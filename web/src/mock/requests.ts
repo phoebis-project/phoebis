@@ -3672,8 +3672,9 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
  * with studio for artifacts, laptop with contract for artifacts and with reserve for connectors, ci with reserve for
  * artifacts before its revocation, and notebook with reserve for connectors. A key whose calls are refused (batch's
  * signed-out legacy) leaves no row. The 64 rows run past the page of 50, and the newest 50 hold both shapes of a
- * failed call, canceled calls, the statuses 200, 401, 404 and 429, and a path of 48 characters beside one of 49, which
- * the list cuts. Every row lies inside the default day and after the desktop key's creation.
+ * failed call, canceled calls, the statuses 200, 204, 304, 401, 404 and 429, which a status badge draws in each of its
+ * tones, and a path of 48 characters beside one of 49, which the list cuts. Every row lies inside the default day and
+ * after the desktop key's creation.
  */
 export const FEATURE_CALLS: FeatureCall[] = [
   { accountId: 'studio', durationMs: 1_284, errorCode: null, feature: 'artifacts', id: 'req_phoebis_73605ad9e70226ee8098aaa84904e49e', keyId: 'desktop', method: 'POST', outcome: 'forwarded', path: '/api/frame/upload', receivedAt: iso(clock(14, 26, 5)), status: 200 },
@@ -3702,7 +3703,7 @@ export const FEATURE_CALLS: FeatureCall[] = [
   { accountId: 'reserve', durationMs: 377, errorCode: null, feature: 'connectors', id: 'req_phoebis_ccaa0f1c96d83eb2810c64b0ee003e63', keyId: 'notebook', method: 'POST', outcome: 'forwarded', path: '/v1/mcp/srv_9p4t2n8r', receivedAt: iso(clock(14, 0, 47)), status: 200 },
   { accountId: 'contract', durationMs: 12_406, errorCode: null, feature: 'artifacts', id: 'req_phoebis_9c4cc75281d40ebc3ebc7483cc9cffab', keyId: 'laptop', method: 'GET', outcome: 'canceled', path: '/api/artifacts/mcp', receivedAt: iso(clock(13, 58, 30)), status: 200 },
   { accountId: 'reserve', durationMs: 2_118, errorCode: null, feature: 'artifacts', id: 'req_phoebis_e899f2ebf1501301e8b0301b629773b1', keyId: 'ci', method: 'POST', outcome: 'forwarded', path: '/api/artifacts/mcp', receivedAt: iso(clock(13, 56, 9)), status: 200 },
-  { accountId: 'studio', durationMs: 214, errorCode: null, feature: 'artifacts', id: 'req_phoebis_3688129c616fd8f2beac546e169149dd', keyId: 'desktop', method: 'GET', outcome: 'forwarded', path: '/api/frame/content/sprint-retro', receivedAt: iso(clock(13, 54, 41)), status: 200 },
+  { accountId: 'studio', durationMs: 214, errorCode: null, feature: 'artifacts', id: 'req_phoebis_3688129c616fd8f2beac546e169149dd', keyId: 'desktop', method: 'GET', outcome: 'forwarded', path: '/api/frame/content/sprint-retro', receivedAt: iso(clock(13, 54, 41)), status: 304 },
   { accountId: 'reserve', durationMs: 30_115, errorCode: null, feature: 'connectors', id: 'req_phoebis_ed0a86d3f4047cccd8d31c70b57606d0', keyId: 'laptop', method: 'GET', outcome: 'forwarded', path: '/v1/mcp/srv_3h8w1c6v', receivedAt: iso(clock(13, 52, 16)), status: 200 },
   { accountId: 'reserve', durationMs: 288, errorCode: null, feature: 'connectors', id: 'req_phoebis_f17b931053e1b8a4a44b887d859c91d6', keyId: 'notebook', method: 'GET', outcome: 'forwarded', path: '/v1/mcp_servers', receivedAt: iso(clock(13, 49, 55)), status: 200 },
   { accountId: 'studio', durationMs: 119, errorCode: null, feature: 'artifacts', id: 'req_phoebis_fa33e7fd72f8b36b6a1b9bc386a232bf', keyId: 'desktop', method: 'GET', outcome: 'forwarded', path: '/api/frame/read/sprint-retro', receivedAt: iso(clock(13, 47, 23)), status: 404 },

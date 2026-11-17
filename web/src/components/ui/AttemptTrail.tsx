@@ -29,7 +29,9 @@ export const OUTCOME_LABEL: Record<AttemptOutcome, string> = {
 /** The words of a cooldown an attempt set, which the trail's lines and the request drawer's Attempts rows share. */
 export const cooldownLine = (c: { reason: string; until: string }): string => `cooldown set, ${c.reason}, until ${fmtAbsolute(c.until)}`;
 
-const statusTone = (status: number | null): BadgeTone => (status === null ? 'neutral' : status === 200 ? 'good' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical');
+// A feature host answers successes past 200 and redirects, which no model request holds, so a status reads by class.
+const statusTone = (status: number | null): BadgeTone =>
+  status === null ? 'neutral' : status >= 200 && status < 300 ? 'good' : status >= 300 && status < 400 ? 'neutral' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical';
 
 export function StatusBadge({ status, attempts = 1 }: { attempts?: number; status: number | null }) {
   return (

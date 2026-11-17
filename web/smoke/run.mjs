@@ -16662,6 +16662,30 @@ await forView('/requests', async () => {
     });
     page.unmount();
   }
+  {
+    // Three forwarded calls of the seed among the newest 50: a favorite's deletion answered 204, a content read
+    // answered 304 and a read answered 404. A feature host answers successes and redirects no model request holds.
+    const NO_CONTENT = 'req_phoebis_42bc9f7e9c75f371493f03b773f50ef5';
+    const NOT_MODIFIED = 'req_phoebis_3688129c616fd8f2beac546e169149dd';
+    const NOT_FOUND = 'req_phoebis_74f8851e07ce3b5668f02f61b6e3d78f';
+    const page = await mount('/requests#feature-calls', { now: CLOCK_ORIGIN });
+    const toneOf = (id) => {
+      const tr = [...(section(page)?.querySelectorAll('.requests__table tbody tr') ?? [])].find((row) => row.querySelector('.sub.mono')?.getAttribute('title') === id);
+      const at = [...(section(page)?.querySelectorAll('.requests__table thead th') ?? [])].findIndex((th) => th.textContent?.trim() === 'Status');
+      const badge = tr?.children[at]?.querySelector('.badge');
+      return badge ? { text: badge.textContent?.trim() ?? '', tone: [...badge.classList].find((c) => c.startsWith('badge--')) ?? 'none' } : null;
+    };
+    const read = { [NO_CONTENT]: toneOf(NO_CONTENT), [NOT_MODIFIED]: toneOf(NOT_MODIFIED), [NOT_FOUND]: toneOf(NOT_FOUND) };
+    results.push({
+      name: "/requests a forwarded feature call's status takes the tone of its class",
+      ok:
+        JSON.stringify(read[NO_CONTENT]) === JSON.stringify({ text: '204', tone: 'badge--good' }) &&
+        JSON.stringify(read[NOT_MODIFIED]) === JSON.stringify({ text: '304', tone: 'badge--neutral' }) &&
+        JSON.stringify(read[NOT_FOUND]) === JSON.stringify({ text: '404', tone: 'badge--critical' }),
+      missing: [JSON.stringify(read)],
+    });
+    page.unmount();
+  }
 });
 
 // The routing log's Models filter lists the catalog in the cost model's tier order, which the shell reads off its
