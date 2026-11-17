@@ -216,6 +216,22 @@ pub(crate) fn accounts_at_cap(retry_after_seconds: u64) -> Failure {
     }
 }
 
+/// 429 `rate_limit_error`, code `domain_checks_at_cap`, `Retry-After: 1`: a domain check whose time ran out while it
+/// waited for a place. It names no key, since the check carries none, and a place frees as soon as a check ends.
+pub(crate) fn domain_checks_at_cap() -> Failure {
+    Failure {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        error_type: "rate_limit_error",
+        code: "domain_checks_at_cap",
+        message: Cow::Borrowed(
+            "as many domain checks are in flight as the router forwards at once",
+        ),
+        retry_after: Some(1),
+        no_retry: false,
+        class: FailureClass::Refused,
+    }
+}
+
 /// A rejected caller credential is always a `401`: telling the caller which of the three ways it failed would
 /// help an attacker enumerate. The answer also tells the client not to resend the request.
 pub(crate) fn auth_failure(error: &AuthError) -> Failure {

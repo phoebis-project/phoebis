@@ -1,36 +1,82 @@
 //! The feature listener's one handler. The listener and no header picks the profile's feature table, so a path of the
 //! upstream's and a path of the router's own never meet in one set of routes.
 
+mod cap;
 mod forward;
 
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
+use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderMap};
+use axum::http::request::Parts;
+use axum::http::{header, HeaderMap, Uri};
 use axum::response::Response;
 use axum::Router;
-use phoebis_profile::{claude_code_2_1_310_linux_x64, FeatureRow, FeatureTable, PathRule};
-use phoebis_routing::{feature_obstacle, Obstacle};
+use phoebis_profile::{
+    claude_code_2_1_310_linux_x64, FeatureRow, FeatureTable, KeylessRow, PathRule,
+};
+use phoebis_routing::{feature_obstacle, Obstacle, UNATTRIBUTED_POOL};
 use phoebis_store::Feature;
+use tokio::time::Instant;
 
 use crate::auth::resolve_key;
 use crate::errors::{
-    feature_account_unavailable, feature_account_unset, Failure, FEATURE_NOT_ALLOWED,
-    UPSTREAM_UNREACHABLE,
+    domain_checks_at_cap, feature_account_unavailable, feature_account_unset, Failure,
+    FEATURE_NOT_ALLOWED, UPSTREAM_UNREACHABLE,
 };
 use crate::messages::{new_request_id, Relay};
+use crate::serve::PeerAddr;
 
-use self::forward::{forward, read_body, Unanswered};
+use self::cap::DomainCheckCap;
+use self::forward::{forward, keyless, read_body, Unanswered};
+
+/// The longest value of the domain check's one query parameter.
+const DOMAIN_MAX_BYTES: usize = 512;
+
+/// What the handler reads: the relay, and the one cap of this listener's domain checks.
+#[derive(Clone)]
+struct Listener {
+    cap: Arc<DomainCheckCap>,
+    relay: Arc<Relay>,
+}
 
 /// The feature listener's routes. Each request on that listener is a feature endpoint request, whatever its path.
 pub fn router(relay: Arc<Relay>) -> Router {
-    Router::new().fallback(feature_call).with_state(relay)
+    let cap = DomainCheckCap::new(
+        relay.limits.domain_checks_total,
+        relay.limits.domain_checks_per_source,
+    );
+    Router::new()
+        .fallback(feature_call)
+        .with_state(Listener { cap, relay })
 }
 
-/// The checks run in their one order, the key first, so a caller without one learns nothing of what the router
-/// forwards, and the account's token is taken only for a call that passed each of them.
-async fn feature_call(State(relay): State<Arc<Relay>>, request: Request) -> Response {
+/// The checks run in their one order: the two keyless shapes, each compared whole, then the key, so a caller without
+/// one learns nothing of what the router forwards, and the account's token is taken only for a call that passed each
+/// of them. A request that misses a keyless shape by anything meets the key check as each other request does.
+async fn feature_call(
+    State(Listener { cap, relay }): State<Listener>,
+    request: Request,
+) -> Response {
+    // The domain check's one deadline runs from here, over its wait for a place too.
+    let arrived = Instant::now();
     let (parts, body) = request.into_parts();
+    let table = &claude_code_2_1_310_linux_x64().features;
+    let host = request_host(&parts.headers);
+    let method = parts.method.as_str();
+    if keyless_method(&table.hello, method, host.as_deref(), parts.uri.path()).is_some() {
+        return Response::new(Body::empty());
+    }
+    if let Some(method) = is_domain_check(
+        &table.domain_check,
+        method,
+        host.as_deref(),
+        &parts.uri,
+        &parts.headers,
+    ) {
+        return domain_check(&relay, &cap, &table.domain_check, method, &parts, arrived).await;
+    }
     let snapshot = relay.router().snapshot();
     let now = (relay.clock)();
     let key = match resolve_key(&snapshot, &parts.headers, now) {
@@ -47,8 +93,6 @@ async fn feature_call(State(relay): State<Arc<Relay>>, request: Request) -> Resp
         );
         failure.response(&new_request_id())
     };
-    let host = request_host(&parts.headers);
-    let table = &claude_code_2_1_310_linux_x64().features;
     let Some((feature, row, method)) = matched(
         table,
         parts.method.as_str(),
@@ -92,6 +136,96 @@ async fn feature_call(State(relay): State<Arc<Relay>>, request: Request) -> Resp
             UPSTREAM_UNREACHABLE.response(&new_request_id())
         }
     }
+}
+
+/// A domain check under the cap and its one deadline from `arrived`, which bounds the wait for a place, the send and
+/// each read of the answer's body. Its lines hold the path alone, since the query names the domain.
+async fn domain_check(
+    relay: &Relay,
+    cap: &Arc<DomainCheckCap>,
+    row: &KeylessRow,
+    method: &'static str,
+    parts: &Parts,
+    arrived: Instant,
+) -> Response {
+    let deadline = arrived + relay.limits.domain_check_timeout;
+    // Each connection the system names no peer for counts under one source, so none of them passes the cap.
+    let source = parts
+        .extensions
+        .get::<PeerAddr>()
+        .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |peer| peer.0.ip());
+    let Ok(place) = tokio::time::timeout_at(deadline, cap.place(source)).await else {
+        let failure = domain_checks_at_cap();
+        tracing::debug!(
+            code = failure.code,
+            method,
+            path = parts.uri.path(),
+            key = UNATTRIBUTED_POOL,
+            "a domain check was refused"
+        );
+        return failure.response(&new_request_id());
+    };
+    let path = parts.uri.path().to_owned();
+    // The place rides in the answer's body to its end, whether the body ended whole, failed or the caller left.
+    let ended = move |outcome: &'static str| {
+        drop(place);
+        tracing::debug!(
+            outcome,
+            method,
+            path = path.as_str(),
+            key = UNATTRIBUTED_POOL,
+            "a domain check ended"
+        );
+    };
+    match keyless(relay, row.host, method, parts, deadline, ended).await {
+        Ok(answer) => answer,
+        Err(case) => {
+            tracing::debug!(
+                outcome = "failed",
+                method,
+                path = parts.uri.path(),
+                key = UNATTRIBUTED_POOL,
+                case,
+                "a domain check failed ahead of the upstream's answer"
+            );
+            UPSTREAM_UNREACHABLE.response(&new_request_id())
+        }
+    }
+}
+
+/// The row's own spelling of the method where a request is the domain check of the table: its method, its host, its
+/// path, a raw query that is `domain=<value>` with 1 to 512 bytes and no `&`, and no body.
+fn is_domain_check(
+    row: &KeylessRow,
+    method: &str,
+    host: Option<&str>,
+    uri: &Uri,
+    headers: &HeaderMap,
+) -> Option<&'static str> {
+    let value = uri.query()?.strip_prefix("domain=")?;
+    let one_value = (1..=DOMAIN_MAX_BYTES).contains(&value.len()) && !value.contains('&');
+    let no_body = !headers.contains_key(header::TRANSFER_ENCODING)
+        && headers
+            .get_all(header::CONTENT_LENGTH)
+            .iter()
+            .all(|length| {
+                length
+                    .to_str()
+                    .is_ok_and(|length| length.trim().parse::<u64>() == Ok(0))
+            });
+    keyless_method(row, method, host, uri.path()).filter(|_| one_value && no_body)
+}
+
+/// The row's own spelling of the method where a request names one of a keyless row's methods, its host and its whole
+/// path. Nothing else of the request is read.
+fn keyless_method(
+    row: &KeylessRow,
+    method: &str,
+    host: Option<&str>,
+    path: &str,
+) -> Option<&'static str> {
+    let held = row.methods.iter().copied().find(|held| *held == method)?;
+    (host == Some(row.host) && path == row.path).then_some(held)
 }
 
 /// The host a request names: its one `Host` line in lowercase, without a port and without a trailing dot.

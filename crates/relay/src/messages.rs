@@ -156,6 +156,12 @@ pub struct Limits {
     pub connect_timeout: Duration,
     /// How long an account is cooled when the upstream rejected it without saying for how long.
     pub cooldown_fallback: Duration,
+    /// The whole of a domain check: its wait for a place, its send and its answer.
+    pub domain_check_timeout: Duration,
+    /// The domain checks one source address has in flight at one time.
+    pub domain_checks_per_source: usize,
+    /// The domain checks in flight at one time, whatever their source.
+    pub domain_checks_total: usize,
     pub head_timeout: Duration,
     pub hold_timeout: Duration,
     /// The longest an upstream may go silent mid-stream before the relay gives up.

@@ -1,6 +1,9 @@
 //! The forward of a feature call the checks admitted: the body read whole under the model route's bounds, the head as
 //! the caller sent it with the feature account's bearer in the caller's slot, and the answer handed back piece by piece
-//! under the relay's filter. No answer reaches the account's routing state.
+//! under the relay's filter. No answer reaches the account's routing state. The domain check leaves here too, with no
+//! credential and under its one deadline.
+
+use std::io;
 
 use axum::body::Body;
 use axum::http::request::Parts;
@@ -16,6 +19,8 @@ use phoebis_transport::control::{ControlAnswer, ControlClient, StreamFailure};
 use phoebis_transport::pool::{Conn, PoolKey};
 use phoebis_transport::request::RawRequest;
 use phoebis_transport::response::{framing, keep_alive, BodyReader, ResponseHead};
+use phoebis_transport::TransportError;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::budget::Reservation;
@@ -142,11 +147,7 @@ pub(crate) async fn forward(
             });
         }
     };
-    let target = parts
-        .uri
-        .path_and_query()
-        .map_or("/", |target| target.as_str())
-        .to_owned();
+    let target = target_of(parts);
     let length = body.as_ref().map(Bytes::len);
     let body = body.unwrap_or_default();
     let request = |bearer: &Secret| RawRequest {
@@ -189,6 +190,65 @@ pub(crate) async fn forward(
     }
 }
 
+/// Sends a call the listener serves without a key on the control plane, with no credential line, and outside the
+/// refresh and the resend, since no account stands behind it: its 401 goes back as it came. `deadline` bounds the send
+/// exactly, with the connect and the head bounds each capped at the time left, and then each read of the answer's body.
+/// `ended` runs once at the answer's end, as `answered` says, and is dropped unrun where no head came. The error is the
+/// word of the case in which no head came.
+pub(crate) async fn keyless(
+    relay: &Relay,
+    host: &'static str,
+    method: &'static str,
+    parts: &Parts,
+    deadline: Instant,
+    ended: impl FnOnce(&'static str) + Send + 'static,
+) -> Result<Response, &'static str> {
+    let Some(control) = relay.control.as_deref() else {
+        return Err("unreachable");
+    };
+    // The shape admits an empty body alone, and a head that framed it by its length keeps that line, as a keyed
+    // forward writes it.
+    let length = parts
+        .headers
+        .contains_key(header::CONTENT_LENGTH)
+        .then_some(0);
+    let request = RawRequest {
+        method,
+        target: target_of(parts),
+        headers: feature_headers(
+            &parts.headers,
+            parts.extensions.get::<OriginalHead>(),
+            None,
+            host,
+            Plane::Control,
+            length,
+        ),
+        body: Bytes::new(),
+    };
+    let left = deadline.saturating_duration_since(Instant::now());
+    let sent = control.send_streaming(
+        request,
+        host,
+        relay.limits.connect_timeout.min(left),
+        relay.limits.head_timeout.min(left),
+    );
+    match tokio::time::timeout_at(deadline, sent).await {
+        Ok(Ok(answer)) => Ok(answered(answer, Some(deadline), ended)),
+        Ok(Err(failure)) => Err(case_of(&failure)),
+        // No head came in the call's time.
+        Err(_) => Err("stalled"),
+    }
+}
+
+/// The request target as the caller sent it, its query among it.
+fn target_of(parts: &Parts) -> String {
+    parts
+        .uri
+        .path_and_query()
+        .map_or("/", |target| target.as_str())
+        .to_owned()
+}
+
 /// Whether an answer asks for the account's credential once more: a 401 without `X-Mcp-Error-Code`. A connector that
 /// wants its own sign-in names it in that line, and the client acts on that answer itself.
 fn wants_refresh(head: &ResponseHead) -> bool {
@@ -211,7 +271,7 @@ impl Held {
 
     fn streamed(self) -> Response {
         match self {
-            Held::Control(answer) => answered(answer),
+            Held::Control(answer) => answered(answer, None, |_| {}),
             Held::Pooled(sent, checkin) => pooled_answer(sent, checkin),
         }
     }
@@ -338,21 +398,60 @@ pub(crate) fn answer_head(head: &ResponseHead) -> Builder {
 
 /// The answer with each piece of its body passed on as it arrives and no bound between two, since a session's event
 /// stream idles between its events. A read that fails behind the head ends the stream with an error, which ends the
-/// caller's connection.
-fn answered(answer: ControlAnswer) -> Response {
+/// caller's connection, and so does a read still waiting at `deadline` where the call has one. `ended` runs once with
+/// the stream's end: `forwarded` at the body's end, `failed` at a failed read, and `canceled` where the caller left
+/// first, so whatever it holds is held to that end.
+fn answered(
+    answer: ControlAnswer,
+    deadline: Option<Instant>,
+    ended: impl FnOnce(&'static str) + Send + 'static,
+) -> Response {
     let ControlAnswer { head, body } = answer;
-    let pieces = futures::stream::unfold(Some(body), |reader| async move {
-        let mut reader = reader?;
-        match reader.next_chunk().await {
-            Ok(Some(piece)) => Some((Ok(piece), Some(reader))),
-            Ok(None) => None,
-            Err(error) => Some((Err(error), None)),
+    let state = Some((body, Ending(Some(ended))));
+    let pieces = futures::stream::unfold(state, move |state| async move {
+        let (mut reader, ending) = state?;
+        let read = match deadline {
+            Some(deadline) => tokio::time::timeout_at(deadline, reader.next_chunk())
+                .await
+                .unwrap_or_else(|_| Err(TransportError::Io(io::ErrorKind::TimedOut.into()))),
+            None => reader.next_chunk().await,
+        };
+        match read {
+            Ok(Some(piece)) => Some((Ok(piece), Some((reader, ending)))),
+            Ok(None) => {
+                ending.end("forwarded");
+                None
+            }
+            Err(error) => {
+                ending.end("failed");
+                Some((Err(error), None))
+            }
         }
     });
     answer_head(&head)
         .body(Body::from_stream(pieces))
         // The status is a validated `StatusCode` and each line was parsed before it was added.
         .expect("a forwarded answer's head is always well formed")
+}
+
+/// A stream's end callback, run once: with the word the stream's last read gave, or with `canceled` where the stream is
+/// dropped first, as when the caller left.
+struct Ending<F: FnOnce(&'static str)>(Option<F>);
+
+impl<F: FnOnce(&'static str)> Ending<F> {
+    fn end(mut self, outcome: &'static str) {
+        if let Some(ended) = self.0.take() {
+            ended(outcome);
+        }
+    }
+}
+
+impl<F: FnOnce(&'static str)> Drop for Ending<F> {
+    fn drop(&mut self) {
+        if let Some(ended) = self.0.take() {
+            ended("canceled");
+        }
+    }
 }
 
 /// The word of a failed send's case, which the answer does not tell apart.

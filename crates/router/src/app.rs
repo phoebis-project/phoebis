@@ -56,6 +56,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HEAD_TIMEOUT: Duration = Duration::from_secs(600);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// A domain check runs under this one bound from its arrival, over its wait for a place, its send and its answer, so a
+/// check whose caller left frees its place by then at the latest.
+const DOMAIN_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+/// A check above either count waits for a place rather than being refused, since the clients behind one remote proxy
+/// share one source address.
+const DOMAIN_CHECKS_PER_SOURCE: usize = 4;
+const DOMAIN_CHECKS_TOTAL: usize = 16;
+
 // A completion is published on every path, the handler's drop guard included, so an in-flight entry silent this
 // long belongs to a stream the relay itself ended at its idle timeout: the assembler's TTL must outwait it, or a
 // still-open stream would be aged out from under a request that has not finished.
@@ -327,6 +335,9 @@ pub async fn run_until(
             body_read_timeout: Duration::from_secs(config.proxy.body_read_seconds),
             connect_timeout: CONNECT_TIMEOUT,
             cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
+            domain_check_timeout: DOMAIN_CHECK_TIMEOUT,
+            domain_checks_per_source: DOMAIN_CHECKS_PER_SOURCE,
+            domain_checks_total: DOMAIN_CHECKS_TOTAL,
             head_timeout: HEAD_TIMEOUT,
             hold_timeout: HOLD_TIMEOUT,
             idle_timeout: IDLE_TIMEOUT,

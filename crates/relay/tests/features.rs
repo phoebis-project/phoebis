@@ -1292,3 +1292,167 @@ async fn a_forced_refresh_that_lands_a_mark_reaches_the_routing_snapshot() {
     .await;
     up.shutdown().await;
 }
+
+/// A request without a key: `request_line` without its version, the head's `Host: api.anthropic.com`, then `lines`,
+/// each ending in CRLF, and `body`.
+fn keyless(request_line: &str, lines: &str, body: &[u8]) -> Vec<u8> {
+    let mut request =
+        format!("{request_line} HTTP/1.1\r\nHost: {API}\r\n{lines}Connection: close\r\n\r\n")
+            .into_bytes();
+    request.extend_from_slice(body);
+    request
+}
+
+#[tokio::test]
+async fn get_api_hello_answers_200_without_a_key() {
+    let up = upstream().await;
+    let h = feature_harness(&up).await;
+    let (status, headers, body) = feature_listener(&h)
+        .await
+        .send(API, &keyless("GET /api/hello", "", b""))
+        .await;
+    assert_eq!(
+        (status, &*String::from_utf8_lossy(&body)),
+        (200, ""),
+        "{headers:?}"
+    );
+    assert_eq!(
+        up.requests().len(),
+        0,
+        "the first-start check reached the upstream"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_domain_check_carries_no_credential() {
+    let up = fake(vec![("/api/web/domain_info", json_200())]).await;
+    let h = feature_harness(&up).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(
+            API,
+            &keyless(
+                "GET /api/web/domain_info?domain=example.com",
+                &format!(
+                    "Authorization: Bearer {KEY}\r\nx-api-key: {KEY}\r\nUser-Agent: example/1.0\r\n"
+                ),
+                b"",
+            ),
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let requests = up.requests();
+    let [arrived] = requests.as_slice() else {
+        panic!("{} requests arrived", requests.len())
+    };
+    assert_eq!(
+        arrived.line,
+        "GET /api/web/domain_info?domain=example.com HTTP/1.1"
+    );
+    let named = |wanted: &str| {
+        arrived
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case(wanted))
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        (
+            named("authorization"),
+            named("x-api-key"),
+            named("user-agent")
+        ),
+        (vec![], vec![], vec!["example/1.0"]),
+        "{:?}",
+        arrived.headers
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_domain_checks_shape_binds() {
+    let up = fake(vec![("/api/web/domain_info", json_200())]).await;
+    let h = feature_harness(&up).await;
+    let listener = feature_listener(&h).await;
+    let past_the_bound = format!("GET /api/web/domain_info?domain={}", "a".repeat(513));
+    let at_the_bound = format!("GET /api/web/domain_info?domain={}", "a".repeat(512));
+    for (request_line, lines, body) in [
+        (
+            "GET /api/web/domain_info?domain=example.com&x=1",
+            "",
+            &b""[..],
+        ),
+        ("GET /api/web/domain_info?domain=", "", b""),
+        (past_the_bound.as_str(), "", b""),
+        (
+            "GET /api/web/domain_info?domain=example.com",
+            "Content-Length: 2\r\n",
+            b"{}",
+        ),
+        ("GET /api/web/domain_info/x?domain=example.com", "", b""),
+    ] {
+        let (status, headers, _) = listener
+            .send(API, &keyless(request_line, lines, body))
+            .await;
+        assert_eq!(status, 401, "{request_line}: {headers:?}");
+    }
+    for request_line in ["GET /api/web/domain_info?domain=x", at_the_bound.as_str()] {
+        let (status, headers, _) = listener.send(API, &keyless(request_line, "", b"")).await;
+        assert_eq!(status, 200, "{request_line}: {headers:?}");
+    }
+    assert_eq!(
+        lines(&up),
+        [
+            "GET /api/web/domain_info?domain=x HTTP/1.1".to_owned(),
+            format!("{at_the_bound} HTTP/1.1"),
+        ]
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_check_past_one_sources_share_waits_and_a_freed_place_serves_the_next() {
+    let up = fake(vec![(
+        "/api/web/domain_info",
+        Respond::Gated(Box::new(json_200())),
+    )])
+    .await;
+    let h = harness_with_limits(
+        &up,
+        &[api_key("acct", "sk-ant-api03-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        Limits {
+            domain_checks_per_source: 2,
+            ..default_limits()
+        },
+    )
+    .await;
+    let listener = Arc::new(feature_listener(&h).await);
+    let check = || {
+        let listener = Arc::clone(&listener);
+        tokio::spawn(async move {
+            let request = keyless("GET /api/web/domain_info?domain=example.com", "", b"");
+            listener.send(API, &request).await.0
+        })
+    };
+    let arrived = |count: usize| {
+        let up = &up;
+        move || (up.requests().len() == count).then_some(())
+    };
+    let first = check();
+    wait_for(Duration::from_secs(5), arrived(1)).await;
+    let second = check();
+    wait_for(Duration::from_secs(5), arrived(2)).await;
+    let third = check();
+    // The cap holds the third check until a place frees, so the window never fails correct code. Its length only
+    // bounds how late a check that passed the cap may arrive and still be seen.
+    stays_for(Duration::from_millis(200), || up.requests().len() == 2).await;
+    up.release_one().await;
+    assert_eq!(first.await.unwrap(), 200);
+    wait_for(Duration::from_secs(5), arrived(3)).await;
+    up.release();
+    assert_eq!((second.await.unwrap(), third.await.unwrap()), (200, 200));
+    up.shutdown().await;
+}

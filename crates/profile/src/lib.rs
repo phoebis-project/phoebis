@@ -64,10 +64,23 @@ pub struct FeatureRow {
     pub plane: Plane,
 }
 
-/// The calls of each claude.ai feature the router forwards, as this client build sends them.
+/// A call the feature listener serves without a key, matched by its whole shape.
+#[derive(Clone, Copy, Debug)]
+pub struct KeylessRow {
+    pub host: &'static str,
+    pub methods: &'static [&'static str],
+    pub path: &'static str,
+}
+
+/// The calls of each claude.ai feature the router forwards, as this client build sends them, and the two it serves
+/// without a key.
 pub struct FeatureTable {
     pub artifacts: &'static [FeatureRow],
     pub connectors: &'static [FeatureRow],
+    /// The client's check of a domain ahead of a web fetch, which names no account and leaves without a credential.
+    pub domain_check: KeylessRow,
+    /// The first-start check of an interactive client, which the router answers itself.
+    pub hello: KeylessRow,
 }
 
 pub struct TlsProfiles {
@@ -161,6 +174,16 @@ static PROFILE_2_1_310: Profile = Profile {
                 plane: Plane::Inference,
             },
         ],
+        domain_check: KeylessRow {
+            host: "api.anthropic.com",
+            methods: &["GET"],
+            path: "/api/web/domain_info",
+        },
+        hello: KeylessRow {
+            host: "api.anthropic.com",
+            methods: &["GET", "HEAD"],
+            path: "/api/hello",
+        },
     },
     tls: TlsProfiles {
         curves: "X25519MLKEM768:X25519:P-256:P-384",
