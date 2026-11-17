@@ -49,5 +49,7 @@ phoebis-transport = { path = "../transport" }
 rusqlite = { workspace = true }
 # The probe deadline is five minutes, so the test that waits it out moves tokio's clock instead of the wall's.
 tokio = { workspace = true, features = ["test-util"] }
+# The relay's harness, which the tests include, opens the feature listener's TLS connections through it.
+tokio-boring = { workspace = true }
 tower = { workspace = true }
 tracing-subscriber = { workspace = true }
