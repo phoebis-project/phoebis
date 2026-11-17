@@ -96,15 +96,15 @@ const rampWords = (ramp: number, factor: number): string => (ramp < 1 ? `Ramping
 /**
  * `slowed since 17:40: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min
  * threshold`, or `under the 30 min threshold` while no round can fire, then one sentence each for the factor the pool
- * computed, the ramp where the entry is inside a span, and the speed the holds realized. With `since` null the words
- * start at `the sessions on this account`. Null where `slowDown` is null or the speed its holds realized is 1 or more.
+ * computed, the ramp where the entry holds one, and the speed the holds realized. Null where `slowDown` is null, where
+ * the entry holds no span and where the speed its holds realized is 1 or more.
  */
 export function speedHover(slowDown: AccountSlowDown | null, now: number): string | null {
-  if (slowDown === null || slowDown.speed >= 1) return null;
+  if (slowDown === null || slowDown.since === null || slowDown.speed >= 1) return null;
   // The round fires on a stretch above the threshold, so one at it reads under.
   const side = slowDown.stretchMs > slowDown.thresholdMs ? 'over' : 'under';
   const words = `the sessions on this account would pass the ceiling ${minuteSpan(slowDown.stretchMs)} before the reset, ${side} the ${minuteSpan(slowDown.thresholdMs)} threshold`;
-  const first = slowDown.since === null ? words : `slowed since ${instant(Date.parse(slowDown.since), now)}: ${words}`;
+  const first = `slowed since ${instant(Date.parse(slowDown.since), now)}: ${words}`;
   return sentences([first, `The pool computed ${speedWord(slowDown.factor)}`, slowDown.ramp === null ? null : rampWords(slowDown.ramp, slowDown.factor), `The holds realized ${speedWord(slowDown.speed)}`]);
 }
 
@@ -114,9 +114,10 @@ export const slowDownChip = (slowDown: AccountSlowDown | null, now: number): { h
 
 /**
  * A serving member's speed chip: its account's slow-down with the hover where the account is loaded, else the speed
- * the holds realized as the pools route serves it on the member, with no hover. A loaded account draws none, whatever
- * the member carries, where `slowedOf` reads no slow-down: none in force, a realized speed of 1, no 5-hour window at
- * all, or a 5-hour window reset since the read.
+ * the holds realized as the pools route serves it on the member or the sessions route on its row, with no hover. Each
+ * route serves that speed inside a slow-down span alone. A loaded account draws none, whatever the member carries,
+ * where `slowedOf` reads no slow-down: none in force, no span open, a realized speed of 1, no 5-hour window at all, a
+ * 5-hour window reset since the read, or one that has not opened.
  */
 export function memberSpeed(member: Pick<PoolMember, 'speed'>, account: Account | null, now: number): { hover: string | null; speed: number | null } {
   if (account === null) return { hover: null, speed: member.speed };

@@ -62,9 +62,10 @@ function memberFitOf(account: Account, now: number, pool: Pick<Pool, 'fiveHourCe
  * A member's seven figures as the pools route serves them: the 7-day window's burn, the router's Pace score, the spare
  * rate on the 7-day window for an OAuth member (`paceOf` with no model, its Fable reservation held whatever the
  * member's tier, since the route reads the score with none) and the remaining worst bucket for an API-key member,
- * which burns no plan window, the Fable reservation that score holds back, null where none applies, the factor and
- * the realized speed of the account's slow-down where the member's pool has the switch on, and the fit and the runway
- * of `memberFitOf`, which a member the router has not loaded reads none of.
+ * which burns no plan window, the Fable reservation that score holds back, null where none applies, the factor of the
+ * account's slow-down where the member's pool has the switch on, with the realized speed while the entry holds a span,
+ * as the pools route's member and the sessions route's row answer it, and the fit and the runway of `memberFitOf`,
+ * which a member the router has not loaded reads none of.
  */
 export function servedFigures(accountId: string, now: number, pool: Pick<Pool, 'fiveHourCeiling' | 'slowDown' | 'weeklyCeiling' | 'windDownMinutes'>): Pick<PoolMember, 'burn' | 'fableReservation' | 'factor' | 'fit' | 'paceScore' | 'runwayMs' | 'speed'> {
   const account = accountById.get(accountId);
@@ -73,7 +74,7 @@ export function servedFigures(accountId: string, now: number, pool: Pick<Pool, '
   if (account.kind === 'api_key') return { burn: null, fableReservation: null, factor: null, ...fit, paceScore: 1 - (lookup(WORST_BUCKET, accountId) ?? 0), speed: null };
   const slowed = pool.slowDown ? account.slowDown : null;
   const factor = slowed?.factor ?? null;
-  const speed = slowed?.speed ?? null;
+  const speed = slowed !== null && slowed.since !== null ? slowed.speed : null;
   const week = account.windows.find((w) => w.id === '7d');
   if (week === undefined) return { burn: null, fableReservation: null, factor, ...fit, paceScore: null, speed };
   const fable = account.fableWindow;

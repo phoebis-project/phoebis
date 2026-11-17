@@ -526,7 +526,8 @@ export interface PoolMember {
    * router does not answer.
    */
   runwayMs: number | null;
-  /** The speed the account's holds realized, from the factor to 1, null where `factor` is. */
+  /** The speed the account's holds realized inside a slow-down span, from 0 to 1. Null outside a span and where
+   *  `factor` is. */
   speed: number | null;
   /** One report per budgeted period the ledger has summed; empty until it reports. */
   spends: { period: BudgetPeriod; periodEnd: string | null; spentUsd: number }[];
@@ -2225,7 +2226,8 @@ export interface Session extends BurnFigures {
    * `mark`) for its landing. Null off a pin never stamped, or with no pin.
    */
   shed: { at: string; from: string; reason: string } | null;
-  /** The speed the account's holds realized, from the factor to 1, null where `factor` is. */
+  /** The speed the account's holds realized inside a slow-down span, from 0 to 1. Null outside a span and where
+   *  `factor` is. */
   speed: number | null;
   /** The session's spend over its life under its key, null where the ledger holds no request of it the router did not
    *  refuse. */

@@ -27946,7 +27946,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // The row's "+N" badges stand with the figure they qualify, inside its cell.
     const KINDS = { 'API-key account: billed per token, no quota windows': 'api_key', 'Subscription account: quota windows apply': 'oauth' };
     const accounts = await api.listAccounts();
-    const slowed = new Set(accounts.filter((a) => a.slowDown !== null && a.slowDown.speed < 1).map((a) => a.id));
+    const slowed = new Set(accounts.filter((a) => a.slowDown !== null && a.slowDown.since !== null && a.slowDown.speed < 1).map((a) => a.id));
     [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
     await m.settle(250);
     const links = [...m.container.querySelectorAll('table.agents-table > tbody > tr .agents__account')].map((c) => ({ chip: c.querySelector('.speed-chip') !== null, link: c.querySelector('a') }));

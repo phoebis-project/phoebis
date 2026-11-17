@@ -11,7 +11,7 @@ test('a window is expired once its reset lies before now, never without a reset'
   assert.equal(d.isExpired(window(null), now), false, 'a window reported without a reset');
 });
 
-test("an account's slow-down draws while the speed its holds realized is under 1 and the 5-hour window it was read from has not reset", () => {
+test("an account's slow-down draws while it holds a span, the speed its holds realized is under 1 and the 5-hour window it was read from has not reset", () => {
   const now = Date.UTC(2026, 8, 16, 14, 30);
   const entry = (factor, speed = factor) => ({ factor, holdMs: 120_000, ramp: null, since: new Date(now - 42 * 60_000).toISOString(), speed, stretchMs: 2_520_000, thresholdMs: 1_800_000 });
   const five = (resetsAt) => [{ id: '5h', label: '5-hour', observedAt: new Date(now - 3_600_000).toISOString(), periodHours: 5, resetsAt, utilization: 0.86 }];
@@ -24,6 +24,8 @@ test("an account's slow-down draws while the speed its holds realized is under 1
   assert.equal(d.slowedOf({ slowDown: null, windows: live }, now), null, 'no entry');
   assert.equal(d.slowedOf({ slowDown: entry(0.5), windows: [{ ...five(null)[0], utilization: 0 }] }, now), null, 'a 5-hour window that has not opened, so the entry was read from one that ended');
   assert.deepEqual(d.slowedOf({ slowDown: entry(0.5), windows: [{ ...five(null)[0], utilization: 0.2 }] }, now), entry(0.5), 'a used 5-hour window the poll reported no reset for');
+  assert.equal(d.slowedOf({ slowDown: { ...entry(1, 0.99966), since: null }, windows: live }, now), null, 'a span that closed, whose folded speed stays under 1 for hours');
+  assert.deepEqual(d.slowedOf({ slowDown: entry(1, 0.99966), windows: live }, now), entry(1, 0.99966), 'a span still open while its factor reads 1 again');
 });
 
 test('noResetWord reads a window with no reset by its utilization', () => {

@@ -113,13 +113,14 @@ export const NO_RESET_TITLE: Readonly<Record<'not open' | 'not reported', string
   'not reported': 'the poll reported no reset for this window',
 };
 
-/** The slow-down a page draws the account's speed chip from: its entry while the speed the holds realized is under 1
- *  and the 5-hour window the entry was read from has not reset since, null otherwise. A 5-hour window that has not
- *  opened means the one the entry was read from has ended. */
+/** The slow-down a page draws the account's speed chip from: its entry while it holds a span, the speed the holds
+ *  realized is under 1 and the 5-hour window the entry was read from has not reset since, null otherwise. The span is
+ *  tested beside the speed, since the router folds the realized speed as an average that stays under 1 for hours
+ *  after a span closes. A 5-hour window that has not opened means the one the entry was read from has ended. */
 export function slowedOf(account: Account, now: number): AccountSlowDown | null {
   const slowDown = account.slowDown ?? null;
   const w5 = windowOf(account, '5h');
-  return slowDown !== null && slowDown.speed < 1 && w5 !== null && !isExpired(w5, now) && noResetWord(w5) !== 'not open' ? slowDown : null;
+  return slowDown !== null && slowDown.since !== null && slowDown.speed < 1 && w5 !== null && !isExpired(w5, now) && noResetWord(w5) !== 'not open' ? slowDown : null;
 }
 
 /**
