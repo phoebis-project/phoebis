@@ -328,8 +328,12 @@ switch `phoebis.mockBuildMismatch` (mock pass, on loads of its own at 1280 by 80
 the Analytics view: the banner's top edge at the window's top, where the bar's sits with the switch off, the bar's top
 edge on the banner's bottom, the banner's paint opaque under its tint, the block's paint transparent with the switch off
 and opaque with it on, the sticky filter bar on the block's bottom and the section bar on the filter bar's bottom, and
-at 1280 by 800 the Accounts list 20 px under the block, each edge within 1 px), the anchored pool card and key row under
-the reload banner (mock pass, on loads of its own under the mock's build switch, the Pools view at 1280 by 800 and the
+at 1280 by 800 the Accounts list 20 px under the block, each edge within 1 px), the Dropped thinking blocks card on the
+Cache tab (mock pass, on a load of its own, whose story holds the account key and the prefix key at the pass's origin:
+the bar of `thinking_dropped.end_user_binding_mismatch` in a fill apart from the bar of
+`thinking_dropped.prefix_binding_mismatch`, the fault ink against the muted one, each bar's label, count and fill
+recorded), the anchored pool card and key row under the reload banner (mock pass, on loads of its own under the mock's
+build switch, the Pools view at 1280 by 800 and the
 Keys view at 1280 by 400: the first card's or row's top edge 16 px under the sticky block's bottom once the view moves
 to its hash, within 0.5 px), the fast lane, the request drawer, which opens once the request list's shot is taken (its
 compact table with Time the fill as wide as its card at 1280 by 800 and 1440 by 900 with every id whole in the mock

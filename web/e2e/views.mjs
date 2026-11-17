@@ -8529,6 +8529,37 @@ async function shellBanner(theme) {
 }
 
 /**
+ * The Dropped thinking blocks card on the Cache tab, on a load of its own: the bar of the account key and the bar of the
+ * prefix key, which the mock's story holds at the pass's origin, in two fills, since a key under an account reason
+ * draws in the fault ink and every other key in the muted ink. A computed fill holds the value, never the token's name,
+ * so the two bars are read against each other. Each bar's label, count and fill is recorded. The mock pass's alone, as
+ * the router's seed reports no dropped block. The Analytics view loads again after, so the measures after it read the
+ * view as it first drew.
+ */
+async function droppedThinkingInks(theme) {
+  const say = (what) => failures.push(`${theme} /analytics dropped thinking blocks: ${what}`);
+  let bars;
+  try {
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    if (!(await tabTo(theme, 'Cache'))) return;
+    bars = await page.evaluate(() => {
+      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Dropped thinking blocks');
+      return card
+        ? [...card.querySelectorAll('.hbars li')].map((li) => ({ count: li.querySelector('.num')?.firstChild?.textContent?.trim() ?? '', fill: getComputedStyle(li.querySelector('.hbars__fill')).backgroundColor, label: li.children[0]?.textContent?.trim() ?? '' }))
+        : null;
+    });
+  } finally {
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    await atRest();
+  }
+  measurements.push(`${theme} /analytics dropped thinking blocks ${JSON.stringify(bars)}`);
+  const account = bars?.find((b) => b.label === 'Dropped, other end user');
+  const prefix = bars?.find((b) => b.label === 'Dropped, prefix changed');
+  if (account === undefined || prefix === undefined) say(`draws ${JSON.stringify(bars?.map((b) => b.label) ?? null)}, not both the account key's bar and the prefix key's`);
+  else if (account.fill === prefix.fill) say(`the account key's bar and the prefix key's bar both draw ${account.fill}, not the fault ink against the muted one`);
+}
+
+/**
  * An anchored pool card or key row under the reload banner, on loads of its own under the mock's build switch: the view
  * loads with the banner drawn and the token past the bar's 52 px, then moves to the hash of its first card or row,
  * which lands with its top edge 16 px under the sticky block's bottom rather than behind the banner. Both edges are
@@ -14096,6 +14127,7 @@ try {
       if (view.path === '/analytics') await barRow(theme, view.path);
       if (view.path === '/analytics') await analyticsSortControl(theme);
       if (view.path === '/analytics' && mock) await shellBanner(theme);
+      if (view.path === '/analytics' && mock) await droppedThinkingInks(theme);
       if (view.path === '/requests') await rangePills(theme);
       // The chip measures, the bar's and the split button's each load what they read and leave the bare log at 1280 by
       // 800, so the shot above stays the bare log and the measures after them read it.

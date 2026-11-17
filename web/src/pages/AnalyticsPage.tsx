@@ -37,6 +37,7 @@ import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow
 import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, plural, shortId, shortModel, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, useResizeObserver, useWeekReading, type Loaded } from '@/lib/hooks';
+import { accountBound, transformationLabel, transformationOrder } from '@/lib/inputTransformations';
 import { rateKind, REFUSED_TITLE } from '@/lib/requests';
 import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
@@ -932,6 +933,14 @@ export function AnalyticsPage() {
                 </LineChart>
               </ChartCard>
 
+              <Card title="Misses by reason" subtitle={MISS_REASON_BLURB}>
+                {loading ? <Skeleton height={190} /> : <ReasonBars link={linkInput} plainLinks={plainLinks} totals={totals} />}
+              </Card>
+
+              <Card title="Dropped thinking blocks" subtitle={DROPPED_THINKING_BLURB}>
+                {loading ? <Skeleton height={190} /> : <DroppedThinkingBars link={linkInput} plainLinks={plainLinks} totals={totals} />}
+              </Card>
+
               <ChartCard
                 title="Write cost vs read cost"
                 subtitle={
@@ -986,12 +995,9 @@ export function AnalyticsPage() {
                   </BarChart>
                 )}
               </ChartCard>
-
-              <Card title="Misses by reason" subtitle={MISS_REASON_BLURB}>
-                {loading ? <Skeleton height={190} /> : <ReasonBars link={linkInput} plainLinks={plainLinks} totals={totals} />}
-              </Card>
             </div>
             <MissReasonsByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} order={tableOrder} plainLinks={plainLinks} />
+            <DroppedThinkingByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} order={tableOrder} plainLinks={plainLinks} totals={totals} />
             {sessionId === null && (
               <CacheByModel
                 groups={byModel.current ?? []}
@@ -1528,10 +1534,10 @@ function reasonColor(ink: ReturnType<typeof useChartInk>, reason: CacheMissReaso
 }
 
 /**
- * What every count of the reasons panel and the refusals card links under: the window and the page's filters, without
- * a count, a reason or a category.
+ * What every count of the reasons panel, the dropped thinking blocks card and the refusals card links under: the window
+ * and the page's filters, without a count, a reason, a key of the dropped blocks or a category.
  */
-type ReasonLink = Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory'>;
+type ReasonLink = Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory' | 'transformation'>;
 
 /**
  * A count of the reasons panel or the refusals card: a link to the requests it counts, else the figure with why it
@@ -1568,6 +1574,49 @@ function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks
         />
       ))}
     </ul>
+  );
+}
+
+const DROPPED_THINKING_BLURB = 'From the thinking-binding beta: requests whose answer listed a thinking block it dropped or let pass, by type and reason. A bar counts requests, never blocks';
+
+/**
+ * One bar per key of the blocks the answers dropped, largest first, a key under an account reason in the fault ink, then
+ * the moved requests and the requests with nothing dropped as plain lines, since the Requests filter lists keys alone.
+ */
+function DroppedThinkingBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks: boolean; totals: AnalyticsGroup }) {
+  const ink = useChartInk();
+  // The sort is stable, so a tie keeps the order the console lists the keys in.
+  const rows = transformationOrder(totals.inputTransformations)
+    .map((key) => ({ count: countOf(totals.inputTransformations, key), key }))
+    .sort((a, b) => b.count - a.count);
+  const moved = totals.inputTransformationsMoved;
+  const none = totals.inputTransformationsNone;
+  if (rows.length === 0 && moved === 0 && none === 0) return <p className="muted">No answer reported its thinking blocks in range.</p>;
+  const max = Math.max(1, ...rows.map((r) => r.count));
+  const share = (count: number) => fmtPct(totals.requests ? count / totals.requests : 0, 1);
+  return (
+    <div className="stack">
+      {rows.length > 0 && (
+        <ul className="plain-list hbars hbars--reasons">
+          {rows.map((r) => (
+            <HBarRow
+              key={r.key}
+              color={accountBound(r.key) ? ink.series[7] : ink.muted}
+              count={<CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count: r.count, transformation: r.key })}>{fmtInt(r.count)}</CountLink>}
+              fill={r.count / max}
+              label={transformationLabel(r.key)}
+              share={share(r.count)}
+            />
+          ))}
+        </ul>
+      )}
+      <ul className="plain-list">
+        <li>Moved to another account: {fmtInt(moved)}</li>
+        <li>
+          Nothing dropped: {fmtInt(none)} <span className="muted">{share(none)}</span>
+        </li>
+      </ul>
+    </div>
   );
 }
 
@@ -1757,6 +1806,41 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, order,
         cells: [...reasons.map((reason) => cell(g, reason)), fmtInt(g.expiredBetweenTurns)],
         // The known reasons alone, since a reason the console does not know has no sort key.
         figures: { ...Object.fromEntries(CACHE_MISS_REASONS.map((reason) => [reason, countOf(g.cacheMissReasons, reason)])), expired_between_turns: g.expiredBetweenTurns },
+      }))}
+    />
+  );
+}
+
+/**
+ * A column per key the totals hold, each count linking its key's requests in its group, then Moved and Nothing dropped,
+ * which no Requests filter lists. The keys are an open set and take no sort key, so a row carries no figure and the
+ * group's label orders the rows.
+ */
+function DroppedThinkingByGroup({ groupBy, groups, groupLabel, link, loading, order, plainLinks, totals }: { groupBy: GroupBy; groupLabel: string; groups: AnalyticsGroup[]; link: ReasonLink; loading: boolean; order: TableOrder; plainLinks: boolean; totals: AnalyticsGroup }) {
+  const keys = transformationOrder(totals.inputTransformations);
+  const cell = (g: AnalyticsGroup, key: string) => {
+    const count = countOf(g.inputTransformations, key);
+    return <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, transformation: key })}>{fmtInt(count)}</CountLink>;
+  };
+  return (
+    <BreakdownTable
+      title={`Dropped thinking blocks by ${groupLabel.toLowerCase()}`}
+      loading={loading}
+      groupLabel={groupLabel}
+      columns={[
+        ...keys.map((key) => (
+          <span key={key} title={key}>
+            {transformationLabel(key)}
+          </span>
+        )),
+        'Moved',
+        'Nothing dropped',
+      ]}
+      order={order}
+      rows={groups.filter(countsRequest).map((g) => ({
+        key: g.key,
+        label: g.label,
+        cells: [...keys.map((key) => cell(g, key)), fmtInt(g.inputTransformationsMoved), fmtInt(g.inputTransformationsNone)],
       }))}
     />
   );

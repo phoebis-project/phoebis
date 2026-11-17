@@ -20395,7 +20395,7 @@ expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Ti
   results.push({ name: "/analytics the Latency head names the merged histograms and the slow-down's hold left out", ok: meta === "Percentiles read from merged per-hour histograms. The slow-down's hold is left out", missing: [meta] });
 }
 await tab(m, 'Cache');
-expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'expired between turns', 'From the cache diagnostics beta: the reason each answered request drew. A gray part counts the requests under a reason that read 90% or more of their prompt from the cache. Not requested sent no diagnostics member, and No reason returned sent one and drew no reason', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h']);
+expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'expired between turns', 'From the cache diagnostics beta: the reason each answered request drew. A gray part counts the requests under a reason that read 90% or more of their prompt from the cache. Not requested sent no diagnostics member, and No reason returned sent one and drew no reason', 'Dropped thinking blocks', 'From the thinking-binding beta: requests whose answer listed a thinking block it dropped or let pass, by type and reason. A bar counts requests, never blocks', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h']);
 {
   // A request refused before it resolved a model read no cache, so Cache by model lists its group under neither its
   // key nor its "no model" label, the route's word for it.
@@ -20718,6 +20718,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const BREAKDOWNS = [
     ['Traffic', 'Traffic by key', ['Key']],
     ['Cache', 'Misses by reason by key', ['Key']],
+    ['Cache', 'Dropped thinking blocks by key', ['Key']],
     ['Cache', 'Cache by model', ['Model']],
   ];
   let read = 0;
@@ -20728,7 +20729,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     columnsMarked(`/analytics every breakdown table marks its group column fill and its figures fit: ${title}`, table, fill);
     fillTitles(`/analytics every group cell of a breakdown table carries its own text as its title: ${title}`, table);
   }
-  results.push({ name: '/analytics every breakdown table marks its group column fill and its figures fit: three tables read', ok: read === BREAKDOWNS.length, missing: [`${read} of ${BREAKDOWNS.length} tables`] });
+  results.push({ name: '/analytics every breakdown table marks its group column fill and its figures fit: four tables read', ok: read === BREAKDOWNS.length, missing: [`${read} of ${BREAKDOWNS.length} tables`] });
 }
 {
   const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
@@ -24369,6 +24370,7 @@ await forView('/analytics', async () => {
   read.latency = keysOf(tableOf('Latency by key'));
   await tab(page, 'Cache');
   read.misses = keysOf(page.container.querySelector('.misses-table'));
+  read.dropped = keysOf(tableOf('Dropped thinking blocks by key'));
   read.cacheByModel = keysOf(tableOf('Cache by model'));
   await tab(page, 'Cost');
   read.nativeCost = keysOf(tableOf('Cost by key'));
@@ -24381,7 +24383,7 @@ await forView('/analytics', async () => {
   delete api.getAnalyticsSeries;
   localStorage.removeItem('phoebis.unit');
   const KEYS = ['ci', 'failed-only', 'laptop'];
-  const want = { traffic: ['0', '4'], latency: KEYS, misses: KEYS, cacheByModel: ['claude-fable-5-1', 'claude-sonnet-5-5', 'failed-only'], nativeCost: KEYS, dollarCost: KEYS, legend: KEYS };
+  const want = { traffic: ['0', '4'], latency: KEYS, misses: KEYS, dropped: KEYS, cacheByModel: ['claude-fable-5-1', 'claude-sonnet-5-5', 'failed-only'], nativeCost: KEYS, dollarCost: KEYS, legend: KEYS };
   results.push({
     name: '/analytics a group of refused requests alone draws in the Traffic table only',
     ok: JSON.stringify(read) === JSON.stringify(want),
@@ -24418,6 +24420,93 @@ await forView('/analytics', async () => {
     name: '/analytics the hit ratio leaves the uncacheable requests out of its base',
     ok: kept.startsWith('100% hit ratio,') && none.startsWith('0% hit ratio,'),
     missing: [kept, none],
+  });
+});
+
+await forView('/analytics', async () => {
+  // The rollups count the requests per key of the thinking blocks an answer dropped, beside two reserved counts that
+  // no Requests filter lists, so the card links a key's count and draws the two counts as plain lines. The stub answers
+  // every breakdown read with two groups that a story group lends its shape: summed, the account key reads fewest and
+  // a key the console has no label for stands between the two known ones, so the bars read largest first and the
+  // unknown key keeps its name. An empty map beside a count of requests with nothing dropped still draws the lines, so
+  // the card's empty text waits for both counts as well as the map.
+  const breakdownRead = api.getAnalyticsBreakdown;
+  const END_USER = 'thinking_dropped.end_user_binding_mismatch';
+  const PREFIX = 'thinking_dropped.prefix_binding_mismatch';
+  const FUTURE = 'thinking.future_reason';
+  const cardWith = async (classes) => {
+    api.getAnalyticsBreakdown = async (q) => {
+      const [template] = await breakdownRead.call(api, q);
+      return template === undefined ? [] : classes.map((c, i) => ({ ...template, key: `group-${i}`, label: `group-${i}`, ...c }));
+    };
+    const page = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
+    const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Dropped thinking blocks');
+    const table = [...page.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Dropped thinking blocks by key');
+    // A count's text without the muted share beside it.
+    const plain = (el) => [...(el?.childNodes ?? [])].filter((n) => !n.classList?.contains('muted')).map((n) => n.textContent).join('').trim();
+    const target = (a) => (a === null ? null : logTarget(a.getAttribute('href')));
+    const read = {
+      bars: [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => ({ count: plain(li.querySelector('.num')), key: target(li.querySelector('.num a'))?.input_transformations ?? null, label: li.children[0]?.textContent?.trim() ?? '', share: li.querySelector('.num .muted')?.textContent ?? null })),
+      empty: card?.textContent?.includes('No answer reported its thinking blocks in range.') ?? false,
+      lines: [...(card?.querySelectorAll('ul:not(.hbars) > li') ?? [])].map((li) => ({ linked: li.querySelector('a') !== null, share: li.querySelector('.muted')?.textContent ?? null, text: plain(li) })),
+      heads: [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? ''),
+      row: [...([...(table?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === 'group-0')?.children ?? [])].slice(1).map((td) => {
+        const t = target(td.querySelector('a'));
+        return { link: t === null ? null : { group: t.keys ?? null, key: t.input_transformations ?? null }, text: td.textContent?.trim() ?? '' };
+      }),
+    };
+    page.unmount();
+    return read;
+  };
+  const drawn = await cardWith([
+    { inputTransformations: { [END_USER]: 2, [PREFIX]: 6 }, inputTransformationsMoved: 1, inputTransformationsNone: 20, requests: 40 },
+    { inputTransformations: { [FUTURE]: 3, [PREFIX]: 1 }, inputTransformationsMoved: 0, inputTransformationsNone: 5, requests: 10 },
+  ]);
+  const empty = await cardWith([
+    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 0, requests: 40 },
+    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 0, requests: 10 },
+  ]);
+  const undropped = await cardWith([
+    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 20, requests: 40 },
+    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 10, requests: 10 },
+  ]);
+  api.getAnalyticsBreakdown = breakdownRead;
+  const want = {
+    drawn: {
+      bars: [
+        { count: '7', key: PREFIX, label: 'Dropped, prefix changed', share: '14.0%' },
+        { count: '3', key: FUTURE, label: FUTURE, share: '6.0%' },
+        { count: '2', key: END_USER, label: 'Dropped, other end user', share: '4.0%' },
+      ],
+      empty: false,
+      lines: [
+        { linked: false, share: null, text: 'Moved to another account: 1' },
+        { linked: false, share: '50.0%', text: 'Nothing dropped: 25' },
+      ],
+      heads: ['Key', 'Dropped, other end user', 'Dropped, prefix changed', FUTURE, 'Moved', 'Nothing dropped'],
+      row: [
+        { link: { group: 'group-0', key: END_USER }, text: '2' },
+        { link: { group: 'group-0', key: PREFIX }, text: '6' },
+        { link: null, text: '0' },
+        { link: null, text: '1' },
+        { link: null, text: '20' },
+      ],
+    },
+    empty: { bars: [], empty: true, lines: [] },
+    undropped: {
+      bars: [],
+      empty: false,
+      lines: [
+        { linked: false, share: null, text: 'Moved to another account: 0' },
+        { linked: false, share: '60.0%', text: 'Nothing dropped: 30' },
+      ],
+    },
+  };
+  const got = { drawn, empty: { bars: empty.bars, empty: empty.empty, lines: empty.lines }, undropped: { bars: undropped.bars, empty: undropped.empty, lines: undropped.lines } };
+  results.push({
+    name: '/analytics draws the dropped thinking blocks by key, and the two reserved counts as plain figures',
+    ok: JSON.stringify(got) === JSON.stringify(want),
+    missing: Object.entries(got).map(([read, value]) => `${read} ${JSON.stringify(value)}`),
   });
 });
 
