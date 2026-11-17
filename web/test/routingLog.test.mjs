@@ -528,7 +528,7 @@ const candidate = (o) => ({
   windows: { five_hour: window5h(0.62, ms(16, 44)), seven_day: window5h(0.41, Date.UTC(2026, 8, 19, 20, 10)), seven_day_fable: window5h(0.12, Date.UTC(2026, 8, 19, 20, 10)) },
   ...o,
 });
-const completion = (o) => ({ cacheMapWritten: null, cacheReadTokens: null, cacheWriteTokens: null, completedAt: null, freed: false, heldMs: null, hit: null, inputTokens: null, promisedTokens: null, status: null, ...o });
+const completion = (o) => ({ cacheMapWritten: null, cacheReadTokens: null, cacheWriteTokens: null, completedAt: null, freed: false, heldMs: null, hit: null, inputTokens: null, inputTransformations: null, promisedTokens: null, status: null, ...o });
 const SETTINGS = {
   affinityMode: 'when_cached', affinityTtlSeconds: 600, burnAverageSeconds: 1_800, fiveHourCeiling: 0.95, inFlightCap: 16, legacy: null, loadShedding: true, migrateWhenSpent: true, minSharedPrefixTokens: 20_000,
   overageMoveGraceMinutes: 30, overagePolicy: 'prefer_plan', poolUpdatedAt: iso(ms(9, 5, 12)), preferSubscription: true, retryInPlaceSeconds: 60, returnToPlan: 'when_cold', returnToPlanDwellSeconds: 900,
@@ -1507,6 +1507,28 @@ test('the verdict line words the kind with its accounts and its pool as entities
   assert.equal(words(record({ outcome: { accountId: null, kind: 'refused' } }), decision({ kind: 'refused' })), 'Refused before selection');
   const pending = record({ outcome: { completion: completion({}) } });
   assert.deepEqual(texts(d.verdictChips(pending, decision({ by: strategy('pace', [0, 0, 0]) }))).slice(-1), ['cache pending']);
+});
+
+test('a move draws the account-bound thinking its answer dropped, and no chip for the prefix entry', () => {
+  const PREFIX = 'thinking_dropped.prefix_binding_mismatch';
+  // A failover's landing is a placement whose pin moved, so the move reads off its pin event and never its kind.
+  const landing = (inputTransformations) => record({ outcome: { completion: completion({ completedAt: iso(NOW), inputTransformations, status: 200 }), kind: 'placed', pinEvents: [{ kind: 'pin_migrated', reason: 'cooldown' }] } });
+  const note = (r) => d.verdictChips(r, decision({})).find((c) => c.label === 'account-bound thinking');
+  const dropped = note(
+    landing({
+      'thinking_dropped.end_user_binding_mismatch': { blocks: 153, firstMessage: 2 },
+      'thinking_dropped.organization_binding_mismatch': { blocks: 1, firstMessage: 4 },
+      [PREFIX]: { blocks: 1, firstMessage: 2 },
+    }),
+  );
+  assert.deepEqual([dropped?.value, dropped?.title], ['154 blocks', 'Dropped, other end user: 153 blocks\nDropped, other organization: 1 block']);
+  assert.equal(note(landing({ [PREFIX]: { blocks: 1, firstMessage: 2 } })), undefined, "the client's standing prefix entry is no block the move cost");
+});
+
+test('a renewal whose answer lists an account key draws no chip', () => {
+  const renewed = record({ outcome: { completion: completion({ completedAt: iso(NOW), inputTransformations: { 'thinking_dropped.end_user_binding_mismatch': { blocks: 1, firstMessage: 2 } }, status: 200 }), kind: 'renewed' } });
+  const note = d.verdictChips(renewed, decision({ kind: 'renewed' })).find((c) => c.label === 'account-bound thinking');
+  assert.equal(note, undefined, 'the account key stands on each answer from the move to the next compaction');
 });
 
 test('the settings fold lists twenty-five rows, draws the five as not recorded on a record from before, and a return dwell of 0 as at once', () => {

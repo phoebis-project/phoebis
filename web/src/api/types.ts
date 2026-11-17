@@ -1499,6 +1499,11 @@ export interface RecordCompletion {
   heldMs: number | null;
   hit: boolean | null;
   inputTokens: number | null;
+  /**
+   * The completing attempt's dropped thinking blocks: an empty map for an answer that listed nothing, and null until the
+   * answer ends, for an answer without the member and for an attempt the router recorded before it kept it.
+   */
+  inputTransformations: InputTransformations | null;
   promisedTokens: number | null;
   status: number | null;
 }

@@ -18059,6 +18059,14 @@ await forView('/routing-log', async () => {
         own: async (card, record, page) => {
           const table = await popoverOf(page, stationButton(card, 'fit'));
           const fact = [...(rowOf(page, `${record.requestId}/1`)?.querySelectorAll('.fact__pair') ?? [])].map((p) => p.textContent);
+          // The move's answer on nightly drops the block that the session's one thinking turn on overflow wrote, which
+          // the mock's `fillDroppedBlocks` lists under the end user key, and the verdict line counts it.
+          const note = [...(card?.querySelectorAll('.decision-card__verdict > .chips > .chip') ?? [])].find((c) => c.querySelector('.chip__label')?.textContent === 'account-bound thinking');
+          results.push({
+            name: "/routing-log notes the account-bound thinking a move's answer dropped",
+            ok: note !== undefined && chipWords(note) === 'account-bound thinking 1 block' && note.getAttribute('title') === 'Dropped, other end user: 1 block',
+            missing: [verdictChipsOf(card).join(' / '), note?.getAttribute('title') ?? 'no chip'],
+          });
           return (table?.querySelectorAll('tbody tr').length ?? 0) === 3 && fact.includes('fitleast bad');
         },
         what: 'least-bad move',

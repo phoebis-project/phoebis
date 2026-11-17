@@ -7,6 +7,7 @@ import { tierOrder } from './costs';
 import { has, lookup } from './counts';
 import type { ChipText } from './filterBar';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, listed, plural, shortModel, weekShort } from './format';
+import { accountBound, transformationLabel, transformationOrder } from './inputTransformations';
 import { ALL_KINDS, DECISION_KIND_LABEL, EVENT_KIND_LABEL } from './kinds';
 import { isFastScope, MODEL_SCOPE_PREFIX, PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL, scopeLabel, scopeModel } from './quota';
 import { speedWord } from './selection';
@@ -1317,7 +1318,10 @@ const rewriteWords = (hold: NonNullable<RecordOutcome['hold']>, now: number): Ch
   ...(hold.until === null ? [] : [plain(`until ${formatFact(hold.until, 'time', now)}`)]),
 ];
 
-/** The tier, the rule or the rung, the pin's warmth and the cache verdict once the attempt has usage. */
+/**
+ * The tier, the rule or the rung, the pin's warmth, the cache verdict once the attempt has usage, and on a move the
+ * account-bound thinking its answer dropped.
+ */
 export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip[] {
   const o = record.outcome;
   const chips: Chip[] = [];
@@ -1351,6 +1355,15 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
     chips.push({ ...plain(figure.text, c.hit ? 'cache hit' : 'cache miss'), title: figure.title ?? promise });
   } else if (c !== null && c.completedAt === null) {
     chips.push(plain('cache pending'));
+  }
+  // An account key stands on each answer from a move to the next compaction, and the prefix key on each answer of a
+  // compacted session, so the chip takes the move's own record and an account reason. A failover's landing is a
+  // placement whose pin moved, so the move reads off the pin event.
+  const dropped = c?.inputTransformations ?? {};
+  const bound = o.pinEvents.some((e) => e.kind === 'pin_migrated') ? transformationOrder(dropped).filter(accountBound) : [];
+  if (bound.length > 0) {
+    const total = bound.reduce((n, key) => n + dropped[key].blocks, 0);
+    chips.push({ ...plain(plural(total, 'block'), 'account-bound thinking'), title: bound.map((key) => `${transformationLabel(key)}: ${plural(dropped[key].blocks, 'block')}`).join('\n') });
   }
   return chips;
 }

@@ -1843,6 +1843,13 @@ test("a decision record's completion reads the attempt's cache write", () => {
   assert.equal(r.outcome.completion.cacheWriteTokens, 27_246);
 });
 
+test("a decision record's completion reads the attempt's dropped thinking blocks", () => {
+  // The captured completion lists no key, so `mock-sync` holds no entry's shape and the key rides on a copy here.
+  const body = fixture('decision');
+  const r = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, completion: { ...body.outcome.completion, input_transformations: { 'thinking_dropped.end_user_binding_mismatch': { blocks: 154, first_message: 3 } } } } });
+  assert.deepEqual(r.outcome.completion.inputTransformations, { 'thinking_dropped.end_user_binding_mismatch': { blocks: 154, firstMessage: 3 } });
+});
+
 test('a row with null optionals decodes to nulls', () => {
   const s = d.decodeDecisionSummary({
     account_id: null, agent_id: null, at: 1_000, attempt: 1, attempt_count: null, by: { kind: 'none', tier: null, value: '' }, cache: null, exhaustion: null, fact: [{ entity: null, key: 'pick', unit: null, value: true }, { entity: null, key: 'idle', unit: 'ms', value: 5 }],

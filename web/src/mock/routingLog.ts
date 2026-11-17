@@ -1506,6 +1506,7 @@ function completionOf(spec: Spec, pool: PoolSeed, chosen: RecordCandidate | unde
     hit: cache.hit,
     // A token count's answer is its body's count, which the router stores no usage for.
     inputTokens: cache.hasUsage ? (r.kind === 'count_tokens' ? bodyTokensOf(r) : usage.input) : null,
+    inputTransformations: attempt?.response.inputTransformations ?? null,
     promisedTokens: cache.promised,
     status: attempt?.upstreamStatus ?? null,
   };
