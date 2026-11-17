@@ -207,3 +207,48 @@ async fn a_zstd_bomb_response_is_refused_at_the_control_bound() {
     }
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_streamed_answer_past_the_buffered_bound_arrives_whole() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/api/frame/".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: vec![b'a'; 5_242_880],
+        },
+    }])
+    .await;
+    let profile = claude_code_2_1_310_linux_x64();
+    let mut b = connector_builder(profile, Plane::Control).unwrap();
+    phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
+    let addr = up.addr();
+    let resolver: Resolver =
+        Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
+    let client = ControlClient::new(profile, b.build(), resolver);
+    let req = RawRequest {
+        method: "GET",
+        target: "/api/frame/artifacts".into(),
+        headers: vec![
+            ("Host".into(), "api.anthropic.com".into()),
+            ("Connection".into(), "close".into()),
+        ],
+        body: Bytes::new(),
+    };
+    let mut answer = client
+        .send_streaming(
+            req,
+            "api.anthropic.com",
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer.head.status, 200);
+    let mut total = 0;
+    while let Some(piece) = answer.body.next_chunk().await.unwrap() {
+        total += piece.len();
+    }
+    assert_eq!(total, 5_242_880);
+    up.shutdown().await;
+}

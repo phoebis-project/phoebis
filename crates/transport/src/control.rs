@@ -4,13 +4,16 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use boring::ssl::SslConnector;
 use bytes::{Bytes, BytesMut};
 use phoebis_profile::Profile;
+use tokio::io::{AsyncRead, ReadBuf};
 
 use crate::decode::{decoder, encoding};
+use crate::pool::Conn;
 use crate::request::{write_request, ProgressCell, RawRequest, WriteProgress};
 use crate::response::{framing, read_head, BodyReader, ResponseHead};
 use crate::{connect_tls, TransportError};
@@ -23,6 +26,30 @@ pub type ResolveFuture = Pin<Box<dyn Future<Output = Option<SocketAddr>> + Send>
 /// Bounds a control-plane response body: these are small JSON payloads, so anything past this is a malformed
 /// or malicious upstream rather than a legitimate response.
 pub const MAX_BODY: usize = 4 * 1024 * 1024;
+
+/// Why a streaming send handed back no answer, in the four cases a caller's log line tells apart.
+#[derive(Debug, thiserror::Error)]
+pub enum StreamFailure {
+    /// The connection failed or ended before the answer's whole head arrived, after the request was written.
+    #[error("the connection was cut before the answer's head: {0}")]
+    Cut(String),
+    /// The answer's head did not arrive inside its bound.
+    #[error("no answer head in time")]
+    Stalled,
+    /// Bytes arrived that are no HTTP head.
+    #[error("unreadable answer head: {0}")]
+    Undecodable(String),
+    /// No address, no connection or no handshake in time, or a write that failed before the request's last byte,
+    /// so nothing upstream can have acted on it.
+    #[error("upstream unreachable: {0}")]
+    Unreachable(String),
+}
+
+/// A control answer as its head and a reader over its body, for a caller that passes the body on as it arrives.
+pub struct ControlAnswer {
+    pub head: ResponseHead,
+    pub body: BodyReader<Conn>,
+}
 
 pub struct ControlClient {
     // Kept for the constructor's stable shape across its call sites; `send` forwards the caller-built `RawRequest`
@@ -112,6 +139,94 @@ impl ControlClient {
         d.feed_into(&mut out, &body, MAX_BODY)?;
         d.finish_into(&mut out, MAX_BODY)?;
         Ok((head, Bytes::from(out)))
+    }
+
+    /// One fresh connection per call, the head as the caller built it, and the answer handed back as its head and a
+    /// reader over its body. Nothing bounds the body and nothing decodes it, so the caller passes each piece on in
+    /// the coding the upstream gave it. `connect_timeout` bounds the lookup, the connection and the handshake, and
+    /// `head_timeout` the write and the wait for the answer's head.
+    pub async fn send_streaming(
+        &self,
+        req: RawRequest,
+        host: &str,
+        connect_timeout: Duration,
+        head_timeout: Duration,
+    ) -> Result<ControlAnswer, StreamFailure> {
+        let connecting = async {
+            let Some(addr) = (self.resolver)(host).await else {
+                return Err(StreamFailure::Unreachable(format!("no address for {host}")));
+            };
+            connect_tls(&self.connector, host, addr)
+                .await
+                .map_err(|error| StreamFailure::Unreachable(error.to_string()))
+        };
+        let mut conn = match tokio::time::timeout(connect_timeout, connecting).await {
+            Ok(connected) => connected?,
+            Err(_) => {
+                return Err(StreamFailure::Unreachable(format!(
+                    "no connection to {host} in time"
+                )))
+            }
+        };
+        let mut buf = BytesMut::new();
+        let exchange = async {
+            write_request(&mut conn, &req, None)
+                .await
+                .map_err(|failure| match failure.progress {
+                    WriteProgress::Unsent => StreamFailure::Unreachable(format!(
+                        "request to {host} was not sent: {}",
+                        failure.error
+                    )),
+                    WriteProgress::Written => StreamFailure::Cut(failure.error.to_string()),
+                })?;
+            let mut watched = EndWatch {
+                conn: &mut conn,
+                ended: false,
+            };
+            let read = read_head(&mut watched, &mut buf).await;
+            read.map_err(|error| {
+                if watched.ended {
+                    StreamFailure::Cut(error.to_string())
+                } else {
+                    StreamFailure::Undecodable(error.to_string())
+                }
+            })
+        };
+        let head = match tokio::time::timeout(head_timeout, exchange).await {
+            Ok(read) => read?,
+            Err(_) => return Err(StreamFailure::Stalled),
+        };
+        let f = framing(&head);
+        Ok(ControlAnswer {
+            head,
+            body: BodyReader::new(conn, buf, f),
+        })
+    }
+}
+
+/// Notes whether the peer ended the connection or failed a read, since `read_head` names a close before the head's
+/// end and a head that does not parse with one error, and the two are different cases of a failed send.
+struct EndWatch<'a> {
+    conn: &'a mut Conn,
+    ended: bool,
+}
+
+impl AsyncRead for EndWatch<'_> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        // A read into a full buffer fills nothing without the peer having ended anything.
+        let room = buf.remaining() > 0;
+        let polled = Pin::new(&mut *self.conn).poll_read(cx, buf);
+        match &polled {
+            Poll::Ready(Ok(())) if room && buf.filled().len() == before => self.ended = true,
+            Poll::Ready(Err(_)) => self.ended = true,
+            _ => {}
+        }
+        polled
     }
 }
 
