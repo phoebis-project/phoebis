@@ -50,6 +50,7 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   warm_prefix_expired: 'warm prefix expired',
   wind_down_started: 'wind-down started',
   window_cleared: 'window cleared',
+  window_dropped: 'window dropped',
   window_reset: 'window reset',
   window_spent: 'window spent',
 };

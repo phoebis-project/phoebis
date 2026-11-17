@@ -69,10 +69,16 @@ test("weeklyResetsKey moves at a reset and holds at a poll's fraction", () => {
   assert.notEqual(d.weeklyResetsKey(listed('2026-11-02T00:59:59.900Z')), d.weeklyResetsKey(listed('2026-11-09T00:59:59.900Z')));
 });
 
+test("the resets' key moves at a use", () => {
+  // A use leaves every weekly reset where it stood and takes one off the account's resets left.
+  const listed = (left) => [{ fableWindow: null, limitResets: { left }, windows: [{ periodHours: 168, resetsAt: '2026-11-02T00:59:59.900Z' }] }];
+  assert.notEqual(d.weeklyResetsKey(listed(1)), d.weeklyResetsKey(listed(0)));
+});
+
 test("the newest four resets total the answer's figures where it lists four or fewer, and the console's own sum and count over more", () => {
   // Three shares whose sum in floating point is 0.6000000000000001, beside the route's 0.6.
   const three = windowOf('seven_day', [0.1, 0.2, 0.3], { total: 0.6 });
-  assert.deepEqual(d.newestResets(three), { counted: 3, resets: three.resets, total: 0.6 });
+  assert.deepEqual(d.newestResets(three), { counted: 3, resets: three.resets, total: 0.6, used: 0 });
   const six = windowOf('seven_day', [0.5, 0.25, 0.125, 0.25, 0.75, 1], { total: 2.875 });
   const newest = d.newestResets(six);
   assert.deepEqual([newest.counted, newest.resets, newest.total], [4, six.resets.slice(0, 4), 1.125]);
@@ -80,6 +86,16 @@ test("the newest four resets total the answer's figures where it lists four or f
   // A week the term ended inside is a reset of that week, so its share counts in the total as any other.
   const ended = windowOf('seven_day', [0.5, 0.25, 0.25, 0.125, 0.75], { sources: ['term_ended'] });
   assert.deepEqual([d.newestResets(ended).counted, d.newestResets(ended).total, d.newestResets(ended).resets[0].source], [4, 1.125, 'term_ended']);
+});
+
+test('the four weeks keep four natural resets and the used resets among them', () => {
+  // A used reset three days before the second newest reset cleared the window inside that week, so its row carries
+  // that week's reset and the route lists it after the week's own.
+  const [first, second, third, fourth] = windowOf('seven_day', [0.5, 0.25, 0.25, 0.125]).resets;
+  const claim = { observedAt: iso(NOW - DAY - WEEK - 3 * DAY), plan: null, resetAt: second.resetAt, shareLeft: 0.375, source: 'claim', tier: null };
+  const resets = [first, second, claim, third, fourth];
+  // The route's total over the five rows: 0.5, 0.25, 0.375, 0.25 and 0.125.
+  assert.deepEqual(d.newestResets({ resets, resetsCounted: 5, totalShareLeft: 1.5, window: 'seven_day' }), { counted: 4, resets, total: 1.5, used: 1 });
 });
 
 test("a figure is the account's own share priced in the chosen week, a Fable-week reset at half its 7-day figure", () => {
@@ -250,6 +266,35 @@ test("allowanceRows keeps a lead week's reset out of the range's figure", () => 
   const [row] = d.allowanceRows(answer, COSTS, 'ultra', { fromMs: NOW - WEEK, toMs: NOW });
   const { counted, inRange, last } = row.figures.seven_day;
   assert.deepEqual([counted, inRange.text, last.text], [1, '50% Ultra week', '50% Ultra week']);
+});
+
+/**
+ * An Ultra account whose 7-day window reset a day before the range's end and a week before that, and one of whose used
+ * resets cleared its 7-day window and its Fable week at one poll half a day before that newest reset, so both rows carry
+ * that closed week's reset. `later` adds a second use a day after the first, inside the week still open at the range's
+ * end, whose rows carry the reset ahead of the end. The rows stand in the route's order.
+ */
+const usedAnswer = (later) => {
+  const claim = (at, resetAt, shareLeft) => ({ observedAt: iso(at), plan: null, resetAt: iso(resetAt), shareLeft, source: 'claim', tier: null });
+  const closed = NOW - DAY;
+  const open = closed + WEEK;
+  const [newest, before] = windowOf('seven_day', [0.5, 0.25]).resets;
+  const seven = [...(later ? [claim(NOW - DAY / 2, open, 0.375)] : []), newest, claim(closed - DAY / 2, closed, 0.125), before];
+  const fable = [...(later ? [claim(NOW - DAY / 2, open, 0.5)] : []), claim(closed - DAY / 2, closed, 0.25)];
+  const windowFrom = (window, resets) => ({ resets, resetsCounted: resets.length, totalShareLeft: resets.reduce((s, r) => s + r.shareLeft, 0), window });
+  return { accounts: [accountOf('used', MAX_20X, [windowFrom('seven_day', seven), windowFrom('seven_day_fable', fable)])], from: iso(NOW - 29 * DAY), to: iso(NOW) };
+};
+
+test("the range counts a used reset apart from the calendar's", () => {
+  const [row] = d.allowanceRows(usedAnswer(false), COSTS, 'ultra', RANGE);
+  // Two 7-day resets, and one use that cleared two windows. The 7-day figure adds the use's 0.125 to the resets' 0.5
+  // and 0.25.
+  assert.deepEqual([row.resets, row.used, row.figures.seven_day.inRange.text], [2, 1, '87.5% Ultra week']);
+});
+
+test('two uses a day apart count twice', () => {
+  const [row] = d.allowanceRows(usedAnswer(true), COSTS, 'ultra', RANGE);
+  assert.deepEqual([row.resets, row.used], [2, 2]);
 });
 
 /** Nine accounts with 17 resets of the 7-day window and three of the Fable week, the ninth on a Free plan. */

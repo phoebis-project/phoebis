@@ -5747,7 +5747,10 @@ await forView('/accounts', async () => {
     // newest first, and its Fable week 0.79, 0.84, 0.76 and 0.82, read here off the route with each reset's pair. A
     // week prices at the tier it ran under: the week under Pro reads to the one its share reads at Max as Pro's 7-day
     // capacity stands to Max's on the cost table the page reads, and the total adds the weeks' own figures rather than
-    // pricing the summed shares at the current tier.
+    // pricing the summed shares at the current tier. Its used reset three hours back cleared the Fable week (its drop's
+    // seed beside its claim in mock/routingLog.ts), so the route lists a `claim` row under the week's own reset, still
+    // ahead, which leads that column at the drop's instant with the "reset used" badge, and the total names the use
+    // apart from the four weeks.
     const studio = story.get('studio');
     const since = Date.parse(studio.subscription.since);
     const span = { from: new Date(CLOCK_ORIGIN - 29 * 24 * 3_600_000).toISOString(), to: new Date(CLOCK_ORIGIN).toISOString() };
@@ -5757,14 +5760,18 @@ await forView('/accounts', async () => {
     const columnWant = (label, window) => {
       const resets = windows.find((w) => w.window === window)?.resets ?? [];
       const own = resets.map((r) => figureIn(r.shareLeft, ranUnder(r), window));
+      const uses = resets.filter((r) => r.source === 'claim').length;
+      const used = resets[0]?.source === 'claim';
       return {
         head: [label, weekShort(own[0], 'ultra')],
+        reset: used ? `left at ${instantOf(Date.parse(resets[0].observedAt))} reset used` : `left at the reset of ${instantOf(Date.parse(resets[0]?.resetAt))}`,
+        resetBadge: used ? 'reset used' : null,
         rows: resets.slice(1).map((r, i) => [day(Date.parse(r.resetAt)), weekShort(own[i + 1], 'ultra')]),
-        total: [`Total, ${resets.length} weeks`, weekShort(sum(own), 'ultra')],
+        total: [`Total, ${resets.length - uses} weeks${uses === 0 ? '' : ` and ${uses} used reset`}`, weekShort(sum(own), 'ultra')],
       };
     };
     const upgraded = await mount('/accounts/studio', { now: CLOCK_ORIGIN });
-    const drawn = blockOf(upgraded)?.columns.map(({ head, rows, total }) => ({ head, rows, total })) ?? null;
+    const drawn = blockOf(upgraded)?.columns.map(({ head, reset, resetBadge, rows, total }) => ({ head, reset, resetBadge, rows, total })) ?? null;
     upgraded.unmount();
     const sevenDay = windows.find((w) => w.window === 'seven_day')?.resets ?? [];
     const pairs = windows.map((w) => `${w.window} ${w.resets.map((r) => r.plan).join(',')}`);
@@ -5774,9 +5781,9 @@ await forView('/accounts', async () => {
     const proWeek = weekShort(figureIn(sevenDay[2]?.shareLeft ?? NaN, studio.subscription.rateLimitTier, 'seven_day') * ratio, 'ultra');
     const atCurrent = weekShort(figureIn(sum(sevenDay.map((r) => r.shareLeft)), studio.subscription.rateLimitTier, 'seven_day'), 'ultra');
     results.push({
-      name: "/accounts/studio each week prices at the tier it ran under, the weeks before the upgrade at Pro's and the total adding the weeks' own figures",
+      name: "/accounts/studio each week prices at the tier it ran under, the weeks before the upgrade at Pro's and the total adding the weeks' own figures, and its used reset leads the Fable column with the \"reset used\" badge",
       ok:
-        JSON.stringify(pairs) === '["seven_day max_5x,max_5x,pro,pro","seven_day_fable max_5x,max_5x,pro,pro"]' &&
+        JSON.stringify(pairs) === '["seven_day max_5x,max_5x,pro,pro","seven_day_fable max_5x,max_5x,max_5x,pro,pro"]' &&
         JSON.stringify(drawn) === JSON.stringify(want) &&
         drawn?.[0]?.rows[1]?.[1] === proWeek &&
         drawn[0].total[1] !== atCurrent,
@@ -18642,6 +18649,7 @@ await forView('/routing-log', async () => {
       warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
       wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
       window_cleared: ['Window', 'Before', 'After', 'Reset', 'Read from'],
+      window_dropped: ['Window', 'Before', 'After', 'Reset'],
       window_reset: ['Window', 'Before the reset', 'Read from', 'Prediction', 'Next reset'],
       // A spent edge a poll read names no request.
       window_spent: (e) => ['Window', 'Reading', 'Read from', 'Resets', 'Effect', ...(e.requestId === null ? [] : ['Request'])],
@@ -18650,7 +18658,7 @@ await forView('/routing-log', async () => {
       'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'limit_reset_claimed', 'mark_cleared', 'model_permitted', 'model_rejected',
       'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
       'refresh_failed', 'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started',
-      'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
+      'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_dropped', 'window_reset', 'window_spent',
     ];
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
     // The pairs the event carries the facts for: the state's effect, the gap's meaning, the spent window's effect, the
@@ -20579,7 +20587,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
   // Under the default 24 hours no weekly reset of the story falls in the range, and each account's newest one stands
   // in the week before it: studio's 7-day reset 2 d 14 h 40 m back (`WEEKLY_RESETS` in mock/routingLog.ts). Its row
-  // draws that reset as its last, the figure the first mount drew, beside the note, and its range's cell the dash.
+  // draws that reset as its last, the figure the first mount drew, beside the note, and its range's cell the dash. Its
+  // used reset three hours back cleared the Fable week from 0.75 (its drop's seed in mock/routingLog.ts), which the
+  // Resets cell reads after the count of natural resets, with a hover line for the cleared week.
   const short = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
   const shortRows = [...short.container.querySelectorAll('#accounts .card')]
     .find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Unused allowance by account')
@@ -20588,9 +20598,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const studioShort = studioRow && { cells: [...studioRow.children].slice(1, 4).map((td) => [text(td), td.querySelector('span[title]')?.getAttribute('title') ?? null]), notes: [...studioRow.querySelectorAll('td.col-fill .sub')].map(text) };
   short.unmount();
   const studioLast = native?.rows[native.ids.indexOf('studio')]?.[2] ?? null;
+  const usedHover = `Fable cleared by a used reset, seen ${fmtAbsolute(new Date(CLOCK_ORIGIN - 3 * 3_600_000).toISOString())}, 25% left`;
   results.push({
-    name: '/analytics the Unused allowance card reads the week before a short range',
-    ok: studioLast !== null && studioLast !== '-' && JSON.stringify(studioShort) === JSON.stringify({ cells: [['0', null], [studioLast, null], ['-', 'No reset of this window in the range']], notes: ['no reset in range'] }),
+    name: '/analytics the Unused allowance card reads the week before a short range, and a use in it apart from the natural resets',
+    ok: studioLast !== null && studioLast !== '-' && JSON.stringify(studioShort) === JSON.stringify({ cells: [['0, 1 used', usedHover], [studioLast, null], ['-', 'No reset of this window in the range']], notes: ['no reset in range'] }),
     missing: [JSON.stringify(studioShort ?? null), `the first mount's last ${studioLast}`],
   });
 

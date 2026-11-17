@@ -120,7 +120,7 @@ export const KIND_PRESETS: readonly KindPreset[] = [
   { label: 'placements and pins', members: ['placed', 'renewed', 'pin_created', 'pin_migrated', 'pin_released', 'pin_expired', 'reservation_expired'] },
   { label: 'moves and holds', members: ['moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started', 'slow_down_started', 'slow_down_ended'] },
   { label: 'exhaustion and refusals', members: ['exhausted', 'refused', 'window_spent', 'budget_reached', 'stream_interrupted'] },
-  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'window_cleared', 'limit_reset_claimed', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'poll_failed', 'plan_ended', 'plan_restored', 'refresh_succeeded', 'refresh_uncertain'] },
+  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'window_cleared', 'window_dropped', 'limit_reset_claimed', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'poll_failed', 'plan_ended', 'plan_restored', 'refresh_succeeded', 'refresh_uncertain'] },
   { label: 'cooldowns and backoff', members: ['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended'] },
   { label: 'keepalive', members: ['probe', 'warm_prefix_expired'] },
   { label: 'registry changes', members: ['registry_changed', 'catalog_changed', 'model_permitted', 'model_rejected'] },
@@ -595,6 +595,11 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
       const window = windowTagWord(str(d.window) ?? '');
       const reading = num(d.utilization);
       return reading === null ? { value: `${window} cleared` } : { title: `${window} cleared to ${fmtPct(reading)} under its reset`, value: `${window} cleared` };
+    }
+    case 'window_dropped': {
+      const window = windowTagWord(str(d.window) ?? '');
+      const reading = num(d.utilization);
+      return reading === null ? { value: `${window} dropped` } : { title: `${window} dropped to ${fmtPct(reading)} under its reset`, value: `${window} dropped` };
     }
     case 'window_reset':
       return { value: `${windowTagWord(str(d.window) ?? '')} reset` };
@@ -2359,6 +2364,13 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('After', pct(d.utilization));
       add('Reset', time(d.reset));
       add('Read from', text(d.source, SOURCE_WORD));
+      break;
+    // The detail's plan and tier price the use's row on the allowance read and draw no row here, as on a reset.
+    case 'window_dropped':
+      add('Window', window === null ? null : plain(windowTagWord(window)));
+      add('Before', pct(d.utilization_before));
+      add('After', pct(d.utilization));
+      add('Reset', time(d.reset));
       break;
     case 'window_reset':
       add('Window', window === null ? null : plain(windowTagWord(window)));

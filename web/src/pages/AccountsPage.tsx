@@ -21,7 +21,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, E
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { accountHref, accountMeterHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, sortDirOf } from '@/lib/address';
-import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, drawsFreeNote, newestResets, ownShareHover, pairOf, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
+import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, drawnInstant, drawsFreeNote, newestResets, ownShareHover, pairOf, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
@@ -861,7 +861,7 @@ function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; a
 }
 
 function AllowanceColumn({ account, costs, holder, week, window: w }: { account: AllowanceAccount; costs: SubscriptionCosts | null; holder: Pick<Account, 'subscription'>; week: WeekPosition; window: AllowanceWindow }) {
-  const { counted, resets } = newestResets(w);
+  const { counted, resets, used } = newestResets(w);
   const [latest, ...before] = resets;
   const figure = (reset: AllowanceReset | undefined) => allowanceFigure(reset?.shareLeft ?? null, w.window, account, costs, week, reset);
   // The figure reads the chosen week, so the hover adds the reset's own share of the account's window under the plan
@@ -872,7 +872,8 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
     const plan = pair.plan === 'free' || pair.plan === 'usage_based' ? planWordLabel(pair.plan) : hintPlan(holder, pair.tier);
     return plan === null ? resetHover(reset) : `${resetHover(reset)}\n${ownShareHover(plan, w.window, reset.shareLeft)}`;
   };
-  const ended = <Badge tone="neutral">term ended</Badge>;
+  // A term's end and a used reset fall inside a week, so their line names their own instant rather than a reset.
+  const badge = (reset: AllowanceReset) => (reset.source === 'term_ended' ? <Badge tone="neutral">term ended</Badge> : reset.source === 'claim' ? <Badge tone="neutral">reset used</Badge> : null);
   return (
     <div className="allowance__col">
       <div className="wbar__head">
@@ -881,26 +882,27 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
       </div>
       {latest && (
         <div className="wbar__reset allowance__reset" title={hover(latest)}>
-          {latest.source === 'term_ended' ? (
-            <>
-              {`left at ${resetInstant(latest.resetAt)}`} {ended}
-            </>
-          ) : (
+          {badge(latest) === null ? (
             `left at the reset of ${resetInstant(latest.resetAt)}`
+          ) : (
+            <>
+              {`left at ${resetInstant(drawnInstant(latest))}`} {badge(latest)}
+            </>
           )}
         </div>
       )}
       {before.map((r) => (
-        <div key={r.resetAt} className="allowance__row" title={hover(r)}>
+        // A use in a closed week carries that week's reset, so its row and the week's own share one `resetAt`.
+        <div key={`${r.source} ${r.resetAt} ${r.observedAt}`} className="allowance__row" title={hover(r)}>
           <span className="allowance__date">
-            {fmtDayMonth(r.resetAt)}
-            {r.source === 'term_ended' && <> {ended}</>}
+            {fmtDayMonth(drawnInstant(r))}
+            {badge(r) !== null && <> {badge(r)}</>}
           </span>
           <AllowanceText className="num" figure={figure(r)} />
         </div>
       ))}
       <div className="allowance__row allowance__total">
-        <span>{`Total, ${plural(counted, 'week')}`}</span>
+        <span>{used === 0 ? `Total, ${plural(counted, 'week')}` : `Total, ${plural(counted, 'week')} and ${plural(used, 'used reset')}`}</span>
         <AllowanceText className="num" figure={weeksFigure(w, account, costs, week)} />
       </div>
     </div>

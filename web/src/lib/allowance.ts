@@ -28,20 +28,35 @@ export function rangeAllowanceSpan(fromMs: number, toMs: number): { from: string
 
 /** The resets of the accounts' 168-hour windows, the Fable window's among them, as one key that moves once a week has
  *  passed, so a read keyed on it runs again at a weekly reset and not at a poll's cadence. Each reset counts to its
- *  nearest minute, since a poll moves a reset by a fraction of a second. */
+ *  nearest minute, since a poll moves a reset by a fraction of a second. Each account's resets left follow its resets,
+ *  since a used limit reset moves no reset and the read would keep the rows from before it. */
 export const weeklyResetsKey = (accounts: readonly Account[]): string =>
   accounts
-    .flatMap(readWindows)
-    .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
-    .map((w) => (w.resetsAt === null ? '' : String(Math.round(Date.parse(w.resetsAt) / 60_000))))
+    .flatMap((a) => [
+      ...readWindows(a)
+        .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
+        .map((w) => (w.resetsAt === null ? '' : String(Math.round(Date.parse(w.resetsAt) / 60_000)))),
+      String(a.limitResets?.left ?? ''),
+    ])
     .join(',');
 
-/** The newest `weeks` resets of a window with their total and count: the answer's figures where it lists that many or
- *  fewer, the console's own sum and count over the newest `weeks` otherwise. */
-export function newestResets(window: AllowanceWindow, weeks = ALLOWANCE_WEEKS): { counted: number; resets: AllowanceReset[]; total: number } {
-  if (window.resets.length <= weeks) return { counted: window.resetsCounted, resets: window.resets, total: window.totalShareLeft };
-  const resets = window.resets.slice(0, weeks);
-  return { counted: resets.length, resets, total: resets.reduce((sum, r) => sum + r.shareLeft, 0) };
+const isClaim = (reset: AllowanceReset): boolean => reset.source === 'claim';
+
+/** The uses among an account's claim rows: one poll reads every window of the account, so the rows it saw, by the
+ *  minute of `observedAt`, are one use. */
+const usesOf = (claims: readonly AllowanceReset[]): number => new Set(claims.map((r) => Math.floor(Date.parse(r.observedAt) / 60_000))).size;
+
+/** The rows the four weeks keep: the newest `weeks` resets that are no claim and every claim row newer than the
+ *  oldest of them. `counted` counts the kept resets that are no claim, `used` the uses among the kept claim rows, and
+ *  `total` sums every kept row: the answer's own total where it keeps every listed row. */
+export function newestResets(window: AllowanceWindow, weeks = ALLOWANCE_WEEKS): { counted: number; resets: AllowanceReset[]; total: number; used: number } {
+  const natural = window.resets.filter((r) => !isClaim(r)).slice(0, weeks);
+  const oldest = natural.at(-1);
+  // A claim row is dated by its drop, since its `resetAt` is the reset of the week the use fell in.
+  const claims = window.resets.filter((r) => isClaim(r) && (oldest === undefined || Date.parse(r.observedAt) > Date.parse(oldest.resetAt)));
+  const resets = window.resets.filter((r) => natural.includes(r) || claims.includes(r));
+  const total = resets.length === window.resets.length ? window.totalShareLeft : resets.reduce((sum, r) => sum + r.shareLeft, 0);
+  return { counted: natural.length, resets, total, used: usesOf(claims) };
 }
 
 /** A figure in the chosen week: the share of the account's own window priced through the tier's 7-day capacity over
@@ -144,13 +159,17 @@ export function weeklyKeys(accounts: AllowanceAccount[]): string[] {
 
 /** The block's own words for where a reading came from, since the routing log's `window reset` panel names none. */
 const SOURCE_WORD = new Map([
+  ['claim', 'a used limit reset'],
   ['clock', 'the clock walk'],
   ['sample', 'a usage sample'],
   ['term_ended', "the term's end"],
 ]);
 
+/** The instant a row draws: the drop's for a claim row, whose `resetAt` can be a day still to come, else the reset's. */
+export const drawnInstant = (reset: AllowanceReset): string => (isClaim(reset) ? reset.observedAt : reset.resetAt);
+
 /** A reset's hover: its absolute instant and where its reading came from, a word the router adds read as sent. */
-export const resetHover = (reset: AllowanceReset): string => `${fmtAbsolute(reset.resetAt)}, read from ${SOURCE_WORD.get(reset.source) ?? reset.source}`;
+export const resetHover = (reset: AllowanceReset): string => `${fmtAbsolute(drawnInstant(reset))}, read from ${SOURCE_WORD.get(reset.source) ?? reset.source}`;
 
 /** A reset's own share for the week's hover, in the hint's words: "Ultra: 39% of the 7-day window left", "Max: 12% of
  *  the Fable week left", a week the console does not know under its key. */
@@ -160,16 +179,21 @@ export const ownShareHover = (plan: string, window: string, shareLeft: number): 
 export const resetInstant = (isoTime: string): string => fmtDated(Date.parse(isoTime));
 
 /** One account of the Analytics card: each weekly window's figures keyed by the wire key, the 7-day window's count of
- *  resets in the range, the instant of a last reset that is the term's end, and whether a 7-day reset the row draws
- *  prices no capacity at the pair it ran under, the account's own pair standing in where it draws none. */
+ *  natural resets in the range, its used resets apart, the instant of a last reset that is the term's end, and whether
+ *  a 7-day reset the row draws prices no capacity at the pair it ran under, the account's own pair standing in where it
+ *  draws none. */
 export interface AllowanceRow {
   accountId: string;
+  /** The claim rows of the account's weekly windows in the range, each with its window, newest first. */
+  claims: { reset: AllowanceReset; window: string }[];
   /** Per weekly window: the resets inside the range counted, their figures added, and the newest reset at or
    *  before the range's end, which a reset of the lead week can be. */
   figures: Record<string, { counted: number; inRange: AllowanceFigure; last: AllowanceFigure }>;
   resets: number;
   termEndedAt: string | null;
   unpriced: boolean;
+  /** The uses among `claims`. */
+  used: number;
 }
 
 /** A figure's value to rank and add by, none for a dash. */
@@ -181,23 +205,30 @@ const valueOf = (figure: AllowanceFigure | undefined): number | null => (figure 
 export function allowanceRows(answer: UnusedAllowanceAnswer, costs: SubscriptionCosts | null, week: WeekPosition, range: { fromMs: number; toMs: number }): AllowanceRow[] {
   const rows = answer.accounts.map((account): AllowanceRow => {
     const figures: AllowanceRow['figures'] = {};
+    const claims: AllowanceRow['claims'] = [];
     let termEndedAt: string | null = null;
     let sevenDay: AllowanceReset[] = [];
     for (const w of allowanceWindows(account)) {
-      const ended = w.resets.filter((r) => Date.parse(r.resetAt) <= range.toMs);
+      // A claim row falls in the range by its drop, since a use in a week still open carries that week's reset, which
+      // lies past the range's end.
+      const used = w.resets.filter((r) => isClaim(r) && Date.parse(r.observedAt) >= range.fromMs && Date.parse(r.observedAt) <= range.toMs);
+      claims.push(...used.map((reset) => ({ reset, window: w.window })));
+      const ended = w.resets.filter((r) => !isClaim(r) && Date.parse(r.resetAt) <= range.toMs);
       if (ended.length === 0) continue;
       const last = ended.reduce((newest, r) => (Date.parse(r.resetAt) > Date.parse(newest.resetAt) ? r : newest));
       const inside = ended.filter((r) => Date.parse(r.resetAt) >= range.fromMs);
+      const summed = [...inside, ...used];
       // An empty sum would read 0%, a week used whole, so a range with no reset draws the dash.
-      const inRange: AllowanceFigure = inside.length === 0 ? { kind: 'none', text: '-', title: NO_RESET_IN_RANGE } : summedFigure(inside, w.window, account, costs, week);
+      const inRange: AllowanceFigure = summed.length === 0 ? { kind: 'none', text: '-', title: NO_RESET_IN_RANGE } : summedFigure(summed, w.window, account, costs, week);
       figures[w.window] = { counted: inside.length, inRange, last: allowanceFigure(last.shareLeft, w.window, account, costs, week, last) };
       if (termEndedAt === null && last.source === 'term_ended') termEndedAt = last.resetAt;
-      if (w.window === 'seven_day') sevenDay = [...inside, last];
+      if (w.window === 'seven_day') sevenDay = [...summed, last];
     }
     // Read off each drawn 7-day reset's own pair, so the fleet's note names every account the sum leaves out.
     const pairs = sevenDay.length === 0 ? [account] : sevenDay.map((r) => pairOf(account, r));
     const unpriced = pairs.some((pair) => capacityWeight(pair, 'seven_day', costs) === null);
-    return { accountId: account.accountId, figures, resets: figures.seven_day?.counted ?? 0, termEndedAt, unpriced };
+    claims.sort((a, b) => Date.parse(b.reset.observedAt) - Date.parse(a.reset.observedAt));
+    return { accountId: account.accountId, claims, figures, resets: figures.seven_day?.counted ?? 0, termEndedAt, unpriced, used: usesOf(claims.map((c) => c.reset)) };
   });
   const lead = (r: AllowanceRow, window: string) => valueOf(r.figures[window]?.inRange) ?? Number.NEGATIVE_INFINITY;
   // A dash ranks under every figure, so an equal pair of dashes compares as a tie rather than as NaN.

@@ -17,8 +17,9 @@ import { tokensTotal } from '@/lib/format';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
-import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf } from '@/lib/quota';
+import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf, readWindows } from '@/lib/quota';
 import { compareOrderKeys, compareRequests, orderKeyOf, type OrderKey } from '@/lib/requests';
+import { WINDOW_HOURS, WINDOW_KEY } from '@/lib/windows';
 import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, lastReadingOf, usageOf, withholdsWindows } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf, wholeHoursOf } from './analytics';
 import { ATTENTION, pairingExpiringOf } from './attention';
@@ -31,7 +32,7 @@ import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
-import { ROUTING_LOG_KINDS, WEEKLY_RESETS, claimDetail, cursorInteger, getDecision, listRoutingLog, routingCursorOf } from './routingLog';
+import { ROUTING_LOG_KINDS, WINDOW_DROP_MARGIN, claimDetail, cursorInteger, dropDetail, getDecision, listRoutingLog, routingCursorOf, wholePoints } from './routingLog';
 import { ROUTING_EVENTS, SUMMARIES } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, hourCeil, iso, startOfHour } from './time';
@@ -325,7 +326,6 @@ const ledger = () => {
     rollups: empty ? [] : ALL_ROLLUPS,
     routingEvents: empty ? [] : ROUTING_EVENTS,
     summaries: empty ? [] : SUMMARIES,
-    weeklyResets: empty ? [] : WEEKLY_RESETS,
   };
 };
 /**
@@ -527,6 +527,21 @@ function readingsAfterReset(a: Account, clears: readonly string[], kind: string,
   const share = kind === 'fable' && !clears.includes('7d') ? (a.limitResets?.fableWeekShare ?? null) : null;
   const read = (w: RateLimitWindow) => (clears.includes(w.id) ? lowered(w, 1, at) : w.id === '7d' && share !== null ? lowered(w, share, at) : w);
   return { fableWindow: a.fableWindow && read(a.fableWindow), windows: a.windows.map(read) };
+}
+
+/**
+ * The drops the poll after a use reads, as the router writes them: one per weekly window whose figure fell by more than
+ * the margin under its unchanged reset, from the stored reading's figure to the poll's, with the stored pair.
+ */
+function dropsAfterReset(a: Account, after: Pick<Account, 'fableWindow' | 'windows'>): Record<string, unknown>[] {
+  const pair = { plan: a.subscription?.plan ?? null, tier: a.subscription?.rateLimitTier ?? null };
+  const read = new Map(readWindows(after).map((w) => [w.id, w.utilization]));
+  return readWindows(a).flatMap((w) => {
+    const before = w.utilization;
+    const next = read.get(w.id) ?? null;
+    if (w.periodHours !== WINDOW_HOURS['7d'] || w.resetsAt === null || before === null || next === null) return [];
+    return wholePoints(before) - wholePoints(next) > wholePoints(WINDOW_DROP_MARGIN) ? [dropDetail(WINDOW_KEY[w.id] ?? w.id, before, next, Date.parse(w.resetsAt), pair)] : [];
+  });
 }
 
 type StoredPool = PoolRow<Omit<PoolMember, 'activePins'>>;
@@ -1126,10 +1141,13 @@ export class MockApi implements Api {
     return latency(seriesOf(ledger().rollups, query));
   }
 
-  /** The story's weekly resets, or none for a fresh installation, whose registry holds no account to end a term on. */
+  /**
+   * The story's weekly resets and drops with the claims they join, the uses written since among them, or none for a
+   * fresh installation, whose registry holds no account to end a term on.
+   */
   getAnalyticsUnusedAllowance(span: Pick<AnalyticsQuery, 'from' | 'to'>, filters?: Pick<AnalyticsQuery, 'accountIds'>) {
-    const { quotaHistory, weeklyResets } = ledger();
-    return latency(unusedAllowanceOf(weeklyResets, this.registry().accounts, quotaHistory, span, filters));
+    const { quotaHistory, routingEvents } = ledger();
+    return latency(unusedAllowanceOf([...routingEvents, ...(emptyStore() ? [] : this.written)], this.registry().accounts, quotaHistory, span, filters));
   }
 
   /**
@@ -1679,7 +1697,8 @@ export class MockApi implements Api {
     const wire = limitResetsWire(accountId, this.resetBlocks, at, incarnationOf(a));
     const limitResets = decodeLimitResets(wire);
     const claimed = limitResets?.grants.find((g) => g.id === grantId);
-    const readings = entry.answer.outcome === 'used' && claimed ? readingsAfterReset(a, claimed.clears, claimed.kind, at) : {};
+    const readings = entry.answer.outcome === 'used' && claimed ? readingsAfterReset(a, claimed.clears, claimed.kind, at) : null;
+    if (readings !== null) for (const drop of dropsAfterReset(a, readings)) this.writeEvent('window_dropped', a.id, null, at, drop);
     this.putAccount({ ...a, ...readings, limitResets });
     return latency(decodeResetUse({ ...entry.answer, limit_resets: wire }), 400);
   }

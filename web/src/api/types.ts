@@ -1927,17 +1927,19 @@ export interface ReconciliationsAnswer {
   requestRetentionDays: number;
 }
 
-/** Where a weekly reset's share comes from: a usage sample, the clock walk (its reading as the event carries it, up
- *  to one poll interval old) or the account's term ending inside the week. The router stores whatever word it
- *  writes. */
-export type AllowanceResetSource = 'clock' | 'sample' | 'term_ended' | string;
+/** Where a weekly reset's share comes from: a used limit reset that cleared the window inside its week, a usage sample,
+ *  the clock walk (its reading as the event carries it, up to one poll interval old) or the account's term ending
+ *  inside the week. The router stores whatever word it writes. */
+export type AllowanceResetSource = 'claim' | 'clock' | 'sample' | 'term_ended' | string;
 
 export interface AllowanceReset {
+  /** The drop's instant on a `claim` row, the first poll after the use. */
   observedAt: string;
   /** The pair of the reading the reset replaced, null on a reset whose event carries none and on a term's end. */
   plan: PlanWord | null;
+  /** The unchanged reset of the week the use fell in on a `claim` row, a day still ahead for a use in an open week. */
   resetAt: string;
-  /** One less the utilization before the reset, inside the unit interval. */
+  /** One less the utilization before the reset, inside the unit interval, before the drop on a `claim` row. */
   shareLeft: number;
   source: AllowanceResetSource;
   /** The tier of that reading, null where `plan` is. */

@@ -1490,7 +1490,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           .filter((e) => e.accountId === a.accountId && e.detail.window === w.window)
           .sort((x, y) => y.detail.reset_at - x.detail.reset_at)
           .map((e) => ({ observedAt: e.at, plan: e.detail.plan, resetAt: iso(e.detail.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - e.detail.utilization_before)), source: e.detail.observed, tier: e.detail.tier }));
-        assert.deepEqual(a.accountId === 'sunset' ? w.resets.slice(1) : w.resets, fromLog, `${a.accountId} ${w.window}: the log's resets, newest first`);
+        const natural = w.resets.filter((r) => r.source !== 'claim');
+        assert.deepEqual(a.accountId === 'sunset' ? natural.slice(1) : natural, fromLog, `${a.accountId} ${w.window}: the log's resets, newest first`);
         assert.ok(w.resetsCounted === w.resets.length && near(w.totalShareLeft, sum(w.resets, (r) => r.shareLeft)), `${a.accountId} ${w.window}: the total and the count over the listed resets`);
       }
     }
@@ -1504,6 +1505,34 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(near(ended.shareLeft, 0.54), `sunset left ${ended.shareLeft} of its last week`);
     const one = await s.api.getAnalyticsUnusedAllowance(span, { accountIds: ['studio'] });
     assert.deepEqual(one.accounts, answer.accounts.filter((a) => a.accountId === 'studio'), 'the Accounts filter keeps its account alone');
+  });
+
+  test(`the allowance answer lists a used reset for the window it cleared alone, at ${at}`, async () => {
+    const s = await story;
+    const span = s.lib.allowanceSpan(s.now);
+    const claimsOf = (answer) => answer.accounts.flatMap((a) => a.windows.flatMap((w) => w.resets.filter((r) => r.source === 'claim').map((r) => [a.accountId, w.window, r])));
+    // Studio's use three hours back dropped its Fable week from 0.75 (the seed beside its claim in mock/routingLog.ts),
+    // so 0.25 of the week was left, under its current pair, at the week's own reset.
+    const studio = s.accounts.find((a) => a.id === 'studio');
+    const studioRow = { observedAt: iso(s.now - 3 * HOUR), plan: 'max_5x', resetAt: iso(Date.parse(studio.fableWindow.resetsAt)), shareLeft: 0.25, source: 'claim', tier: 'default_claude_max_5x' };
+    assert.deepEqual(claimsOf(await s.api.getAnalyticsUnusedAllowance(span)), [['studio', 'seven_day_fable', studioRow]]);
+    // A use of primary's Fable reset clears its Fable week from 0.12 and gives the 7-day window back the week's six
+    // points, 0.41 to 0.35, and the log holds both drops. The claim names the Fable week alone, so the answer lists its
+    // row, 0.88 left, and none for the 7-day window. A fresh mock, so the use leaves the story the other cases read.
+    const api = new s.lib.MockApi();
+    await api.login('admin');
+    const primary = s.accounts.find((a) => a.id === 'primary');
+    const wall = Date.now;
+    Date.now = () => s.now;
+    try {
+      await api.useLimitReset('primary', 'rg-primary-1');
+      const drops = (await api.listRoutingLog({ from: iso(s.now - HOUR), kinds: ['window_dropped'], to: iso(s.now) })).rows.filter((e) => e.accountId === 'primary');
+      assert.deepEqual(drops.map((e) => [e.detail.window, e.detail.utilization_before, e.detail.utilization]).sort(), [['seven_day', 0.41, 0.35], ['seven_day_fable', 0.12, 0]]);
+      const primaryRow = { observedAt: iso(s.now), plan: 'max_20x', resetAt: iso(Date.parse(primary.fableWindow.resetsAt)), shareLeft: 0.88, source: 'claim', tier: 'default_claude_max_20x' };
+      assert.deepEqual(claimsOf(await api.getAnalyticsUnusedAllowance(span, { accountIds: ['primary'] })), [['primary', 'seven_day_fable', primaryRow]]);
+    } finally {
+      Date.now = wall;
+    }
   });
 
   test(`an end before the span drops the resets after it and adds no term_ended row, at ${at}`, async () => {

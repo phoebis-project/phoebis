@@ -2753,25 +2753,46 @@ export function claimDetail(grant: MockGrant, requestId: string, status: number,
   };
 }
 
+/** The fall past which the router writes a weekly window's drop, which also clears a drop no answered claim joins
+ *  where the poll after it reads under it. The router reads both in whole points. */
+export const WINDOW_DROP_MARGIN = 0.05;
+export const wholePoints = (utilization: number): number => Math.round(utilization * 100);
+
 /**
- * The claims the story's blocks rest on: studio's use at the instant its block stamps, and workshop's refusal 20
- * minutes back, the claim its block's cooldown comes from. A seed is its id's first account, so each claim's holder is
- * incarnation 1.
+ * A drop's detail as the router writes it: the stored reading's figure before the use, the first poll's after it, the
+ * week's unchanged reset in epoch milliseconds and the stored reading's pair.
+ */
+export const dropDetail = (window: string, before: number, after: number, reset: number, pair: ReadingPair): Record<string, unknown> => ({
+  plan: pair.plan,
+  reset,
+  tier: pair.tier,
+  utilization: after,
+  utilization_before: before,
+  window,
+});
+
+/**
+ * The claims the story's blocks rest on: studio's use at the instant its block stamps, with the drop of the Fable week
+ * it cleared from 0.75 to 0.02, and workshop's refusal 20 minutes back, the claim its block's cooldown comes from. The
+ * use leaves the 7-day window as it stood, so it drops no other window. A seed is its id's first account, so each
+ * claim's holder is incarnation 1.
  */
 function claimRows(): EventSeed[] {
   const studio = RESET_BLOCKS.studio;
   const workshop = RESET_BLOCKS.workshop;
   const used = studio.grants[0];
+  const usedAt = studio.uses[used.id];
   const cooled = workshop.grants[0];
   const cooldown = workshop.cooldown_until === null ? null : Date.parse(workshop.cooldown_until);
   return [
     {
       accountId: 'studio',
       actor: 'admin',
-      at: iso(studio.uses[used.id]),
+      at: iso(usedAt),
       detail: claimDetail(used, '8c1f5a3e-2d74-4b09-9e6a-5f3b7c0d1e82', 200, FABLE_USE, 1),
       kind: 'limit_reset_claimed',
     },
+    { accountId: 'studio', at: iso(usedAt), detail: dropDetail('seven_day_fable', 0.75, 0.02, resetOf('studio', '7d_fable'), readingPairAt('studio', usedAt)), kind: 'window_dropped' },
     {
       accountId: 'workshop',
       actor: 'admin',
@@ -2856,7 +2877,7 @@ export function readingPairAt(accountId: string, at: number): ReadingPair {
  * resets run back from the reset of the week the end cut short. Nightly's third 7-day reset fell between two polls and
  * the clock walk announced it.
  */
-export const WEEKLY_RESETS: EventSeed[] = [
+const WEEKLY_RESETS: EventSeed[] = [
   ...weeklyResets('primary', 'seven_day', resetOf('primary', '7d'), [0.32, 0.41, 0.27, 0.38]),
   ...weeklyResets('primary', 'seven_day_fable', resetOf('primary', '7d_fable'), [0.05, 0.12, 0.08, 0.03]),
   ...weeklyResets('secondary', 'seven_day', resetOf('secondary', '7d'), [0.61, 0.55, 0.7, 0.58]),
@@ -3122,7 +3143,7 @@ const EVENT_KINDS: readonly string[] = [
   'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'limit_reset_claimed', 'mark_cleared', 'model_permitted', 'model_rejected',
   'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
   'refresh_failed', 'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started',
-  'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
+  'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_dropped', 'window_reset', 'window_spent',
 ];
 
 /**

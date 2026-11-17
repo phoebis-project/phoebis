@@ -23,7 +23,7 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
-import { NO_RESET_IN_RANGE, allowanceRows, fleetFigures, rangeAllowanceSpan, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
+import { NO_RESET_IN_RANGE, allowanceRows, fleetFigures, rangeAllowanceSpan, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure, type AllowanceRow } from '@/lib/allowance';
 import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, coveredWindow, dollarsOf, equivalentOrDash, errorRateOf, failureHead, firstBucketPartial, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, probeParts, readBurn, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { ignoredNote, type AnalyticsControl } from '@/lib/analyticsControls';
 import { bucketSizeFor } from '@/lib/buckets';
@@ -2982,6 +2982,14 @@ const allowanceCell = (key: string, figure: AllowanceFigure | undefined) => (
   </td>
 );
 
+/** The Resets cell: the natural resets of the 7-day window, and the uses after them with a hover line per claim row. */
+const resetsCell = (r: AllowanceRow) =>
+  r.used === 0 ? (
+    fmtInt(r.resets)
+  ) : (
+    <span title={r.claims.map((c) => `${windowWord(c.window)} cleared by a used reset, seen ${fmtAbsolute(c.reset.observedAt)}, ${fmtShare(c.reset.shareLeft)} left`).join('\n')}>{`${fmtInt(r.resets)}, ${fmtInt(r.used)} used`}</span>
+  );
+
 /**
  * "Unused allowance by account": each subscription account's weekly windows over the range under the Accounts filter in
  * the chosen week, each window's newest reset at or before the range's end beside the sum over its resets in the
@@ -3039,7 +3047,7 @@ function AllowanceTable({ answer, costs, error, inForce, span, week }: { answer:
                     )}
                     {r.resets === 0 && <span className="sub">no reset in range</span>}
                   </td>
-                  <td className="right num col-fit">{fmtInt(r.resets)}</td>
+                  <td className="right num col-fit">{resetsCell(r)}</td>
                   {windows.flatMap((w) => [allowanceCell(`${w}-last`, r.figures[w]?.last), allowanceCell(`${w}-range`, r.figures[w]?.inRange)])}
                 </tr>
               ))}

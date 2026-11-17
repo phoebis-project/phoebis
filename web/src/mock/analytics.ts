@@ -20,7 +20,7 @@ import { keyById } from './pools';
 import { bandAt, freedPart, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
 import { createRng } from './rng';
 import { round } from './round';
-import { forcedReasons, readingPairAt, type EventSeed } from './routingLog';
+import { WINDOW_DROP_MARGIN, forcedReasons, readingPairAt, wholePoints, type EventSeed } from './routingLog';
 import { TABLES, tablesFor } from './samples';
 import { DAY, HOUR, MINUTE, NOW, clock, hourCeil, iso, startOfHour } from './time';
 
@@ -1030,16 +1030,37 @@ export function termEndOf(a: Account, at: number): number | null {
   return earliest(endOf(a, at), flagged);
 }
 
+/** How long before a drop a used claim of its account still joins it: the router dates the drop at the first poll
+ *  after the use. */
+const CLAIM_JOIN_MS = HOUR;
+
+/**
+ * Whether a `window_dropped` row cleared its window, as the ledger joins it: the newest `used` claim of the account in
+ * the hour before the drop decides through its `cleared` list where it holds a parsed answer, and with no such claim,
+ * or one with no parsed answer, the drop cleared where the poll after it reads under the margin.
+ */
+function dropCleared(drop: EventSeed, window: string, utilization: number, events: EventSeed[]): boolean {
+  const at = Date.parse(drop.at);
+  const claim = events
+    .filter((e) => e.kind === 'limit_reset_claimed' && e.accountId === drop.accountId && e.detail.outcome === 'used' && Date.parse(e.at) <= at && at - Date.parse(e.at) <= CLAIM_JOIN_MS)
+    .reduce<EventSeed | null>((newest, e) => (newest === null || Date.parse(e.at) > Date.parse(newest.at) ? e : newest), null);
+  if (claim !== null && claim.detail.result !== null) return (claim.detail.cleared as string[]).includes(window);
+  return wholePoints(utilization) < wholePoints(WINDOW_DROP_MARGIN);
+}
+
 /**
  * The weekly resets in range per subscription account as the route answers them, from the story's `window_reset` rows
- * with the pair each event carries and, for an account whose term ended in range, one `term_ended` reset per weekly
- * window at the end, its share the last reading of the window's quota history strictly before the end, as the ledger
- * reads `observed_at < end`. Its pair is the one the router's stored reading of the window carries, for which the
- * window's newest sample of the history stands in: the pair the story stores for a reading at that sample's instant,
- * and null for both where the history holds no sample. A reset at or after an end the read has reached is left out, an
- * end before the range's start included, as the ledger drops the resets at or after every end it lists, so the week
- * the end cut short counts once. The `term_ended` rows build for an end inside the range alone. The term is read at the
- * range's end capped at the story's now, and the windows run in key order, the 7-day window first.
+ * with the pair each event carries, a `claim` row for each `window_dropped` row in range that cleared its window, at
+ * the drop's instant with the share left before it and the week's unchanged reset, and, for an account whose term
+ * ended in range, one `term_ended` reset per weekly window at the end, its share the last reading of the window's quota
+ * history strictly before the end, as the ledger reads `observed_at < end`. Its pair is the one the router's stored
+ * reading of the window carries, for which the window's newest sample of the history stands in: the pair the story
+ * stores for a reading at that sample's instant, and null for both where the history holds no sample. A reset at or
+ * after an end the read has reached is left out, an end before the range's start included, as the ledger drops the
+ * resets at or after every end it lists, so the week the end cut short counts once, and so is a drop at or after it.
+ * The `term_ended` rows build for an end inside the range alone. The term is read at the range's end capped at the
+ * story's now, the windows run in key order, the 7-day window first, and a window's rows by reset and then by the
+ * instant read, newest first, so a week's reset stands ahead of a use inside that week.
  */
 export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], history: QuotaHistory[], span: Range, filters: Pick<AnalyticsQuery, 'accountIds'> = {}): UnusedAllowanceAnswer {
   const fromMs = Date.parse(span.from);
@@ -1057,10 +1078,16 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
       const add = (window: string, reset: AllowanceReset) => byWindow.set(window, [...(byWindow.get(window) ?? []), reset]);
       for (const e of events) {
         const at = Date.parse(e.at);
-        if (e.kind !== 'window_reset' || e.accountId !== a.id || at < fromMs || at > toMs) continue;
-        const d = e.detail as { observed: string; plan: string | null; reset_at: number; tier: string | null; utilization_before: number; window: string };
-        if (!isWeekly(d.window) || (elapsed !== null && d.reset_at >= elapsed)) continue;
-        add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: d.observed, tier: d.tier });
+        if (e.accountId !== a.id || at < fromMs || at > toMs) continue;
+        if (e.kind === 'window_reset') {
+          const d = e.detail as { observed: string; plan: string | null; reset_at: number; tier: string | null; utilization_before: number; window: string };
+          if (!isWeekly(d.window) || (elapsed !== null && d.reset_at >= elapsed)) continue;
+          add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: d.observed, tier: d.tier });
+        } else if (e.kind === 'window_dropped') {
+          const d = e.detail as { plan: string | null; reset: number; tier: string | null; utilization: number; utilization_before: number; window: string };
+          if (!isWeekly(d.window) || (elapsed !== null && at >= elapsed) || !dropCleared(e, d.window, d.utilization, events)) continue;
+          add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: 'claim', tier: d.tier });
+        }
       }
       if (ended !== null) {
         for (const h of history) {
@@ -1076,7 +1103,7 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
       const windows = [...byWindow]
         .sort(([x], [y]) => byteOrder(x, y))
         .map(([window, listedResets]) => {
-          const resets = [...listedResets].sort((x, y) => Date.parse(y.resetAt) - Date.parse(x.resetAt));
+          const resets = [...listedResets].sort((x, y) => Date.parse(y.resetAt) - Date.parse(x.resetAt) || Date.parse(y.observedAt) - Date.parse(x.observedAt));
           return { resets, resetsCounted: resets.length, totalShareLeft: resets.reduce((sum, r) => sum + r.shareLeft, 0), window };
         });
       return windows.length === 0 ? [] : [{ accountId: a.id, plan: a.subscription?.plan ?? null, tier: a.subscription?.rateLimitTier ?? null, windows }];

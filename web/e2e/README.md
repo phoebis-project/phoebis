@@ -292,7 +292,7 @@ and on the routing log and Analytics the width of the row's slots and gaps at re
 800 on Analytics and Requests the bar's scroll width at most its client width with the count inside the window, the
 trailing slots wrapped, and at 400 by 800 on every view with a bar, at rest, the bar and the row no wider than their
 boxes with the count where the view draws one and the Refresh button inside the window), the Kinds list through Add
-filter on the routing log (Select all, the eight presets and the 45 kinds, its popover 8 px inside the window at 1280 by
+filter on the routing log (Select all, the eight presets and the 46 kinds, its popover 8 px inside the window at 1280 by
 800), the split Refresh button on the request log (one width at Off, at 5 s and paused under the drawer, so the count
 beside it never moves), a late row on the request log (in the mock pass, after the view's shot, the story's late request
 landing below the first of the rows a page of 50 shows on the first auto reload at 5 s, every cell of it in the fill a
