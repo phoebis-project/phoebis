@@ -142,11 +142,11 @@ fn sixth_step_taken_back(conn: &rusqlite::Connection) {
     .unwrap();
 }
 
-/// A registry as a version-5 build left it: the build's own file with the ninth, eighth, seventh and sixth steps taken
-/// back through `ninth_step_taken_back`, `eighth_step_taken_back`, `seventh_step_taken_back` and
-/// `sixth_step_taken_back`, the version row set to 5, then `seed`, the rows a case stands at version 5 before its
-/// reopen. Each of the sixth step's column changes keeps its take-back. Its delete needs none, since a row it removed
-/// is seeded here, after the take-back.
+/// A registry as a version-5 build left it: the build's own file with the steps past version 5 taken back through
+/// `ninth_step_taken_back`, `eighth_step_taken_back`, `seventh_step_taken_back` and `sixth_step_taken_back`, the
+/// version row set to 5, then `seed`, the rows a case stands at version 5 before its reopen. Each of the sixth step's
+/// column changes keeps its take-back. Its delete needs none, since a row it removed is seeded here, after the
+/// take-back.
 fn at_version_five(path: &std::path::Path, seed: &str) {
     let conn = rusqlite::Connection::open(path).unwrap();
     ninth_step_taken_back(&conn);
@@ -3048,9 +3048,11 @@ fn deleting_an_account_sets_each_selection_that_names_it_to_none() {
 #[test]
 fn a_write_from_before_the_deletion_is_refused_as_stale() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store
-        .insert_account(&account("a", AccountKind::Oauth))
-        .unwrap();
+    for id in ["a", "b"] {
+        store
+            .insert_account(&account(id, AccountKind::Oauth))
+            .unwrap();
+    }
     store
         .insert_pool(
             &PoolRow {
@@ -3063,7 +3065,18 @@ fn a_write_from_before_the_deletion_is_refused_as_stale() {
             "admin",
         )
         .unwrap();
-    store.insert_pool(&pool("plain"), "admin").unwrap();
+    store
+        .insert_pool(
+            &PoolRow {
+                feature_accounts: PoolFeatureAccounts {
+                    artifacts: Some("b".into()),
+                    ..PoolFeatureAccounts::default()
+                },
+                ..pool("kept")
+            },
+            "admin",
+        )
+        .unwrap();
     store
         .insert_api_key(
             &ApiKeyRow {
@@ -3076,19 +3089,35 @@ fn a_write_from_before_the_deletion_is_refused_as_stale() {
             "admin",
         )
         .unwrap();
+    store
+        .insert_api_key(
+            &ApiKeyRow {
+                feature_accounts: KeyFeatureAccounts {
+                    connectors: FeatureOverride::Account("b".into()),
+                    ..KeyFeatureAccounts::default()
+                },
+                ..key(&store, "j", "kept", "phoebis-j")
+            },
+            "admin",
+        )
+        .unwrap();
     let other = store.pool("other").unwrap().unwrap();
-    let plain = store.pool("plain").unwrap().unwrap();
+    let kept = store.pool("kept").unwrap().unwrap();
     let k = store.api_key("k").unwrap().unwrap();
+    let j = store.api_key("j").unwrap().unwrap();
     store.delete_account("a", "admin").unwrap();
     let other_save = store.update_pool(&other, other.updated_at, "admin");
     let k_save = store.update_api_key(&k, k.updated_at, "admin");
-    let plain_save = store.update_pool(&plain, plain.updated_at, "admin");
+    let kept_save = store.update_pool(&kept, kept.updated_at, "admin");
+    let j_save = store.update_api_key(&j, j.updated_at, "admin");
     assert!(
         matches!(other_save, Err(StoreError::Stale))
             && matches!(k_save, Err(StoreError::Stale))
-            && plain_save.is_ok(),
-        "a save read before the deletion is refused on the pool and the key it cleared, and the pool it left alone \
-         saves: other {other_save:?}, k {k_save:?}, plain {plain_save:?}"
+            && kept_save.is_ok()
+            && j_save.is_ok(),
+        "a save read before the deletion is refused on the pool and the key it cleared, and the pool and the key whose \
+         selections name another account save: other {other_save:?}, k {k_save:?}, kept {kept_save:?}, \
+         j {j_save:?}"
     );
 }
 
