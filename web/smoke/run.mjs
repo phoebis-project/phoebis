@@ -16651,14 +16651,16 @@ await forView('/requests', async () => {
     await closeBoxes(page);
     tab('Model requests')?.click();
     await page.settle();
+    // A tab the lookup missed would leave the section shown, and the filter would stand without a look away.
+    const away = { calls: section(page) !== null, requests: page.container.querySelector('#requests') !== null };
     tab('Feature calls')?.click();
     await page.settle(700);
     const features = [...new Set(callRows(page).map((r) => r.Feature))];
     const chip = chipRead(page, 'feature');
     results.push({
       name: '/requests a filter of the feature calls stands behind a look at Model requests',
-      ok: picked && chip === 'feature: Connectors' && JSON.stringify(features) === JSON.stringify(['Connectors']),
-      missing: [chip, JSON.stringify(features)],
+      ok: picked && away.requests && !away.calls && chip === 'feature: Connectors' && JSON.stringify(features) === JSON.stringify(['Connectors']),
+      missing: [JSON.stringify(away), chip, JSON.stringify(features)],
     });
     page.unmount();
   }
