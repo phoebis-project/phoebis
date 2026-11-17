@@ -18,8 +18,10 @@ import type {
   FeatureAccountIds,
   FeatureCallPage,
   FeatureCallQuery,
+  FeatureWord,
   KeepaliveOverview,
   KeepaliveRecipe,
+  KeyFeatureAccount,
   KeyModels,
   LimitResetsRead,
   MemberBudget,
@@ -68,6 +70,7 @@ export interface KeyInput {
   enabled: boolean;
   /** An ISO instant, or null for no expiry; undefined leaves the stored expiry alone. */
   expiresAt?: string | null;
+  featureAccounts: Record<FeatureWord, KeyFeatureAccount>;
   /** The key's own list in order, replacing it whole. Undefined leaves it alone, and the create route refuses it. */
   guardrails?: string[];
   longContextTwins: boolean;

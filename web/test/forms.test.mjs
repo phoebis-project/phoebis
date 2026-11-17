@@ -218,6 +218,13 @@ test('the key form reads its own guardrails in position order, the input leaves 
   assert.deepEqual(d.guardrailsChange([], ['first']), { guardrails: [] }, 'removing the last sends the empty list');
 });
 
+test("a key's choice of an account named inherit or none stays that account", () => {
+  assert.equal(d.keyFeatureValue({ accountId: 'inherit', mode: 'account' }), 'account:inherit');
+  assert.deepEqual(d.keyFeatureChoice('account:inherit'), { accountId: 'inherit', mode: 'account' });
+  assert.deepEqual(d.keyFeatureChoice('account:none'), { accountId: 'none', mode: 'account' });
+  assert.deepEqual(d.keyFeatureChoice('inherit'), { accountId: null, mode: 'inherit' });
+});
+
 test('ticking canceled leaves the end as typed, unticking clears it, and the form refuses what the route refuses', () => {
   const body = fixture('account');
   const account = d.decodeAccount(body);
@@ -261,7 +268,7 @@ test('a model rule list is refused in the route\'s order and words, and the refu
 });
 
 test("the key dialog's holds agree with its Save condition", () => {
-  assert.deepEqual(d.KEY_GROUPS, ['key', 'access', 'models', 'guardrails', 'sessions', 'capture']);
+  assert.deepEqual(d.KEY_GROUPS, ['key', 'access', 'models', 'guardrails', 'features', 'sessions', 'capture']);
   const named = { captureHours: 6, captureMode: 'inherit', modelRules: [], name: 'workstation', poolId: 'all' };
   assert.deepEqual(d.keyRefusals(named), [], 'a named key in a pool with no rules may save');
   assert.deepEqual(d.keyRefusals({ ...named, name: '' }), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }]);

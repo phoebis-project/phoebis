@@ -842,12 +842,23 @@ end of the list at once and an uncheck removes it, "Select all" adds every guard
 removes them all, and Escape or a click outside closes the box, the save writing the list as it stands, the control
 disabled with "No other guardrail is left to attach" on hover while the registry holds nothing beyond the pool's, under
 the hint "The pool's guardrails run first and cannot be dropped here. This key's own run after them." and the link
-"Manage guardrails", reading "Guardrails can be attached once the key is saved." on create), Sessions (the key's two
+"Manage guardrails", reading "Guardrails can be attached once the key is saved." on create), claude.ai features
+(Artifacts and Connectors, below), Sessions (the key's two
 companion permissions as toggles, Allowance tool with the hint "The model may read the pool's allowance through the
 companion." and Cache warming with "The router warms this key's sessions' caches.", both on for a new key) and Capture
 (Capture request and response bodies as Inherit from pool, an override in hours or off for this key). Server-side auto
 mode, Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture group warns what the
 bodies hold, the warning [Keys](routing.md#keys) quotes.
+
+claude.ai features holds two selects, Artifacts and Connectors. Each lists `Inherit ({label})`, a new key's choice,
+which follows the pool's selection and names its account, or `Inherit (None (refused))` where the pool selects none,
+then "None (refused)", which refuses the feature's calls for this key, then the accounts the pool dialog's group lists,
+in its order and with its disabled options. The first option follows the pool the dialog shows, so a change of Pool
+changes that text and no choice, and a key moved to another pool keeps an account it names and a "None (refused)". The
+selects wait for the account list, a failed read of it draws "The account list did not load" with "Try again", a named
+account the list does not hold reads `{id} (not listed)`, and a pool's account the list does not hold reads
+`Inherit ({id}, not listed)`, neither with a line under it. Under a named account, and under Inherit for the pool's
+account, the line of the pool dialog's group says why the account cannot serve. Each save sends both choices.
 
 A saved key's dialog shows its Effective list under the Models group: the list the key is judged by, top to bottom, with
 the level each entry comes from and, where accounts cool for a model the entry names, a cooling count whose hover names

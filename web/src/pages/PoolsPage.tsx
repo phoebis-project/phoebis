@@ -1361,8 +1361,8 @@ export function PoolDialog({
     () =>
       pool || pools.some((p) => p.id === draftPoolId)
         ? pools
-        : [...pools, { autoModeServer: form.autoModeServer, bodyCaptureHours: draftCaptureHours, guardrails: [], id: draftPoolId, members: Object.keys(form.members).map((accountId) => ({ accountId })), modelRules: form.modelRules, name: draftName }],
-    [pool, pools, draftCaptureHours, draftPoolId, draftName, form.autoModeServer, form.members, form.modelRules],
+        : [...pools, { autoModeServer: form.autoModeServer, bodyCaptureHours: draftCaptureHours, featureAccounts: form.featureAccounts, guardrails: [], id: draftPoolId, members: Object.keys(form.members).map((accountId) => ({ accountId })), modelRules: form.modelRules, name: draftName }],
+    [pool, pools, draftCaptureHours, draftPoolId, draftName, form.autoModeServer, form.featureAccounts, form.members, form.modelRules],
   );
   const keyIds = useMemo(() => new Set([...keys, ...localKeys].map((k) => k.id)), [keys, localKeys]);
   const suggestions = useCatalogSuggestions(Object.keys(form.members), open);
@@ -2536,6 +2536,7 @@ export function PoolDialog({
       />
       <KeyDialog
         open={keyOpen}
+        accounts={accountsRead}
         captureMaxHours={captureMaxHours}
         onClose={() => setKeyOpen(false)}
         pools={keyDialogPools}

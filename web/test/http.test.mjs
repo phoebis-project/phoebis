@@ -603,7 +603,7 @@ test('the request detail answers the stream cut its body carries, and none where
   assert.equal((await api.getRequest('r-failover')).streamCut, null, 'a body without the member reads none');
 });
 
-const keyEdit = { autoModeServer: null, bodyCaptureHours: null, enabled: true, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Desktop', notes: null, poolId: 'main' };
+const keyEdit = { autoModeServer: null, bodyCaptureHours: null, enabled: true, featureAccounts: { artifacts: { accountId: null, mode: 'inherit' }, connectors: { accountId: null, mode: 'inherit' } }, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Desktop', notes: null, poolId: 'main' };
 
 test('a key creation and a key edit send the auto mode override in snake_case', async () => {
   const row = JSON.parse(readFileSync(new URL('./fixtures/keys.json', import.meta.url), 'utf8')).body.keys[0];

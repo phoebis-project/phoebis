@@ -100,6 +100,8 @@ export function KeysPage() {
   const paused = pauseCause !== null;
   const keys = useAsync(() => api.listKeys(), [], { paused, refreshMs: intervalMs });
   const pools = useAsync(() => api.listPools(), [], { paused, refreshMs: intervalMs });
+  // The key dialog's claude.ai features group lists them.
+  const accounts = useAsync(() => api.listAccounts(), [], { paused, refreshMs: intervalMs });
 
   useAddressEdit(keys.data, 'Key', (key, group) => setDialog({ initialGroup: oneOf(KEY_GROUPS, group) ?? 'key', key }));
 
@@ -198,6 +200,7 @@ export function KeysPage() {
             onRefresh: () => {
               keys.reload();
               pools.reload();
+              accounts.reload();
               settings.reload();
             },
             paused: pauseCause,
@@ -386,6 +389,7 @@ export function KeysPage() {
 
         <KeyDialog
           open={dialog !== null}
+          accounts={accounts}
           captureMaxHours={settings.data?.retention.bodyCaptureMaxHours}
           existing={dialog?.key ?? null}
           initialGroup={dialog?.initialGroup ?? null}

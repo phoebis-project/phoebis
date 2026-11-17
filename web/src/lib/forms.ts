@@ -1,8 +1,8 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
 import { iso } from '@/api/decode';
 import { slug } from '@/api/http';
-import type { Account, ApiKey, FeatureWord, GuardrailRef, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
-import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
+import type { Account, ApiKey, FeatureWord, GuardrailRef, KeyFeatureAccount, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
+import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, FEATURE_WORD_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { byteOrder, fmtInt, toLocalInput, viewingZone } from './format';
 import { checkPattern } from './patterns';
 import { canceledEndOf } from './quota';
@@ -403,6 +403,7 @@ export interface KeyForm {
   enabled: boolean;
   /** `keep` leaves the stored expiry alone, `never` clears it, and a number is days from the save. */
   expiry: string;
+  featureAccounts: Record<FeatureWord, KeyFeatureAccount>;
   /** The key's own guardrail ids in the order they run, after its pool's. */
   guardrails: string[];
   keepalive: boolean;
@@ -431,6 +432,10 @@ export const guardrailsChange = (list: readonly string[], opened: readonly strin
  */
 export const sameMembers = (a: readonly string[], b: readonly string[]): boolean => new Set(a).size === b.length && a.every((x) => b.includes(x));
 
+const INHERITED_FEATURE: KeyFeatureAccount = { accountId: null, mode: 'inherit' };
+
+const perFeature = <T>(of: (feature: FeatureWord) => T): Record<FeatureWord, T> => Object.fromEntries(FEATURE_WORD_VALUES.map((f) => [f, of(f)])) as Record<FeatureWord, T>;
+
 /** The dialog's starting fields: the stored key's, or a new key's in `poolId`. */
 export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
   return {
@@ -442,6 +447,7 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
     // say nothing about it.
     enabled: existing?.enabled ?? true,
     expiry: existing ? 'keep' : 'never',
+    featureAccounts: perFeature((f) => existing?.featureAccounts[f] ?? INHERITED_FEATURE),
     guardrails: guardrailIdsOf(existing?.guardrails ?? []),
     keepalive: existing?.companionPermissions.includes('keepalive') ?? true,
     longContextTwins: existing?.longContextTwins ?? true,
@@ -461,6 +467,7 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput & { guardrails?
     companionPermissions: COMPANION_PERMISSION_VALUES.filter((p) => form[p]),
     enabled: form.enabled,
     expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : iso(now + Number(form.expiry) * DAY),
+    featureAccounts: perFeature((f) => form.featureAccounts[f]),
     longContextTwins: form.longContextTwins,
     modelRules: form.modelRules,
     modelRulesMode: form.modelRulesMode,
@@ -470,8 +477,18 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput & { guardrails?
   };
 }
 
+/** A select's value for a key's choice: `inherit`, `none`, or `account:<id>` for an account. */
+export const keyFeatureValue = (choice: KeyFeatureAccount): string => (choice.mode === 'account' ? featureAccountValue(choice.accountId ?? '') : choice.mode);
+
+/** The key's choice a select's value names, read back through the account namespace before the two control words. */
+export const keyFeatureChoice = (value: string): KeyFeatureAccount => {
+  const accountId = featureAccountOf(value);
+  if (accountId !== null) return { accountId, mode: 'account' };
+  return { accountId: null, mode: value === 'none' ? 'none' : 'inherit' };
+};
+
 /** The key dialog's groups in rail order; a refusal names the one its control sits in. */
-export const KEY_GROUPS = ['key', 'access', 'models', 'guardrails', 'sessions', 'capture'] as const;
+export const KEY_GROUPS = ['key', 'access', 'models', 'guardrails', 'features', 'sessions', 'capture'] as const;
 export type KeyGroup = (typeof KEY_GROUPS)[number];
 
 export interface KeyRefusal {

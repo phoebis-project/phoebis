@@ -384,10 +384,12 @@ Canceled in the type of the Ends label beside it), the hint a confirmed pairing 
 reading is in flight (in the mock pass, after the view's shot, read whole with its closing period against the note of
 the story's API-key account annex in type, ink, line height, margin and place), the catalog popup and its columns (Model
 and Name the fills), the Keys table's columns (Name, Models and Status the fills) and the badges of its fill cells (each
-ending inside its cell and cutting its own label with the ellipsis), the key dialog's Access selects, the Keys bar's
-pool chip against its status chip (26 px, on an address that holds both), the lifetime cost card on the story (mock
-pass, on a load of its own: each key whose requests priced nothing reads a dash beside its billed dollars under the
-unpriced title, the first one's figure in the type and ink of a neighbor's that reads a number and its track as wide),
+ending inside its cell and cutting its own label with the ellipsis), the key dialog's Access selects, the key dialog's
+claude.ai features group (mock pass: on the story's `laptop`, the Artifacts and Connectors selects against the Expiry
+select in box and type, reading `contract (contract)` and `Inherit (reserve)`), the Keys bar's pool chip against its
+status chip (26 px, on an address that holds both), the lifetime cost card on the story (mock pass, on a load of its
+own: each key whose requests priced nothing reads a dash beside its billed dollars under the unpriced title, the first
+one's figure in the type and ink of a neighbor's that reads a number and its track as wide),
 the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head under the bar's bottom, its height closed
 and open, the button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the lead and
 above the card's top, Cost reference one line at the head's top right), the stripes on every view with a table (the

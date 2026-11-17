@@ -162,6 +162,18 @@ test('a stored feature account the list lacks stays shown and marked', async () 
   assert.ok(option?.textContent?.includes('not listed'), `the option reads ${JSON.stringify(option?.textContent ?? null)}`);
 });
 
+test("a key's named feature account the list lacks stays shown and marked", async () => {
+  const desktop = (await mock.listKeys()).find((k) => k.id === 'desktop');
+  assert.ok(desktop, 'the mock holds the desktop key');
+  const key = { ...desktop, featureAccounts: { ...desktop.featureAccounts, artifacts: { accountId: 'retired', mode: 'account' } } };
+  const { container, draw } = mount();
+  await draw(h(KeyDialog, { accounts: accountsRead(accounts), existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools }));
+  const select = fieldIn(container, 'Artifacts')?.querySelector('select');
+  assert.equal(select?.value, 'account:retired', 'the named choice, never Inherit');
+  const option = [...(select?.options ?? [])].find((o) => o.value === 'account:retired');
+  assert.ok(option?.textContent?.includes('not listed'), `the option reads ${JSON.stringify(option?.textContent ?? null)}`);
+});
+
 test('a pool dialog whose account list failed draws the failure with its retry, and no member row waits', async () => {
   const pool = pools.find((p) => p.members.length > 0);
   assert.ok(pool, 'the mock holds a pool with members');
@@ -179,9 +191,9 @@ test('a pool dialog whose account list failed draws the failure with its retry, 
 test("the key override is unbounded with the floor's sentence until the page hands the limit down as a prop", async () => {
   const key = (await mock.listKeys()).find((k) => k.id === 'desktop');
   assert.ok(key, 'the mock holds the desktop key');
-  const keyPools = pools.map((p) => ({ autoModeServer: p.autoModeServer, bodyCaptureHours: p.bodyCaptureHours, id: p.id, members: p.members.map((m) => ({ accountId: m.accountId })), modelRules: p.modelRules, name: p.name }));
+  const keyPools = pools.map((p) => ({ autoModeServer: p.autoModeServer, bodyCaptureHours: p.bodyCaptureHours, featureAccounts: p.featureAccounts, id: p.id, members: p.members.map((m) => ({ accountId: m.accountId })), modelRules: p.modelRules, name: p.name }));
   const { container, draw } = mount();
-  const keyDialog = (captureMaxHours) => h(KeyDialog, { captureMaxHours, existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools: keyPools });
+  const keyDialog = (captureMaxHours) => h(KeyDialog, { accounts: accountsRead(accounts), captureMaxHours, existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools: keyPools });
   await draw(keyDialog(undefined));
   const capture = () => [...container.querySelectorAll('dialog[open] section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Capture');
   const field = () => capture()?.querySelector('input[aria-label="Capture hours for this key"]');
@@ -203,7 +215,7 @@ test("a key dialog keeps a failed save's words while a field is written again un
     throw new ApiError(422, 'The pool refused the key', null);
   };
   const { container, draw } = mount();
-  await draw(h(KeyDialog, { captureMaxHours: LIMIT, existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools }));
+  await draw(h(KeyDialog, { accounts: accountsRead(accounts), captureMaxHours: LIMIT, existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools }));
   act(() => [...container.querySelectorAll('dialog[open] .dialog__actions button')].find((b) => b.textContent?.trim() === 'Save')?.click());
   await settled();
   assert.equal(statusOf(container), 'The pool refused the key');
@@ -390,6 +402,7 @@ test("a key move sends the stored key's settings with the new pool, the name tri
     companionPermissions: [],
     enabled: false,
     expiresAt: '2026-12-01T00:00:00.000Z',
+    featureAccounts: { artifacts: { accountId: 'studio', mode: 'account' }, connectors: { accountId: null, mode: 'none' } },
     guardrails: [],
     id: 'mover',
     longContextTwins: false,
@@ -429,6 +442,7 @@ test("a key move sends the stored key's settings with the new pool, the name tri
     companionPermissions: [],
     enabled: false,
     expiresAt: undefined,
+    featureAccounts: { artifacts: { accountId: 'studio', mode: 'account' }, connectors: { accountId: null, mode: 'none' } },
     longContextTwins: false,
     modelRules: [{ not: true, pattern: 'claude-opus-*' }],
     modelRulesMode: 'replace',

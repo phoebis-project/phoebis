@@ -477,9 +477,9 @@ export const POOLS: PoolSeed[] = POOL_ROWS.map(({ guardrails: _g, warnings: _w, 
 
 export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 
-/** A key as the story seeds it and the mock stores it. Its guardrails and its pool's are the attachments', which the
- *  key view reads. */
-export type KeyRow = Omit<ApiKey, 'guardrails' | 'poolGuardrails'>;
+/** A key as the story seeds it and the mock stores it. Its guardrails and its pool's are the attachments', and its
+ *  resolved feature accounts follow its pool's selection, all of which the key view reads. */
+export type KeyRow = Omit<ApiKey, 'effectiveFeatureAccounts' | 'guardrails' | 'poolGuardrails'>;
 
 // Each key's 7-day usage derives from the rollups in `requests.ts`. A lifetime is the story's own where the key is
 // older than the month the rollups hold, raised there to their sum; a key created inside that month carries none,
@@ -511,6 +511,8 @@ export const KEYS: KeyRow[] = [
     notes: 'Main workstation. Claude Code launches through the shell profile.',
     bodyCaptureHours: null,
     companionPermissions: ['allowance', 'keepalive'],
+    // Its pool's account for artifacts, and no connectors on this machine.
+    featureAccounts: { artifacts: { accountId: null, mode: 'inherit' }, connectors: { accountId: null, mode: 'none' } },
     lifetime: { billedUsd: 0, cost: 0, equivalent: 0, requests: 0 },
   },
   {
@@ -541,6 +543,8 @@ export const KEYS: KeyRow[] = [
     notes: 'Travel laptop. Bodies captured while debugging the pre-commit hook.',
     bodyCaptureHours: 6,
     companionPermissions: ['allowance', 'keepalive'],
+    // Its artifacts under an account of another pool, its connectors under its pool's.
+    featureAccounts: { artifacts: { accountId: 'contract', mode: 'account' }, connectors: { accountId: null, mode: 'inherit' } },
     // Plan-funded, so its dollars bill nothing. Its equivalents before the month the rollups hold are not drawn, so
     // they read the rollups' sums.
     lifetime: { billedUsd: 0, cost: 38.6, equivalent: 0, requests: 1_012 },
@@ -568,6 +572,8 @@ export const KEYS: KeyRow[] = [
     notes: 'Nightly evaluation runs. Switched off between campaigns rather than revoked.',
     bodyCaptureHours: 0,
     companionPermissions: ['allowance'],
+    // Its connectors under legacy, which needs a sign-in, so the key's dialog says why its calls are refused.
+    featureAccounts: { artifacts: { accountId: null, mode: 'inherit' }, connectors: { accountId: 'legacy', mode: 'account' } },
     // The jobs pool's one member is an API key account, so every dollar of its life billed.
     lifetime: { billedUsd: 31.8, cost: 31.8, equivalent: 0, requests: 2_204 },
   },
@@ -598,6 +604,8 @@ export const KEYS: KeyRow[] = [
     notes: 'Rotated out after the runner image moved to its own key.',
     bodyCaptureHours: 0,
     companionPermissions: ['allowance'],
+    // Its artifacts under reserve, the account two pools select as well.
+    featureAccounts: { artifacts: { accountId: 'reserve', mode: 'account' }, connectors: { accountId: null, mode: 'inherit' } },
     lifetime: { billedUsd: 21.4, cost: 21.4, equivalent: 0, requests: 960 },
   },
   {

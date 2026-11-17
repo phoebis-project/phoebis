@@ -458,8 +458,10 @@ test('a key keeps its enabled flag beside the status the flag folds into', () =>
   assert.equal(d.decodeKey(silent).enabled, true, 'a row without the flag reads as on, as its status does');
 });
 
+const INHERITED_FEATURES = { artifacts: { accountId: null, mode: 'inherit' }, connectors: { accountId: null, mode: 'inherit' } };
+
 test('a key edit sends enabled every time and expires_at only when the dialog changed it', () => {
-  const input = { bodyCaptureHours: null, enabled: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'batch', notes: null, poolId: 'jobs' };
+  const input = { bodyCaptureHours: null, enabled: false, featureAccounts: INHERITED_FEATURES, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'batch', notes: null, poolId: 'jobs' };
   const kept = d.encodeKey({ ...input, expiresAt: undefined });
   assert.equal(kept.enabled, false);
   assert.equal('expires_at' in kept, false, 'an absent expiry leaves the stored one alone');
@@ -471,7 +473,7 @@ test('a key edit sends enabled every time and expires_at only when the dialog ch
 test('a key decodes only the members the console knows, and a write sends only the ones it reads', () => {
   const row = fixture('keys').keys[0];
   assert.equal('nickname' in d.decodeKey({ ...row, nickname: 'desk' }), false, 'a row member the console does not know reads as nothing');
-  const input = { autoModeServer: false, bodyCaptureHours: null, enabled: true, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'strict', notes: null, poolId: 'main' };
+  const input = { autoModeServer: false, bodyCaptureHours: null, enabled: true, featureAccounts: INHERITED_FEATURES, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'strict', notes: null, poolId: 'main' };
   assert.equal('nickname' in d.encodeKey({ ...input, nickname: 'desk' }), false, 'a write sends no member the console does not read');
 });
 
@@ -483,15 +485,20 @@ test("a key decodes its server-side auto mode override as on, off, or inheriting
   const bare = { ...row };
   delete bare.auto_mode_server;
   assert.equal(d.decodeKey(bare).autoModeServer, null, 'a row without the field inherits');
-  const input = { autoModeServer: null, bodyCaptureHours: null, enabled: true, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'desktop', notes: null, poolId: 'main' };
+  const input = { autoModeServer: null, bodyCaptureHours: null, enabled: true, featureAccounts: INHERITED_FEATURES, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'desktop', notes: null, poolId: 'main' };
   assert.equal(d.encodeKey(input).auto_mode_server, null, 'inherit is sent as null so a patch clears an override');
   assert.equal(d.encodeKey({ ...input, autoModeServer: true }).auto_mode_server, true);
+});
+
+test("encodeKey sends the feature accounts under the wire's names", () => {
+  const input = { autoModeServer: null, bodyCaptureHours: null, enabled: true, featureAccounts: { artifacts: { accountId: 'studio', mode: 'account' }, connectors: { accountId: null, mode: 'none' } }, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'desktop', notes: null, poolId: 'main' };
+  assert.deepEqual(d.encodeKey(input).feature_accounts, { artifacts: { account_id: 'studio', mode: 'account' }, connectors: { account_id: null, mode: 'none' } });
 });
 
 test('decodeKey reads the companion permissions and encodeKey writes the words that are on', () => {
   const key = d.decodeKey({ ...fixture('keys').keys[0], companion_permissions: ['allowance'] });
   assert.deepEqual(key.companionPermissions, ['allowance']);
-  const input = { autoModeServer: null, bodyCaptureHours: null, enabled: true, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Laptop', notes: null, poolId: 'main' };
+  const input = { autoModeServer: null, bodyCaptureHours: null, enabled: true, featureAccounts: INHERITED_FEATURES, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Laptop', notes: null, poolId: 'main' };
   const both = d.encodeKey({ ...input, companionPermissions: ['allowance', 'keepalive'] });
   assert.deepEqual(both.companion_permissions, ['allowance', 'keepalive']);
 });

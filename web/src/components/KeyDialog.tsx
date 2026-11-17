@@ -1,17 +1,18 @@
 import { useId, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import { isStaleEdit, slug } from '@/api/http';
-import type { ApiKey, CreatedApiKey, Guardrail, GuardrailRef, KeyModels, KeyStatus, ModelRulesMode, Pool } from '@/api/types';
+import type { Account, ApiKey, CreatedApiKey, Guardrail, GuardrailRef, KeyModels, KeyStatus, ModelRulesMode, Pool } from '@/api/types';
+import { FEATURE_WORD_VALUES } from '@/api/types';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { OptionList } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
 import { IconInfo, IconPlus } from '@/components/ui/icons';
-import { Badge, Button, CopyButton, Dialog, Expert, Field, GroupedDialog, Input, NumberInput, PageLink, Refusal, RowActions, Segmented, Select, Skeleton, StaleRefusal, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, Input, NumberInput, PageLink, Refusal, RowActions, Segmented, Select, Skeleton, StaleRefusal, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { messageOf, plural } from '@/lib/format';
-import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, refusalsView, sameValues, saveStatus, type AutoModeOverride, type KeyForm, type KeyGroup } from '@/lib/forms';
+import { FEATURE_LABEL, FEATURE_NONE, featureAccountOptions, featureAccountValue, featureStandingLine, guardrailsChange, KEY_GROUPS, keyFeatureChoice, keyFeatureValue, keyFormOf, keyInputOf, keyRefusals, refusalsView, sameValues, saveStatus, unlistedFeatureOption, type AutoModeOverride, type KeyForm, type KeyGroup } from '@/lib/forms';
 import { MODE_TONE } from '@/lib/guardrails';
-import { useAsync, type Loaded } from '@/lib/hooks';
+import { failedFirst, useAsync, useNow, type Loaded } from '@/lib/hooks';
 
 export const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const MODES: { label: string; value: ModelRulesMode }[] = [
@@ -47,12 +48,12 @@ export function SecretDialog({ children, onClose, secret, title }: { children?: 
 }
 
 /**
- * What the key dialog reads of a pool: its auto mode and capture defaults, the rules and guardrails a key inherits, and
- * whose catalogs to suggest from.
+ * What the key dialog reads of a pool: its auto mode and capture defaults, the rules, guardrails and feature accounts a
+ * key inherits, and whose catalogs to suggest from.
  */
-export type KeyDialogPool = Pick<Pool, 'autoModeServer' | 'bodyCaptureHours' | 'guardrails' | 'id' | 'modelRules' | 'name'> & { members: Pick<Pool['members'][number], 'accountId'>[] };
+export type KeyDialogPool = Pick<Pool, 'autoModeServer' | 'bodyCaptureHours' | 'featureAccounts' | 'guardrails' | 'id' | 'modelRules' | 'name'> & { members: Pick<Pool['members'][number], 'accountId'>[] };
 
-const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: 'Capture', guardrails: 'Guardrails', key: 'Key', models: 'Models', sessions: 'Sessions' };
+const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: 'Capture', features: 'claude.ai features', guardrails: 'Guardrails', key: 'Key', models: 'Models', sessions: 'Sessions' };
 const KEY_GUARDRAILS_HINT = "The pool's guardrails run first and cannot be dropped here. This key's own run after them.";
 
 /** A row of a guardrail list: the route's ref, or the registry's row for one attached since the dialog opened. */
@@ -153,16 +154,19 @@ export function GuardrailList({ inherited = [], onChange, pending, refs, registr
  * the dialog is opened from inside a pool's own dialog. `existingIds` are the listed keys' ids, which a new key's
  * derived id is checked against before the create.
  */
-export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools, captureMaxHours, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { /** The bootstrap's body capture limit from the host page's settings read, undefined while that read is out. */ captureMaxHours?: number; existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; /** The stale save's Reload: closes the dialog and reads the keys again. */ onReload?: () => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
+export function KeyDialog({ accounts: accountsRead, open, onClose, onCreated, onReload, onUpdated, pools, captureMaxHours, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { /** The host page's account read, which the claude.ai features group's options come from. */ accounts: Pick<Loaded<Account[]>, 'data' | 'error' | 'reload'>; /** The bootstrap's body capture limit from the host page's settings read, undefined while that read is out. */ captureMaxHours?: number; existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; /** The stale save's Reload: closes the dialog and reads the keys again. */ onReload?: () => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
   const [chosen, setChosen] = useState<KeyGroup>('key');
   const [form, setForm] = useState<KeyForm>(() => keyFormOf(null, ''));
   // A field written again unchanged, as the override's focus writes its mode, keeps the form, so it keeps the server's
   // words too.
   const set = <K extends keyof KeyForm>(key: K, value: KeyForm[K]) => setForm((f) => (f[key] === value ? f : { ...f, [key]: value }));
-  const { allowance, autoModeServer, captureHours, captureMode, enabled, expiry, guardrails, keepalive, longContextTwins, modelRules, modelRulesMode, name, notes, poolId } = form;
+  const { allowance, autoModeServer, captureHours, captureMode, enabled, expiry, featureAccounts, guardrails, keepalive, longContextTwins, modelRules, modelRulesMode, name, notes, poolId } = form;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState<string | null>(null);
+  const now = useNow(undefined, open);
+  const accounts = accountsRead.data ?? [];
+  const accountsFailed = failedFirst(accountsRead) ? accountsRead.error : null;
   const pool = pools.find((p) => p.id === poolId) ?? null;
   const poolName = pool?.name ?? poolId;
   const poolHours = pool?.bodyCaptureHours ?? 0;
@@ -236,6 +240,12 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
       }
       setError(messageOf(e));
     }
+  };
+
+  // The dialog holds no member list, so an option names the pool the account is stored in.
+  const poolNameOf = (accountId: string) => {
+    const poolOf = accounts.find((a) => a.id === accountId)?.pool?.poolId;
+    return poolOf === undefined ? null : (pools.find((p) => p.id === poolOf)?.name ?? poolOf);
   };
 
   // Keyed by group, so a group without a body fails to compile. `KEY_GROUPS` sets the rail order.
@@ -359,6 +369,44 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
               of its pool's list until the pool list arrives. */}
           <GuardrailList inherited={pool?.guardrails ?? (existing?.poolId === poolId ? existing.poolGuardrails : [])} onChange={(v) => set('guardrails', v)} pending={existing ? undefined : 'Guardrails can be attached once the key is saved.'} refs={existing?.guardrails ?? []} registry={registry} value={guardrails} />
         </Field>
+      </div>
+    ),
+    features: (
+      <div className="cells">
+        {accountsFailed !== null && <ErrorState title="The account list did not load" body={accountsFailed} retry={accountsRead.reload} />}
+        {FEATURE_WORD_VALUES.map((feature) => {
+          const choice = featureAccounts[feature];
+          const named = choice.mode === 'account' ? choice.accountId : null;
+          const listed = featureAccountOptions(accounts, feature, poolNameOf);
+          // A select whose value matches no option draws its first, which would read Inherit for a key whose calls run
+          // under the named account.
+          const options = named === null || listed.some((o) => o.accountId === named) ? listed : [...listed, unlistedFeatureOption(named)];
+          // The selection of the pool the form names, so a key moved in this dialog reads the pool it lands in.
+          const inherited = pool?.featureAccounts[feature] ?? null;
+          const inheritedAccount = inherited === null ? undefined : accounts.find((a) => a.id === inherited);
+          const lineAccount = choice.mode === 'account' ? accounts.find((a) => a.id === named) : choice.mode === 'inherit' ? inheritedAccount : undefined;
+          return (
+            <Field key={feature} label={FEATURE_LABEL[feature]} hint={lineAccount && featureStandingLine(lineAccount, now)}>
+              <Select
+                value={keyFeatureValue(choice)}
+                disabled={accountsRead.data === null}
+                onChange={(e) => {
+                  const next = keyFeatureChoice(e.target.value);
+                  setForm((f) => ({ ...f, featureAccounts: { ...f.featureAccounts, [feature]: next } }));
+                }}
+                aria-label={FEATURE_LABEL[feature]}
+              >
+                <option value="inherit">Inherit ({inherited === null ? FEATURE_NONE : (inheritedAccount?.label ?? `${inherited}, not listed`)})</option>
+                <option value="none">{FEATURE_NONE}</option>
+                {options.map((o) => (
+                  <option key={o.accountId} value={featureAccountValue(o.accountId)} disabled={o.disabled}>
+                    {o.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          );
+        })}
       </div>
     ),
     sessions: (

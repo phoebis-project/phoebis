@@ -11375,11 +11375,11 @@ async function keyAccessSelects(theme) {
   await atRest();
 }
 
-const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Guardrails', 'Sessions', 'Capture'];
+const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Guardrails', 'claude.ai features', 'Sessions', 'Capture'];
 
 /**
  * The key dialog on the grouped frame, on create and on edit, in the plain view and then in the expert view: the frame
- * and a flat rail of six groups that fits it, 8 px apart with no line between them and a refusal dot 6 px after its
+ * and a flat rail of seven groups that fits it, 8 px apart with no line between them and a refusal dot 6 px after its
  * label on its line, each group inside one window of the body with the layout `groupGeometry` reads, the derived id
  * under a new key's typed Name, the moving warning leading Key on an edit that changes the pool, the bodies warning
  * leading Capture while capture is on, the mode badge ending at one x in the desktop key's inherited and own guardrail
@@ -11583,6 +11583,48 @@ async function keyCompanionPermissions(theme) {
     say(error instanceof Error ? error.message : String(error));
   }
   await loadAtOrigin('/keys', '.card--table tbody tr');
+  await atRest();
+}
+
+/**
+ * The story's key `laptop` opened on its claude.ai features group: the Artifacts and the Connectors select against the
+ * Expiry select of the Access group in box and type, each reading the story's choice, `contract (contract)` and
+ * `Inherit (reserve)`, every figure recorded. The dialog closes with nothing saved, and the page is left at its top
+ * with the pointer and the focus at rest for the view's shot.
+ */
+async function keyFeatures(theme) {
+  const say = (what) => failures.push(`${theme} /keys dialog, claude.ai features: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const laptop = page.locator('.card--table tbody tr').filter({ has: page.locator('td:first-child > b', { hasText: /^laptop$/ }) }).first();
+  const read = {};
+  try {
+    await laptop.locator('.menu__trigger').click();
+    await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+    // A hidden group measures no box, so each select is read while its group shows, and a field under the pointer draws
+    // the hover border, so the pointer leaves the dialog first.
+    await railEntry(dialog, 'Access').click();
+    await settle();
+    await page.mouse.move(0, 0);
+    read.expiry = await measureSelect('Expiry');
+    await railEntry(dialog, 'claude.ai features').click();
+    await settle();
+    await page.mouse.move(0, 0);
+    read.artifacts = await measureSelect('Artifacts');
+    read.connectors = await measureSelect('Connectors');
+    read.shown = await dialog.evaluate((el) => ['Artifacts', 'Connectors'].map((label) => el.querySelector(`section.dialog-group[aria-label="claude.ai features"] select[aria-label="${label}"]`)?.selectedOptions[0]?.textContent ?? null));
+    await closeByEscape(dialog, `${theme} /keys claude.ai features dialog`, say);
+  } catch (error) {
+    say(`never measured (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape').catch(() => {});
+  }
+  measurements.push(`${theme} /keys claude.ai features group ${JSON.stringify(read)}`);
+  const box = ['background', 'border', 'font', 'height', 'padding', 'width'];
+  failures.push(...compare(read.artifacts, read.expiry, box, `${theme} /keys dialog: the Artifacts select against the Expiry select`));
+  failures.push(...compare(read.connectors, read.expiry, box, `${theme} /keys dialog: the Connectors select against the Expiry select`));
+  if (JSON.stringify(read.shown) !== JSON.stringify(['contract (contract)', 'Inherit (reserve)'])) say(`the selects read ${JSON.stringify(read.shown ?? null)}, not the story's contract (contract) and Inherit (reserve)`);
+  await page.evaluate(() => window.scrollTo(0, 0));
   await atRest();
 }
 
@@ -14100,6 +14142,7 @@ try {
         await keyDialogGeometry(theme);
         // Its load ends on the bare view, so the measures after it read the view as it first drew.
         if (mock) await keyCompanionPermissions(theme);
+        if (mock) await keyFeatures(theme);
         await keysPageMenus(theme);
       }
       if (view.path === '/requests') {

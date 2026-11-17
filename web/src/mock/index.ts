@@ -5,7 +5,7 @@ import { decodeStreamCut } from '@/api/decode';
 import { clientLeft } from '@/api/fold';
 import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, FeatureAccountIds, FeatureCall, FeatureCallPage, FeatureCallQuery, KeepaliveOverview, KeyModels, LimitResetsRead, MemberEligibility,
+  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, FeatureAccountIds, FeatureCall, FeatureCallPage, FeatureCallQuery, FeatureWord, KeepaliveOverview, KeyFeatureAccount, KeyModels, LimitResetsRead, MemberEligibility,
   ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RateLimitWindow, RequestDetail, RequestEvent, RequestLog, RequestOrder, RequestPage, RequestQuery, ResetUse, RoutingEvent, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
@@ -142,7 +142,7 @@ const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRule
  * The key routes refuse a body with a member outside `KeyInput` before they read any member, so the mock answers the
  * pool routes' sentence first.
  */
-const KEY_INPUT_MEMBERS: ReadonlySet<string> = new Set(['autoModeServer', 'bodyCaptureHours', 'companionPermissions', 'enabled', 'expiresAt', 'guardrails', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
+const KEY_INPUT_MEMBERS: ReadonlySet<string> = new Set(['autoModeServer', 'bodyCaptureHours', 'companionPermissions', 'enabled', 'expiresAt', 'featureAccounts', 'guardrails', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
 const unknownKeyMember = (input: object): string | null => (Object.keys(input).some((k) => !KEY_INPUT_MEMBERS.has(k)) ? 'body must be a JSON object' : null);
 
 /**
@@ -184,6 +184,25 @@ const subjectsTwice = (input: Pick<Partial<GuardrailInput>, 'keys' | 'pools'>): 
 };
 
 const NO_FEATURE_ACCOUNTS: FeatureAccountIds = { artifacts: null, connectors: null };
+const INHERITED_FEATURE_ACCOUNTS: Record<FeatureWord, KeyFeatureAccount> = { artifacts: { accountId: null, mode: 'inherit' }, connectors: { accountId: null, mode: 'inherit' } };
+
+/**
+ * The key routes' refusal of a word whose id does not go with its mode, which they read with the body, ahead of the
+ * stamp. A word the body leaves out is not read.
+ */
+const keyFeatureRefusal = (words: Partial<Record<FeatureWord, KeyFeatureAccount>> | undefined): string | null => {
+  for (const feature of FEATURE_WORD_VALUES) {
+    const word = words?.[feature];
+    if (word !== undefined && (word.mode === 'account') !== (word.accountId !== null)) return `feature_accounts.${feature}.account_id is an account id under the mode account and null under each other`;
+  }
+  return null;
+};
+
+/** The accounts a key's choices name, in the shape the routes' check of a selection reads. */
+const namedFeatureAccounts = (words: Record<FeatureWord, KeyFeatureAccount>): FeatureAccountIds => ({
+  artifacts: words.artifacts.mode === 'account' ? words.artifacts.accountId : null,
+  connectors: words.connectors.mode === 'account' ? words.connectors.accountId : null,
+});
 
 /** The route's 409 for a member another pool holds, since an account belongs to one pool. */
 const heldElsewhere = (members: PoolInput['members'], pools: { id: string; members: { accountId: string }[] }[], poolId: string): string | null => {
@@ -669,10 +688,22 @@ export class MockApi implements Api {
 
   /**
    * The key as the route answers it, its own guardrails and its pool's read from the attachments at the time of the
-   * read.
+   * read, and its feature accounts resolved from its pool's selection at that time, since a pool write and a move of
+   * the key change them.
    */
   private keyView(k: KeyRow): ApiKey {
-    return { ...k, guardrails: this.guardrailRefs('keys', k.id), poolGuardrails: this.guardrailRefs('pools', k.poolId) };
+    const pool = this.pools.find((p) => p.id === k.poolId);
+    // The router's rule: the key's own account or none, else its pool's selection, and none for a pool it lacks.
+    const effective = (feature: FeatureWord): string | null => {
+      const own = k.featureAccounts[feature];
+      return own.mode === 'inherit' ? (pool?.featureAccounts[feature] ?? null) : own.accountId;
+    };
+    return {
+      ...k,
+      effectiveFeatureAccounts: { artifacts: effective('artifacts'), connectors: effective('connectors') },
+      guardrails: this.guardrailRefs('keys', k.id),
+      poolGuardrails: this.guardrailRefs('pools', k.poolId),
+    };
   }
 
   /**
@@ -985,8 +1016,12 @@ export class MockApi implements Api {
     const id = slug(input.name);
     if (this.keys.some((k) => k.id === id)) throw new ApiError(409, KEY_TAKEN, null);
     if (!this.pools.some((p) => p.id === input.poolId)) throw new ApiError(404, 'pool not found', null);
-    const refusal = keyRulesRefusal(input);
+    const refusal = keyRulesRefusal(input) ?? keyFeatureRefusal(input.featureAccounts);
     if (refusal) throw new ApiError(400, refusal, null);
+    // A new key starts at inherit for each word the body leaves out.
+    const featureAccounts = { ...INHERITED_FEATURE_ACCOUNTS, ...input.featureAccounts };
+    const unselectable = this.featureAccountRefusal(namedFeatureAccounts(featureAccounts));
+    if (unselectable) throw unselectable;
     const body = this.token(40);
     const secret = `phoebis-${body}`;
     const key: KeyRow = {
@@ -998,6 +1033,7 @@ export class MockApi implements Api {
       // The route's defaults for a body that leaves these fields out, which a caller outside the console may.
       autoModeServer: input.autoModeServer ?? null,
       companionPermissions: input.companionPermissions ?? [...COMPANION_PERMISSION_VALUES],
+      featureAccounts,
       longContextTwins: input.longContextTwins ?? true,
       modelRules: input.modelRules ?? [],
       modelRulesMode: input.modelRulesMode ?? 'extend',
@@ -1627,7 +1663,8 @@ export class MockApi implements Api {
 
   /**
    * The refusals in the route's order: the unknown member, then after the mock's key lookup the pool 404, the rules
-   * refusal, the doubled guardrail, the stale stamp, the bound refusal, the unknown guardrail.
+   * refusal, a feature word's id that does not go with its mode, the doubled guardrail, the stale stamp, a feature
+   * account that cannot be selected, the bound refusal, the unknown guardrail.
    */
   async updateKey(id: string, input: KeyInput, revision?: number): Promise<ApiKey> {
     const shape = unknownKeyMember(input);
@@ -1639,11 +1676,17 @@ export class MockApi implements Api {
     // The route reads the pool before the rule list and the guardrail list, and before it compares the edit's stamp, so
     // an edit onto a missing pool answers 404 ahead of their refusals.
     if (!this.pools.some((p) => p.id === rest.poolId)) return Promise.reject(new ApiError(404, 'pool not found', null));
-    const refusal = keyRulesRefusal(input);
+    const refusal = keyRulesRefusal(input) ?? keyFeatureRefusal(input.featureAccounts);
     if (refusal) return Promise.reject(new ApiError(400, refusal, null));
     const twice = repeatedId(ownIds);
     if (twice !== null) return Promise.reject(new ApiError(400, `guardrails lists ${twice} twice`, null));
     if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, KEY_STALE, 'stale_edit'));
+    // A word the body leaves out keeps its stored choice, and a move keeps both.
+    const featureAccounts = { ...current.featureAccounts, ...rest.featureAccounts };
+    // Behind the stamp, over the choices the write would store, so a save from before an account's deletion answers
+    // stale_edit, never this refusal.
+    const unselectable = this.featureAccountRefusal(namedFeatureAccounts(featureAccounts));
+    if (unselectable) return Promise.reject(unselectable);
     // The pool the key lands in, a new one on a move, with the key's own list as the edit leaves it.
     const own = ownIds ?? this.guardrailRefs('keys', id).map((r) => r.id);
     const bound = boundRefusal(rest.poolId, this.guardrailRefs('pools', rest.poolId).map((r) => r.id), [[id, own]]);
@@ -1653,7 +1696,7 @@ export class MockApi implements Api {
     const expiresAt = expiry === undefined ? current.expiresAt : expiry;
     // The status is the decoder's fold of the stored flags, so a key switched off or lapsed reads that way at once.
     const status = keyStatusOf(current.status === 'revoked', expiresAt, rest.enabled, Date.now());
-    const next: KeyRow = { ...current, ...rest, expiresAt, status, ...restamp(current) };
+    const next: KeyRow = { ...current, ...rest, expiresAt, featureAccounts, status, ...restamp(current) };
     this.keys = this.keys.map((k, i) => (i === idx ? next : k));
     if (ownIds !== undefined) this.setSubjectGuardrails('keys', id, ownIds);
     return latency(this.keyView(next), 250);

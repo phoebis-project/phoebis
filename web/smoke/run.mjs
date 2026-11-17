@@ -10239,19 +10239,20 @@ await forView(['/keys', '/pools'], async () => {
   [...k.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create key')?.click();
   await k.settle(300);
   let keyDlg = [...k.container.querySelectorAll('dialog[open]')].pop();
-  const keyRead = (dlgOf) => Object.fromEntries(['Key', 'Access', 'Models', 'Guardrails', 'Sessions', 'Capture'].map((label) => [label, [labelsIn(group(dlgOf, label)), lineIn(group(dlgOf, label))]]));
+  const keyRead = (dlgOf) => Object.fromEntries(['Key', 'Access', 'Models', 'Guardrails', 'claude.ai features', 'Sessions', 'Capture'].map((label) => [label, [labelsIn(group(dlgOf, label)), lineIn(group(dlgOf, label))]]));
   const plainKey = keyRead(keyDlg);
   const plainKeyWanted = {
     Key: [['Name', 'Pool', 'Notes'], null],
     Access: [['Expiry'], '1 more setting in the '],
     Models: [['Model rules'], '2 more settings in the '],
     Guardrails: [['Guardrails'], null],
+    'claude.ai features': [['Artifacts', 'Connectors'], null],
     Sessions: [['Allowance tool', 'Cache warming'], null],
     Capture: [['Capture request and response bodies'], null],
   };
   results.push({
     name: '/keys with the mode off each group reads its plain fields, and the line counts the expert ones in Access and Models',
-    ok: JSON.stringify(plainKey) === JSON.stringify(plainKeyWanted) && keyDlg?.querySelector('select[aria-label="Server-side auto mode"], .segmented, button[role="switch"][aria-label="List [1m] twins in the models listing"]') === null && JSON.stringify(railOf(keyDlg)) === '["Key","Access","Models","Guardrails","Sessions","Capture"]',
+    ok: JSON.stringify(plainKey) === JSON.stringify(plainKeyWanted) && keyDlg?.querySelector('select[aria-label="Server-side auto mode"], .segmented, button[role="switch"][aria-label="List [1m] twins in the models listing"]') === null && JSON.stringify(railOf(keyDlg)) === '["Key","Access","Models","Guardrails","claude.ai features","Sessions","Capture"]',
     missing: [JSON.stringify(plainKey), JSON.stringify(railOf(keyDlg))],
   });
   group(keyDlg, 'Models')?.querySelector('.dialog-group__more button')?.click();
@@ -10700,8 +10701,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     const railLabels = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((l) => l.textContent?.trim());
     const marked = [...(dlg?.querySelectorAll('.dialog-rail__group') ?? [])].filter((b) => b.querySelector('.dialog-rail__dot') && b.getAttribute('aria-describedby')).map((b) => b.getAttribute('data-group'));
     results.push({
-      name: '/keys dialog lists Key, Access, Models, Guardrails, Sessions and Capture on its rail',
-      ok: JSON.stringify(railLabels) === JSON.stringify(['Key', 'Access', 'Models', 'Guardrails', 'Sessions', 'Capture']) && dlg?.querySelector('.dialog-rail__parent') === null && JSON.stringify(marked) === '["key"]',
+      name: '/keys dialog lists Key, Access, Models, Guardrails, claude.ai features, Sessions and Capture on its rail',
+      ok: JSON.stringify(railLabels) === JSON.stringify(['Key', 'Access', 'Models', 'Guardrails', 'claude.ai features', 'Sessions', 'Capture']) && dlg?.querySelector('.dialog-rail__parent') === null && JSON.stringify(marked) === '["key"]',
       missing: [JSON.stringify(railLabels), JSON.stringify(marked)],
     });
     const headings = [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
@@ -10751,7 +10752,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     const focused = dlg?.ownerDocument.activeElement === group(dlg, 'Sessions')?.querySelector('.dialog-group__title');
     results.push({
       name: '/keys choosing a group hides the others',
-      ok: JSON.stringify(hidden) === JSON.stringify(['Key', 'Access', 'Models', 'Guardrails', 'Capture']) && !group(dlg, 'Sessions')?.hidden && JSON.stringify(current) === '["sessions"]' && focused,
+      ok: JSON.stringify(hidden) === JSON.stringify(['Key', 'Access', 'Models', 'Guardrails', 'claude.ai features', 'Capture']) && !group(dlg, 'Sessions')?.hidden && JSON.stringify(current) === '["sessions"]' && focused,
       missing: [JSON.stringify(hidden), JSON.stringify(current), `focus on the heading: ${focused}`],
     });
     rail(dlg, 'key')?.click();
@@ -11177,6 +11178,80 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   });
 }
 {
+  // The claude.ai features group on the keys of the first pool and of jobs, behind the checks that put laptop back in
+  // all under its own name. A case that saves writes the story's row back, and the others cancel.
+  const rows = () => [...m.container.querySelectorAll('.card--table tbody tr')];
+  const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const edit = async (name) => {
+    rows().find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === name)?.querySelector('.menu__trigger')?.click();
+    await m.settle(120);
+    [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+    await m.settle(400);
+    return [...m.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const selectOf = (dlg, label) => group(dlg, 'claude.ai features')?.querySelector(`select[aria-label="${label}"]`) ?? null;
+  const firstOf = (select) => select?.options[0]?.textContent ?? null;
+  const shownOf = (select) => select?.selectedOptions[0]?.textContent ?? null;
+  const accounts = await api.listAccounts();
+  const labelOf = (id) => accounts.find((a) => a.id === id)?.label ?? `no account ${id}`;
+
+  let dlg = await edit('desktop');
+  const desktop = [selectOf(dlg, 'Artifacts')?.value ?? null, firstOf(selectOf(dlg, 'Artifacts'))];
+  foot(dlg, 'Cancel')?.click();
+  await m.settle(200);
+  results.push({
+    name: "/keys the first option of Artifacts names the pool's account (the mock's desktop under all, which selects studio)",
+    ok: JSON.stringify(desktop) === JSON.stringify(['inherit', `Inherit (${labelOf('studio')})`]),
+    missing: [JSON.stringify(desktop)],
+  });
+
+  const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
+  dlg = await edit('laptop');
+  await changeSelect(m, selectOf(dlg, 'Connectors'), 'none');
+  foot(dlg, 'Save')?.click();
+  await m.settle(700);
+  dlg = await edit('laptop');
+  const reopened = [selectOf(dlg, 'Connectors')?.value ?? null, shownOf(selectOf(dlg, 'Connectors'))];
+  foot(dlg, 'Cancel')?.click();
+  await m.settle(200);
+  results.push({
+    name: "/keys None (refused) saved for Connectors is selected after a reopen (the mock's laptop)",
+    ok: JSON.stringify(reopened) === JSON.stringify(['none', 'None (refused)']),
+    missing: [JSON.stringify(reopened)],
+  });
+  // With its feature accounts, since the route keeps a word the input leaves out.
+  await api.updateKey('laptop', { autoModeServer: laptop.autoModeServer, bodyCaptureHours: laptop.bodyCaptureHours, companionPermissions: laptop.companionPermissions, enabled: laptop.enabled, featureAccounts: laptop.featureAccounts, longContextTwins: laptop.longContextTwins, modelRules: laptop.modelRules, modelRulesMode: laptop.modelRulesMode, name: laptop.name, notes: laptop.notes, poolId: laptop.poolId });
+
+  dlg = await edit('laptop');
+  const before = firstOf(selectOf(dlg, 'Artifacts'));
+  await changeSelect(m, group(dlg, 'Key')?.querySelector('select'), 'jobs');
+  const moved = [selectOf(dlg, 'Artifacts')?.value ?? null, firstOf(selectOf(dlg, 'Artifacts'))];
+  foot(dlg, 'Cancel')?.click();
+  await m.settle(200);
+  const stored = (await api.listKeys()).find((k) => k.id === 'laptop');
+  results.push({
+    name: "/keys a change of the pool changes the first option of Artifacts and leaves a named account selected (the mock's laptop moved to jobs, which selects none)",
+    ok:
+      before === `Inherit (${labelOf('studio')})` &&
+      JSON.stringify(moved) === JSON.stringify(['account:contract', 'Inherit (None (refused))']) &&
+      m.container.querySelector('dialog[open]') === null &&
+      stored?.poolId === 'all' &&
+      JSON.stringify(stored.featureAccounts) === JSON.stringify(laptop.featureAccounts),
+    missing: [String(before), JSON.stringify(moved), stored ? `${stored.poolId} ${JSON.stringify(stored.featureAccounts)}` : 'no laptop'],
+  });
+
+  dlg = await edit('batch');
+  const connectors = [...(group(dlg, 'claude.ai features')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Connectors');
+  const line = connectors?.querySelector('.field__hint')?.textContent ?? null;
+  foot(dlg, 'Cancel')?.click();
+  await m.settle(200);
+  results.push({
+    name: "/keys the line under a named Connectors account names that account and not the pool's (the mock's batch on legacy, under jobs, which selects none)",
+    ok: line !== null && line.startsWith(`${labelOf('legacy')} `),
+    missing: [String(line)],
+  });
+}
+{
   // A mount of its own, whose provider holds the shell's toast: a save the route refuses for a field and the stale
   // story's 409 each read in the key dialog alone, and the stale footer says what is held.
   const page = await mount('/keys');
@@ -11230,7 +11305,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
 {
   // The key routes refuse a body member outside the key input with 400, so the dialog's own save is read against the
   // members the routes take.
-  const KEY_INPUT_MEMBERS = new Set(['autoModeServer', 'bodyCaptureHours', 'companionPermissions', 'enabled', 'expiresAt', 'guardrails', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
+  const KEY_INPUT_MEMBERS = new Set(['autoModeServer', 'bodyCaptureHours', 'companionPermissions', 'enabled', 'expiresAt', 'featureAccounts', 'guardrails', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
   const page = await mount('/keys');
   const rows = () => [...page.container.querySelectorAll('.card--table tbody tr')];
   const listed = (name) => rows().some((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === name);
