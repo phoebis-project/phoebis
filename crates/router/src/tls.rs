@@ -745,6 +745,40 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_certificate_issued_ahead_of_a_failed_build_serves_from_the_next_step() {
+        let dir = tempfile::tempdir().unwrap();
+        // The CA's own dates are checked against the wall clock as it is read, so the test's clock starts there.
+        let now = jiff::Timestamp::now().as_millisecond();
+        let (ca, _) = FeatureCa::open(dir.path(), now).unwrap();
+        let at = Arc::new(AtomicI64::new(now));
+        let clock: phoebis_store::Clock = {
+            let at = Arc::clone(&at);
+            Arc::new(move || at.load(AtomicOrdering::SeqCst))
+        };
+        let leaves = FeatureLeaves::issue(Arc::new(ca), clock).unwrap();
+        let live = LiveAcceptor::new(feature_acceptor(&leaves).unwrap());
+        let first = served(&live).await;
+        let end = leaves.current("api.anthropic.com").unwrap().not_after;
+
+        at.store(
+            end - LEAF_RENEW_AHEAD.as_millis() as i64 + 1,
+            AtomicOrdering::SeqCst,
+        );
+        // What a step leaves whose build failed behind its issue: the new certificates in the leaves, and the acceptor
+        // over the old ones in front of the connections.
+        assert_eq!(leaves.renew_due().unwrap(), 2);
+        assert_eq!(renew_feature_certificates(&leaves, &live).unwrap(), 0);
+        let next = served(&live).await;
+        assert_eq!(
+            next.not_after().compare(first.not_after()).unwrap(),
+            Ordering::Greater,
+            "served {} after {}",
+            next.not_after(),
+            first.not_after()
+        );
+    }
+
     #[test]
     fn a_leafs_not_after_reads_as_unix_milliseconds() {
         let dir = tempfile::tempdir().unwrap();
