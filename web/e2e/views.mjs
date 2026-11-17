@@ -100,6 +100,9 @@ const VIEWS = [
   { path: '/keys', title: 'Keys', wait: '.card--table tbody tr', slug: 'keys' },
   { path: '/guardrails', title: 'Guardrails', wait: '.guardrails__table', slug: 'guardrails' },
   { path: '/requests', title: 'Requests', wait: '.requests__table', slug: 'requests' },
+  // The page shows one section at a time, so the feature calls' shot is a view of its own, and the mock pass's alone,
+  // since the router's seed sends no feature call.
+  { path: '/requests#feature-calls', title: 'Requests', wait: '#feature-calls .requests__table tbody .sub.mono', slug: 'requests-feature-calls', mockOnly: true },
   { path: '/analytics', title: 'Analytics', wait: '.analytics-section#traffic', slug: 'analytics' },
   // The page shows one section at a time, so the site's Cache warming shot is a view of its own; like the catalog
   // shot it is the mock pass's alone, whose story the site's screenshots come from.
@@ -9433,8 +9436,8 @@ async function fastLane(theme, path) {
  * legend lists the seven phases, and the token bar draws a segment wherever the Usage table holds tokens (a request
  * that ended with no answer holds none and draws none). A request that ended with no answer draws no chip, so then the
  * chips are read on the newest request that answered 200. The router's seeded answers name no stop reason, speed or
- * region, so there the ids' chips carry that measure. It runs after the list view's shot, so that shot stays the list
- * alone.
+ * region, so there the ids' chips carry that measure. Scrolled 600 px at 1280 by 800, the drawer's top stands at or
+ * under the section bar's bottom. It runs after the list view's shot, so that shot stays the list alone.
  */
 async function requestDrawerCompact(theme) {
   const say = (what) => failures.push(`${theme} /requests: ${what}`);
@@ -9583,6 +9586,22 @@ async function requestDrawerCompact(theme) {
     for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
     costRow(where, got);
   }
+  // The section bar and the drawer both dock under the shell's block, so once the page scrolls the drawer's head must
+  // stand under the bar, not behind it.
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  await page.evaluate(() => window.scrollTo(0, 600));
+  await settle();
+  const docked = await page.evaluate(() => ({
+    bar: Math.round((document.querySelector('.section-bar')?.getBoundingClientRect().bottom ?? Number.NaN) * 10) / 10,
+    drawer: Math.round((document.querySelector('.drawer')?.getBoundingClientRect().top ?? Number.NaN) * 10) / 10,
+    scrolled: window.scrollY,
+  }));
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await settle();
+  measurements.push(`${theme} /requests the open drawer scrolled at 1280 by 800 ${JSON.stringify(docked)}`);
+  if (docked.scrolled === 0) say('the page does not scroll under the open drawer at 1280 by 800, so its dock is not measured');
+  else if (!(docked.drawer >= docked.bar - 0.5)) say(`scrolled at 1280 by 800, the drawer's top at ${docked.drawer}px stands over the section bar's bottom at ${docked.bar}px`);
   // Under 1100 px the drawer stacks under the list, so the compact set takes the phone's whole card and scrolls inside
   // it where it is wider.
   await page.setViewportSize({ height: 800, width: 375 });
@@ -9644,6 +9663,56 @@ async function requestDrawerCompact(theme) {
   if (got.chips.length === 0) say("the newest answered request's drawer draws no chip to measure");
   counted("the newest answered request's drawer", got);
   for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`the newest answered request's ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
+}
+
+/**
+ * The Requests view's Feature calls section as it loads, on its first page with no filter, at 1280 by 800: the table
+ * as wide as its card with nothing to scroll sideways, Time its one fill, and every Path cell on one line with the
+ * whole path in its title, a path the cell cuts drawn at 48 characters with the ellipsis, the cut paths and every
+ * figure recorded. The pager's controls follow (`pagerControls`), and the view's stripes measure reads the table's rows
+ * at the same place. It sets no filter and turns no page, so it ends at rest for the view's shot.
+ */
+async function featureCallsTable(theme) {
+  const say = (what) => failures.push(`${theme} /requests#feature-calls: ${what}`);
+  const read = await page.evaluate(() => {
+    const table = document.querySelector('#feature-calls .requests__table');
+    const wrap = table?.closest('.table-wrap');
+    if (!table || !wrap) return null;
+    const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent?.trim() ?? '');
+    const at = heads.indexOf('Path');
+    // The lines a cell's text takes, read off its client rects as the request table's reader reads a cell.
+    const lines = (el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+    };
+    const rows = [...table.querySelectorAll('tbody tr')].filter((tr) => !tr.classList.contains('table__detail'));
+    const paths = rows.map((tr) => tr.children[at]).filter(Boolean).map((td) => ({ lines: lines(td), text: td.textContent ?? '', title: td.getAttribute('title') ?? '' }));
+    return {
+      client: wrap.clientWidth,
+      fills: [...table.querySelectorAll('thead th.col-fill')].map((th) => th.textContent?.trim() ?? ''),
+      heads,
+      paths,
+      rows: rows.length,
+      scroll: table.scrollWidth,
+      width: Math.round(table.getBoundingClientRect().width * 100) / 100,
+    };
+  });
+  const cut = (read?.paths ?? []).filter((p) => p.text !== p.title);
+  measurements.push(`${theme} /requests#feature-calls table at 1280 by 800 ${read === null ? 'not drawn' : JSON.stringify({ client: read.client, cut: cut.map((p) => [p.text, p.title]), fills: read.fills, heads: read.heads, rows: read.rows, scroll: read.scroll, width: read.width })}`);
+  if (read === null) say('no feature call table to measure');
+  else {
+    if (read.rows === 0) say('the table draws no row to measure');
+    if (read.scroll > read.client) say(`the table needs ${read.scroll}px of its card's ${read.client}px`);
+    if (Math.abs(read.width - read.client) > 1) say(`the table is ${read.width}px wide in its ${read.client}px card`);
+    if (JSON.stringify(read.fills) !== JSON.stringify(['Time'])) say(`the fill columns read ${JSON.stringify(read.fills)}, not ["Time"]`);
+    for (const p of read.paths.filter((x) => x.lines !== 1)) say(`the path cell "${p.text}" takes ${p.lines} lines`);
+    for (const p of read.paths.filter((x) => x.title === '')) say(`the path cell "${p.text}" carries no title`);
+    for (const p of cut.filter((x) => x.text.length !== 48 || !x.text.includes('…'))) say(`the path "${p.title}" is drawn as "${p.text}", not cut to 48 characters with the ellipsis`);
+    if (mock && cut.length === 0) say("no path of the mock's story is cut, so the cut is not measured");
+  }
+  await pagerControls(theme, '/requests#feature-calls');
+  await atRest();
 }
 
 /**
@@ -14219,6 +14288,9 @@ try {
         await requestsRefusalChip(theme);
         await agentChips(theme);
         await pagerControls(theme, view.path);
+      }
+      if (view.path === '/requests#feature-calls') {
+        if (mock) await featureCallsTable(theme);
       }
       if (view.path === '/routing-log') {
         await routingLogColumns(theme);

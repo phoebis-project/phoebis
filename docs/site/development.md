@@ -129,7 +129,7 @@ PHOEBIS_E2E_BASE=http://127.0.0.1:8081 PHOEBIS_E2E_SECRET=... PHOEBIS_SCREENSHOT
 
 `PHOEBIS_E2E_BASE` is the admin listener's URL (`http://127.0.0.1:8081` when unset) and `PHOEBIS_E2E_SECRET` the admin
 secret, without which the script stops with `set PHOEBIS_E2E_SECRET`. The router seeds its registry at real time, so
-the clock origin there is the launch instant, and the pass skips the three mock-only views and writes none of the ten
+the clock origin there is the launch instant, and the pass skips the four mock-only views and writes none of the ten
 extra shots. `cargo test -p phoebis-router --test end_to_end the_ui_passes` runs the same script against a router the
 test starts and seeds itself when `PHOEBIS_E2E_BROWSER=1` is set, and prints `skipped: set PHOEBIS_E2E_BROWSER=1 to run
 the browser pass` otherwise, so a build host without Chromium still runs the rest of that suite.

@@ -939,6 +939,10 @@ created", "Guardrail saved" and "Guardrail deleted". What the test evaluates and
 ![The Requests view: the table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the table with its client column](assets/requests-dark.png#only-dark)
 
+A section bar shows one of two sections at a time: Model requests, where the view opens, and Feature calls, which a
+link or a reload with `#feature-calls` lands on. The bar stays at the top as the page scrolls, and the request drawer
+docks under it. Model requests is the request list this part describes up to [Feature calls](#feature-calls).
+
 The filter bar holds the range, the search, Add filter, the Columns button, the Sort control, and at the right edge the
 split Refresh button and the count of rows shown ("25 shown, more available"), the right edge on a second line at 1280
 px whatever the count reads, since its slot keeps the width of its longest text. The range offers Last hour, Last 6
@@ -1106,6 +1110,36 @@ has no session or no account.
 A request the ledger does not hold reads "Request not found" with "It may have aged out of the ledger." A failed read of
 a request the list does not show draws "Could not load the request" with the error and Try again, which reads the
 request again.
+
+### Feature calls
+
+The Feature calls section lists the calls the router sent to a claude.ai feature host under a feature account, one row
+per call, newest first. Time reads the call's arrival as the request list reads a time, with the call's id under it. Key
+reads the key's name and Account the label of the account whose sign-in the call carried, each with its id on hover,
+and the id itself where the key list or the account list holds no row for it. A row takes the name the key list holds
+now, so where a key's id is issued again, an older call reads the newer key's name. Feature reads Artifacts or
+Connectors, Method the client's method, Path the path without its query in the monospace face, cut in the middle past
+48 characters and whole on hover, and Duration the time from the call's arrival to the answer's end. Status reads the
+status for a forwarded call and `canceled` for a call whose client left before the answer's end. A failed call reads
+its code, `upstream_unreachable`, where no upstream head arrived and the router answered with a 502, and its status with
+`ended early` behind it, such as `200 ended early`, where the answer stopped after its head went back. A call the router
+refused leaves no row, and a row opens no drawer, since the table shows all the row holds.
+
+Above the table the section draws a bar of its own, and nothing of the request list's bar shows there: the range, Add
+filter with Key, Feature, Account and Outcome (`canceled`, `failed` or `forwarded`), each filter in force a chip under
+the bar, and the split Refresh button. Both sections read the one range. The section and the range live in the page's
+address, so a reload or a shared link keeps them, while the four filters stay with the open page and start empty. The
+table pages 50 calls at a time with First, Previous and Next, and a change of the range or of a filter returns to the
+first page. Refresh moves the range's end to now for both sections. Auto reload is off when the section opens, and the
+dropdown offers the request list's intervals: each one reads the first page again over the same range, and it waits on
+an older page and while a menu or popover under the bar is open. While Feature calls shows, the request list reads
+nothing on its interval.
+
+An empty table with no filter reads "No feature calls in this range" with "A row appears once a key's pool selects an
+account for a feature and a client in a feature setup uses it." and the link "How the claude.ai features work", which
+opens the documentation's page on the features in a new tab. With a filter it reads "No feature calls match" with
+"Widen the range or clear a filter." A failed read draws "Could not load the feature calls" with the error and Try
+again, which reads the calls again.
 
 ## Analytics
 

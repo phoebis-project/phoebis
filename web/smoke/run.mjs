@@ -16379,6 +16379,115 @@ await forView('/requests', async () => {
   }
 });
 
+// The Feature calls section over the 64 feature calls of `FEATURE_CALLS` in `web/src/mock/requests.ts`, all inside the
+// default day: the route's page of 50, then the 14 behind it.
+await forView('/requests', async () => {
+  const section = (page) => page.container.querySelector('#feature-calls');
+  /** The drawn rows, each its id off the Time cell's id line and its cells' texts by their headers. */
+  const callRows = (page) => {
+    const table = section(page)?.querySelector('.requests__table');
+    const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+    return [...(table?.querySelectorAll('tbody tr') ?? [])]
+      .filter((tr) => !tr.classList.contains('table__detail'))
+      .map((tr) => ({ id: tr.querySelector('.sub.mono')?.getAttribute('title') ?? null, ...Object.fromEntries(heads.map((head, i) => [head, tr.children[i]?.textContent?.trim() ?? null])) }));
+  };
+  const button = (page, label) => section(page)?.querySelector(`button[aria-label="${label}"]`) ?? null;
+  {
+    // A reload or a shared link lands on the section the hash names.
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    const before = { calls: section(page) !== null, requests: page.container.querySelector('#requests .requests__table') !== null };
+    [...page.container.querySelectorAll('[role="tab"]')].find((t) => t.textContent?.trim() === 'Feature calls')?.click();
+    await page.settle();
+    const after = { calls: callRows(page).length, hash: page.location().hash, requests: page.container.querySelector('#requests') !== null };
+    results.push({
+      name: '/requests the section bar switches to the feature calls and writes the section into the address',
+      ok: !before.calls && before.requests && after.calls > 0 && after.hash === '#feature-calls' && !after.requests,
+      missing: [JSON.stringify(before), JSON.stringify(after)],
+    });
+    page.unmount();
+  }
+  {
+    // Each filter's value holds some of the newest 50 and leaves others out, so a query built without one of the four
+    // lists shows the chip over rows of another value.
+    const page = await mount('/requests#feature-calls', { now: CLOCK_ORIGIN });
+    const reads = [];
+    for (const [label, value, column, word] of [
+      ['Feature', 'Connectors', 'Feature', 'feature'],
+      ['Key', 'laptop', 'Key', 'key'],
+      ['Account', 'reserve', 'Account', 'account'],
+      ['Outcome', 'canceled', 'Status', 'outcome'],
+    ]) {
+      const before = callRows(page).map((r) => r[column]);
+      const picked = await pick(page, label, value);
+      const after = callRows(page).map((r) => r[column]);
+      reads.push({ after: [...new Set(after)], before: before.length, label, ok: picked && before.some((v) => v !== value) && after.length > 0 && after.every((v) => v === value) });
+      await closeBoxes(page);
+      await removeChip(page, word);
+    }
+    results.push({
+      name: '/requests each of the four filters narrows the feature calls to the rows of its value',
+      ok: reads.length === 4 && reads.every((r) => r.ok),
+      missing: reads.filter((r) => !r.ok).map((r) => JSON.stringify(r)),
+    });
+    page.unmount();
+  }
+  {
+    // The newest Connectors call of the seed, at 14:25:41 on the story's clock.
+    const NEWEST_CONNECTORS = 'req_phoebis_2b4989b8670bb5019fa4cf9e7e106140';
+    const page = await mount('/requests#feature-calls', { now: CLOCK_ORIGIN });
+    const first = callRows(page).map((r) => r.id);
+    button(page, 'Next page')?.click();
+    await page.settle(700);
+    const second = callRows(page).map((r) => r.id);
+    await pick(page, 'Feature', 'Connectors');
+    await closeBoxes(page);
+    const filtered = callRows(page).map((r) => r.id);
+    const pager = { first: button(page, 'First page')?.disabled ?? null, previous: button(page, 'Previous page')?.disabled ?? null };
+    results.push({
+      name: '/requests the feature calls page by the cursor, 50 then 14, and a filter changed on the second page opens on its first',
+      ok: first.length === 50 && second.length === 14 && second.every((id) => !first.includes(id)) && filtered[0] === NEWEST_CONNECTORS && pager.first === true && pager.previous === true,
+      missing: [`${first.length} rows, then ${second.length} with ${second.filter((id) => first.includes(id)).length} of the first`, `the filtered list opens on ${filtered[0] ?? 'nothing'}`, JSON.stringify(pager)],
+    });
+    page.unmount();
+  }
+  {
+    // A failed read draws the error with its retry, never the empty state that tells the operator no call ran.
+    failNextCall('listFeatureCalls', '/admin/feature-calls', 'ledger locked');
+    const page = await mount('/requests#feature-calls', { now: CLOCK_ORIGIN });
+    const stateOf = () => ({
+      body: section(page)?.querySelector('.empty--error .empty__body')?.textContent?.trim() ?? null,
+      retry: buttonIn(section(page), 'Try again') !== undefined,
+      rows: callRows(page).length,
+      title: section(page)?.querySelector('.empty__title')?.textContent?.trim() ?? null,
+    });
+    const failed = stateOf();
+    buttonIn(section(page), 'Try again')?.click();
+    await page.settle(700);
+    const retried = stateOf();
+    results.push({
+      name: '/requests a failed read of the feature calls draws its error with Try again, which draws the rows',
+      ok: JSON.stringify(failed) === JSON.stringify({ body: 'ledger locked', retry: true, rows: 0, title: 'Could not load the feature calls' }) && retried.rows > 0 && retried.title === null && !retried.retry,
+      missing: [JSON.stringify(failed), JSON.stringify(retried)],
+    });
+    page.unmount();
+  }
+  {
+    // Two failed calls of the seed among the newest 50: one whose answer ended behind its 200 head, which holds no
+    // code, and one the router answered itself with upstream_unreachable.
+    const ENDED_EARLY = 'req_phoebis_b35ad6164b33b2fb742c08bdb2606e04';
+    const UNREACHABLE = 'req_phoebis_9073a3408c08f2dbb0f9bd0c0c1d6aa7';
+    const page = await mount('/requests#feature-calls', { now: CLOCK_ORIGIN });
+    const rows = callRows(page);
+    const statusOf = (id) => rows.find((r) => r.id === id)?.Status ?? null;
+    results.push({
+      name: "/requests a failed feature call's Status reads its code, or its status with ended early where it holds none",
+      ok: statusOf(ENDED_EARLY) === '200 ended early' && statusOf(UNREACHABLE) === 'upstream_unreachable',
+      missing: [`${ENDED_EARLY}: ${JSON.stringify(statusOf(ENDED_EARLY))}`, `${UNREACHABLE}: ${JSON.stringify(statusOf(UNREACHABLE))}`],
+    });
+    page.unmount();
+  }
+});
+
 // The routing log's Models filter lists the catalog in the cost model's tier order, which the shell reads off its
 // settings answer. Here that answer lands after the catalog and orders the tiers the other way round from the pair
 // the mounts before it left, so the filter's order can only come from it.

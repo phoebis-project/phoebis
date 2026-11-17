@@ -267,6 +267,14 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
   SESSION_ID,
 ];
 
+/** The feature call table's four, in the order of its columns, under one group so the list draws no heading. */
+export const FEATURE_CALLS_DIMENSIONS: Dimension[] = [
+  { ...KEY, group: 'Feature calls' },
+  { field: 'features', group: 'Feature calls', kind: 'list', label: 'Feature', word: 'feature' },
+  { ...ACCOUNT, group: 'Feature calls' },
+  { field: 'outcomes', group: 'Feature calls', kind: 'list', label: 'Outcome', word: 'outcome' },
+];
+
 /** Kinds, Routing, Subject: the kinds lead, since their presets are the way to narrow this view. */
 export const ROUTING_LOG_DIMENSIONS: Dimension[] = [
   { emptyMeansAll: true, field: 'kinds', group: 'Kinds', kind: 'list', label: 'Kinds', text: (value) => kindsChipText(value as string[]), word: 'kinds' },

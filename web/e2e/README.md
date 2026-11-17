@@ -5,7 +5,8 @@ pass under the default and the GitHub palette. It logs in through the login scre
 palette (the default palette first) visits the dashboard, quota, accounts (which lands on the first account through a
 client-side redirect, since `/accounts` carries no account id), pools, keys, guardrails, request logs, analytics (on its
 Traffic tab), sessions, settings, and the routing log, and in the mock pass the Analytics page once more on its Cache
-warming tab and the Quota page once more on its Quota windows section. Before each theme and palette after the first it
+warming tab, the Quota page once more on its Quota windows section and the Requests view once more on its Feature calls
+section. Before each theme and palette after the first it
 logs out through the top bar's Log out control and logs in again on the screen drawn in that theme and palette, storing
 `phoebis.palette` beside `phoebis.theme`. Per view it waits for one element, asserts the document title, records every
 console error and page error, and writes a full-page screenshot to `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png` under
@@ -347,7 +348,11 @@ which opens once the request list's shot is taken (its compact table with Time t
 its chips in the status badge's type, and the Estimated cost row's figure chip and muted equivalent on one line each
 inside the cell and its hint's chips on a row of their own under it, each on one line inside that row's one cell across
 the table, at 1280 by 800 and 1440 by 900, the story's Fable request reading its figure in the Ultra week alone on the
-cost row, then its plan, and a 5-hour, a 7-day and a Fable week share in that order), a reasons panel link landing on
+cost row, then its plan, and a 5-hour, a 7-day and a Fable week share in that order, and scrolled 600 px at 1280 by 800
+the drawer's top at or under the section bar's bottom), the Requests view's Feature calls section (mock pass, on its
+first page at 1280 by 800: the table as wide as its card with Time the one fill, every Path cell on one line with its
+whole path in its title, a cut path drawn at 48 characters with the ellipsis, the cut paths recorded, and its pager's
+three buttons 32 px square with the footer one control tall), a reasons panel link landing on
 a list whose first row's drawer reads the reason (mock pass, on a load of its own in the part behind the walks), the
 attempt count's hover card at the request log's bottom (mock pass, on the log read at 50 rows a page, where the story's
 last row of two or more attempts sits below the window's fold, the bare log loaded again after: that row scrolled to
@@ -509,7 +514,8 @@ the Analytics page's Burn tab, its plan card drawing its lines, as `<theme>/anal
 dialog on its two pages as `<theme>/quota-reset-pick.png` and `<theme>/quota-reset-confirm.png`, and the written
 session's open row on the Sessions view as `<theme>/sessions-open.png` and again at 375 by 800 as
 `<theme>/sessions-phone.png`. Its views include the Analytics page's Cache warming tab as
-`<theme>/analytics-cache-warming.png` and the Quota page's Quota windows section as `<theme>/quota-windows.png`. The
+`<theme>/analytics-cache-warming.png`, the Quota page's Quota windows section as `<theme>/quota-windows.png` and the
+Requests view's Feature calls section as `<theme>/requests-feature-calls.png`. The
 mock pass writes each of these shots under both palettes, `<theme>/` for the default and `<theme>-github/` for the
 GitHub one, and the site's screenshots come from the default palette's directories. The router's pass writes none of
 these: one shot per view it runs, under the default palette alone, which its test counts. The dashboard's remaining

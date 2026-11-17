@@ -8,8 +8,10 @@ import { useAppSettings } from '@/app/settings';
 import { useFollow, usePaging } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
 import { Chips } from '@/components/ChipView';
+import { FeatureCallsTable } from '@/components/FeatureCallsTable';
 import { FilterBar } from '@/components/FilterBar';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
+import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { TokenBar } from '@/components/TokenBar';
 import { AttemptCount, cooldownLine, OUTCOME_LABEL, StatusBadge } from '@/components/ui/AttemptTrail';
@@ -33,7 +35,7 @@ import { keyOptions, notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBa
 import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, rowsRefreshTitle, shownCount, shownWords, spanEnded } from '@/lib/follow';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, modelTitle, plural, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
-import { useAsync, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
+import { useAsync, useHashSection, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
 import { TRANSFORMATION_KEYS, transformationLabel, transformationOrder } from '@/lib/inputTransformations';
 import { costCellOf, costHeaderTitle, type CostTable, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, orderedTokens, requestCostUnit, requestHintArgs, requestOrder, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
@@ -264,6 +266,11 @@ const listed = (page: RequestPage) => ({ landedThrough: page.landedThrough, next
 /** A full largest page with more available, the widest count a freshly read page draws. */
 const WIDEST_COUNT = shownWords(Math.max(...REQUEST_PAGE_SIZES), true);
 
+const REQUEST_SECTIONS = [
+  { id: 'requests', label: 'Model requests' },
+  { id: 'feature-calls', label: 'Feature calls' },
+] as const;
+
 export function RequestsPage() {
   const { requestId } = useParams();
   const navigate = useNavigate();
@@ -293,6 +300,7 @@ export function RequestsPage() {
   const [intervalMs, setIntervalMs] = useState(0);
   const { cause: holdCause, host } = useHoldHost();
   const rangeTakenAt = useRangeTakenAt(filters.range);
+  const [section, chooseSection] = useHashSection(REQUEST_SECTIONS, 'requests');
 
   // A custom range names its own window, which Refresh reads again rather than moving it to now.
   const custom = filters.range.preset === 'custom';
@@ -309,7 +317,7 @@ export function RequestsPage() {
   );
   const requests = useAsync(() => api.listRequests(query), [query]);
   // The open drawer reads one of the rows, and an open menu or popover under the bar stands over the list, so the poll
-  // waits for either to close.
+  // waits for either to close. Under the feature calls the list is not drawn, so it waits there too.
   const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RequestLog>({
     address,
     compare: requestOrder(order, dir),
@@ -320,7 +328,7 @@ export function RequestsPage() {
     intervalMs: polledMs,
     list: requests.data && listed(requests.data),
     pagedTo,
-    paused: Boolean(requestId) || holdCause !== null,
+    paused: Boolean(requestId) || holdCause !== null || section === 'feature-calls',
     read: (c, to, landedAfter) => api.listRequests(pollQuery(query, custom, span.to, to, c, landedAfter)).then(listed),
     setPaging,
     stack,
@@ -375,193 +383,212 @@ export function RequestsPage() {
   const fills = COLUMNS.some((c) => shown.has(c.id) && 'fill' in c && c.fill);
   const detailTo = (id: string) => ({ pathname: requestHref(id), search: location.search });
   const closeDrawer = () => navigate({ pathname: '/requests', search: location.search });
+  const refreshTitle = rowsRefreshTitle(custom, filters.range.from, custom ? filters.range.to : loadedAt);
 
   return (
     <PopoverHost.Provider value={host}>
-      <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
-        <FilterBar
-          address={address}
-          count={shownCount(rows, nextCursor, requests.data !== null)}
-          countSizer={WIDEST_COUNT}
-          dimensions={REQUESTS_DIMENSIONS}
-          disabled={disabled}
-          filters={filters}
-          options={options}
-          placeholder="Search id, session, key, account, model, error, message id"
-          range={{ now: clock.now, window: span }}
-          refresh={{
-            disabled: ended ? ENDED_RANGE : undefined,
-            intervalMs,
-            onIntervalChange: setIntervalMs,
-            onRefresh: refresh,
-            paused: requestId ? 'request' : (holdCause ?? (cursor !== undefined ? 'olderPage' : null)),
-            refreshTitle: rowsRefreshTitle(custom, filters.range.from, custom ? filters.range.to : loadedAt),
-          }}
-          update={update}
-        >
-          <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
-          <SortControl keys={REQUEST_SORT_KEYS} onChange={update} value={filters} />
-        </FilterBar>
-        <div className="stack">
-          {overrun !== null && (
-            <div className="callout callout--warning requests__overrun" role="status">
-              {FOLLOW_OVERRUN}
-            </div>
-          )}
+      <div className="stack">
+        <SectionBar sections={REQUEST_SECTIONS} shown={section} onChoose={chooseSection} />
+        {section === 'requests' ? (
+          <div className={`requests ${requestId ? 'has-drawer' : ''}`} id="requests" role="tabpanel" aria-labelledby="tab-requests">
+            <FilterBar
+              address={address}
+              count={shownCount(rows, nextCursor, requests.data !== null)}
+              countSizer={WIDEST_COUNT}
+              dimensions={REQUESTS_DIMENSIONS}
+              disabled={disabled}
+              filters={filters}
+              options={options}
+              placeholder="Search id, session, key, account, model, error, message id"
+              range={{ now: clock.now, window: span }}
+              refresh={{
+                disabled: ended ? ENDED_RANGE : undefined,
+                intervalMs,
+                onIntervalChange: setIntervalMs,
+                onRefresh: refresh,
+                paused: requestId ? 'request' : (holdCause ?? (cursor !== undefined ? 'olderPage' : null)),
+                refreshTitle,
+              }}
+              update={update}
+            >
+              <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
+              <SortControl keys={REQUEST_SORT_KEYS} onChange={update} value={filters} />
+            </FilterBar>
+            <div className="stack">
+              {overrun !== null && (
+                <div className="callout callout--warning requests__overrun" role="status">
+                  {FOLLOW_OVERRUN}
+                </div>
+              )}
 
-          <Card padded={false} className="card--table">
-            <div className="table-wrap">
-              <table className={`table table--hover requests__table${timeFormat === '12h' ? ' requests__table--12h' : ''}${fills ? '' : ' table--no-fill'}`}>
-                <thead>
-                  <tr>
-                    {shown.has('time') && <th className="col-fill">Time</th>}
-                    {shown.has('key') && <th className="col-fit">Key</th>}
-                    {shown.has('pool') && <th className="col-fit">Pool</th>}
-                    {shown.has('account') && <th className="col-fit">Account</th>}
-                    {shown.has('model') && <th className="col-fit">Model</th>}
-                    {shown.has('client') && <th className="col-fit">Client</th>}
-                    {shown.has('kind') && <th className="col-fit">Kind</th>}
-                    {shown.has('transport') && <th className="col-fit">Transport</th>}
-                    {shown.has('status') && <th className="col-fit">Status</th>}
-                    {shown.has('attempts') && <th className="col-fit" title="How many attempts the request took, the trail on hover">Attempts</th>}
-                    {shown.has('ttfb') && <th className="right col-fit">TTFB</th>}
-                    {shown.has('duration') && <th className="right col-fit">Duration</th>}
-                    {shown.has('tokens') && <th className="right col-fit">Tokens</th>}
-                    {shown.has('input') && <th className="right col-fit">Uncached input</th>}
-                    {shown.has('output') && <th className="right col-fit">Output tokens</th>}
-                    {shown.has('cost') && (
-                      <th className="right col-fit" title={costHeaderTitle(unit)}>
-                        Cost
-                      </th>
-                    )}
-                    <th className="col-fit" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {/* A list read in flight over a stand-in page (the poll's newest page holding the place of a read that
-                      failed) keeps the stand-in's rows drawn, so the skeleton rows are the empty table's alone. */}
-                  {requests.loading && !requests.data && rows.length === 0
-                    ? <SkeletonRows count={8} colSpan={shown.size + 1} />
-                    : rows.map((r) => (
-                        <tr
-                          key={r.id}
-                          className={[r.id === requestId ? 'is-selected' : '', fresh.has(r.id) ? 'is-new' : ''].filter(Boolean).join(' ')}
-                          tabIndex={0}
-                          {...toggleRow(() => (r.id === requestId ? closeDrawer() : navigate(detailTo(r.id))))}
-                        >
-                          {shown.has('time') && (
-                            <td className="num requests__time col-fill" title={fmtAbsolute(r.at)}>
-                              {fmtDatedTime(r.at)}
-                              <span className="sub mono" title={r.id}>{r.id}</span>
-                            </td>
-                          )}
-                          {shown.has('key') && <td className="mono col-fit">{r.keyId ?? '-'}</td>}
-                          {shown.has('pool') && <td className="mono col-fit">{r.poolId ?? '-'}</td>}
-                          {shown.has('account') && <td className="col-fit">{r.accountId ?? '-'}</td>}
-                          {shown.has('model') && (
-                            <td className="mono nowrap col-fit" title={modelTitle(r.model)}>
-                              {r.model === '' ? <span className="muted">-</span> : shortModel(r.model)}
-                            </td>
-                          )}
-                          {shown.has('client') && (
-                            <td className="mono requests__client col-fit" title={r.client ?? undefined}>
-                              {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text ellipsis" title={r.client}>{r.client}</span>}
-                              {r.agentType && (
-                                <span className="sub ellipsis" title={r.agentType}>
-                                  {r.agentType}
-                                </span>
+              <Card padded={false} className="card--table">
+                <div className="table-wrap">
+                  <table className={`table table--hover requests__table${timeFormat === '12h' ? ' requests__table--12h' : ''}${fills ? '' : ' table--no-fill'}`}>
+                    <thead>
+                      <tr>
+                        {shown.has('time') && <th className="col-fill">Time</th>}
+                        {shown.has('key') && <th className="col-fit">Key</th>}
+                        {shown.has('pool') && <th className="col-fit">Pool</th>}
+                        {shown.has('account') && <th className="col-fit">Account</th>}
+                        {shown.has('model') && <th className="col-fit">Model</th>}
+                        {shown.has('client') && <th className="col-fit">Client</th>}
+                        {shown.has('kind') && <th className="col-fit">Kind</th>}
+                        {shown.has('transport') && <th className="col-fit">Transport</th>}
+                        {shown.has('status') && <th className="col-fit">Status</th>}
+                        {shown.has('attempts') && <th className="col-fit" title="How many attempts the request took, the trail on hover">Attempts</th>}
+                        {shown.has('ttfb') && <th className="right col-fit">TTFB</th>}
+                        {shown.has('duration') && <th className="right col-fit">Duration</th>}
+                        {shown.has('tokens') && <th className="right col-fit">Tokens</th>}
+                        {shown.has('input') && <th className="right col-fit">Uncached input</th>}
+                        {shown.has('output') && <th className="right col-fit">Output tokens</th>}
+                        {shown.has('cost') && (
+                          <th className="right col-fit" title={costHeaderTitle(unit)}>
+                            Cost
+                          </th>
+                        )}
+                        <th className="col-fit" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {/* A list read in flight over a stand-in page (the poll's newest page holding the place of a read
+                          that failed) keeps the stand-in's rows drawn, so the skeleton rows are the empty table's
+                          alone. */}
+                      {requests.loading && !requests.data && rows.length === 0
+                        ? <SkeletonRows count={8} colSpan={shown.size + 1} />
+                        : rows.map((r) => (
+                            <tr
+                              key={r.id}
+                              className={[r.id === requestId ? 'is-selected' : '', fresh.has(r.id) ? 'is-new' : ''].filter(Boolean).join(' ')}
+                              tabIndex={0}
+                              {...toggleRow(() => (r.id === requestId ? closeDrawer() : navigate(detailTo(r.id))))}
+                            >
+                              {shown.has('time') && (
+                                <td className="num requests__time col-fill" title={fmtAbsolute(r.at)}>
+                                  {fmtDatedTime(r.at)}
+                                  <span className="sub mono" title={r.id}>{r.id}</span>
+                                </td>
                               )}
-                            </td>
-                          )}
-                          {shown.has('kind') && <td className="col-fit">{words(r.kind)}</td>}
-                          {shown.has('transport') && (
-                            <td className="col-fit">
-                              <Badge tone={r.transport === 'sse' ? 'accent' : 'neutral'}>{transportLabel(r)}</Badge>
-                            </td>
-                          )}
-                          {shown.has('status') && (
-                            <td className="col-fit">
-                              <span className="requests__status">
-                                <StatusBadge status={r.status} />
-                                {servingResponse(r)?.stopReason === 'refusal' && (
-                                  <Badge tone="warning" title={UPSTREAM_REFUSAL_TITLE}>
-                                    {servingResponse(r)?.refusalCategory ?? 'none'}
-                                  </Badge>
-                                )}
-                                {r.fallbackDigest !== null && (
-                                  <Badge tone="info" title={fallbackTitle(r.fallbackDigest, issuedBy)}>
-                                    fallback
-                                  </Badge>
-                                )}
-                                {r.outcome !== 'succeeded' && <span className="muted requests__outcome">{REQUEST_OUTCOME_LABEL[r.outcome]}</span>}
-                              </span>
-                            </td>
-                          )}
-                          {shown.has('attempts') && (
-                            <td className="col-fit">
-                              <span className="requests__attempts">
-                                <AttemptCount attempts={r.attempts} />
-                                {r.held && <HeldBadge held={r.held} />}
-                              </span>
-                            </td>
-                          )}
-                          {shown.has('ttfb') && <td className="right num col-fit">{fmtMs(r.ttfbMs)}</td>}
-                          {shown.has('duration') && <td className="right num col-fit">{fmtMs(r.durationMs)}</td>}
-                          {shown.has('tokens') && (
-                            <td className="right num col-fit">
-                              {fmtCompact(tokensTotal(r.usage))}
-                              <span className="sub">{r.usage.cacheRead > 0 ? `${fmtCompact(r.usage.cacheRead)} cached` : 'uncached'}</span>
-                            </td>
-                          )}
-                          {shown.has('input') && <OrderedTokensCell kind="input" request={r} />}
-                          {shown.has('output') && <OrderedTokensCell kind="output" request={r} />}
-                          {shown.has('cost') && <CostCell context={context} request={r} unit={unit} />}
-                          <td className="right col-fit">
-                            <span className="requests__links">
-                              <Link to={routingLogHref(r, now)}>
-                                Routing
-                              </Link>
-                              <Link to={detailTo(r.id)}>
-                                Details
-                              </Link>
-                            </span>
+                              {shown.has('key') && <td className="mono col-fit">{r.keyId ?? '-'}</td>}
+                              {shown.has('pool') && <td className="mono col-fit">{r.poolId ?? '-'}</td>}
+                              {shown.has('account') && <td className="col-fit">{r.accountId ?? '-'}</td>}
+                              {shown.has('model') && (
+                                <td className="mono nowrap col-fit" title={modelTitle(r.model)}>
+                                  {r.model === '' ? <span className="muted">-</span> : shortModel(r.model)}
+                                </td>
+                              )}
+                              {shown.has('client') && (
+                                <td className="mono requests__client col-fit" title={r.client ?? undefined}>
+                                  {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text ellipsis" title={r.client}>{r.client}</span>}
+                                  {r.agentType && (
+                                    <span className="sub ellipsis" title={r.agentType}>
+                                      {r.agentType}
+                                    </span>
+                                  )}
+                                </td>
+                              )}
+                              {shown.has('kind') && <td className="col-fit">{words(r.kind)}</td>}
+                              {shown.has('transport') && (
+                                <td className="col-fit">
+                                  <Badge tone={r.transport === 'sse' ? 'accent' : 'neutral'}>{transportLabel(r)}</Badge>
+                                </td>
+                              )}
+                              {shown.has('status') && (
+                                <td className="col-fit">
+                                  <span className="requests__status">
+                                    <StatusBadge status={r.status} />
+                                    {servingResponse(r)?.stopReason === 'refusal' && (
+                                      <Badge tone="warning" title={UPSTREAM_REFUSAL_TITLE}>
+                                        {servingResponse(r)?.refusalCategory ?? 'none'}
+                                      </Badge>
+                                    )}
+                                    {r.fallbackDigest !== null && (
+                                      <Badge tone="info" title={fallbackTitle(r.fallbackDigest, issuedBy)}>
+                                        fallback
+                                      </Badge>
+                                    )}
+                                    {r.outcome !== 'succeeded' && <span className="muted requests__outcome">{REQUEST_OUTCOME_LABEL[r.outcome]}</span>}
+                                  </span>
+                                </td>
+                              )}
+                              {shown.has('attempts') && (
+                                <td className="col-fit">
+                                  <span className="requests__attempts">
+                                    <AttemptCount attempts={r.attempts} />
+                                    {r.held && <HeldBadge held={r.held} />}
+                                  </span>
+                                </td>
+                              )}
+                              {shown.has('ttfb') && <td className="right num col-fit">{fmtMs(r.ttfbMs)}</td>}
+                              {shown.has('duration') && <td className="right num col-fit">{fmtMs(r.durationMs)}</td>}
+                              {shown.has('tokens') && (
+                                <td className="right num col-fit">
+                                  {fmtCompact(tokensTotal(r.usage))}
+                                  <span className="sub">{r.usage.cacheRead > 0 ? `${fmtCompact(r.usage.cacheRead)} cached` : 'uncached'}</span>
+                                </td>
+                              )}
+                              {shown.has('input') && <OrderedTokensCell kind="input" request={r} />}
+                              {shown.has('output') && <OrderedTokensCell kind="output" request={r} />}
+                              {shown.has('cost') && <CostCell context={context} request={r} unit={unit} />}
+                              <td className="right col-fit">
+                                <span className="requests__links">
+                                  <Link to={routingLogHref(r, now)}>
+                                    Routing
+                                  </Link>
+                                  <Link to={detailTo(r.id)}>
+                                    Details
+                                  </Link>
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                      {!requests.loading && rows.length === 0 && (
+                        <tr className="table__detail">
+                          <td colSpan={shown.size + 1}>
+                            {error ? (
+                              <ErrorState title="Could not load the request log" body={error} retry={requests.reload} />
+                            ) : (
+                              <EmptyState title="No requests match" body="Widen the range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
+                            )}
                           </td>
                         </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <footer className="pager">
+                  <label className="row">
+                    <span className="muted">Rows</span>
+                    <Select value={filters.rows} onChange={(e) => update({ rows: Number(e.target.value) })}>
+                      {REQUEST_PAGE_SIZES.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
                       ))}
-                  {!requests.loading && rows.length === 0 && (
-                    <tr className="table__detail">
-                      <td colSpan={shown.size + 1}>
-                        {error ? (
-                          <ErrorState title="Could not load the request log" body={error} retry={requests.reload} />
-                        ) : (
-                          <EmptyState title="No requests match" body="Widen the range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
-                        )}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                    </Select>
+                  </label>
+                  <PagerNav atFirst={stack.length === 0} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
+                </footer>
+              </Card>
             </div>
-            <footer className="pager">
-              <label className="row">
-                <span className="muted">Rows</span>
-                <Select value={filters.rows} onChange={(e) => update({ rows: Number(e.target.value) })}>
-                  {REQUEST_PAGE_SIZES.map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <PagerNav atFirst={stack.length === 0} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
-            </footer>
-          </Card>
-        </div>
 
-        {requestId && (
-          <Descriptions>
-            <RequestDrawer context={context} request={selected} requestId={requestId} guardrails={guardrails.data} now={now} rows={filters.rows} settings={settings.data} unit={unit} onClose={closeDrawer} />
-          </Descriptions>
+            {requestId && (
+              <Descriptions>
+                <RequestDrawer context={context} request={selected} requestId={requestId} guardrails={guardrails.data} now={now} rows={filters.rows} settings={settings.data} unit={unit} onClose={closeDrawer} />
+              </Descriptions>
+            )}
+          </div>
+        ) : (
+          <section className="stack" id="feature-calls" role="tabpanel" aria-labelledby="tab-feature-calls">
+            <FeatureCallsTable
+              accounts={accounts.data ?? []}
+              disabled={{ ...notLoadedReason('keys', 'key', keys), ...notLoadedReason('accounts', 'account', accounts) }}
+              keys={keys.data ?? []}
+              onRangeChange={(next) => update({ range: next })}
+              range={filters.range}
+              refresh={{ disabled: ended ? ENDED_RANGE : undefined, onRefresh: refresh, title: refreshTitle }}
+              span={span}
+            />
+          </section>
         )}
       </div>
     </PopoverHost.Provider>
