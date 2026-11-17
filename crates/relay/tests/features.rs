@@ -17,8 +17,8 @@ use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule, SseEvent};
 use phoebis_bus::{Bus, Delivery, Event, FeatureEnd, FeatureOutcome, ResponseChunk, QUEUE_DEPTH};
 use phoebis_relay::{Accounting, AccountingSource, Limits, Relay};
 use phoebis_store::{
-    AccountState, Cancellation, FeatureOverride, KeyFeatureAccounts, PoolFeatureAccounts,
-    StateCause,
+    AccountState, Cancellation, FeatureOverride, KeyFeatureAccounts, NewBundle,
+    PoolFeatureAccounts, Secret, StateCause,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -1367,6 +1367,162 @@ async fn a_forced_refresh_that_lands_a_mark_reaches_the_routing_snapshot() {
         (state_of_a() == Some(AccountState::ReauthRequired)).then_some(())
     })
     .await;
+    up.shutdown().await;
+}
+
+/// A disconnect of `id` and a new pairing under `secret`, as the admin's two routes leave the store, the manager and
+/// the routing: the stored token row gone, the lifecycle generation moved by one and the token's count back at 1.
+async fn signed_in_again(h: &Harness, id: &str, secret: &str) {
+    let lifecycle = h.store.bump_lifecycle(id, StateCause::Operator).unwrap();
+    h.store
+        .commit_pairing(
+            id,
+            1,
+            lifecycle,
+            None,
+            &NewBundle {
+                access_token: Secret::new(secret),
+                refresh_token: Some(Secret::new(&format!("{secret}-refresh"))),
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    h.store
+        .set_state(id, AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    h.manager.invalidate(id);
+    h.router.reload().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_401_under_a_rejected_token_gets_no_further_refresh() {
+    let up = fake(vec![
+        ("/api/frame/", expired()),
+        ("/v1/oauth/token", token_answer()),
+    ])
+    .await;
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!((feature_requests(&up).len(), token_posts(&up)), (3, 1));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_later_token_is_refreshed_and_resent_again() {
+    let up = fake(vec![
+        ("/api/frame/", expired()),
+        ("/v1/oauth/token", token_answer()),
+    ])
+    .await;
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    // The model path's forced refresh moves the account past the held generation 2.
+    h.manager.refresh_now("a", 2).await.unwrap();
+    // Generation 3 gets its refresh and its resend again, and the resend's 401 holds generation 4 in place of 2, so
+    // the third call goes out once with no refresh.
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!((feature_requests(&up).len(), token_posts(&up)), (5, 3));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_401_whose_refresh_gave_no_token_sets_no_hold() {
+    let up = fake(vec![
+        ("/api/frame/", expired()),
+        (
+            "/v1/oauth/token",
+            Respond::Json {
+                status: 503,
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+        ),
+    ])
+    .await;
+    up.set_rule_after(1, "/v1/oauth/token", token_answer());
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    // The 503 armed the manager's backoff, which holds each refresh of the account until the clock reaches its end.
+    step_to_backoff(&h, &up, "a").await;
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!((feature_requests(&up).len(), token_posts(&up)), (3, 2));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_accepted_resend_sets_no_hold() {
+    let up = fake(vec![
+        ("/api/frame/", json_200()),
+        ("/v1/oauth/token", token_answer()),
+    ])
+    .await;
+    up.add_credential_rule(SECRET_A, "/api/frame/", expired());
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    // The token the resend went out under, the token fixture's, goes stale behind the accepted call.
+    up.add_credential_rule("sk-ant-oat01-PLACEHOLDER", "/api/frame/", expired());
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!((feature_requests(&up).len(), token_posts(&up)), (4, 2));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_new_sign_in_starts_without_the_hold() {
+    let up = fake(vec![
+        ("/api/frame/", expired()),
+        ("/v1/oauth/token", token_answer()),
+    ])
+    .await;
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    signed_in_again(&h, "a", "sk-ant-oat01-PLACEHOLDER-AGAIN").await;
+    // The new sign-in's token reaches generation 2, the number the first sign-in's hold names.
+    h.manager.refresh_now("a", 1).await.unwrap();
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!((feature_requests(&up).len(), token_posts(&up)), (4, 3));
     up.shutdown().await;
 }
 

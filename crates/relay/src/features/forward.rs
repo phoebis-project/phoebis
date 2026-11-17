@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use super::cap::Place;
+use super::refresh_hold::{Holds, Rejected};
 use crate::budget::Reservation;
 use crate::casing::OriginalHead;
 use crate::dispatch::{attempt, AttemptFailure, Sent};
@@ -115,10 +116,14 @@ pub(crate) async fn read_body(
 /// account's pooled connections toward the row's host. `body` is `None` for a head that framed none, which then leaves
 /// with no length line, and a framed body, an empty one among them, keeps its line. A 401 that `wants_refresh` names
 /// gets the account's one forced refresh and the call once more under the new token, and that answer goes back
-/// whatever it is, while a refresh that gives no newer token sends the first 401 back as it came. `ending` arms at the
-/// first send and ends with the answer that goes back, or as unanswered where the forward fails ahead of a head.
+/// whatever it is, while a refresh that gives no newer token sends the first 401 back as it came. A 401 under the
+/// token `holds` keeps for the account goes back as it came too, and a resend's own such 401 holds the new token there.
+/// `ending` arms at the first send and ends with the answer that goes back, or as unanswered where the forward fails
+/// ahead of a head.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn forward(
     relay: &Relay,
+    holds: &Holds,
     account: &AccountRow,
     row: &FeatureRow,
     method: &'static str,
@@ -126,7 +131,7 @@ pub(crate) async fn forward(
     body: Option<Bytes>,
     mut ending: Ending,
 ) -> Result<Response, Unanswered> {
-    match answer_of(relay, account, row, method, parts, body, &mut ending).await {
+    match answer_of(relay, holds, account, row, method, parts, body, &mut ending).await {
         Ok(held) => Ok(held.streamed(ending)),
         Err(unanswered) => {
             if let Unanswered::Failed(..) = unanswered {
@@ -138,8 +143,10 @@ pub(crate) async fn forward(
 }
 
 /// The answer that goes back to the caller, its body still on its connection.
+#[allow(clippy::too_many_arguments)]
 async fn answer_of(
     relay: &Relay,
+    holds: &Holds,
     account: &AccountRow,
     row: &FeatureRow,
     method: &'static str,
@@ -193,7 +200,11 @@ async fn answer_of(
     };
     ending.arm();
     let first = send(relay, control, account, row.host, request(&token.secret)).await?;
-    if !wants_refresh(first.head()) {
+    // A token the upstream rejected behind its own refresh gets no second one. The call went out once, since the
+    // upstream can accept the token on another path, and its 401 goes back as it came.
+    if !wants_refresh(first.head())
+        || holds.holds(&account.id, Rejected::of(account, token.generation))
+    {
         return Ok(first);
     }
     // The first answer stays unread while the refresh runs, so where no newer token comes it goes back as it came.
@@ -206,7 +217,13 @@ async fn answer_of(
             // Dropped ahead of the resend, its connection with it, since a connection whose body went unread serves no
             // later call.
             drop(first);
-            send(relay, control, account, row.host, request(&fresh.secret)).await
+            let second = send(relay, control, account, row.host, request(&fresh.secret)).await?;
+            // A resend's 401 alone holds its token: a first 401 whose refresh gave no token and a resend the upstream
+            // accepted each leave the next 401 its refresh.
+            if wants_refresh(second.head()) {
+                holds.set(&account.id, Rejected::of(account, fresh.generation));
+            }
+            Ok(second)
         }
         Err(error) => {
             // The manager's store write starts no reload, so the mark reaches the routing through this report.

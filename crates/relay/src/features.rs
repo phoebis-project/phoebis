@@ -3,6 +3,7 @@
 
 mod cap;
 mod forward;
+mod refresh_hold;
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -31,14 +32,17 @@ use crate::serve::PeerAddr;
 
 use self::cap::DomainCheckCap;
 use self::forward::{forward, keyless, read_body, Call, Ending, Unanswered};
+use self::refresh_hold::Holds;
 
 /// The longest value of the domain check's one query parameter.
 const DOMAIN_MAX_BYTES: usize = 512;
 
-/// What the handler reads: the relay, and the one cap of this listener's domain checks.
+/// What the handler reads: the relay, the one cap of this listener's domain checks, and the tokens its feature hosts
+/// rejected behind a forced refresh.
 #[derive(Clone)]
 struct Listener {
     cap: Arc<DomainCheckCap>,
+    holds: Arc<Holds>,
     relay: Arc<Relay>,
 }
 
@@ -48,16 +52,18 @@ pub fn router(relay: Arc<Relay>) -> Router {
         relay.limits.domain_checks_total,
         relay.limits.domain_checks_per_source,
     );
-    Router::new()
-        .fallback(feature_call)
-        .with_state(Listener { cap, relay })
+    Router::new().fallback(feature_call).with_state(Listener {
+        cap,
+        holds: Arc::new(Holds::default()),
+        relay,
+    })
 }
 
 /// The checks run in their one order: the two keyless shapes, each compared whole, then the key, so a caller without
 /// one learns nothing of what the router forwards, and the account's token is taken only for a call that passed each
 /// of them. A request that misses a keyless shape by anything meets the key check as each other request does.
 async fn feature_call(
-    State(Listener { cap, relay }): State<Listener>,
+    State(Listener { cap, holds, relay }): State<Listener>,
     request: Request,
 ) -> Response {
     // The domain check's one deadline runs from here, over its wait for a place too.
@@ -139,7 +145,7 @@ async fn feature_call(
         }
     };
     let ending = Ending::sent(&relay, call.clone(), account.id.clone());
-    match forward(&relay, account, row, method, &parts, body, ending).await {
+    match forward(&relay, &holds, account, row, method, &parts, body, ending).await {
         Ok(answer) => answer,
         Err(Unanswered::Refused(failure)) => refusal(&relay, call, &failure, &key.label).await,
         Err(Unanswered::Failed(case, detail)) => {
