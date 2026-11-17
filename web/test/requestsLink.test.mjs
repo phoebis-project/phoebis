@@ -6,7 +6,7 @@ const at = (iso) => Date.parse(iso);
 const BASE = {
   count: 3,
   filters: { accountIds: [], clientPattern: '', includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' },
-  reason: 'messages_changed',
+  narrow: { cacheMissReasons: ['messages_changed'] },
   window: { exact: false, fromMs: at('2026-09-16T11:20:00Z'), nowMs: at('2026-09-16T14:30:00Z'), toMs: at('2026-09-16T14:10:00Z') },
 };
 const SESSION = '0b6f3c2e-8d41-4a7f-9e25-3c1d7a90b4f6';
@@ -55,7 +55,7 @@ test('a count links to the Requests page under its reason, from the hour holding
 });
 
 test("a count's link for a dropped block carries the key", () => {
-  const answer = link({ reason: undefined, transformation: 'thinking_dropped.end_user_binding_mismatch' });
+  const answer = link({ narrow: { inputTransformations: ['thinking_dropped.end_user_binding_mismatch'] } });
   assert.deepEqual(target(answer.href), { from: '2026-09-16T11:00:00.000Z', input_transformations: 'thinking_dropped.end_user_binding_mismatch', path: '/requests', to: '2026-09-16T14:30:00.000Z' });
 });
 

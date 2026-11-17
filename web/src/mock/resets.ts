@@ -1,5 +1,6 @@
 import type { AttentionItem, ResetGrantState, ResetOutcome } from '@/api/types';
 import { lookup } from '@/lib/counts';
+import { storedFableKey } from '@/lib/windows';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 
 /** A grant as the upstream's block lists it, a member the router reads as its default where absent left optional. */
@@ -49,9 +50,6 @@ export interface MockUse {
 
 /** A use's answer, or the route's refusal beside the status the upstream answered, which the use's ledger row keeps. */
 export type MockAnswer = { answer: MockUse } | { refusal: { code: string; message: string; status: number }; upstream: number };
-
-/** The router's name for a window a grant names. */
-const routerWindow = (name: string): string => (name === 'seven_day_overage_included' ? 'seven_day_fable' : name);
 
 /** The client's kind, as the router sets it at the parse. */
 function kindOf(g: MockGrant): string {
@@ -146,8 +144,8 @@ export function limitResetsWire(seed: string, blocks: Readonly<Record<string, Mo
     eligible: block.eligible,
     fable_week_share: block.used_percent_of_weekly === null ? null : block.used_percent_of_weekly / 100,
     grants: block.grants.map((g, i) => ({
-      blocking: (g.blocking ?? []).map(routerWindow),
-      clears: g.clears.map(routerWindow),
+      blocking: (g.blocking ?? []).map(storedFableKey),
+      clears: g.clears.map(storedFableKey),
       ends_at: Date.parse(g.ends_at),
       id: g.id,
       kind: kindOf(g),
@@ -223,7 +221,7 @@ export function resetEnding(account: string, block: MockBlock | undefined, now: 
   return {
     detail: {
       account,
-      clears: first.clears.map(routerWindow),
+      clears: first.clears.map(storedFableKey),
       days_left: Math.floor((end - now) / DAY),
       ends_at: end,
       ending: ending.reduce((sum, g) => sum + g.resets_left, 0),
@@ -243,7 +241,7 @@ export function wallReset(block: MockBlock | undefined, atLimit: readonly string
   if (block === undefined) return null;
   const states = grantStates(block, now);
   for (const [i, g] of block.grants.entries()) {
-    const clears = g.clears.map(routerWindow).filter((w) => atLimit.includes(w));
+    const clears = g.clears.map(storedFableKey).filter((w) => atLimit.includes(w));
     if (states[i].state === 'usable' && clears.length > 0) return { clears, grant: g.id, label: g.label };
   }
   return null;

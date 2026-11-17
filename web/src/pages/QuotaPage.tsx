@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { Account, AccountSlowDown, ExtraUsage, LimitResetsRead, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend, WindowId } from '@/api/types';
+import type { Account, ExtraUsage, LimitResetsRead, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useHashLanding } from '@/app/useHashLanding';
 import { accountColor, accountSlots } from '@/components/charts/theme';
@@ -16,7 +16,7 @@ import { Badge, Button, EmptyState, ErrorState, Meter, MeterAbsent, Pill, Segmen
 import { QUOTA_CODEC, QUOTA_SORT_KEYS, sortDirOf, type QuotaAddress } from '@/lib/address';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, messageOf, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useQueryFilters, useResizeObserver } from '@/lib/hooks';
-import { NO_RESET_TITLE, STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, leadOf, meterTone, noResetWord, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, resetOf, slowedOf, soonestResetAt, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { NO_RESET_TITLE, STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, leadOf, meterTone, noResetWord, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, resetOf, slowedOf, soonestResetAt, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState, type SlowedDown } from '@/lib/quota';
 import { clearsWords, readsFull, resetChip, resetMarks } from '@/lib/resets';
 import { slowDownChip } from '@/lib/selection';
 import { orderRows, type SortFigure } from '@/lib/sort';
@@ -370,7 +370,7 @@ function WindowChip({ id, window: w, className, now, resettable }: { className: 
  * "no 5-hour window" muted in the reset label's place. A window a reset usable now clears, passed `resettable`,
  * carries the reset mark in its chip. A window with no reset names its state muted in the reset label's place.
  */
-function QuotaWindow({ end, id, window: w, now, resettable, slowDown = null, soon }: { end: number | null; id: WindowId; now: number; resettable: boolean; slowDown?: AccountSlowDown | null; soon: boolean; window: RateLimitWindow | null }) {
+function QuotaWindow({ end, id, window: w, now, resettable, slowDown = null, soon }: { end: number | null; id: WindowId; now: number; resettable: boolean; slowDown?: SlowedDown | null; soon: boolean; window: RateLimitWindow | null }) {
   // The last reading describes a window that has since reset, so its share says nothing until the next one.
   const live = w && !isExpired(w, now) ? w : null;
   const pace = live ? paceWords(live, now, end) : null;

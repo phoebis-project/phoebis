@@ -3926,7 +3926,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(counted.length > 1, 'the range counts several reasons');
     const filters = { accountIds: [], clientPattern: '', includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' };
     for (const [reason, count] of counted) {
-      const { href } = s.lib.requestsLink({ count, filters, reason, window: { exact: false, fromMs: s.now - DAY, nowMs: s.now, toMs: s.now } });
+      const { href } = s.lib.requestsLink({ count, filters, narrow: { cacheMissReasons: [reason] }, window: { exact: false, fromMs: s.now - DAY, nowMs: s.now, toMs: s.now } });
       const params = new URL(href, 'http://console.test').searchParams;
       const { requests } = await s.api.listRequests({ cacheMissReasons: params.get('cache_miss_reasons').split(','), from: params.get('from'), limit: 1, to: params.get('to') });
       assert.ok(requests.length > 0, `${reason} lists no request from ${params.get('from')} to ${params.get('to')}`);

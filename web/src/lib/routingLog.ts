@@ -10,9 +10,9 @@ import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, ins
 import { accountBound, transformationLabel, transformationOrder } from './inputTransformations';
 import { ALL_KINDS, DECISION_KIND_LABEL, EVENT_KIND_LABEL } from './kinds';
 import { isFastScope, MODEL_SCOPE_PREFIX, PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL, scopeLabel, scopeModel } from './quota';
-import { speedWord } from './selection';
+import { INELIGIBLE_LABEL, speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
-import { knownWindowsFirst, WINDOW_KEYS, WINDOW_LABEL, windowEntry, windowLabelOf, windowTag, windowTagOf } from './windows';
+import { knownWindowsFirst, storedFableKey, WINDOW_KEYS, WINDOW_LABEL, windowEntry, windowLabelOf, windowTag, windowTagOf } from './windows';
 
 export { ageWord, ALL_KINDS, DECISION_KIND_LABEL, EVENT_KIND_LABEL };
 
@@ -221,9 +221,6 @@ export const words = (name: string) => name.replace(/_/g, ' ');
 export const wordOf = (map: Record<string, string>, name: string) => lookup(map, name) ?? words(name);
 /** A window's tag, or the key's words where the console does not know the window. */
 const windowTagWord = (key: string): string => windowTagOf(key) ?? words(key);
-/** A cooldown's window id. The relay files a Fable week's cooldown under a key of its own, which the window
- *  table leaves to this module and to the quota history's decoder. */
-const cooldownWindow = (window: string): string => (window === 'seven_day_overage_included' ? 'seven_day_fable' : window);
 /** The window whose trigger set a shedding mark, as the Pin fold and the Sessions view word it. */
 export const triggerPhrase = (window: string): string => `by the ${windowTagWord(window)} trigger`;
 /** A no-return stamp's origin. A failover's landing stamps the pin as a round's move does, so the reason picks it. */
@@ -267,13 +264,13 @@ const RUNG_WORD: Record<string, string> = { content: 'content rung', static: 'st
 /** What a probe's pinned member could not get past. Any other name reads as sent. */
 const OBSTACLE_WORD: Record<string, string> = {
   attempted: 'already tried',
-  budget_unknown: 'budget unknown',
-  cooldown: 'in cooldown',
+  budget_unknown: INELIGIBLE_LABEL.budget_unknown,
+  cooldown: INELIGIBLE_LABEL.cooldown,
   credits: 'credits unavailable',
-  operator: 'not available',
-  overage: 'in overage',
-  spent: 'spend cap reached',
-  subscription_ended: 'subscription ended',
+  operator: INELIGIBLE_LABEL.unavailable,
+  overage: INELIGIBLE_LABEL.overage,
+  spent: INELIGIBLE_LABEL.spent,
+  subscription_ended: INELIGIBLE_LABEL.subscription_ended,
 };
 /** The pinned obstacles a wait clears, which the relay answers with a 429 as it answers a dated exhaustion. */
 const PINNED_WAITS = new Set(['cooldown', 'credits', 'overage', 'spent']);
@@ -447,11 +444,7 @@ function cooldownBy(e: RoutingEvent): string {
   if (scope === 'fast') return 'fast lane 429';
   const reason = str(d.reason) ?? '';
   const window = str(d.window) ?? '';
-  if (reason === 'rate_limit') {
-    const word = windowTagOf(cooldownWindow(window));
-    if (word !== undefined) return `429 on ${word}`;
-    return window === 'retry_after' ? '429 retry-after' : '429';
-  }
+  if (reason === 'rate_limit') return rateLimitWords(window) ?? (window === 'retry_after' ? '429 retry-after' : '429');
   const model = scopeModel(scope);
   return model === null ? words(reason) : `404 on ${shortModel(model)}`;
 }
@@ -605,15 +598,11 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
     case 'wind_down_started':
       return { value: 'subscription ends' };
     // The sentence runs past the By column, so the chip draws its first words and its title carries it whole.
-    case 'window_cleared': {
-      const window = windowTagWord(str(d.window) ?? '');
-      const reading = num(d.utilization);
-      return reading === null ? { value: `${window} cleared` } : { title: `${window} cleared to ${fmtPct(reading)} under its reset`, value: `${window} cleared` };
-    }
+    case 'window_cleared':
     case 'window_dropped': {
-      const window = windowTagWord(str(d.window) ?? '');
+      const value = `${windowTagWord(str(d.window) ?? '')} ${e.kind === 'window_cleared' ? 'cleared' : 'dropped'}`;
       const reading = num(d.utilization);
-      return reading === null ? { value: `${window} dropped` } : { title: `${window} dropped to ${fmtPct(reading)} under its reset`, value: `${window} dropped` };
+      return reading === null ? { value } : { title: `${value} to ${fmtPct(reading)} under its reset`, value };
     }
     case 'window_reset':
       return { value: `${windowTagWord(str(d.window) ?? '')} reset` };
@@ -1148,7 +1137,7 @@ function obstacleChip(text: string, record: DecisionRecord, now: number): Chip {
       ? operatorWords(member)
       : member !== undefined && member.obstacle !== null && member.obstacle.name === name
         ? rowObstacleChip(member, member.obstacle, now)
-        : { title: hintOf(name), value: lookup(PARTITION_WORD, name) ?? wordOf(OBSTACLE_WORD, name) };
+        : obstacleNameChip(name);
   return id === '' ? { label: 'obstacle', title, value } : { label: id, labelEntity: accountEntity(id), title, value };
 }
 
@@ -1390,6 +1379,7 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
 const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
 const VERDICT_BADGE: Record<string, string> = { held_on: 'held on', not_needed: 'not needed' };
 const PARTITION_WORD: Record<string, string> = { above_ceiling: 'above the ceiling', at_cap: 'at its cap', floor: 'at the Pace floor', spent: 'window spent', winding_down: 'winding down' };
+const obstacleNameChip = (name: string): Chip => ({ title: hintOf(name), value: lookup(PARTITION_WORD, name) ?? wordOf(OBSTACLE_WORD, name) });
 
 /**
  * The plan beneath a member's account: `Ultra`, `Free`, `API key`. The record's resolved word reads through the label
@@ -1406,15 +1396,18 @@ function prefixEntryOf(c: RecordCandidate, record: DecisionRecord): PrefixEntry 
   return order.find((e): e is PrefixEntry => e !== null && e.refusedBy !== null) ?? null;
 }
 
+/** A 429's words on the window it names, null where it names none or one the console does not know. */
+function rateLimitWords(window: string | null): string | null {
+  const word = window === null ? undefined : windowTagOf(storedFableKey(window));
+  return word === undefined ? null : `429 on ${word}`;
+}
+
 /** A cooldown's reason and window as the console words them, with no deadline. */
 function cooledWords(reason: string | null, window: string | null): string {
   const r = reason ?? '';
   if (r === 'model_rejected' || window === 'model_rejection') return 'model 404';
   if (r === 'fast_rate_limit' || window === 'fast') return 'fast lane 429';
-  if (r === 'rate_limit') {
-    const word = window === null ? undefined : windowTagOf(cooldownWindow(window));
-    return word === undefined ? '429' : `429 on ${word}`;
-  }
+  if (r === 'rate_limit') return rateLimitWords(window) ?? '429';
   return words(r || 'cooldown');
 }
 
@@ -1488,7 +1481,7 @@ function rowObstacleChip(c: RecordCandidate, obstacle: NonNullable<RecordCandida
     case 'spent':
       return spentChip(obstacle, now);
     default:
-      return hinted(lookup(PARTITION_WORD, obstacle.name) ?? wordOf(OBSTACLE_WORD, obstacle.name));
+      return obstacleNameChip(obstacle.name);
   }
 }
 
@@ -1863,7 +1856,7 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
     rows.push({
       chips: [
         plain(String(ranOut || waits ? 429 : (lookup(EXHAUSTION_STATUS, x.kind) ?? 503)), 'status'),
-        ...(x.window !== null ? [plain(windowTagWord(cooldownWindow(x.window)), 'window')] : []),
+        ...(x.window !== null ? [plain(windowTagWord(storedFableKey(x.window)), 'window')] : []),
         ...(x.reason !== null ? [plain(wordOf(CREDITS_WORD, x.reason), 'cause')] : []),
         plain(x.deadline === null ? 'none' : formatFact(x.deadline, 'time', at), x.deadline === null ? 'retry' : 'retry after'),
       ],
@@ -2023,7 +2016,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
         break;
       }
       add('Reason', text(d.reason));
-      add('Window', window === null ? null : plain(windowTagWord(cooldownWindow(window))));
+      add('Window', window === null ? null : plain(windowTagWord(storedFableKey(window))));
       add('Until', time(d.until));
       add('Set by', request);
       break;
@@ -2408,19 +2401,14 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('End from', text(d.end_source));
       break;
     }
+    // A dropped row's plan and tier price the use's row on the allowance read and draw no row here, as on a reset.
     case 'window_cleared':
-      add('Window', window === null ? null : plain(windowTagWord(window)));
-      add('Before', pct(d.utilization_before));
-      add('After', pct(d.utilization));
-      add('Reset', time(d.reset));
-      add('Read from', text(d.source, SOURCE_WORD));
-      break;
-    // The detail's plan and tier price the use's row on the allowance read and draw no row here, as on a reset.
     case 'window_dropped':
       add('Window', window === null ? null : plain(windowTagWord(window)));
       add('Before', pct(d.utilization_before));
       add('After', pct(d.utilization));
       add('Reset', time(d.reset));
+      if (row.kind === 'window_cleared') add('Read from', text(d.source, SOURCE_WORD));
       break;
     case 'window_reset':
       add('Window', window === null ? null : plain(windowTagWord(window)));

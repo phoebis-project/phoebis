@@ -229,8 +229,10 @@ export function attentionDetail(item: AttentionItem, now: number): string {
 }
 
 /** The spent windows as the record names them, `5h`, `7d` or `Fable`, a key the console does not know as sent. */
-const windowsOf = (windows: string[]): string =>
-  windows.length === 0 ? '' : ` the ${listWords(windows.map((w) => windowTag(w)))} ${noun(windows.length, 'window')}`;
+const windowsOf = (windows: string[]): string => {
+  const words = clearsWords(windows);
+  return words === null ? '' : ` the ${words} ${noun(windows.length, 'window')}`;
+};
 
 /** The settings a condition names, each with the pool's value where the route sends one, printed by `value`. */
 const settingWords = (d: AttentionItem['detail'], value: (n: number) => string): string => {

@@ -3,7 +3,7 @@ import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, Subscr
 import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } from '@/lib/costs';
 import { byteOrder, fmtAbsolute, fmtDated, fmtShare, plural, weekShort } from '@/lib/format';
 import { pricedTier, readWindows } from '@/lib/quota';
-import { DAY } from '@/lib/time';
+import { DAY, MINUTE } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
 import { WINDOW_HOURS, inWindowOrder, windowHint } from '@/lib/windows';
 
@@ -35,7 +35,7 @@ export const weeklyResetsKey = (accounts: readonly Account[]): string =>
     .flatMap((a) => [
       ...readWindows(a)
         .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
-        .map((w) => (w.resetsAt === null ? '' : String(Math.round(Date.parse(w.resetsAt) / 60_000)))),
+        .map((w) => (w.resetsAt === null ? '' : String(Math.round(Date.parse(w.resetsAt) / MINUTE)))),
       String(a.limitResets?.left ?? ''),
     ])
     .join(',');
@@ -44,7 +44,7 @@ const isClaim = (reset: AllowanceReset): boolean => reset.source === 'claim';
 
 /** The uses among an account's claim rows: one poll reads every window of the account, so the rows it saw, by the
  *  minute of `observedAt`, are one use. */
-const usesOf = (claims: readonly AllowanceReset[]): number => new Set(claims.map((r) => Math.floor(Date.parse(r.observedAt) / 60_000))).size;
+const usesOf = (claims: readonly AllowanceReset[]): number => new Set(claims.map((r) => Math.floor(Date.parse(r.observedAt) / MINUTE))).size;
 
 /** The rows the four weeks keep: the newest `weeks` resets that are no claim and every claim row newer than the
  *  oldest of them. `counted` counts the kept resets that are no claim, `used` the uses among the kept claim rows, and

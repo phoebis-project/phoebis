@@ -92,7 +92,7 @@ test("a bucket whose revision sizes no window for the chosen tier draws the tier
   // Under the Max week the chosen tier is Max 5x. A busy bucket with a number under Pro and none under Max 5x ran under
   // a revision that sizes no Max 5x window, and one with no number under any tier ran on a model with no weight.
   const at = Date.UTC(2026, 8, 16, 12);
-  const causes = (card) => card.points.map((p) => [p.unsized, p.unpriced]);
+  const causes = (card) => card.points.map((p) => [p.gap === 'unsized', p.gap === 'unpriced']);
   const fiveHour = d.fiveHourCard([busyPoint(at, { fiveHourEquivalentByTier: { [MAX_5X]: null, [PRO]: 0.4 } }), busyPoint(at, { fiveHourEquivalentByTier: { [MAX_5X]: null, [PRO]: null } })], 'max');
   assert.deepEqual(causes(fiveHour), [[true, false], [false, true]], "the tier's gap beside another tier's number, the model's where no tier holds one");
   // The route's flag names the week's model gap, so a week map of nulls with the flag unset is the tier's.

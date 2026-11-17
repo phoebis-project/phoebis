@@ -549,9 +549,10 @@ export function AnalyticsPage() {
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
   // A route sums whole hours from the hour that holds the range's start up to the hour ceiling of its end, and a
   // session view's fold of the request log reads the range itself.
+  const covered = coveredWindow(sessionId === null ? 'rollup' : 'session', span, now, null);
   const partial: PartialEnds = {
-    first: firstBucketPartial(buckets, coveredWindow(sessionId === null ? 'rollup' : 'session', span, now, null).fromMs),
-    last: lastBucketPartial(buckets, bucketMs, span.toMs, now, sessionId === null),
+    first: firstBucketPartial(buckets, covered.fromMs),
+    last: lastBucketPartial(buckets, bucketMs, covered.toMs),
   };
   /** A stamped read's two flags, off its own buckets, their width, its own range and the instant it left at. Each
    *  stamped read is a route's read, the rewrites read in a session view too, so the whole hours hold. False until the
@@ -559,9 +560,10 @@ export function AnalyticsPage() {
   const stampedPartial = <T,>(read: Stamped<T> | null, pointsOf: (answer: T) => readonly { at: string }[]): PartialEnds => {
     if (read === null) return WHOLE_ENDS;
     const own = pointsOf(read.answer).map((p) => ({ at: Date.parse(p.at) }));
+    const covered = coveredWindow('rollup', { fromMs: read.fromMs, toMs: read.endMs }, read.readAt, null);
     return {
-      first: firstBucketPartial(own, coveredWindow('rollup', { fromMs: read.fromMs, toMs: read.endMs }, read.readAt, null).fromMs),
-      last: lastBucketPartial(own, own.length > 1 ? own[1].at - own[0].at : rangeBucketMs, read.endMs, read.readAt, true),
+      first: firstBucketPartial(own, covered.fromMs),
+      last: lastBucketPartial(own, own.length > 1 ? own[1].at - own[0].at : rangeBucketMs, covered.toMs),
     };
   };
   const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, { agentGroups }, latest)), [stale, sessionId, breakdown.data, kept, groupBy, agentGroups, latest]);
@@ -1537,7 +1539,7 @@ function reasonColor(ink: ReturnType<typeof useChartInk>, reason: CacheMissReaso
  * What every count of the reasons panel, the dropped thinking blocks card and the refusals card links under: the window
  * and the page's filters, without a count, a reason, a key of the dropped blocks or a category.
  */
-type ReasonLink = Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory' | 'transformation'>;
+type ReasonLink = Omit<RequestsLinkInput, 'count' | 'group' | 'narrow'>;
 
 /**
  * A count of the reasons panel or the refusals card: a link to the requests it counts, else the figure with why it
@@ -1566,7 +1568,7 @@ function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks
         <HBarRow
           key={r.reason}
           color={reasonColor(ink, r.reason)}
-          count={<CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count: r.count, reason: r.reason })}>{fmtInt(r.count)}</CountLink>}
+          count={<CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count: r.count, narrow: { cacheMissReasons: [r.reason] } })}>{fmtInt(r.count)}</CountLink>}
           fill={r.count / max}
           label={missLabel(r.reason)}
           second={r.hits > 0 ? { color: ink.muted, portion: r.hits / r.count, title: reasonHitTitle(r.hits) } : undefined}
@@ -1602,7 +1604,7 @@ function DroppedThinkingBars({ link, plainLinks, totals }: { link: ReasonLink; p
             <HBarRow
               key={r.key}
               color={accountBound(r.key) ? ink.series[7] : ink.muted}
-              count={<CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count: r.count, transformation: r.key })}>{fmtInt(r.count)}</CountLink>}
+              count={<CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count: r.count, narrow: { inputTransformations: [r.key] } })}>{fmtInt(r.count)}</CountLink>}
               fill={r.count / max}
               label={transformationLabel(r.key)}
               share={share(r.count)}
@@ -1773,7 +1775,7 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, order,
   const cell = (g: AnalyticsGroup, reason: CacheMissReason) => {
     const count = countOf(g.cacheMissReasons, reason);
     const hits = isFaultReason(reason) ? countOf(g.cacheMissReasonHits, reason) : 0;
-    const counted = <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, reason })}>{fmtInt(count)}</CountLink>;
+    const counted = <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, narrow: { cacheMissReasons: [reason] } })}>{fmtInt(count)}</CountLink>;
     if (hits === 0) return counted;
     return (
       <>
@@ -1820,7 +1822,7 @@ function DroppedThinkingByGroup({ groupBy, groups, groupLabel, link, loading, or
   const keys = transformationOrder(totals.inputTransformations);
   const cell = (g: AnalyticsGroup, key: string) => {
     const count = countOf(g.inputTransformations, key);
-    return <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, transformation: key })}>{fmtInt(count)}</CountLink>;
+    return <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, narrow: { inputTransformations: [key] } })}>{fmtInt(count)}</CountLink>;
   };
   return (
     <BreakdownTable

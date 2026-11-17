@@ -1,8 +1,8 @@
-import type { Account, AccountSlowDown, MemberEligibility, MemberFit, Pool, PoolMember, PoolStrategy } from '@/api/types';
+import type { Account, MemberEligibility, MemberFit, Pool, PoolMember, PoolStrategy } from '@/api/types';
 import { MEMBER_FIT_VALUES } from '@/api/types';
 import { sentences } from './analytics';
 import { fmtAbsolute, fmtDuration, fmtPct, fmtPeriodEnd, fmtRelative, fmtShortTime, instant, noun, sameLocalDay } from './format';
-import { endOf, isPaidSource, minuteSpan, planExtraUsage, planOverage, slowedOf } from './quota';
+import { endOf, isPaidSource, minuteSpan, planExtraUsage, planOverage, slowedOf, type SlowedDown } from './quota';
 import { MINUTE } from './time';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
@@ -96,11 +96,10 @@ const rampWords = (ramp: number, factor: number): string => (ramp < 1 ? `Ramping
 /**
  * `slowed since 17:40: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min
  * threshold`, or `under the 30 min threshold` while no round can fire, then one sentence each for the factor the pool
- * computed, the ramp where the entry holds one, and the speed the holds realized. Null where `slowDown` is null, where
- * the entry holds no span and where the speed its holds realized is 1 or more.
+ * computed, the ramp where the entry holds one, and the speed the holds realized. Null where `slowDown` is null.
  */
-export function speedHover(slowDown: AccountSlowDown | null, now: number): string | null {
-  if (slowDown === null || slowDown.since === null || slowDown.speed >= 1) return null;
+export function speedHover(slowDown: SlowedDown | null, now: number): string | null {
+  if (slowDown === null) return null;
   // The round fires on a stretch above the threshold, so one at it reads under.
   const side = slowDown.stretchMs > slowDown.thresholdMs ? 'over' : 'under';
   const words = `the sessions on this account would pass the ceiling ${minuteSpan(slowDown.stretchMs)} before the reset, ${side} the ${minuteSpan(slowDown.thresholdMs)} threshold`;
@@ -109,7 +108,7 @@ export function speedHover(slowDown: AccountSlowDown | null, now: number): strin
 }
 
 /** The speed chip of a slow-down: the speed the holds realized with `speedHover`'s words, nothing without one. */
-export const slowDownChip = (slowDown: AccountSlowDown | null, now: number): { hover: string | null; speed: number | null } =>
+export const slowDownChip = (slowDown: SlowedDown | null, now: number): { hover: string | null; speed: number | null } =>
   slowDown === null ? { hover: null, speed: null } : { hover: speedHover(slowDown, now), speed: slowDown.speed };
 
 /**
@@ -142,13 +141,9 @@ function keyOf(member: PoolMember | undefined, strategy: PoolStrategy): number {
 /** Whether a member is inside the pool's wind-down before its window's end, which a member with no end never is. */
 export const windingDown = (pool: Pick<Pool, 'windDownMinutes'>, end: number | null, now: number): boolean => end !== null && now >= end - pool.windDownMinutes * MINUTE;
 
-/**
- * Where a member falls in the router's ladder for a fresh session, lowest first: its fit's rank, a member the router
- * answers no fit for among the fitting ones, and every word past `fits` its last resort. The router lands on the best
- * rung before it picks a tier, so a member trails every better member of every tier.
- */
-function resortOf({ fit }: Pick<PoolMember, 'fit'>): { lastResort: LastResort | null; order: number } {
-  return fit === null || fit === 'fits' ? { lastResort: null, order: 0 } : { lastResort: fit, order: MEMBER_FIT_VALUES.indexOf(fit) };
+/** A member's last resort: its fit past `fits`, none for a fitting member or one the router answers no fit for. */
+function resortOf({ fit }: Pick<PoolMember, 'fit'>): LastResort | null {
+  return fit === null || fit === 'fits' ? null : fit;
 }
 
 /**
@@ -182,7 +177,6 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
   const tiers = [...new Map(pool.members.map((m) => [`${groupFor(m.accountId)}:${m.priority}`, { group: groupFor(m.accountId), priority: m.priority }])).values()].sort(
     (a, b) => a.group - b.group || a.priority - b.priority,
   );
-  const resort = new Map<string, number>();
   const built = tiers.map(({ group, priority }) => {
     const placements: Placement[] = pool.members
       .filter((m) => m.priority === priority && groupFor(m.accountId) === group)
@@ -190,8 +184,6 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
         const account = byId.get(m.accountId);
         if (!account) return [];
         const ineligible = m.eligible === 'eligible' ? null : m.eligible;
-        const { lastResort, order } = resortOf(m);
-        if (ineligible === null) resort.set(account.id, order);
         return [
           {
             account,
@@ -200,7 +192,7 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
             deferred: !grouped && pool.overagePolicy === 'prefer_plan' && Boolean(planExtraUsage(account)?.inUse),
             end: endOf(account, now),
             ineligible,
-            lastResort: ineligible === null ? lastResort : null,
+            lastResort: ineligible === null ? resortOf(m) : null,
             // The engine's count, one pin per agent and model, so a session whose subagents run on another model
             // counts more than once, as the pool's Active pins does.
             pins: m.activePins,
@@ -210,18 +202,19 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
       });
     return { group, placements, priority };
   });
+  /**
+   * Where a placement falls in the router's ladder for a fresh session, lowest first: its last resort's rank, and a
+   * placement with none among the fitting ones. The router lands on the best rung before it picks a tier, so a member
+   * trails every better member of every tier.
+   */
+  const orderOf = (p: Placement) => (p.lastResort === null ? 0 : MEMBER_FIT_VALUES.indexOf(p.lastResort));
+  const eligibleInPool = built.flatMap((t) => t.placements).filter((p) => p.ineligible === null);
   // The rung the router settles on is the best one any eligible member of the pool reaches.
-  const settled = Math.min(...resort.values());
-  const orderOf = (p: Placement) => resort.get(p.account.id) ?? 0;
+  const settled = Math.min(...eligibleInPool.map(orderOf));
   const runwayFor = (p: Placement) => runwayOf(p, memberOf.get(p.account.id));
   // On a rung that ranks by the runway the router keeps the longest one over the whole pool before it picks a tier.
   // Every other rung reads 0, so its first tier names `next` as the tier walk finds it.
-  const longest = Math.max(
-    ...built
-      .flatMap((t) => t.placements)
-      .filter((p) => p.ineligible === null && orderOf(p) === settled)
-      .map(runwayFor),
-  );
+  const longest = Math.max(...eligibleInPool.filter((p) => orderOf(p) === settled).map(runwayFor));
   const keyFor = (p: Placement) => keyOf(memberOf.get(p.account.id), pool.strategy);
   let nextFound = false;
   return built.map(({ group, placements, priority }) => {

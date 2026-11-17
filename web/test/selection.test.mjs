@@ -331,8 +331,6 @@ test('a speed word and its hover read the factor, the since, the stretch against
     'a stretch at the threshold reads under it, since a round fires only above it',
   );
   assert.equal(d.speedHover(slowDown(0.5, 42, 150), NOW), `slowed since ${fmtShortTime(since)}: ${tail}, under the 2 h 30 min threshold. The pool computed 0.5x. The holds realized 0.5x`, 'a threshold past an hour reads its hours');
-  assert.equal(d.speedHover(slowDown(0.5, 42, 30, null), NOW), null, 'an entry outside a span has no hover');
-  assert.equal(d.speedHover(slowDown(1, 0), NOW), null, 'an account at full speed has no hover');
   assert.equal(d.speedHover(null, NOW), null, 'nor one the router has not read');
 });
 

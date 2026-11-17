@@ -152,6 +152,7 @@ const RUNGS = ['rung:content', 'rung:with_main', 'rung:static'];
 const SELECTION_STEPS = new Set(['exhausted', 'fit', 'hold', 'partitions', 'pick', 'reserve', ...RUNGS]);
 /** The engine books after every walk it runs, so Reserve stands last, decides nothing and hosts no candidates. */
 const RESERVE = 'reserve';
+const walkEnd = (walk: WalkStep[]): string | undefined => walk.filter((s) => s.step !== RESERVE).at(-1)?.step;
 /** Walks that end before any selection: a refusal, a probe answered. */
 const SHORT_ENDS = new Set(['admission', 'probe', 'selection']);
 const SLOT_OF: Record<DecisionKind, string> = { exhausted: 'exhausted', held: 'hold', moved: 'pick', placed: 'pick', refused: 'exhausted', renewed: 'pick' };
@@ -179,7 +180,7 @@ const isRule = (step: string) => step.startsWith('move:');
  */
 function shapeOf(walk: WalkStep[]): StripShape {
   if (walk.some((s) => isRule(s.step))) return 'pinned';
-  const last = walk.filter((s) => s.step !== RESERVE).at(-1)?.step;
+  const last = walkEnd(walk);
   return walk.some((s) => s.step === 'bound') || (last !== undefined && SHORT_ENDS.has(last)) ? 'short' : 'fresh';
 }
 
@@ -416,8 +417,7 @@ function hostOf(record: DecisionRecord, stations: Station[], shape: StripShape, 
   const pick = stations.find((s) => s.step === 'pick' && s.index !== null);
   if (pick !== undefined) return pick.id;
   if (shape === 'fresh') return stations.find((s) => s.id === SLOT_OF[record.outcome.kind])?.id ?? null;
-  const walk = record.walk.filter((s) => s.step !== RESERVE);
-  if (shape === 'pinned' && walk[walk.length - 1]?.step === 'renew') return 'renew';
+  if (shape === 'pinned' && walkEnd(record.walk) === 'renew') return 'renew';
   const track = stations.filter((s) => s.level === 'track' && s.step !== RESERVE);
   // A rung that matched before the continuation's last leaves the later rungs unrun, so it places the request itself.
   if (branch?.kind === 'move' && track.length > 0) return (track.find((s) => s.decisive) ?? track[track.length - 1]).id;

@@ -199,19 +199,13 @@ export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, 
  *  completing inside the band or outside it. Null where the model has no weight on the window. */
 export const equivalentIn = (costs: SubscriptionCosts, model: string, usage: Usage, inside: boolean): number | null => shareIn(costs, 'seven_day', anchorTier(costs), model, usage, inside);
 
-/** The anchor tier's capacity on `window` in `anchorTable` over the chosen tier's on the same window in `chosenTable`
- *  times `divisor`, null where either capacity or the divisor is null: the 7-day ratio for a Pro-week figure. */
-const capacityRatio = (anchorTable: SubscriptionCosts, chosenTable: SubscriptionCosts, week: WeekPosition, window: CostWindow, divisor: number | null = 1): number | null => {
-  const anchor = tierCapacity(anchorTable, anchorTier(anchorTable), window);
-  const chosen = tierCapacity(chosenTable, WEEK_TIER[week], window);
-  return anchor === null || chosen === null || divisor === null ? null : anchor / (chosen * divisor);
-};
-
 /** The chosen week's figure per Pro-week figure: the anchor tier's 7-day capacity over the chosen tier's in the
  *  revision `costs` is (the one in force at the read), 1 under Pro with no table, null where either side is null. */
 export const weekScale = (costs: SubscriptionCosts | null, week: WeekPosition): number | null => {
   if (costs === null) return week === 'pro' ? 1 : null;
-  return capacityRatio(costs, costs, week, 'seven_day');
+  const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
+  const chosen = tierCapacity(costs, WEEK_TIER[week], 'seven_day');
+  return anchor === null || chosen === null ? null : anchor / chosen;
 };
 
 const unpricedFor = (what: string, week: WeekPosition): string => `Unpriced: the cost model holds no ${what} for the ${planLabel(WEEK_TIER[week])} week`;
@@ -237,16 +231,16 @@ export const weekReadingOf = (costs: SubscriptionCosts | null, error: string | n
   return { failure: { text: weekUnpricedTitle(week), unpriced: true }, scale, week };
 };
 
-/** A burn point with one plan card's figure under the chosen tier, and the cause where the bucket draws a gap:
+/** A burn point with one plan card's figure under the chosen tier, and `gap`, the cause where the bucket draws a gap:
  *  `unsized` where the tier's entry is missing beside another tier's number above 0, `unpriced` where no tier holds a
- *  number, or on the week card where the route flags the bucket. An idle bucket and a row the cost model cannot weigh
- *  read null on every tier. */
-export interface FiguredPoint extends BurnPoint { figure: number | null; unpriced: boolean; unsized: boolean }
+ *  number, or on the week card where the route flags the bucket, null where it draws none. An idle bucket and a row the
+ *  cost model cannot weigh read null on every tier. */
+export interface FiguredPoint extends BurnPoint { figure: number | null; gap: GapCause }
 /** One plan card over a range: its points, and the sentence it reads in place of its chart, null where it draws. */
 export interface PlanCardFigures { points: FiguredPoint[]; unpriced: string | null }
 
 type TierMap = Record<string, number | null>;
-type GapCause = 'unpriced' | 'unsized' | null;
+export type GapCause = 'unpriced' | 'unsized' | null;
 
 /**
  * A plan card's points read under the chosen week's tier: a number there is the figure, a 0 reading as idle, and a
@@ -258,9 +252,9 @@ const planCardOf = (points: BurnPoint[], week: WeekPosition, mapOf: (p: BurnPoin
   const figured = points.map((p): FiguredPoint => {
     const figure = lookup(mapOf(p), tier) ?? null;
     const cause = p.tokens > 0 && figure === null ? causeOf(p, mapOf(p)) : null;
-    return { ...p, figure, unpriced: cause === 'unpriced', unsized: cause === 'unsized' };
+    return { ...p, figure, gap: cause };
   });
-  const unpriced = figured.some((p) => p.unsized) && figured.every((p) => p.figure === null) ? unpricedFor(what, week) : null;
+  const unpriced = figured.some((p) => p.gap === 'unsized') && figured.every((p) => p.figure === null) ? unpricedFor(what, week) : null;
   return { points: figured, unpriced };
 };
 

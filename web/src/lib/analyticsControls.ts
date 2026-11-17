@@ -1,4 +1,4 @@
-import { listWords } from '@/lib/format';
+import { listWords, noun } from '@/lib/format';
 
 /**
  * A control of the Analytics filter bar that a card's read can pass by: a filter, or the Include probes toggle. The
@@ -44,7 +44,7 @@ export function ignoredNote(card: AnalyticsCard, inForce: ReadonlySet<AnalyticsC
   const toggle = ignored('probes');
   if (filters.length === 0 && !toggle) return null;
   // The filters share one plural noun, and the toggle follows them under a noun of its own.
-  const run = filters.length === 0 ? null : `${listWords(filters)} ${filters.length === 1 ? 'filter' : 'filters'}`;
+  const run = filters.length === 0 ? null : `${listWords(filters)} ${noun(filters.length, 'filter')}`;
   const controls = run === null ? 'Include probes toggle' : toggle ? `${run} and the Include probes toggle` : run;
-  return `The ${controls} above ${filters.length + (toggle ? 1 : 0) === 1 ? 'does' : 'do'} not apply here`;
+  return `The ${controls} above ${noun(filters.length + (toggle ? 1 : 0), 'does', 'do')} not apply here`;
 }

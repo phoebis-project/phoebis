@@ -15,7 +15,7 @@ import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, fmtMinute, formatIn } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { accountStatusOf, planWordLabel } from '@/lib/quota';
-import { inWindowOrder, periodHoursOf, windowKeyId, windowLabelOf } from '@/lib/windows';
+import { inWindowOrder, periodHoursOf, storedFableKey, windowKeyId, windowLabelOf } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
 export const rec = (v: unknown): Rec => (v && typeof v === 'object' ? (v as Rec) : {});
@@ -218,8 +218,8 @@ export function decodePairingConfirmed(v: unknown): PairingConfirmed {
 }
 
 /** The history's samples keep the ledger's stored key, which spells a head's 7-day Fable window
- *  `seven_day_overage_included`, so the history alone reads that key as the Fable series. */
-const historyWindowId = (id: string): WindowId | null => (id === 'seven_day_overage_included' ? '7d_fable' : windowKeyId(id));
+ *  `seven_day_overage_included`, so the history reads that key as the Fable series. */
+const historyWindowId = (id: string): WindowId | null => windowKeyId(storedFableKey(id));
 
 export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
   const q = rec(v);

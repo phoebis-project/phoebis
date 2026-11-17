@@ -1,6 +1,7 @@
 import type { Account, AgentContext, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
+import { groupInto } from './counts';
 import { byteOrder, fmtDuration, instant, noun, percentText, plural } from './format';
-import { openMark } from './keepalive';
+import { openMark, pinTtlMs } from './keepalive';
 import { endOf, minuteSpan, windowOf } from './quota';
 import { speedWord, windingDown } from './selection';
 import { compareFigures } from './sort';
@@ -51,6 +52,8 @@ const BURN_DECAY_CUTOFF_AVERAGES = 30;
 
 /** The causes a walk that marks nothing answers, in the router's order. */
 const SHED_CAUSES = ['sliver', 'last_pin', 'standing'] as const;
+type ShedCause = (typeof SHED_CAUSES)[number];
+const firstCause = (read: ReadonlySet<ShedCause>): ShedCause | null => SHED_CAUSES.find((c) => read.has(c)) ?? null;
 
 /**
  * The round's marking rule, the mirror of the router's walk: pins in the round's order with their burns on the round's
@@ -77,7 +80,7 @@ const SHED_CAUSES = ['sliver', 'last_pin', 'standing'] as const;
 export function shedMarks(
   ordered: { burn: number | null; cost?: number; id: string; skip?: boolean; standing?: boolean }[],
   target: number,
-): { marks: string[]; quiet: 'last_pin' | 'sliver' | 'standing' | null } {
+): { marks: string[]; quiet: ShedCause | null } {
   type Pin = (typeof ordered)[number];
   const marks: string[] = [];
   if (Number.isNaN(target) || target <= 0) return { marks, quiet: null };
@@ -91,7 +94,7 @@ export function shedMarks(
   // An unpriced burn moves the removed sum nowhere, so marking the pin would shed a session on a guess. A pin with no
   // sibling to move to stays where it is, and its burn stays on the account.
   const open = (pin: Pin): pin is Pin & { burn: number } => pin.burn !== null && pin.skip !== true && pin.standing !== true;
-  const read = new Set<(typeof SHED_CAUSES)[number]>();
+  const read = new Set<ShedCause>();
   if (ordered.some((pin) => pin.standing === true)) read.add('standing');
   for (const [index, pin] of ordered.entries()) {
     // An indivisible pin may carry the removed burn past the target, and the round stops there.
@@ -121,7 +124,7 @@ export function shedMarks(
     marks.push(pin.id);
     removed += pin.burn;
   }
-  return { marks, quiet: marks.length > 0 ? null : (SHED_CAUSES.find((cause) => read.has(cause)) ?? null) };
+  return { marks, quiet: marks.length > 0 ? null : firstCause(read) };
 }
 
 /**
@@ -226,7 +229,7 @@ export interface ShedPreview {
    * `last_pin`, then `standing`. Null where the switch is off, where no member is over the ceiling, where a round
    * marks a session, where no pin is priced, where no sibling has runway and where no walk names a cause.
    */
-  quiet: 'burnless' | 'last_pin' | 'sliver' | 'standing' | 'warm' | null;
+  quiet: 'burnless' | 'warm' | ShedCause | null;
   sessions: number;
   /**
    * The rounds mark nothing and read the router's own fallback word: no pin on the members over the ceiling is priced,
@@ -236,6 +239,9 @@ export interface ShedPreview {
   warm: number;
 }
 
+/** Whether the line holds the row's own display pin. */
+const isDisplayLine = (s: Pick<Session, 'agentId' | 'model'>, c: Pick<AgentContext, 'agentId' | 'model'>) => c.agentId === s.agentId && c.model === s.model;
+
 /**
  * A conversation pin as the round walks it, its figures read off its source: the row for a display pin no line holds,
  * else the line. A line is warm before its first cold instant, and by its served `warm` where it carries none. The
@@ -244,8 +250,8 @@ export interface ShedPreview {
 const walkedPin = (s: Session, line: AgentContext | null, now: number) => {
   const source = line ?? s;
   return {
-    accountId: line === null ? s.accountId : line.accountId,
-    agentId: line === null ? s.agentId : line.agentId,
+    accountId: source.accountId,
+    agentId: source.agentId,
     burn: source.burn,
     burnAt: source.burnAt,
     burnUnit: source.burnUnit,
@@ -253,19 +259,16 @@ const walkedPin = (s: Session, line: AgentContext | null, now: number) => {
     ended: source.ended,
     fast: source.fast,
     keyId: s.keyId,
-    model: line === null ? s.model : line.model,
+    model: source.model,
     moveCost: source.moveCost,
     moveDropCost: source.moveDropCost,
     moveDropSize: source.moveDropSize,
     moveSize: source.moveSize,
     sessionId: s.sessionId,
-    standing: (line === null || (line.agentId === s.agentId && line.model === s.model)) && openMark(s) !== null,
-    warm: line === null ? s.lastRefreshAt !== null && s.cacheTtlMs !== null && now - Date.parse(s.lastRefreshAt) < s.cacheTtlMs : line.warmUntil === null ? line.warm : now < Date.parse(line.warmUntil),
+    standing: (line === null || isDisplayLine(s, line)) && openMark(s) !== null,
+    warm: line === null ? s.lastRefreshAt !== null && s.cacheTtlMs !== null && now - Date.parse(s.lastRefreshAt) < s.cacheTtlMs : line.warmUntil === null ? line.warm : pinTtlMs(line, now) !== null,
   };
 };
-
-/** Whether a walked pin's agent ended and its next request has not arrived, as the pin's own row or line reads it. */
-const endedPin = (p: { ended: boolean | null }): boolean => p.ended === true;
 
 /**
  * The shedding round's dry run, replayed from the data the routes serve. Each member's served projection is read at its
@@ -337,6 +340,17 @@ export function shedPreview(
                 return projection !== null && projection < ceilingOf(pool, id);
               })),
     );
+  // `hasRunway` reads the model only through whether it draws the Fable week, so a member's pins share at most two
+  // answers.
+  const runwayMemo = new Map<string, boolean>();
+  const runwayOf = (source: string, model: string | null): boolean => {
+    const key = `${source}/${drawsFable(model)}`;
+    const known = runwayMemo.get(key);
+    if (known !== undefined) return known;
+    const runway = hasRunway(source, model);
+    runwayMemo.set(key, runway);
+    return runway;
+  };
   const windowMs = pool.burnAverageSeconds * 1_000;
   const hot: ShedHot[] = [];
   const held: ShedHeld[] = [];
@@ -348,14 +362,15 @@ export function shedPreview(
   let stranded = 0;
   let priced = 0;
   let burning = 0;
-  const causes = new Set<(typeof SHED_CAUSES)[number]>();
+  const causes = new Set<ShedCause>();
   // Only Pace holds a reservation back, and the option adds a test to the round the switch runs.
   const reserving = pool.fableReservationShedding && pool.strategy === 'pace' && pool.loadShedding;
   const reserved: ShedPreview['reservation'] = { labels: [], sessions: 0, warm: 0 };
   const conversation = sessions.flatMap((s) => {
-    const display = s.pinned && !s.agentContexts.some((c) => c.agentId === s.agentId && c.model === s.model) ? [walkedPin(s, null, now)] : [];
+    const display = s.pinned && !s.agentContexts.some((c) => isDisplayLine(s, c)) ? [walkedPin(s, null, now)] : [];
     return [...display, ...s.agentContexts.map((c) => walkedPin(s, c, now))];
   });
+  const byAccount = groupInto(conversation.filter((p) => p.ended !== true), (p) => p.accountId);
   /**
    * One round's walk on `account` over `pins` on the window `fired` names, toward the target `targetOf` reads off the
    * walked burn. The served burn is a pin's share of the window its `burnWindow` names: the 5-hour window, or the 7-day
@@ -380,7 +395,7 @@ export function shedPreview(
           id: `${p.keyId}/${p.sessionId}/${p.agentId ?? ''}/${p.model ?? ''}`,
           moveCost: p.moveCost,
           order: served,
-          runway: hasRunway(account.id, p.model),
+          runway: runwayOf(account.id, p.model),
           // A pin with no prompt size reported yet ranks as the cheapest rewrite, at one token, as the round reads it.
           size: p.moveSize ?? 1,
           standing: p.standing,
@@ -419,8 +434,7 @@ export function shedPreview(
   };
   for (const { account, reservation } of listed) {
     if (account.kind === 'api_key') continue;
-    const kept = conversation
-      .filter((p) => p.accountId === account.id && !endedPin(p))
+    const kept = [...(byAccount.get(account.id) ?? [])]
       // The router walks an account's pins in key, session, agent and model order as bytes, which settles ties in the
       // sorts below.
       .sort((a, b) => byteOrder(a.keyId, b.keyId) || byteOrder(a.sessionId, b.sessionId) || byteOrder(a.agentId ?? '', b.agentId ?? '') || byteOrder(a.model ?? '', b.model ?? ''));
@@ -482,7 +496,7 @@ export function shedPreview(
   const walkedQuiet = pool.loadShedding && hot.length > 0 && marked === 0 && priced > 0 && !noRunway;
   // The router runs a round per member, each with its own cause, and the preview draws one line for them all, so the
   // line names the first cause in the router's order that any walk answered.
-  const quiet = !walkedQuiet ? null : burning === 0 ? 'burnless' : walkable === 0 ? 'warm' : (SHED_CAUSES.find((cause) => causes.has(cause)) ?? null);
+  const quiet = !walkedQuiet ? null : burning === 0 ? 'burnless' : walkable === 0 ? 'warm' : firstCause(causes);
   return {
     closest: hot.length === 0 ? closest : null,
     covered,
@@ -524,7 +538,7 @@ export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()):
     labels.length === 0
       ? []
       : [
-          labels.length === 1 ? `1 member holds less 7-day room than its Fable reservation: ${labels[0]}.` : `${plural(labels.length, 'member')} hold less 7-day room than their Fable reservation: ${labels.join(', ')}.`,
+          `${plural(labels.length, 'member')} ${noun(labels.length, 'holds', 'hold')} less 7-day room than ${noun(labels.length, 'its', 'their')} Fable reservation: ${labels.join(', ')}.`,
           sessions === 0 ? 'A round there would mark no non-Fable session.' : `A round there would mark ${plural(sessions, 'non-Fable session')} (${warm} warm), to move to a sibling with runway.`,
         ];
   if (hot.length === 0) {

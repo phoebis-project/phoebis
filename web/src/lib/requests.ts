@@ -6,6 +6,7 @@ import { type Funding, fundingOf, inBand, revisionAt, tableAt } from '@/lib/cost
 import { has, lookup } from '@/lib/counts';
 import { servingAttempt } from '@/lib/dimensions';
 import { byteOrder, fmtUsd, fmtWeek, plural, weekShort } from '@/lib/format';
+import { keysOf } from '@/lib/keepalive';
 import { heldAccount, WAIT_REASON_WORD } from '@/lib/routingLog';
 import { compareFigures } from '@/lib/sort';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
@@ -234,7 +235,7 @@ const planUsdOf = (spend: Pick<SessionSpendPart, 'usd'>, billed: number): number
  * plan-funded request reads 0 too.
  */
 export function spendUnitOf(spend: SessionSpendPart, unit: UnitPosition, accountId: string | null, hint: string | null): SpendReading {
-  const accounts = [...new Set([...Object.keys(spend.shares), ...Object.keys(spend.billedUsdByAccount)])].filter((id) => id !== accountId).sort();
+  const accounts = keysOf(spend.shares, spend.billedUsdByAccount).filter((id) => id !== accountId).sort();
   if (spend.requests === 0) return { accounts, billed: 0, unit: { kind: 'unserved', usd: 0 } };
   const billed = billedSum(spend);
   const figures = { dollars: billed, figure: spend.equivalent, hint, reason: null, usd: spend.usd };

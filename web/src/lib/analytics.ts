@@ -593,6 +593,8 @@ export function windowLines(rollups: AccountRollup[], window: string, read: 'pac
   }
   // Read after the fold, since a reset-only sample in a bucket's later hour leaves the bucket without a point.
   const accounts = listed.filter((a) => data.some((row) => row[a] !== null));
+  // With no account dropped, the rows already hold the keys the rebuild keeps, in its order.
+  if (accounts.length === listed.length) return { accounts, data };
   const keys = ['at', ...accounts.flatMap(keysOf)];
   return { accounts, data: data.map((row) => Object.fromEntries(keys.map((k) => [k, row[k]]))) };
 }
@@ -687,8 +689,8 @@ export function foldBurn(
     s.usd += p.usd;
     if (slot >= kept.length) continue;
     if (p.figure !== null) s.equivalent.sum = (s.equivalent.sum ?? 0) + p.figure;
-    if (p.unpriced) s.equivalent.unpriced = true;
-    if (p.unsized) s.equivalent.unsized = true;
+    if (p.gap === 'unpriced') s.equivalent.unpriced = true;
+    if (p.gap === 'unsized') s.equivalent.unsized = true;
   }
   const secondsOf = (at: number) => {
     if (rangeEndMs === undefined) return bucketSeconds;
@@ -754,14 +756,12 @@ export function foldBurn(
 }
 
 /**
- * Whether a bucket chart's last bucket is partial: its covered end lies before the bucket's own end. No row past the
- * read's instant exists yet, so the covered end is no later than `readAt`. A route sums whole hours up to the hour
- * ceiling of the range's end, the covered end under `wholeHours`, as `foldBurn`'s `secondsOf` reads it. A fold of the
- * request log stops at the range's end itself, the covered end without it.
+ * Whether a bucket chart's last bucket is partial: the covered end, the end of the window `coveredWindow` answers for
+ * the read, lies before the bucket's own end.
  */
-export const lastBucketPartial = (buckets: readonly { at: number }[], bucketMs: number, rangeEndMs: number, readAt: number, wholeHours: boolean): boolean => {
+export const lastBucketPartial = (buckets: readonly { at: number }[], bucketMs: number, coveredToMs: number): boolean => {
   const last = buckets[buckets.length - 1];
-  return last !== undefined && coveredEnd(rangeEndMs, readAt, wholeHours) < last.at + bucketMs;
+  return last !== undefined && coveredToMs < last.at + bucketMs;
 };
 
 /** How a read covers its range: a rollup read sums whole hours, the burn read starts at its first bucket, and a

@@ -74,16 +74,4 @@ export const emptyWastedProbeReasons = (): Record<WastedProbeReason, number> => 
  * a name such as `__proto__` or `constructor` is a key like any other: it neither reads an inherited member as
  * its count nor, assigned, replaces the map's prototype.
  */
-export const emptyCacheMissReasons = (): Record<CacheMissReason, number> =>
-  Object.assign(emptyCounts(), {
-    messages_changed: 0,
-    model_changed: 0,
-    none: 0,
-    not_requested: 0,
-    not_returned: 0,
-    pending: 0,
-    previous_message_not_found: 0,
-    system_changed: 0,
-    tools_changed: 0,
-    unavailable: 0,
-  });
+export const emptyCacheMissReasons = (): Record<CacheMissReason, number> => Object.assign(emptyCounts(), Object.fromEntries([...CACHE_MISS_REASONS].sort().map((reason) => [reason, 0])));

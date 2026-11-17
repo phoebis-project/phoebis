@@ -7,7 +7,7 @@ const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.js
 
 const HOUR = 3_600_000;
 const point = (at, group, over = {}) => {
-  const p = { at: new Date(at).toISOString(), cachedTokens: 0, equivalentByTier: {}, fableEquivalentByTier: {}, figure: null, fiveHourEquivalentByTier: {}, fiveHourShare: null, group, planUsd: 0, sevenDayShare: null, uncachedTokens: 0, unit: null, unpriced: false, unsized: false, usd: 0, ...over };
+  const p = { at: new Date(at).toISOString(), cachedTokens: 0, equivalentByTier: {}, fableEquivalentByTier: {}, figure: null, fiveHourEquivalentByTier: {}, fiveHourShare: null, gap: null, group, planUsd: 0, sevenDayShare: null, uncachedTokens: 0, unit: null, unpriced: false, usd: 0, ...over };
   return { tokens: p.cachedTokens + p.uncachedTokens, ...p };
 };
 const NONE = new Set();
@@ -130,13 +130,13 @@ test("a chart's last bucket is partial where the hours a route sums, a fold's ra
   assert.deepEqual(
     [
       // A past range ending at 1.5 h: the route summed the 1 h bucket up to the hour ceiling, 2 h, its own end.
-      d.lastBucketPartial(hourly, 3_600_000, 5_400_000, 86_400_000, true),
+      d.lastBucketPartial(hourly, 3_600_000, 7_200_000),
       // A past range ending at 25.5 h: the route stopped at the hour ceiling, 26 h, short of the daily bucket's 48 h.
-      d.lastBucketPartial(daily, 86_400_000, 91_800_000, 864_000_000, true),
+      d.lastBucketPartial(daily, 86_400_000, 93_600_000),
       // A live read at 1.5 h: no row past the read exists, so the running hour holds half its width.
-      d.lastBucketPartial(hourly, 3_600_000, 5_400_000, 5_400_000, true),
+      d.lastBucketPartial(hourly, 3_600_000, 5_400_000),
       // The first range folded from the request log, which the route bounds at the range's end, 1.5 h.
-      d.lastBucketPartial(hourly, 3_600_000, 5_400_000, 86_400_000, false),
+      d.lastBucketPartial(hourly, 3_600_000, 5_400_000),
     ],
     [false, true, true, true],
   );
@@ -242,7 +242,7 @@ test('under the account grouping the rest folds into one other per unit, so no d
 
 test('a line that priced no bucket keeps its idle buckets null, so its legend reads a dash', () => {
   const plan = (at, over) => point(at * HOUR, 'primary', { unit: 'window_share', ...over });
-  const { lines, rows } = d.foldBurn([plan(0, { tokens: 100, unpriced: true }), plan(1, { tokens: 0 })], 'account', 3_600, new Set(['primary']));
+  const { lines, rows } = d.foldBurn([plan(0, { gap: 'unpriced', tokens: 100 }), plan(1, { tokens: 0 })], 'account', 3_600, new Set(['primary']));
   assert.deepEqual(rows.map((r) => r.equivalent[0]), [null, null], 'a flagged bucket and an idle one');
   assert.deepEqual([lines[0].perHour, lines[0].unpriced], [null, true]);
 });
@@ -264,14 +264,14 @@ test('a bucket with cache writes and output alone is not idle', () => {
 
 test('a sized account whose points carry no figure keeps its plan line', () => {
   // An Ultra account whose range ran throughout on a model the cost model has no weight for.
-  const answered = [point(0, 'a', { tokens: 300, uncachedTokens: 300, unit: 'window_share', unpriced: true }), point(HOUR, 'a', { tokens: 200, uncachedTokens: 200, unit: 'window_share', unpriced: true })];
+  const answered = [point(0, 'a', { gap: 'unpriced', tokens: 300, uncachedTokens: 300, unit: 'window_share' }), point(HOUR, 'a', { gap: 'unpriced', tokens: 200, uncachedTokens: 200, unit: 'window_share' })];
   assert.equal(d.foldBurn(answered, 'account', 3_600, new Set(['a'])).lines[0].unit, 'window_share');
   assert.equal(d.foldBurn(answered, 'account', 3_600, NONE).lines[0].unit, 'unknown', 'the same traffic on an account whose tier the cost model does not size');
 });
 
 test('a null slot is unpriced only with tokens behind it, so an idle slot of a line that priced nothing is not', () => {
   const plan = (at, over) => point(at * HOUR, 'primary', { unit: 'window_share', ...over });
-  const { rows } = d.foldBurn([plan(0, { uncachedTokens: 10, unpriced: true }), plan(1, {})], 'account', 3_600, new Set(['primary']));
+  const { rows } = d.foldBurn([plan(0, { gap: 'unpriced', uncachedTokens: 10 }), plan(1, {})], 'account', 3_600, new Set(['primary']));
   const [busy, idle] = rows;
   assert.equal(d.slotUnpriced(busy.equivalent[0], busy.tokens[0]), true, 'traffic the cost model could not price');
   assert.equal(d.slotUnpriced(idle.equivalent[0], idle.tokens[0]), false, 'an idle slot has no traffic to list as model unlisted');
@@ -421,13 +421,13 @@ test("the plan card reads the card's figure under any grouping", () => {
   assert.deepEqual(rows.map((r) => r.equivalent[desktop]), [0.004, 0.004], 'the figure per hour, which no account tier reads');
   assert.equal(lines[desktop].perHour, 0.004);
   assert.deepEqual([rows[1].equivalent[laptop], lines[laptop].unpriced], [0, false], 'an idle bucket reads zero once the line priced the figure');
-  const unpriced = d.foldBurn([p(0, 'desktop', { figure: null, unpriced: true })], 'key', 3_600, NONE);
+  const unpriced = d.foldBurn([p(0, 'desktop', { figure: null, gap: 'unpriced' })], 'key', 3_600, NONE);
   assert.equal(unpriced.lines[0].unpriced, true, 'traffic on a model without a weight prices no figure, flagged, and lists as model unlisted');
 });
 
 test('a filter naming one account sizes every group by that account, so its figure charts as a plan line under any grouping', () => {
   // The points carry no figure, so the sized set alone tells the plan line from tier unknown.
-  const p = (group) => point(0, group, { tokens: 100, uncachedTokens: 100, unit: 'window_share', unpriced: true });
+  const p = (group) => point(0, group, { gap: 'unpriced', tokens: 100, uncachedTokens: 100, unit: 'window_share' });
   const answered = [p('claude-opus-5-5'), p('claude-sonnet-4-6')];
   const fold = (sized, account) => d.foldBurn(answered, 'model', 3_600, sized, undefined, undefined, { account }).lines.map((l) => l.unit);
   assert.deepEqual(fold(new Set(['primary']), 'primary'), ['window_share', 'window_share'], "the named account's tier sizes each model's line");
@@ -436,7 +436,7 @@ test('a filter naming one account sizes every group by that account, so its figu
 });
 
 test('under the request class grouping a filter naming one account sizes both class lines by that account', () => {
-  const p = (group) => point(0, group, { tokens: 100, uncachedTokens: 100, unit: 'window_share', unpriced: true });
+  const p = (group) => point(0, group, { gap: 'unpriced', tokens: 100, uncachedTokens: 100, unit: 'window_share' });
   const answered = [p('main'), p('subagent'), p('auxiliary')];
   const fold = (sized) => d.foldBurn(answered, 'request_class', 3_600, sized, undefined, undefined, { account: 'primary' }).lines.map((l) => [l.key, l.unit]);
   assert.deepEqual(fold(new Set(['primary'])), [['conversation', 'window_share'], ['overhead', 'window_share']], "the named account's tier sizes the two folded lines");
@@ -457,8 +457,8 @@ test("a deleted key's group reads its creation minute in the viewer's zone, and 
 });
 
 test('a priced bucket between unpriced ones, or at an end beside one, is an isolated slot the plan chart marks', () => {
-  const plan = (at, over) => point(at * HOUR, 'primary', { tokens: 100, uncachedTokens: 100, unit: 'window_share', unpriced: true, ...over });
-  const { rows } = d.foldBurn([plan(0), plan(1, { figure: 0.05, unpriced: false }), plan(2)], 'account', 3_600, new Set(['primary']));
+  const plan = (at, over) => point(at * HOUR, 'primary', { gap: 'unpriced', tokens: 100, uncachedTokens: 100, unit: 'window_share', ...over });
+  const { rows } = d.foldBurn([plan(0), plan(1, { figure: 0.05, gap: null }), plan(2)], 'account', 3_600, new Set(['primary']));
   const figures = rows.map((r) => r.equivalent[0]);
   assert.deepEqual(figures, [null, 0.05, null], 'a priced hour between two whose traffic went unpriced');
   assert.deepEqual(d.isolatedSlots(figures), [false, true, false], 'the line draws no segment through it, so it takes a dot');
@@ -707,7 +707,7 @@ test('the idle slots of the plan card zero-fill against the flag, and an unprice
   const p = (at, over) => point(at * HOUR, 'desktop', { figure: 0.004, tokens: 100, uncachedTokens: 100, ...over });
   // The card answers a null figure with no cause for an idle bucket, and with the model's cause for one holding a row
   // the cost model could not price.
-  const { lines, rows } = d.foldBurn([p(0), p(1, { figure: null }), p(2, { figure: null, unpriced: true })], 'key', 3_600, NONE);
+  const { lines, rows } = d.foldBurn([p(0), p(1, { figure: null }), p(2, { figure: null, gap: 'unpriced' })], 'key', 3_600, NONE);
   assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.004, 0, null], 'the idle slot reads zero and the unpriced one stays a gap');
   assert.ok(Math.abs(lines[0].perHour - 0.002) < 1e-12, 'the mean counts the idle slot and leaves the gap out');
   assert.equal(lines[0].unpriced, true, 'the legend reads the flag');
@@ -728,7 +728,7 @@ test("each plan card reads its own map's figure under the chosen week's tier", (
 test("a range whose later revision drops the chosen tier's capacity draws its earlier buckets and leaves its later ones as the tier's gaps", () => {
   // The card hands the first hour its figure under the chosen tier, the second the tier's gap its revision left, and
   // the third the zero its billed rows add, which drew nothing from the plan.
-  const points = [point(0, 'a', { figure: 0.1, uncachedTokens: 100 }), point(HOUR, 'a', { uncachedTokens: 100, unsized: true }), point(2 * HOUR, 'a', { figure: 0, uncachedTokens: 100 })];
+  const points = [point(0, 'a', { figure: 0.1, uncachedTokens: 100 }), point(HOUR, 'a', { gap: 'unsized', uncachedTokens: 100 }), point(2 * HOUR, 'a', { figure: 0, uncachedTokens: 100 })];
   const { lines, rows } = d.foldBurn(points, 'model', 3_600, NONE);
   assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.1, null, 0], 'the gap stays null on a line that priced another bucket');
   assert.deepEqual([lines[0].unsized, lines[0].unpriced], [true, false], "the line carries the tier's gap alone");

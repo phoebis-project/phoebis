@@ -194,6 +194,7 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   refuse('models', 'Model rules', modelRulesRefusal(input.modelRules));
 
   const choice = (group: PoolGroup, label: string, values: readonly string[], value: string) => refuse(group, label, values.some((v) => v === value) ? null : listed(label));
+  const fraction = (group: PoolGroup, label: string, value: number, minPercent: number) => refuse(group, label, ratio(value, minPercent / 100) ? null : `${label} is from ${minPercent} to 100.`);
   choice('placement', 'Subagent placement', SUBAGENT_PLACEMENT_VALUES, input.subagentPlacement);
   choice('placement', 'Session placement', SESSION_PLACEMENT_VALUES, input.sessionPlacement);
   refuse('placement', 'Minimum shared prefix, tokens', prefixThresholdRefusal(input.minSharedPrefixTokens));
@@ -203,14 +204,14 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
 
   // NaN is a field left empty or one whose text the browser could not parse, which fails the range and so holds the
   // save.
-  refuse('utilization', '5-hour ceiling (%)', ratio(input.fiveHourCeiling, 0.5) ? null : '5-hour ceiling (%) is from 50 to 100.');
-  refuse('utilization', 'Weekly ceiling (%)', ratio(input.weeklyCeiling, 0.5) ? null : 'Weekly ceiling (%) is from 50 to 100.');
+  fraction('utilization', '5-hour ceiling (%)', input.fiveHourCeiling, 50);
+  fraction('utilization', 'Weekly ceiling (%)', input.weeklyCeiling, 50);
 
   const engine = (group: PoolGroup, key: keyof typeof ENGINE_BOUNDS) =>
     refuse(group, ENGINE_FIELD_LABELS[key], whole(input[key], ENGINE_BOUNDS[key].min, ENGINE_BOUNDS[key].max) ? null : boundText(ENGINE_FIELD_LABELS[key], ENGINE_BOUNDS[key]));
   engine('utilization', 'burnAverageSeconds');
 
-  refuse('shedding', 'Shed cap (%)', ratio(input.shedCap, 0.1) ? null : 'Shed cap (%) is from 10 to 100.');
+  fraction('shedding', 'Shed cap (%)', input.shedCap, 10);
   engine('shedding', 'shedDwellSeconds');
   choice('shedding', 'Warm sessions', WARM_SESSIONS_VALUES, input.warmSessions);
 

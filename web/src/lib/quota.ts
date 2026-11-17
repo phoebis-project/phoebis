@@ -113,14 +113,18 @@ export const NO_RESET_TITLE: Readonly<Record<'not open' | 'not reported', string
   'not reported': 'the poll reported no reset for this window',
 };
 
+/** A slow-down entry inside its span, as `slowedOf` answers it. */
+export type SlowedDown = AccountSlowDown & { since: string };
+
 /** The slow-down a page draws the account's speed chip from: its entry while it holds a span, the speed the holds
  *  realized is under 1 and the 5-hour window the entry was read from has not reset since, null otherwise. The span is
  *  tested beside the speed, since the router folds the realized speed as an average that stays under 1 for hours
  *  after a span closes. A 5-hour window that has not opened means the one the entry was read from has ended. */
-export function slowedOf(account: Account, now: number): AccountSlowDown | null {
+export function slowedOf(account: Account, now: number): SlowedDown | null {
   const slowDown = account.slowDown ?? null;
   const w5 = windowOf(account, '5h');
-  return slowDown !== null && slowDown.since !== null && slowDown.speed < 1 && w5 !== null && !isExpired(w5, now) && noResetWord(w5) !== 'not open' ? slowDown : null;
+  // The `since` test narrows the member and not the entry, so the answer spells the narrowed member out.
+  return slowDown !== null && slowDown.since !== null && slowDown.speed < 1 && w5 !== null && !isExpired(w5, now) && noResetWord(w5) !== 'not open' ? { ...slowDown, since: slowDown.since } : null;
 }
 
 /**
@@ -292,7 +296,7 @@ const aheadOf = (at: string | null | undefined, now: number): number | null => {
 
 /** The span inside which two resets read as one reset, the router's `RESET_SLACK_MS` (crates/routing/src/task.rs),
  *  inclusive at the bound. */
-export const RESET_SLACK_MS = 60_000;
+export const RESET_SLACK_MS = MINUTE;
 
 /** The soonest future reset over every window the poll read and a seat's spend window, with every window whose reset
  *  lies within `RESET_SLACK_MS` after it, in the reading's order, so the card marks each. Empty where no reset lies
@@ -300,8 +304,11 @@ export const RESET_SLACK_MS = 60_000;
 export function soonestResetAt(account: Account, now: number): WindowId[] {
   // A window the sampler reported without a reset time can never be the soonest to recover, and a usage-based seat
   // recovers at its spend window's reset, the one reset it carries.
-  const read: { at: number | null; id: WindowId }[] = [...readWindows(account).map((w) => ({ at: aheadOf(w.resetsAt, now), id: w.id })), { at: aheadOf(account.spend?.resetsAt, now), id: 'spend' }];
-  const resets = read.flatMap((r) => (r.at === null ? [] : [{ at: r.at, id: r.id }]));
+  const ahead = (id: WindowId, at: string | null | undefined) => {
+    const t = aheadOf(at, now);
+    return t === null ? [] : [{ at: t, id }];
+  };
+  const resets = [...readWindows(account).flatMap((w) => ahead(w.id, w.resetsAt)), ...ahead('spend', account.spend?.resetsAt)];
   const soonest = Math.min(...resets.map((r) => r.at));
   // Measured from the soonest reset, so a window within the slack of a marked one but past the soonest's is unmarked.
   return resets.filter((r) => r.at - soonest <= RESET_SLACK_MS).map((r) => r.id);

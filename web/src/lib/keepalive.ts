@@ -410,7 +410,7 @@ export function agentFigures(session: Pick<Session, 'agentRequests'>, agentId: s
   return session.agentRequests.find((entry) => entry.agentId === agentId) ?? null;
 }
 
-const keysOf = (a: object, b: object): string[] => [...new Set([...Object.keys(a), ...Object.keys(b)])];
+export const keysOf = (a: object, b: object): string[] => [...new Set([...Object.keys(a), ...Object.keys(b)])];
 
 /** Two maps keyed by data summed by key, built as fresh entries so no key the wire sends reaches a prototype. */
 const addMap = (a: Record<string, number>, b: Record<string, number>): Record<string, number> => Object.fromEntries(keysOf(a, b).map((k) => [k, countOf(a, k) + countOf(b, k)]));

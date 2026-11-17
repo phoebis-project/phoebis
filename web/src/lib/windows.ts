@@ -38,9 +38,7 @@ export function hoursOfKey(id: WindowId): number {
  * The ledger, the request log and the usage endpoint spell a window by the endpoint's key, a request log attempt's
  * windows carry the stored keys, which no view reads, and the router's own windows name the 7-day Fable window
  * `fable`. Each spelling of a window is one window to the UI: `seven_day_fable`, `7d_oi` and `fable` all mean the
- * model-scoped week the UI draws third. The head's stored key `seven_day_overage_included` names it too, which the
- * quota history's decoder and the routing log's cooldown words map onto it. Any other key is a window of its own,
- * kept under its name.
+ * model-scoped week the UI draws third. Any other key is a window of its own, kept under its name.
  */
 const WINDOW_IDS = new Map<string, KnownWindowId>([
   ['5h', '5h'],
@@ -51,6 +49,12 @@ const WINDOW_IDS = new Map<string, KnownWindowId>([
   ['seven_day', '7d'],
   ['seven_day_fable', '7d_fable'],
 ]);
+/**
+ * A stored window key under the wire key of the window it names. The head's stored key `seven_day_overage_included`
+ * names the 7-day Fable window too. It stays out of `WINDOW_IDS` because the other readers of `windowKeyId` keep that
+ * key as sent.
+ */
+export const storedFableKey = (key: string): string => (key === 'seven_day_overage_included' ? WINDOW_KEY['7d_fable'] : key);
 /** The UI's id for a window key: a known window's own id, any other key as it is, `null` for no key at all. */
 export const windowKeyId = (id: string): WindowId | null => WINDOW_IDS.get(id) ?? (id === '' ? null : id);
 /** A window table's entry under any of the window's spellings, nothing for a window the console does not know. */

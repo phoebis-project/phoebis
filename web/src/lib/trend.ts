@@ -1,4 +1,5 @@
 import type { QuotaHistory } from '@/api/types';
+import { MINUTE } from './time';
 
 /** Percents. A value is null before its series' first sample and after its last one, and every Fable value is null
  *  for an account without a Fable window. */
@@ -9,8 +10,10 @@ export interface TrendPoint {
   uf: number | null;
 }
 
+const BUCKET_MS = 5 * MINUTE;
+
 /** The same boundaries as the ledger's `bucket_of`, which answers the bucket's start in seconds. */
-export const bucketOf = (iso: string) => Math.floor(Date.parse(iso) / 300_000);
+export const bucketOf = (iso: string) => Math.floor(Date.parse(iso) / BUCKET_MS);
 
 /**
  * Joins the 5-hour, 7-day and Fable series on the union of their samples' 5-minute buckets, the ledger's, each point at
@@ -39,5 +42,5 @@ export function joinTrend(history: QuotaHistory[], hasFable: boolean, every = 3)
   const buckets = [...new Set([...h5, ...h7, ...hF].map((s) => s.bucket))].sort((a, b) => a - b);
   return buckets
     .filter((_, i) => i % every === 0)
-    .map((bucket) => ({ at: bucket * 300_000, u5: at5(bucket), u7: at7(bucket), uf: hasFable ? atF(bucket) : null }));
+    .map((bucket) => ({ at: bucket * BUCKET_MS, u5: at5(bucket), u7: at7(bucket), uf: hasFable ? atF(bucket) : null }));
 }
