@@ -1,11 +1,11 @@
 use phoebis_routing::{
-    all_plan_windows, burn_average_ms, cohort_hold, decide, effective_warm, lane_key,
-    release_reasons, resolve, select, shed_dwell_ms, warm, warmth_of, AccountTicket, AffinityChain,
-    AffinityMap, AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit,
+    all_plan_windows, burn_average_ms, cohort_hold, decide, effective_warm, feature_obstacle,
+    lane_key, release_reasons, resolve, select, shed_dwell_ms, warm, warmth_of, AccountTicket,
+    AffinityChain, AffinityMap, AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit,
     CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditAccount, CreditsState, Decided,
     DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, FailedOver, HeadMark,
     HoldFacts, HoldOutcome, HoldReason, HoldWait, LaneFacts, LongContextRates, MemberSpend,
-    MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef, PinShed, PinUsage,
+    MigrateReason, MoveCause, Obstacle, OverageEvidence, PinKeyFacts, PinRef, PinShed, PinUsage,
     PinnedObstacle, Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates,
     RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult,
     SharePricer, SharedWindows, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite,
@@ -2875,6 +2875,71 @@ fn the_release_reasons_name_a_funding_mark_only_while_the_selection_would_not_tr
         "another attempt holds the one slot"
     );
     drop(ticket);
+}
+
+#[test]
+fn a_feature_account_the_registry_lacks_answers_deleted() {
+    let s = snapshot(Pool::default());
+    assert_eq!(
+        feature_obstacle(&s, "gone", 1_000),
+        Some(Obstacle::Deleted),
+        "no account holds the id"
+    );
+    assert_eq!(
+        feature_obstacle(&s, "a", 1_000),
+        None,
+        "a ready account serves"
+    );
+}
+
+#[test]
+fn a_feature_account_that_is_signed_out_answers_unready() {
+    let s = snapshot_with(
+        Pool::default(),
+        &[
+            ("b", true, AccountState::ReauthRequired),
+            ("c", false, AccountState::Ready),
+        ],
+    );
+    assert_eq!(
+        feature_obstacle(&s, "b", 1_000),
+        Some(Obstacle::Unready),
+        "the account needs a new sign-in"
+    );
+    assert_eq!(
+        feature_obstacle(&s, "c", 1_000),
+        None,
+        "a pause stops model requests alone"
+    );
+}
+
+#[test]
+fn a_feature_account_past_its_subscription_end_answers_ended() {
+    let s = snapshot_with_terms(
+        Pool::default(),
+        vec![SubscriptionTerm {
+            account_id: "b".into(),
+            since: Some(0),
+            trial_ends_at: None,
+            cancellation: Cancellation::On {
+                ends_at: Some(1_000),
+            },
+            tier: None,
+            usage_based: false,
+            plan: None,
+            plan_ended_at: None,
+        }],
+    );
+    assert_eq!(
+        feature_obstacle(&s, "b", 1_000),
+        Some(Obstacle::Ended),
+        "the saved end has come"
+    );
+    assert_eq!(
+        feature_obstacle(&s, "b", 999),
+        None,
+        "a millisecond before the saved end"
+    );
 }
 
 /// `req` sent with `speed: "fast"`, on its model's fast lane.

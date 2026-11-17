@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use phoebis_guardrails::CompiledGuardrail;
 use phoebis_store::{
-    digest_with, AccountKind, AccountRow, ApiKeyRow, PoolMember, PoolRow, RegistryLoad,
-    SubscriptionTerm,
+    digest_with, AccountKind, AccountRow, ApiKeyRow, Feature, FeatureOverride, PoolMember, PoolRow,
+    RegistryLoad, SubscriptionTerm,
 };
 use subtle::ConstantTimeEq;
 
@@ -317,6 +317,19 @@ impl RegistrySnapshot {
                 .get(&key.pool_id)
                 .is_none_or(|p| p.auto_mode_server)
         })
+    }
+    /// The account the key's calls of `feature` act under, `None` for none: the key's own value where that is
+    /// none or an account, else its pool's. A key whose pool the snapshot lacks reads none, so the feature stays
+    /// off.
+    pub fn feature_account<'a>(&'a self, key: &'a ApiKeyRow, feature: Feature) -> Option<&'a str> {
+        match key.feature_accounts.get(feature) {
+            FeatureOverride::Account(id) => Some(id),
+            FeatureOverride::Inherit => self
+                .pools
+                .get(&key.pool_id)
+                .and_then(|pool| pool.feature_accounts.get(feature)),
+            FeatureOverride::NoAccount => None,
+        }
     }
 }
 

@@ -855,7 +855,9 @@ pub enum Obstacle {
         until: i64,
         window: String,
     },
-    /// The account's state is not `ready`, as `unready` reads it.
+    /// The account's state is not `ready`. The selection reads it through `unready`, which admits a
+    /// `funding_required` account whose retry is due, and a feature call through `feature_obstacle`, which admits a
+    /// `ready` account alone.
     Unready,
 }
 
@@ -1328,7 +1330,12 @@ pub(crate) fn affinity_ttl_ms(pool: &PoolRow) -> i64 {
 fn unready(state: &RoutingState, account: &AccountRow, now: i64) -> Option<&'static str> {
     let retry_admitted = account.state == AccountState::FundingRequired
         && state.funding_retry_admits(&account.id, now);
-    (account.state != AccountState::Ready && !retry_admitted).then(|| account.state.as_str())
+    not_ready(account).filter(|_| !retry_admitted)
+}
+
+/// The stored state that keeps `account` from serving, by its word, `None` for a ready account.
+fn not_ready(account: &AccountRow) -> Option<&'static str> {
+    (account.state != AccountState::Ready).then(|| account.state.as_str())
 }
 
 /// The facts a selection finds against a pinned account, in the order it evaluates them, for two events: the
@@ -6816,6 +6823,23 @@ pub(crate) fn obstacle_on(
         fallback_ms,
         fast,
     )
+}
+
+/// What keeps a feature call from going out under `account_id`: `Deleted` for an id the registry lacks, `Unready`
+/// for a stored state other than `ready`, `Ended` past the subscription's end, tested in that order. A pause, a
+/// cooldown and a spent window stop model requests alone, so they answer `None` here.
+pub fn feature_obstacle(
+    snapshot: &RegistrySnapshot,
+    account_id: &str,
+    now: i64,
+) -> Option<Obstacle> {
+    let Some(account) = snapshot.account(account_id) else {
+        return Some(Obstacle::Deleted);
+    };
+    if not_ready(account).is_some() {
+        return Some(Obstacle::Unready);
+    }
+    subscription_ended(snapshot, account_id, now).then_some(Obstacle::Ended)
 }
 
 /// The account's live fast-credits row, which refuses a fast request whatever later row stands beside it.
