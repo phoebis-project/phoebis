@@ -1876,6 +1876,51 @@ pub fn credentials_seen(up: &FakeUpstream) -> Vec<String> {
         .collect()
 }
 
+pub fn token_posts(up: &FakeUpstream) -> usize {
+    up.requests()
+        .iter()
+        .filter(|r| r.line.starts_with("POST /v1/oauth/token"))
+        .count()
+}
+
+/// The token endpoint's answer to a refresh that rotates: the profile's fixture, naming `ACCOUNT_UUID`.
+pub fn token_answer() -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: phoebis_profile::fixtures::control_response(
+            phoebis_profile::fixtures::ControlFixture::Token,
+        )
+        .to_vec(),
+    }
+}
+
+pub fn expired() -> Respond {
+    Respond::Json {
+        status: 401,
+        headers: vec![],
+        body: br#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#
+            .to_vec(),
+    }
+}
+
+/// An OAuth account the token fixture's identity matches, so a refresh that reaches the endpoint commits.
+pub fn paired(id: &'static str, secret: &'static str) -> TestAccount {
+    TestAccount {
+        uuid: Some(ACCOUNT_UUID),
+        ..oauth(id, secret, 0)
+    }
+}
+
+/// The token endpoint's conclusive refusal of a refresh, which lands the reauth mark.
+pub fn invalid_grant() -> Respond {
+    Respond::Json {
+        status: 400,
+        headers: vec![],
+        body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+    }
+}
+
 /// The `anthropic-beta` list a recorded request carried, in its order.
 pub fn beta_list(r: &fake_upstream::RecordedRequest) -> Vec<String> {
     r.headers

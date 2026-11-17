@@ -13,9 +13,12 @@ use axum::body::Body;
 use axum::http::Request;
 use bytes::Bytes;
 use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule, SseEvent};
 use phoebis_relay::{Limits, Relay};
-use phoebis_store::{Cancellation, FeatureOverride, KeyFeatureAccounts, PoolFeatureAccounts};
+use phoebis_store::{
+    AccountState, Cancellation, FeatureOverride, KeyFeatureAccounts, PoolFeatureAccounts,
+    StateCause,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
@@ -1064,5 +1067,228 @@ async fn a_host_line_in_capitals_with_a_trailing_dot_and_a_port_names_its_host()
         .await;
     assert_eq!(status, 200, "{headers:?}");
     assert_eq!(feature_lines(&up), ["GET /api/frame/x HTTP/1.1"]);
+    up.shutdown().await;
+}
+
+/// A body of nineteen bytes, which a resend carries whole.
+const TITLE: &[u8] = br#"{"title":"example"}"#;
+
+/// The body of the upstream's 401 that `expired` answers.
+const EXPIRED_BODY: &str =
+    r#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#;
+
+/// A keyed `POST` of `TITLE` to `path` under the `Host` line `host`.
+fn keyed_title(path: &str, host: &str) -> Vec<u8> {
+    keyed(
+        &format!("POST {path}"),
+        host,
+        "Content-Length: 19\r\n",
+        TITLE,
+    )
+}
+
+/// The requests a fake recorded for feature calls, the token endpoint's and the model route's left out.
+fn feature_requests(fake: &FakeUpstream) -> Vec<RecordedRequest> {
+    fake.requests()
+        .into_iter()
+        .filter(|request| {
+            !request.line.starts_with("POST /v1/oauth/token")
+                && !request.line.starts_with("POST /v1/messages")
+        })
+        .collect()
+}
+
+/// The `Authorization` line and the body of the second of exactly two requests.
+fn second_of_two(requests: &[RecordedRequest]) -> (Option<&str>, &[u8]) {
+    let [_, second] = requests else {
+        panic!("{} feature requests arrived", requests.len())
+    };
+    let authorization = second
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .map(|(_, value)| value.as_str());
+    (authorization, second.body.as_slice())
+}
+
+#[tokio::test]
+async fn a_401_is_refreshed_and_resent_once() {
+    let up = fake(vec![
+        ("/api/frame/", json_200()),
+        ("/v1/oauth/token", token_answer()),
+    ])
+    .await;
+    up.add_credential_rule(SECRET_A, "/api/frame/", expired());
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let requests = feature_requests(&up);
+    assert_eq!(
+        second_of_two(&requests),
+        (Some("Bearer sk-ant-oat01-PLACEHOLDER"), TITLE)
+    );
+    up.shutdown().await;
+
+    // The connectors' session rides the other plane, on a harness of its own, since a refresh rotates the token the
+    // account then holds and this call has to start from the first one.
+    let up = fake(vec![("/v1/oauth/token", token_answer())]).await;
+    let connectors = connector_host_fake(vec![Rule {
+        path_prefix: "/v1/mcp/".into(),
+        respond: json_200(),
+    }])
+    .await;
+    connectors.add_credential_rule(SECRET_A, "/v1/mcp/", expired());
+    let h = harness_with_connector_host(
+        &up,
+        &connectors,
+        &[paired("a", SECRET_A)],
+        both_features_at_a(),
+        default_limits(),
+    )
+    .await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(
+            CONNECTOR_HOST,
+            &keyed_title("/v1/mcp/srv_example", CONNECTOR_HOST),
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let requests = connectors.requests();
+    assert_eq!(
+        second_of_two(&requests),
+        (Some("Bearer sk-ant-oat01-PLACEHOLDER"), TITLE)
+    );
+    up.shutdown().await;
+    connectors.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_second_401_goes_back() {
+    let up = fake(vec![
+        ("/api/frame/", expired()),
+        ("/v1/oauth/token", token_answer()),
+    ])
+    .await;
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let (status, headers, body) = feature_listener(&h)
+        .await
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains(EXPIRED_BODY), "{body}");
+    assert_eq!((feature_requests(&up).len(), token_posts(&up)), (2, 1));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_connectors_own_401_goes_back_at_once() {
+    let up = fake(vec![("/v1/oauth/token", token_answer())]).await;
+    let connectors = connector_host_fake(vec![Rule {
+        path_prefix: "/v1/mcp/".into(),
+        respond: json_with_headers(401, &[("X-Mcp-Error-Code", "example_reauth")]),
+    }])
+    .await;
+    let h = harness_with_connector_host(
+        &up,
+        &connectors,
+        &[paired("a", SECRET_A)],
+        both_features_at_a(),
+        default_limits(),
+    )
+    .await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(
+            CONNECTOR_HOST,
+            &keyed_title("/v1/mcp/srv_example", CONNECTOR_HOST),
+        )
+        .await;
+    let codes: Vec<&str> = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("x-mcp-error-code"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!((status, codes), (401, vec!["example_reauth"]));
+    assert_eq!((lines(&connectors).len(), token_posts(&up)), (1, 0));
+    up.shutdown().await;
+    connectors.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_401_leaves_the_account_as_it_was() {
+    let up = fake(vec![
+        ("/api/frame/", expired()),
+        ("/v1/oauth/token", token_answer()),
+        ("/v1/messages", json_200()),
+    ])
+    .await;
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", &fresh_session()))
+        .await
+        .unwrap();
+    let row = h.store.account("a").unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.state_cause, resp.status().as_u16()),
+        (AccountState::Ready, StateCause::Operator, 200)
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_401_whose_refresh_fails_goes_back_as_the_upstream_sent_it() {
+    let up = fake(vec![
+        ("/api/frame/", expired()),
+        ("/v1/oauth/token", invalid_grant()),
+    ])
+    .await;
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let (status, headers, body) = feature_listener(&h)
+        .await
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains(EXPIRED_BODY), "{body}");
+    assert_eq!(feature_requests(&up).len(), 1);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_forced_refresh_that_lands_a_mark_reaches_the_routing_snapshot() {
+    let up = fake(vec![
+        ("/api/frame/", expired()),
+        ("/v1/oauth/token", invalid_grant()),
+    ])
+    .await;
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let state_of_a = || {
+        h.router
+            .snapshot()
+            .account("a")
+            .map(|account| account.state)
+    };
+    assert_eq!(state_of_a(), Some(AccountState::Ready));
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    wait_for(Duration::from_secs(5), || {
+        (state_of_a() == Some(AccountState::ReauthRequired)).then_some(())
+    })
+    .await;
     up.shutdown().await;
 }

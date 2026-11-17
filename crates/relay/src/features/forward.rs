@@ -11,8 +11,8 @@ use bytes::Bytes;
 use phoebis_oauth::AcquireError;
 use phoebis_profile::{FeatureRow, Plane};
 use phoebis_routing::{Obstacle, Report};
-use phoebis_store::{AccountRow, ApiKeyRow};
-use phoebis_transport::control::{ControlAnswer, StreamFailure};
+use phoebis_store::{AccountRow, ApiKeyRow, Secret};
+use phoebis_transport::control::{ControlAnswer, ControlClient, StreamFailure};
 use phoebis_transport::pool::{Conn, PoolKey};
 use phoebis_transport::request::RawRequest;
 use phoebis_transport::response::{framing, keep_alive, BodyReader, ResponseHead};
@@ -103,7 +103,9 @@ pub(crate) async fn read_body(
 /// Sends the admitted call under `account`'s token on the row's plane and hands back the upstream's answer, its body
 /// streaming as it arrives: on the control plane over a fresh connection, and on the inference plane over the
 /// account's pooled connections toward the row's host. `body` is `None` for a head that framed none, which then leaves
-/// with no length line, and a framed body, an empty one among them, keeps its line.
+/// with no length line, and a framed body, an empty one among them, keeps its line. A 401 that `wants_refresh` names
+/// gets the account's one forced refresh and the call once more under the new token, and that answer goes back
+/// whatever it is.
 pub(crate) async fn forward(
     relay: &Relay,
     account: &AccountRow,
@@ -113,7 +115,7 @@ pub(crate) async fn forward(
     body: Option<Bytes>,
 ) -> Result<Response, Unanswered> {
     let control = match row.plane {
-        Plane::Control => match relay.control.as_ref() {
+        Plane::Control => match relay.control.as_deref() {
             Some(control) => Some(control),
             None => return Err(Unanswered::Failed("unreachable", None)),
         },
@@ -140,40 +142,103 @@ pub(crate) async fn forward(
             });
         }
     };
-    let headers = feature_headers(
-        &parts.headers,
-        parts.extensions.get::<OriginalHead>(),
-        Some(&token.secret),
-        row.host,
-        row.plane,
-        body.as_ref().map(Bytes::len),
-    );
     let target = parts
         .uri
         .path_and_query()
         .map_or("/", |target| target.as_str())
         .to_owned();
-    let request = RawRequest {
+    let length = body.as_ref().map(Bytes::len);
+    let body = body.unwrap_or_default();
+    let request = |bearer: &Secret| RawRequest {
         method,
-        target,
-        headers,
-        body: body.unwrap_or_default(),
+        target: target.clone(),
+        headers: feature_headers(
+            &parts.headers,
+            parts.extensions.get::<OriginalHead>(),
+            Some(bearer),
+            row.host,
+            row.plane,
+            length,
+        ),
+        body: body.clone(),
     };
+    let first = send(relay, control, account, row.host, request(&token.secret)).await?;
+    if !wants_refresh(first.head()) {
+        return Ok(first.streamed());
+    }
+    // The first answer stays unread while the refresh runs, so where no newer token comes it goes back as it came.
+    match relay
+        .manager
+        .refresh_now(&account.id, token.generation)
+        .await
+    {
+        Ok(fresh) => {
+            // Dropped ahead of the resend, its connection with it, since a connection whose body went unread serves no
+            // later call.
+            drop(first);
+            let resent = send(relay, control, account, row.host, request(&fresh.secret)).await?;
+            Ok(resent.streamed())
+        }
+        Err(error) => {
+            // The manager's store write starts no reload, so the mark reaches the routing through this report.
+            if let Some(mark) = error.landed_mark() {
+                relay.router().report(Report::from(mark)).await;
+            }
+            Ok(first.streamed())
+        }
+    }
+}
+
+/// Whether an answer asks for the account's credential once more: a 401 without `X-Mcp-Error-Code`. A connector that
+/// wants its own sign-in names it in that line, and the client acts on that answer itself.
+fn wants_refresh(head: &ResponseHead) -> bool {
+    head.status == 401 && head.get("x-mcp-error-code").is_none()
+}
+
+/// An answer whose head arrived and whose body is still on its connection.
+enum Held {
+    Control(ControlAnswer),
+    Pooled(Sent<Conn>, Checkin),
+}
+
+impl Held {
+    fn head(&self) -> &ResponseHead {
+        match self {
+            Held::Control(answer) => &answer.head,
+            Held::Pooled(sent, _) => &sent.head,
+        }
+    }
+
+    fn streamed(self) -> Response {
+        match self {
+            Held::Control(answer) => answered(answer),
+            Held::Pooled(sent, checkin) => pooled_answer(sent, checkin),
+        }
+    }
+}
+
+/// One send of the call: through `control` where the row's plane is the control plane, else over the account's pooled
+/// connections.
+async fn send(
+    relay: &Relay,
+    control: Option<&ControlClient>,
+    account: &AccountRow,
+    host: &'static str,
+    request: RawRequest,
+) -> Result<Held, Unanswered> {
     let Some(control) = control else {
-        return pooled(relay, account, row.host, &request).await;
+        return pooled(relay, account, host, &request).await;
     };
-    match control
+    control
         .send_streaming(
             request,
-            row.host,
+            host,
             relay.limits.connect_timeout,
             relay.limits.head_timeout,
         )
         .await
-    {
-        Ok(answer) => Ok(answered(answer)),
-        Err(failure) => Err(Unanswered::Failed(case_of(&failure), None)),
-    }
+        .map(Held::Control)
+        .map_err(|failure| Unanswered::Failed(case_of(&failure), None))
 }
 
 /// Sends the call over `account`'s pooled connections toward `host`, as the model path sends a request, under the
@@ -184,7 +249,7 @@ async fn pooled(
     account: &AccountRow,
     host: &'static str,
     request: &RawRequest,
-) -> Result<Response, Unanswered> {
+) -> Result<Held, Unanswered> {
     let Some(addr) = (relay.resolver)(host).await else {
         return Err(Unanswered::Failed("unreachable", None));
     };
@@ -203,7 +268,7 @@ async fn pooled(
                     pool: relay.pool.clone(),
                     key,
                 };
-                return Ok(pooled_answer(sent, checkin));
+                return Ok(Held::Pooled(sent, checkin));
             }
             Err(AttemptFailure::Unsent { connect: false, .. }) if !fresh => fresh = true,
             Err(AttemptFailure::Unsent { .. }) => {

@@ -2102,51 +2102,6 @@ fn rows_of(
         .expect("the request lands a ledger row")
 }
 
-fn token_posts(up: &FakeUpstream) -> usize {
-    up.requests()
-        .iter()
-        .filter(|r| r.line.starts_with("POST /v1/oauth/token"))
-        .count()
-}
-
-/// The token endpoint's answer to a refresh that rotates: the profile's fixture, naming `ACCOUNT_UUID`.
-fn token_answer() -> Respond {
-    Respond::Json {
-        status: 200,
-        headers: vec![],
-        body: phoebis_profile::fixtures::control_response(
-            phoebis_profile::fixtures::ControlFixture::Token,
-        )
-        .to_vec(),
-    }
-}
-
-fn expired() -> Respond {
-    Respond::Json {
-        status: 401,
-        headers: vec![],
-        body: br#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#
-            .to_vec(),
-    }
-}
-
-/// An OAuth account the token fixture's identity matches, so a refresh that reaches the endpoint commits.
-fn paired(id: &'static str, secret: &'static str) -> TestAccount {
-    TestAccount {
-        uuid: Some(ACCOUNT_UUID),
-        ..oauth(id, secret, 0)
-    }
-}
-
-/// The token endpoint's conclusive refusal of a refresh, which lands the reauth mark.
-fn invalid_grant() -> Respond {
-    Respond::Json {
-        status: 400,
-        headers: vec![],
-        body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
-    }
-}
-
 /// Commits a bundle for `id` inside its refresh margin and drops the manager's cached one, as a pairing does, so the
 /// account's next acquisition goes to the token endpoint.
 fn due_for_refresh(h: &Harness, id: &str) {
