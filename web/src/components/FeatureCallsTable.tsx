@@ -5,6 +5,7 @@ import { FEATURE_OUTCOME_VALUES, FEATURE_WORD_VALUES } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { usePaging } from '@/app/useFollow';
 import { FilterBar } from '@/components/FilterBar';
+import { StatusBadge } from '@/components/ui/AttemptTrail';
 import type { Option } from '@/components/ui/OptionList';
 import { PagerNav } from '@/components/ui/PagerNav';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
@@ -41,17 +42,17 @@ const OUTCOME_OPTIONS: Option[] = FEATURE_OUTCOME_VALUES.map((o) => ({ label: o,
 function statusOf(call: FeatureCall): ReactNode {
   switch (call.outcome) {
     case 'canceled':
-      return 'canceled';
+      return <span className="muted requests__outcome">canceled</span>;
     case 'failed':
       return call.errorCode !== null ? (
         <span className="mono">{call.errorCode}</span>
       ) : (
-        <>
-          {call.status ?? '-'} <span className="muted">ended early</span>
-        </>
+        <span className="requests__status">
+          <StatusBadge status={call.status} /> <span className="muted requests__outcome">ended early</span>
+        </span>
       );
     case 'forwarded':
-      return call.status ?? '-';
+      return <StatusBadge status={call.status} />;
   }
 }
 
