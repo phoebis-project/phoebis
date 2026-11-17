@@ -46,6 +46,9 @@ export function failoverPresetOf(p: Pick<Pool, 'inFlightCap' | 'retryInPlaceSeco
 /** The share of a round's burn sum that its marks leave on the account's unmarked priced pins, as the router's. */
 export const SHED_MARK_SHARE = 0.1;
 
+/** The burn averages after which a decayed burn reads zero, as the router's. */
+const BURN_DECAY_CUTOFF_AVERAGES = 30;
+
 /** The causes a walk that marks nothing answers, in the router's order. */
 const SHED_CAUSES = ['sliver', 'last_pin', 'standing'] as const;
 
@@ -123,12 +126,16 @@ export function shedMarks(
 
 /**
  * A pin's served burn decayed on from `burnAt`, the instant the route decayed it to, to `now`, as the router's average
- * decays between folds. A burn with no instant reads as served.
+ * decays between folds, and 0 once `burnAt` lies more than `BURN_DECAY_CUTOFF_AVERAGES` averages before `now`, the
+ * router's cutoff. The route already serves 0 past the cutoff at its read, so this holds the router's rule over the
+ * span from the read to `now`, and over an older instant a reader hands it. A burn with no instant reads as served.
  */
 function burnDecayed(burn: number, burnAt: string | null, now: number, windowMs: number): number {
   if (burnAt === null) return burn;
+  const span = now - Date.parse(burnAt);
+  if (span > BURN_DECAY_CUTOFF_AVERAGES * Math.max(windowMs, 1)) return 0;
   // An instant after `now` (another clock) decays nothing rather than growing the burn.
-  return burn * Math.exp(-Math.max(now - Date.parse(burnAt), 0) / Math.max(windowMs, 1));
+  return burn * Math.exp(-Math.max(span, 0) / Math.max(windowMs, 1));
 }
 
 /**

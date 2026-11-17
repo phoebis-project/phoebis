@@ -576,6 +576,20 @@ test("the round decays each pin's served burn from the instant it was served to 
   assert.deepEqual([unpriced.sessions, unpriced.covered], [1, 0.03], 'the unpriced pin stays unmarked and counts among the pins, so the priced one is not the last');
 });
 
+test("a pin's burn decays to nothing once its instant lies more than thirty burn averages back", () => {
+  // Thirty of the pool's averages of 1,800 s are 54,000,000 ms. At exactly that span idle's 0.03 decays by e to the
+  // minus 30, to about 2.8e-15, so the sum reads 0.03 and a sliver, and the target is the cap's half of it, about
+  // 0.015, under the excess of 0.045. fresh leads the order and covers the target, but the guard refuses it, since
+  // idle's 2.8e-15 left on hot is under a tenth of the sum, 0.003. idle covers nothing and is under a tenth of the
+  // rest, 0.0015, so it stays as a sliver, the cause the line names first. One millisecond further back idle reads 0
+  // and leaves before the order, so fresh walks alone on a target of 0.015, and its mark would leave hot no burn.
+  const read = (idleBack) => line([hot, cool], [pin('hot', 'fresh', 0.03, false), pin('hot', 'idle', 0.03, false, { burnAt: at(NOW - idleBack) })]);
+  assert.deepEqual(
+    { atCutoff: read(54_000_000), past: read(54_000_001) },
+    { atCutoff: quiet('each is too small to move.'), past: quiet('each would leave its member too little burn.') },
+  );
+});
+
 /**
  * A line as the Sessions route serves it, its own pin's figures: its burn on `burnWindow` decayed to `burnAt`, the
  * instant of the read, warm until four minutes after it or cold since five minutes before it.
