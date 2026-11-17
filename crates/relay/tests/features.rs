@@ -826,17 +826,13 @@ async fn a_body_that_stalls_is_ended_at_the_reads_deadline() {
 }
 
 /// The harness of `features_harness` with `connectors` as the fake of `CONNECTOR_HOST`.
-async fn connectors_harness(
-    up: &FakeUpstream,
-    connectors: &FakeUpstream,
-    limits: Limits,
-) -> Harness {
+async fn connectors_harness(up: &FakeUpstream, connectors: &FakeUpstream) -> Harness {
     harness_with_connector_host(
         up,
         connectors,
         &[oauth("a", SECRET_A, 0)],
         both_features_at_a(),
-        limits,
+        default_limits(),
     )
     .await
 }
@@ -851,14 +847,6 @@ fn keyed_post(path: &str, host: &str) -> Vec<u8> {
     )
 }
 
-/// The request lines a fake recorded.
-fn lines(fake: &FakeUpstream) -> Vec<String> {
-    fake.requests()
-        .into_iter()
-        .map(|request| request.line)
-        .collect()
-}
-
 #[tokio::test]
 async fn a_rows_host_binds() {
     let up = fake(vec![("/v1/mcp/", json_200())]).await;
@@ -867,12 +855,12 @@ async fn a_rows_host_binds() {
         respond: json_200(),
     }])
     .await;
-    let h = connectors_harness(&up, &connectors, default_limits()).await;
+    let h = connectors_harness(&up, &connectors).await;
     let listener = feature_listener(&h).await;
     let (status, headers, _) = listener.send(API, &keyed_post("/v1/mcp/x", API)).await;
     assert_eq!(status, 403, "{headers:?}");
     assert_eq!(
-        (lines(&up), lines(&connectors)),
+        (feature_lines(&up), feature_lines(&connectors)),
         (Vec::<String>::new(), Vec::<String>::new())
     );
     let (status, headers, _) = listener
@@ -880,7 +868,7 @@ async fn a_rows_host_binds() {
         .await;
     assert_eq!(status, 200, "{headers:?}");
     assert_eq!(
-        (lines(&up), lines(&connectors)),
+        (feature_lines(&up), feature_lines(&connectors)),
         (
             Vec::<String>::new(),
             vec!["POST /v1/mcp/x HTTP/1.1".to_owned()]
@@ -898,7 +886,7 @@ async fn each_plane_takes_its_rows() {
         respond: json_200(),
     }])
     .await;
-    let h = connectors_harness(&up, &connectors, default_limits()).await;
+    let h = connectors_harness(&up, &connectors).await;
     let listener = feature_listener(&h).await;
     let (status, headers, _) = listener
         .send(API, &keyed("GET /api/frame/x", API, "", b""))
@@ -956,7 +944,7 @@ async fn a_caller_that_leaves_mid_stream_ends_the_upstream_read_and_its_connecti
         },
     ])
     .await;
-    let h = connectors_harness(&up, &connectors, default_limits()).await;
+    let h = connectors_harness(&up, &connectors).await;
     let listener = feature_listener(&h).await;
     for _ in 0..2 {
         let (status, headers, _) = listener
@@ -1214,7 +1202,7 @@ async fn a_connectors_own_401_goes_back_at_once() {
         .map(|(_, value)| value.as_str())
         .collect();
     assert_eq!((status, codes), (401, vec!["example_reauth"]));
-    assert_eq!((lines(&connectors).len(), token_posts(&up)), (1, 0));
+    assert_eq!((feature_lines(&connectors).len(), token_posts(&up)), (1, 0));
     up.shutdown().await;
     connectors.shutdown().await;
 }
@@ -1403,7 +1391,7 @@ async fn the_domain_checks_shape_binds() {
         assert_eq!(status, 200, "{request_line}: {headers:?}");
     }
     assert_eq!(
-        lines(&up),
+        feature_lines(&up),
         [
             "GET /api/web/domain_info?domain=x HTTP/1.1".to_owned(),
             format!("{at_the_bound} HTTP/1.1"),
