@@ -9456,8 +9456,9 @@ async function fastLane(theme, path) {
  * legend lists the seven phases, and the token bar draws a segment wherever the Usage table holds tokens (a request
  * that ended with no answer holds none and draws none). A request that ended with no answer draws no chip, so then the
  * chips are read on the newest request that answered 200. The router's seeded answers name no stop reason, speed or
- * region, so there the ids' chips carry that measure. Scrolled 600 px at 1280 by 800, the drawer's top stands at or
- * under the section bar's bottom. It runs after the list view's shot, so that shot stays the list alone.
+ * region, so there the ids' chips carry that measure. Scrolled up to 600 px at 1280 by 800, the drawer's top stands at
+ * or under the section bar's bottom, with the scroll recorded, and a page that does not scroll fails the mock pass
+ * alone. It runs after the list view's shot, so that shot stays the list alone.
  */
 async function requestDrawerCompact(theme) {
   const say = (what) => failures.push(`${theme} /requests: ${what}`);
@@ -9620,8 +9621,11 @@ async function requestDrawerCompact(theme) {
   await page.evaluate(() => window.scrollTo(0, 0));
   await settle();
   measurements.push(`${theme} /requests the open drawer scrolled at 1280 by 800 ${JSON.stringify(docked)}`);
-  if (docked.scrolled === 0) say('the page does not scroll under the open drawer at 1280 by 800, so its dock is not measured');
-  else if (!(docked.drawer >= docked.bar - 0.5)) say(`scrolled at 1280 by 800, the drawer's top at ${docked.drawer}px stands over the section bar's bottom at ${docked.bar}px`);
+  // The mock's list always makes the page scroll, while the seeded router's few requests can leave it too short to, so
+  // a page that does not scroll fails the mock pass alone and the compare runs wherever the page scrolled.
+  if (docked.scrolled === 0) {
+    if (mock) say('the page does not scroll under the open drawer at 1280 by 800, so its dock is not measured');
+  } else if (!(docked.drawer >= docked.bar - 0.5)) say(`scrolled at 1280 by 800, the drawer's top at ${docked.drawer}px stands over the section bar's bottom at ${docked.bar}px`);
   // Under 1100 px the drawer stacks under the list, so the compact set takes the phone's whole card and scrolls inside
   // it where it is wider.
   await page.setViewportSize({ height: 800, width: 375 });
