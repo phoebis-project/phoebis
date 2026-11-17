@@ -216,9 +216,10 @@ pub fn outbound_headers(
 }
 
 /// The head a feature call leaves with: each caller line as sent and in its place, except the never-copied set
-/// and a second credential line. `bearer` takes the first credential line's place, and `None` drops each. `host`
-/// and `connection` take their lines' places, and `content_length` is `None` for a request without a body. Each of
-/// the three is appended where the caller sent no line of its own.
+/// and a second credential line. The first credential line's place takes `bearer` as the model path writes an OAuth
+/// account's credential, under the name `credential_header` spells, and `None` drops each. `host` and `connection`
+/// take their lines' places, and `content_length` is `None` for a request without a body. Each of the three is
+/// appended where the caller sent no line of its own.
 pub(crate) fn feature_headers(
     caller: &HeaderMap,
     original: Option<&OriginalHead>,
@@ -234,18 +235,13 @@ pub(crate) fn feature_headers(
     for (name, value) in sent {
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
-            // The caller presented the router's key here. A caller that spelled an `Authorization` line keeps its
-            // spelling of the name.
+            // The caller presented the router's key here: the slot is the caller's, the header name and the secret
+            // are the account's.
             "authorization" | "x-api-key" => {
                 if !saw_credential {
                     saw_credential = true;
                     if let Some(secret) = bearer {
-                        let name = if lower == "authorization" {
-                            name
-                        } else {
-                            "Authorization"
-                        };
-                        out.push((name.into(), format!("Bearer {}", secret.expose())));
+                        out.push(credential_header(AccountKind::Oauth, secret));
                     }
                 }
             }
