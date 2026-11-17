@@ -249,6 +249,42 @@ async fn a_dot_segment_under_an_allowed_prefix_is_refused() {
 }
 
 #[tokio::test]
+async fn a_path_an_upstream_could_fold_is_refused() {
+    let up = fake(vec![("/api", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let mut answers = Vec::new();
+    for request_line in [
+        "GET /api/frame/%2e%2e/oauth/profile",
+        "GET /api/frame/x%2Fy",
+        "GET /api/frame/x%5Cy",
+        "GET /api/frame/..\\oauth/profile",
+        "GET /api/frame/..;/oauth/profile",
+        "POST /api/frame/Track",
+    ] {
+        let (status, _, _) = listener.send(API, &keyed(request_line, API, "", b"")).await;
+        answers.push((request_line, status));
+    }
+    assert_eq!(
+        answers,
+        [
+            ("GET /api/frame/%2e%2e/oauth/profile", 403),
+            ("GET /api/frame/x%2Fy", 403),
+            ("GET /api/frame/x%5Cy", 403),
+            ("GET /api/frame/..\\oauth/profile", 403),
+            ("GET /api/frame/..;/oauth/profile", 403),
+            ("POST /api/frame/Track", 403),
+        ]
+    );
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    assert_eq!(feature_lines(&up), ["GET /api/frame/x HTTP/1.1"]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_path_that_ends_in_a_slash_is_refused() {
     let up = fake(vec![("/api/frame/", json_200())]).await;
     let h = features_harness(&up, both_features_at_a()).await;

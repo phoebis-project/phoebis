@@ -133,13 +133,19 @@ fn matched(
                 PathRule::Under(prefix) => path.len() > prefix.len() && path.starts_with(prefix),
                 PathRule::Whole(whole) => path == whole,
             };
-            let excepted = row.except.contains(&(method, path));
+            // In any case of its letters, since an upstream that reads a path without regard to case would serve the
+            // excepted call under another spelling.
+            let excepted = row
+                .except
+                .iter()
+                .any(|(held, whole)| *held == method && whole.eq_ignore_ascii_case(path));
             (row.host == host && on_path && !excepted).then_some((feature, row, method))
         })
 }
 
-/// A path with no segment `.` or `..`, no empty segment at any place, the last among them, no backslash, and no
-/// encoded slash, backslash or dot in either case. Nothing is decoded.
+/// A path with no segment `.` or `..`, no empty segment at any place, the last among them, no backslash, no semicolon,
+/// which opens a path parameter an upstream may drop, and no encoded slash, backslash or dot in either case. Nothing is
+/// decoded.
 fn plain_path(path: &str) -> bool {
     let Some(segments) = path.strip_prefix('/') else {
         return false;
@@ -152,7 +158,7 @@ fn plain_path(path: &str) -> bool {
             )
     });
     !encoded
-        && !path.contains('\\')
+        && !path.contains(['\\', ';'])
         && segments
             .split('/')
             .all(|segment| !matches!(segment, "" | "." | ".."))
