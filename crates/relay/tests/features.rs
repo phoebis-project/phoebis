@@ -1328,8 +1328,8 @@ async fn a_forced_refresh_that_lands_a_mark_reaches_the_routing_snapshot() {
     up.shutdown().await;
 }
 
-/// A request without a key: `request_line` without its version, the head's `Host: api.anthropic.com`, then `lines`,
-/// each ending in CRLF, and `body`.
+/// A request under the feature host: `request_line` without its version, the head's `Host: api.anthropic.com`, then
+/// `lines`, each ending in CRLF, and `body`.
 fn keyless(request_line: &str, lines: &str, body: &[u8]) -> Vec<u8> {
     let mut request =
         format!("{request_line} HTTP/1.1\r\nHost: {API}\r\n{lines}Connection: close\r\n\r\n")
@@ -1489,5 +1489,82 @@ async fn a_check_past_one_sources_share_waits_and_a_freed_place_serves_the_next(
     wait_for(Duration::from_secs(5), arrived(3)).await;
     up.release();
     assert_eq!((second.await.unwrap(), third.await.unwrap()), (200, 200));
+    up.shutdown().await;
+}
+
+/// The harness of the domain check's limit: `limit` for the whole call and `per_source` places for one address, each
+/// other bound at its default, the harness's head bound of ten seconds among them.
+async fn domain_check_harness(up: &FakeUpstream, limit: Duration, per_source: usize) -> Harness {
+    harness_with_limits(
+        up,
+        &[api_key("acct", "sk-ant-api03-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        Limits {
+            domain_check_timeout: limit,
+            domain_checks_per_source: per_source,
+            ..default_limits()
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_domain_check_whose_upstream_sends_no_head_gets_the_502_at_its_limit() {
+    let up = fake(vec![(
+        "/api/web/domain_info",
+        Respond::Gated(Box::new(json_200())),
+    )])
+    .await;
+    let h = domain_check_harness(&up, Duration::from_millis(500), 4).await;
+    let listener = feature_listener(&h).await;
+    // Well inside the harness's head bound of ten seconds, which ends a send that keeps no limit of the check's own.
+    let (status, headers, _) = tokio::time::timeout(
+        Duration::from_secs(5),
+        listener.send(
+            API,
+            &keyless("GET /api/web/domain_info?domain=example.com", "", b""),
+        ),
+    )
+    .await
+    .expect("the check ran past its limit");
+    let code = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-phoebis-error-code"))
+        .map(|(_, value)| value.as_str());
+    assert_eq!(
+        (status, code),
+        (502, Some("upstream_unreachable")),
+        "{headers:?}"
+    );
+    assert_eq!(up.requests().len(), 1, "the check never reached the fake");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_domain_check_whose_answer_stalls_behind_its_head_ends_at_its_limit_and_frees_its_place()
+{
+    let up = fake(vec![(
+        "/api/web/domain_info",
+        Respond::Stall {
+            status: 200,
+            headers: vec![],
+            events: vec![],
+        },
+    )])
+    .await;
+    up.set_rule_after(1, "/api/web/domain_info", json_200());
+    let h = domain_check_harness(&up, Duration::from_millis(500), 1).await;
+    let listener = feature_listener(&h).await;
+    let check = keyless("GET /api/web/domain_info?domain=example.com", "", b"");
+    let (status, headers, mut body) = listener.open(API, &check).await;
+    assert_eq!(status, 200, "{headers:?}");
+    // Well inside the harness's head bound of ten seconds, and the control plane sets no bound between two pieces.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while body.next().await.is_some() {}
+    })
+    .await
+    .expect("the stalled answer ran past the check's limit");
+    let (status, headers, _) = listener.send(API, &check).await;
+    assert_eq!(status, 200, "{headers:?}");
     up.shutdown().await;
 }
