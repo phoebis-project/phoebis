@@ -4950,7 +4950,17 @@ await m.navigate('/accounts/spare');
   [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete account')?.click();
   await m.settle(250);
   const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/accounts Delete account names the consequence before it runs', confirm?.textContent ?? '', ['Delete account', 'Removes spare from its pool and deletes it. Request history stays in the ledger.']);
+  {
+    // spare is in no pool and nothing selects it, so its dialog draws no use above the sentence.
+    const text = confirm?.textContent ?? '';
+    const absent = ['Delete account', 'Removes spare from its pool and deletes it. Request history stays in the ledger.'].filter((n) => !text.includes(n));
+    const uses = confirm?.querySelectorAll('.dialog__body li').length ?? 0;
+    results.push({
+      name: '/accounts Delete account names the consequence before it runs',
+      ok: absent.length === 0 && !text.includes('spare is in use:') && uses === 0,
+      missing: [...absent, text.includes('spare is in use:') ? 'a lead' : 'no lead', `${uses} uses`],
+    });
+  }
   [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete')?.click();
   await m.settle(1200);
   const listed = [...m.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim());
@@ -9725,6 +9735,34 @@ await forView('/accounts', async () => {
         uses.includes('The key ci selects it for Artifacts.') &&
         closed,
       missing: [JSON.stringify(failed), freed ? 'freed' : 'still held after the retry', JSON.stringify(uses), closed ? 'closed' : 'still open'],
+    });
+  }
+  {
+    // The story's primary serves model requests in the pool all, and no pool and no key selects it.
+    const story = (await api.listAccounts()).find((a) => a.id === 'primary');
+    const page = await mount('/accounts/primary');
+    headButtonOf(page, 'Delete account')?.click();
+    const ready = await until(page, () => buttonIn(openDialogs(page).pop(), 'Delete')?.disabled === false);
+    const dlg = openDialogs(page).pop();
+    const body = dlg?.querySelector('.dialog__body')?.textContent ?? '';
+    const uses = usesOf(dlg);
+    buttonIn(dlg, 'Cancel')?.click();
+    await page.settle(200);
+    const closed = openDialogs(page).length === 0;
+    page.unmount();
+    const after = (await api.listAccounts()).find((a) => a.id === 'primary');
+    const close = body.includes('Deleting it sets those selections to none');
+    results.push({
+      name: "/accounts the deletion's dialog of a member that nothing selects names the pool and no selection (the mock's primary)",
+      ok:
+        ready &&
+        body.includes('primary is in use:') &&
+        JSON.stringify(uses) === JSON.stringify(['It serves model requests in the pool all.']) &&
+        body.includes('Removes primary from its pool and deletes it. Request history stays in the ledger.') &&
+        !close &&
+        closed &&
+        after?.revision === story?.revision,
+      missing: [ready ? 'Delete enabled' : 'Delete still held', JSON.stringify(uses), close ? 'the close drawn' : 'no close', closed ? 'closed' : 'still open', `revision ${story?.revision} then ${after?.revision}`],
     });
   }
 });
