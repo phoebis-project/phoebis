@@ -574,6 +574,7 @@ async fn a_429_changes_nothing_on_the_account() {
                     ("retry-after", "60"),
                     ("anthropic-ratelimit-unified-status", "rejected"),
                     ("anthropic-ratelimit-unified-5h-status", "rejected"),
+                    ("anthropic-ratelimit-unified-5h-utilization", "1.0"),
                     ("anthropic-ratelimit-unified-5h-reset", "4600"),
                     ("anthropic-ratelimit-unified-reset", "4600"),
                     (
@@ -587,6 +588,15 @@ async fn a_429_changes_nothing_on_the_account() {
     ])
     .await;
     let h = features_harness(&up, both_features_at_a()).await;
+    let windows_of_a = || async {
+        h.router
+            .samples()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(account, _)| account == "a")
+    };
+    let windows_before = windows_of_a().await;
     let (status, headers, _) = feature_listener(&h)
         .await
         .send(API, &keyed("GET /api/frame/x", API, "", b""))
@@ -598,6 +608,7 @@ async fn a_429_changes_nothing_on_the_account() {
             .any(|(name, value)| name.eq_ignore_ascii_case("retry-after") && value == "60"),
         "{headers:?}"
     );
+    assert_eq!(windows_of_a().await, windows_before);
     let resp = h
         .app
         .clone()
