@@ -1,4 +1,4 @@
-import { agentTokenOf, couldNotCache, countDropped, plus } from '@/api/fold';
+import { agentTokenOf, clientLeft, couldNotCache, countDropped, plus } from '@/api/fold';
 import type {
   AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, InputTransformations, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
@@ -2775,12 +2775,6 @@ const upstreamFailed = (r: RequestLog) => r.outcome !== 'canceled' && r.status !
 
 /** A request's failovers: every attempt after the first but a resend in place. */
 const failoversOf = (r: RequestLog): number => r.attempts.filter((_, i) => i > 0 && !resentInPlace(r, i)).length;
-
-/**
- * A client that left before its answer ended, which the ledger counts apart from the failures and files under no error
- * code. A probe is the keepalive's own request, whose cancel stays a failure.
- */
-export const clientLeft = (r: Pick<RequestLog, 'errorCode' | 'kind' | 'outcome'>): boolean => r.outcome === 'canceled' && r.errorCode === 'client_gone' && r.kind !== 'probe';
 
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);

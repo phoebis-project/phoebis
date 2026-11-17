@@ -375,9 +375,8 @@ function QuotaWindow({ end, id, window: w, now, resettable, slowDown = null, soo
   const live = w && !isExpired(w, now) ? w : null;
   const pace = live ? paceWords(live, now, end) : null;
   const reading = live ? `${live.label}: ${fmtPct(remainingOf(live))} left${pace ? `, ${pace}` : ''}` : '';
-  // A window that has not opened has nothing to project, though the router answers its horizon five hours out.
   const word = live ? noResetWord(live) : null;
-  const projection = live && word !== 'not open' ? projectionWords(live, now) : null;
+  const projection = live ? projectionWords(live, now) : null;
   const burn = live ? burnWords(live) : null;
   return (
     <>

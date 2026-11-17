@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { ModelTiers } from '@/api/types';
+import type { ModelTiers, Settings } from '@/api/types';
 import { setTimeFormat as applyTimeFormat, type TimeFormat } from '@/lib/format';
 import { useLocalStorage, useMediaQuery } from '@/lib/hooks';
 import { positionOf, weekOf, type UnitPosition, type WeekPosition } from '@/lib/unit';
@@ -22,9 +22,8 @@ interface AppSettings {
   palette: PaletteChoice;
   resolvedTheme: 'dark' | 'light';
   setExpertView: (on: boolean) => void;
-  setLimitResetWarningDays: (days: number | null) => void;
-  setModelTiers: (tiers: ModelTiers) => void;
   setPalette: (palette: PaletteChoice) => void;
+  setSettingsAnswer: (answer: Settings) => void;
   setTheme: (t: ThemeChoice) => void;
   setTimeFormat: (f: TimeFormat) => void;
   setUnit: (u: UnitPosition) => void;
@@ -56,8 +55,9 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const setExpertView = useCallback((on: boolean) => storeExpert(on ? 'on' : 'off'), [storeExpert]);
   const [unit, setUnit] = useLocalStorage('phoebis.unit', positionOf);
   const [week, setWeek] = useLocalStorage('phoebis.week', weekOf);
-  const [modelTiers, setModelTiers] = useState<ModelTiers>(NO_TIERS);
-  const [limitResetWarningDays, setLimitResetWarningDays] = useState<number | null>(null);
+  const [answer, setSettingsAnswer] = useState<Settings | null>(null);
+  const modelTiers = useMemo(() => (answer === null ? NO_TIERS : { modelTier: answer.subscriptionCosts.modelTier, tierOrder: answer.subscriptionCosts.tierOrder }), [answer]);
+  const limitResetWarningDays = answer?.usage.limitResetWarningDays ?? null;
   // Applied while the first render is still being built, so the timestamps below are already in the stored format.
   const [formatVersion, setFormatVersion] = useState(() => {
     applyTimeFormat(storedFormat);
@@ -82,8 +82,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<AppSettings>(
-    () => ({ expertView, formatVersion, limitResetWarningDays, modelTiers, palette, resolvedTheme, setExpertView, setLimitResetWarningDays, setModelTiers, setPalette, setTheme, setTimeFormat, setUnit, setWeek, theme, timeFormat: storedFormat, unit, week }),
-    [expertView, formatVersion, limitResetWarningDays, modelTiers, palette, resolvedTheme, setExpertView, setLimitResetWarningDays, setModelTiers, setPalette, setTheme, setTimeFormat, setUnit, setWeek, storedFormat, theme, unit, week],
+    () => ({ expertView, formatVersion, limitResetWarningDays, modelTiers, palette, resolvedTheme, setExpertView, setPalette, setSettingsAnswer, setTheme, setTimeFormat, setUnit, setWeek, theme, timeFormat: storedFormat, unit, week }),
+    [expertView, formatVersion, limitResetWarningDays, modelTiers, palette, resolvedTheme, setExpertView, setPalette, setSettingsAnswer, setTheme, setTimeFormat, setUnit, setWeek, storedFormat, theme, unit, week],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

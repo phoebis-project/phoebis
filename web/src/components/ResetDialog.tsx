@@ -4,11 +4,11 @@ import { api } from '@/api';
 import type { Account, LimitResetsRead, ResetGrant, ResetUse, WindowId } from '@/api/types';
 import { useSession } from '@/app/session';
 import { Button, Dialog, KeyValue, Refusal, Warning } from '@/components/ui/primitives';
-import { fmtDate, fmtEndsIn, fmtRelative, listWords, noun } from '@/lib/format';
+import { fmtDate, fmtEndsIn, fmtRelative, noun } from '@/lib/format';
 import { useLatest } from '@/lib/hooks';
 import { windowOf } from '@/lib/quota';
 import { clearsWords, resetAnswer, resetClearsNothing, resetEstimate, resetHolds, resetRowNote, resetRows, type ResetAnswer } from '@/lib/resets';
-import { periodHoursOf, windowTag } from '@/lib/windows';
+import { periodHoursOf } from '@/lib/windows';
 
 /**
  * The first page, with the row Back returned from, or the confirmation of one grant, `direct` where it opened there.
@@ -130,7 +130,6 @@ export function ResetDialog({
     const target = answered === null ? confirming : (after?.grants.find((g) => g.id === confirming.id) ?? null);
     const usable = answered === null || target?.state === 'usable';
     const why = usable ? undefined : target === null ? resetHolds(label, null) : (resetRowNote(target, after?.cooldownUntil ?? null, now) ?? undefined);
-    const tags = confirming.clears.map(windowTag);
     const estimate = resetEstimate(confirming, block?.fableWeekShare ?? null, windowOf(account, '7d'), account.fableWindow, now);
     pages = (
       <>
@@ -143,7 +142,7 @@ export function ResetDialog({
         {resetClearsNothing(
           confirming.clears.map((id) => windowOf(account, id)),
           now,
-        ) && <Warning>{`${listWords(tags)} ${noun(tags.length, 'reads', 'read')} 100% left now, so this reset has nothing to clear yet.`}</Warning>}
+        ) && <Warning>{`${clearsWords(confirming.clears)} ${noun(confirming.clears.length, 'reads', 'read')} 100% left now, so this reset has nothing to clear yet.`}</Warning>}
         <p>{confirming.label}</p>
         <div className="reset-dialog__windows">
           {confirming.clears.map((id) => (
@@ -222,10 +221,8 @@ export function ResetDialog({
   // A dialog inside the card would inherit the foot's type size and join the card's text, so it lives under the body.
   return createPortal(
     <Dialog open={open} onClose={close} title={title} width={440} className="reset-dialog" footer={foot}>
-      <>
-        {stale}
-        {pages}
-      </>
+      {stale}
+      {pages}
     </Dialog>,
     document.body,
   );

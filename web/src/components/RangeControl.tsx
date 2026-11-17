@@ -3,7 +3,7 @@ import { iso } from '@/api/decode';
 import { Popover } from '@/components/ui/Popover';
 import { Button, Field, Input } from '@/components/ui/primitives';
 import { RANGE_PRESETS, type RangeValue } from '@/lib/address';
-import { fmtAbsolute, spanText, toLocalInput } from '@/lib/format';
+import { fmtAbsolute, joinPresent, spanText, toLocalInput } from '@/lib/format';
 
 export interface RangeControlProps {
   /** The clock, read while the popover is open and at Apply, so a typed end is capped at the instant the span is written rather than at the page's load. */
@@ -37,7 +37,7 @@ export function RangeControl({ now, onChange, sentence, value, window: shown }: 
   const to = fmtAbsolute(shown.to);
   const label = RANGE_PRESETS.find((p) => p.name === value.preset)?.label ?? value.preset;
   const span = custom ? `${fmtAbsolute(shown.from)} to ${to}` : `${label}, ends ${to}`;
-  const title = sentence === undefined ? span : `${span}. ${sentence}`;
+  const title = joinPresent([span, sentence], '. ');
 
   // A field's minute drops the window's seconds and milliseconds, so an untouched field keeps the window's own instant.
   const bound = (side: Side) => (edit === null ? Number.NaN : edit[side] === toLocalInput(edit.base[side]) ? edit.base[side] : Date.parse(edit[side]));

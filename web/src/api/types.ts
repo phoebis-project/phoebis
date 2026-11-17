@@ -1322,6 +1322,13 @@ export interface RecordRequest {
   sessionId: string | null;
 }
 
+/** The no-return stamp a shed move or a failover's landing leaves on a pin. */
+export interface ShedStamp {
+  at: string;
+  from: string;
+  reason: string;
+}
+
 /** Step 1's reading of the pin, its row's fields null when none was found. */
 export interface RecordPin {
   accountId: string | null;
@@ -1350,7 +1357,7 @@ export interface RecordPin {
    * and the failover's word (`cooldown`, `fast_lane`, `mark`) for a landing, and `round` on a record from before the
    * member.
    */
-  shed: { at: string; from: string; reason: string } | null;
+  shed: ShedStamp | null;
   /** The slow-down deadline standing on the pin, null without one or on a record from before the member. */
   slowDownUntil: string | null;
   warmth: string | null;
@@ -2023,6 +2030,8 @@ export interface BurnFigures {
    *  whose account left the registry, on a subscription account whose tier is unknown, or on a model it has no weight
    *  for, or a tier it has no capacity for on that window. */
   burn: number | null;
+  /** The instant the pin's served burn is decayed to. Null for a pin never renewed with usage. */
+  burnAt: string | null;
   /** The Pro-week burn per hour, the share of the Pro 7-day window a Pro account would spend on it, null where
    *  `burnUnit` is not `window_share` or the model has no weight. */
   burnEquivalent: number | null;
@@ -2039,13 +2048,25 @@ export interface BurnFigures {
   burnWindow: string | null;
 }
 
-export interface AgentContext extends BurnFigures {
+/** A pin's move figures: a row's for its display pin, a line's for its own. */
+export interface MoveFigures {
+  /** The cost a move of the pin pays as a warm pin, as a shedding round's pick compares it, null where the cost model
+   *  sizes none. */
+  moveCost: number | null;
+  /** The share of the dropped thinking as output on the window moveCost reads, which a cold pin's move pays. Null
+   *  where moveDropSize is. */
+  moveDropCost: number | null;
+  /** The dropped thinking at the output's weight, in tokens, which orders a cold pin whose move drops thinking. Null
+   *  where the move drops nothing and where the cost model weighs none. */
+  moveDropSize: number | null;
+  /** The size the round's order divides the pin's burn by, in tokens. Null on a pin with no prompt size. */
+  moveSize: number | null;
+}
+
+export interface AgentContext extends BurnFigures, MoveFigures {
   /** The pin's account. */
   accountId: string;
   agentId: string;
-  /** The instant the pin's served burn is decayed to, as the row's `burnAt`. Null for a pin never renewed with
-   *  usage. */
-  burnAt: string | null;
   /** The cache TTL in force at the pin's last refresh. */
   cacheTtlMs: number | null;
   /** The effective effort of the request that placed or last renewed the pin, the word as the client sent it. */
@@ -2059,17 +2080,6 @@ export interface AgentContext extends BurnFigures {
   /** The agent's lifecycle word from the keepalive engine's record, null where no mod reports it. */
   lifecycle: Lifecycle | null;
   model: string;
-  /** The cost a move of the pin pays as a warm pin, as the row's `moveCost`, null where the cost model sizes none. */
-  moveCost: number | null;
-  /** The share of the dropped thinking as output on the window moveCost reads, which a cold pin's move pays, as the
-   *  row's `moveDropCost`. Null where moveDropSize is. */
-  moveDropCost: number | null;
-  /** The dropped thinking at the output's weight, in tokens, as the row's `moveDropSize`. Null where the move drops
-   *  nothing and where the cost model weighs none. */
-  moveDropSize: number | null;
-  /** The size the round's order divides the pin's burn by, in tokens, as the row's `moveSize`. Null on a pin with no
-   *  prompt size. */
-  moveSize: number | null;
   /** The instant the pin was written on the account it stands on. */
   pinnedAt: string | null;
   /** The route's reading of the selector's rule: whether the pin's last refresh is inside its cache TTL. */
@@ -2122,7 +2132,11 @@ export interface AgentRequests {
   spend: SessionSpend;
 }
 
-export interface Session extends BurnFigures {
+/**
+ * On a row with no pin, `burnAt`, `moveCost` and `moveSize` read null, and a reader takes a null `moveCost` as 0. The
+ * row's `moveSize` is the rewrite at the pin's destination plus the dropped thinking at the output's weight.
+ */
+export interface Session extends BurnFigures, MoveFigures {
   accountId: string | null;
   /** One entry per conversation pin that draws a line, main's among them, and empty where none does. */
   agentContexts: AgentContext[];
@@ -2131,8 +2145,6 @@ export interface Session extends BurnFigures {
   /** The session's requests per agent, main's among them, each with its type, its newest request's account and
    *  instant and its spend. */
   agentRequests: AgentRequests[];
-  /** The instant the served burn is decayed to, null with no pin or for a pin never folded. */
-  burnAt: string | null;
   /** The cache TTL in force at the pin's last refresh, and `null` for a session with no pin. */
   cacheTtlMs: number | null;
   companion: CompanionState;
@@ -2190,18 +2202,6 @@ export interface Session extends BurnFigures {
    *  it. Null where the pin holds none and on a row with no pin. */
   mark: { at: string; on: string; window: string } | null;
   model: string | null;
-  /** The cost a move of the display pin pays as a warm pin, as a shedding round's pick compares it, null where the cost
-   *  model sizes none and on a row with no pin. A reader takes a null as 0. */
-  moveCost: number | null;
-  /** The share of the dropped thinking as output on the window moveCost reads, which a cold pin's move pays. Null
-   *  where moveDropSize is. */
-  moveDropCost: number | null;
-  /** The dropped thinking at the output's weight, in tokens, which orders a cold pin whose move drops thinking.
-   *  Null where the move drops nothing and where the cost model weighs none. */
-  moveDropSize: number | null;
-  /** The size the round's order divides the pin's burn by, in tokens: the rewrite at the pin's destination plus the
-   *  dropped thinking at the output's weight. Null on a row with no pin and on a pin with no prompt size. */
-  moveSize: number | null;
   /** Whether the session is pinned to its account for as long as affinity holds. */
   pinned: boolean;
   /** The instant the pin was written on the account it stands on, null on a row with no pin. */
@@ -2225,7 +2225,7 @@ export interface Session extends BurnFigures {
    * why the move took it off: `round` for a shedding round's move, the failover's word (`cooldown`, `fast_lane`,
    * `mark`) for its landing. Null off a pin never stamped, or with no pin.
    */
-  shed: { at: string; from: string; reason: string } | null;
+  shed: ShedStamp | null;
   /** The speed the account's holds realized inside a slow-down span, from 0 to 1. Null outside a span and where
    *  `factor` is. */
   speed: number | null;

@@ -100,7 +100,7 @@ export const planExtraUsage = (account: Pick<Account, 'extraUsage' | 'usageBased
 export const planOverage = (account: Pick<Account, 'overage' | 'usageBased'>): Account['overage'] => (account.usageBased ? null : account.overage);
 
 /** A window whose reset has passed with no reading since: the card and the timeline agree on this one test. */
-export const isExpired = (w: RateLimitWindow, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
+export const isExpired = (w: Pick<RateLimitWindow, 'resetsAt'>, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
 
 /** The state of a window with no reset: not open at a utilization of exactly 0, since the window never started, not
  *  reported at any other utilization, and null for a window that carries a reset. */
@@ -180,7 +180,7 @@ export function minuteSpan(ms: number): string {
  * (`projection` at 1 or more) reads the instant it runs out instead, `spent in 2 h 10 min` in both forms, the span
  * `(horizon - now) - (projection - 1) / burn` hours through `minuteSpan`, and `0% left now` once that instant has
  * come. With `burn` null or zero it reads `0% left` in the horizon's form, and a utilization already at 1 or more reads
- * `0% left now`. Null without a projection.
+ * `0% left now`. Null without a projection, and for a window past its reset or not yet open.
  */
 export function projectionWords(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'projection' | 'resetsAt' | 'utilization'>, now: number, compact = false): string | null {
   const parts = projectionParts(w, now, compact);
@@ -188,8 +188,11 @@ export function projectionWords(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'p
 }
 
 /** `projectionWords` as its two parts, the share left (or `spent`) and the horizon, so a window bar too narrow for the
- *  words on one line breaks between the two and keeps each whole. */
+ *  words on one line breaks between the two and keeps each whole. A window past its reset says nothing until its next
+ *  reading, as the Quota cell's expired line does, and one that has not opened has nothing to project, though the
+ *  router answers its horizon five hours out. */
 export function projectionParts(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'projection' | 'resetsAt' | 'utilization'>, now: number, compact = false): [string, string] | null {
+  if (noResetWord(w) === 'not open' || isExpired(w, now)) return null;
   if (w.projection === null || w.horizon === null) return null;
   if (w.utilization >= 1) return ['0% left', 'now'];
   const horizon = Date.parse(w.horizon);

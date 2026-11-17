@@ -1,4 +1,4 @@
-import type { AgentContext, AgentRequests, BurnFigures, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, Lifecycle, RecipeCause, RecipeState, RequestLog, RoutingEvent, Session, SessionDay, SessionSpendPart } from '@/api/types';
+import type { AgentContext, AgentRequests, BurnFigures, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, Lifecycle, MoveFigures, RecipeCause, RecipeState, RequestLog, RoutingEvent, Session, SessionDay, SessionSpendPart } from '@/api/types';
 import { anchorTier, fundingOf, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { expiredBetweenTurns, servingAttempt } from '@/lib/dimensions';
@@ -412,7 +412,7 @@ type UndatedLine = Omit<AgentContext, 'pinnedAt'> & Partial<Pick<AgentContext, '
  * per pin.
  */
 const pinLine = (
-  line: Omit<UndatedLine, keyof BurnFigures | 'burnAt' | 'fast' | 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize' | 'warm' | 'warmUntil'> & Partial<Pick<AgentContext, 'burnAt'>>,
+  line: Omit<UndatedLine, keyof BurnFigures | 'fast' | keyof MoveFigures | 'warm' | 'warmUntil'> & Partial<Pick<AgentContext, 'burnAt'>>,
   keyId: string,
   sessionId: string,
   served: { burn: number | null; dollars: number | null },

@@ -2,6 +2,7 @@ import type { AccountPatch, Api, CreateGuardrailInput, CreateKeyInput, CreatePoo
 import type { GuardrailInput, GuardrailPatch, GuardrailRange, GuardrailTestInput, OverviewRange } from '@/api/client';
 import { decodeLimitResets, decodeResetUse, decodeSettings, keyStatusOf } from '@/api/decode';
 import { decodeStreamCut } from '@/api/decode';
+import { clientLeft } from '@/api/fold';
 import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, LimitResetsRead, MemberEligibility,
@@ -27,7 +28,7 @@ import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
 import { KEYS, POOLS, UNLOADED_MEMBERS, UNTIL_DRAWN, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, clientLeft, landedAt, requestById, requestSidesOf } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
 import { createRng } from './rng';

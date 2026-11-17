@@ -108,12 +108,13 @@ export const PERCENTILES = [
 export const CHART_HEIGHT = 220;
 
 export const PCT_AXIS = { axisLine: false, domain: [0, 100], tickFormatter: (v: number) => `${v}%`, tickLine: false, ticks: [0, 25, 50, 75, 100], width: 40 };
+const BAR_GAP_PERCENT = 14;
 /** The gap on each side of a bucket's bar as a share of the bucket's width, so that a bar keeps a width at each
  *  bucket count. 14% is the 2 px of a desktop's plot under 24 hours and under 7 days. */
-export const BAR_GAP = '14%';
+export const BAR_GAP = `${BAR_GAP_PERCENT}%`;
 /** The gaps of a chart with two bars a bucket: twice the side gap, and one gap between the bars. That gap is a share
  *  too, since Recharts keeps a gap in pixels until the bucket holds no more than the gaps, which leaves the bars a
  *  fraction of a pixel just above that width. */
-export const PAIRED_BAR_GAPS = { barCategoryGap: '28%', barGap: '14%' };
+export const PAIRED_BAR_GAPS = { barCategoryGap: `${2 * BAR_GAP_PERCENT}%`, barGap: BAR_GAP };
 /** A count axis: compact ticks in the token axes' width, since the chart's box clips a tick wider than its axis. */
 export const COUNT_AXIS = { allowDecimals: false, axisLine: false, tickFormatter: (v: number) => fmtCompact(v), tickLine: false, width: 44 };

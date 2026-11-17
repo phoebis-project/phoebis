@@ -108,6 +108,12 @@ export const agentTokenOf = (userAgent: string | null): string => (userAgent ===
  */
 export const couldNotCache = (r: Pick<RequestLog, 'cacheMarker' | 'kind'>): boolean => r.kind === 'count_tokens' || r.cacheMarker === false;
 
+/**
+ * A client that left before its answer ended, which the ledger counts apart from the failures and files under no error
+ * code. A probe is the keepalive's own request, whose cancel stays a failure.
+ */
+export const clientLeft = (r: Pick<RequestLog, 'errorCode' | 'kind' | 'outcome'>): boolean => r.outcome === 'canceled' && r.errorCode === 'client_gone' && r.kind !== 'probe';
+
 const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): string => {
   if (by === 'account') return r.accountId ?? '-';
   if (by === 'client') return r.client ?? '-';
@@ -299,15 +305,15 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     g.requests += 1;
     // A client that hangs up is no failure of the route, whatever status the row holds, so its cancel counts apart and
     // its code stays out of the errors. A probe's cancel and the router's own fall to the arms below.
-    const clientLeft = r.outcome === 'canceled' && r.errorCode === 'client_gone' && r.kind !== 'probe';
+    const left = clientLeft(r);
     if (r.outcome === 'succeeded') g.succeeded += 1;
     else if (r.outcome === 'exhausted') g.exhausted += 1;
     else if (r.outcome === 'rejected') g.rejected += 1;
     else if (r.outcome === 'incomplete') g.incomplete += 1;
-    else if (clientLeft) g.clientCanceled += 1;
+    else if (left) g.clientCanceled += 1;
     else if (r.status === 429) g.rateLimited += 1;
     else g.failed += 1;
-    if (r.errorCode && !clientLeft) g.errors[r.errorCode] = countOf(g.errors, r.errorCode) + 1;
+    if (r.errorCode && !left) g.errors[r.errorCode] = countOf(g.errors, r.errorCode) + 1;
     g.attempts += r.attempts.length;
     // A failover is an account change between adjacent attempts, as the ledger's delta_of counts it; a retry
     // on the same account is none.
@@ -350,9 +356,10 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
   }
   for (const { group: g, rows: list } of groups.values()) {
     const samples = list.map(latencySamples);
-    const pick = (m: (typeof METRICS)[number]) => histogramOf(samples.map((s) => s[m]).filter((v): v is number => v !== null));
-    g.histograms = { durationMs: pick('durationMs'), outputTps: pick('outputTps'), ttfbMs: pick('ttfbMs'), ttftMs: pick('ttftMs') };
-    for (const m of METRICS) g.percentiles[m] = quartet(g.histograms[m]);
+    for (const m of METRICS) {
+      g.histograms[m] = histogramOf(samples.map((s) => s[m]).filter((v): v is number => v !== null));
+      g.percentiles[m] = quartet(g.histograms[m]);
+    }
     // Shares of one account's windows add, and a group of any other dimension spans accounts, whose windows do not.
     if (by === 'account') foldShares(g, list);
   }
@@ -433,11 +440,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     out.planRequests = plusKnown(out.planRequests, g.planRequests);
     out.planOutputTokens = plusKnown(out.planOutputTokens, g.planOutputTokens);
     for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'thinking', 'uncachedInput', 'webFetch', 'webSearch'] as const) out.tokens[k] += g.tokens[k];
-    for (const [code, n] of Object.entries(g.errors)) out.errors[code] = countOf(out.errors, code) + n;
-    for (const [code, n] of Object.entries(g.refusals)) out.refusals[code] = countOf(out.refusals, code) + n;
-    for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = countOf(out.cacheMissReasons, reason) + n;
-    for (const [reason, n] of Object.entries(g.cacheMissReasonHits)) out.cacheMissReasonHits[reason] = countOf(out.cacheMissReasonHits, reason) + n;
-    for (const [key, n] of Object.entries(g.inputTransformations)) out.inputTransformations[key] = countOf(out.inputTransformations, key) + n;
+    for (const k of ['cacheMissReasonHits', 'cacheMissReasons', 'errors', 'inputTransformations', 'refusals'] as const) for (const [name, n] of Object.entries(g[k])) out[k][name] = countOf(out[k], name) + n;
     if (g.fromRequests) out.fromRequests = true;
     out.keptWarm = plusBoth(out.keptWarm, g.keptWarm);
     for (const k of ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'] as const) out.probes[k] += g.probes[k];

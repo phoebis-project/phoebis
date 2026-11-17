@@ -1,6 +1,6 @@
 import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
 import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
-import { NO_RESET_TITLE, hasSpendReading, isExpired, meterTone, noResetWord, noWindowSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf } from '@/lib/quota';
+import { NO_RESET_TITLE, hasSpendReading, meterTone, noResetWord, noWindowSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf } from '@/lib/quota';
 import { slowDownChip } from '@/lib/selection';
 import { WINDOW_ORDER, windowTag, windowWord } from '@/lib/windows';
 import { Meter, MeterAbsent } from './primitives';
@@ -14,9 +14,7 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
   const remaining = remainingOf(w);
   const word = noResetWord(w);
   const reset = word ?? (compact ? fmtRelative(w.resetsAt, now) : `resets ${fmtRelative(w.resetsAt, now)}`);
-  // A window past its reset says nothing until its next reading, as the Quota cell's expired line does, and one that
-  // has not opened has nothing to project, though the router answers its horizon.
-  const projection = isExpired(w, now) || word === 'not open' ? null : projectionParts(w, now, compact);
+  const projection = projectionParts(w, now, compact);
   return (
     <div className="wbar">
       <div className="wbar__head">

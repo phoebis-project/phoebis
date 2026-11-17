@@ -1,7 +1,7 @@
 import type { AccountPatch, Api, CreateGuardrailInput, CreateKeyInput, CreatePoolInput, KeyInput, PoolInput } from './client';
 import type { GuardrailPatch, GuardrailRange, GuardrailTestInput, OverviewRange } from './client';
 import * as d from './decode';
-import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingConfirmed, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
+import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingConfirmed, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 import { clock } from '@/lib/clock';
 import { messageOf } from '@/lib/format';
 
@@ -204,7 +204,8 @@ const range = (from: string, to: string) => `${Date.parse(from)},${Date.parse(to
 // `qs` joins a list with commas, which a pattern may hold, so a pattern list travels joined by newline, and an empty
 // one is left out as `qs` leaves out an empty list.
 const lines = (v?: string[]) => (v?.length ? v.join('\n') : undefined);
-const analytics = (q: AnalyticsQuery) => qs({ accounts: q.accountIds, clients: lines(q.clients), funding: q.funding, group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: range(q.from, q.to), user_agent_groups: lines(q.userAgentGroups), user_agents: lines(q.userAgents) });
+const analytics = (q: Omit<Partial<AnalyticsQuery>, 'groupBy'> & { groupBy?: AnalyticsGroupBy | BurnGroup }) =>
+  qs({ accounts: q.accountIds, clients: lines(q.clients), funding: q.funding, group_by: q.groupBy, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kinds, models: q.models, pools: q.poolIds, range: q.from !== undefined && q.to !== undefined ? range(q.from, q.to) : undefined, user_agent_groups: lines(q.userAgentGroups), user_agents: lines(q.userAgents) });
 
 /** Each model once, the first catalog naming an id answering for it, in id order; a fetch that failed adds nothing. */
 export const catalogUnion = (catalogs: (AccountCatalog | null)[]): CatalogModel[] => {
@@ -225,7 +226,7 @@ const DIALOG_WRITE = { report: 'quiet' } as const;
 export class HttpApi implements Api {
   analyticsBudgets = async () => (await call<{ members: unknown[] }>('GET', '/admin/analytics/budgets')).members.map(d.decodeMemberBudget);
   analyticsPlacements = async (q: Pick<AnalyticsQuery, 'accountIds' | 'clients' | 'from' | 'keyIds' | 'models' | 'poolIds' | 'to' | 'userAgents'>) =>
-    (await call<{ rows: unknown[] }>('GET', `/admin/analytics/placements${qs({ accounts: q.accountIds, clients: lines(q.clients), keys: q.keyIds, models: q.models, pools: q.poolIds, range: range(q.from, q.to), user_agents: lines(q.userAgents) })}`)).rows.map(d.decodePlacementRow);
+    (await call<{ rows: unknown[] }>('GET', `/admin/analytics/placements${analytics({ accountIds: q.accountIds, clients: q.clients, from: q.from, keyIds: q.keyIds, models: q.models, poolIds: q.poolIds, to: q.to, userAgents: q.userAgents })}`)).rows.map(d.decodePlacementRow);
   cancelPairing = (pairingId: string) => call<void>('DELETE', `/admin/oauth/sessions/${enc(pairingId)}`);
   clearCooldown = (accountId: string, scope: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}/cooldowns/${enc(scope)}`);
   clearFunding = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/clear-funding`);
@@ -246,15 +247,15 @@ export class HttpApi implements Api {
   getAccountCatalog = async (accountId: string, refresh?: boolean) => d.decodeAccountCatalog(await call('GET', `/admin/accounts/${enc(accountId)}/catalog${qs({ refresh: refresh ? 1 : undefined })}`));
   getAnalyticsBreakdown = async (q: AnalyticsQuery): Promise<AnalyticsGroup[]> => (await call<{ rows: unknown[] }>('GET', `/admin/analytics/breakdown${analytics(q)}`)).rows.map(d.decodeAnalyticsGroup);
   getAnalyticsBurn = async (r: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters: Pick<AnalyticsQuery, 'accountIds' | 'keyIds' | 'poolIds' | 'userAgentGroups'> = {}) =>
-    d.decodeBurn(await call('GET', `/admin/analytics/burn${qs({ accounts: filters.accountIds, group_by: groupBy, keys: filters.keyIds, pools: filters.poolIds, range: range(r.from, r.to), user_agent_groups: lines(filters.userAgentGroups) })}`));
+    d.decodeBurn(await call('GET', `/admin/analytics/burn${analytics({ accountIds: filters.accountIds, from: r.from, groupBy, keyIds: filters.keyIds, poolIds: filters.poolIds, to: r.to, userAgentGroups: filters.userAgentGroups })}`));
   getAnalyticsGuardrails = async (r: GuardrailRange) => d.decodeGuardrailCounts(await call('GET', `/admin/analytics/guardrails${qs({ range: r === '24h' ? r : range(r.from, r.to) })}`));
-  getAnalyticsReconciliations = async (filters: Pick<AnalyticsQuery, 'accountIds'> = {}) => d.decodeReconciliations(await call('GET', `/admin/analytics/reconciliations${qs({ accounts: filters.accountIds })}`));
+  getAnalyticsReconciliations = async (filters: Pick<AnalyticsQuery, 'accountIds'> = {}) => d.decodeReconciliations(await call('GET', `/admin/analytics/reconciliations${analytics({ accountIds: filters.accountIds })}`));
   getAnalyticsRefusalCategories = async (query: AnalyticsQuery) => d.decodeRefusalCategories(await call('GET', `/admin/analytics/refusal_categories${analytics(query)}`));
   getAnalyticsRewrites = async (r: Pick<AnalyticsQuery, 'from' | 'to'>, filters: Pick<AnalyticsQuery, 'accountIds' | 'poolIds'> = {}) =>
-    d.decodeRewrites(await call('GET', `/admin/analytics/rewrites${qs({ accounts: filters.accountIds, pools: filters.poolIds, range: range(r.from, r.to) })}`));
+    d.decodeRewrites(await call('GET', `/admin/analytics/rewrites${analytics({ accountIds: filters.accountIds, from: r.from, poolIds: filters.poolIds, to: r.to })}`));
   getAnalyticsSeries = async (q: AnalyticsQuery): Promise<AnalyticsPoint[]> => (await call<{ points: unknown[] }>('GET', `/admin/analytics/series${analytics(q)}`)).points.map(d.decodeAnalyticsPoint);
   getAnalyticsUnusedAllowance = async (span: Pick<AnalyticsQuery, 'from' | 'to'>, filters: Pick<AnalyticsQuery, 'accountIds'> = {}) =>
-    d.decodeUnusedAllowance(await call('GET', `/admin/analytics/unused_allowance${qs({ accounts: filters.accountIds, range: range(span.from, span.to) })}`));
+    d.decodeUnusedAllowance(await call('GET', `/admin/analytics/unused_allowance${analytics({ accountIds: filters.accountIds, from: span.from, to: span.to })}`));
   getAttention = async () => (await call<{ items: unknown[] }>('GET', '/admin/attention', undefined, { report: 'quiet' })).items.map(d.decodeAttention);
   getCapturedBodies = (requestId: string) => unlessGone(call('GET', `/admin/requests/${enc(requestId)}/bodies`).then(d.decodeBodies));
   getDecision = (requestId: string, seq: number) => unlessGone(call('GET', `/admin/requests/${enc(requestId)}/decisions/${seq}`).then(d.decodeDecisionRecord));

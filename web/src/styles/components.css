@@ -1011,10 +1011,12 @@ textarea.input {
   display: grid;
 }
 
+.filter-bar__count-slot > *,
 .refresh-control__word > span {
   grid-area: 1 / 1;
 }
 
+.filter-bar__count-sizer,
 .refresh-control__sizer {
   visibility: hidden;
 }
@@ -3281,14 +3283,6 @@ textarea.input {
 .filter-bar__count-slot {
   display: inline-grid;
   justify-items: end;
-}
-
-.filter-bar__count-slot > * {
-  grid-area: 1 / 1;
-}
-
-.filter-bar__count-sizer {
-  visibility: hidden;
 }
 
 .filter-bar__count,

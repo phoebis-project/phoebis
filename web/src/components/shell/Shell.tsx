@@ -43,7 +43,7 @@ const navLink = (item: NavItem) => (
 
 export function Shell() {
   const { pathname } = useLocation();
-  const { expertView, setExpertView, setLimitResetWarningDays, setModelTiers, setTheme, setUnit, setWeek, theme, unit, week } = useAppSettings();
+  const { expertView, setExpertView, setSettingsAnswer, setTheme, setUnit, setWeek, theme, unit, week } = useAppSettings();
   const narrow = useMediaQuery('(max-width: 900px)');
   const { done, logout } = useSession();
   const queue = useToastQueue();
@@ -67,10 +67,8 @@ export function Shell() {
   // The settings answer is the one the shell holds for every view, so the views' model orders read its tiers and the
   // Quota card's reset warning reads its days.
   useEffect(() => {
-    if (!settings.data) return;
-    setModelTiers({ modelTier: settings.data.subscriptionCosts.modelTier, tierOrder: settings.data.subscriptionCosts.tierOrder });
-    setLimitResetWarningDays(settings.data.usage.limitResetWarningDays);
-  }, [settings.data, setLimitResetWarningDays, setModelTiers]);
+    if (settings.data) setSettingsAnswer(settings.data);
+  }, [settings.data, setSettingsAnswer]);
 
   // A registration of its own, since setHooks would replace the session's handlers. The banner holds until the reload,
   // so nothing takes it down again.
