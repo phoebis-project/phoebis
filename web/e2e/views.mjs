@@ -4227,6 +4227,59 @@ async function settingsAboutRows(theme) {
 }
 
 /**
+ * The client card's two feature blocks, each shown through the Setup switch: the block's lines, the listener hint, the
+ * feature hint, the fingerprint's line and the variable list in that order, at the base block's gaps of 10 px under the
+ * block and each hint and 14 px over the list, with the fingerprint's line inside the card's content box at the pass's
+ * viewport and in the phone window. Every figure is recorded. The switch ends on Base URL with the pointer and the focus
+ * at rest, so the view's shot and the copy check behind it read the base block.
+ */
+async function settingsSetups(theme) {
+  const say = (what) => failures.push(`${theme} /settings client card: ${what}`);
+  const tab = (label) => page.getByRole('tablist', { name: 'Setup' }).getByRole('tab', { name: label, exact: true });
+  const reading = () =>
+    page.evaluate(() => {
+      const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Downstream client configuration');
+      const round = (px) => Math.round(px * 10) / 10;
+      const pre = card?.querySelector('pre.snippet') ?? null;
+      const parts = [];
+      for (let el = pre; el; el = el.nextElementSibling) parts.push(el);
+      const nameOf = (el) => (el.matches('pre.snippet') ? 'block' : el.matches('p.snippet__hint') ? 'hint' : el.matches('.feature-ca') ? 'fingerprint' : el.matches('.envdl') ? 'list' : el.tagName.toLowerCase());
+      const line = card?.querySelector('.feature-ca') ?? null;
+      return {
+        edge: card ? round(card.getBoundingClientRect().right - parseFloat(getComputedStyle(card).paddingRight)) : null,
+        fingerprint: line ? { right: round(Math.max(line.getBoundingClientRect().right, ...[...line.children].map((c) => c.getBoundingClientRect().right))), text: line.textContent?.trim() ?? '' } : null,
+        gaps: parts.slice(1).map((el, i) => round(el.getBoundingClientRect().top - parts[i].getBoundingClientRect().bottom)),
+        hints: parts.filter((el) => el.matches('p.snippet__hint')).map((el) => el.textContent?.replace(/\s+/g, ' ').trim() ?? ''),
+        lines: pre?.textContent?.split('\n') ?? [],
+        parts: parts.map(nameOf),
+        terms: [...(card?.querySelectorAll('.envdl dt') ?? [])].map((dt) => dt.textContent?.trim() ?? ''),
+      };
+    });
+  for (const label of ['Base URL and proxy', 'Base URL and DNS redirect']) {
+    try {
+      await tab(label).click();
+      await settle();
+      const read = await reading();
+      const phone = await inPhoneWindow(reading);
+      measurements.push(`${theme} /settings client card ${label} ${JSON.stringify(read)}`);
+      measurements.push(`${theme} /settings client card ${label} in the phone window ${JSON.stringify({ edge: phone.edge, fingerprint: phone.fingerprint?.right ?? null, gaps: phone.gaps })}`);
+      const want = ['block', 'hint', 'hint', 'fingerprint', 'list'];
+      if (JSON.stringify(read.parts) !== JSON.stringify(want)) say(`${label} runs ${JSON.stringify(read.parts)}, not ${JSON.stringify(want)}`);
+      else if (JSON.stringify(read.gaps) !== JSON.stringify([10, 10, 10, 14])) say(`${label}'s parts sit ${JSON.stringify(read.gaps)} px apart, not 10, 10, 10 and 14`);
+      for (const [where, at] of [['at 1280 px', read], ['in the phone window', phone]]) {
+        if (at.fingerprint === null || at.edge === null) say(`${label} draws no fingerprint's line ${where}`);
+        else if (at.fingerprint.right > at.edge + 0.5) say(`${label}'s fingerprint's line ends at ${at.fingerprint.right} px ${where}, past the card's content edge at ${at.edge} px`);
+      }
+    } catch (error) {
+      say(`${label} never measured (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+  await tab('Base URL').click();
+  await settle();
+  await atRest();
+}
+
+/**
  * The Accounts head's Delete account button against the Disconnect button beside it: the same danger variant in
  * the same action row, so a box, an ink, or a line that differs between the two is the defect to catch.
  */
@@ -14122,6 +14175,7 @@ try {
         await settingsRetentionLines(theme);
         await settingsAboutRows(theme);
         await settingsUnitLegend(theme);
+        if (mock) await settingsSetups(theme);
       }
       if (view.path === '/accounts') {
         if (mock) await accountBadges(theme);

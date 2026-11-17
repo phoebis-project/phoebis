@@ -2368,6 +2368,25 @@
   color: var(--ink-2);
 }
 
+/* The client card's setup switch keeps the block, or what stands in for it, clear of the tabs' underline. */
+.client-config .tabs {
+  margin-bottom: 12px;
+}
+
+.feature-ca {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+}
+
+/* The fingerprint is one unbroken word of 64 characters, wider than a phone's card, so it breaks where it must. */
+.feature-ca code {
+  overflow-wrap: anywhere;
+}
+
 .settings {
   display: flex;
   flex-direction: column;

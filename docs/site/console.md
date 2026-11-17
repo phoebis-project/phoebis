@@ -1624,16 +1624,38 @@ plan about to end), and Admin secret as "configured" or "not configured", each p
 session line's and the reset warning's hover naming the bootstrap key that sets it, and closes on "The values the
 configuration file sets are on the installation page, and `phoebis check-config` prints this router's."
 
-"Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
-that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point
-Claude Code at the router, with "Copy snippet". The base URL carries the proxy listener's scheme (`https` where the
-listener terminates TLS) and the port it binds, on the placeholder host `router.example.com`, and the hint under the
-block reads `Inference is served on {proxy}, the address the proxy listener binds, so the base URL carries its scheme
-and port. Replace the placeholder host with the name that reaches the listener, and the scheme and the port too where a
-TLS proxy or a port mapping stands between Claude Code and it.` One definition per variable follows, with
-`CLAUDE_CODE_PROMPT_CACHE_TTL=5m` defined although it is not in the block.
-[The environment block](client.md#the-environment-block) on The client explains each line. The view writes browser
-preferences alone and changes no router setting.
+"Downstream client configuration" opens on its Setup switch, which shows one block at a time: "Base URL", the default,
+"Base URL and proxy" and "Base URL and DNS redirect". On "Base URL" the subtitle reads "Put it in the env block of the
+client's settings file or export it in the shell that launches the client, and replace the token with a key from the
+Keys page." and the block shows the seven lines that point Claude Code at the router, with "Copy snippet". The base URL
+carries the proxy listener's scheme (`https` where the listener terminates TLS) and the port it binds, on the
+placeholder host `router.example.com`, and the hint under the block reads `Inference is served on {proxy}, the address
+the proxy listener binds, so the base URL carries its scheme and port. Replace the placeholder host with the name that
+reaches the listener, and the scheme and the port too where a TLS proxy or a port mapping stands between Claude Code and
+it.`
+
+The two other blocks are the setups of a client that uses Artifacts and the claude.ai connectors through the router.
+Each holds the seven lines, then `CLAUDE_CODE_OAUTH_SCOPES`, `CLAUDE_ENV_FILE`, `NODE_EXTRA_CA_CERTS` and
+`PHOEBIS_FEATURE_CA_SHA256` with the router's feature CA fingerprint, and "Base URL and proxy" adds
+`HTTPS_PROXY=http://127.0.0.1:8318` and a `NO_PROXY` of the placeholder host and the loopback names, which the
+redirect's block leaves out. The router knows no client's files, so the file lines carry marked places. A feature
+block's lines are what the launch script of the claude.ai features page sets, and no reader pastes them, so the subtitle
+there reads "The launch script sets these lines. Give the script the base URL, a key from the Keys page and the
+fingerprint below." "Copy snippet" copies the block shown. Under the listener hint a second hint reads "The launch
+script of the claude.ai features page sets these lines. The script fetches the CA, compares the fingerprint, checks the
+road and writes the env file before it starts the client.", its first words a link to the script, and under the
+redirect's block it adds "The machine's name resolution must lead api.anthropic.com and mcp-proxy.anthropic.com to the
+router's feature listener on port 443." The line "Feature CA fingerprint" follows with the fingerprint, "Copy
+fingerprint" and "Download feature-ca.pem", which saves the CA's certificate from the settings answer as the file
+`feature-ca.pem`. On a router whose configuration names no `features.listen` a feature block shows only "This router
+serves no feature call until its configuration names features.listen." with a link to Installation. Before the settings
+arrive it shows a placeholder, and after a failed read the error with "Try again", each with no copy control.
+
+One definition per variable follows the block, and the list follows the shown block: its lines in the block's order,
+then `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, which is defined under each setup although no block holds it. Under a feature
+block the definitions of `CLAUDE_CODE_SUBSCRIPTION_TYPE=max` and `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1` add that
+the claude.ai features need the line. [The environment block](client.md#the-environment-block) on The client explains
+each line. The view writes browser preferences alone and changes no router setting.
 
 ## Routing log
 

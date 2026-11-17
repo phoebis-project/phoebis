@@ -127,7 +127,11 @@ three retention lines (the label's type and ink, the value's ink and the row's h
 them, the label's and the value's type and ink of the Admin secret line below them, and in the 720 px strip and at 400
 px those types and inks again with the label column at most half the list's width), About's Session expiry and
 Non-companion timeout lines (the label's type and ink, the value's type, the row's height and the label's and the
-value's left edges of the Body capture line above them, each line's text and hover recorded), the Settings page's Unit
+value's left edges of the Body capture line above them, each line's text and hover recorded), the client card's two
+feature blocks (mock pass: each shown through the Setup switch, its block, the listener hint, the feature hint, the
+fingerprint's line and the variable list in that order, 10 px apart under the block and each hint and 14 px over the
+list, the fingerprint's line inside the card's content box at 1280 px and in the phone window, every figure recorded,
+the switch ending on Base URL at rest), the Settings page's Unit
 row at 1280 and 400 px (the legend's button on the select's line, and its popover inside the viewport's width, at or
 below its button's bottom, uncovered, in the legend's 12 px type and closed by Escape), the Appearance card's Theme,
 Palette, Time format and Unit rows at 400 px (each control under its label), the cooling-down block's columns (Reason

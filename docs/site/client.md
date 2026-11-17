@@ -42,6 +42,15 @@ how `env` values interact with the shell. A settings file can set a variable but
 string in the `env` block reads as unset. Between settings files, `env` values follow the settings precedence, a
 managed entry over a user or project entry.
 
+The card's Setup switch shows two more blocks, "Base URL and proxy" and "Base URL and DNS redirect", for a client that
+uses Artifacts and the claude.ai connectors through the router. Each holds these seven lines, then
+`CLAUDE_CODE_OAUTH_SCOPES`, `CLAUDE_ENV_FILE`, `NODE_EXTRA_CA_CERTS` and the router's feature CA fingerprint as
+`PHOEBIS_FEATURE_CA_SHA256`, and the first adds `HTTPS_PROXY` and `NO_PROXY`. Their lines are what the launch script of
+the claude.ai features page sets, and no reader pastes them: the script writes each line by itself, and a pasted proxy
+or trust line would reach each Bash command of the session as the shell's own value. Beside those two blocks the card
+shows the fingerprint, which the script takes as an input, with a copy control, and offers the CA's certificate as the
+file `feature-ca.pem`.
+
 ### ANTHROPIC_BASE_URL
 
 Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. Every model
@@ -78,6 +87,13 @@ the `schedule` skill and, in the terminal only, the `artifact-capabilities` skil
 null type. The client documents the variable nowhere, sets it itself from its own auth state when the token is its own,
 and a future build may drop it.
 
+In a setup for the claude.ai features the line is required and reads `max` or `pro`: under another type or none the
+client asks for the organization's policy limits, the router refuses that read, and the client then denies Artifacts.
+Under `max` and `pro` the client still sends the hourly policy read in the background
+(`GET /api/claude_code/policy_limits`) and the two settings reads of an interactive session
+(`GET /api/claude_code_grove`, `GET /api/oauth/account/settings`). In a feature setup these reach the router and get its
+`403`, where the plain setup's get the upstream's `401`.
+
 ### `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`
 
 Optional, and worth setting. Under it Claude Code sends its first-party request shape to the router: the attribution
@@ -89,7 +105,8 @@ reading the router's models listing, which it otherwise uses to size its context
 toward `api.anthropic.com`, the fields the restoration names that the line lacks, each only when absent and never a
 field the client sent ([The restoration](relay.md#the-restoration)). Two checks guard that line against a client
 build the router is not pinned to and refuse the request as `client_drift` before any account is chosen
-([Client drift](relay.md#client-drift)). The variable is an internal one that a future build may drop.
+([Client drift](relay.md#client-drift)). The variable is an internal one that a future build may drop. A setup for the
+claude.ai features requires it at `1`, which keeps the Artifact tool on under `DISABLE_TELEMETRY=1`.
 
 ### CLAUDE_CODE_GATEWAY_HINT_HEADERS
 

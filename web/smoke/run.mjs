@@ -30715,6 +30715,44 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const relayedAsIs = m.text().includes('the router relays the reduced shape as is');
   results.push({ name: '/settings no definition says the router relays the reduced shape as is', ok: !relayedAsIs, missing: [relayedAsIs ? 'still there' : ''] });
 }
+
+// The client card's two feature blocks on the mock's settings answer, whose `features` member comes from the captured
+// fixture through `SETTINGS_WIRE`. Each case puts the switch back on Base URL.
+const clientCard = (page) => [...page.container.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Downstream client configuration');
+const showSetup = async (page, label) => {
+  [...(clientCard(page)?.querySelectorAll('[role="tab"]') ?? [])].find((t) => t.textContent?.trim() === label)?.click();
+  await page.settle(100);
+};
+const shownLines = (page) => (clientCard(page)?.querySelector('pre.snippet')?.textContent ?? '').split('\n');
+const fingerprintLine = `PHOEBIS_FEATURE_CA_SHA256=${decodeSettings(SETTINGS_WIRE).features.caFingerprint}`;
+{
+  await showSetup(m, 'Base URL and proxy');
+  const lines = shownLines(m);
+  results.push({ name: "/settings the Base URL and proxy block holds an HTTPS_PROXY line and the settings answer's fingerprint", ok: lines.some((l) => l.startsWith('HTTPS_PROXY=')) && lines.includes(fingerprintLine), missing: lines });
+  await showSetup(m, 'Base URL');
+}
+{
+  await showSetup(m, 'Base URL and DNS redirect');
+  const lines = shownLines(m);
+  results.push({
+    name: "/settings the Base URL and DNS redirect block holds the settings answer's fingerprint and no HTTPS_PROXY or NO_PROXY line",
+    ok: lines.includes(fingerprintLine) && !lines.some((l) => l.startsWith('HTTPS_PROXY=') || l.startsWith('NO_PROXY=')),
+    missing: lines,
+  });
+  await showSetup(m, 'Base URL');
+}
+{
+  // A stub stands for the clipboard and records what the one click hands it.
+  const copied = [];
+  Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: (text) => (copied.push(text), Promise.resolve()) } });
+  await showSetup(m, 'Base URL and DNS redirect');
+  const shown = clientCard(m)?.querySelector('pre.snippet')?.textContent ?? '';
+  [...(clientCard(m)?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Copy snippet')?.click();
+  await m.settle(100);
+  delete window.navigator.clipboard;
+  results.push({ name: '/settings Copy snippet on the Base URL and DNS redirect block copies that block', ok: shown.split('\n').includes(fingerprintLine) && JSON.stringify(copied) === JSON.stringify([shown]), missing: copied });
+  await showSetup(m, 'Base URL');
+}
 {
   const dark = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Dark');
   dark?.click();
@@ -30728,6 +30766,28 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   results.push({ name: 'palette toggle -> github', ok: document.documentElement.getAttribute('data-palette') === 'github' && localStorage.getItem('phoebis.palette') === 'github', missing: [document.documentElement.getAttribute('data-palette'), localStorage.getItem('phoebis.palette')] });
 }
 m.unmount();
+// A router whose configuration names no `features.listen` answers `features` at null, which the mock's answer never
+// does, so the case answers it itself.
+{
+  const { getSettings } = api;
+  api.getSettings = async (...args) => ({ ...(await getSettings.apply(api, args)), features: null });
+  try {
+    const page = await mount('/settings', { now: CLOCK_ORIGIN });
+    await showSetup(page, 'Base URL and proxy');
+    const card = clientCard(page);
+    const link = [...(card?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Installation');
+    const text = (card?.textContent ?? '').replace(/\s+/g, ' ');
+    results.push({
+      name: '/settings a feature block on a router without the listener shows the stand-in',
+      ok: text.includes('This router serves no feature call until its configuration names features.listen.') && link !== undefined && card?.querySelector('pre.snippet') === null && card?.querySelector('.skeleton') === null,
+      missing: [text.slice(0, 200), link ? 'the Installation link' : 'no Installation link', card?.querySelector('pre.snippet')?.textContent?.split('\n').at(-1) ?? 'no block'],
+    });
+    await showSetup(page, 'Base URL');
+    page.unmount();
+  } finally {
+    api.getSettings = getSettings;
+  }
+}
 });
 
 // The unit switch: one select in the top bar sets the unit every view prices in, kept in this browser alone and
