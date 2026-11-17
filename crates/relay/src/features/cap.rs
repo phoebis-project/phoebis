@@ -169,4 +169,27 @@ mod tests {
             "a check whose caller left kept its place or its turn"
         );
     }
+
+    #[test]
+    fn a_freed_place_goes_to_the_waiter_and_a_later_call_of_the_source_waits() {
+        let cap = DomainCheckCap::new(4, 1);
+        let held = poll_once(pin!(cap.place(address(1)))).expect("the place is free");
+        let mut waiter = pin!(cap.place(address(1)));
+        assert!(
+            poll_once(waiter.as_mut()).is_none(),
+            "a check past its source's share got a place"
+        );
+        drop(held);
+        // Ahead of the waiter's next poll, since the waiter is granted the freed place before it takes it, and a
+        // source's entry gone in between would give this call a share of its own.
+        assert!(
+            poll_once(pin!(cap.place(address(1)))).is_none(),
+            "a later call of the source got the place the waiter was granted"
+        );
+        let _granted = poll_once(waiter.as_mut()).expect("the freed place went past the waiter");
+        assert!(
+            poll_once(pin!(cap.place(address(1)))).is_none(),
+            "a later call of the source got a place beside the waiter's"
+        );
+    }
 }
