@@ -1684,13 +1684,14 @@ router's feature listener on port 443." The line "Feature CA fingerprint" follow
 fingerprint" and "Download feature-ca.pem", which saves the CA's certificate from the settings answer as the file
 `feature-ca.pem`. On a router whose configuration names no `features.listen` a feature block shows only "This router
 serves no feature call until its configuration names features.listen." with a link to Installation. Before the settings
-arrive it shows a placeholder, and after a failed read the error with "Try again", each with no copy control.
+arrive it shows a placeholder, and after a failed read the error with "Try again", each with no subtitle and no copy
+control.
 
 One definition per variable follows the block, and the list follows the shown block: its lines in the block's order,
 then `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, which is defined under each setup although no block holds it. Under a feature
 block the definitions of `CLAUDE_CODE_SUBSCRIPTION_TYPE=max` and `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1` add that
 the claude.ai features need the line. [The environment block](client.md#the-environment-block) on The client explains
-each line. The view writes browser preferences alone and changes no router setting.
+each of the base block's seven lines. The view writes browser preferences alone and changes no router setting.
 
 ## Routing log
 
