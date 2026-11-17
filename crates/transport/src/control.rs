@@ -23,8 +23,8 @@ use crate::{connect_tls, TransportError};
 pub type Resolver = Arc<dyn Fn(&str) -> ResolveFuture + Send + Sync>;
 pub type ResolveFuture = Pin<Box<dyn Future<Output = Option<SocketAddr>> + Send>>;
 
-/// Bounds a control-plane response body: these are small JSON payloads, so anything past this is a malformed
-/// or malicious upstream rather than a legitimate response.
+/// Bounds an answer to the buffered `send`, which carries the router's own calls. Their answers are small JSON
+/// payloads, so anything past this is a malformed or malicious upstream rather than a legitimate response.
 pub const MAX_BODY: usize = 4 * 1024 * 1024;
 
 /// Why a streaming send handed back no answer, in the four cases a caller's log line tells apart.
@@ -36,7 +36,8 @@ pub enum StreamFailure {
     /// The answer's head did not arrive inside its bound.
     #[error("no answer head in time")]
     Stalled,
-    /// Bytes arrived that are no HTTP head.
+    /// Bytes arrived that yield no answer head: a head that does not parse or passes the reader's size bound, or more
+    /// interim heads than the reader allows.
     #[error("unreadable answer head: {0}")]
     Undecodable(String),
     /// No address, no connection or no handshake in time, or a write that failed before the request's last byte,

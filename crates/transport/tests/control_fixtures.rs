@@ -7,7 +7,7 @@ use phoebis_profile::{
 use phoebis_transport::request::{parse_head, RawRequest};
 use phoebis_transport::{
     connector_builder,
-    control::{ControlClient, ResolveFuture, Resolver},
+    control::{ControlClient, ResolveFuture, Resolver, StreamFailure},
     Plane, TransportError,
 };
 use std::{sync::Arc, time::Duration};
@@ -250,5 +250,79 @@ async fn a_streamed_answer_past_the_buffered_bound_arrives_whole() {
         total += piece.len();
     }
     assert_eq!(total, 5_242_880);
+    up.shutdown().await;
+}
+
+/// A streamed frame request, for the tests whose answer never gets past its head.
+fn frame_request() -> RawRequest {
+    RawRequest {
+        method: "GET",
+        target: "/api/frame/artifacts".into(),
+        headers: vec![
+            ("Host".into(), "api.anthropic.com".into()),
+            ("Connection".into(), "close".into()),
+        ],
+        body: Bytes::new(),
+    }
+}
+
+#[tokio::test]
+async fn a_peer_that_closes_before_the_answer_head_is_named_a_cut() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/api/frame/".into(),
+        respond: Respond::CloseAfterRequest,
+    }])
+    .await;
+    let profile = claude_code_2_1_310_linux_x64();
+    let mut b = connector_builder(profile, Plane::Control).unwrap();
+    phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
+    let addr = up.addr();
+    let resolver: Resolver =
+        Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
+    let client = ControlClient::new(profile, b.build(), resolver);
+    let error = client
+        .send_streaming(
+            frame_request(),
+            "api.anthropic.com",
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .await
+        .map(|_| ())
+        .expect_err("the upstream closes without an answer");
+    assert!(matches!(error, StreamFailure::Cut(_)), "{error:?}");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn bytes_that_are_no_answer_head_are_named_unreadable() {
+    // A status of four digits makes a status line that no HTTP head has.
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/api/frame/".into(),
+        respond: Respond::Json {
+            status: 1000,
+            headers: vec![],
+            body: vec![],
+        },
+    }])
+    .await;
+    let profile = claude_code_2_1_310_linux_x64();
+    let mut b = connector_builder(profile, Plane::Control).unwrap();
+    phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
+    let addr = up.addr();
+    let resolver: Resolver =
+        Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
+    let client = ControlClient::new(profile, b.build(), resolver);
+    let error = client
+        .send_streaming(
+            frame_request(),
+            "api.anthropic.com",
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .await
+        .map(|_| ())
+        .expect_err("the upstream answers no head");
+    assert!(matches!(error, StreamFailure::Undecodable(_)), "{error:?}");
     up.shutdown().await;
 }
