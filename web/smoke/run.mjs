@@ -1184,11 +1184,12 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 }
 {
   // The story's pools hold 32, 0, 6, 3 and 1 pins, one per key, session, agent and model under their keys, on primary,
-  // nightly, secondary, overflow, studio, contract and workshop, over 24 listed pinned rows on six of those accounts,
-  // since secondary's one pinned row, idle for two hours, left the route's list under the non-companion timeout. The
-  // two written sessions bring four of them: the auxiliary-only session's subagent pin and main's auxiliary pin on
-  // overflow, and the two pins of the fleet session no mod reports on contract. The workshop session's one pin on bench
-  // is the workshop pool's. So a hero counting the pinned rows or a note counting every row's account reads otherwise.
+  // nightly, secondary, overflow, studio, contract and workshop, over 24 listed pinned rows on seven accounts.
+  // Secondary's row idle for two hours left the route's list under the non-companion timeout, and its listed one is
+  // 229bf72c, whose keepalive probe renewed the pin on secondary and moved none. The two written sessions bring four of
+  // them: the auxiliary-only session's subagent pin and main's auxiliary pin on overflow, and the two pins of the fleet
+  // session no mod reports on contract. The workshop session's one pin on bench is the workshop pool's. So a hero
+  // counting the pinned rows or a note counting every row's account reads otherwise.
   // A hero counting every session row reads otherwise only while the story's row count differs from its pins, so the
   // count is read first and a story where the two meet fails here.
   const PINS = 42;
@@ -1196,7 +1197,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({
     name: "/ the sessions card counts the router's live pins, which the story keeps apart from its session rows, over the pinned rows' accounts",
-    ok: sessionRows !== PINS && hero?.querySelector('.stat__value')?.textContent === String(PINS) && hero?.querySelector('.stat__note')?.textContent === 'active pins across 6 accounts',
+    ok: sessionRows !== PINS && hero?.querySelector('.stat__value')?.textContent === String(PINS) && hero?.querySelector('.stat__note')?.textContent === 'active pins across 7 accounts',
     missing: [`${sessionRows} session rows against ${PINS} pins`, hero?.textContent ?? 'absent'],
   });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
@@ -17989,6 +17990,23 @@ await forView('/routing-log', async () => {
     page.unmount();
   }
   {
+    // The story probe's leg on secondary meets a 429 that cools the account, and the router answers the probe's next
+    // selection with its pinned member's cooldown and moves no pin: the row reads the obstacle's label under By, the
+    // card's walk ends at the Probe line, and the Answer row reads the relay's 429 with the cooldown's end.
+    const { card, page } = await story('req_c41d0311-200', 2, 'probe');
+    scan('pinned answer', card);
+    const by = rowOf(page, 'req_c41d0311-200/2')?.querySelector('td.routing-log__by .chip')?.textContent ?? null;
+    const kind = card?.querySelector('.decision-card__verdict > .badge')?.textContent ?? null;
+    const decisive = stationsOf(card).find((s) => s.button.classList.contains('is-decisive'));
+    const answer = outcomeOf(card).Answer ?? [];
+    page.unmount();
+    results.push({
+      name: "/routing-log the story probe's pinned answer reads in cooldown under By, ends its walk at the Probe line and answers 429 with a retry after",
+      ok: kind === 'exhausted' && by === 'in cooldown' && decisive?.step === 'Probe' && decisive.verdict === 'answered' && answer.length === 2 && answer[0] === 'status 429' && answer[1].startsWith('retry after '),
+      missing: [JSON.stringify([kind, by, decisive ? [decisive.step, decisive.verdict] : null, answer])],
+    });
+  }
+  {
     const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
     scan('failover attempt', card);
     stripDrawn('failover attempt', card, modelPairs(record), record);
@@ -21840,8 +21858,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // and stays, for its dollars, in the five hours a billed probe ran, as the breakdown answers it, so Probes by
       // outcome draws all its bars only while its own reads count probes. Its legend reads the warming breakdown's
       // probe counts, which a read with probes off still holds here. The figures are the probe rows of the story's
-      // rollups (`ALL_ROLLUPS`, mock/requests.ts) over the day to 14:30: 30 ok of which 11 migrated, 1 held, 32 skipped
-      // and 4 failed, in 18 hourly buckets that stack 37 nonzero bars. jsdom lays nothing out, so the chart's container
+      // rollups (`ALL_ROLLUPS`, mock/requests.ts) over the day to 14:30: 29 ok of which 12 migrated, 1 held, 36 skipped
+      // and 5 failed, in 18 hourly buckets that stack 38 nonzero bars. jsdom lays nothing out, so the chart's container
       // reads a browser's size here.
       const measure = window.HTMLElement.prototype.getBoundingClientRect;
       window.HTMLElement.prototype.getBoundingClientRect = function () {
@@ -21857,7 +21875,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       kinds.unmount();
       results.push({
         name: '/analytics Probes by outcome counts probes with the toggle off',
-        ok: JSON.stringify(legend) === JSON.stringify([['OK', '19'], ['Migrated', '11'], ['Held', '1'], ['Skipped', '32'], ['Failed', '4']]) && bars === 37,
+        ok: JSON.stringify(legend) === JSON.stringify([['OK', '17'], ['Migrated', '12'], ['Held', '1'], ['Skipped', '36'], ['Failed', '5']]) && bars === 38,
         missing: [JSON.stringify(legend), `${bars} bars`],
       });
     }
@@ -26939,7 +26957,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // Session: the id, then one line under it with the fork badge, the folded client version and the placements from 2
     // on, the raw user agent and the placements' sentence on its hover. A row with none of the three draws no line, and
     // the speed chip stands in the Account cell, never here. The story's first session is placed once, the fifth
-    // twice, and the silent fork five times, its main's two placements and three moves in the mock's routing log.
+    // twice, and the silent fork four times, its main's two placements and two moves in the mock's routing log, since
+    // its keepalive probe renews its pin and moves none.
     const lineOf = (s) => {
       const line = cellOf(s, 'Session')?.querySelector('.srow__client') ?? null;
       return line === null ? null : { badge: line.firstElementChild?.classList.contains('srow__fork') === true, text: line.textContent?.trim() ?? '', title: line.getAttribute('title') };
@@ -26950,7 +26969,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       client: { badge: false, text: 'Claude Code 2.0.44', title: 'claude-cli/2.0.44 (external, cli)' },
       placed: { badge: false, text: 'Claude Code 2.1.310 · 2 placements', title: "claude-cli/2.1.310 (external, cli). How many times the router placed or moved this session's main conversation" },
       registered: null,
-      silent: { badge: true, text: 'fork · Claude Code 2.1.310 · 5 placements', title: "claude-cli/2.1.310 (external, cli). How many times the router placed or moved this session's main conversation" },
+      silent: { badge: true, text: 'fork · Claude Code 2.1.310 · 4 placements', title: "claude-cli/2.1.310 (external, cli). How many times the router placed or moved this session's main conversation" },
       story: { badge: false, text: 'Claude Code 2.1.310', title: 'claude-cli/2.1.310 (external, cli)' },
     };
     results.push({
@@ -27417,8 +27436,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     // The Session and Routing facts read the row they open on: the written session for the plain words, studio's
     // slowed notebook session (`SLOWED_PINS`) for the speed chip and the measured cycle, and the silent session for the
-    // fork, whose base the list holds on the same account. Each Companion fact draws the chip the Companion
-    // column draws.
+    // fork, whose base the list holds on primary while its keepalive probe left its own pin on secondary. Each
+    // Companion fact draws the chip the Companion column draws.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     await showColumn(page, 'Companion');
     const chipOf = (el) => (el === null || el === undefined ? null : { badge: el.querySelector('.badge')?.className ?? null, text: textOf(el), title: (el.querySelector('.badge') ?? el.querySelector('.muted'))?.getAttribute('title') ?? null });
@@ -27472,9 +27491,9 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       silent: {
         companion: true,
         labels: LABELS,
-        routing: { Account: 'primary subscription', 'Pinned since': since(silent?.pinnedAt ?? null), 'Shed mark': 'none', Moved: 'none', Runway: 'unbounded', Speed: 'full speed', Cycle: 'not measured yet' },
-        session: { Created: since(silent?.firstRequestAt ?? null), Key: `desktop in pool ${poolOf(silent)}`, Client: 'Claude Code 2.1.310', Fork: `${silent?.forkedFrom?.slice(0, 13)}… at depth 3, same account`, Placements: '5' },
-        links: { account: '/accounts/primary', fork: silent === undefined ? null : `#${sessionRowId({ ...silent, sessionId: silent.forkedFrom })}`, forkTitle: silent?.forkedFrom ?? null, key: '/keys#desktop', log: silent === undefined ? null : window(silent), logText: 'View in routing log' },
+        routing: { Account: 'secondary subscription', 'Pinned since': since(silent?.pinnedAt ?? null), 'Shed mark': 'none', Moved: 'none', Runway: 'unbounded', Speed: 'full speed', Cycle: 'not measured yet' },
+        session: { Created: since(silent?.firstRequestAt ?? null), Key: `desktop in pool ${poolOf(silent)}`, Client: 'Claude Code 2.1.310', Fork: `${silent?.forkedFrom?.slice(0, 13)}… at depth 3, on another account`, Placements: '4' },
+        links: { account: '/accounts/secondary', fork: silent === undefined ? null : `#${sessionRowId({ ...silent, sessionId: silent.forkedFrom })}`, forkTitle: silent?.forkedFrom ?? null, key: '/keys#desktop', log: silent === undefined ? null : window(silent), logText: 'View in routing log' },
         speed: false,
         clientTitle: 'claude-cli/2.1.310 (external, cli)',
       },
@@ -28241,11 +28260,10 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   }
 
   // A forked session's badge links to the row of the session it branched from, read with every row the route lists.
-  // The story's two pinned forks sit on their bases' account, primary: 229bf72c beside 4ef130f1 (`sessionSpec[2]` in
-  // mock/operations.ts) and 0d588de5 beside d7167642 (`sessionSpec[5]`). The list's answer hands 229bf72c nightly, so
-  // its badge reads the relation to another account, and the view is drawn again off the story's list after the reads.
-  const { listSessions: storySessions } = api;
-  api.listSessions = async () => (await storySessions.call(api)).map((s) => (!s.historical && s.keyId === 'desktop' && s.sessionId.startsWith('229bf72c') ? { ...s, accountId: 'nightly' } : s));
+  // The story's two pinned forks stand beside bases on primary: 0d588de5 beside d7167642 (`sessionSpec[5]` in
+  // mock/operations.ts) on the same account, and 229bf72c beside 4ef130f1 (`sessionSpec[2]`) on secondary, where its
+  // keepalive probe left the pin its placement wrote, so its badge reads the relation to another account. The view is
+  // drawn afresh after the reads.
   await m.navigate('/settings');
   await m.navigate('/sessions?finished=1');
   await until(m, () => rows().length > 0);
@@ -28267,8 +28285,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const cellOf = (r) => ({ label: r.children[sessionAt]?.querySelector('.srow__id')?.textContent ?? '', title: r.children[sessionAt]?.getAttribute('title') ?? '' });
     // A row is its key, its holder and its session id, the three the route keys a session by and its element id names.
     const sessionOf = (r) => sessionOfRow(r, listed);
-    // Two pinned forks stand beside their bases: 0d588de5 on its base's account as the story has it, and 229bf72c on
-    // another as the list hands it. The badge reads `fork` alone, and its title the relation off the two listed rows'
+    // Two pinned forks stand beside their bases: 0d588de5 on its base's account and 229bf72c on another, each as the
+    // story has it. The badge reads `fork` alone, and its title the relation off the two listed rows'
     // live pins with the base's account label, which it describes to a reader that never hovers, so the relation is
     // read off the title and the accounts off the listed rows.
     const accountLabel = new Map((await api.listAccounts()).map((a) => [a.id, a.label]));
@@ -28320,7 +28338,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       ok: target?.getAttribute('aria-current') === 'true' && m.container.querySelectorAll('tr[aria-current="true"]').length === 1 && m.container.querySelectorAll('.srow__detail').length === expandedBefore,
       missing: [String(target?.getAttribute('aria-current')), String(m.container.querySelectorAll('.srow__detail').length)],
     });
-    api.listSessions = storySessions;
     await m.navigate('/settings');
     await m.navigate('/sessions?finished=1');
     await until(m, () => rows().length > 0);
@@ -30912,8 +30929,9 @@ await forView(['/analytics', '/requests', '/routing-log'], async () => {
   // The routing log's rows by the page's own row key, so a narrowed table reads against the mock's answer.
   const logRows = (page) => [...page.container.querySelectorAll('.routing-log__table tbody tr')].filter((tr) => !tr.querySelector('.skeleton, .empty')).map((tr) => tr.getAttribute('data-row'));
   const logKey = (r) => (r.type === 'decision' ? `${r.requestId}/${r.seq}` : `event/${r.id}`);
-  // The story hour's keepalive probe, `req_c41d0311-200` at 14:06:30 in `web/src/mock/requests.ts`, is the default
-  // hour's probe decision, so the table this kind's click narrows to lists it.
+  // The story hour's keepalive probe, `req_c41d0311-200` at 14:06:30 in `web/src/mock/requests.ts`, makes the default
+  // hour's two probe decisions, its renewal and its pinned answer, so the table this kind's click narrows to lists
+  // both.
   const ONE_KIND = 'Probe decisions';
   /**
    * The cleared draw's table, read against the rows at rest, proves the empty list still means every kind. Select all's

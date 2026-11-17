@@ -265,7 +265,18 @@ const pair = (key: FactKey, value: number | string, unit: FactUnit | null, now: 
 const STRATEGY_WORD: Record<string, string> = { pace: 'Pace', priority: 'priority', round_robin: 'round robin' };
 const RUNG_WORD: Record<string, string> = { content: 'content rung', static: 'static rung', with_main: 'with main rung' };
 /** What a probe's pinned member could not get past. Any other name reads as sent. */
-const OBSTACLE_WORD: Record<string, string> = { attempted: 'already tried', budget_unknown: 'budget unknown', operator: 'by hand', subscription_ended: 'subscription ended' };
+const OBSTACLE_WORD: Record<string, string> = {
+  attempted: 'already tried',
+  budget_unknown: 'budget unknown',
+  cooldown: 'in cooldown',
+  credits: 'credits unavailable',
+  operator: 'not available',
+  overage: 'in overage',
+  spent: 'spend cap reached',
+  subscription_ended: 'subscription ended',
+};
+/** The pinned obstacles a wait clears, which the relay answers with a 429 as it answers a dated exhaustion. */
+const PINNED_WAITS = new Set(['cooldown', 'credits', 'overage', 'spent']);
 /**
  * A key refusal's words by the structured code the record carries. A code outside the map reads through the fallback.
  */
@@ -1075,6 +1086,8 @@ function textWord(key: string, value: string): string {
       return windowTagWord(value);
     case 'fired_by':
       return wordOf(LABELS, value);
+    case 'obstacle':
+      return wordOf(OBSTACLE_WORD, value);
     default:
       return SNAKE.test(value) ? words(value) : value;
   }
@@ -1121,7 +1134,9 @@ export function laneChips(lane: string): Chip[] {
 /**
  * An exhausted line's obstacle, `account:name` as the engine weighs it, the account as the key. An operator obstacle
  * reads the member's own pause or state whatever obstacle the member's row carries. Any other obstacle reads the
- * member's row words and hover where the row's own obstacle carries the line's name, and the bare word otherwise.
+ * member's row words and hover where the row's own obstacle carries the line's name, and otherwise the partition's
+ * word or the obstacle's label: the selector names `spent` over a row with no obstacle where a plan window or a
+ * model's week passed the member over, which is no spend cap.
  */
 function obstacleChip(text: string, record: DecisionRecord, now: number): Chip {
   const at = text.lastIndexOf(':');
@@ -1133,7 +1148,7 @@ function obstacleChip(text: string, record: DecisionRecord, now: number): Chip {
       ? operatorWords(member)
       : member !== undefined && member.obstacle !== null && member.obstacle.name === name
         ? rowObstacleChip(member, member.obstacle, now)
-        : { title: hintOf(name), value: wordOf(OBSTACLE_WORD, name) };
+        : { title: hintOf(name), value: lookup(PARTITION_WORD, name) ?? wordOf(OBSTACLE_WORD, name) };
   return id === '' ? { label: 'obstacle', title, value } : { label: id, labelEntity: accountEntity(id), title, value };
 }
 
@@ -1728,7 +1743,10 @@ export function settingValue(key: SettingKey, settings: RecordSettings): string 
   return words(v);
 }
 
-/** The relay's status for an exhaustion: a dated one a 429, a model no member serves a 404, the rest a 503. */
+/**
+ * The relay's status for an exhaustion: a dated one and a pinned wait a 429, a model no member serves a 404, the rest a
+ * 503.
+ */
 const EXHAUSTION_STATUS: Record<string, number> = { fast_credits: 429, fast_lane: 429, model_rejected: 404, timed: 429 };
 export const PLACE_WORD: Record<string, string> = { strategy_pick: 'strategy pick' };
 /** A wait's reason as a held row's hover and the Hold row read it: `cap` waited for a slot the in-flight cap freed. */
@@ -1841,9 +1859,10 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
   }
   if (o.exhaustion !== null) {
     const x = o.exhaustion;
+    const waits = x.kind === 'pinned' && x.obstacle !== null && PINNED_WAITS.has(x.obstacle);
     rows.push({
       chips: [
-        plain(String(ranOut ? 429 : (lookup(EXHAUSTION_STATUS, x.kind) ?? 503)), 'status'),
+        plain(String(ranOut || waits ? 429 : (lookup(EXHAUSTION_STATUS, x.kind) ?? 503)), 'status'),
         ...(x.window !== null ? [plain(windowTagWord(cooldownWindow(x.window)), 'window')] : []),
         ...(x.reason !== null ? [plain(wordOf(CREDITS_WORD, x.reason), 'cause')] : []),
         plain(x.deadline === null ? 'none' : formatFact(x.deadline, 'time', at), x.deadline === null ? 'retry' : 'retry after'),

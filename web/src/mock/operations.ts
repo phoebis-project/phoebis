@@ -74,7 +74,9 @@ const ENDED_SUBAGENT = WRITTEN_SUBAGENTS[2];
 // its last request, so no probe has renewed the pin since and the row and the line
 // agree. A row of those whose pin a move of the story wrote (`pinnedBy`) reads the
 // later of its last request and that move, since the write of a pin stamps its
-// last use. `released` marks a session whose every agent, main included, the mod
+// last use, and one whose pin a placement wrote (`placedBy`) the later of its last
+// request and the renewal it names, since a renewal, a probe's among them, stamps it
+// too. `released` marks a session whose every agent, main included, the mod
 // released. `sessionId` writes out the id of a session past the story's ids whose
 // story row names it.
 const sessionSpec: ({
@@ -104,6 +106,12 @@ const sessionSpec: ({
    * move, and `stamped` gives the row the no-return stamp the move left.
    */
   pinnedBy?: { requestId: string; stamped?: true };
+  /**
+   * The story request whose placement wrote the row's pin where no move of the story did, and the one whose renewal
+   * last stamped the pin's use. The row and main's line date their pin by the placement, and the row's last use reads
+   * the later of its last request and the renewal.
+   */
+  placedBy?: { renewedBy: string; requestId: string };
   released?: true;
   sessionId?: string;
   state: Lifecycle | null;
@@ -125,7 +133,8 @@ const sessionSpec: ({
   // Its second subagent compacted, while its first stays paused on its cold probes.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', lastUseFromRows: true, subagents: { model: 'claude-sonnet-5', accountId: 'nightly' }, cause: 'awaiting_cache_evidence', compactedAgent: 2, subagentHold: 'repeated_cold_probe' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting', cause: 'expired' },
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'idle', agents: 2, companion: 'silent', lastUseFromRows: true, pinnedBy: { requestId: 'req_c41d0311-200' } },
+  // Its keepalive probe renewed the pin on secondary and met a 429 there, so main waits on the retry ladder.
+  { keyId: 'desktop', accountId: 'secondary', model: 'claude-sonnet-4-5', state: 'idle', agents: 2, companion: 'silent', lastUseFromRows: true, cause: 'probe_quota_exhausted', placedBy: { renewedBy: 'req_c41d0311-200', requestId: 'req_d4e8a7b2-916' } },
   // A parked main agent on a wakeup further away than the pool's horizon, held with its prompt kept. The other parked
   // session's agent stays retained, parked on a background command with its deadline.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting', cause: 'horizon' },
@@ -473,6 +482,19 @@ function storyPinWrite(requestId: string, accountId: string, stamped: boolean): 
 }
 
 /**
+ * The instants a placement of the story wrote a row's pin at and a renewal last stamped its use at, each its request's
+ * own. A request the story does not hold fails the mock as it loads rather than reading a default.
+ */
+function storyPinPlaced(placedBy: { renewedBy: string; requestId: string }): { at: string; usedAt: string } {
+  const atOf = (id: string) => {
+    const r = REQUESTS.find((x) => x.id === id);
+    if (r === undefined) throw new Error(`the story holds no request ${id}`);
+    return r.at;
+  };
+  return { at: atOf(placedBy.requestId), usedAt: atOf(placedBy.renewedBy) };
+}
+
+/**
  * Each drawn row's first sighting, which the builders date its pins from: the router keeps it until the session's last
  * pin leaves, so an unpinned row holds none.
  */
@@ -487,13 +509,15 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const sessionId = spec.sessionId ?? drawnId;
   const seen = ledgered.get(activityOf(spec.keyId, keyGeneration, sessionId)) ?? null;
   const pinWrite = spec.pinnedBy === undefined ? null : storyPinWrite(spec.pinnedBy.requestId, spec.accountId, spec.pinnedBy.stamped === true);
+  const pinPlaced = spec.placedBy === undefined ? null : storyPinPlaced(spec.placedBy);
+  const pinUsedAt = pinWrite?.at ?? pinPlaced?.usedAt ?? null;
   // Both rolls are drawn whatever the spec says, except on a fixed row, so pinning one session's idle
   // does not shift the seeded stream the rest of these fixtures read from.
   const createdRoll = (written ? written.createdMinutes : rng.int(8, 9 * 60)) * MINUTE;
   const idleRoll = spec.fixed ? spec.idleMinutes * MINUTE : spec.state === 'busy' ? rng.int(5, 90) * 1000 : rng.int(2, 40) * MINUTE;
   // Off the rows, a session the ledger holds no request of has no last use.
   const seenAt = seen === null ? null : Date.parse(seen);
-  const lastFromRows = !spec.lastUseFromRows ? undefined : pinWrite === null ? seenAt : Math.max(seenAt ?? 0, Date.parse(pinWrite.at));
+  const lastFromRows = !spec.lastUseFromRows ? undefined : pinUsedAt === null ? seenAt : Math.max(seenAt ?? 0, Date.parse(pinUsedAt));
   const lastUsedAgo = typeof lastFromRows === 'number' ? NOW - lastFromRows : spec.idleMinutes === undefined ? Math.min(createdRoll, idleRoll) : spec.idleMinutes * MINUTE;
   const createdAgo = Math.max(createdRoll, lastUsedAgo + 5 * MINUTE);
   // A session the engine still keeps a recipe for is the one holding a pin on its account.
@@ -512,7 +536,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : weighted ? burnRoll : null;
   // The ledger names a session's fork from its requests, so a session it never saw records none.
   const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
-  // A drawn row's pin was written at its first sighting, unless a move of the story wrote it later.
+  // A drawn row's pin was written at its first sighting, unless a move or a placement of the story wrote it later.
   const firstSeen = pinned ? ago(createdAgo) : null;
   const row: Session = {
     ...SESSION_SAMPLE,
@@ -524,7 +548,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     model: spec.model,
     historical: false,
     keyGeneration,
-    pinnedAt: pinWrite?.at ?? firstSeen,
+    pinnedAt: pinWrite?.at ?? pinPlaced?.at ?? firstSeen,
     // The placement the router's ledger holds for a pinned row, which the listing counts with the routing log's.
     placements: pinned ? 1 : 0,
     // An unpinned session's last use is what its own rows read.
@@ -623,16 +647,18 @@ const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
   overage: 'held',
   parked_limit: 'ended',
   probe_pool_exhausted: 'held',
+  probe_quota_exhausted: 'held',
   probing: 'retained',
   repeated_cold_probe: 'paused',
   scheduled: 'retained',
   unsupported_shape: 'not_retained',
 };
 
-// The cause the story holds on the engine's retry ladder: its line reads `held` with the next rung ahead of the clock,
-// inside the ladder's 300 s cap and the entry's TTL. The rung is written rather than drawn, so the rows after the line
-// keep their rolls.
-const LADDER_NEXT_PROBE: Partial<Record<RecipeCause, string>> = { probe_pool_exhausted: ahead(3 * MINUTE) };
+// The causes the story holds on the engine's retry ladder: each line reads `held` with the next rung ahead of the
+// clock, inside the ladder's 300 s cap and the entry's TTL. A rung is written rather than drawn, so the rows after the
+// line keep their rolls. A probe answered 429 waits at least the answer's retry-after, and secondary's cooldown runs
+// past the cap until 14:55, so the probe after main's last one, three minutes back, stands the cap's 300 s after it.
+const LADDER_NEXT_PROBE: Partial<Record<RecipeCause, string>> = { probe_pool_exhausted: ahead(3 * MINUTE), probe_quota_exhausted: ahead(2 * MINUTE) };
 
 /**
  * What every line of a session the mod released whole reads, written over the drawn row. The row keeps its last request
@@ -705,6 +731,9 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const writtenProbe = fixedAgents?.[j].lastProbeMinutes;
     const lastProbeAt = writtenProbe !== undefined ? ago(writtenProbe * MINUTE) : cause === 'awaiting_cache_evidence' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
+    // A main the retry ladder holds was scheduled before the probe that put it there, so its draw is taken and set
+    // aside, and the rows after it keep their rolls.
+    const scheduledAt = !fixedAgents && (cause === 'scheduled' || (j === 0 && LADDER_NEXT_PROBE[cause] !== undefined)) ? ahead(rng.int(20, 280) * 1000) : null;
     // The written session's rows past its drawn pair are written, so a reader meets every lifecycle word. A session the
     // mod released whole keeps its draws, so the rows after it keep theirs.
     const written = sessionSpec[i].released
@@ -730,7 +759,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       lastRequestAt,
       model,
       // A probe in flight leaves the due time it went out at, which the engine keeps showing until it lands.
-      nextProbeAt: fixedAgents ? (fixedAgents[j].nextProbeSeconds === null ? null : ahead(fixedAgents[j].nextProbeSeconds * 1000)) : cause === 'scheduled' ? ahead(rng.int(20, 280) * 1000) : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : (LADDER_NEXT_PROBE[cause] ?? null),
+      nextProbeAt: fixedAgents ? (fixedAgents[j].nextProbeSeconds === null ? null : ahead(fixedAgents[j].nextProbeSeconds * 1000)) : cause === 'scheduled' ? scheduledAt : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : (LADDER_NEXT_PROBE[cause] ?? null),
       parkKind,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
       probesToday,

@@ -174,11 +174,12 @@ const isRule = (step: string) => step.startsWith('move:');
 
 /**
  * The engine never writes `bound` beside a rule, a partition, a rung or a pick: a bound request renews or exhausts on
- * its own path, so a walk that carries it expects no placeholder.
+ * its own path, so a walk that carries it expects no placeholder. A walk's end is its last step ahead of the Reserve
+ * the engine writes behind every walk, a probe's pinned answer among them.
  */
 function shapeOf(walk: WalkStep[]): StripShape {
   if (walk.some((s) => isRule(s.step))) return 'pinned';
-  const last = walk[walk.length - 1]?.step;
+  const last = walk.filter((s) => s.step !== RESERVE).at(-1)?.step;
   return walk.some((s) => s.step === 'bound') || (last !== undefined && SHORT_ENDS.has(last)) ? 'short' : 'fresh';
 }
 

@@ -1453,8 +1453,22 @@ function storySeeds(): StorySeed[] {
       requestClass: 'subagent',
       session: '407dd39b',
     },
-    // The keepalive's probe of a pin on secondary finds its window spent and moves the pin to primary.
-    { agentId: 'main', at: t(14, 6, 30), attempts: [{ accountId: 'primary', at: t(14, 6, 30), ms: 1_400, status: 200 }], id: 'req_c41d0311-200', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-5', requestClass: 'main', session: '229bf72c', usage: { cacheWrite1h: 46_000, output: 1 } },
+    // The keepalive's probe follows its pin to secondary, whose 429 cools the account, and the router then answers the
+    // probe its pinned member's cooldown.
+    {
+      agentId: 'main',
+      at: t(14, 6, 30),
+      attempts: [{ accountId: 'secondary', at: t(14, 6, 30), cooldown: retryAfter(t(14, 6, 31)), head5h: 1, ms: 1_000, status: 429 }],
+      errorCode: 'accounts_exhausted',
+      id: 'req_c41d0311-200',
+      keyId: 'desktop',
+      kind: 'probe',
+      model: 'claude-sonnet-4-5',
+      outcome: 'rejected',
+      requestClass: 'main',
+      session: '229bf72c',
+      status: 429,
+    },
     { agentId: 'main', at: t(14, 5, 12), attempts: [{ accountId: 'primary', at: t(14, 5, 12), ms: 7_900, status: 200 }], id: 'req_da52d141-a5a', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: '0d588de5', usage: { cacheRead: 30_100, cacheWrite1h: 14_800, input: 2_200, output: 1_120 } },
     // Secondary answers a 429 that rejects no plan window while its head reads the 5-hour window spent: the account
     // cools for the retry-after alone and the turn fails over.
@@ -2106,7 +2120,6 @@ function storyEvents(): Map<string, RequestEvent[]> {
   moved('req_4b0e9d17-c31', clock(14, 27, 1), 'primary', 'nightly', 'fast_lane');
   moved('req_2e7c90a1-6d4', clock(14, 24, 10), 'primary', 'nightly', 'cooldown');
   moved('req_da52d141-a5a', clock(14, 5, 12), 'secondary', 'primary', 'spent');
-  moved('req_c41d0311-200', clock(14, 6, 30), 'secondary', 'primary', 'spent');
   moved('req_b8c3e9d4-e61', clock(14, 7, 51), 'secondary', 'primary', 'cooldown');
   moved('req_1d9c3e55-0b2', clock(14, 2, 11), 'secondary', 'primary', 'cooldown');
   moved(TIE_STORY_ID, clock(8, 16, 21), 'overflow', 'primary', 'cooldown');

@@ -2284,6 +2284,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         );
         continue;
       }
+      // A probe's pinned answer ends at the probe step before any placement, which the strip's read of the story's own
+      // answer holds.
+      if (r.outcome.exhaustion?.kind === 'pinned') continue;
       assert.ok(firstRung >= 0, walk);
       assert.equal(partitions.length, 1, walk);
       assert.ok(partitions[0] < firstRung, `${walk}: partitions after the rungs`);
@@ -2536,7 +2539,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok((kept.runwayMs ?? Number.POSITIVE_INFINITY) > (other.runwayMs ?? Number.POSITIVE_INFINITY), `${kept.runwayMs} over ${other.runwayMs}`);
   });
 
-  test(`the story lists three forks, at 14:30 two on their base's account and one without a pin, at 03:40 all three on their base's account, at ${at}`, async () => {
+  test(`the story lists three forks, at 14:30 one on its base's account, one on another and one without a pin, at 03:40 two on their base's account and one on another, at ${at}`, async () => {
     const s = await story;
     const forks = s.sessions.filter((x) => x.forkedFrom !== null);
     assert.equal(forks.length, 3, `${forks.length} forks are listed`);
@@ -2546,10 +2549,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       return { base, fork };
     });
     // A drawn first turn takes the third fork: at 14:30 on laptop's unpinned session 5eeed6ce, at depth 2 under a base
-    // of its own key, and at 03:40 on the desktop session whose failover the story pinned on primary.
+    // of its own key, and at 03:40 on the desktop session whose failover the story pinned on primary. The keepalive's
+    // probe of 229bf72c leaves its pin on secondary, where its placement put it, beside its base on primary.
     const want = {
-      '2026-09-16T14:30:00Z': { pinless: [['5eeed6ce', 2]], same: 2 },
-      '2026-09-20T03:40:00Z': { pinless: [], same: 3 },
+      '2026-09-16T14:30:00Z': { other: ['229bf72c'], pinless: [['5eeed6ce', 2]], same: 1 },
+      '2026-09-20T03:40:00Z': { other: ['229bf72c'], pinless: [], same: 2 },
     }[at];
     const pinless = pairs.filter((p) => !p.fork.pinned);
     assert.deepEqual(pinless.map((p) => [p.fork.sessionId.slice(0, 8), p.fork.forkDepth]), want.pinless, 'the forks that hold no pin, each with its depth');
@@ -2557,7 +2561,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const same = pinned.filter((p) => p.fork.accountId === p.base.accountId);
     const other = pinned.filter((p) => p.fork.accountId !== p.base.accountId);
     assert.equal(same.length, want.same, "the pinned forks that sit on their base's account");
-    assert.equal(other.length, 0, 'no pinned fork sits on another account than its base');
+    assert.deepEqual(other.map((p) => p.fork.sessionId.slice(0, 8)), want.other, 'the pinned forks that sit on another account than their base');
   });
 
   test(`one window of the story reads ahead of pace and one behind at ${at}`, async () => {

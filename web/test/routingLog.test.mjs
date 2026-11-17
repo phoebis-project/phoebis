@@ -749,9 +749,9 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(verdict({ obstacle: operator, state: 'reauth_required', verdict: 'out' }), ['out', 'needs re-auth', 'the account leaves every eligible set until it is paired again']);
   assert.deepEqual(verdict({ enabled: false, obstacle: operator, state: 'deleted', verdict: 'out' }), ['out', 'deleted', 'the account left the registry']);
   // An exhausted line's chip reads its member's row where the row's own obstacle carries the chip's name, an operator
-  // chip the member's state whatever the row carries, and any other chip the bare word. The router names a member's
-  // own obstacle, or `spent` over a row with none, so the last two entries hold the rule's halves on records it does
-  // not write.
+  // chip the member's state whatever the row carries, and any other chip the partition's word or the obstacle's label.
+  // The router names a member's own obstacle, or `spent` over a row with none where a plan window or a model's week
+  // passed the member over, so the fifth and sixth entries hold the rule's halves on records it does not write.
   const capped = { name: 'spent', reason: 'spent', scope: null, until: until(15, 42), window: 'spend' };
   const cooled = { name: 'cooldown', reason: 'rate_limit', scope: 'account', until: until(15, 42), window: 'five_hour' };
   const held = record({
@@ -761,12 +761,13 @@ test('the candidate cells word every verdict and its chip', () => {
       candidate({ accountId: 'contract', obstacle: capped, verdict: 'out' }),
       candidate({ accountId: 'secondary', obstacle: cooled, verdict: 'out' }),
       candidate({ accountId: 'reserve', obstacle: cooled, state: 'funding_required', verdict: 'out' }),
+      candidate({ accountId: 'studio', verdict: 'out' }),
     ],
     outcome: { accountId: null, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, kind: 'exhausted', upstreamModel: null },
-    walk: [wstep('exhausted', 'exhausted', [wfact('obstacles', ['overflow:operator', 'nightly:operator', 'contract:spent', 'secondary:cooldown', 'contract:cooldown', 'reserve:operator'])])],
+    walk: [wstep('exhausted', 'exhausted', [wfact('obstacles', ['overflow:operator', 'nightly:operator', 'contract:spent', 'secondary:cooldown', 'contract:cooldown', 'reserve:operator', 'studio:spent'])])],
   });
   const exhausted = d.walkLines(held)[0].chips;
-  assert.deepEqual(texts(exhausted), ['overflow needs funding', 'nightly held by hand', 'contract spend cap reached until 15:42', 'secondary 429 on 5h until 15:42', 'contract cooldown', 'reserve needs funding']);
+  assert.deepEqual(texts(exhausted), ['overflow needs funding', 'nightly held by hand', 'contract spend cap reached until 15:42', 'secondary 429 on 5h until 15:42', 'contract in cooldown', 'reserve needs funding', 'studio window spent']);
   assert.equal(exhausted[2].title, 'at its spend cap until 15:42');
   assert.deepEqual(verdict({ budget: [{ budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1.1 }], obstacle: { name: 'budget', reason: 'day', until: iso(MIDNIGHT), window: null }, verdict: 'out' }), ['out', 'budget $1.10 of $5.00', 'at its spend budget for the period']);
   const daily = { budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1 };
@@ -845,6 +846,18 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
     });
   assert.deepEqual(rows(reachedBy('month')).find(([label]) => label === 'Spend'), ['Spend', ['research $12.00 of $10.00']]);
   assert.equal(rows(reachedBy(null)).find(([label]) => label === 'Spend'), undefined, 'an obstacle that names no period draws no budget detail');
+});
+
+test("a probe's pinned answer reads the relay's status: 429 where a wait clears the obstacle, 503 elsewhere", () => {
+  const answer = (obstacle) =>
+    texts(d.outcomeRows(record({ outcome: { accountId: null, exhaustion: { deadline: null, kind: 'pinned', obstacle, reason: null, window: null }, kind: 'exhausted', upstreamModel: null } }), NOW).find((line) => line.label === 'Answer').chips)[0];
+  assert.equal(answer('credits'), 'status 429', 'a wait that names no deadline');
+  assert.equal(answer('no_pin'), 'status 503', 'an answer no wait clears');
+});
+
+test("the Probe line words the pinned member's obstacle as the row's By cell does", () => {
+  const r = record({ walk: [wstep('probe', 'answered', [wfact('obstacle', 'spent')])] });
+  assert.deepEqual(d.walkLines(r).map((l) => [l.step, l.verdict, texts(l.chips)]), [['Probe', 'answered', ['obstacle spend cap reached']]]);
 });
 
 test("the cache figure's base holds the write", () => {

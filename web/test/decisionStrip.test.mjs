@@ -206,10 +206,14 @@ test("the story's records give their stations, states, host and termini", async 
   assert.ok(refused.d.startsWith(`M${refusalLayout.stations.admission.x} ${refusalLayout.y0 + d.RADIUS} `), 'the taken path drops from the decisive Admission toward Refused');
   assert.equal(refusalLayout.labels.admission.above, true, 'the curve drops from Admission, so its label sits above the line');
 
+  // A probe renews its pin with every move rule unrun, and the router answers its next selection with the pinned
+  // member's obstacle at the Probe line: that walk ends there, the Reserve the router writes after every walk aside.
   const probe = modelOf(await recordOf('req_c41d0311-200/1'));
-  assert.deepEqual(read(probe), ['Pin: match (taken)', 'Eligible: match (taken)', 'Probe: passed (taken)', 'spent: fired (taken)', ...FIVE_RULES('not run', 'idle').slice(1), '^Move: moved (taken)', '^Fit: rewrite only (taken)', '^Cap filter: passed (taken)', '^Partitions: match (taken)', '^content: none (taken)', '^with main: none (taken)', '^static: none (taken)', '^Pick: chosen (taken)', 'Renew: not run (idle)', '^Reserve: none (taken)']);
-  assert.deepEqual([probe.shape, probe.decisive, probe.host, probe.branch], ['pinned', 'pick', 'pick', { from: 'move:spent', kind: 'move' }]);
-  assert.deepEqual(terminiOf(probe), PINNED_TERMINI('moved'));
+  assert.deepEqual(read(probe), ['Pin: match (taken)', 'Eligible: match (taken)', 'Probe: passed (taken)', ...FIVE_RULES('not run', 'idle'), 'Renew: renewed (taken)', 'Reserve: none (taken)']);
+  assert.deepEqual([probe.shape, probe.decisive, probe.host, probe.branch], ['pinned', 'renew', 'renew', null]);
+  assert.deepEqual(terminiOf(probe), PINNED_TERMINI('renewed'));
+  const answered = modelOf(await recordOf('req_c41d0311-200/2'));
+  assert.deepEqual([answered.shape, read(answered)], ['short', ['Pin: match (taken)', 'Eligible: match (taken)', 'Probe: answered (taken)', 'Reserve: none (taken)']]);
 
   const failover = modelOf(await recordOf('req_1d9c3e55-0b2/2'));
   assert.deepEqual(read(failover), [...FRESH_LINE('match', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: match (taken)', 'Pick: not run (idle)', 'Reserve: booked (taken)']);

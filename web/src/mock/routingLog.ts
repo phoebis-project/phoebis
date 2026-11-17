@@ -95,7 +95,7 @@ interface Spec {
   fact?: SummaryFact[];
   /** The pin event reason of a failover placement, which moves the pin from the task rather than by a rule. */
   failover?: string;
-  /** The account the pin was on before a move or a failover. */
+  /** The account the pin was on before a move or a failover, or the one a probe's pinned answer names. */
   from?: string;
   /** The holds before this attempt's placement, summed as the placement's row names them. */
   heldBefore?: CohortHold;
@@ -251,6 +251,12 @@ const inPlaceOf = (spec: Spec): 'reset' | 'rewrite' | 'slow_down' | null => {
 
 /** Whether the decision left a live pin: a rule's move, or a placement the pin's account state forced. */
 const leftPin = (spec: Spec) => spec.kind === 'moved' || spec.reasons !== undefined;
+
+/**
+ * Whether the decision is a probe's pinned answer: the router answers the probe its pinned member's obstacle at the
+ * probe step, so it reads no fit and walks no placement behind it.
+ */
+const pinnedAnswerOf = (spec: Spec) => spec.exhaustion?.kind === 'pinned';
 
 /**
  * The windows a decision read on a member: the attempt's own reading on the account it went to, so the card and the
@@ -598,8 +604,9 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const endsAt = sub?.endsAt ? Date.parse(sub.endsAt) : null;
     // Drawn for every member, so a count the story sets moves no later draw. A drawn count stands under the cap, so a
     // member reads full only where the story's own pins or the marks of `fillDrawnRivals` hold it there. A row outside
-    // the seeded streams draws none.
-    const drawn = UNSEEDED_IDS.has(r.id) ? 0 : inFlightRng.int(0, 5);
+    // the seeded streams draws none, and neither does a probe's pinned answer, so the decisions after the story's one
+    // keep their draws.
+    const drawn = UNSEEDED_IDS.has(r.id) || pinnedAnswerOf(spec) ? 0 : inFlightRng.int(0, 5);
     const drawnInFlight = Math.min(drawn, pool.inFlightCap - 1);
     const obstacle = obstacleOf(a, pool, at, r.canonicalModel, fast, spec.attempted);
     const paid = isPaidSource(a);
@@ -1407,7 +1414,8 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
 /**
  * The move rules a live pin a portable request still reaches walks, the destinations a fired rule names and whether
  * the move gate answered the fitting order, which tells a move's runway ties apart. A token count follows its pin,
- * since it writes none a move could leave, and a pin past its account's end is released at renewal instead.
+ * since it writes none a move could leave, a probe warms the pin it was sent for and never moves it, and a pin past
+ * its account's end is released at renewal instead.
  */
 function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, pin: RecordPin | null, portable: boolean): { gateFits: boolean; movedAmong: string[] | undefined; steps: WalkStep[] } {
   const r = spec.request;
@@ -1416,7 +1424,7 @@ function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, p
   if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || leftPin(spec) || inPlaceOf(spec) !== null)) {
     const source = candidates.find((c) => c.accountId === pin.accountId);
     const endsAt = source?.term?.endsAt ? Date.parse(source.term.endsAt) : null;
-    const skip = r.kind === 'count_tokens' ? 'count' : endsAt !== null && endsAt <= spec.at ? 'subscription_ended' : null;
+    const skip = r.kind === 'count_tokens' ? 'count' : r.kind === 'probe' ? 'probe' : endsAt !== null && endsAt <= spec.at ? 'subscription_ended' : null;
     if (skip !== null) {
       for (const rule of RULES) steps.push(step(`move:${rule}`, 'not_run', [fact('reason', skip)]));
     } else {
@@ -1427,8 +1435,8 @@ function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, p
         for (const c of move.reached) c.inFlight = c.inFlightCap;
         move = moveOf(spec, candidates, pool, source, pin);
       }
-      // The shed line carries the account's read whichever rule answered, save a probe's, which reads none.
-      const pace = r.kind === 'probe' ? [] : slowFactsOf(source, pool, spec.at, cycleStands(spec, source?.accountId ?? '', pool));
+      // The shed line carries the account's read whichever rule answered.
+      const pace = slowFactsOf(source, pool, spec.at, cycleStands(spec, source?.accountId ?? '', pool));
       steps.push(...move.lines.map((line) => (line.step === 'move:shed' ? { ...line, facts: [...line.facts, ...pace] } : line)));
       if (move.fired !== null) {
         steps.push(step('cap_filter', move.destinations.some((c) => c.inFlight < c.inFlightCap) ? 'passed' : 'dropped', move.destinations.map((c) => fact('in_flight', `${c.inFlight}/${c.inFlightCap}`, 'count', c.accountId))));
@@ -1445,7 +1453,7 @@ function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, p
 /**
  * The placement walk: the partitions, the three rungs and the pick among the members they kept, or an exhaustion's
  * empty pick. `gateFits` is whether the move gate answered the fitting order, which tells a move's runway ties apart.
- * A decision that holds in place or renews walks none.
+ * A decision that holds in place or renews walks none, and neither does a probe's pinned answer.
  */
 function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, movedAmong: string[] | undefined, gateFits: boolean): { pick: ReturnType<typeof pickOf>; steps: WalkStep[]; tierSize: number } {
   const r = spec.request;
@@ -1453,7 +1461,7 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
   const steps: WalkStep[] = [];
   let pick: ReturnType<typeof pickOf> = { runnerUp: null, score: null, tierSize: 0 };
   let tierSize = 0;
-  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlaceOf(spec) === null;
+  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlaceOf(spec) === null && !pinnedAnswerOf(spec);
   if (placing) {
     const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
     const partitions = narrowed(set, pool, r, movedAmong !== undefined);
@@ -1609,7 +1617,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   const candidates = spec.kind === 'refused' ? [] : candidatesOf(spec, pool);
   const inPlace = inPlaceOf(spec);
   if (!spec.story && (spec.kind === 'placed' || spec.kind === 'moved')) fillDrawnRivals(spec, candidates, pool);
-  if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlace === null) readPlacementFits(spec, candidates, pool);
+  if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlace === null && !pinnedAnswerOf(spec)) readPlacementFits(spec, candidates, pool);
   const portable = r.client !== 'other';
   const pinKey = pinKeyOf(r);
   const pinning = pool.affinityTtlSeconds > 0 && r.sessionId !== null && (typeof spec.pin === 'object' || spec.pin === 'none');
@@ -1622,11 +1630,11 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   }
   const member = (id: string | null | undefined) => candidates.find((c) => c.accountId === id);
   // A probe warms the pin it was sent for: the line names that member's obstacle, if any, and whether this probe
-  // already tried it.
+  // already tried it. A pinned answer ends the walk there, the reserve station aside.
   if (r.kind === 'probe') {
     const pinned = pin?.found === 'live' ? member(pin.accountId) : undefined;
     const facts = pinned ? [...(pinned.obstacle ? [fact('obstacle', pinned.obstacle.name)] : []), fact('tried', spec.attempted.includes(pinned.accountId))] : [];
-    walk.push(step('probe', 'passed', facts));
+    walk.push(step('probe', pinnedAnswerOf(spec) ? 'answered' : 'passed', facts));
   }
   const { gateFits, movedAmong, steps: moveSteps } = moveWalkOf(spec, candidates, pool, pin, portable);
   walk.push(...moveSteps);
@@ -1643,7 +1651,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     walk.push(step('hold', 'held', [fact('place', spec.hold.place), fact('account_id', spec.accountId, null, spec.accountId), fact('bound_ms', pool.retryInPlaceSeconds * 1_000, 'ms')]));
   }
   const exhaustion = spec.kind === 'exhausted' ? (spec.exhaustion ?? exhaustionOf(candidates)) : null;
-  if (exhaustion) {
+  if (exhaustion && !pinnedAnswerOf(spec)) {
     walk.push(step('exhausted', 'exhausted', [fact('kind', exhaustion.kind), fact('deadline', exhaustion.deadline === null ? null : Date.parse(exhaustion.deadline), 'time'), fact('window', exhaustion.window), fact('obstacles', candidates.map((c) => c.obstacle?.name ?? 'eligible'))]));
   }
   // Every walked selection ends at the reserve station: a booking where a placement or a move booked, else the
@@ -2221,8 +2229,16 @@ function storySpecs(): Spec[] {
       rule: 'spent',
       rung: placedStatic,
     }),
-    // The keepalive's probe walks the move rules like any request on its pin, so the spent rule moves it too.
-    at('req_c41d0311-200', 1, 1, t(14, 6, 30), 'moved', 'primary', { from: 'secondary', pin: live('probe', 290_000, 'untouched'), rule: 'spent' }),
+    // The keepalive's probe warms its pin on secondary, whose spent window is no obstacle to a probe, so it renews
+    // there with every move rule unrun. Its leg's 429 cools secondary, and the selection behind that answer meets the
+    // cooldown on the pinned member, which the router answers the probe rather than moving the pin.
+    at('req_c41d0311-200', 1, 1, t(14, 6, 30), 'renewed', 'secondary', { pin: live('probe', 290_000, 'untouched') }),
+    at('req_c41d0311-200', 2, 2, t(14, 6, 31), 'exhausted', null, {
+      attempted: ['secondary'],
+      exhaustion: { deadline: requestById.get('req_c41d0311-200')!.attempts[0].cooldownSet!.until, kind: 'pinned', obstacle: 'cooldown', reason: null, window: null },
+      from: 'secondary',
+      pin: live('probe', 1_000, 'untouched'),
+    }),
     at('req_ef099b34-453', 1, 1, t(14, 9, 41), 'placed', 'primary'),
     // The member placed by its static prefix holds a deeper entry the rung refused as expired beside the one it took.
     // A sibling's entry reads the gate that refused it.
