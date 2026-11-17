@@ -30,10 +30,10 @@ import { IconPencil, IconPlus } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, NumberInput, PageLink, Refusal, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS_CODEC, sortDirOf, type PoolsAddress } from '@/lib/address';
-import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, UNIT_TILE_LABEL, type WeekReading } from '@/lib/analytics';
+import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, namedCostLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, type PoolGroup, type WholeEngineKey } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, SHARE_FIELD_LABELS, type PoolGroup, type WholeEngineKey } from '@/lib/forms';
 import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow, useQueryFilters, useWeekReading, type Loaded } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -313,7 +313,7 @@ export function PoolsPage() {
   );
   const attentionOf = useMemo(() => new Map((pools.data ?? []).map((p) => [p.id, (attention.items ?? []).filter((i) => i.pools.includes(p.id))])), [attention.items, pools.data]);
   const dayTile = totals ? sumTileOf(unit, totals.day, reading) : null;
-  const named = unit === 'equivalent' || unit === 'usd';
+  const named = namedCostLabel(unit);
 
   return (
     <PopoverHost.Provider value={host}>
@@ -348,7 +348,7 @@ export function PoolsPage() {
           <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
           <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
           <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
-          <Tile label={named ? `${UNIT_TILE_LABEL[unit]}, 24h` : 'Cost, 24h'} value={dayTile?.value ?? null} title={dayTile?.title} failure={dayTile?.failure ?? null} />
+          <Tile label={named === null ? 'Cost, 24h' : `${named}, 24h`} value={dayTile?.value ?? null} title={dayTile?.title} failure={dayTile?.failure ?? null} />
         </div>
         {/* A failed read leaves the cards on the last answer's items, or none before the first. This line says so. */}
         {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}
@@ -610,7 +610,7 @@ function PoolCard({
 }) {
   const standingId = useId();
   const { unit } = useAppSettings();
-  const named = unit === 'equivalent' || unit === 'usd';
+  const named = namedCostLabel(unit);
   const warnedAt = pool.warnings.length === 0 ? null : warningGroup(pool.warnings[0]);
   const tiers = selectionOrder(pool, accounts ?? [], now);
   const grouped = kindOrdered(pool);
@@ -790,7 +790,7 @@ function PoolCard({
           <dd className="num">{fmtInt(pool.requests24h)}</dd>
         </div>
         <div>
-          <dt>{named ? `${UNIT_TILE_LABEL[unit]} 24h` : 'Cost 24h'}</dt>
+          <dt>{named === null ? 'Cost 24h' : `${named} 24h`}</dt>
           <PoolCost pool={pool} reading={reading} />
         </div>
         <div>
@@ -970,11 +970,15 @@ function Eligibility({ verdict, account, now, periodEnd }: { account: Account | 
   }
 }
 
-/** The sentence each word of a fit draws on its chip's title. The wind-down's countdown carries its own. */
-const LAST_RESORT_TITLE: Record<Exclude<LastResortWord, 'ending'>, string> = {
-  least_bad: 'A shared window stands at or past its ceiling',
-  rewrite_only: "A fresh session's burn would carry a shared window past its ceiling before it resets",
-  spent: 'A shared window has no allowance left',
+/**
+ * Each word of a fit: the clause that closes the row's hover, the sentence its chip's title draws and the chip's tone.
+ * The wind-down's countdown carries its own title.
+ */
+const LAST_RESORT_WORDS: Record<LastResortWord, { taken: string; title: string | null; tone: 'serious' | 'warning' }> = {
+  ending: { taken: 'no other account can take a fresh session', title: null, tone: 'warning' },
+  least_bad: { taken: 'no account fits a fresh session', title: 'A shared window stands at or past its ceiling', tone: 'warning' },
+  rewrite_only: { taken: 'no account fits a fresh session', title: "A fresh session's burn would carry a shared window past its ceiling before it resets", tone: 'warning' },
+  spent: { taken: 'no other account has allowance left', title: 'A shared window has no allowance left', tone: 'serious' },
 };
 
 /**
@@ -984,9 +988,10 @@ const LAST_RESORT_TITLE: Record<Exclude<LastResortWord, 'ending'>, string> = {
 function LastResort({ placement, now }: { now: number; placement: Placement }) {
   const word = placement.lastResort;
   if (word === null) return null;
-  if (word === 'ending') return placement.end === null ? <Badge tone="warning">{LAST_RESORT_LABEL[word]}</Badge> : <WordedBadge tone="warning" badge={windingDownBadge(placement.end, now)} />;
+  const { title, tone } = LAST_RESORT_WORDS[word];
+  if (word === 'ending') return placement.end === null ? <Badge tone={tone}>{LAST_RESORT_LABEL[word]}</Badge> : <WordedBadge tone={tone} badge={windingDownBadge(placement.end, now)} />;
   return (
-    <Badge tone={word === 'spent' ? 'serious' : 'warning'} title={LAST_RESORT_TITLE[word]}>
+    <Badge tone={tone} title={title ?? undefined}>
       {LAST_RESORT_LABEL[word]}
     </Badge>
   );
@@ -994,9 +999,7 @@ function LastResort({ placement, now }: { now: number; placement: Placement }) {
 
 /** The row's hover for a member that waits for the rest, by the word of its fit. */
 function lastResortWhy(label: string, word: LastResortWord): string {
-  if (word === 'ending') return `${label}: ${LAST_RESORT_LABEL[word]}, taken only once no other account can take a fresh session`;
-  if (word === 'spent') return `${label}: ${LAST_RESORT_LABEL[word]}, taken only once no other account has allowance left`;
-  return `${label}: ${LAST_RESORT_LABEL[word]}, taken only once no account fits a fresh session`;
+  return `${label}: ${LAST_RESORT_LABEL[word]}, taken only once ${LAST_RESORT_WORDS[word].taken}`;
 }
 
 /** The saved pool's warnings above the dialog's groups, each with a link to the group of its first field. */
@@ -1525,14 +1528,32 @@ export function PoolDialog({
       };
       return { fiveHour: shared('5h'), id: a.id, label: a.label, sevenDay: shared('7d') };
     });
-    // The route's verdict and Fable reservation per stored member, so a member in cooldown is no destination for a shed
-    // session and a member not saved yet holds no reservation.
+    // The route's verdict, Fable reservation and factor per stored member, so a member in cooldown is no destination
+    // for a shed session, a member not saved yet holds no reservation, and a member whose account did not load is read
+    // by its stored factor.
     const stored = new Map((pool?.members ?? []).map((m) => [m.accountId, m]));
     const previewed = previewInput(input, form, opened);
-    const preview = shedPreview({ ...previewed, members: previewed.members.map((m) => ({ ...m, eligible: stored.get(m.accountId)?.eligible, fableReservation: stored.get(m.accountId)?.fableReservation ?? null })) }, accounts, sessions, now);
-    // The route's factor per stored member, which a member whose account did not load is read by.
-    const factorOf = new Map((pool?.members ?? []).map((m) => [m.accountId, m.factor]));
-    const slowPreview = slowDownPreview({ ...previewed, members: previewed.members.map((m) => ({ ...m, factor: factorOf.get(m.accountId) ?? null })) }, accounts);
+    const preview = shedPreview(
+      {
+        ...previewed,
+        members: previewed.members.map((m) => {
+          const s = stored.get(m.accountId);
+          return { ...m, eligible: s?.eligible, fableReservation: s?.fableReservation ?? null };
+        }),
+      },
+      accounts,
+      sessions,
+      now,
+    );
+    const slowPreview = slowDownPreview({ ...previewed, members: previewed.members.map((m) => ({ ...m, factor: stored.get(m.accountId)?.factor ?? null })) }, accounts);
+    type CeilingKey = 'fiveHourCeiling' | 'weeklyCeiling';
+    const ceilingField = (key: CeilingKey, hint: string) => (
+      <Field label={SHARE_FIELD_LABELS[key]} className="cell--half" hint={hint}>
+        <NumberInput min={CEILING_PERCENT.min} max={CEILING_PERCENT.max} value={percentField(form.engine[key])} onNumber={(v) => setEngine(key, shareField(v))} aria-label={SHARE_FIELD_LABELS[key]} aria-invalid={invalid(SHARE_FIELD_LABELS[key])} />
+      </Field>
+    );
+    // A handle takes a number, so an emptied or unparsable field puts it at 0.
+    const ceilingHandle = (key: CeilingKey) => ({ onChange: (v: number) => setEngine(key, v / 100), value: percentOf(form.engine[key] || 0) });
     return {
       identity: (
         <div className="cells">
@@ -1939,34 +1960,8 @@ export function PoolDialog({
             The windows the router works from: the share of each it keeps every account under, and the span each session&apos;s burn is averaged over.
           </p>
           <div className="cells">
-            <Field
-              label="5-hour ceiling (%)"
-              className="cell--half"
-              hint="A move or a new session lands on a member only where its 5-hour window stays under this share until it resets. The slow-down paces a member's 5-hour window to it."
-            >
-              <NumberInput
-                min={CEILING_PERCENT.min}
-                max={CEILING_PERCENT.max}
-                value={percentField(form.engine.fiveHourCeiling)}
-                onNumber={(v) => setEngine('fiveHourCeiling', shareField(v))}
-                aria-label="5-hour ceiling (%)"
-                aria-invalid={invalid('5-hour ceiling (%)')}
-              />
-            </Field>
-            <Field
-              label="Weekly ceiling (%)"
-              className="cell--half"
-              hint="The same line for the 7-day window and each model week, read over the next five hours. A round runs on a member whose weekly window would pass it. At 100 a week is used up to its wall. Lower it for accounts with extra usage on or used outside the router."
-            >
-              <NumberInput
-                min={CEILING_PERCENT.min}
-                max={CEILING_PERCENT.max}
-                value={percentField(form.engine.weeklyCeiling)}
-                onNumber={(v) => setEngine('weeklyCeiling', shareField(v))}
-                aria-label="Weekly ceiling (%)"
-                aria-invalid={invalid('Weekly ceiling (%)')}
-              />
-            </Field>
+            {ceilingField('fiveHourCeiling', "A move or a new session lands on a member only where its 5-hour window stays under this share until it resets. The slow-down paces a member's 5-hour window to it.")}
+            {ceilingField('weeklyCeiling', 'The same line for the 7-day window and each model week, read over the next five hours. A round runs on a member whose weekly window would pass it. At 100 a week is used up to its wall. Lower it for accounts with extra usage on or used outside the router.')}
             {/* A full cell on its own row, since no half stands alone. */}
             <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds)}>
               <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} hint="The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round. A slowed member's holds reach their full length over it. Editable under the Custom preset in Load shedding.">
@@ -1990,9 +1985,8 @@ export function PoolDialog({
               }
             >
               <UtilizationBar
-                // A handle takes a number, so an emptied or unparsable field puts it at 0.
-                fiveHourCeiling={{ onChange: (v) => setEngine('fiveHourCeiling', v / 100), value: percentOf(form.engine.fiveHourCeiling || 0) }}
-                weeklyCeiling={{ onChange: (v) => setEngine('weeklyCeiling', v / 100), value: percentOf(form.engine.weeklyCeiling || 0) }}
+                fiveHourCeiling={ceilingHandle('fiveHourCeiling')}
+                weeklyCeiling={ceilingHandle('weeklyCeiling')}
                 min={CEILING_PERCENT.min}
                 max={CEILING_PERCENT.max}
                 readings={readings}
@@ -2017,20 +2011,20 @@ export function PoolDialog({
             </Expert>
             {/* An expert half halves its row only while its mate draws, in the expert view or under the mate's refusal,
                 so a refused half drawn alone in the plain view spans its row. */}
-            <Expert refused={refusedFields.has('Shed cap (%)')}>
-              <Field label="Shed cap (%)" className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds) ? 'cell--half' : undefined} hint="The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this.">
+            <Expert refused={refusedFields.has(SHARE_FIELD_LABELS.shedCap)}>
+              <Field label={SHARE_FIELD_LABELS.shedCap} className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds) ? 'cell--half' : undefined} hint="The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this.">
                 <NumberInput
                   min={CAP_PERCENT.min}
                   max={CAP_PERCENT.max}
                   value={percentField(form.engine.shedCap)}
                   onNumber={(v) => setEngine('shedCap', shareField(v))}
                   disabled={sheddingPill !== 'custom'}
-                  aria-invalid={invalid('Shed cap (%)')}
+                  aria-invalid={invalid(SHARE_FIELD_LABELS.shedCap)}
                 />
               </Field>
             </Expert>
             <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds)}>
-              <Field label={ENGINE_FIELD_LABELS.shedDwellSeconds} className={expertView || refusedFields.has('Shed cap (%)') ? 'cell--half' : undefined} hint="The least time between two rounds on one member, and how long a moved session stays off it.">
+              <Field label={ENGINE_FIELD_LABELS.shedDwellSeconds} className={expertView || refusedFields.has(SHARE_FIELD_LABELS.shedCap) ? 'cell--half' : undefined} hint="The least time between two rounds on one member, and how long a moved session stays off it.">
                 <NumberInput
                   min={ENGINE_BOUNDS.shedDwellSeconds.min}
                   step={60}

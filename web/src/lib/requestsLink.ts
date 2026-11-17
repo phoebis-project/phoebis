@@ -1,9 +1,9 @@
 import { iso } from '@/api/decode';
 import type { AnalyticsGroupBy, RequestLog } from '@/api/types';
-import { type RangeValue, REQUESTS_CODEC, requestsHref, type RequestsAddress } from './address';
+import { REQUESTS_CODEC, requestsHref, type RequestsAddress } from './address';
 import { OTHER_DIMENSION, foldRequestClass } from './dimensions';
 import { matchesPattern } from './pattern';
-import { aroundRequest, aroundSubject, clockMinute, type LogWindow } from './routingLog';
+import { aroundRequest, aroundSubject, clockMinute, rangeOfWindow } from './routingLog';
 import { HOUR } from './time';
 
 export interface RequestsLinkInput {
@@ -164,10 +164,9 @@ export function requestsWiden(request: Pick<RequestLog, 'accountId' | 'at' | 'du
   // request out, or put this minute's end before its start.
   const cap = Math.max(now, finished ?? at);
   const defaults = { ...REQUESTS_CODEC.defaults, rows };
-  const over = (link: LogWindow): RangeValue => ('range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) });
   return [
-    { href: requestsHref({ ...defaults, range: over(clockMinute(at, cap)) }), label: 'this minute', title: null },
-    ...(request.sessionId === null ? [] : [{ href: requestsHref({ ...defaults, range: over(aroundSubject(at, cap)), session: request.sessionId }), label: 'this session' as const, title: request.sessionId }]),
-    ...(request.accountId === null ? [] : [{ href: requestsHref({ ...defaults, accounts: [request.accountId], range: over(aroundRequest(at, finished, cap)) }), label: 'this account' as const, title: request.accountId }]),
+    { href: requestsHref({ ...defaults, range: rangeOfWindow(clockMinute(at, cap)) }), label: 'this minute', title: null },
+    ...(request.sessionId === null ? [] : [{ href: requestsHref({ ...defaults, range: rangeOfWindow(aroundSubject(at, cap)), session: request.sessionId }), label: 'this session' as const, title: request.sessionId }]),
+    ...(request.accountId === null ? [] : [{ href: requestsHref({ ...defaults, accounts: [request.accountId], range: rangeOfWindow(aroundRequest(at, finished, cap)) }), label: 'this account' as const, title: request.accountId }]),
   ];
 }

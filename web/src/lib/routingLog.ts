@@ -807,9 +807,12 @@ export function compareRows(a: OrderFields, b: OrderFields): number {
   return (b as RoutingEvent).id - (a as RoutingEvent).id;
 }
 
+/** A window as an address's range: a preset by name, and a fixed window as two instants under the custom preset. */
+export const rangeOfWindow = (link: LogWindow): RangeValue => ('range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) });
+
 /** The log's address for `link` through its codec: a preset by name, nothing for the hour, and a window as two instants. */
 export function logHref(link: LogLink): string {
-  const range: RangeValue = 'range' in link ? { from: '', preset: link.range, to: '' } : { from: iso(link.from), preset: 'custom', to: iso(link.to) };
+  const range = rangeOfWindow(link);
   const d = ROUTING_LOG_CODEC.defaults;
   const search = ROUTING_LOG_CODEC.toParams({ ...d, accounts: link.accounts ?? d.accounts, agentId: link.agentId ?? d.agentId, kinds: link.kinds ?? d.kinds, models: link.models ?? d.models, pools: link.pools ?? d.pools, range, request: link.request ?? d.request, session: link.session ?? d.session }).toString();
   return search ? `/routing-log?${search}` : '/routing-log';
@@ -1368,7 +1371,7 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
   // compacted session, so the chip takes the move's own record and an account reason. A failover's landing is a
   // placement whose pin moved, so the move reads off the pin event.
   const dropped = c?.inputTransformations ?? {};
-  const bound = o.pinEvents.some((e) => e.kind === 'pin_migrated') ? transformationOrder(dropped).filter(accountBound) : [];
+  const bound = o.pinEvents.some((e) => e.kind === 'pin_migrated') ? transformationOrder(Object.keys(dropped)).filter(accountBound) : [];
   if (bound.length > 0) {
     const total = bound.reduce((n, key) => n + dropped[key].blocks, 0);
     chips.push({ ...plain(plural(total, 'block'), 'account-bound thinking'), title: bound.map((key) => `${transformationLabel(key)}: ${plural(dropped[key].blocks, 'block')}`).join('\n') });

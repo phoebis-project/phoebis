@@ -109,6 +109,13 @@ export const ENGINE_FIELD_LABELS: Record<keyof typeof ENGINE_BOUNDS, string> = {
   windDownMinutes: 'Wind down (min)',
 };
 
+/** The labels the dialog draws over each share field, as the refusals name them. */
+export const SHARE_FIELD_LABELS: Record<'fiveHourCeiling' | 'shedCap' | 'weeklyCeiling', string> = {
+  fiveHourCeiling: '5-hour ceiling (%)',
+  shedCap: 'Shed cap (%)',
+  weeklyCeiling: 'Weekly ceiling (%)',
+};
+
 /** The labels the dialog draws over each numeric keepalive field, as the refusals name them. */
 export const KEEPALIVE_FIELD_LABELS: Record<NumericKeepaliveKey, string> = {
   maxIdleSeconds: 'Max idle (s)',
@@ -204,14 +211,14 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
 
   // NaN is a field left empty or one whose text the browser could not parse, which fails the range and so holds the
   // save.
-  fraction('utilization', '5-hour ceiling (%)', input.fiveHourCeiling, 50);
-  fraction('utilization', 'Weekly ceiling (%)', input.weeklyCeiling, 50);
+  fraction('utilization', SHARE_FIELD_LABELS.fiveHourCeiling, input.fiveHourCeiling, 50);
+  fraction('utilization', SHARE_FIELD_LABELS.weeklyCeiling, input.weeklyCeiling, 50);
 
   const engine = (group: PoolGroup, key: keyof typeof ENGINE_BOUNDS) =>
     refuse(group, ENGINE_FIELD_LABELS[key], whole(input[key], ENGINE_BOUNDS[key].min, ENGINE_BOUNDS[key].max) ? null : boundText(ENGINE_FIELD_LABELS[key], ENGINE_BOUNDS[key]));
   engine('utilization', 'burnAverageSeconds');
 
-  fraction('shedding', 'Shed cap (%)', input.shedCap, 10);
+  fraction('shedding', SHARE_FIELD_LABELS.shedCap, input.shedCap, 10);
   engine('shedding', 'shedDwellSeconds');
   choice('shedding', 'Warm sessions', WARM_SESSIONS_VALUES, input.warmSessions);
 

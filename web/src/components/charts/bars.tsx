@@ -19,3 +19,9 @@ export const chartBar = (handed: unknown): ReactElement => {
   const drawn = Math.max(width, MIN_WIDTH);
   return <Rectangle {...props} x={(props.x ?? 0) - (drawn - width) / 2} width={drawn} stroke={drawn >= OUTLINE_MIN_WIDTH ? props.stroke : 'none'} />;
 };
+
+/**
+ * The props every bar of a time chart shares, spread on its `Bar` beside its own data key, fill and width cap. Recharts
+ * finds a chart's series among its children by element type, so a component wrapping `Bar` would draw nothing.
+ */
+export const TIME_BAR: { isAnimationActive: boolean; radius: [number, number, number, number]; shape: typeof chartBar } = { isAnimationActive: false, radius: [3, 3, 0, 0], shape: chartBar };

@@ -72,6 +72,8 @@ export const hitUnderReason = (r: Pick<RequestLog, 'usage'>): boolean => {
  * upstream names says why its comparison missed.
  */
 const EXPIRY_REASONS: readonly CacheMissReason[] = ['none', 'not_requested', 'not_returned', 'pending'];
+/** Whether a reason is one of `EXPIRY_REASONS`, which name no diagnosed fault. */
+export const relayReason = (reason: CacheMissReason): boolean => EXPIRY_REASONS.includes(reason);
 
 /**
  * Whether a turn found its cache expired: its serving attempt stored a usage report and read under half the size the
@@ -82,7 +84,7 @@ export const expiredBetweenTurns = (r: Pick<RequestLog, 'attempts' | 'kind' | 's
   const previous = servingAttempt(r)?.previousInputTokens ?? null;
   if (previous === null || r.kind === 'probe' || r.kind === 'count_tokens' || r.storedTokens.input === null) return false;
   const reason = servedMissReason(r);
-  return 2 * r.usage.cacheRead < previous && (reason === null || EXPIRY_REASONS.includes(reason));
+  return 2 * r.usage.cacheRead < previous && (reason === null || relayReason(reason));
 };
 
 /** The serving attempt's answer, where an attempt served the request. */

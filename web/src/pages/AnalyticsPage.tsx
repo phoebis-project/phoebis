@@ -7,7 +7,7 @@ import { iso } from '@/api/decode';
 import { foldGroups, foldRequests, keptRows, latestGenerations, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, Settings, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
-import { chartBar } from '@/components/charts/bars';
+import { TIME_BAR } from '@/components/charts/bars';
 import { Donut, DonutLegend } from '@/components/charts/Donut';
 import { BAR_GAP, CHART_HEIGHT, COUNT_AXIS, OUTCOME_SERIES, PAIRED_BAR_GAPS, PCT_AXIS, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -31,7 +31,7 @@ import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel
 import { clock } from '@/lib/clock';
 import { fableWeekCard, failed, fiveHourCard, pendingReading, weekCard, weekScale, type FiguredPoint } from '@/lib/costs';
 import { countOf, groupInto } from '@/lib/counts';
-import { REASON_HIT_PERCENT } from '@/lib/dimensions';
+import { REASON_HIT_PERCENT, relayReason } from '@/lib/dimensions';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow';
 import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, plural, shortId, shortModel, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
@@ -217,6 +217,7 @@ const totalsOf = (groups: AnalyticsGroup[]) => {
   return { ...summed, tokens: withPlainOutput(summed.tokens) };
 };
 const bucketsOf = (points: AnalyticsPoint[]): Bucket[] => points.map((p) => ({ at: Date.parse(p.at), ...totalsOf(p.groups) }));
+const PROBE_COUNTERS = ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'] as const;
 /** Whether a group counts a request. A group of refused requests alone counts none, and only the Traffic table's
  *  Refused column has a figure for it. */
 const countsRequest = (g: { requests: number }): boolean => g.requests > 0;
@@ -401,7 +402,10 @@ export function AnalyticsPage() {
     reload,
   );
   /** A read with the range's start and end and the instant it left at, so its card's notes read its own answer. */
-  const stamped = <T,>(read: Promise<T>, readAt: number): Promise<Stamped<T>> => read.then((answer) => ({ answer, endMs: span.toMs, fromMs: span.fromMs, readAt }));
+  const stamped = <T,>(read: Promise<T>): Promise<Stamped<T>> => {
+    const readAt = clock.now();
+    return read.then((answer) => ({ answer, endMs: span.toMs, fromMs: span.fromMs, readAt }));
+  };
   // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
   // differs from the Dashboard's, and one account keeps one color across the views. It reads with the window, since
   // each answer redraws every chart of the open tab for colors, hints and resets that seldom move.
@@ -423,9 +427,15 @@ export function AnalyticsPage() {
   const costs = costSettings.data?.subscriptionCosts ?? null;
   const { scale } = reading;
   const sized = useMemo(() => (burn.data && costs ? sizedAccounts(burn.data.accounts, costs) : null), [burn.data, costs]);
+  // The range pill's burn sentence starts at the answer's earliest point, parsed once per answer, not on each render.
+  const burnAnswer = burn.current;
+  const burnFirstAt = useMemo(() => {
+    const points = burnAnswer?.answer.points ?? [];
+    return points.length === 0 ? null : points.reduce((at, p) => Math.min(at, Date.parse(p.at)), Number.POSITIVE_INFINITY);
+  }, [burnAnswer]);
   const rewrites = useGatedRead(
     tab === 'traffic',
-    () => stamped(api.getAnalyticsRewrites({ from: fromIso, to: toIso }, { accountIds: filters.accountId, poolIds: filters.poolId }), clock.now()),
+    () => stamped(api.getAnalyticsRewrites({ from: fromIso, to: toIso }, { accountIds: filters.accountId, poolIds: filters.poolId })),
     [fromIso, toIso, filters.accountId, filters.poolId, tab, generation],
     reload,
   );
@@ -433,14 +443,14 @@ export function AnalyticsPage() {
   // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
   const guardrailCounts = useGatedRead(tab === 'traffic', () => api.getAnalyticsGuardrails({ from: fromIso, to: toIso }), [fromIso, toIso, tab, generation], reload);
   // Side groupings on the page's own query, as byModel is. A session view folds them from the log.
-  const bySpeed = useGatedRead((tab === 'traffic' || tab === 'cost') && sessionId === null, () => stamped(api.getAnalyticsSeries({ ...query, groupBy: 'speed' }), clock.now()), [query, sessionId, tab, generation], reload);
+  const bySpeed = useGatedRead((tab === 'traffic' || tab === 'cost') && sessionId === null, () => stamped(api.getAnalyticsSeries({ ...query, groupBy: 'speed' })), [query, sessionId, tab, generation], reload);
   const byEffort = useGatedRead(tab === 'traffic' && sessionId === null, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }), [query, sessionId, tab, generation], reload);
   // A dollar side narrows the three cost-bearing sections to the rows that side paid for, a filter the page's reads
   // cannot carry (Traffic, Latency and the Cache token charts read every row), so those sections read a second query
   // while one of them shows. The whole reads the page's own.
   const fundedTab = tab === 'cache' || tab === 'cache-warming' || tab === 'cost';
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
-  const costSeries = useGatedRead(funded && fundedTab, () => stamped(api.getAnalyticsSeries({ ...query, funding }), clock.now()), [query, funding, funded, fundedTab, generation], reload);
+  const costSeries = useGatedRead(funded && fundedTab, () => stamped(api.getAnalyticsSeries({ ...query, funding })), [query, funding, funded, fundedTab, generation], reload);
   // The Cache warming card's Probe cost tile and the Probes by outcome legend read this breakdown on its tab, and they
   // read the probe rows counted under every position, the whole included: a breakdown that does not count probes drops
   // a group of plan probes alone and keeps a billed probe's dollars, even in a group with no request, whether a dollar
@@ -460,8 +470,8 @@ export function AnalyticsPage() {
   const warmingSeries = useGatedRead(warming, () => api.getAnalyticsSeries({ ...query, funding: funded ? funding : undefined, includeProbes: true }), [query, funding, funded, warming, generation], reload);
   // Probes by outcome counts the probes of both sides. Under native and All in dollars the two reads above carry no
   // funding and answer it, and under a dollar side, whose reads keep that side's rows, the chart reads the whole once
-  // more.
-  const probeSeries = useGatedRead(warming && funded, () => api.getAnalyticsSeries({ ...query, includeProbes: true }), [query, funded, warming, generation], reload);
+  // more. With the Probes toggle on, that read is the page's own series request, so the chart reads `series` instead.
+  const probeSeries = useGatedRead(warming && funded && !includeProbes, () => api.getAnalyticsSeries({ ...query, includeProbes: true }), [query, funded, warming, generation], reload);
   // Native pairs the whole read's plan probes with the billed probes' dollars, which no member of the whole carries, so
   // the Cache warming tab reads the billed rows once more, counting probes as the whole read does.
   const nativeWarming = warming && unit === 'native';
@@ -482,8 +492,11 @@ export function AnalyticsPage() {
     reload,
   );
   const budgets = useAsync(() => (tab === 'burn' ? api.analyticsBudgets() : Promise.resolve(null)), [tab]);
+  // The agent stands in force in a session view alone, the one view whose reads send it.
+  const controls: Record<AnalyticsControl, boolean> = { accounts: filters.accountId.length > 0, agent: sessionAgent !== null, clients: a.clients.length > 0, keys: filters.keyId.length > 0, models: filters.model.length > 0, pools: filters.poolId.length > 0, probes: includeProbes, session: sessionId !== null, userAgents: a.userAgents.length > 0 };
+  const inForce = new Set((Object.keys(controls) as AnalyticsControl[]).filter((c) => controls[c]));
   // With no filter and no session the page's breakdown is the range's whole key list on its grouping.
-  const plain = sessionId === null && filters.accountId.length === 0 && filters.keyId.length === 0 && filters.model.length === 0 && filters.poolId.length === 0 && a.clients.length === 0 && a.userAgents.length === 0 && !includeProbes && agentGroups === undefined;
+  const plain = inForce.size === 0 && agentGroups === undefined;
   const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId, generation, plain && groupBy === DIM_GROUP.accountId ? breakdown : undefined);
   const keyKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.keyId, generation, plain && groupBy === DIM_GROUP.keyId ? breakdown : undefined);
   const modelKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.model, generation, plain && groupBy === DIM_GROUP.model ? breakdown : undefined);
@@ -547,26 +560,29 @@ export function AnalyticsPage() {
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
-  // A route sums whole hours from the hour that holds the range's start up to the hour ceiling of its end, and a
-  // session view's fold of the request log reads the range itself.
-  const covered = coveredWindow(sessionId === null ? 'rollup' : 'session', span, now, null);
-  const partial: PartialEnds = {
-    first: firstBucketPartial(buckets, covered.fromMs),
-    last: lastBucketPartial(buckets, bucketMs, covered.toMs),
-  };
-  /** A stamped read's two flags, off its own buckets, their width, its own range and the instant it left at. Each
-   *  stamped read is a route's read, the rewrites read in a session view too, so the whole hours hold. False until the
-   *  read answers. */
-  const stampedPartial = <T,>(read: Stamped<T> | null, pointsOf: (answer: T) => readonly { at: string }[]): PartialEnds => {
-    if (read === null) return WHOLE_ENDS;
-    const own = pointsOf(read.answer).map((p) => ({ at: Date.parse(p.at) }));
-    const covered = coveredWindow('rollup', { fromMs: read.fromMs, toMs: read.endMs }, read.readAt, null);
+  /** A bucket chart's two flags, off its buckets, their width, the range it was read for and the instant it left at. A
+   *  route sums whole hours from the hour that holds the range's start up to the hour ceiling of its end, and a session
+   *  view's fold of the request log reads the range itself. */
+  const partialEndsOf = (points: readonly { at: number }[], window: { fromMs: number; toMs: number }, at: number, routed: boolean): PartialEnds => {
+    const covered = coveredWindow(routed ? 'rollup' : 'session', window, at, null);
     return {
-      first: firstBucketPartial(own, covered.fromMs),
-      last: lastBucketPartial(own, own.length > 1 ? own[1].at - own[0].at : rangeBucketMs, covered.toMs),
+      first: firstBucketPartial(points, covered.fromMs),
+      last: lastBucketPartial(points, points.length > 1 ? points[1].at - points[0].at : rangeBucketMs, covered.toMs),
     };
   };
+  const partial = partialEndsOf(buckets, span, now, sessionId === null);
+  /** A stamped read's two flags, off its own buckets, its own range and the instant it left at. Each stamped read is a
+   *  route's read, the rewrites read in a session view too, so the whole hours hold. False until the read answers. */
+  const stampedPartial = <T,>(read: Stamped<T> | null, pointsOf: (answer: T) => readonly { at: string }[]): PartialEnds => {
+    if (read === null) return WHOLE_ENDS;
+    // The flags read the first point, the second for the width and the last, so a long answer parses those three alone.
+    const all = pointsOf(read.answer);
+    const ends = all.length <= 3 ? all : [all[0], all[1], all[all.length - 1]];
+    return partialEndsOf(ends.map((p) => ({ at: Date.parse(p.at) })), { fromMs: read.fromMs, toMs: read.endMs }, read.readAt, true);
+  };
   const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, { agentGroups }, latest)), [stale, sessionId, breakdown.data, kept, groupBy, agentGroups, latest]);
+  // Every group table but Traffic leaves out a group of refused requests alone.
+  const requestGroups = useMemo(() => groups.filter(countsRequest), [groups]);
   const byPoolAnswer = byPool.current;
   const poolGroups = useMemo(() => (sessionId === null ? (byPoolAnswer ?? []) : tab === 'cache-warming' ? foldGroups(kept, 'pool', { agentGroups }, latest) : []), [sessionId, byPoolAnswer, tab, kept, agentGroups, latest]);
   const bySpeedAnswer = bySpeed.current?.answer;
@@ -592,6 +608,7 @@ export function AnalyticsPage() {
     if (sessionId !== null) return funding === undefined ? groups : stale || !fundedTab ? [] : foldGroups(kept, groupBy, { agentGroups, funding }, latest);
     return funded || warming ? (costBreakdownAnswer ?? []) : groups;
   }, [sessionId, funding, funded, warming, groups, stale, fundedTab, kept, groupBy, agentGroups, latest, costBreakdownAnswer]);
+  const costRequestGroups = useMemo(() => costGroups.filter(countsRequest), [costGroups]);
   const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
   const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
   // A session view folds the request log, which the page reads with the toggle, so its figure holds no probe while the
@@ -612,9 +629,6 @@ export function AnalyticsPage() {
   const rowHint = (g: AnalyticsGroup): string | null => (groupBy === 'account' ? hintOf(g.key, g.costShares) : namedAccount === null ? null : hintOf(namedAccount, g.costShares));
   const oneGroup = useMemo(() => (namedAccount === null ? null : oneAccountGroupOf(costTotals, costGroups)), [costGroups, costTotals, namedAccount]);
   const tileHint = namedAccount === null || oneGroup === null ? null : hintOf(namedAccount, oneGroup.costShares);
-  // The agent stands in force in a session view alone, the one view whose reads send it.
-  const controls: Record<AnalyticsControl, boolean> = { accounts: filters.accountId.length > 0, agent: sessionAgent !== null, clients: a.clients.length > 0, keys: filters.keyId.length > 0, models: filters.model.length > 0, pools: filters.poolId.length > 0, probes: includeProbes, session: sessionId !== null, userAgents: a.userAgents.length > 0 };
-  const inForce = new Set((Object.keys(controls) as AnalyticsControl[]).filter((c) => controls[c]));
   const burnAccount = filters.accountId.length === 1 ? filters.accountId[0] : null;
   // The plan chart sizes its lines by tier where each group holds one account's rows.
   const burnSizes = pageBy === 'account' || burnAccount !== null;
@@ -664,15 +678,23 @@ export function AnalyticsPage() {
   const savingTile = warmingTile(keptWarmRequests(costTotals), savingSidesOf(costTotals, billedTotals, 'gross'), costTotals.savingUsd);
   const netTile = warmingTile('less the probe cost', savingSidesOf(costTotals, billedTotals, 'net'), netSaving(costTotals.savingUsd, costTotals.probeCostUsd));
   const warmingPoints = warmingSeries.current ?? NO_POINTS;
+  const warmingBuckets = useMemo(() => bucketsOf(warmingPoints), [warmingPoints]);
   const billedWarmingPoints = nativeWarming ? billedWarmingSeries.current : null;
   const warmingLoading = warmingSeries.current === null || (nativeWarming && billedWarmingSeries.current === null);
   // Under the whole the chart's legend reads the tab's breakdown, and under a dollar side it sums the chart's own
   // buckets. A session view draws the page's fold of the log.
-  const probeAnswer = (funded ? probeSeries : warmingSeries).current;
-  const probeBuckets = useMemo(() => (sessionId === null ? bucketsOf(probeAnswer ?? NO_POINTS) : buckets).map((b) => ({ ...b, probes: probeParts(b.probes) })), [sessionId, probeAnswer, buckets]);
-  const probeTotals = probeParts(sessionId !== null ? totals.probes : funded ? sumGroups((probeAnswer ?? NO_POINTS).flatMap((p) => p.groups)).probes : costTotals.probes);
+  const fundedProbes = includeProbes ? series : probeSeries;
+  const probeAnswer = (funded ? fundedProbes : warmingSeries).current;
+  const { probeBuckets, probeTotals } = useMemo(() => {
+    const raw = sessionId !== null ? buckets : funded ? bucketsOf(probeAnswer ?? NO_POINTS) : warmingBuckets;
+    // The counters are whole numbers, so the buckets sum to the answer's whole. `probeParts` floors the whole rather
+    // than each bucket, since its floor at zero does not add.
+    const summed = { failed: 0, held: 0, migrated: 0, ok: 0, planOk: 0, skipped: 0 };
+    if (funded) for (const b of raw) for (const k of PROBE_COUNTERS) summed[k] += b.probes[k];
+    return { probeBuckets: raw.map((b) => ({ ...b, probes: probeParts(b.probes) })), probeTotals: probeParts(sessionId !== null ? totals.probes : funded ? summed : costTotals.probes) };
+  }, [sessionId, funded, probeAnswer, warmingBuckets, buckets, totals.probes, costTotals.probes]);
   const probeLoading = sessionId === null ? probeAnswer === null || (!funded && costBreakdown.current === null) : loading;
-  const probeFailure = sessionId === null ? failed(funded ? probeSeries.error : (warmingSeries.error ?? costBreakdown.error)) : null;
+  const probeFailure = sessionId === null ? failed(funded ? fundedProbes.error : (warmingSeries.error ?? costBreakdown.error)) : null;
   const byModelFundedAnswer = byModelFunded.current;
   const fundedModels = useMemo(() => new Map((byModelFundedAnswer ?? []).map((g) => [g.key, g])), [byModelFundedAnswer]);
   const fundedByPoolAnswer = fundedByPool.current;
@@ -713,7 +735,7 @@ export function AnalyticsPage() {
           disabled={disabled}
           filters={a}
           options={barOptions}
-          range={{ now: clock.now, sentence: rangeSentenceOf(tab, sessionId !== null, coveredWindow('rollup', span, now, null), burn.current), window: { from: span.fromMs, to: span.toMs } }}
+          range={{ now: clock.now, sentence: rangeSentenceOf(tab, sessionId !== null, coveredWindow('rollup', span, now, null), burnAnswer, burnFirstAt), window: { from: span.fromMs, to: span.toMs } }}
           ref={filtersRef}
           refresh={{
             disabled: ended ? ENDED_RANGE : undefined,
@@ -754,9 +776,7 @@ export function AnalyticsPage() {
                   <XAxis {...axis} />
                   <YAxis {...COUNT_AXIS} />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(p[s.key]) })))} />
-                  {OUTCOME_SERIES.map((s, i) => (
-                    <Bar key={s.key} dataKey={s.key} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === OUTCOME_SERIES.length - 1 ? [3, 3, 0, 0] : 0} shape={chartBar} isAnimationActive={false} />
-                  ))}
+                  {stackedBars(OUTCOME_SERIES, (s) => s.key, ink)}
                 </BarChart>
               </ChartCard>
 
@@ -878,7 +898,7 @@ export function AnalyticsPage() {
               groupLabel={groupLabel}
               columns={analyticsKeysOf('latency', unit).slice(1).map((k, i) => (i === 0 ? k.label : <PctLabel key={k.id} text={k.label} />))}
               order={tableOrder}
-              rows={groups.filter(countsRequest).map((g) => ({
+              rows={requestGroups.map((g) => ({
                 key: g.key,
                 label: g.label,
                 cells: [
@@ -902,11 +922,9 @@ export function AnalyticsPage() {
                 <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
-                  <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
+                  <YAxis {...COUNT_AXIS} allowDecimals />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(p.tokens[s.key]) })))} />
-                  {TOKEN_SERIES.map((s, i) => (
-                    <Bar key={s.key} dataKey={`tokens.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === TOKEN_SERIES.length - 1 ? [3, 3, 0, 0] : 0} shape={chartBar} isAnimationActive={false} />
-                  ))}
+                  {stackedBars(TOKEN_SERIES, (s) => `tokens.${s.key}`, ink)}
                 </BarChart>
               </ChartCard>
 
@@ -977,8 +995,8 @@ export function AnalyticsPage() {
                         { color: ink.series[2], label: 'read cost', value: equivalentOrDash(p.cacheEquivalent?.read, week, cacheScale) },
                       ])}
                     />
-                    <Bar dataKey="cacheEquivalent.write" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />
-                    <Bar dataKey="cacheEquivalent.read" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />
+                    <Bar dataKey="cacheEquivalent.write" fill={ink.series[3]} maxBarSize={12} {...TIME_BAR} />
+                    <Bar dataKey="cacheEquivalent.read" fill={ink.series[2]} maxBarSize={12} {...TIME_BAR} />
                   </BarChart>
                 ) : (
                   <BarChart data={costBuckets} margin={CHART_MARGIN} {...PAIRED_BAR_GAPS}>
@@ -992,14 +1010,14 @@ export function AnalyticsPage() {
                         { color: ink.series[2], label: 'read cost', value: cacheSplit === null ? '-' : usdOrDash(p[cacheDollars].cacheRead) },
                       ])}
                     />
-                    {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheWrite`} fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
-                    {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheRead`} fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
+                    {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheWrite`} fill={ink.series[3]} maxBarSize={12} {...TIME_BAR} />}
+                    {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheRead`} fill={ink.series[2]} maxBarSize={12} {...TIME_BAR} />}
                   </BarChart>
                 )}
               </ChartCard>
             </div>
-            <MissReasonsByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} order={tableOrder} plainLinks={plainLinks} />
-            <DroppedThinkingByGroup groupBy={groupBy} groups={groups} groupLabel={groupLabel} link={linkInput} loading={loading} order={tableOrder} plainLinks={plainLinks} totals={totals} />
+            <MissReasonsByGroup groupBy={groupBy} groups={requestGroups} groupLabel={groupLabel} link={linkInput} loading={loading} order={tableOrder} plainLinks={plainLinks} />
+            <DroppedThinkingByGroup groupBy={groupBy} groups={requestGroups} groupLabel={groupLabel} link={linkInput} loading={loading} order={tableOrder} plainLinks={plainLinks} />
             {sessionId === null && (
               <CacheByModel
                 groups={byModel.current ?? []}
@@ -1064,7 +1082,7 @@ export function AnalyticsPage() {
                 groupLabel={groupLabel}
                 columns={NATIVE_COLUMNS}
                 order={tableOrder}
-                rows={scale === null ? [] : costGroups.filter(countsRequest).map((g) => nativeRowOf(g, week, scale, rowHint(g)))}
+                rows={scale === null ? [] : costRequestGroups.map((g) => nativeRowOf(g, week, scale, rowHint(g)))}
               />
             )}
             {sessionId === null && unit !== 'native' && (
@@ -1076,7 +1094,7 @@ export function AnalyticsPage() {
                 groupLabel={groupLabel}
                 columns={analyticsKeysOf('cost', unit).slice(1).map((k) => k.label)}
                 order={tableOrder}
-                rows={costGroups.filter(countsRequest).map((g) => {
+                rows={costRequestGroups.map((g) => {
                   const perRequest = per(g.costUsd, g.requests, 1) ?? 0;
                   const perThousand = per(g.costUsd, g.tokens.output, 1000) ?? 0;
                   return {
@@ -1106,10 +1124,7 @@ export function AnalyticsPage() {
                   <XAxis {...axis} />
                   <YAxis {...COUNT_AXIS} />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(p.probes[s.key]) })))} />
-                  {!probesUnmeasured &&
-                    PROBE_SERIES.map((s, i) => (
-                      <Bar key={s.key} dataKey={`probes.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === PROBE_SERIES.length - 1 ? [3, 3, 0, 0] : 0} shape={chartBar} isAnimationActive={false} />
-                    ))}
+                  {!probesUnmeasured && stackedBars(PROBE_SERIES, (s) => `probes.${s.key}`, ink)}
                 </BarChart>
               </ChartCard>
 
@@ -1128,6 +1143,7 @@ export function AnalyticsPage() {
               <SavingChart
                 axis={axis}
                 billed={billedWarmingPoints}
+                buckets={sessionId === null ? warmingBuckets : buckets}
                 failure={weekFailure(warmingError)}
                 loading={(sessionId === null ? warmingLoading : loading) || weekWait}
                 points={sessionId === null ? warmingPoints : points}
@@ -1142,7 +1158,7 @@ export function AnalyticsPage() {
                   <XAxis {...axis} />
                   <YAxis {...COUNT_AXIS} />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[0], label: 'kept-warm requests', value: keptWarm === null || p.keptWarm === null ? '-' : fmtInt(p.keptWarm.requests) }])} />
-                  {keptWarm !== null && <Bar dataKey="keptWarm.requests" fill={ink.series[0]} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
+                  {keptWarm !== null && <Bar dataKey="keptWarm.requests" fill={ink.series[0]} maxBarSize={22} {...TIME_BAR} />}
                 </BarChart>
               </ChartCard>
 
@@ -1150,9 +1166,9 @@ export function AnalyticsPage() {
                 <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
-                  <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
+                  <YAxis {...COUNT_AXIS} allowDecimals />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[2], label: 'kept-warm tokens', value: keptWarm === null || p.keptWarm === null ? '-' : fmtCompact(keptWarmTokens(p.keptWarm)) }])} />
-                  {keptWarm !== null && <Bar dataKey={(p: Bucket) => (p.keptWarm === null ? null : keptWarmTokens(p.keptWarm))} fill={ink.series[2]} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
+                  {keptWarm !== null && <Bar dataKey={(p: Bucket) => (p.keptWarm === null ? null : keptWarmTokens(p.keptWarm))} fill={ink.series[2]} maxBarSize={22} {...TIME_BAR} />}
                 </BarChart>
               </ChartCard>
             </div>
@@ -1509,7 +1525,7 @@ const refusalRows = (answer: RefusalCategoriesAnswer, input: ReasonLink, plainLi
 /** Requests per effort level, each named as the rollups file it; `none`, the requests that asked for no level, last. */
 function EffortBars({ groups, color }: { color: string; groups: AnalyticsGroup[] }) {
   const rows = groups
-    .filter((g) => g.requests > 0)
+    .filter(countsRequest)
     .map((g) => ({ count: g.requests, label: g.key }))
     .sort((a, b) => Number(a.label === 'none') - Number(b.label === 'none') || b.count - a.count || a.label.localeCompare(b.label));
   return <CountBars color={color} empty="No requests in range." rows={rows} />;
@@ -1520,15 +1536,16 @@ const MISS_REASON_BLURB = `From the cache diagnostics beta: the reason each answ
 /** The hover of a fault reason's hit part, on its bar and beside its count in the table. */
 const reasonHitTitle = (hits: number) => `${fmtInt(hits)} of these requests read ${REASON_HIT_PERCENT}% or more of their prompt from the cache`;
 
-/** A request not asked, an answer that returned no reason and a comparison still running: no finished comparison. */
-const NEUTRAL_REASONS: readonly CacheMissReason[] = ['not_requested', 'not_returned', 'pending'];
-
 /**
- * Every reason but no divergence and the neutral ones reads as a fault, like the error bars above: a diagnosed
- * divergence, a missing previous message, an unavailable comparison and a name the console has no label for. A fault's
- * bar and cell draw apart the requests under it that still read their prompt from the cache.
+ * Every reason but no divergence and the relay's own words reads as a fault, like the error bars above: a diagnosed
+ * divergence, a missing previous message, an unavailable comparison and a name the console has no label for. The
+ * relay's words (a request not asked, an answer that returned no reason and a comparison still running) name no
+ * finished comparison. A fault's bar and cell draw apart the requests under it that still read their prompt from the
+ * cache.
  */
-const isFaultReason = (reason: CacheMissReason): boolean => reason !== 'none' && !NEUTRAL_REASONS.includes(reason);
+const isFaultReason = (reason: CacheMissReason): boolean => !relayReason(reason);
+/** A group counts its hits under every reason, and a bar or cell draws apart the hits under a fault alone. */
+const faultHits = (group: Pick<AnalyticsGroup, 'cacheMissReasonHits'>, reason: CacheMissReason): number => (isFaultReason(reason) ? countOf(group.cacheMissReasonHits, reason) : 0);
 
 function reasonColor(ink: ReturnType<typeof useChartInk>, reason: CacheMissReason): string {
   if (reason === 'none') return ink.series[2];
@@ -1555,10 +1572,18 @@ function CountLink({ children, target }: { children: ReactNode; target: Requests
   );
 }
 
+const requestShare = (count: number, totals: Pick<AnalyticsGroup, 'requests'>): string => fmtPct(totals.requests ? count / totals.requests : 0, 1);
+
+/** A count of the reasons panel or the dropped thinking blocks card, linking its requests under `narrow`, and in its
+ *  group where a table's row holds it. */
+function LinkedCount({ count, group, link, narrow, plainLinks }: { count: number; group?: RequestsLinkInput['group']; link: ReasonLink; narrow: NonNullable<RequestsLinkInput['narrow']>; plainLinks: boolean }) {
+  return <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group, narrow })}>{fmtInt(count)}</CountLink>;
+}
+
 function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks: boolean; totals: AnalyticsGroup }) {
   const ink = useChartInk();
   const rows = missReasonOrder([totals])
-    .map((reason) => ({ count: countOf(totals.cacheMissReasons, reason), hits: isFaultReason(reason) ? countOf(totals.cacheMissReasonHits, reason) : 0, reason }))
+    .map((reason) => ({ count: countOf(totals.cacheMissReasons, reason), hits: faultHits(totals, reason), reason }))
     .sort((a, b) => b.count - a.count);
   const max = Math.max(1, ...rows.map((r) => r.count));
   if (rows.every((r) => r.count === 0)) return <p className="muted">No diagnostics in range.</p>;
@@ -1568,11 +1593,11 @@ function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks
         <HBarRow
           key={r.reason}
           color={reasonColor(ink, r.reason)}
-          count={<CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count: r.count, narrow: { cacheMissReasons: [r.reason] } })}>{fmtInt(r.count)}</CountLink>}
+          count={<LinkedCount count={r.count} link={link} narrow={{ cacheMissReasons: [r.reason] }} plainLinks={plainLinks} />}
           fill={r.count / max}
           label={missLabel(r.reason)}
           second={r.hits > 0 ? { color: ink.muted, portion: r.hits / r.count, title: reasonHitTitle(r.hits) } : undefined}
-          share={fmtPct(totals.requests ? r.count / totals.requests : 0, 1)}
+          share={requestShare(r.count, totals)}
         />
       ))}
     </ul>
@@ -1588,14 +1613,13 @@ const DROPPED_THINKING_BLURB = 'From the thinking-binding beta: requests whose a
 function DroppedThinkingBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks: boolean; totals: AnalyticsGroup }) {
   const ink = useChartInk();
   // The sort is stable, so a tie keeps the order the console lists the keys in.
-  const rows = transformationOrder(totals.inputTransformations)
+  const rows = transformationOrder(Object.keys(totals.inputTransformations))
     .map((key) => ({ count: countOf(totals.inputTransformations, key), key }))
     .sort((a, b) => b.count - a.count);
   const moved = totals.inputTransformationsMoved;
   const none = totals.inputTransformationsNone;
   if (rows.length === 0 && moved === 0 && none === 0) return <p className="muted">No answer reported its thinking blocks in range.</p>;
   const max = Math.max(1, ...rows.map((r) => r.count));
-  const share = (count: number) => fmtPct(totals.requests ? count / totals.requests : 0, 1);
   return (
     <div className="stack">
       {rows.length > 0 && (
@@ -1604,10 +1628,10 @@ function DroppedThinkingBars({ link, plainLinks, totals }: { link: ReasonLink; p
             <HBarRow
               key={r.key}
               color={accountBound(r.key) ? ink.series[7] : ink.muted}
-              count={<CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count: r.count, narrow: { inputTransformations: [r.key] } })}>{fmtInt(r.count)}</CountLink>}
+              count={<LinkedCount count={r.count} link={link} narrow={{ inputTransformations: [r.key] }} plainLinks={plainLinks} />}
               fill={r.count / max}
               label={transformationLabel(r.key)}
-              share={share(r.count)}
+              share={requestShare(r.count, totals)}
             />
           ))}
         </ul>
@@ -1615,7 +1639,7 @@ function DroppedThinkingBars({ link, plainLinks, totals }: { link: ReasonLink; p
       <ul className="plain-list">
         <li>Moved to another account: {fmtInt(moved)}</li>
         <li>
-          Nothing dropped: {fmtInt(none)} <span className="muted">{share(none)}</span>
+          Nothing dropped: {fmtInt(none)} <span className="muted">{requestShare(none, totals)}</span>
         </li>
       </ul>
     </div>
@@ -1697,15 +1721,14 @@ const chartEquivalent = (s: ReturnType<typeof probeSidesOf>, week: WeekPosition,
 /**
  * The Saved by probes chart: two bars per bucket, the gross saving and the probe cost, each bucket's net in the
  * tooltip, and the range's gross, cost and net in the legend, the net in the critical ink under zero. `points` is the
- * series that counts probes under the position's funding and `billed` native's billed twin. The dollar positions draw
- * dollars. Native draws the plan side's Pro-week figures, read in the chosen week, with the billed dollars beside them
- * in the tooltip, as the Probe cost tile pairs them, and the billed dollars alone where the range holds no plan side,
- * as the cache cost card does. A session view's fold carries no credit, so `session` draws no bar and dashes the
- * legend.
+ * series that counts probes under the position's funding, `buckets` its fold, and `billed` native's billed twin. The
+ * dollar positions draw dollars. Native draws the plan side's Pro-week figures, read in the chosen week, with the
+ * billed dollars beside them in the tooltip, as the Probe cost tile pairs them, and the billed dollars alone where the
+ * range holds no plan side, as the cache cost card does. A session view's fold carries no credit, so `session` draws
+ * no bar and dashes the legend.
  */
-function SavingChart({ axis, billed, failure, loading, points, reading, session, unit }: { axis: TimeAxis; billed: AnalyticsPoint[] | null; failure: WeekReading['failure']; loading: boolean; points: AnalyticsPoint[]; reading: WeekReading; session: boolean; unit: UnitPosition }) {
+function SavingChart({ axis, billed, buckets, failure, loading, points, reading, session, unit }: { axis: TimeAxis; billed: AnalyticsPoint[] | null; buckets: Bucket[]; failure: WeekReading['failure']; loading: boolean; points: AnalyticsPoint[]; reading: WeekReading; session: boolean; unit: UnitPosition }) {
   const ink = useChartInk();
-  const buckets = useMemo(() => bucketsOf(points), [points]);
   const billedBuckets = useMemo(() => (billed === null ? null : bucketsOf(billed)), [billed]);
   const billedAt = useMemo(() => new Map((billedBuckets ?? []).map((b) => [b.at, b])), [billedBuckets]);
   const totals = useMemo(() => totalsOf(points.flatMap((p) => p.groups)), [points]);
@@ -1760,8 +1783,8 @@ function SavingChart({ axis, billed, failure, loading, points, reading, session,
         <XAxis {...axis} />
         {equivalents ? <YAxis tickFormatter={(v: number) => fmtShare(v * factor)} tickLine={false} axisLine={false} width={60} /> : <YAxis {...usdAxis(drawn.flatMap((b) => [b.savingUsd, b.probeCostUsd]))} tickLine={false} axisLine={false} />}
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>(tip)} />
-        {!session && <Bar dataKey={gross} fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
-        {!session && <Bar dataKey={cost} fill={ink.series[3]} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
+        {!session && <Bar dataKey={gross} fill={ink.series[1]} maxBarSize={22} {...TIME_BAR} />}
+        {!session && <Bar dataKey={cost} fill={ink.series[3]} maxBarSize={22} {...TIME_BAR} />}
       </BarChart>
     </ChartCard>
   );
@@ -1774,8 +1797,8 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, order,
   const reasons = missReasonOrder(groups);
   const cell = (g: AnalyticsGroup, reason: CacheMissReason) => {
     const count = countOf(g.cacheMissReasons, reason);
-    const hits = isFaultReason(reason) ? countOf(g.cacheMissReasonHits, reason) : 0;
-    const counted = <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, narrow: { cacheMissReasons: [reason] } })}>{fmtInt(count)}</CountLink>;
+    const hits = faultHits(g, reason);
+    const counted = <LinkedCount count={count} group={{ by: groupBy, key: g.key }} link={link} narrow={{ cacheMissReasons: [reason] }} plainLinks={plainLinks} />;
     if (hits === 0) return counted;
     return (
       <>
@@ -1801,7 +1824,7 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, order,
         'Expired between turns',
       ]}
       order={order}
-      rows={groups.filter(countsRequest).map((g) => ({
+      rows={groups.map((g) => ({
         key: g.key,
         label: g.label,
         // Expired between turns is no reason the Requests page filters by, so it stays plain.
@@ -1814,16 +1837,13 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, order,
 }
 
 /**
- * A column per key the totals hold, each count linking its key's requests in its group, then Moved and Nothing dropped,
+ * A column per key the groups hold, each count linking its key's requests in its group, then Moved and Nothing dropped,
  * which no Requests filter lists. The keys are an open set and take no sort key, so a row carries no figure and the
  * group's label orders the rows.
  */
-function DroppedThinkingByGroup({ groupBy, groups, groupLabel, link, loading, order, plainLinks, totals }: { groupBy: GroupBy; groupLabel: string; groups: AnalyticsGroup[]; link: ReasonLink; loading: boolean; order: TableOrder; plainLinks: boolean; totals: AnalyticsGroup }) {
-  const keys = transformationOrder(totals.inputTransformations);
-  const cell = (g: AnalyticsGroup, key: string) => {
-    const count = countOf(g.inputTransformations, key);
-    return <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, narrow: { inputTransformations: [key] } })}>{fmtInt(count)}</CountLink>;
-  };
+function DroppedThinkingByGroup({ groupBy, groups, groupLabel, link, loading, order, plainLinks }: { groupBy: GroupBy; groupLabel: string; groups: AnalyticsGroup[]; link: ReasonLink; loading: boolean; order: TableOrder; plainLinks: boolean }) {
+  const keys = transformationOrder(groups.flatMap((g) => Object.keys(g.inputTransformations)));
+  const cell = (g: AnalyticsGroup, key: string) => <LinkedCount count={countOf(g.inputTransformations, key)} group={{ by: groupBy, key: g.key }} link={link} narrow={{ inputTransformations: [key] }} plainLinks={plainLinks} />;
   return (
     <BreakdownTable
       title={`Dropped thinking blocks by ${groupLabel.toLowerCase()}`}
@@ -1839,7 +1859,7 @@ function DroppedThinkingByGroup({ groupBy, groups, groupLabel, link, loading, or
         'Nothing dropped',
       ]}
       order={order}
-      rows={groups.filter(countsRequest).map((g) => ({
+      rows={groups.map((g) => ({
         key: g.key,
         label: g.label,
         cells: [...keys.map((key) => cell(g, key)), fmtInt(g.inputTransformationsMoved), fmtInt(g.inputTransformationsNone)],
@@ -2203,14 +2223,13 @@ const spanWords = (w: { fromMs: number; toMs: number }): string => `${fmtAbsolut
  * The range pill's sentence: the window the open tab's cards read, by the tab first and the view second. The burn read
  * and the account rollups send no session, so Burn and Accounts name their route's window in a session view too, where
  * three Traffic cards read their routes beside the folded ones. Burn names the window of the answer its cards draw,
- * whose first bucket the route chose, so it names none until that answer holds a point.
+ * whose first bucket the route chose, so it names none until that answer holds a point. `burnFirstAt` is that answer's
+ * earliest point, null where it holds none.
  */
-function rangeSentenceOf(tab: SectionId, session: boolean, wholeHours: { fromMs: number; toMs: number }, burn: Stamped<{ points: BurnPoint[] }> | null): string | undefined {
+function rangeSentenceOf(tab: SectionId, session: boolean, wholeHours: { fromMs: number; toMs: number }, burn: Stamped<{ points: BurnPoint[] }> | null, burnFirstAt: number | null): string | undefined {
   if (tab === 'burn') {
-    const points = burn?.answer.points ?? [];
-    if (burn === null || points.length === 0) return undefined;
-    const first = points.reduce((at, p) => Math.min(at, Date.parse(p.at)), Number.POSITIVE_INFINITY);
-    return `Reads from the first bucket's start: ${spanWords(coveredWindow('burn', { fromMs: burn.fromMs, toMs: burn.endMs }, burn.readAt, first))}`;
+    if (burn === null || burnFirstAt === null) return undefined;
+    return `Reads from the first bucket's start: ${spanWords(coveredWindow('burn', { fromMs: burn.fromMs, toMs: burn.endMs }, burn.readAt, burnFirstAt))}`;
   }
   if (tab === 'accounts' || !session) return `Reads whole hours: ${spanWords(wholeHours)}`;
   if (tab === 'traffic') return `Reads the range itself. ${MIGRATION_REWRITES_TITLE}, ${REFUSAL_CATEGORIES_TITLE} and ${GUARDRAILS_TITLE} read whole hours: ${spanWords(wholeHours)}`;
@@ -2230,6 +2249,13 @@ function timeAxis(bucketMs: number, ink: ChartInk): TimeAxis {
 }
 /** The top tick label and a line's last point center on the top and right edges. The axes hold the other labels. */
 const CHART_MARGIN = { top: 8, right: 8, bottom: 0, left: 0 };
+/**
+ * A stacked time chart's bars, one per series, the surface outline parting the segments and the top segment rounded.
+ * A chart calls it as a function: recharts finds its series among its children by element type, which a component in
+ * between would hide.
+ */
+const stackedBars = <S extends { key: string; slot: number }>(series: readonly S[], dataKeyOf: (s: S) => string, ink: ChartInk) =>
+  series.map((s, i) => <Bar key={s.key} dataKey={dataKeyOf(s)} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} {...TIME_BAR} radius={i === series.length - 1 ? TIME_BAR.radius : 0} />);
 
 type SpeedRow = { at: number; fast: number; standard: number };
 const requestsIn = (p: AnalyticsPoint, key: string) => p.groups.find((g) => g.key === key)?.requests ?? 0;
@@ -2254,9 +2280,7 @@ function SpeedCard({ axis, points, error, loading, partial }: { axis: TimeAxis; 
         <XAxis {...axis} />
         <YAxis {...COUNT_AXIS} />
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<SpeedRow>((p) => SPEED_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(p[s.key]) })))} />
-        {SPEED_SERIES.map((s, i) => (
-          <Bar key={s.key} dataKey={s.key} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === SPEED_SERIES.length - 1 ? [3, 3, 0, 0] : 0} shape={chartBar} isAnimationActive={false} />
-        ))}
+        {stackedBars(SPEED_SERIES, (s) => s.key, ink)}
       </BarChart>
     </ChartCard>
   );
@@ -2333,9 +2357,9 @@ function RewritesCard({ answer, axis, error, inForce, partial }: { answer: Rewri
       <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
         <XAxis {...axis} />
-        <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
+        <YAxis {...COUNT_AXIS} allowDecimals />
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<{ at: number; rewriteTokens: number }>((p) => [{ color: ink.series[1], label: 'rewrite tokens', value: fmtCompact(p.rewriteTokens) }])} />
-        <Bar dataKey="rewriteTokens" fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />
+        <Bar dataKey="rewriteTokens" fill={ink.series[1]} maxBarSize={22} {...TIME_BAR} />
       </BarChart>
     </ChartCard>
   );
@@ -2375,7 +2399,7 @@ function HeldChart({ answer, axis, note }: { answer: RewritesAnswer; axis: TimeA
             <XAxis {...axis} />
             <YAxis tickFormatter={(v: number) => fmtMs(v)} tickLine={false} axisLine={false} width={44} />
             <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<HeldRow>((p) => [{ color: ink.warning, label: heldHover(p), value: null }])} />
-            <Bar dataKey="heldMs" fill={ink.warning} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />
+            <Bar dataKey="heldMs" fill={ink.warning} maxBarSize={22} {...TIME_BAR} />
           </BarChart>
         </ResponsiveContainer>
       )}
@@ -2983,7 +3007,7 @@ function AccountsSection({
         title="Peak 5-hour utilization"
         subtitle="Highest utilization seen in each bucket, per account"
         loading={loading}
-        legend={accounts.filter((a) => data.some((p) => p[a] !== null && p[a] !== undefined)).map((a) => ({ color: colorOf(a), label: a, shape: 'line' }))}
+        legend={legendOf(accounts.filter((a) => data.some((p) => p[a] !== null && p[a] !== undefined)))}
       >
         <LineChart data={data} margin={CHART_MARGIN}>
           <CartesianGrid vertical={false} stroke={ink.grid} />

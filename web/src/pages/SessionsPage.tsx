@@ -26,7 +26,7 @@ import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_H
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
-import { ageWord, aroundSubject, logHref, shedOrigin, triggerPhrase } from '@/lib/routingLog';
+import { ageWord, aroundSubject, logHref, rangeOfWindow, shedOrigin, triggerPhrase } from '@/lib/routingLog';
 import { memberSpeed } from '@/lib/selection';
 import type { UnitPosition } from '@/lib/unit';
 import { windowHint } from '@/lib/windows';
@@ -149,18 +149,21 @@ const noRecipeText = ({ idleLimit, noRecipe }: Pick<Row, 'idleLimit' | 'noRecipe
 const rowKey = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `${session.keyId}:${session.keyGeneration}:${session.sessionId}`;
 /** The row's element id, so a fork's badge can link to its base; a session id may hold characters an id may not. */
 const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `session-${encodeURIComponent(rowKey(session))}`;
+/** The agent a link narrows the session to, with the first and the last request the request log's range reads off. */
+type LinkAgent = { agentId: string; firstRequestAt: string | null; lastRequestAt: string | null };
 /**
  * The request log on the session the client sent under the row's key lifetime, since a key id created again can hold
  * the same session id, over the range `requestsSpan` reads off the first and the last request of the session or of the
  * agent the link is for, read on the clock when the link is made (the menu's click, a line's draw): the page's `now` is
- * a sample up to five seconds old, and the request log measures its window from its own load. The session lands as the
- * log's session chip, which matches the id exactly, and an agent line's link adds its agent's.
+ * a sample up to five seconds old, and the request log measures its window from its own load. An agent without a first
+ * request of its own reads the session's. The session lands as the log's session chip, which matches the id exactly,
+ * and an agent line's link adds its agent's.
  */
-const requestsHref = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, firstRequestAt: string | null, lastRequestAt: string | null, agentId?: string) => {
+const requestsHref = (session: Pick<Session, 'firstRequestAt' | 'keyGeneration' | 'keyId' | 'lastRequestAt' | 'sessionId'>, agent?: LinkAgent) => {
   const defaults = REQUESTS_CODEC.defaults;
-  const span = requestsSpan(firstRequestAt, lastRequestAt, clock.now());
-  const range = span === null ? defaults.range : 'preset' in span ? { from: '', preset: span.preset, to: '' } : { from: iso(span.from), preset: 'custom', to: iso(span.to) };
-  return requestsAddressHref({ ...defaults, agentId: agentId ?? defaults.agentId, keys: [keyLifetime(session.keyId, session.keyGeneration)], range, session: session.sessionId });
+  const span = requestsSpan(agent?.firstRequestAt ?? session.firstRequestAt, agent === undefined ? session.lastRequestAt : agent.lastRequestAt, clock.now());
+  const range = span === null ? defaults.range : rangeOfWindow('preset' in span ? { range: span.preset } : span);
+  return requestsAddressHref({ ...defaults, agentId: agent?.agentId ?? defaults.agentId, keys: [keyLifetime(session.keyId, session.keyGeneration)], range, session: session.sessionId });
 };
 /** The analytics on the session the client sent under the row's key lifetime, an agent line's narrowed to its agent. */
 const analyticsHref = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, agentId?: string) =>
@@ -168,16 +171,16 @@ const analyticsHref = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessi
 
 /**
  * The menus' Analytics and request log items, the session's or an agent's, each address built when its item is chosen
- * over the first and the last request handed in. Both views read the ledger, so a session that never reached it has
- * nothing to open. The count leaves a refused request out while the log lists it, so a ledgered session reads off its
- * last request instead.
+ * over the first and the last request of the session or of the agent handed in. Both views read the ledger, so a
+ * session that never reached it has nothing to open. The count leaves a refused request out while the log lists it, so
+ * a ledgered session reads off its last request instead.
  */
-const ledgerItems = (session: Session, firstRequestAt: string | null, lastRequestAt: string | null, navigate: (path: string) => void, agentId?: string) => {
+const ledgerItems = (session: Session, navigate: (path: string) => void, agent?: LinkAgent) => {
   const hasTraffic = session.lastRequestAt !== null;
   const title = hasTraffic ? undefined : NO_TRAFFIC_HINT;
   return [
-    { label: 'View in analytics', disabled: !hasTraffic, title, onClick: () => navigate(analyticsHref(session, agentId)) },
-    { label: 'View in requests', disabled: !hasTraffic, title, onClick: () => navigate(requestsHref(session, firstRequestAt, lastRequestAt, agentId)) },
+    { label: 'View in analytics', disabled: !hasTraffic, title, onClick: () => navigate(analyticsHref(session, agent?.agentId)) },
+    { label: 'View in requests', disabled: !hasTraffic, title, onClick: () => navigate(requestsHref(session, agent)) },
   ];
 };
 
@@ -658,9 +661,6 @@ function RowAccount({ accent, account, others, session, speed }: { accent: boole
   );
 }
 
-/** The window a mark's trigger read, as the routing log's Pin fold words it. */
-const triggerWords = (window: string): string => ` ${triggerPhrase(window)}`;
-
 /**
  * The warning badge `leaving` while a shedding round's mark stands on the session's pin, the mark's account, window and
  * instant on hover.
@@ -669,7 +669,7 @@ function ShedBadge({ session }: { session: Pick<Session, 'accountId' | 'mark'> }
   const mark = openMark(session);
   if (mark === null) return null;
   return (
-    <Badge tone="warning" title={`Marked to leave ${mark.on}${triggerWords(mark.window)} at ${fmtAbsolute(mark.at)}. The next request moves the session`}>
+    <Badge tone="warning" title={`Marked to leave ${mark.on} ${triggerPhrase(mark.window)} at ${fmtAbsolute(mark.at)}. The next request moves the session`}>
       leaving
     </Badge>
   );
@@ -1015,7 +1015,7 @@ function SessionRows({
           <Menu
             label={`Actions for session ${shortId(session.sessionId, SESSION_CHARS)}${session.historical ? ', deleted holder' : ''}`}
             items={[
-              ...ledgerItems(session, session.firstRequestAt, session.lastRequestAt, navigate),
+              ...ledgerItems(session, navigate),
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request and
               // opens an hour either side of the session's last activity.
               { label: 'View in routing log', disabled: !session.sessionId, onClick: () => navigate(routingLogTo()) },
@@ -1108,7 +1108,7 @@ function SessionRows({
                       ) : (
                         <>
                           <ShedBadge session={session} />
-                          {` on ${mark.on}${triggerWords(mark.window)}`}
+                          {` on ${mark.on} ${triggerPhrase(mark.window)}`}
                         </>
                       ),
                     },
@@ -1177,7 +1177,7 @@ function SessionRows({
                         <span>State</span>
                       </div>
                       {shownLines.map((line) => (
-                        <AgentLine key={`${line.agentId}|${line.model}`} line={line} now={now} requestsTo={hasTraffic ? requestsHref(session, line.firstRequestAt ?? session.firstRequestAt, lineLastRequestAt(line) ?? session.lastRequestAt, line.agentId) : null} />
+                        <AgentLine key={`${line.agentId}|${line.model}`} line={line} now={now} requestsTo={hasTraffic ? requestsHref(session, { agentId: line.agentId, firstRequestAt: line.firstRequestAt, lastRequestAt: lineLastRequestAt(line) ?? session.lastRequestAt }) : null} />
                       ))}
                     </div>
                   )}
@@ -1407,8 +1407,8 @@ function AgentRow({
   const recipe = line?.recipe ?? null;
   // The agent's request log link opens under the check the menu's ledger items read.
   const hasTraffic = session.lastRequestAt !== null;
-  const firstRequestAt = figures?.firstRequestAt ?? session.firstRequestAt;
   const lastRequestAt = figures?.lastRequestAt ?? null;
+  const linked = { agentId, firstRequestAt: figures?.firstRequestAt ?? null, lastRequestAt };
   const model = line === null ? (figures?.model ?? null) : line.model;
   const short = model === null ? null : shortModel(model);
   // A line's account is its pin's, and its recipe's only where no pin stands, as the row's "+N" and the Account filter
@@ -1426,7 +1426,7 @@ function AgentRow({
   return (
     <tr>
       <td className="mono" title={title === '' ? undefined : title}>
-        {hasTraffic ? <Link to={requestsHref(session, firstRequestAt, lastRequestAt, agentId)}>{agentId}</Link> : agentId}
+        {hasTraffic ? <Link to={requestsHref(session, linked)}>{agentId}</Link> : agentId}
       </td>
       <td>{type ?? <span className="muted">-</span>}</td>
       <td title={model === null ? undefined : modelTitle(model)}>
@@ -1469,7 +1469,7 @@ function AgentRow({
         <Menu
           label={`Actions for agent ${agentId}`}
           items={[
-            ...ledgerItems(session, firstRequestAt, lastRequestAt, navigate, agentId),
+            ...ledgerItems(session, navigate, linked),
             // An hour either side of the agent's last request, read when the item is chosen.
             { label: 'View in routing log', onClick: () => navigate(logHref({ agentId, session: session.sessionId, ...aroundSubject(lastRequestAt === null ? null : Date.parse(lastRequestAt), now) })) },
           ]}

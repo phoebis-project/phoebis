@@ -6,7 +6,7 @@ import { has, lookup } from '@/lib/counts';
 import { earlierHolderLabel, fmtCompact, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, joinPresent, parseKeyLifetime, plural, weekShort } from '@/lib/format';
 import { planLabel, pricedTier } from '@/lib/quota';
 import { ageWord, HOUR, hourCeil } from '@/lib/time';
-import type { UnitPosition, WeekPosition } from '@/lib/unit';
+import { UNIT_LABEL, type UnitPosition, type WeekPosition } from '@/lib/unit';
 import { windowHint } from '@/lib/windows';
 
 /** Why a session's pin moved, as the pool card's moves tile, the rewrites legend and the routing log word it. */
@@ -370,9 +370,11 @@ const UNIT_META: Record<DollarPosition, string> = { all: 'all requests', equival
 /**
  * The cost label per dollar position. The Analytics page's first Cost tile reads it under a dollar position, the
  * Dashboard's cost tile under every position through `dollarsOf`, and the Keys and Pools cost tiles and a pool card's
- * cost row under the two positions that name one side.
+ * cost row under the two positions that name one side, through `namedCostLabel`.
  */
-export const UNIT_TILE_LABEL: Record<DollarPosition, string> = { all: 'Estimated cost', equivalent: 'Dollar equivalent', usd: 'Billed dollars' };
+export const UNIT_TILE_LABEL: Record<DollarPosition, string> = { all: 'Estimated cost', equivalent: UNIT_LABEL.equivalent, usd: UNIT_LABEL.usd };
+/** The cost label of a position that names one side, and null under the others. */
+export const namedCostLabel = (unit: UnitPosition): string | null => (unit === 'equivalent' || unit === 'usd' ? UNIT_TILE_LABEL[unit] : null);
 
 /** The chosen week a page's figures read in, and `scale` its factor over the Pro-week figure, null while the cost model
  *  is out or where it sizes no week for the chosen tier. `failure` is the settings read's failure while the scale is

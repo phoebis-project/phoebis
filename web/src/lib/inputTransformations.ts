@@ -1,4 +1,4 @@
-import { has, lookup } from '@/lib/counts';
+import { lookup } from '@/lib/counts';
 
 /** The keys the upstream is known to send, in the order the console lists them. */
 export const TRANSFORMATION_KEYS = [
@@ -27,8 +27,9 @@ export const transformationLabel = (key: string): string => lookup(TRANSFORMATIO
  */
 export const accountBound = (key: string): boolean => key.endsWith('.end_user_binding_mismatch') || key.endsWith('.organization_binding_mismatch');
 
-/** A map's keys in the order the console lists them: the known keys in their order, then every other key by name. */
-export function transformationOrder(map: Readonly<Record<string, unknown>>): string[] {
+/** The keys in the order the console lists them, each once: the known keys in their order, then the rest by name. */
+export function transformationOrder(keys: Iterable<string>): string[] {
+  const held = new Set(keys);
   const known: readonly string[] = TRANSFORMATION_KEYS;
-  return [...known.filter((key) => has(map, key)), ...Object.keys(map).filter((key) => !known.includes(key)).sort()];
+  return [...known.filter((key) => held.has(key)), ...[...held].filter((key) => !known.includes(key)).sort()];
 }

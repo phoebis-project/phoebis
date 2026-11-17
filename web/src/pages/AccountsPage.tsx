@@ -29,7 +29,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayMonth, fmtDayShort, f
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { byWindow, meterGroups } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, noWindowSentence, planExtraUsage, planOverage, planWordLabel, readWindows, resetOf, slowedOf } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, isQuotaListed, noWindowSentence, planExtraUsage, planOverage, planWordLabel, readWindows, resetOf, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { slowDownChip } from '@/lib/selection';
 import { orderRows, type SortFigure } from '@/lib/sort';
@@ -328,7 +328,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
   const overage = planOverage(account);
   // The router withholds every window of a row whose term ended or that is not paired or needs re-auth, so its empty
   // trend reads the Usage card's sentence, where another account's names the first sample to come.
-  const trendWithheld = account.planEndedAt !== null || account.status === 'unpaired' || account.status === 'reauth_required';
+  const trendWithheld = !isQuotaListed(account);
   const trendEmptyTitle = trendWithheld ? 'No samples in the last 7 days' : 'No samples yet';
   const trendEmptyBody = trendWithheld ? noWindowSentence(account, now) : 'Quota samples appear after the first successful quota fetch.';
   /**
@@ -873,7 +873,8 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
     return plan === null ? resetHover(reset) : `${resetHover(reset)}\n${ownShareHover(plan, w.window, reset.shareLeft)}`;
   };
   // A term's end and a used reset fall inside a week, so their line names their own instant rather than a reset.
-  const badge = (reset: AllowanceReset) => (reset.source === 'term_ended' ? <Badge tone="neutral">term ended</Badge> : reset.source === 'claim' ? <Badge tone="neutral">reset used</Badge> : null);
+  const sourceWord = (reset: AllowanceReset): string | null => (reset.source === 'term_ended' ? 'term ended' : reset.source === 'claim' ? 'reset used' : null);
+  const latestWord = latest === undefined ? null : sourceWord(latest);
   return (
     <div className="allowance__col">
       <div className="wbar__head">
@@ -882,27 +883,25 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
       </div>
       {latest && (
         <div className="wbar__reset allowance__reset" title={hover(latest)}>
-          {badge(latest) === null ? (
-            `left at the reset of ${resetInstant(latest.resetAt)}`
-          ) : (
-            <>
-              {`left at ${resetInstant(drawnInstant(latest))}`} {badge(latest)}
-            </>
-          )}
+          {`${latestWord === null ? 'left at the reset of' : 'left at'} ${resetInstant(drawnInstant(latest))}`}
+          {latestWord !== null && <> <Badge tone="neutral">{latestWord}</Badge></>}
         </div>
       )}
-      {before.map((r) => (
-        // A use in a closed week carries that week's reset, so its row and the week's own share one `resetAt`.
-        <div key={`${r.source} ${r.resetAt} ${r.observedAt}`} className="allowance__row" title={hover(r)}>
-          <span className="allowance__date">
-            {fmtDayMonth(drawnInstant(r))}
-            {badge(r) !== null && <> {badge(r)}</>}
-          </span>
-          <AllowanceText className="num" figure={figure(r)} />
-        </div>
-      ))}
+      {before.map((r) => {
+        const word = sourceWord(r);
+        return (
+          // A use in a closed week carries that week's reset, so its row and the week's own share one `resetAt`.
+          <div key={`${r.source} ${r.resetAt} ${r.observedAt}`} className="allowance__row" title={hover(r)}>
+            <span className="allowance__date">
+              {fmtDayMonth(drawnInstant(r))}
+              {word !== null && <> <Badge tone="neutral">{word}</Badge></>}
+            </span>
+            <AllowanceText className="num" figure={figure(r)} />
+          </div>
+        );
+      })}
       <div className="allowance__row allowance__total">
-        <span>{used === 0 ? `Total, ${plural(counted, 'week')}` : `Total, ${plural(counted, 'week')} and ${plural(used, 'used reset')}`}</span>
+        <span>{`Total, ${plural(counted, 'week')}${used === 0 ? '' : ` and ${plural(used, 'used reset')}`}`}</span>
         <AllowanceText className="num" figure={weeksFigure(w, account, costs, week)} />
       </div>
     </div>
