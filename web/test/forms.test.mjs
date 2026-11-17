@@ -559,6 +559,9 @@ test('an account that is paused and signed out stands as signed out', () => {
   assert.notEqual(signedOut, null, 'an account signed out alone draws a line');
   assert.equal(line({ routingEnabled: false, status: 'reauth_required' }), signedOut);
   assert.notEqual(line({ routingEnabled: false, status: 'reauth_required' }), line({ routingEnabled: false }), 'the line of an account paused alone');
+  const notPaired = line({ status: 'unpaired' });
+  assert.notEqual(notPaired, null, 'an account not paired alone draws a line');
+  assert.equal(line({ routingEnabled: false, status: 'unpaired' }), notPaired);
 });
 
 test('a canceled account past its saved end stands as ended', () => {
