@@ -389,7 +389,9 @@ export function KeyDialog({ accounts: accountsRead, open, onClose, onCreated, on
             <Field key={feature} label={FEATURE_LABEL[feature]} hint={lineAccount && featureStandingLine(lineAccount, now)}>
               <Select
                 value={keyFeatureValue(choice)}
-                disabled={accountsRead.data === null}
+                // Without the pool the first option cannot name its account, so a choice made then would rest on a
+                // value the dialog does not know.
+                disabled={accountsRead.data === null || pool === null}
                 onChange={(e) => {
                   const next = keyFeatureChoice(e.target.value);
                   setForm((f) => ({ ...f, featureAccounts: { ...f.featureAccounts, [feature]: next } }));
