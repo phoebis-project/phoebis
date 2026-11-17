@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use boring::asn1::Asn1Time;
 use boring::error::ErrorStack;
-use boring::pkey::PKey;
+use boring::pkey::{PKey, Private};
 use boring::ssl::{select_next_proto, AlpnError, SslAcceptor, SslMethod};
 use boring::x509::X509;
 use phoebis_admin::{Reloaded, TlsReload};
@@ -117,52 +117,90 @@ pub enum TlsError {
     },
 }
 
-/// Reads an operator's pair whole (`X509::stack_from_pem`, `PKey::private_key_from_pem`), sets the leaf, the chain
-/// and the key on a `mozilla_intermediate_v5` acceptor with ALPN fixed to `http/1.1`, and checks the key and the
-/// dates.
+/// Reads an operator's pair through `read_checked`, then sets the leaf, the chain and the key on a
+/// `mozilla_intermediate_v5` acceptor with ALPN fixed to `http/1.1`.
 pub fn load_pair(
     listener: PublicListener,
     cert_file: &Path,
     key_file: &Path,
 ) -> Result<Loaded, TlsError> {
     let key = listener.key();
-    let (cert_pem, key_pem) = read_pair(key, cert_file, key_file)?;
-    let (leaf, chain) = certificates(key, cert_file, &cert_pem)?;
-    let pkey = PKey::private_key_from_pem(&key_pem).map_err(|_| TlsError::NoKey {
-        key,
-        path: key_file.to_path_buf(),
-    })?;
+    let checked = read_checked(key, cert_file, key_file)?;
+    let (_, chain) = certificates(key, cert_file, &checked.cert_pem)?;
 
     let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).map_err(stack(key))?;
-    builder.set_certificate(&leaf).map_err(stack(key))?;
+    builder.set_certificate(&checked.leaf).map_err(stack(key))?;
     for intermediate in chain {
         builder
             .add_extra_chain_cert(intermediate)
             .map_err(stack(key))?;
     }
-    let mismatch = || TlsError::KeyMismatch {
-        key,
-        path: key_file.to_path_buf(),
-        cert: cert_file.to_path_buf(),
-    };
     // BoringSSL compares the key with the leaf's public half as the key is set and refuses there
     // (`KEY_VALUES_MISMATCH`); `check_private_key` only confirms both halves are in place.
-    builder.set_private_key(&pkey).map_err(|_| mismatch())?;
-    builder.check_private_key().map_err(|_| mismatch())?;
+    builder
+        .set_private_key(&checked.key)
+        .map_err(|_| mismatch(key, cert_file, key_file))?;
+    builder
+        .check_private_key()
+        .map_err(|_| mismatch(key, cert_file, key_file))?;
     // Both loops serve HTTP/1 only; a client that offers h2 is steered at the handshake rather than failing after
     // it. The server side selects, so this is the select callback and not `set_alpn_protos`.
     builder.set_alpn_select_callback(|_, offered| {
         select_next_proto(ALPN_HTTP1, offered).ok_or(AlpnError::NOACK)
     });
 
-    let leaf = leaf_facts(key, cert_file, &leaf)?;
     Ok(Loaded {
         listener,
         acceptor: builder.build(),
         cert_file: cert_file.to_path_buf(),
         key_file: key_file.to_path_buf(),
-        leaf,
+        leaf: checked.facts,
     })
+}
+
+/// A pair `read_checked` read and found sound: both files' bytes, the parsed key and leaf, and the leaf's facts.
+pub(crate) struct CheckedPair {
+    pub cert_pem: Vec<u8>,
+    pub key: PKey<Private>,
+    pub key_pem: Vec<u8>,
+    pub leaf: X509,
+    pub facts: LeafFacts,
+}
+
+/// Both files of a pair read whole (`X509::stack_from_pem`, `PKey::private_key_from_pem`), the key matched with the
+/// leaf's public half and the leaf's dates checked, each refusal under `key`. The match is made here because a
+/// reader that builds no acceptor has no handshake library to make it.
+pub(crate) fn read_checked(
+    key: &'static str,
+    cert_file: &Path,
+    key_file: &Path,
+) -> Result<CheckedPair, TlsError> {
+    let (cert_pem, key_pem) = read_pair(key, cert_file, key_file)?;
+    let (leaf, _) = certificates(key, cert_file, &cert_pem)?;
+    let pkey = PKey::private_key_from_pem(&key_pem).map_err(|_| TlsError::NoKey {
+        key,
+        path: key_file.to_path_buf(),
+    })?;
+    let public = leaf.public_key().map_err(stack(key))?;
+    if !pkey.public_eq(&public) {
+        return Err(mismatch(key, cert_file, key_file));
+    }
+    let facts = leaf_facts(key, cert_file, &leaf)?;
+    Ok(CheckedPair {
+        cert_pem,
+        key: pkey,
+        key_pem,
+        leaf,
+        facts,
+    })
+}
+
+fn mismatch(key: &'static str, cert_file: &Path, key_file: &Path) -> TlsError {
+    TlsError::KeyMismatch {
+        key,
+        path: key_file.to_path_buf(),
+        cert: cert_file.to_path_buf(),
+    }
 }
 
 /// The leaf's facts from `cert_file` alone, refused as `load_pair` refuses the certificate file. `status` reads the

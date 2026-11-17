@@ -40,8 +40,8 @@ the start's `listening` line names each listener's scheme and address the same w
 
 A pair you hold terminates TLS on the proxy listener: `--proxy-cert PATH` with `--proxy-key PATH` on the `init` line,
 each requiring the other, or the `tls` key under `proxy` in the file, a mapping with `cert_file` and `key_file`. The
-router generates no certificate, and a Tailscale certificate, one from a LAN CA or one an ACME client renews all
-serve ([TLS on the listeners](installation.md#tls-on-the-listeners)).
+router generates no certificate for this listener, and a Tailscale certificate, one from a LAN CA or one an ACME
+client renews all serve ([TLS on the listeners](installation.md#tls-on-the-listeners)).
 
 Without a pair the listener serves plain HTTP on the address named, loopback or not, and no address requires a pair.
 A plain listener on a network address sends in the clear what a certificate would cover, which on the proxy is the

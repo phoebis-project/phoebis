@@ -213,7 +213,7 @@ fn the_summary_names_the_routing_keys() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(
-        lines.get(4..8),
+        lines.get(5..9),
         Some(
             &[
                 "proxy: body budget 536870912 bytes, body read 60s, key body reads 128, max request 33554432 bytes, \
@@ -225,21 +225,21 @@ fn the_summary_names_the_routing_keys() {
         ),
         "{stdout}"
     );
-    // Neither default path has a file under the test's working directory, so lines 8 and 9 frame the shipped tables
+    // Neither default path has a file under the test's working directory, so lines 9 and 10 frame the shipped tables
     // with the path each looked for. The counts inside move with every revision, and the hand-counted tables below pin
     // them.
     assert!(
-        lines[8].starts_with("api prices: built in (")
-            && lines[8].ends_with("), since ./api_prices.yaml was not found"),
+        lines[9].starts_with("api prices: built in (")
+            && lines[9].ends_with("), since ./api_prices.yaml was not found"),
         "{stdout}"
     );
     assert!(
-        lines[9].starts_with("subscription costs: built in (")
-            && lines[9].ends_with("), since ./subscription_costs.yaml was not found"),
+        lines[10].starts_with("subscription costs: built in (")
+            && lines[10].ends_with("), since ./subscription_costs.yaml was not found"),
         "{stdout}"
     );
     assert_eq!(
-        lines.get(10..12),
+        lines.get(11..13),
         Some(
             &[
                 "retention 365 days, rollups 365 days",
@@ -345,7 +345,7 @@ fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_
         phoebis_ledger::CostRevisions::shipped().latest().effective
     );
     assert_eq!(
-        lines.get(7..10),
+        lines.get(8..11),
         Some(
             &[
                 "ledger at ./data/ledger.sqlite",
@@ -393,7 +393,7 @@ fn files_whose_one_entry_is_dated_after_now_name_it_in_force_and_no_next_date() 
         costs.display()
     );
     assert_eq!(
-        lines.get(8..10),
+        lines.get(9..11),
         Some(&[api_prices.as_str(), subscription_costs.as_str()][..]),
         "{}",
         printed(&out)
@@ -1097,14 +1097,19 @@ fn a_listener_without_tls_on_an_unspecified_address_prints_over_plain_http() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(
-        lines.get(1..4),
+        lines.get(1..3),
         Some(
             &[
                 "proxy listens on 0.0.0.0:0 over plain HTTP",
                 "admin listens on [::]:0 over plain HTTP",
-                "metrics listens on 127.0.0.1:9464",
             ][..]
         ),
+        "{}",
+        printed(&out)
+    );
+    assert_eq!(
+        lines.get(4),
+        Some(&"metrics listens on 127.0.0.1:9464"),
         "{}",
         printed(&out)
     );

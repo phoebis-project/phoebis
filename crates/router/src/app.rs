@@ -23,6 +23,7 @@ use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_relay::{
     Accounting, CatalogService, Limits, ListenLimits, Relay, ShutdownMark, REFRESH_TICK,
 };
+use phoebis_store::permissions::{check_private_file, data_dir_of};
 use phoebis_store::{StorageKey, Store};
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::pool::Pool;
@@ -30,6 +31,7 @@ use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use tokio::task::JoinSet;
 
 use crate::config::{Config, RoutingConfig, StatsConfig, StorageConfig, UpstreamConfig};
+use crate::feature_ca::FeatureCa;
 use crate::tls::PublicListener;
 use crate::{listen, tls};
 
@@ -138,6 +140,7 @@ pub async fn run_until(
     }
 
     let clock: Clock = Arc::new(|| jiff::Timestamp::now().as_millisecond());
+    let feature_ca = open_feature_ca(&config, clock())?;
     let resolver = resolver_for(&config.upstream);
     let control = Arc::new(ControlClient::new(
         profile,
@@ -306,57 +309,59 @@ pub async fn run_until(
         move |change| ledger.on_catalog_change(&change)
     }));
     let mark = ShutdownMark::default();
-    let relay = Arc::new(
-        Relay::new(
-            store.clone(),
-            manager.clone(),
-            pool.clone(),
-            router_task.clone(),
-            resolver.clone(),
-            clock.clone(),
-            Limits {
-                body_budget_bytes: config.proxy.body_budget_bytes,
-                body_capture_max_hours: config.stats.body_capture_max_hours,
-                body_read_timeout: Duration::from_secs(config.proxy.body_read_seconds),
-                connect_timeout: CONNECT_TIMEOUT,
-                cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
-                head_timeout: HEAD_TIMEOUT,
-                hold_timeout: HOLD_TIMEOUT,
-                idle_timeout: IDLE_TIMEOUT,
-                key_body_reads: config.proxy.key_body_reads,
-                max_request_bytes: config.proxy.max_request_bytes,
-                model_rejection: Duration::from_secs(config.routing.model_rejection_seconds),
-                upstream_gzip: config.proxy.upstream_gzip,
+    let relay = Relay::new(
+        store.clone(),
+        manager.clone(),
+        pool.clone(),
+        router_task.clone(),
+        resolver.clone(),
+        clock.clone(),
+        Limits {
+            body_budget_bytes: config.proxy.body_budget_bytes,
+            body_capture_max_hours: config.stats.body_capture_max_hours,
+            body_read_timeout: Duration::from_secs(config.proxy.body_read_seconds),
+            connect_timeout: CONNECT_TIMEOUT,
+            cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
+            head_timeout: HEAD_TIMEOUT,
+            hold_timeout: HOLD_TIMEOUT,
+            idle_timeout: IDLE_TIMEOUT,
+            key_body_reads: config.proxy.key_body_reads,
+            max_request_bytes: config.proxy.max_request_bytes,
+            model_rejection: Duration::from_secs(config.routing.model_rejection_seconds),
+            upstream_gzip: config.proxy.upstream_gzip,
+        },
+        catalog.clone(),
+    )
+    .with_bus(bus.clone())
+    .with_readiness({
+        let readiness = readiness.clone();
+        Arc::new(move || readiness.dead())
+    })
+    .with_accounting({
+        let ledger = ledger.clone();
+        Arc::new(move |counts: bool| Accounting {
+            behind: if counts {
+                ledger.admission().behind
+            } else {
+                ledger.behind()
             },
-            catalog.clone(),
-        )
-        .with_bus(bus.clone())
-        .with_readiness({
-            let readiness = readiness.clone();
-            Arc::new(move || readiness.dead())
         })
-        .with_accounting({
-            let ledger = ledger.clone();
-            Arc::new(move |counts: bool| Accounting {
-                behind: if counts {
-                    ledger.admission().behind
-                } else {
-                    ledger.behind()
-                },
-            })
-        })
-        .with_shutdown_mark(mark.clone())
-        .with_signed_placeholder(config.proxy.sign_cch_placeholder)
-        .with_profile_name(profile.name)
-        .with_session_memory(
-            config.sessions.memory_cap,
-            Duration::from_secs(config.sessions.memory_idle_seconds),
-        )
-        .with_memory_store(
-            store.clone(),
-            Duration::from_secs(u64::from(config.sessions.memory_retention_days) * 86_400),
-        ),
+    })
+    .with_shutdown_mark(mark.clone())
+    .with_signed_placeholder(config.proxy.sign_cch_placeholder)
+    .with_profile_name(profile.name)
+    .with_session_memory(
+        config.sessions.memory_cap,
+        Duration::from_secs(config.sessions.memory_idle_seconds),
+    )
+    .with_memory_store(
+        store.clone(),
+        Duration::from_secs(u64::from(config.sessions.memory_retention_days) * 86_400),
     );
+    let relay = Arc::new(match &feature_ca {
+        Some(ca) => relay.with_feature_ca(ca.facts().pem.clone().into()),
+        None => relay,
+    });
     let memory_flush = relay
         .clone()
         .spawn_memory_flush(phoebis_relay::MEMORY_FLUSH_INTERVAL);
@@ -861,6 +866,27 @@ pub fn load_storage_key(storage: &StorageConfig) -> anyhow::Result<StorageKey> {
             storage.encryption_key_file.display()
         )
     })
+}
+
+/// The feature CA where the file has a `features` block, opened before any listener binds so a CA the start cannot
+/// use refuses with its line and no port is taken. Without the block nothing reads the data directory's CA files.
+fn open_feature_ca(config: &Config, now: i64) -> anyhow::Result<Option<FeatureCa>> {
+    if config.features.is_none() {
+        return Ok(None);
+    }
+    let (ca, created) = FeatureCa::open(data_dir_of(&config.storage.path), now)?;
+    let facts = ca.facts();
+    if created {
+        tracing::info!(
+            cert_file = %facts.cert_file.display(),
+            fingerprint = %facts.fingerprint,
+            "feature CA created"
+        );
+    }
+    for warning in check_private_file(&facts.key_file, 0o600) {
+        tracing::warn!("{warning}");
+    }
+    Ok(Some(ca))
 }
 
 /// The price table, from `stats.api_prices_path` or built in, refused under the line the start and `check-config`

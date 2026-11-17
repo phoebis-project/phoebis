@@ -313,6 +313,9 @@ pub struct Relay {
     /// The decoders built for the hold's reads of a response.
     #[cfg(feature = "debug-hooks")]
     pub(crate) decoders_built: Arc<std::sync::atomic::AtomicU64>,
+    /// The feature CA's certificate. Without one the download's path is an unknown route, which a launcher reads as a
+    /// router without the features.
+    feature_ca: Option<Bytes>,
     heads: Arc<Heads>,
     pub(crate) limits: Limits,
     manager: Arc<CredentialManager>,
@@ -403,6 +406,7 @@ impl Relay {
             credits: Arc::new(CreditStore::new()),
             #[cfg(feature = "debug-hooks")]
             decoders_built: Arc::default(),
+            feature_ca: None,
             heads: Arc::new(Mutex::new(HashMap::new())),
             limits,
             manager,
@@ -462,6 +466,14 @@ impl Relay {
     pub fn with_bus(self, bus: Bus) -> Relay {
         Relay {
             bus: Some(bus),
+            ..self
+        }
+    }
+
+    /// The feature CA's certificate, which `GET /v0/features/ca.pem` then serves without a key.
+    pub fn with_feature_ca(self, pem: Bytes) -> Relay {
+        Relay {
+            feature_ca: Some(pem),
             ..self
         }
     }
@@ -1249,12 +1261,22 @@ pub fn router(relay: Arc<Relay>) -> Router {
         .route("/v1/models/{*id}", get(crate::models::show))
         .method_not_allowed_fallback(wrong_method)
         .layer(map_response(no_store_answer));
-    Router::new()
+    let mut relayed = Router::new()
         .route("/api/hello", head(hello))
         .route("/api/ready", get(ready).head(ready))
         .route("/v1/messages", post(messages))
         .route("/v1/messages/count_tokens", post(messages))
-        .merge(models)
+        .merge(models);
+    // Registered only where the relay holds a CA, so each method on the path keeps the unknown route's 404 on a
+    // router without one. Merged ahead of the wrong method's fallback, which another method on the path then gets.
+    if let Some(pem) = relay.feature_ca.clone() {
+        relayed = relayed.merge(
+            Router::new()
+                .route("/v0/features/ca.pem", get(feature_ca))
+                .with_state(pem),
+        );
+    }
+    relayed
         .method_not_allowed_fallback(wrong_method)
         .fallback(unknown_route)
         .with_state(relay)
@@ -1263,6 +1285,11 @@ pub fn router(relay: Arc<Relay>) -> Router {
 /// The native client probes this before it sends anything and ignores the answer.
 async fn hello() -> StatusCode {
     StatusCode::OK
+}
+
+/// The public half alone, so the download reads no key.
+async fn feature_ca(State(pem): State<Bytes>) -> Response {
+    ([(header::CONTENT_TYPE, "application/x-pem-file")], pem).into_response()
 }
 
 /// Readiness, as the image's health check and an orchestrator read it: 200 while the router task, the ledger

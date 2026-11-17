@@ -11,6 +11,7 @@ use clap::{Parser, Subcommand};
 use phoebis_router::admin_client::{self, AdminClient, Common};
 use phoebis_router::backup::{self, BackupArgs};
 use phoebis_router::config::Config;
+use phoebis_router::feature_ca::{self, FeatureCa};
 use phoebis_router::recover_key::{self, RecoverKeyArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
 use phoebis_router::tls::PublicListener;
@@ -45,7 +46,8 @@ enum Command {
     /// socket: exit 0 once the manifest is written, 1 otherwise.
     Backup(BackupArgs),
     /// Validate the configuration, the key file, the registry's key canary, the registry's and the ledger's schema
-    /// versions and the certificate pairs, taking no lock and opening no socket.
+    /// versions, the certificate pairs and, with a `features` block, the feature CA's two files, taking no lock and
+    /// opening no socket.
     CheckConfig,
     /// Probe the proxy listener's `/api/ready`: exit 0 when it answers 200, 1 otherwise.
     Health,
@@ -78,6 +80,12 @@ fn main() -> anyhow::Result<()> {
             // Read before the first line, so a pair the start would refuse is the one line the check prints.
             let proxy_tls = tls::load(PublicListener::Proxy, &config.proxy.tls)?;
             let admin_tls = tls::load(PublicListener::Admin, &config.admin.tls)?;
+            let data_dir = phoebis_store::permissions::data_dir_of(&config.storage.path);
+            // With the block alone, as the start reads it, so a CA an earlier configuration left refuses nothing.
+            let ca_facts = match &config.features {
+                Some(_) => FeatureCa::inspect(data_dir)?,
+                None => None,
+            };
             println!("{} is valid", cli.config.display());
             println!(
                 "{}",
@@ -86,6 +94,10 @@ fn main() -> anyhow::Result<()> {
             println!(
                 "{}",
                 tls::describe("admin", config.admin.listen, &admin_tls)
+            );
+            println!(
+                "{}",
+                feature_ca::describe(config.features.as_ref(), data_dir, ca_facts.as_ref())
             );
             println!("metrics listens on {}", config.stats.metrics_listen);
             println!(
@@ -212,7 +224,6 @@ fn main() -> anyhow::Result<()> {
                 // A set one the start refuses (too short, the example's placeholder) is the same finding here.
                 Err(error) => return Err(error.into()),
             }
-            let data_dir = phoebis_store::permissions::data_dir_of(&config.storage.path);
             for warning in phoebis_store::permissions::check_private_file(
                 &config.storage.encryption_key_file,
                 0o600,
@@ -220,6 +231,9 @@ fn main() -> anyhow::Result<()> {
             .into_iter()
             .chain(tls::warnings(&proxy_tls))
             .chain(tls::warnings(&admin_tls))
+            .chain(ca_facts.iter().flat_map(|facts| {
+                phoebis_store::permissions::check_private_file(&facts.key_file, 0o600)
+            }))
             .chain(phoebis_store::permissions::check_private_dir(data_dir))
             .chain(phoebis_store::permissions::check_private_file(
                 &config.storage.path,

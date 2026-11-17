@@ -115,7 +115,7 @@ fn init_writes_the_three_artifacts_at_their_modes_and_prints_the_secret_once() {
     let checked = check(&config);
     assert_eq!(checked.status.code(), Some(0), "{}", printed(&checked));
     // The required keys alone, the two database paths and the two table files: whatever this file prints from the
-    // fifth line on is the binary's own defaults, so the written file spells no value that differs from them.
+    // sixth line on is the binary's own defaults, so the written file spells no value that differs from them.
     let minimal = dir.path().join("minimal.yaml");
     std::fs::write(
         &minimal,
@@ -134,20 +134,20 @@ fn init_writes_the_three_artifacts_at_their_modes_and_prints_the_secret_once() {
     .unwrap();
     let defaults = check(&minimal);
     assert_eq!(defaults.status.code(), Some(0), "{}", printed(&defaults));
-    let from_the_fifth = |out: &Output| {
+    let from_the_sixth = |out: &Output| {
         String::from_utf8_lossy(&out.stdout)
             .lines()
-            .skip(4)
+            .skip(5)
             .map(str::to_string)
             .collect::<Vec<_>>()
     };
-    let written = from_the_fifth(&checked);
+    let written = from_the_sixth(&checked);
     assert!(
         written[0].starts_with("proxy: body budget"),
         "{}",
         printed(&checked)
     );
-    assert_eq!(written, from_the_fifth(&defaults));
+    assert_eq!(written, from_the_sixth(&defaults));
 }
 
 /// A pseudo-terminal's two ends: the test holds the near one, and the child gets the far one as stdin and stderr, which

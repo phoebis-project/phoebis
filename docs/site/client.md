@@ -208,6 +208,7 @@ figures from the proxy listener with the `curl` of [Your key's usage](#your-keys
 | GET | `/v1/models/{*id}` | router key | one row of that listing, or `404` |
 | POST | `/v0/keepalive/events` | router key | the companion mod's event report |
 | GET | `/v0/companion/allowance` | router key | the key's pool under pseudonyms, for the companion mod's `allowance` tool |
+| GET | `/v0/features/ca.pem` | none | the feature CA's certificate as PEM text, on a router with the `features` block |
 | any other method on a known path | | none | `405` |
 | any unmatched path | | none | `404` |
 

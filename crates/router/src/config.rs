@@ -17,6 +17,8 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub admin: AdminConfig,
+    #[serde(default, deserialize_with = "present_features")]
+    pub features: Option<FeaturesConfig>,
     /// Process-wide keepalive limits, read once at start; whether probes run, and their tuning, are per-pool
     /// registry settings.
     #[serde(default)]
@@ -42,6 +44,53 @@ pub struct AdminConfig {
     pub secret_env: String,
     #[serde(default, deserialize_with = "present_tls")]
     pub tls: Option<ListenerTls>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeaturesConfig {
+    pub listen: SocketAddr,
+}
+
+/// The line for a `features` key with nothing beneath it, or a word in its place. Serde puts the key's path in front
+/// of it.
+const FEATURES_SHAPE: &str = "must be a mapping with listen";
+
+/// A present `features` key must hold the block. Serde's own `Option` reads the key with nothing beneath it as an
+/// absent key, and the router would then start without the features its operator asked for and say nothing.
+fn present_features<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<FeaturesConfig>, D::Error> {
+    struct Shape;
+
+    impl<'de> serde::de::Visitor<'de> for Shape {
+        type Value = FeaturesConfig;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a mapping with listen")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, _word: &str) -> Result<FeaturesConfig, E> {
+            Err(E::custom(FEATURES_SHAPE))
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<FeaturesConfig, E> {
+            Err(E::custom(FEATURES_SHAPE))
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<FeaturesConfig, E> {
+            Err(E::custom(FEATURES_SHAPE))
+        }
+
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            self,
+            map: M,
+        ) -> Result<FeaturesConfig, M::Error> {
+            FeaturesConfig::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_any(Shape).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -810,6 +859,21 @@ mod tests {
             chain.contains("admin.tls") && chain.contains(TLS_SHAPES),
             "admin-empty: {chain}"
         );
+    }
+
+    #[test]
+    fn an_empty_features_key_is_refused_and_a_file_without_it_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let error =
+            load_unresolved(&file(dir.path(), "features-empty", "features:\n")).unwrap_err();
+        let chain = chain(&error);
+        assert!(
+            matches!(error, ConfigError::Syntax(_))
+                && chain.contains("features: must be a mapping with listen"),
+            "{chain}"
+        );
+        let absent = load_unresolved(&file(dir.path(), "features-absent", "")).unwrap();
+        assert!(absent.features.is_none());
     }
 
     /// Places `lines` at the top of `block` in a file a helper wrote: a key has to sit inside its block for serde

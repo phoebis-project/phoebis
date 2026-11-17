@@ -7,6 +7,8 @@ admin:
   # session cookie on every call cross that LAN in the clear. A pair mounted read-only beside this file terminates TLS.
   listen: 0.0.0.0:8081
   secret_env: PHOEBIS_ADMIN_SECRET
+# features:
+#   listen: 0.0.0.0:8443  # the listener for the claude.ai features, always TLS under the router's own CA
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and for how long, are pool settings in
   # the registry.

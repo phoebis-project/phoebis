@@ -220,7 +220,7 @@ subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` th
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then stops within 35 seconds. |
 | `phoebis init --config ./config.yaml` | Writes the bootstrap file, the storage key and the admin secret, once. |
 | `phoebis recover-key --config ./config.yaml` | Discards the registry's secrets after a lost key and seals a new canary, or seals the canary of a registry that has none when the key opens its rows: exit 0 once the accounts are marked or the canary is sealed ([The storage key](operations.md#the-storage-key)). |
-| `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas and certificate pairs. |
+| `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas, certificate pairs and, with a `features` block, the feature CA's two files. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |
 | `phoebis backup --to <dir>` | Copies both databases into `<dir>` with a manifest: exit 0 once it is written. |
@@ -231,41 +231,46 @@ subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` th
 that path instead, and the flag wins when both are given.
 
 `check-config` takes no lock, runs no migration and opens no socket. It reads the key file, the registry's canary, the
-registry's and the ledger's schema versions and each listener's certificate pair read-only, so it is safe to run
-against a production file while the router is up. It prints, in order:
+registry's and the ledger's schema versions, each listener's certificate pair and, with a `features` block, the feature
+CA's two files read-only, so it is safe to run against a production file while the router is up. It prints, in order:
 
 <!-- check-config: begin -->
 1. `{config path} is valid`
 2. `proxy listens on {config.proxy.listen} over plain HTTP`, or `proxy listens on {config.proxy.listen} over TLS
    (certificate {cert_file}, expires {date})` for a certificate pair ([TLS on the listeners](#tls-on-the-listeners))
 3. the admin line in the same two shapes, with `admin` and `config.admin.listen`
-4. `metrics listens on {config.stats.metrics_listen}`
-5. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
+4. `features listener is off` without a `features` block, `features listens on {features.listen} over TLS (CA {path},
+   fingerprint {hex}, expires {date})` for the feature CA in the data directory, or `features listens on
+   {features.listen} over TLS, and the first start creates the CA at {path}` where neither of its files stands yet
+   ([features](#features))
+5. `metrics listens on {config.stats.metrics_listen}`
+6. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
    {on|off}, upstream gzip {auto|on|off}`
-6. `profile {the build's profile}`
-7. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog refresh {n}s, startup fetch {n}s`
-8. `ledger at {config.stats.ledger_path}`
-9. `api prices: {path} (file, {n} revisions, in force {date}, {n} models)` when `stats.api_prices_path` names a file
-   that exists, `api prices: built in ({n} revisions, in force {date}, {n} models), since {path} was not found` when it
-   names a file that is missing, or `api prices: built in ({n} revisions, in force {date}, {n} models)` when the key is
-   set to `null`, with `revision` for a list of one entry and `, next {date}` after the entry in force while an entry
-   is held
-10. `subscription costs: {path} (file, {n} revisions, in force {date}, {n} weighted models, {n} account tiers, {n}
+7. `profile {the build's profile}`
+8. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog refresh {n}s, startup fetch {n}s`
+9. `ledger at {config.stats.ledger_path}`
+10. `api prices: {path} (file, {n} revisions, in force {date}, {n} models)` when `stats.api_prices_path` names a file
+    that exists, `api prices: built in ({n} revisions, in force {date}, {n} models), since {path} was not found` when
+    it names a file that is missing, or `api prices: built in ({n} revisions, in force {date}, {n} models)` when the
+    key is set to `null`, with `revision` for a list of one entry and `, next {date}` after the entry in force while an
+    entry is held
+11. `subscription costs: {path} (file, {n} revisions, in force {date}, {n} weighted models, {n} account tiers, {n}
     regimes: {names})`, in the same three shapes, from `stats.subscription_costs_path`, where the regime clause reads
     `, no regime` for a model without the map and `, 1 regime: {name}` for one, and a file whose newest entry takes
     effect before the built-in model's newest adds `, the built-in model has a newer revision {date}`
-11. `retention {n days|forever}, rollups {n days|forever}`
-12. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
-13. the registry line, `registry at {config.storage.path} does not exist yet, and the first start creates it` when the
+12. `retention {n days|forever}, rollups {n days|forever}`
+13. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
+14. the registry line, `registry at {config.storage.path} does not exist yet, and the first start creates it` when the
     registry is not there yet, or `registry at {config.storage.path} has no key canary yet. A sealed row opens under
     the key, and the next start seals one` for a registry from before the canary
-14. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
+15. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
 <!-- check-config: end -->
 
-Further warning lines name a storage key file, data directory, database or TLS key file whose mode or owner is wider
-than the router expects, and a certificate that expires within 30 days (`warning: proxy.tls.cert_file {path} expires in
-{n} days ({date})`). The router starts either way and logs the same warnings. A TLS key owned by root and readable by
-its group alone, such as `0640 root:phoebis`, earns no warning from a process that runs as root or holds that group.
+Further warning lines name a storage key file, data directory, database, TLS key file or, with a `features` block, the
+feature CA's key file whose mode or owner is wider than the router expects, and a certificate that expires within 30
+days (`warning: proxy.tls.cert_file {path} expires in {n} days ({date})`). The router starts either way and logs the
+same warnings. A TLS key owned by root and readable by its group alone, such as `0640 root:phoebis`, earns no warning
+from a process that runs as root or holds that group.
 
 A registry or a ledger whose schema is newer than the binary reads fails the check with exit 1 and the start's own
 refusal under `reading the registry at {config.storage.path}`: `the registry's schema version {n} is newer than the {m}
@@ -416,6 +421,8 @@ admin:
   # tls: {cert_file: ..., key_file: ...} names your certificate pair and the listener terminates TLS.
   # Without tls the listener serves plain HTTP on the address named, loopback or not.
   secret_env: PHOEBIS_ADMIN_SECRET
+# features:
+#   listen: 0.0.0.0:8443  # the listener for the claude.ai features, always TLS under the router's own CA
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and for how long, are pool settings in
   # the registry. The largest retained recipe follows proxy.max_request_bytes, the relay's request body bound.
@@ -534,6 +541,33 @@ Refused with:
 
 A file from an earlier build can still carry `admin.origin`, `admin.plain_http` or `usage.cache_ttl_seconds`, and the
 loader refuses each at start as an unknown key.
+
+### features
+
+Optional, and off without the block.
+
+| Key | Default | Accepts |
+| --- | --- | --- |
+| `listen` | required in the block | a socket address |
+
+With the block the router holds a CA of its own for the claude.ai features: two files in the data directory, the
+directory of `storage.path`, `feature-ca.pem` for the certificate and `feature-ca-key.pem` for its private key, both
+written once at `0600` by the first start that finds neither. The CA carries a critical name constraint that permits
+`api.anthropic.com` and `mcp-proxy.anthropic.com` with the names beneath them and excludes each IP address, so a client
+that trusts it accepts its certificates for those two hosts and for no other name. The router never replaces it. A new
+CA comes from removing both files before a start, and it has a new fingerprint.
+
+The proxy listener serves the CA's certificate at `GET /v0/features/ca.pem` without a key
+([What the proxy accepts](client.md#what-the-proxy-accepts)), and on a router without the block that path answers the
+unknown route's `404`. The fingerprint is the SHA-256 of the bytes the download serves in lowercase hex, which
+`sha256sum` (or `shasum -a 256` on macOS) prints for the downloaded file. `check-config` prints it in its `features`
+line, and the first start logs it with the path in its `feature CA created` line.
+
+Refused with:
+
+- `features`: `features: must be a mapping with listen` under `the configuration is not valid YAML` for the key with
+  nothing beneath it or a word in its place
+- `listen`: a YAML error
 
 ### keepalive
 
@@ -774,11 +808,21 @@ PEM. Under the service unit, keep both under `/etc/phoebis`: the certificate at 
 the key at `0400` owned by uid 65532. A Tailscale certificate, a certificate from a LAN CA, or one an ACME client
 renews all serve.
 
-The router generates no certificate. A certificate from a public CA needs nothing on the clients. A certificate from a
-private CA (a LAN CA, a Tailscale certificate's issuer, a CA you run) needs the clients to trust that CA, through
+With `features.listen` set the router creates one CA for the two feature hosts and issues their certificates
+([features](#features)), and it generates no certificate for its own name, which stays yours through a pair on a
+listener or a front that terminates TLS. A certificate from a public CA needs nothing on the clients. A certificate
+from a private CA (a LAN CA, a Tailscale certificate's issuer, a CA you run) needs the clients to trust that CA, through
 `NODE_EXTRA_CA_CERTS=<path>` beside `ANTHROPIC_BASE_URL` in the client's
 [environment block](client.md#the-environment-block). `phoebis status` and `phoebis tls reload` take the same file
 through `--ca`.
+
+A start with a `features` block reads the feature CA's two files as it reads a listener's pair and refuses what it
+refuses there, with the lines the list below gives for a pair under `features.ca` in place of `proxy.tls`, such as
+`features.ca.key_file {path}: does not match the certificate in {cert_file}`. It refuses one file without the other
+too, with `features.ca: {path} stands without {path}: restore the missing file, or remove both for a new CA`, and
+creates nothing, since a new CA written over half of an old one would change the fingerprint. `check-config` reads the
+two files the same way with the block alone. A key file with a wider mode or another owner draws a warning from the
+start and from `check-config` and refuses nothing.
 
 The start reads the pair once, before it binds a port, and a renewal puts new files at both paths and asks the running
 router to re-read every listener's pair with `phoebis tls reload`, as [Upgrades and renewals](operations.md#upgrades)
