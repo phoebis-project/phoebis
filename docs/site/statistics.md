@@ -672,7 +672,8 @@ Each family means what its entry below says, the text a `# HELP` line would hold
 - `phoebis_feature_calls_total` counts the claude.ai feature calls the router sent upstream, by feature, key and
   outcome (`canceled`, `failed` or `forwarded`), with the domain check under the feature `domain_check` and the key `-`.
 - `phoebis_feature_refusals_total` counts the claude.ai feature calls the router refused with a 401 or a 403, by code,
-  feature and key, under the feature `none` for a call that matched no feature, each 401 among them.
+  feature and key, under the feature `none` for a call that matched no feature, each 401 among them, and a 401 under the
+  key `-`.
 - `phoebis_keepalive_agents` reads the agents the keepalive engine retains, one series per state.
 - `phoebis_keepalive_probes_total` counts the keepalive engine's probes, by outcome and pool.
 - `phoebis_keepalive_skipped_total` counts the due probes the keepalive engine withheld, by pool and recipe state.
