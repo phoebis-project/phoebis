@@ -1,6 +1,6 @@
-import { agentTokenOf, couldNotCache, plus } from '@/api/fold';
+import { agentTokenOf, countDropped, couldNotCache, plus } from '@/api/fold';
 import type {
-  AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
+  AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, InputTransformations, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import type { GuardrailMatch } from '@/api/types';
@@ -305,8 +305,9 @@ export const sumSplit = (parts: CostSplit[]): CostSplit => sumEach(parts, { cach
 const missRng = createRng(1_517);
 
 /**
- * The keys whose client sends a diagnostics member of its own: the current Claude Code builds on `ci` and `desktop`.
- * The laptop's older build sends none, and the other keys' rows name no Claude Code client, so none of their own.
+ * The keys whose client sends a diagnostics member and a thinking-binding token of its own: the current Claude Code
+ * builds on `ci` and `desktop`. The laptop's older build sends neither, and the other keys' rows name no Claude Code
+ * client, so none of their own.
  */
 const MEMBER_CLIENT_KEYS: ReadonlySet<string> = new Set(['ci', 'desktop']);
 
@@ -329,6 +330,16 @@ function sourceOf(keyId: string | null, poolId: string | null, kind: RequestKind
   if (kind === 'count_tokens' || !attempted) return null;
   if (MEMBER_CLIENT_KEYS.has(keyId ?? '')) return 'client';
   return marked && poolById.get(poolId ?? '')?.cacheDiagnostics === true ? 'router' : null;
+}
+
+/**
+ * Who sent the thinking-binding token on a request, as the relay reads it: the client where its build sends its own,
+ * a token count's included, else the router where the pool's `thinkingDiagnostics` is on and the request is no token
+ * count. Every row asks for thinking, so the thinking type the router's gate also reads holds on each.
+ */
+function thinkingSourceOf(keyId: string | null, poolId: string | null, kind: RequestKind): DiagnosticsSource | null {
+  if (MEMBER_CLIENT_KEYS.has(keyId ?? '')) return 'client';
+  return kind !== 'count_tokens' && poolById.get(poolId ?? '')?.thinkingDiagnostics === true ? 'router' : null;
 }
 
 /**
@@ -733,7 +744,7 @@ function buildRequests(): RequestLog[] {
       usage,
       costUsd: round(costOf(model, usage, false, atMs), 4),
       diagnosticsSource: source,
-      thinkingDiagnosticsSource: null,
+      thinkingDiagnosticsSource: thinkingSourceOf(lane.keyId, lane.poolId, kind),
       errorCode,
       sessionId,
       agentId: agent.id,
@@ -805,6 +816,7 @@ function buildRequests(): RequestLog[] {
         model: drawn,
         poolId: 'work',
         responseTruncated: false,
+        thinkingDiagnosticsSource: thinkingSourceOf('notebook', 'work', kind),
       });
     }
   }
@@ -1331,7 +1343,7 @@ function storyRow(seed: StorySeed): RequestLog {
     sessionId,
     shape: { ...REQUEST_SAMPLE.shape, requestedSpeed: fast ? 'fast' : null },
     status,
-    thinkingDiagnosticsSource: null,
+    thinkingDiagnosticsSource: thinkingSourceOf(seed.keyId, poolId, kind),
     transport: kind === 'inference' ? 'sse' : 'json',
     ttfbMs,
     ttftMs,
@@ -1531,8 +1543,9 @@ function storySeeds(): StorySeed[] {
     { agentId: 'main', at: t(14, 3), attempts: [{ accountId: 'primary', at: t(14, 3), ms: 5_600, status: 200 }], id: 'req_7a2d4c18-e95', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'main', session: RELEASED_SESSION_ID, usage: { cacheWrite1h: 15_800, input: 2_300, output: 960 } },
     // A long conversation's turn the Overflow workspace answers, and its next turn once the cache there has gone cold,
     // which returns it to a plan: primary fits but is full and the rest fall short of the ceiling with its 640k-token
-    // rewrite, so the move lands on the least bad one, and nightly's window is spent within the hour.
-    { agentId: 'main', at: t(10, 52, 30), attempts: [{ accountId: 'overflow', at: t(10, 52, 30), ms: 14_000, status: 200 }], id: 'req_4e8b1d36-f72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: FORCED_SESSION_ID, usage: { cacheRead: 612_000, cacheWrite5m: 24_000, input: 2_800, output: 1_900 } },
+    // rewrite, so the move lands on the least bad one, and nightly's window is spent within the hour. The first turn
+    // thinks, so the move has a block to drop.
+    { agentId: 'main', at: t(10, 52, 30), attempts: [{ accountId: 'overflow', at: t(10, 52, 30), ms: 14_000, status: 200 }], id: 'req_4e8b1d36-f72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: FORCED_SESSION_ID, usage: { cacheRead: 612_000, cacheWrite5m: 24_000, input: 2_800, output: 1_900, thinking: 700 } },
     { agentId: 'main', at: t(11, 1, 50), attempts: [{ accountId: 'nightly', at: t(11, 1, 50), ms: 21_000, status: 200 }], id: FORCED_MOVE_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: FORCED_SESSION_ID, usage: { cacheWrite1h: 640_000, input: 3_100, output: 2_400 } },
     // The conversation's next request a second later waits on nightly for the move's head, which comes a second on,
     // and then reads the prefix the move wrote.
@@ -2552,6 +2565,78 @@ function walkSessionTurns() {
   }
 }
 
+/** The client's standing entry once its session compacted, which the upstream lists on each later request of it. */
+const PREFIX_KEY = 'thinking_dropped.prefix_binding_mismatch';
+/** A block that another end user's account wrote, which the upstream drops from an answer on this one. */
+const ACCOUNT_KEY = 'thinking_dropped.end_user_binding_mismatch';
+/** Where a session's first block sits, since the client's first request sends two messages. */
+const FIRST_BLOCK_MESSAGE = 2;
+
+/**
+ * Whether the model binds a thinking block to the account that wrote it, so that an answer on another account drops
+ * it: the vendor's four, of which the catalog serves Sonnet 5.5 alone. The router holds no such list and learns each
+ * pair of accounts from an answer.
+ */
+function bindsThinking(model: string): boolean {
+  return ['claude-fable-5-2', 'claude-haiku-5-5', 'claude-mythos-5-2', 'claude-sonnet-5-5'].includes(model);
+}
+
+/** What one pin key's history holds for the upstream's binding checks, from its last compaction on. */
+interface ThinkingHistory {
+  /** A compaction stands behind the turn, so the client sends its standing prefix block. */
+  compacted: boolean;
+  /**
+   * The pin key's last move since the compaction: the account it landed on, the blocks it left behind, and whether the
+   * compaction's prefix block went with it.
+   */
+  move: { accountId: string; blocks: number; carried: boolean } | null;
+  /** The serving account of each answered turn that thought since the compaction. */
+  thinkers: string[];
+}
+
+/**
+ * The blocks each answered attempt's upstream dropped from the request's history, read off the rows as they finally
+ * stand, per pin key (key, session, agent and canonical model) in arrival order, since a block binds by the model that
+ * wrote it. An attempt reports where the request's head carried the thinking-binding token and the attempt answered,
+ * a token count aside, whose answer holds no list. From a compaction on, each report lists the client's standing prefix
+ * block. From a move to the next compaction, a report on the account the move landed on lists the blocks of the
+ * account the move left, where the model binds them: one per earlier answered turn that thought there. A move with a
+ * compaction behind it and no move between carries the prefix block over, which the upstream drops under the account
+ * reason, so such a report lists the account key alone with one block more. A row names the token's sender beside a
+ * reported map alone.
+ */
+function fillDroppedBlocks() {
+  const fresh = (): ThinkingHistory => ({ compacted: false, move: null, thinkers: [] });
+  const histories = new Map<string, ThinkingHistory>();
+  for (const r of byArrival()) {
+    const pin = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+    const history = r.sessionId === null ? fresh() : (histories.get(pin) ?? fresh());
+    if (r.sessionId !== null) histories.set(pin, history);
+    if (r.contextCompacted !== null) Object.assign(history, fresh(), { compacted: true });
+    // The builders wrote who sent the token, and only an answer to a head that carried one reports.
+    const token = r.thinkingDiagnosticsSource;
+    for (const a of r.attempts) {
+      const from = migrationAt(r, a)?.detail?.from_account;
+      if (typeof from === 'string') {
+        const carried = history.compacted && history.move === null;
+        history.move = { accountId: a.accountId, blocks: history.thinkers.filter((id) => id === from).length + (carried ? 1 : 0), carried };
+      }
+      let dropped: InputTransformations | null = null;
+      if (token !== null && r.kind !== 'count_tokens' && a.upstreamStatus === 200) {
+        const left = history.move?.accountId === a.accountId && history.move.blocks > 0 && bindsThinking(r.canonicalModel) ? history.move : null;
+        dropped = {};
+        if (history.compacted && !left?.carried) dropped[PREFIX_KEY] = { blocks: 1, firstMessage: FIRST_BLOCK_MESSAGE };
+        if (left !== null) dropped[ACCOUNT_KEY] = { blocks: left.blocks, firstMessage: FIRST_BLOCK_MESSAGE };
+      }
+      // A failover's added legs share their response with the leg they copy, so each takes one of its own.
+      a.response = { ...a.response, inputTransformations: dropped };
+    }
+    const serving = servingAttempt(r);
+    if (serving?.upstreamStatus === 200 && r.usage.thinking > 0) history.thinkers.push(serving.accountId);
+    if ((serving?.response.inputTransformations ?? null) === null) r.thinkingDiagnosticsSource = null;
+  }
+}
+
 traceRequests();
 seedDrawerBranches();
 seedHolds();
@@ -2560,6 +2645,7 @@ identifyRequests();
 phaseRequests();
 traceForks();
 walkSessionTurns();
+fillDroppedBlocks();
 
 function histogramsOf(rows: RequestLog[]): LatencyHistograms {
   const samples = rows.filter((r) => r.status === 200).map((r) => ({ kind: r.kind, ...latencySamples(r) }));
@@ -2731,6 +2817,12 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         const reason = servingAttempt(r)?.cacheMissReason ?? null;
         if (reason !== null && hitUnderReason(r)) cacheMissReasonHits[reason] = countOf(cacheMissReasonHits, reason) + 1;
       }
+      const dropped: Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone'> = { inputTransformations: emptyCounts(), inputTransformationsMoved: 0, inputTransformationsNone: 0 };
+      for (const r of partRows) {
+        const serving = servingAttempt(r);
+        // The routing log writes the story's traces after these rows, so a move reads off the event a trace names.
+        countDropped(dropped, serving?.response.inputTransformations ?? null, serving !== null && migrationAt(r, serving) !== undefined);
+      }
       const keptHere = partRows.filter((r) => kept.has(r));
       const uncached = ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0);
       const freed = freedPart({ classifier, funding });
@@ -2788,6 +2880,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         cacheMissReasonHits,
         cacheMissReasons,
         expiredBetweenTurns: ok.filter(expiredBetweenTurns).length,
+        ...dropped,
         uncacheable: uncached.filter(couldNotCache).length,
         uncached: uncached.length,
         costUsd: sumOf(partRows, (r) => r.costUsd),
@@ -2852,6 +2945,20 @@ function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean, draws = t
   return { cacheMissReasons: compares ? cacheMissReasons : uncompared(), expiredBetweenTurns };
 }
 
+/**
+ * An hour's dropped thinking blocks, inside the bounds the router's fold keeps: each of the `answered` requests counts
+ * once, under the client's standing prefix key where its session had compacted, else under none, and an hour whose
+ * key sent no token reports nothing. No history row of a model that binds its thinking holds a thinking token, so no
+ * hour lists the account key or counts a move.
+ */
+function synthesizeDropped(hd: Rng, lane: Lane, kind: RequestKind, answered: number): Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone'> {
+  const inputTransformations = emptyCounts();
+  const reported = thinkingSourceOf(lane.keyId, lane.poolId, kind) === null ? 0 : answered;
+  const prefix = reported > 0 && hd.chance(0.2) ? hd.int(1, Math.min(2, reported)) : 0;
+  if (prefix > 0) inputTransformations[PREFIX_KEY] = prefix;
+  return { inputTransformations, inputTransformationsMoved: 0, inputTransformationsNone: reported - prefix };
+}
+
 // The smoke run reads the holder's day and the mock consistency tests read the cap raise through this module.
 export { DELETED_HOLDER_DAY, NIGHTLY_CAP_RAISED } from './time';
 
@@ -2879,6 +2986,8 @@ function historicalRollups(): HourlyRollup[] {
   const hm = createRng(521);
   // Its own stream as well: the desktop key's Opus hours ran part in fast mode.
   const hf = createRng(7_373);
+  // And the dropped thinking blocks, so every draw of the hours above keeps its place.
+  const hd = createRng(5_519);
   // The desktop key asks for high effort throughout; one laptop hour asked for the most, so a grouping on
   // effort has a third group to show. The first eligible hour takes it rather than leaving it to a draw.
   let maxEffortOwed = true;
@@ -2964,6 +3073,7 @@ function historicalRollups(): HourlyRollup[] {
         cacheHits: Math.round(ok * h.float(0.6, 0.8)),
         cacheMisses: Math.round(ok * h.float(0.1, 0.25)),
         ...synthesizeMissReasons(hm, ok, kindOf(accountId) === 'oauth', lane.keyId !== 'ci'),
+        ...synthesizeDropped(hd, lane, 'inference', ok),
         // The route answers no hit map for an hour folded before it counted one.
         cacheMissReasonHits: emptyCounts(),
         // The hour holds the lane's inference turns alone, so its uncached turns count where the lane's turns mark no
@@ -3029,6 +3139,7 @@ function historicalRollups(): HourlyRollup[] {
           cacheHits: probes,
           cacheMisses: 0,
           ...synthesizeMissReasons(hm, probes, false),
+          ...synthesizeDropped(hd, lane, 'probe', probes),
           cacheMissReasonHits: emptyCounts(),
           uncacheable: 0,
           uncached: 0,
@@ -3098,6 +3209,10 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       cacheMissReasonHits: emptyCounts(),
       cacheMissReasons: emptyCacheMissReasons(),
       expiredBetweenTurns: 0,
+      // The one probe answered, and it reports under the token rule: none where the key sends no token.
+      inputTransformations: emptyCounts(),
+      inputTransformationsMoved: 0,
+      inputTransformationsNone: thinkingSourceOf(r.keyId, r.poolId, 'probe') === null ? 0 : 1,
       uncacheable: 0,
       uncached: 0,
       costUsd,

@@ -13487,21 +13487,23 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
   }
 }
 {
-  // No mock row carries a dropped-blocks map or a thinking-binding sender, so the block writes both onto one story row
-  // whose cache diagnostics member reads `router`, and puts each back. The mock serves the row by reference, and the
-  // block opens another row between two writes so that each write draws.
+  // The map with keys goes on a row that serves the client's token and the empty map on one that serves the router's,
+  // each written alone, so both reads take the sender the mock fills. The first also writes the row's cache member
+  // sender to the router, so a drawer that read that member would name the wrong sender. No mock row holds a sender
+  // beside a null map, so the two null reads write theirs. The mock serves each row by reference, the block puts every
+  // write back, and it opens another row between two writes so that each write draws.
   const TITLE = "The thinking blocks the upstream dropped from this request's history, and who sent the token that asks for the report";
   const NOT_REQUESTED_TITLE = 'No thinking-binding token is on record for this request, so nothing asked the upstream for the report. A request stored before the router kept the sender reads the same';
-  const row = requests.find((r) => r.diagnosticsSource === 'router' && r.attempts.length > 0);
-  const other = requests.find((r) => r !== row && r.attempts.length > 0);
-  if (!row || !other) results.push({ name: '/requests the Dropped thinking row has a story row to draw on', ok: false, missing: ['fixture'] });
+  const clientRow = requests.find((r) => r.thinkingDiagnosticsSource === 'client' && r.attempts.length > 0);
+  const routerRow = requests.find((r) => r.thinkingDiagnosticsSource === 'router' && r.attempts.length > 0);
+  const other = requests.find((r) => r !== clientRow && r !== routerRow && r.attempts.length > 0);
+  if (!clientRow || !routerRow || !other) results.push({ name: '/requests the Dropped thinking row has a story row to draw on', ok: false, missing: ['fixture'] });
   else {
-    const serving = row.attempts.at(-1);
-    const { response } = serving;
-    const sender = row.thinkingDiagnosticsSource;
-    const read = async (inputTransformations, thinkingDiagnosticsSource) => {
-      serving.response = { ...response, inputTransformations };
-      row.thinkingDiagnosticsSource = thinkingDiagnosticsSource;
+    const kept = [clientRow, routerRow].map((row) => ({ row, members: { diagnosticsSource: row.diagnosticsSource, thinkingDiagnosticsSource: row.thinkingDiagnosticsSource }, response: row.attempts.at(-1).response }));
+    const read = async (row, inputTransformations, members = {}) => {
+      const serving = row.attempts.at(-1);
+      serving.response = { ...serving.response, inputTransformations };
+      Object.assign(row, members);
       await m.navigate(`/requests/${other.id}`);
       await m.settle(300);
       await m.navigate(`/requests/${row.id}`);
@@ -13519,18 +13521,20 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
     };
     // The key the console does not know comes first in the map, as the wire may order it, so the known key's line leads
     // only where the row lists the known keys ahead of the others.
-    const listed = await read({ 'thinking.prefix_binding_mismatch': { blocks: 1, firstMessage: 5 }, 'thinking_dropped.model_binding_mismatch': { blocks: 154, firstMessage: 3 } }, 'client');
-    const empty = await read({}, 'router');
-    const unreported = await read(null, 'client');
-    const unrequested = await read(null, null);
-    serving.response = response;
-    row.thinkingDiagnosticsSource = sender;
+    const listed = await read(clientRow, { 'thinking.prefix_binding_mismatch': { blocks: 1, firstMessage: 5 }, 'thinking_dropped.model_binding_mismatch': { blocks: 154, firstMessage: 3 } }, { diagnosticsSource: 'router' });
+    const empty = await read(routerRow, {});
+    const unreported = await read(routerRow, null, { thinkingDiagnosticsSource: 'client' });
+    const unrequested = await read(routerRow, null, { thinkingDiagnosticsSource: null });
+    for (const { row, members, response } of kept) {
+      row.attempts.at(-1).response = response;
+      Object.assign(row, members);
+    }
     results.push({
       name: '/requests the Dropped thinking row follows Diagnostics with a line per key, the known key first under its label and the other as sent, then the sender in the secondary ink',
       ok: listed.after && listed.title === TITLE && JSON.stringify(listed.lines) === JSON.stringify([['Dropped, other model: 154 blocks, first at messages.3', ''], ['thinking.prefix_binding_mismatch: 1 block, first at messages.5', ''], ['token sent by the client', 'secondary']]),
-      missing: [row.id, JSON.stringify(listed)],
+      missing: [clientRow.id, JSON.stringify(listed)],
     });
-    results.push({ name: '/requests the Dropped thinking row reads an answer that listed nothing as none dropped, with the sender', ok: empty.text === 'none dropped, token added by the router', missing: [JSON.stringify(empty)] });
+    results.push({ name: '/requests the Dropped thinking row reads an answer that listed nothing as none dropped, with the sender', ok: empty.text === 'none dropped, token added by the router', missing: [routerRow.id, JSON.stringify(empty)] });
     results.push({ name: '/requests the Dropped thinking row reads an answer without the list as not reported, with the sender', ok: unreported.text === 'not reported, token sent by the client', missing: [JSON.stringify(unreported)] });
     results.push({
       name: '/requests the Dropped thinking row reads a request that sent no token as not requested, muted, under its hover',

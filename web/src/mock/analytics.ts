@@ -70,6 +70,12 @@ export interface HourlyRollup {
   funding: 'billed' | 'fast' | 'overage' | 'plan' | 'usage_based';
   histograms: LatencyHistograms;
   hour: string;
+  /** The requests per key of the blocks their serving attempt's answer dropped, each counted once under each key. */
+  inputTransformations: Record<string, number>;
+  /** The moved requests whose serving attempt's answer dropped a block under one of the two account reasons. */
+  inputTransformationsMoved: number;
+  /** The requests whose serving attempt's answer listed no dropped block. */
+  inputTransformationsNone: number;
   /** Requests whose cache read was kept alive by a probe, and the tokens they read under each TTL. */
   keptWarm: { requests: number; tokens1h: number; tokens5m: number };
   keyId: string;
@@ -323,6 +329,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   for (const r of counted) for (const [reason, n] of Object.entries(r.cacheMissReasons)) cacheMissReasons[reason] = countOf(cacheMissReasons, reason) + n;
   const cacheMissReasonHits = emptyCounts();
   for (const r of counted) for (const [reason, n] of Object.entries(r.cacheMissReasonHits)) cacheMissReasonHits[reason] = countOf(cacheMissReasonHits, reason) + n;
+  const inputTransformations = emptyCounts();
+  for (const r of counted) for (const [key, n] of Object.entries(r.inputTransformations)) inputTransformations[key] = countOf(inputTransformations, key) + n;
   const refusals = emptyCounts();
   for (const r of counted) for (const [code, n] of Object.entries(r.refusals)) refusals[code] = countOf(refusals, code) + n;
   const wastedProbeReasons = emptyWastedProbeReasons();
@@ -366,10 +374,9 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     failovers,
     histograms,
     incomplete: outcomes.incomplete,
-    // Every mock hour reads as one the router folded before it counted the dropped thinking blocks.
-    inputTransformations: emptyCounts(),
-    inputTransformationsMoved: 0,
-    inputTransformationsNone: 0,
+    inputTransformations,
+    inputTransformationsMoved: sumOf(counted, (r) => r.inputTransformationsMoved),
+    inputTransformationsNone: sumOf(counted, (r) => r.inputTransformationsNone),
     // A row's funding is its credited request's, so the plan-funded credits are the plan rows' own.
     keptWarm: { planRequests: planKept.requests, planTokens1h: planKept.tokens1h, planTokens5m: planKept.tokens5m, ...kept },
     key,

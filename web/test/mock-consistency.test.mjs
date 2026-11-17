@@ -3808,6 +3808,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.requests.some((r) => r.shape.effort === null), 'a row asked for no effort');
   });
 
+  test(`a row names who sent the thinking token wherever its serving attempt reports the dropped blocks, at ${at}`, async () => {
+    const s = await story;
+    // The router writes a reported map only beside the token's sender, while it can write a sender beside a null map,
+    // so a row without a report is read for nothing.
+    const reported = s.requests.filter((r) => (r.attempts.at(-1)?.response.inputTransformations ?? null) !== null);
+    assert.ok(reported.length > 0, 'a request reports its dropped blocks');
+    for (const r of reported) assert.ok(r.thinkingDiagnosticsSource === 'client' || r.thinkingDiagnosticsSource === 'router', `${r.id} reports its dropped blocks and names ${r.thinkingDiagnosticsSource}`);
+  });
+
   test(`the story holds one request whose comparison was still running, landed on its agent's last account under the client's member, at ${at}`, async () => {
     const s = await story;
     const pending = s.requests.filter((r) => r.attempts.at(-1)?.cacheMissReason === 'pending');

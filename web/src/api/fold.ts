@@ -7,7 +7,7 @@ import { emptyHistogram, histogramOf, mergeHistograms, quartet } from '@/lib/his
 import { accountBound } from '@/lib/inputTransformations';
 import { matchesPattern } from '@/lib/pattern';
 import { iso } from './decode';
-import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, RequestLog, RequestPage } from './types';
+import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, InputTransformations, RequestLog, RequestPage } from './types';
 
 const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
 
@@ -256,6 +256,20 @@ export function keptRows(rows: RequestLog[], options: PatternOptions): RequestLo
 }
 
 /**
+ * One request's share of the dropped-block counts, as the router's rollup folds it off the serving attempt's answer:
+ * one under each key whatever its blocks, since the readers count requests, one under `none` for an answer that listed
+ * nothing, one moved where the request moved and a key names an account reason, and nothing for an answer without the
+ * member.
+ */
+export function countDropped(into: Pick<AnalyticsGroup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone'>, dropped: InputTransformations | null, moved: boolean): void {
+  if (dropped === null) return;
+  const keys = Object.keys(dropped);
+  for (const key of keys) into.inputTransformations[key] = countOf(into.inputTransformations, key) + 1;
+  if (keys.length === 0) into.inputTransformationsNone += 1;
+  if (moved && keys.some(accountBound)) into.inputTransformationsMoved += 1;
+}
+
+/**
  * Request rows summed the way the rollups sum them, for the one filter the rollups cannot answer: a session.
  * `latest` is taken over every row of the range, so a bucket holding an earlier key holder alone still labels it
  * deleted.
@@ -331,16 +345,8 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
       if (hitUnderReason(r)) g.cacheMissReasonHits[reason] = countOf(g.cacheMissReasonHits, reason) + 1;
     }
     if (expiredBetweenTurns(r)) g.expiredBetweenTurns += 1;
-    // The rollup's rule: a request counts once under each key whatever its blocks, since the readers count requests,
-    // and an answer without the member counts nowhere.
     const served = servingAttempt(r);
-    const dropped = served?.response.inputTransformations ?? null;
-    if (served && dropped) {
-      const keys = Object.keys(dropped);
-      for (const key of keys) g.inputTransformations[key] = countOf(g.inputTransformations, key) + 1;
-      if (keys.length === 0) g.inputTransformationsNone += 1;
-      if ((served.selection?.moved ?? null) !== null && keys.some(accountBound)) g.inputTransformationsMoved += 1;
-    }
+    countDropped(g, served?.response.inputTransformations ?? null, (served?.selection?.moved ?? null) !== null);
   }
   for (const { group: g, rows: list } of groups.values()) {
     const samples = list.map(latencySamples);
