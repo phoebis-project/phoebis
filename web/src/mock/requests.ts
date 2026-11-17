@@ -3717,7 +3717,8 @@ export const FEATURE_CALLS: FeatureCall[] = [
   { accountId: 'reserve', durationMs: 301, errorCode: null, feature: 'connectors', id: 'req_phoebis_8755fbad8fb6fa52cd3e5d2e4c3ce0e6', keyId: 'notebook', method: 'GET', outcome: 'forwarded', path: '/v1/mcp_servers', receivedAt: iso(clock(13, 17, 45)), status: 200 },
   { accountId: 'studio', durationMs: 188, errorCode: null, feature: 'artifacts', id: 'req_phoebis_201bef4cb01b094530575e9dc296f0f8', keyId: 'desktop', method: 'GET', outcome: 'forwarded', path: '/api/frame/frames', receivedAt: iso(clock(13, 13, 26)), status: 200 },
   { accountId: 'reserve', durationMs: 276, errorCode: null, feature: 'connectors', id: 'req_phoebis_e04fd86caed31fffef8721a981a077fd', keyId: 'laptop', method: 'GET', outcome: 'forwarded', path: '/v1/mcp_servers', receivedAt: iso(clock(13, 9, 2)), status: 200 },
-  // The client left while the token was refreshed, before any head went back.
+  // The feature host answered the first send with a 401, and the client left during the forced refresh behind it,
+  // before any head went back.
   { accountId: 'studio', durationMs: 2_904, errorCode: null, feature: 'artifacts', id: 'req_phoebis_4ef85e0b213f8b4155bd28e17e2d279c', keyId: 'desktop', method: 'POST', outcome: 'canceled', path: '/api/frame/upload', receivedAt: iso(clock(13, 4, 37)), status: null },
   { accountId: 'reserve', durationMs: 226, errorCode: null, feature: 'artifacts', id: 'req_phoebis_1521f4281cc38644ed48b04dc328ada0', keyId: 'ci', method: 'GET', outcome: 'forwarded', path: '/api/frame/content/build-matrix-summary', receivedAt: iso(clock(12, 59, 15)), status: 200 },
   { accountId: 'reserve', durationMs: 391, errorCode: null, feature: 'connectors', id: 'req_phoebis_a11a694caa9f909058547b88ff660cd5', keyId: 'notebook', method: 'POST', outcome: 'forwarded', path: '/v1/mcp/srv_9p4t2n8r', receivedAt: iso(clock(12, 53, 48)), status: 200 },
