@@ -13,7 +13,7 @@ import type { RangeValue } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { docsHref } from '@/lib/docs';
 import { FEATURE_CALLS_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval } from '@/lib/follow';
+import { effectiveInterval, rowsRefreshTitle } from '@/lib/follow';
 import { fmtAbsolute, fmtDatedTime, fmtMs } from '@/lib/format';
 import { FEATURE_LABEL } from '@/lib/forms';
 import { useAsync } from '@/lib/hooks';
@@ -76,9 +76,9 @@ export function FeatureCallsTable({
   keys: readonly ApiKey[];
   onRangeChange: (range: RangeValue) => void;
   range: RangeValue;
-  /** The page's Refresh, which moves the end of both sections, its title, and why it reads nothing new. */
-  refresh: { disabled: string | undefined; onRefresh: () => void; title: string };
-  /** The range's window in Unix milliseconds, which each page reads, so the cursors walk one fixed span. */
+  /** The page's Refresh, which takes the range again for both sections, and why it reads nothing new. */
+  refresh: { disabled: string | undefined; onRefresh: () => void };
+  /** The range's window in Unix milliseconds, whose end a custom range's read sends and a preset's leaves out. */
   span: { from: number; to: number };
 }): JSX.Element {
   const { timeFormat } = useAppSettings();
@@ -89,10 +89,13 @@ export function FeatureCallsTable({
   // A cursor belongs to the range and the filters it was read under, so a change of either starts the walk again.
   const address = JSON.stringify([range, span.from, span.to, filters]);
   const { cursor, reset, setPaging, stack } = usePaging(address);
-  // Keyed on the span itself, so Refresh on a custom range, which keeps its instants, still reads the window again.
+  const custom = range.preset === 'custom';
+  // A preset's read sends no end, so auto reload and a section opened long after the page took its range reach the
+  // calls received since, and a cursor page is bounded by its cursor. Keyed on the span itself, so Refresh on a custom
+  // range, which keeps its instants, still reads the window again.
   const query = useMemo<FeatureCallQuery>(
-    () => ({ accounts: filters.accounts, cursor, features: FEATURE_WORD_VALUES.filter((f) => filters.features.includes(f)), from: span.from, keys: filters.keys, outcomes: FEATURE_OUTCOME_VALUES.filter((o) => filters.outcomes.includes(o)), to: span.to }),
-    [cursor, filters, span],
+    () => ({ accounts: filters.accounts, cursor, features: FEATURE_WORD_VALUES.filter((f) => filters.features.includes(f)), from: span.from, keys: filters.keys, outcomes: FEATURE_OUTCOME_VALUES.filter((o) => filters.outcomes.includes(o)), to: custom ? span.to : undefined }),
+    [cursor, custom, filters, span],
   );
   // The rows under the reader would move on an older page, so its cursor holds the reload until the first page returns.
   const calls = useAsync(() => api.listFeatureCalls(query), [query], { paused: holdCause !== null || cursor !== undefined, refreshMs: effectiveInterval(intervalMs, refresh.disabled !== undefined) });
@@ -134,7 +137,7 @@ export function FeatureCallsTable({
           onIntervalChange: setIntervalMs,
           onRefresh: refresh.onRefresh,
           paused: holdCause ?? (cursor !== undefined ? 'olderPage' : null),
-          refreshTitle: refresh.title,
+          refreshTitle: custom ? rowsRefreshTitle(true, range.from, range.to) : 'Reads the list again now',
         }}
         update={update}
       />

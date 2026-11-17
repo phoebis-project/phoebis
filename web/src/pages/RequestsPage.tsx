@@ -383,7 +383,6 @@ export function RequestsPage() {
   const fills = COLUMNS.some((c) => shown.has(c.id) && 'fill' in c && c.fill);
   const detailTo = (id: string) => ({ pathname: requestHref(id), search: location.search });
   const closeDrawer = () => navigate({ pathname: '/requests', search: location.search });
-  const refreshTitle = rowsRefreshTitle(custom, filters.range.from, custom ? filters.range.to : loadedAt);
 
   return (
     <PopoverHost.Provider value={host}>
@@ -407,7 +406,7 @@ export function RequestsPage() {
                 onIntervalChange: setIntervalMs,
                 onRefresh: refresh,
                 paused: requestId ? 'request' : (holdCause ?? (cursor !== undefined ? 'olderPage' : null)),
-                refreshTitle,
+                refreshTitle: rowsRefreshTitle(custom, filters.range.from, custom ? filters.range.to : loadedAt),
               }}
               update={update}
             >
@@ -585,7 +584,7 @@ export function RequestsPage() {
               keys={keys.data ?? []}
               onRangeChange={(next) => update({ range: next })}
               range={filters.range}
-              refresh={{ disabled: ended ? ENDED_RANGE : undefined, onRefresh: refresh, title: refreshTitle }}
+              refresh={{ disabled: ended ? ENDED_RANGE : undefined, onRefresh: refresh }}
               span={span}
             />
           </section>

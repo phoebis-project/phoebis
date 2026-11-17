@@ -1130,10 +1130,11 @@ filter with Key, Feature, Account and Outcome (`canceled`, `failed` or `forwarde
 the bar, and the split Refresh button. Both sections read the one range. The section and the range live in the page's
 address, so a reload or a shared link keeps them, while the four filters stay with the open page and start empty. The
 table pages 50 calls at a time with First, Previous and Next, and a change of the range or of a filter returns to the
-first page. Refresh moves the range's end to now for both sections. Auto reload is off when the section opens, and the
-dropdown offers the request list's intervals: each one reads the first page again over the same range, and it waits on
-an older page and while a menu or popover under the bar is open. While Feature calls shows, the request list reads
-nothing on its interval.
+first page. Under a preset each read runs up to now, from the start the range took when the page loaded or Refresh
+last ran, and a custom range reads its own window. Refresh, titled "Reads the list again now" under a preset, takes the
+range again for both sections. Auto reload is off when the section opens, and the dropdown offers the request list's
+intervals: each one reads the first page again, and it waits on an older page and while a menu or popover under the bar
+is open. While Feature calls shows, the request list reads nothing on its interval.
 
 An empty table with no filter reads "No feature calls in this range" with "A row appears once a key's pool selects an
 account for a feature and a client in a feature setup uses it." and the link "How the claude.ai features work", which

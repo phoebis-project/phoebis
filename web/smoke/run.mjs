@@ -16486,6 +16486,33 @@ await forView('/requests', async () => {
     });
     page.unmount();
   }
+  {
+    // A preset's read runs up to now, so auto reload and a section opened late list the calls received since the page
+    // loaded. A custom range reads its own window, here the hour that ended an hour before the clock.
+    const HOUR = 3_600_000;
+    const { listFeatureCalls } = api;
+    const queries = [];
+    api.listFeatureCalls = (...args) => {
+      queries.push(args[0] ?? null);
+      return listFeatureCalls.apply(api, args);
+    };
+    try {
+      const preset = await mount('/requests#feature-calls', { now: CLOCK_ORIGIN });
+      const presetQuery = queries[0] ?? null;
+      preset.unmount();
+      queries.length = 0;
+      const custom = await mount(`/requests?from=${isoAt(CLOCK_ORIGIN - 2 * HOUR)}&to=${isoAt(CLOCK_ORIGIN - HOUR)}#feature-calls`, { now: CLOCK_ORIGIN });
+      const customQuery = queries[0] ?? null;
+      custom.unmount();
+      results.push({
+        name: "/requests the feature calls' read carries no end under a preset and the range's end under a custom range",
+        ok: presetQuery !== null && presetQuery.from === CLOCK_ORIGIN - 24 * HOUR && presetQuery.to === undefined && customQuery !== null && customQuery.from === CLOCK_ORIGIN - 2 * HOUR && customQuery.to === CLOCK_ORIGIN - HOUR,
+        missing: [`under the preset ${JSON.stringify(presetQuery)}`, `under the custom range ${JSON.stringify(customQuery)}`],
+      });
+    } finally {
+      api.listFeatureCalls = listFeatureCalls;
+    }
+  }
 });
 
 // The routing log's Models filter lists the catalog in the cost model's tier order, which the shell reads off its
