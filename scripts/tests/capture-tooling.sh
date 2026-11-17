@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Each case pins a rule a real capture leans on, checked here without the client: the leaf a receiver presents
 # chains to the run's own CA and names the control hosts, the CA carries the key usage a strict verifier asks for,
-# mkcerts.sh refuses to start on a host without openssl, hello_lib.py's compare tells the two pinned hellos apart and
-# finds one equal to itself, and control_receiver.py answers the control calls with the
-# committed canned bodies, records each call, keeps serving after a client that drops its tunnel before the handshake,
-# and records a chunked request as an error. The resign example's --write mode leaves a body stamped with the digits
-# the signer computes over its own bytes. drive_login.py logs stub_client.py in by either login method with the
-# authorize URL's state and reads /status and /usage, and gives up with its screen saved when the client stops
-# answering or refuses the code. The stub's https calls reach the receiver alone, NO_PROXY or not, and the stub refuses
-# a proxy off loopback. capture-control.sh seeds each login's config directory past the client's first-start screens,
-# records the stub's login and refresh phases in both of its variants, with the refresh run starting from the
-# credentials the login wrote and its inference post reaching the inference receiver past the proxy, moves on past a
-# login the driver gives up on, stops in a phase whose control receiver cannot bind its port, and refuses a real token.
-# lib.sh's runcli takes KEEP_CONFIG and ALLOW_NONESSENTIAL_TRAFFIC from a call's prefix and never from the caller's
-# environment, and its start_receiver runs the receiver isolated. Every case runs against a throwaway tree, never
-# /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
+# mkcerts.sh refuses to start on a host without openssl, hello_lib.py's compare tells the two pinned hellos apart, finds
+# one equal to itself and names the one extension a changed copy of it differs in, and control_receiver.py answers the
+# control calls with the committed canned bodies, records each call, keeps serving after a client that drops its tunnel
+# before the handshake, and records a chunked request as an error. The resign example's --write mode leaves a body
+# stamped with the digits the signer computes over its own bytes. drive_login.py logs stub_client.py in by either
+# login method with the authorize URL's state and reads /status and /usage, and gives up with its screen saved when the
+# client stops answering or refuses the code. The stub's https calls reach the receiver alone, NO_PROXY or not, and the
+# stub refuses a proxy off loopback. capture-control.sh seeds each login's config directory past the client's
+# first-start screens, records the stub's login and refresh phases in both of its variants, with the refresh run
+# starting from the credentials the login wrote and its inference post reaching the inference receiver past the proxy,
+# moves on past a login the driver gives up on, stops in a phase whose control receiver cannot bind its port, and
+# refuses a real token. lib.sh's runcli takes KEEP_CONFIG and ALLOW_NONESSENTIAL_TRAFFIC from a call's prefix and never
+# from the caller's environment, and its start_receiver runs the receiver isolated. Every case runs against a throwaway
+# tree, never /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -79,7 +79,19 @@ status=0
 out=$(python3 -I "$capture/hello_lib.py" "$fixtures/hello_inference.hex" "$fixtures/hello_inference.hex" 2>&1) \
   || status=$?
 [[ "$status" -eq 0 ]] || fail "the compare of a pinned hello with itself exited $status, want 0: $out"
-[[ "$out" == "equal under the masks" ]] || fail "the compare of a pinned hello with itself printed: $out"
+
+# The pinned pair differs ahead of the extensions, so this pair differs in one alone: the inference hello's ALPN
+# extension offering http/1.0 in place of http/1.1, its seventh extension.
+alpn_11=0010000b000908687474702f312e31
+alpn_10=0010000b000908687474702f312e30
+inference=$(<"$fixtures/hello_inference.hex")
+[[ "$inference" == *"$alpn_11"* ]] || fail "hello_inference.hex holds no ALPN extension offering http/1.1 alone"
+printf '%s\n' "${inference/"$alpn_11"/"$alpn_10"}" >"$tmp/hello_alpn.hex"
+status=0
+out=$(python3 -I "$capture/hello_lib.py" "$fixtures/hello_inference.hex" "$tmp/hello_alpn.hex" 2>&1) || status=$?
+[[ "$status" -eq 3 ]] || fail "the compare of hellos that differ in one extension exited $status, want 3: $out"
+[[ "$(tail -n 1 <<<"$out")" == "differs at extension 16 (alpn) at place 7" ]] \
+  || fail "the compare of hellos that differ in one extension printed: $out"
 
 # --- control_receiver.py ---
 
