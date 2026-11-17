@@ -627,10 +627,31 @@ test("the preview walks a subagent's pin on its own member", () => {
   assert.equal(line([hot, cool], [own, second]), markedOne, 'a display pin and its own line count as one pin');
 });
 
+test('two pins of one session and one model are walked and marked apart, and a line reads its warmth off its cold instant', () => {
+  // r's display pin, which no line holds, burns 3 points an hour on hot and its subagent's line 1 on the same model.
+  // The cap's half of their 4 is 2, which the display pin's 3 covers alone, and its mark leaves sub's 1 on hot, over
+  // the guard's tenth of 0.4.
+  const pair = pin('hot', 'r', 0.03, false, { agentContexts: [agentLine('hot', 'sub', 0.01, false)] });
+  assert.equal(line([hot, cool], [pair]), markedOne);
+  // The subagent's line is served warm and went cold a minute before the dialog's clock, so it walks cold beside t,
+  // the sums of case 1: its 3 covers the target of 2.5 and leaves t's 2 on hot.
+  const cooled = pin('cool', 's', 0.01, false, { agentContexts: [agentLine('cool', 'main', 0.01, false), agentLine('hot', 'sub', 0.03, true, { warmUntil: at(NOW - MINUTE) })] });
+  assert.equal(line([hot, cool], [cooled, second]), markedOne, 'a line past its cold instant reads cold whatever it was served');
+});
+
 test('a fast-lane pin is out of the round', () => {
   const read = (fast) => line([hot, cool], [pin('hot', 'f', 0.03, false, { fast }), second]);
   assert.equal(read(true), quiet('each would leave its member too little burn.'), "on the fast lane f is out, and t's mark would leave hot no burn");
   assert.equal(read(false), markedOne);
+});
+
+test('a member whose one Fable pin rides the fast lane still reads its Fable week', () => {
+  // fable-hot projects 99 % five hours out on its 7-day Fable window, over the weekly ceiling of 90, and its shared
+  // windows sit under it. Its one Fable pin rides the fast lane and leaves the round, but its model's week still counts
+  // among the windows the trigger reads, so the week fires.
+  const fableHot = oauth('fable-hot', 0.5, 0.4, 0.99);
+  const preview = d.shedPreview(pool([fableHot, cool]), [fableHot, cool], [pin('fable-hot', 'f', 0.01, false, { fast: true, model: 'claude-fable-5-1' })], NOW);
+  assert.deepEqual(preview.hot.map((h) => [h.label, h.window]), [['fable-hot', '7d_fable']]);
 });
 
 test('an ended row with no line is out of the round', () => {

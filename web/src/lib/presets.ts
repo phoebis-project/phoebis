@@ -270,13 +270,14 @@ const endedPin = (p: { ended: boolean | null }): boolean => p.ended === true;
  * The router's round also walks a pin only auxiliary requests used and a pin whose line the route no longer lists,
  * which no served row holds. Each pin reads its burn, its prompt size, its lane, its ended mark and its move cost off
  * its own row or line, and two pins of one session are marked and counted apart. A pin on the fast lane or whose agent
- * ended is out of the round, its order, its sum and its counts, as the router's round leaves it out. The round orders
- * the pins by their served burn, decayed from the instant it was served to `now`: cold pins first by burn, then warm
- * ones by burn over their last input size, bounded by the warm-sessions mode. It marks until the removed burn covers
- * the excess under `shedCap`, passing over a pin with no sibling that has runway for it, by `shedMarks`. A pin under
- * its row's standing mark is a move pending, and a subagent's pending move still counts as burn to remove. A move costs
- * the pin's served move cost where the pin is warm or the mode reads `always`, and nothing for a cold pin. A member
- * without `eligible` counts as eligible, as a member of a pool not saved yet does.
+ * ended is out of the round, its order, its sum and its counts, as the router's round leaves it out, though a fast
+ * pin's model week still counts among the windows the trigger reads. The round orders the pins by their served burn,
+ * decayed from the instant it was served to `now`: cold pins first by burn, then warm ones by burn over their last
+ * input size, bounded by the warm-sessions mode. It marks until the removed burn covers the excess under `shedCap`,
+ * passing over a pin with no sibling that has runway for it, by `shedMarks`. The display pin under its row's standing
+ * mark is a move pending, and a subagent's pending move, which the route answers no mark for, still counts as burn to
+ * remove. A move costs the pin's served move cost where the pin is warm or the mode reads `always`, and nothing for a
+ * cold pin. A member without `eligible` counts as eligible, as a member of a pool not saved yet does.
  */
 export function shedPreview(
   pool: Pick<Pool, 'burnAverageSeconds' | 'fiveHourCeiling' | 'loadShedding' | 'shedCap' | 'warmSessions' | 'weeklyCeiling' | 'windDownMinutes'> & { members: { accountId: string; eligible?: MemberEligibility; priority: number }[] },
@@ -331,11 +332,12 @@ export function shedPreview(
   });
   for (const { account } of listed) {
     if (account.kind === 'api_key') continue;
-    const pins = conversation
-      .filter((p) => p.accountId === account.id && !endedPin(p) && p.fast !== true)
+    const kept = conversation
+      .filter((p) => p.accountId === account.id && !endedPin(p))
       // The router walks an account's pins in key, session, agent and model order as bytes, which settles ties in the
       // sorts below.
       .sort((a, b) => byteOrder(a.keyId, b.keyId) || byteOrder(a.sessionId, b.sessionId) || byteOrder(a.agentId ?? '', b.agentId ?? '') || byteOrder(a.model ?? '', b.model ?? ''));
+    const pins = kept.filter((p) => p.fast !== true);
     const five = windowOf(account, '5h');
     const start = five === null ? null : windowStart(five, now);
     // A start at or after `now`, from a reset more than five hours ahead, is no reading of a fresh window, so it holds
@@ -343,8 +345,9 @@ export function shedPreview(
     const heldNow = start !== null && start < now && now - start < 2 * windowMs;
     const end = endOf(account, now);
     const lineAt = (id: ShedWindow, w: RateLimitWindow, horizon: number) => lineOf(pool, id, w.resetsAt === null ? null : Date.parse(w.resetsAt), end, horizon, now);
-    // A model week is read only where one of the pins draws it, as the router's trigger reads it.
-    const read = TRIGGER_ORDER.filter((id) => id !== '7d_fable' || pins.some((p) => drawsFable(p.model)))
+    // A model week is read only where one of the pins draws it, a pin on the fast lane among them, as the router's
+    // trigger reads every pin the pool keeps on the account.
+    const read = TRIGGER_ORDER.filter((id) => id !== '7d_fable' || kept.some((p) => drawsFable(p.model)))
       .filter((id) => !(id === '5h' && heldNow))
       .flatMap((id) => {
         const w = windowOf(account, id);

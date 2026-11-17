@@ -2276,19 +2276,20 @@ test("a session row reads main's effort and every agent line with all its member
   const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
   // Sent out of the alphabet's order, so a decoder that sorted would read the second line first.
   // The second line sits on an API-key account, whose burn reads dollars with no window, no Pro-week figure and no plan
-  // dollars beside it.
+  // dollars beside it, and its burn was decayed to an instant before its last use, so the two instants read apart.
   const sent = [
     agentLine('7b2e', 'claude-haiku-4-5', { effort: 'low', lifecycle: 'idle', warm: false }),
-    agentLine('4f0c', 'claude-sonnet-5', { account_id: 'direct', burn: 0.074, burn_equivalent: null, burn_unit: 'usd', burn_usd: null, burn_window: null, effort: 'high', last_input_tokens: 31_000 }),
+    agentLine('4f0c', 'claude-sonnet-5', { account_id: 'direct', burn: 0.074, burn_at: 1_791_720_500_000, burn_equivalent: null, burn_unit: 'usd', burn_usd: null, burn_window: null, effort: 'high', last_input_tokens: 31_000 }),
   ];
   const s = d.decodeSession({ ...row, agent_contexts: sent, effort: 'high' });
   assert.equal(s.effort, 'high');
   const used = new Date(1_791_721_000_000).toISOString();
+  const decayed = new Date(1_791_720_500_000).toISOString();
   const pinnedAt = new Date(1_791_719_000_000).toISOString();
   const warmUntil = new Date(1_791_721_300_000).toISOString();
   assert.deepEqual(s.agentContexts, [
     { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnAt: used, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnUsd: 0.0215, burnWindow: 'five_hour', cacheTtlMs: 300_000, effort: 'low', ended: true, fast: false, lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', moveCost: null, pinnedAt, warm: false, warmUntil },
-    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnAt: used, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, effort: 'high', ended: true, fast: false, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', moveCost: null, pinnedAt, warm: true, warmUntil },
+    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnAt: decayed, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, effort: 'high', ended: true, fast: false, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', moveCost: null, pinnedAt, warm: true, warmUntil },
   ]);
 });
 

@@ -332,8 +332,9 @@ const dollarBurnOf = (pin: BurnFigures): number | null => (pin.burnUnit === 'usd
 /**
  * A pin's move cost as the mock's rounds price their pick: its prompt's rewrite as the Pro-week figure, under the
  * regime its key's client label names, null where the pin holds no prompt size or the model has no weight of its own.
+ * A prompt of 0 tokens is no size, as the route answers null where nothing is priced above zero.
  */
-const moveCostOf = (tokens: number | null, model: string, keyId: string): number | null => (tokens === null ? null : proWeekRewriteOf(tokens, model, CLIENTS[keyId] ?? null));
+const moveCostOf = (tokens: number | null, model: string, keyId: string): number | null => (tokens === null || tokens === 0 ? null : proWeekRewriteOf(tokens, model, CLIENTS[keyId] ?? null));
 /** A pin's lane by the story's rule for its key's turns on its model, which the router stores on the pin. */
 const fastPin = (keyId: string, model: string): boolean => fastTurn(keyId, model, 'inference');
 /**
