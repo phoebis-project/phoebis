@@ -1066,6 +1066,76 @@ fn trust_fake_ca(builder: &mut boring::ssl::SslConnectorBuilder, up: &FakeUpstre
     }
 }
 
+/// The feature module on a loopback port, served through `serve_features` under a pair of the test's own making
+/// for both feature hosts.
+pub struct FeatureListener {
+    pub addr: std::net::SocketAddr,
+    pair: fake_upstream::GeneratedPair,
+    /// Dropped with the listener, which ends its accept loop.
+    _stop: tokio::sync::watch::Sender<bool>,
+}
+
+pub async fn feature_listener(h: &Harness) -> FeatureListener {
+    let pair = fake_upstream::generate_pair(&["api.anthropic.com", "mcp-proxy.anthropic.com"]);
+    let acceptor = phoebis_relay::LiveAcceptor::new(fake_upstream::acceptor_for(&pair));
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop, stop_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(phoebis_relay::serve_features(
+        listener,
+        h.relay.clone(),
+        stop_rx,
+        phoebis_relay::ListenLimits {
+            drain_timeout: Duration::from_secs(30),
+            header_read_timeout: Duration::from_secs(30),
+            max_connections: 64,
+        },
+        Arc::new(acceptor),
+    ));
+    FeatureListener {
+        addr,
+        pair,
+        _stop: stop,
+    }
+}
+
+impl FeatureListener {
+    /// Sends `request`, the bytes of one HTTP/1.1 request, on a new TLS connection that names `host`, and answers
+    /// the status, the head's lines as sent and the body. The answer is read to the connection's end, so `request`
+    /// carries `Connection: close`, and a chunked body comes back in its framing.
+    pub async fn send(&self, host: &str, request: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let socket = tokio::net::TcpStream::connect(self.addr).await.unwrap();
+        let mut tls =
+            tokio_boring::connect(fake_upstream::connector_trusting(&self.pair), host, socket)
+                .await
+                .unwrap();
+        tls.write_all(request).await.unwrap();
+        let mut answer = Vec::new();
+        // A peer that closes without a TLS close_notify ends the read with an error after the whole answer.
+        let _ = tokio::time::timeout(Duration::from_secs(30), tls.read_to_end(&mut answer)).await;
+        let split = answer
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap_or_else(|| panic!("no answer head in {:?}", String::from_utf8_lossy(&answer)));
+        let head = String::from_utf8_lossy(&answer[..split]).into_owned();
+        let mut lines = head.split("\r\n");
+        let status = lines
+            .next()
+            .and_then(|line| line.split(' ').nth(1))
+            .and_then(|code| code.parse().ok())
+            .unwrap_or_else(|| panic!("no status line in {head:?}"));
+        let headers = lines
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.to_owned(), value.trim().to_owned()))
+            .collect();
+        (status, headers, answer[split + 4..].to_vec())
+    }
+}
+
 /// Bounds no test is meant to reach unless it asks for them.
 pub fn default_limits() -> Limits {
     Limits {

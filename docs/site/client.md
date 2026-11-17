@@ -212,6 +212,9 @@ figures from the proxy listener with the `curl` of [Your key's usage](#your-keys
 | any other method on a known path | | none | `405` |
 | any unmatched path | | none | `404` |
 
+The calls of the claude.ai features arrive on a listener of their own, the feature listener of a router with the
+`features` block ([features](installation.md#features)), where no path of this table answers.
+
 The query string of a request to either Messages route travels as the client sent it, `?beta=true` included: the
 router routes on the path alone.
 
@@ -256,11 +259,12 @@ as JSON, or as one HTML page when `Accept` prefers `text/html`. The JSON carries
 
 ## Refusal codes
 
-Every refusal the relay answers on the proxy listener is in Anthropic's error shape, `{"type": "error", "error":
-{"type", "message"}, "request_id"}`, with the header `x-phoebis-error-code` naming the code and `Retry-After` where the
-row says so. The companion mod's routes answer a refused key the same way and their other refusals in their own shape,
-described on [The relay](relay.md#the-keepalive-protocol). One row per code, with every message the code is answered
-with.
+Every refusal the relay answers on the proxy listener and on the feature listener is in Anthropic's error shape,
+`{"type": "error", "error": {"type", "message"}, "request_id"}`, with the header `x-phoebis-error-code` naming the code
+and `Retry-After` where the row says so. A client meets `feature_not_allowed` on the feature listener alone, and the
+`401` codes of a key on both. The companion mod's routes answer a refused key the same way and their other refusals in
+their own shape, described on [The relay](relay.md#the-keepalive-protocol). One row per code, with every message the
+code is answered with.
 
 <!-- refusal-codes: begin -->
 | Code | Status | Type | Messages | What to do |
@@ -281,6 +285,7 @@ with.
 | `client_not_allowed` | 403 | `permission_error` | `the router admits Claude Code clients only` | Use Claude Code. The router serves no other client, under any key ([clients](routing.md#clients)). The answer carries `x-should-retry: false`. |
 | `fast_credits_unavailable` | 429 | `rate_limit_error` | `no account in this pool can draw usage credits for fast mode` | Turn fast mode off, or wait for the credits. |
 | `fast_lane_exhausted` | 429 | `rate_limit_error` | `every account in this pool is at its fast limit` | Wait out the `Retry-After`, or turn fast mode off. |
+| `feature_not_allowed` | 403 | `permission_error` | `the router does not forward this claude.ai call` | The router forwards this call for no client, so nothing is to be done unless a claude.ai feature stopped working, and then ask the operator. The answer carries `x-should-retry: false`. |
 | `guardrail_blocked` | 403 | `permission_error` | `blocked by guardrail "{name}"`, the guardrail's id standing in for a stored name that carries "model:", "OAuth token has been revoked" or "prompt is too long" | A guardrail the operator attached to your key matched the request, and the answer carries `x-should-retry: false`, so do not send it again unchanged. Claude Code reads a 403 as final, so it neither heals, retries nor tries a fallback model on it, and a blocked request costs one request. The Requests view names the guardrail ([Guardrails](guardrails.md)). |
 | `invalid_body` | 400 | `invalid_request_error` | `the request body is not valid gzip`, `the request body nests deeper than the relay reads`, `the request body is not a valid Messages request` | Send a Messages request as Claude Code sends it. |
 | `invalid_limit` | 400 | `invalid_request_error` | `limit must be between 1 and 1000` | Ask `GET /v1/models` for 1 to 1000 rows. |

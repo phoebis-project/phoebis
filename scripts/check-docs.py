@@ -6,10 +6,10 @@ names no heading or anchor on the page it lands on. `client` compares the proxy 
 on the client page, so a route added or removed in the router fails the build until the page follows.
 
 `check-config` compares the lines the binary's `check-config` arm prints with the installation page's list, `codes`
-the refusal codes the `x-phoebis-error-code` header carries on the proxy listener with the client page's table,
-`example` the installation page's quoted example with the file, `unit` the installation page's quoted unit with
-`deploy/phoebis.service`, `schema` the schema versions the operations page states with the last step of the registry's
-and the ledger's migration tables, and `prose` holds the mechanical content rules of the site's prose.
+the refusal codes the `x-phoebis-error-code` header carries on the proxy and the feature listener with the client
+page's table, `example` the installation page's quoted example with the file, `unit` the installation page's quoted
+unit with `deploy/phoebis.service`, `schema` the schema versions the operations page states with the last step of the
+registry's and the ledger's migration tables, and `prose` holds the mechanical content rules of the site's prose.
 """
 import functools
 import html.parser
@@ -36,9 +36,9 @@ UNIT_FILE = ROOT / "deploy/phoebis.service"
 REGISTRY_SCHEMA_RS = ROOT / "crates/store/src/schema.rs"
 LEDGER_SCHEMA_RS = ROOT / "crates/ledger/src/schema.rs"
 OPERATIONS_MD = ROOT / "docs/site/operations.md"
-# Every file whose refusals carry a code in the `x-phoebis-error-code` header on the proxy listener, and the bus
-# constant the body-shape code is spelled by. A file listed here that does not exist fails the check rather than
-# narrowing it.
+# Every file whose refusals carry a code in the `x-phoebis-error-code` header on the proxy or the feature listener, and
+# the bus constant the body-shape code is spelled by. A file listed here that does not exist fails the check rather
+# than narrowing it.
 CODE_FILES = [
     ROOT / "crates/bus/src/event.rs",
     ROOT / "crates/ledger/src/usage.rs",
@@ -735,8 +735,8 @@ def code_expressions(code, blanked):
 
 
 def check_codes(code_files, client_md):
-    """Every code the `x-phoebis-error-code` header carries on the proxy listener against the client page's refusal
-    table, both ways. A code expression the check cannot read is a finding, never a silent pass."""
+    """Every code the `x-phoebis-error-code` header carries on the proxy and the feature listener against the client
+    page's refusal table, both ways. A code expression the check cannot read is a finding, never a silent pass."""
     if missing([client_md]):
         return 1
     consts, failures, sources, answered, pending, findings = {}, {}, {}, set(), [], 0
@@ -823,7 +823,7 @@ def check_codes(code_files, client_md):
         print(f"{client_md.name} has no row for {name}")
         findings += 1
     for name in sorted(documented - answered):
-        print(f"{client_md.name} lists {name}, which the proxy listener does not answer")
+        print(f"{client_md.name} lists {name}, which neither the proxy nor the feature listener answers")
         findings += 1
     return 1 if findings else 0
 

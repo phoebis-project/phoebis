@@ -1,10 +1,11 @@
-//! The accept loop the proxy, admin and metrics listeners share, and the proxy listener's connections on it.
+//! The accept loop the router's listeners share, and the connections of the proxy and the feature listener on it.
 //!
 //! The relayed surface is served through hyper directly rather than through `axum::serve` so every accepted
 //! stream can be wrapped in a [`HeadRecorder`]: the caller's original header spelling and order exist nowhere
 //! else by the time a handler runs.
 
 use std::future::Future;
+use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
@@ -134,8 +135,60 @@ pub async fn serve(
     .await
 }
 
-/// The HTTP/1 connection builder the proxy, admin and metrics listeners serve on, with `header_read_timeout` as the
-/// bound on the wait for a request head.
+/// The address a feature endpoint request's connection came from, in the request's extensions.
+#[derive(Clone, Copy, Debug)]
+pub struct PeerAddr(pub SocketAddr);
+
+/// Serves the feature module's routes until `stop` flips, each connection wrapped as a proxy listener's is, so a
+/// head reaches the forward in the caller's spelling and order.
+pub async fn serve_features(
+    listener: TcpListener,
+    relay: Arc<Relay>,
+    stop: watch::Receiver<bool>,
+    limits: Limits,
+    acceptor: Arc<LiveAcceptor>,
+) -> std::io::Result<()> {
+    let shutdown_mark = relay.shutdown_mark();
+    let app = crate::features::router(relay);
+    // Left at hyper's default parser configuration for the recorder's sake, as `serve` leaves it.
+    let builder = http1_builder(limits.header_read_timeout);
+    accept_loop(
+        "features",
+        listener,
+        stop,
+        limits,
+        shutdown_mark,
+        Some(acceptor),
+        move |stream, watcher| {
+            let peer = peer_of(&stream);
+            let queue = head_queue();
+            let io = TokioIo::new(HeadRecorder::new(stream, queue.clone()));
+            let service = WithOriginalHead {
+                inner: WithPeer {
+                    inner: TowerToHyperService::new(app.clone()),
+                    peer,
+                },
+                queue,
+            };
+            watcher.watch(builder.serve_connection(io, service))
+        },
+    )
+    .await
+}
+
+/// The peer of an accepted connection. A socket the system can no longer name a peer for, as one already reset, has
+/// none, and its requests carry no `PeerAddr`.
+fn peer_of(stream: &Accepted) -> Option<PeerAddr> {
+    match stream {
+        Either::Left(plain) => plain.peer_addr(),
+        Either::Right(tls) => tls.get_ref().peer_addr(),
+    }
+    .ok()
+    .map(PeerAddr)
+}
+
+/// The HTTP/1 connection builder each listener serves on, with `header_read_timeout` as the bound on the wait for a
+/// request head.
 pub fn http1_builder(header_read_timeout: Duration) -> hyper::server::conn::http1::Builder {
     let mut builder = hyper::server::conn::http1::Builder::new();
     // hyper's own 30 second default is silently off until a timer is set. The timeout is named here so the
@@ -150,9 +203,8 @@ pub fn http1_builder(header_read_timeout: Duration) -> hyper::server::conn::http
 /// deadline. With `acceptor` set, every connection completes a TLS handshake under the header read timeout, on the
 /// acceptor current when it was accepted. `connect` then builds the connection's hyper connection inside its task
 /// and runs it under the watcher it is handed, so the stop asks every connection to finish what it holds. `name`
-/// labels the loop's log lines, since the proxy, admin and metrics listeners each run one. `shutdown_mark` is the
-/// relay's own, set before the drain deadline's cut. The admin and the metrics listeners serve no relayed stream
-/// and pass `None`.
+/// labels the loop's log lines, since each listener runs one. `shutdown_mark` is the relay's own, set before the drain
+/// deadline's cut. The admin and the metrics listeners serve no relayed stream and pass `None`.
 pub async fn accept_loop<C, F, E>(
     name: &'static str,
     listener: TcpListener,
@@ -285,6 +337,28 @@ where
             queue.clear();
         }
         drop(queue);
+        self.inner.call(request)
+    }
+}
+
+/// Hands each request of a connection the connection's peer, which the request's own head never names.
+struct WithPeer<S> {
+    inner: S,
+    peer: Option<PeerAddr>,
+}
+
+impl<S, B> hyper::service::Service<Request<B>> for WithPeer<S>
+where
+    S: hyper::service::Service<Request<B>>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn call(&self, mut request: Request<B>) -> Self::Future {
+        if let Some(peer) = self.peer {
+            request.extensions_mut().insert(peer);
+        }
         self.inner.call(request)
     }
 }

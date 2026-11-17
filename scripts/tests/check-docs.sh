@@ -430,7 +430,7 @@ sed -i '/refusal-codes: end/i | `body_shape` | 400 | `invalid_request_error` | `
 python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/client.md" >/dev/null || fail "the restored body_shape row was refused"
 sed -i '/refusal-codes: end/i | `made_up` | 400 | `x` | `y` | z |' "$tmp/codes/client.md"
 out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/client.md" 2>&1) && fail "a table naming a code no file answers passed"
-echo "$out" | grep -q "client.md lists made_up, which the proxy listener does not answer" || fail "the stray code did not report: $out"
+echo "$out" | grep -q "client.md lists made_up, which neither the proxy nor the feature listener answers" || fail "the stray code did not report: $out"
 sed -i '/`made_up`/d' "$tmp/codes/client.md"
 # A code passed through a local. Each case sits in a file of its own beside an errors.rs with no finding yet, so the
 # check's exit comes from that case alone.

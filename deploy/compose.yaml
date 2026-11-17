@@ -14,6 +14,8 @@ services:
       - "8317:8317"
       - "127.0.0.1:8081:8081"
       - "127.0.0.1:9464:9464"
+      # The feature listener on port 443 of the host for a DNS redirect, with features.listen on 0.0.0.0:8443.
+      # - "443:8443"
     restart: unless-stopped
     secrets:
       - router-storage-key

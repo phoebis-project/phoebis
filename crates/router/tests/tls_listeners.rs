@@ -2,19 +2,31 @@
 //! pair the test generates and trusts from its own clients alone, `phoebis health` probing its proxy listener over
 //! TLS, a pair the start cannot serve refused before any port is taken, and `POST /admin/tls/reload` putting a new pair
 //! in front of the next connection or keeping the old one when the new one does not load, with an attention item until
-//! a reload lands.
+//! a reload lands. The feature listener serves each feature host its own certificate under the feature CA, which a
+//! client trusts by the download's bytes and which signs for no other name.
 
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use boring::x509::X509;
+use boring::asn1::Asn1Time;
+use boring::bn::BigNum;
+use boring::ec::{EcGroup, EcKey};
+use boring::hash::MessageDigest;
+use boring::nid::Nid;
+use boring::pkey::{PKey, Private};
+use boring::ssl::{ConnectConfiguration, SslConnector, SslMethod};
+use boring::stack::Stack;
+use boring::x509::extension::SubjectAlternativeName;
+use boring::x509::store::X509StoreBuilder;
+use boring::x509::{X509Builder, X509NameBuilder, X509StoreContext, X509};
 use fake_upstream::{
     connector_trusting, generate_pair, generate_pair_valid_between, FakeUpstream, GeneratedPair,
 };
 use hyper::Method;
 use phoebis_router::admin_client::{AdminClient, Answer, Common};
-use phoebis_router::config::Config;
+use phoebis_router::config::{Config, FeaturesConfig};
+use phoebis_router::feature_ca::CA_KEY_FILE;
 use phoebis_router::status;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -529,5 +541,195 @@ async fn a_reload_with_a_mismatched_key_keeps_the_old_pair_serving() {
 
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
+/// The ports of a router started with a `features` block.
+struct FeaturePorts {
+    features: u16,
+    proxy: u16,
+}
+
+/// The router on loopback with both public listeners on plain HTTP and a `features` block, its data directory at
+/// `dir`, started and waited for until its feature listener accepts.
+async fn start_with_features(
+    dir: &Path,
+    up: &FakeUpstream,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+    FeaturePorts,
+) {
+    let (proxy_port, admin_port, features_port) = (free_port(), free_port(), free_port());
+    let mut config = configured_with(dir, up, (proxy_port, admin_port), "", "");
+    config.features = Some(FeaturesConfig {
+        listen: ([127, 0, 0, 1], features_port).into(),
+    });
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    fake_upstream::wait_for_async(SETTLE, || async {
+        TcpStream::connect(("127.0.0.1", features_port)).await.ok()
+    })
+    .await;
+    (
+        stop_tx,
+        server,
+        FeaturePorts {
+            features: features_port,
+            proxy: proxy_port,
+        },
+    )
+}
+
+/// The body of `GET /v0/features/ca.pem` on the proxy listener, asked without a key.
+async fn download(proxy_port: u16) -> Vec<u8> {
+    let mut stream = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    stream
+        .write_all(
+            b"GET /v0/features/ca.pem HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    tokio::time::timeout(SETTLE, stream.read_to_end(&mut answer))
+        .await
+        .expect("the answer ended")
+        .unwrap();
+    let split = answer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("the answer has a head");
+    let head = String::from_utf8_lossy(&answer[..split]);
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    answer[split + 4..].to_vec()
+}
+
+/// A client that trusts the CA in `ca_pem` and no other certificate, and checks the name it connects to.
+fn trusting_alone(ca_pem: &[u8]) -> ConnectConfiguration {
+    let mut store = X509StoreBuilder::new().unwrap();
+    store.add_cert(X509::from_pem(ca_pem).unwrap()).unwrap();
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_cert_store(store.build());
+    builder.build().configure().unwrap()
+}
+
+/// A handshake with the feature listener that names `host`, under a client that trusts `ca_pem` alone.
+async fn feature_handshake(features_port: u16, ca_pem: &[u8], host: &str) -> SslStream<TcpStream> {
+    let socket = TcpStream::connect(("127.0.0.1", features_port))
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        SETTLE,
+        tokio_boring::connect(trusting_alone(ca_pem), host, socket),
+    )
+    .await
+    .expect("the handshake finished")
+    .unwrap_or_else(|error| panic!("the handshake that names {host} failed: {error}"))
+}
+
+/// A certificate for the one name `name` puts in its subject alternative names, signed by `ca_key` under `ca`'s
+/// subject. Its subject holds no common name, so no verifier reads a name from there in place of the one under test.
+fn signed_under(
+    ca: &X509,
+    ca_key: &PKey<Private>,
+    name: impl Fn(&mut SubjectAlternativeName),
+) -> X509 {
+    let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+    let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+    let mut subject = X509NameBuilder::new().unwrap();
+    subject
+        .append_entry_by_nid(Nid::ORGANIZATIONNAME, "Invented leaf")
+        .unwrap();
+    let subject = subject.build();
+    let mut builder = X509Builder::new().unwrap();
+    builder.set_version(2).unwrap();
+    builder
+        .set_serial_number(&BigNum::from_u32(7).unwrap().to_asn1_integer().unwrap())
+        .unwrap();
+    builder.set_subject_name(&subject).unwrap();
+    builder.set_issuer_name(ca.subject_name()).unwrap();
+    builder.set_pubkey(&key).unwrap();
+    builder
+        .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+        .unwrap();
+    builder
+        .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+        .unwrap();
+    let mut names = SubjectAlternativeName::new();
+    name(&mut names);
+    let names = names
+        .build(&builder.x509v3_context(Some(ca), None))
+        .unwrap();
+    builder.append_extension(&names).unwrap();
+    builder.sign(ca_key, MessageDigest::sha256()).unwrap();
+    builder.build()
+}
+
+/// Whether a standard verifier that trusts `ca` alone accepts `cert`.
+fn verifies(ca: &X509, cert: &X509) -> bool {
+    let mut store = X509StoreBuilder::new().unwrap();
+    store.add_cert(ca.clone()).unwrap();
+    let store = store.build();
+    let mut context = X509StoreContext::new().unwrap();
+    context
+        .init(&store, cert, &Stack::new().unwrap(), |context| {
+            context.verify_cert()
+        })
+        .unwrap()
+}
+
+#[tokio::test]
+async fn each_feature_host_gets_its_own_certificate() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (stop_tx, server, ports) = start_with_features(dir.path(), &up).await;
+
+    let ca_pem = download(ports.proxy).await;
+    feature_handshake(ports.features, &ca_pem, "api.anthropic.com").await;
+    feature_handshake(ports.features, &ca_pem, "mcp-proxy.anthropic.com").await;
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_feature_ca_is_bound_to_the_two_hosts() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (stop_tx, server, ports) = start_with_features(dir.path(), &up).await;
+
+    let ca_pem = download(ports.proxy).await;
+    let served = feature_handshake(ports.features, &ca_pem, "api.anthropic.com")
+        .await
+        .ssl()
+        .peer_certificate()
+        .expect("the listener served a certificate");
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+
+    let ca = X509::from_pem(&ca_pem).unwrap();
+    let ca_key =
+        PKey::private_key_from_pem(&std::fs::read(dir.path().join(CA_KEY_FILE)).unwrap()).unwrap();
+    let other_host = signed_under(&ca, &ca_key, |names| {
+        names.dns("other.example");
+    });
+    let address = signed_under(&ca, &ca_key, |names| {
+        names.ip("203.0.113.9");
+    });
+    assert!(
+        !verifies(&ca, &other_host),
+        "the CA's key signs for other.example"
+    );
+    assert!(
+        !verifies(&ca, &address),
+        "the CA's key signs for 203.0.113.9"
+    );
+    assert!(
+        verifies(&ca, &served),
+        "the certificate served for api.anthropic.com"
+    );
     up.shutdown().await;
 }

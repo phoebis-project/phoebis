@@ -16,6 +16,7 @@ mod drift;
 mod errors;
 mod exhaustion;
 mod facts;
+pub mod features;
 mod headers;
 mod hold;
 mod identity;
@@ -60,7 +61,8 @@ pub use observe::RELAY_MISS_REASONS;
 pub use portability::portable_of;
 pub use ratelimit::{retry_after, UnifiedHeaders, FAST_INPUT, FAST_OUTPUT};
 pub use serve::{
-    accept_loop, http1_builder, serve, Accepted, Limits as ListenLimits, LiveAcceptor,
+    accept_loop, http1_builder, serve, serve_features, Accepted, Limits as ListenLimits,
+    LiveAcceptor, PeerAddr,
 };
 pub use sse::SseEvent;
 

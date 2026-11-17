@@ -150,6 +150,40 @@ fn init_writes_the_three_artifacts_at_their_modes_and_prints_the_secret_once() {
     assert_eq!(written, from_the_sixth(&defaults));
 }
 
+#[test]
+fn init_writes_the_features_block_for_its_flag_alone() {
+    let flagged = tempfile::tempdir().unwrap();
+    let config = flagged.path().join("config.yaml");
+    let out = init(
+        flagged.path(),
+        &[
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+            "--features-listen",
+            "127.0.0.1:8443",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    let loaded = phoebis_router::config::load_unresolved(&config).unwrap();
+    assert_eq!(
+        loaded.features.map(|block| block.listen),
+        Some(std::net::SocketAddr::from(([127, 0, 0, 1], 8443))),
+        "{}",
+        text(&config)
+    );
+
+    let plain = tempfile::tempdir().unwrap();
+    let config = plain.path().join("config.yaml");
+    let out = init(
+        plain.path(),
+        &["--non-interactive", "--config", path_arg(&config)],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    let loaded = phoebis_router::config::load_unresolved(&config).unwrap();
+    assert!(loaded.features.is_none(), "{}", text(&config));
+}
+
 /// A pseudo-terminal's two ends: the test holds the near one, and the child gets the far one as stdin and stderr, which
 /// is what `init` takes for a terminal to ask on.
 fn terminal() -> (std::fs::File, std::fs::File) {

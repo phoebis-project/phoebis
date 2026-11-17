@@ -71,6 +71,9 @@ pub struct InitArgs {
     /// Writes the admin secret here, with `RUST_LOG=info`, rather than printing it.
     #[arg(long, value_name = "PATH")]
     pub env_file: Option<PathBuf>,
+    /// The feature listener's address. Unset when absent, and `init` asks no question for it.
+    #[arg(long, value_name = "ADDR")]
+    pub features_listen: Option<SocketAddr>,
     /// The storage key file. `storage.key` beside the bootstrap file when absent.
     #[arg(long, value_name = "PATH")]
     pub key_file: Option<PathBuf>,
@@ -110,6 +113,8 @@ pub struct Plan {
     pub container: bool,
     pub data_dir: PathBuf,
     pub env_file: Option<PathBuf>,
+    /// The feature listener's address, which writes the `features` block. `None` keeps the example's commented block.
+    pub features_listen: Option<SocketAddr>,
     pub key_file: PathBuf,
     pub owner: Option<String>,
     pub proxy: Listener,
@@ -336,6 +341,7 @@ pub fn plan(config_path: &Path, args: &InitArgs) -> Result<Plan, InitError> {
         container: args.container,
         data_dir,
         env_file,
+        features_listen: args.features_listen,
         key_file,
         owner: args.owner.clone(),
         proxy: listener(
@@ -416,6 +422,9 @@ pub fn render(plan: &Plan) -> String {
 struct Fill {
     block: &'static str,
     key: &'static str,
+    /// The example carries the block commented out, its head and the key's line both comments, so the fill replaces
+    /// the two lines together and a file without the fill keeps them as the example spells them.
+    commented: bool,
     lines: Vec<String>,
 }
 
@@ -460,6 +469,17 @@ fn fills(plan: &Plan) -> Vec<Fill> {
             CONTAINER_METRICS_LISTEN.to_string(),
         ));
     }
+    if let Some(listen) = plan.features_listen {
+        fills.push(Fill {
+            block: "features",
+            key: "listen",
+            commented: true,
+            lines: vec![
+                "features:".to_string(),
+                format!("  listen: {}", scalar(&listen.to_string())),
+            ],
+        });
+    }
     fills
 }
 
@@ -467,6 +487,7 @@ fn value_fill(block: &'static str, key: &'static str, value: String) -> Fill {
     Fill {
         block,
         key,
+        commented: false,
         lines: vec![format!("  {key}: {value}")],
     }
 }
@@ -490,6 +511,7 @@ fn listen_fill(block: &'static str, listener: &Listener) -> Fill {
     Fill {
         block,
         key: "listen",
+        commented: false,
         lines,
     }
 }
@@ -500,19 +522,38 @@ fn fill(example: &str, fills: &[Fill]) -> Result<String, String> {
     let mut found = vec![0usize; fills.len()];
     let mut text = String::with_capacity(example.len() + 512);
     let mut block = "";
-    for line in example.lines() {
+    let mut example_lines = example.lines().peekable();
+    while let Some(line) = example_lines.next() {
         if let Some(name) = line
             .strip_suffix(':')
             .filter(|name| !name.starts_with([' ', '#']))
         {
             block = name;
         }
-        let at = fills.iter().position(|fill| {
-            fill.block == block
+        let commented = fills.iter().position(|fill| {
+            fill.commented
                 && line
-                    .strip_prefix("  ")
-                    .and_then(|rest| rest.strip_prefix(fill.key))
-                    .is_some_and(|rest| rest.starts_with(':'))
+                    .strip_prefix("# ")
+                    .and_then(|rest| rest.strip_suffix(':'))
+                    == Some(fill.block)
+                && example_lines.peek().is_some_and(|next| {
+                    next.strip_prefix("#   ")
+                        .and_then(|rest| rest.strip_prefix(fill.key))
+                        .is_some_and(|rest| rest.starts_with(':'))
+                })
+        });
+        if commented.is_some() {
+            example_lines.next();
+        }
+        let at = commented.or_else(|| {
+            fills.iter().position(|fill| {
+                !fill.commented
+                    && fill.block == block
+                    && line
+                        .strip_prefix("  ")
+                        .and_then(|rest| rest.strip_prefix(fill.key))
+                        .is_some_and(|rest| rest.starts_with(':'))
+            })
         });
         let lines = match at {
             Some(at) => {

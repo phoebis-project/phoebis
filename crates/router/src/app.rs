@@ -1,5 +1,4 @@
-//! The running process: the store and the credential manager the three listeners share, and the drain that
-//! ends them.
+//! The running process: the store and the credential manager the listeners share, and the drain that ends them.
 
 use std::future::Future;
 use std::sync::atomic::Ordering;
@@ -21,7 +20,8 @@ use phoebis_ledger::{
 };
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_relay::{
-    Accounting, CatalogService, Limits, ListenLimits, Relay, ShutdownMark, REFRESH_TICK,
+    Accounting, CatalogService, Limits, ListenLimits, LiveAcceptor, Relay, ShutdownMark,
+    REFRESH_TICK,
 };
 use phoebis_store::permissions::{check_private_file, data_dir_of};
 use phoebis_store::{StorageKey, Store};
@@ -31,7 +31,7 @@ use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use tokio::task::JoinSet;
 
 use crate::config::{Config, RoutingConfig, StatsConfig, StorageConfig, UpstreamConfig};
-use crate::feature_ca::FeatureCa;
+use crate::feature_ca::{FeatureCa, FeatureLeaves, FEATURE_HOSTS};
 use crate::tls::PublicListener;
 use crate::{listen, tls};
 
@@ -90,6 +90,10 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 /// of the deadline it can no longer meet.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
+/// A feature certificate is due a day ahead of its end, so a step this often issues it again some 23 hours early, and
+/// a failed step leaves the current one serving for many more tries.
+const FEATURE_RENEWAL_INTERVAL: Duration = Duration::from_secs(3_600);
+
 /// An unattended browser must not keep an admin session usable, and no session outlives the day it was
 /// opened on. A login that asks to stay lives by its signed token's 30 days instead.
 const SESSION_ABSOLUTE: Duration = Duration::from_secs(43_200);
@@ -100,8 +104,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     run_until(config, shutdown, &ShutdownDeadline::default()).await
 }
 
-/// Builds every component from the configuration, serves the proxy, the admin, and the metrics listeners
-/// until `shutdown` resolves, then drains, the drain's deadline written to `deadline`.
+/// Builds every component from the configuration, serves the proxy, the admin and the metrics listener, and the
+/// feature listener where the file has its block, until `shutdown` resolves, then drains, the drain's deadline written
+/// to `deadline`.
 pub async fn run_until(
     config: Config,
     shutdown: impl Future<Output = ()>,
@@ -505,13 +510,39 @@ pub async fn run_until(
         (PublicListener::Proxy, proxy_live),
         (PublicListener::Admin, admin_live),
     ]);
+    // Issued before any bind as the pairs are read, so a certificate the start cannot issue refuses with its line and
+    // no port is taken. The listener joins no reload, since it has no pair of the operator's to read again.
+    let features = match feature_ca.zip(config.features.as_ref()) {
+        None => None,
+        Some((ca, block)) => {
+            let facts = ca.facts().clone();
+            let leaves = Arc::new(FeatureLeaves::issue(Arc::new(ca), clock.clone())?);
+            let acceptor = Arc::new(LiveAcceptor::new(tls::feature_acceptor(&leaves)?));
+            tracing::info!(
+                listener = "features",
+                names = ?FEATURE_HOSTS,
+                ca_fingerprint = %facts.fingerprint,
+                ca_not_after = %facts.leaf.not_after,
+                "serving TLS"
+            );
+            Some((block.listen, leaves, acceptor))
+        }
+    };
     let proxy_listener = bind("proxy.listen", config.proxy.listen).await?;
     let admin_listener = bind("admin.listen", config.admin.listen).await?;
     let metrics_listener = bind("stats.metrics_listen", config.stats.metrics_listen).await?;
+    let features_listener = match &features {
+        Some((listen, ..)) => Some(bind("features.listen", *listen).await?),
+        None => None,
+    };
     tracing::info!(
         proxy = %tls::url(&config.proxy.tls, config.proxy.listen),
         admin = %tls::url(&config.admin.tls, config.admin.listen),
         metrics = %tls::url(&None, config.stats.metrics_listen),
+        // An `Option` records nothing at `None`, so the line names no feature listener on a router without one.
+        features = features
+            .as_ref()
+            .map(|(listen, ..)| tracing::field::display(format!("https://{listen}"))),
         profile = profile.name,
         "listening"
     );
@@ -549,6 +580,22 @@ pub async fn run_until(
             }
         })
     };
+    let renewal = features.as_ref().map(|(_, leaves, acceptor)| {
+        let (leaves, acceptor) = (Arc::clone(leaves), Arc::clone(acceptor));
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(FEATURE_RENEWAL_INTERVAL);
+            loop {
+                tick.tick().await;
+                if let Err(error) = tls::renew_feature_certificates(&leaves, &acceptor) {
+                    tracing::warn!(
+                        %error,
+                        "the feature listener's certificates were not renewed, and the current ones serve until the \
+                         next try"
+                    );
+                }
+            }
+        })
+    });
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     let proxy_stop = stop_rx.clone();
     let limits = |max_connections| ListenLimits {
@@ -587,6 +634,20 @@ pub async fn run_until(
             admin_acceptor,
         ))
         .id();
+    let features_task =
+        features_listener
+            .zip(features.as_ref())
+            .map(|(listener, (_, _, acceptor))| {
+                servers
+                    .spawn(phoebis_relay::serve_features(
+                        listener,
+                        relay.clone(),
+                        stop_rx.clone(),
+                        limits(PROXY_MAX_CONNECTIONS),
+                        Arc::clone(acceptor),
+                    ))
+                    .id()
+            });
     servers.spawn(listen::serve(
         "metrics",
         metrics_listener,
@@ -605,13 +666,15 @@ pub async fn run_until(
         limits(METRICS_MAX_CONNECTIONS),
         None,
     ));
-    // The set holds the three listeners alone, so a task that is neither the proxy's nor the admin's is the metrics
-    // listener.
+    // The set holds the listeners alone, so a task that is none of the proxy's, the admin's and the feature listener's
+    // is the metrics listener.
     let listener_of = |id| {
         if id == proxy_task {
             "proxy"
         } else if id == admin_task {
             "admin"
+        } else if Some(id) == features_task {
+            "features"
         } else {
             "metrics"
         }
@@ -683,6 +746,9 @@ pub async fn run_until(
     observer.abort();
     scheduler_tick.abort();
     sweeper.abort();
+    if let Some(renewal) = renewal {
+        renewal.abort();
+    }
     // The engine holds an Arc<Relay>, so dropping the relay alone would not release the pool's last holder.
     drop(keepalive);
     // The listeners are done, while a relayed body runs on its own task. A cut connection drops its body channel's

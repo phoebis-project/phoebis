@@ -566,6 +566,20 @@ pub(crate) const ACCOUNT_CANCELED: Failure = Failure {
     class: FailureClass::Canceled,
 };
 
+/// A keyed call on the feature listener that no row of the table names.
+///
+/// A 403 `permission_error` is the one answer the client takes quietly on each of its claude.ai calls, and the
+/// message holds none of the phrases the client reads in a 403.
+pub(crate) const FEATURE_NOT_ALLOWED: Failure = Failure {
+    status: StatusCode::FORBIDDEN,
+    error_type: "permission_error",
+    code: "feature_not_allowed",
+    message: Cow::Borrowed("the router does not forward this claude.ai call"),
+    retry_after: None,
+    no_retry: true,
+    class: FailureClass::Rejected,
+};
+
 pub(crate) const METHOD_NOT_ALLOWED: Failure = Failure {
     status: StatusCode::METHOD_NOT_ALLOWED,
     error_type: "invalid_request_error",

@@ -9,7 +9,10 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use boring::asn1::Asn1Time;
 use boring::error::ErrorStack;
 use boring::pkey::{PKey, Private};
-use boring::ssl::{select_next_proto, AlpnError, SslAcceptor, SslMethod};
+use boring::ssl::{
+    select_next_proto, AlpnError, NameType, SniError, SslAcceptor, SslAcceptorBuilder, SslAlert,
+    SslContext, SslMethod,
+};
 use boring::x509::X509;
 use phoebis_admin::{Reloaded, TlsReload};
 use phoebis_attention::{PairFacts, TlsPairs};
@@ -17,6 +20,7 @@ use phoebis_relay::LiveAcceptor;
 use phoebis_transport::ALPN_HTTP1;
 
 use crate::config::ListenerTls;
+use crate::feature_ca::{FeatureCaError, FeatureLeaves, IssuedLeaf, FEATURE_HOSTS};
 
 /// The acceptor an accept loop takes: `None` is plain HTTP.
 pub type Acceptor = Option<Arc<LiveAcceptor>>;
@@ -156,6 +160,74 @@ pub fn load_pair(
         key_file: key_file.to_path_buf(),
         leaf: checked.facts,
     })
+}
+
+/// The prefix of the feature acceptor's refusals: the listener's own block, since it takes no pair of the operator's.
+const FEATURES: &str = "features";
+
+/// The feature listener's acceptor over the current certificates: the handshake's server name picks one, and a
+/// name outside the two feature hosts ends the handshake. ALPN selects `http/1.1`, as on each listener.
+pub(crate) fn feature_acceptor(leaves: &FeatureLeaves) -> Result<SslAcceptor, TlsError> {
+    let contexts = FEATURE_HOSTS
+        .iter()
+        .map(|host| {
+            let leaf = leaves
+                .current(host)
+                .expect("the leaves hold a certificate for each feature host");
+            host_context(&leaf).map(|context| (*host, context))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut builder = http1_acceptor()?;
+    // The base context holds no certificate, so a handshake the callback does not hand to a host's context gets none.
+    builder.set_servername_callback(move |ssl, alert| {
+        let picked = ssl.servername(NameType::HOST_NAME).and_then(|name| {
+            let name = name.strip_suffix('.').unwrap_or(name);
+            contexts
+                .iter()
+                .find(|(host, _)| host.eq_ignore_ascii_case(name))
+        });
+        let Some((_, context)) = picked else {
+            *alert = SslAlert::UNRECOGNIZED_NAME;
+            return Err(SniError::ALERT_FATAL);
+        };
+        ssl.set_ssl_context(context)
+            .map_err(|_| SniError::ALERT_FATAL)
+    });
+    Ok(builder.build())
+}
+
+/// The renewal's step: issues each certificate that is due and, where one was issued, puts an acceptor over the
+/// current certificates in front of the next connection. Answers how many it issued.
+pub(crate) fn renew_feature_certificates(
+    leaves: &FeatureLeaves,
+    live: &LiveAcceptor,
+) -> Result<usize, FeatureCaError> {
+    let issued = leaves.renew_due()?;
+    if issued > 0 {
+        live.replace(feature_acceptor(leaves)?);
+    }
+    Ok(issued)
+}
+
+/// One feature host's certificate and key on a context of their own. The ALPN callback is set here too, since the
+/// handshake reads it from the context the server name switched to.
+fn host_context(leaf: &IssuedLeaf) -> Result<SslContext, TlsError> {
+    let cert = X509::from_der(&leaf.cert_der).map_err(stack(FEATURES))?;
+    let key = PKey::private_key_from_pkcs8(&leaf.key_der).map_err(stack(FEATURES))?;
+    let mut builder = http1_acceptor()?;
+    builder.set_certificate(&cert).map_err(stack(FEATURES))?;
+    builder.set_private_key(&key).map_err(stack(FEATURES))?;
+    Ok(builder.build().into_context())
+}
+
+/// A `mozilla_intermediate_v5` acceptor that steers each client to HTTP/1.1, as `load_pair` builds one.
+fn http1_acceptor() -> Result<SslAcceptorBuilder, TlsError> {
+    let mut builder =
+        SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).map_err(stack(FEATURES))?;
+    builder.set_alpn_select_callback(|_, offered| {
+        select_next_proto(ALPN_HTTP1, offered).ok_or(AlpnError::NOACK)
+    });
+    Ok(builder)
 }
 
 /// A pair `read_checked` read and found sound: both files' bytes, the parsed key and leaf, and the leaf's facts.
@@ -618,6 +690,60 @@ mod tests {
     use super::*;
 
     use fake_upstream::{generate_pair, generate_pair_valid_until};
+
+    use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
+
+    use boring::ssl::{SslConnector, SslVerifyMode};
+
+    use crate::feature_ca::{FeatureCa, LEAF_RENEW_AHEAD};
+
+    /// The certificate a handshake that names `api.anthropic.com` gets from the acceptor `live` holds now, over a pair
+    /// of streams in memory. The client checks nothing: a certificate the moved clock issued starts after the wall
+    /// clock a verifier reads, and the test reads the end alone.
+    async fn served(live: &LiveAcceptor) -> X509 {
+        let acceptor = live.current();
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
+        connector.set_verify(SslVerifyMode::NONE);
+        let config = connector.build().configure().unwrap();
+        let (accepted, connected) = tokio::join!(
+            tokio_boring::accept(&acceptor, server),
+            tokio_boring::connect(config, "api.anthropic.com", client)
+        );
+        accepted.unwrap();
+        connected.unwrap().ssl().peer_certificate().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_renewed_feature_certificate_serves_the_next_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        // The CA's own dates are checked against the wall clock as it is read, so the test's clock starts there.
+        let now = jiff::Timestamp::now().as_millisecond();
+        let (ca, _) = FeatureCa::open(dir.path(), now).unwrap();
+        let at = Arc::new(AtomicI64::new(now));
+        let clock: phoebis_store::Clock = {
+            let at = Arc::clone(&at);
+            Arc::new(move || at.load(AtomicOrdering::SeqCst))
+        };
+        let leaves = FeatureLeaves::issue(Arc::new(ca), clock).unwrap();
+        let live = LiveAcceptor::new(feature_acceptor(&leaves).unwrap());
+        let first = served(&live).await;
+        let end = leaves.current("api.anthropic.com").unwrap().not_after;
+
+        at.store(
+            end - LEAF_RENEW_AHEAD.as_millis() as i64 + 1,
+            AtomicOrdering::SeqCst,
+        );
+        assert_eq!(renew_feature_certificates(&leaves, &live).unwrap(), 2);
+        let next = served(&live).await;
+        assert_eq!(
+            next.not_after().compare(first.not_after()).unwrap(),
+            Ordering::Greater,
+            "served {} after {}",
+            next.not_after(),
+            first.not_after()
+        );
+    }
 
     #[test]
     fn a_leafs_not_after_reads_as_unix_milliseconds() {

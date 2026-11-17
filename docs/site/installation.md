@@ -217,7 +217,7 @@ subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` th
 
 | Command | Effect |
 | --- | --- |
-| `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then stops within 35 seconds. |
+| `phoebis --config ./config.yaml` | Serves the proxy, the admin and the metrics listener, and with a `features` block the feature listener, until Ctrl-C or SIGTERM, then stops within 35 seconds. |
 | `phoebis init --config ./config.yaml` | Writes the bootstrap file, the storage key and the admin secret, once. |
 | `phoebis recover-key --config ./config.yaml` | Discards the registry's secrets after a lost key and seals a new canary, or seals the canary of a registry that has none when the key opens its rows: exit 0 once the accounts are marked or the canary is sealed ([The storage key](operations.md#the-storage-key)). |
 | `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas, certificate pairs and, with a `features` block, the feature CA's two files. |
@@ -306,10 +306,10 @@ file (64 hex characters and a newline, created at `0600` in one open), the envir
 directory and every missing parent of those paths at `0700`. It opens no database, so the first start creates both and
 seals the key canary. The bootstrap file is [the example](#the-bootstrap-file) with the two listeners,
 `admin.secret_env`, the key file, both databases under the data directory, `stats.api_prices_path` (`api_prices.yaml`
-beside the bootstrap file) and `stats.subscription_costs_path` (`subscription_costs.yaml` beside it) filled in, every
-path absolute and every other line as the example spells it. The admin secret is 32 random bytes in base64url, 43
-characters, and never lands in the bootstrap file. `init` loads the written file the way `check-config` does before it
-answers.
+beside the bootstrap file) and `stats.subscription_costs_path` (`subscription_costs.yaml` beside it) filled in, the
+`features` block in place of its two commented lines where `--features-listen` gives an address, every path absolute
+and every other line as the example spells it. The admin secret is 32 random bytes in base64url, 43 characters, and
+never lands in the bootstrap file. `init` loads the written file the way `check-config` does before it answers.
 
 | Flag | Default | Effect |
 | --- | --- | --- |
@@ -318,6 +318,7 @@ answers.
 | `--container` | off | Writes the compose directory's shape, below. |
 | `--data-dir PATH` | `data` beside the file | Holds `router.sqlite` and `ledger.sqlite`. |
 | `--env-file PATH` | unset | Writes the admin secret there rather than printing it. |
+| `--features-listen ADDR` | unset | The feature listener's address, written as the `features` block ([features](#features)). `init` asks no question for it. |
 | `--key-file PATH` | `storage.key` beside the file | The storage key file. |
 | `--non-interactive` | off | Asks nothing, even on a terminal. |
 | `--owner USER` | unset | Gives that user the key file and each directory `init` created for the service, which needs root. |
@@ -550,7 +551,12 @@ Optional, and off without the block.
 | --- | --- | --- |
 | `listen` | required in the block | a socket address |
 
-With the block the router holds a CA of its own for the claude.ai features: two files in the data directory, the
+With the block the router binds a fourth listener at `listen`, beside the proxy, the admin and the metrics listener,
+which serves the calls of the claude.ai features and nothing else. It always terminates TLS under the router's own CA
+and takes no `tls` key ([TLS on the listeners](#tls-on-the-listeners)). These pages give it port 8443, as in
+`listen: 0.0.0.0:8443`.
+
+With the block the router also holds a CA of its own for the claude.ai features: two files in the data directory, the
 directory of `storage.path`, `feature-ca.pem` for the certificate and `feature-ca-key.pem` for its private key, both
 written once at `0600` by the first start that finds neither. The CA carries a critical name constraint that permits
 `api.anthropic.com` and `mcp-proxy.anthropic.com` with the names beneath them and excludes each IP address, so a client
@@ -853,6 +859,32 @@ fails in the client's own handshake, since the listener answers no TLS.
 
 The metrics listener has no `tls` key and serves plain HTTP.
 
+The feature listener has no `tls` key either and always terminates TLS, on certificates the router issues itself under
+the feature CA ([features](#features)): one for `api.anthropic.com` and one for `mcp-proxy.anthropic.com`, each valid
+for seven days, with a key that lives in memory alone. The router issues the next certificate of a name about a day
+before the current one ends and serves it from the next connection on, so the listener needs no renewal step and no
+`phoebis tls reload`, which leaves it out. The handshake's server name picks the certificate, and a handshake that names
+another host or none ends without one, which the router logs at debug, as it logs each failed handshake. The listener
+speaks HTTP/1.1 only, as the others do. Its start lines are `serving TLS` with `listener="features"`, the two names,
+the CA's fingerprint and its end, and `features=https://{addr}` in the `listening` line.
+
+### Port 443 for a DNS redirect
+
+A client that reaches the feature listener through a DNS redirect, with both feature hosts resolving to the router,
+connects to port 443 of that address. A client behind `phoebis-proxy` needs none of this, since the proxy's upstream
+names the listener's own port. The `phoebis` user of the service unit cannot bind a port below 1024, and the shipped
+unit stays as it is. One road is a drop-in for the unit that grants the capability, with `features.listen` on port 443:
+
+```ini title="A drop-in for the service unit"
+# /etc/systemd/system/phoebis.service.d/features-port.conf
+[Service]
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+```
+
+The other is a rule of the host's firewall that maps port 443 of that address to the listener's port, 8443 on these
+pages. In the container the listener binds its port inside the container, and `deploy/compose.yaml` carries the line
+that publishes it as port 443 of the host, `- "443:8443"`, commented out under its published ports.
+
 ## Storage
 
 `storage.path` names the database file itself rather than a directory, and `phoebis` uses the name as given. It creates
@@ -898,10 +930,10 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Admin session lifetime | 15 minutes idle, 12 hours absolute. With "Stay logged in", 30 days from the last read, across a restart, until a secret rotation or a kept logout. |
 | Body elements | 1,000,000 elements in a request body, counted before the parse. Above it the body is refused `body_shape`. |
 | Chunk framing | 1 KiB per chunk-size line and 16 KiB of trailers from an upstream. |
-| Connection cap | 4,096 on the proxy listener, 256 on the admin listener, 64 on the metrics listener. |
+| Connection cap | 4,096 on the proxy listener and on the feature listener, 256 on the admin listener, 64 on the metrics listener. |
 | Cooldown booking | Seven days ahead of each announcement, and a later announcement books the next stretch. |
 | Decoded output | 1 MiB per stream chunk, 64 KiB for an inspected or buffered body, 4 MiB for a control-plane answer. |
-| Header read timeout | 30 seconds for a request head on all three listeners, after the TLS handshake's own 30. |
+| Header read timeout | 30 seconds for a request head on each listener, the feature listener included, after the TLS handshake's own 30. |
 | Keepalive ticker | One scheduling pass per second, and a probe answer is read up to 256 KiB. |
 | Ledger assembler | 16,384 requests in flight, 64 MiB captured, oldest or largest evicted as `ledger_gap`. |
 | Ledger channel | 4,096 records, `ledger_behind` at 2,048 queued, and an event or sample past it drops as a `ledger_gap`, but for the event of a limit reset's use, which waits for room. |
