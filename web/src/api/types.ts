@@ -1748,6 +1748,8 @@ export type WastedProbeReason = 'cold_return' | 'evicted' | 'expired' | 'horizon
 /** An hour's last quota sample of one window: `lead` null for a sample that reported the reset alone, `sampledAt`
  *  the instant it was taken, which the lead and the Pace score read. */
 export interface WindowSample {
+  /** The instant the sample's lead reads, the earlier of the window's reset and the account's end. */
+  deadline: string | null;
   lead: number | null;
   resetsAt: string | null;
   sampledAt: string;

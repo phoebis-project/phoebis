@@ -20374,21 +20374,24 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics the Accounts meta names window usage and pace', ok: meta === 'Peak utilization, window usage, pace, ineligible time, and pin churn per account', missing: [meta] });
 }
 {
-  // The story samples the 5-hour window of every account but the approved Ultra seat, whose set lacks it, so the Peak
-  // chart draws a line for each other account. Here studio's rows hold no 5-hour peak either, so the chart draws no
-  // line for studio or the seat, and the window cards beside it still list both.
+  // The Peak chart draws a line for each account whose rows hold a 5-hour peak, which the approved Ultra seat's never
+  // do, since its set lacks the window. Here studio's rows hold none either, so the chart draws no line for studio or
+  // the seat. The Window usage card lists the accounts its own 5-hour samples draw: studio, whose samples stand, and
+  // neither the seat nor zephyr, whose 5-hour window carries no reset and so no sample.
   const { listAccountRollups } = api;
-  api.listAccountRollups = async (...args) => (await listAccountRollups.apply(api, args)).map((r) => (r.accountId === 'studio' ? { ...r, peak: { ...r.peak, '5h': null } } : r));
+  let answered = [];
+  api.listAccountRollups = async (...args) => (answered = (await listAccountRollups.apply(api, args)).map((r) => (r.accountId === 'studio' ? { ...r, peak: { ...r.peak, '5h': null } } : r)));
   const page = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
   await page.settle(700);
   api.listAccountRollups = listAccountRollups;
   const legendOf = (t) => [...([...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t)?.querySelectorAll('.legend li') ?? [])].map((li) => li.textContent?.trim() ?? '');
   const peak = legendOf('Peak 5-hour utilization');
   const usage = legendOf('Window usage');
+  const peaked = [...new Set(answered.filter((r) => r.peak['5h'] !== null).map((r) => r.accountId))].sort();
   results.push({
     name: '/analytics the Peak 5-hour legend lists an account only where the chart draws its line',
-    ok: usage.includes('studio') && usage.includes('workshop') && peak.length > 0 && !peak.includes('studio') && !peak.includes('workshop') && JSON.stringify(peak) === JSON.stringify(usage.filter((a) => a !== 'studio' && a !== 'workshop')),
-    missing: [`Peak ${JSON.stringify(peak)}`, `Window usage ${JSON.stringify(usage)}`],
+    ok: peak.length > 0 && !peak.includes('studio') && JSON.stringify(peak) === JSON.stringify(peaked) && usage.includes('studio') && !usage.includes('workshop') && !usage.includes('zephyr'),
+    missing: [`Peak ${JSON.stringify(peak)}`, `with a 5-hour peak ${JSON.stringify(peaked)}`, `Window usage ${JSON.stringify(usage)}`],
   });
   page.unmount();
 }
@@ -21707,12 +21710,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
     }
     {
-      // The Pace card draws a line per sampled account from the leads the samples carry, which the story's sawtooth
-      // puts on both sides of zero: a window's reading runs ahead of its pace early in the window and behind it late.
-      // The axis and the tooltip sign the figures, so a hover across the chart meets both signs.
+      // The Pace card draws a line per account whose 5-hour samples carry a lead, which the story's sawtooth puts on
+      // both sides of zero: a window's reading runs ahead of its pace early in the window and behind it late. The axis
+      // and the tooltip sign the figures, so a hover across the chart meets both signs.
       const sampled = await api.listAccountRollups(day.from, day.to);
       const leads = sampled.flatMap((r) => Object.values(r.windows).map((s) => s.lead)).filter((l) => l !== null);
-      const accounts = [...new Set(sampled.map((r) => r.accountId))];
+      const accounts = [...new Set(sampled.filter((r) => typeof r.windows.five_hour?.lead === 'number').map((r) => r.accountId))];
       const paced = await mount('/analytics#accounts');
       const pace = () => [...paced.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pace');
       const curves = pace()?.querySelectorAll('.recharts-line-curve').length ?? 0;
@@ -21730,7 +21733,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       results.push({
         name: '/analytics the Pace card draws leads on both sides of zero',
         ok: leads.some((l) => l > 0) && leads.some((l) => l < 0) && accounts.length > 1 && curves === accounts.length && ticks.some((t) => t.startsWith('+')) && ticks.some((t) => t.startsWith('-')) && signs.size === 2,
-        missing: [`${leads.filter((l) => l > 0).length} leads ahead, ${leads.filter((l) => l < 0).length} behind`, `${curves} curves for ${accounts.length} accounts`, `ticks ${ticks.join(' ')}`, `tooltip signs ${[...signs].join('')}`],
+        missing: [`${leads.filter((l) => l > 0).length} leads ahead, ${leads.filter((l) => l < 0).length} behind`, `${curves} curves for ${accounts.length} accounts with a 5-hour lead`, `ticks ${ticks.join(' ')}`, `tooltip signs ${[...signs].join('')}`],
       });
       paced.unmount();
     }

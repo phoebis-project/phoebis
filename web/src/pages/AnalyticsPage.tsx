@@ -2879,13 +2879,14 @@ function AccountsSection({
   const pace = useMemo(() => windowLines(rollups ?? [], window, 'pace', span, bucketMs), [rollups, window, span, bucketMs]);
   // The axis takes the widest lead either side of zero, raised to a round tick, so ahead and behind read alike.
   const paceTop = useMemo(() => {
-    const widest = Math.max(0, ...pace.data.flatMap((r) => accounts.map((a) => Math.abs(r[a] ?? 0))));
+    const widest = Math.max(0, ...pace.data.flatMap((r) => pace.accounts.map((a) => Math.abs(r[a] ?? 0))));
     return widest > 0 ? niceAxisTop(widest) : 50;
-  }, [pace, accounts]);
+  }, [pace]);
   const toggle = <Segmented value={window} options={WINDOW_OPTIONS} onChange={setWindow} ariaLabel="Window" />;
   const colorOf = (a: string) => accountColor(ink, slotOf(a));
-  const legend = accounts.map((a) => ({ color: colorOf(a), label: a, shape: 'line' as const }));
-  const shareTip = timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: colorOf(a), label: a, value: pct(p[a]) })));
+  // Each window card names the accounts its own answer draws, while the Peak card's tooltip keeps every account.
+  const legendOf = (listed: string[]) => listed.map((a) => ({ color: colorOf(a), label: a, shape: 'line' as const }));
+  const shareTipOf = (listed: string[]) => timeTip<Record<string, number | null> & { at: number }>((p) => listed.map((a) => ({ color: colorOf(a), label: a, value: pct(p[a]) })));
   const scoreOf = (p: Record<string, number | null>, a: string) => {
     const score = p[`${a}:score`];
     return score === null || score === undefined ? '-' : score.toFixed(2);
@@ -2902,35 +2903,35 @@ function AccountsSection({
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis {...axis} />
           <YAxis {...PCT_AXIS} />
-          <Tooltip cursor={{ stroke: ink.axis }} content={shareTip} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={shareTipOf(accounts)} />
           {accounts.map((a) => (
             <Line key={a} type="monotone" dataKey={a} stroke={colorOf(a)} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           ))}
         </LineChart>
       </ChartCard>
       <div className="grid-2">
-        <ChartCard title="Window usage" subtitle="The window's utilization per bucket, from the quota samples" actions={toggle} loading={loading} legend={legend}>
+        <ChartCard title="Window usage" subtitle="The window's utilization per bucket, from the quota samples" actions={toggle} loading={loading} legend={legendOf(usage.accounts)}>
           <LineChart data={usage.data} margin={CHART_MARGIN}>
             <CartesianGrid vertical={false} stroke={ink.grid} />
             <XAxis {...axis} />
             <YAxis {...PCT_AXIS} />
-            <Tooltip cursor={{ stroke: ink.axis }} content={shareTip} />
+            <Tooltip cursor={{ stroke: ink.axis }} content={shareTipOf(usage.accounts)} />
             {/* The lines leave a null bucket unconnected, so a bucket with no sample reads as a gap rather than a
                 slope, and a sampled bucket with a gap or the range's edge on both sides draws as a dot, as the share
                 chart draws one. */}
-            {accounts.map((a) => (
+            {usage.accounts.map((a) => (
               <Line key={a} type="monotone" dataKey={a} stroke={colorOf(a)} strokeWidth={1.5} dot={isolatedDot(usage.data.map((r) => r[a]), colorOf(a))} isAnimationActive={false} />
             ))}
           </LineChart>
         </ChartCard>
-        <ChartCard title="Pace" subtitle="The lead over pace per bucket: above zero ahead, below behind, from the quota samples, before the router's burn projection" actions={toggle} loading={loading} legend={legend}>
+        <ChartCard title="Pace" subtitle="The lead over pace per bucket: above zero ahead, below behind, from the quota samples, before the router's burn projection" actions={toggle} loading={loading} legend={legendOf(pace.accounts)}>
           <LineChart data={pace.data} margin={CHART_MARGIN}>
             <CartesianGrid vertical={false} stroke={ink.grid} />
             <XAxis {...axis} />
             <YAxis domain={[-paceTop, paceTop]} ticks={[-paceTop, -paceTop / 2, 0, paceTop / 2, paceTop]} tickFormatter={(v: number) => pct(v, true)} tickLine={false} axisLine={false} width={44} />
             <ReferenceLine y={0} stroke={ink.axis} />
-            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => accounts.flatMap((a) => [{ color: colorOf(a), label: a, value: pct(p[a], true) }, { label: `Pace score, ${a}`, title: "the remaining share over the hours from the sample's instant to the window's reset", value: scoreOf(p, a) }]))} />
-            {accounts.map((a) => (
+            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number | null> & { at: number }>((p) => pace.accounts.flatMap((a) => [{ color: colorOf(a), label: a, value: pct(p[a], true) }, { label: `Pace score, ${a}`, title: "the remaining share over the hours from the sample's instant to the window's deadline, the earlier of its reset and the account's end", value: scoreOf(p, a) }]))} />
+            {pace.accounts.map((a) => (
               <Line key={a} type="monotone" dataKey={a} stroke={colorOf(a)} strokeWidth={1.5} dot={isolatedDot(pace.data.map((r) => r[a]), colorOf(a))} isAnimationActive={false} />
             ))}
           </LineChart>

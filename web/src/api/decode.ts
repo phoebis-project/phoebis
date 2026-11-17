@@ -834,7 +834,7 @@ export function decodeAccountRollups(v: unknown): AccountRollup[] {
       pins: { created: num(h.pins_created), migratedIn: num(h.pins_migrated_in), migratedOut: num(h.pins_migrated_out) },
       // The keys stay as the ledger spells them, with no `windowId` fold, since the cards never draw two windows as one.
       // The lead reads `numOrNull`, so a reset-only sample's null never reads as zero, exactly on pace.
-      windows: Object.fromEntries(Object.entries(rec(h.windows)).flatMap(([id, w]) => (w === null ? [] : [[id, { lead: numOrNull(rec(w).lead), resetsAt: isoOrNull(rec(w).reset_at), sampledAt: isoOr(rec(w).sampled_at, hourIso), utilization: numOrNull(rec(w).utilization) }] as [string, WindowSample]]))),
+      windows: Object.fromEntries(Object.entries(rec(h.windows)).flatMap(([id, w]) => (w === null ? [] : [[id, { deadline: isoOrNull(rec(w).deadline), lead: numOrNull(rec(w).lead), resetsAt: isoOrNull(rec(w).reset_at), sampledAt: isoOr(rec(w).sampled_at, hourIso), utilization: numOrNull(rec(w).utilization) }] as [string, WindowSample]]))),
     };
   }));
 }

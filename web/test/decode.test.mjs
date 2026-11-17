@@ -1498,13 +1498,14 @@ test("an account rollup carries its hour's window samples keyed by the ledger's 
   assert.deepEqual(Object.keys(sampled.windows).sort(), Object.keys(wireHour.windows).filter((k) => wireHour.windows[k] !== null).sort(), "the keys are the ledger's ids as the route spells them, the null windows absent");
   assert.ok('seven_day_fable' in sampled.windows, 'the model week keeps its own key rather than folding onto the overage-included one');
   const five = wireHour.windows.five_hour;
-  assert.deepEqual(sampled.windows.five_hour, { lead: five.lead, resetsAt: new Date(five.reset_at).toISOString(), sampledAt: new Date(five.sampled_at).toISOString(), utilization: five.utilization });
+  assert.deepEqual(sampled.windows.five_hour, { deadline: new Date(five.deadline).toISOString(), lead: five.lead, resetsAt: new Date(five.reset_at).toISOString(), sampledAt: new Date(five.sampled_at).toISOString(), utilization: five.utilization });
   assert.equal(typeof sampled.windows.five_hour.lead, 'number', 'a sampled utilization carries its lead');
   const wireIdle = wireAccount.hours.find((h) => Object.values(h.windows).every((w) => w === null));
   assert.ok(wireIdle, 'the capture holds a business hour without a sample');
   assert.deepEqual(rollups.find((r) => r.accountId === 'business' && r.hour === new Date(wireIdle.hour).toISOString()).windows, {}, 'an hour whose windows all read null decodes none');
-  const [hand] = d.decodeAccountRollups({ accounts: [{ account_id: 'a', hours: [{ hour: 3_600_000, windows: { five_hour: null, seven_day: { utilization: null, reset_at: 7_200_000, lead: null, sampled_at: 5_400_000 }, seven_day_fable: null } }] }] });
-  assert.deepEqual(hand.windows, { seven_day: { lead: null, resetsAt: '1970-01-01T02:00:00.000Z', sampledAt: '1970-01-01T01:30:00.000Z', utilization: null } }, 'a reset-only sample keeps its null lead rather than reading as on pace');
+  // The deadline lies before the reset, as an account's end does, so a decoder that reads the reset's key into it fails.
+  const [hand] = d.decodeAccountRollups({ accounts: [{ account_id: 'a', hours: [{ hour: 3_600_000, windows: { five_hour: null, seven_day: { utilization: null, reset_at: 7_200_000, deadline: 6_300_000, lead: null, sampled_at: 5_400_000 }, seven_day_fable: null } }] }] });
+  assert.deepEqual(hand.windows, { seven_day: { deadline: '1970-01-01T01:45:00.000Z', lead: null, resetsAt: '1970-01-01T02:00:00.000Z', sampledAt: '1970-01-01T01:30:00.000Z', utilization: null } }, 'a reset-only sample keeps its null lead rather than reading as on pace');
   const [bare] = d.decodeAccountRollups({ accounts: [{ account_id: 'a', hours: [{ hour: 3_600_000, windows: { five_hour: { utilization: 0.5, reset_at: null, lead: 0.5 } } }] }] });
   assert.equal(bare.windows.five_hour.sampledAt, '1970-01-01T01:00:00.000Z', "a sample without an instant reads the hour's own");
   assert.equal(bare.windows.five_hour.resetsAt, null);

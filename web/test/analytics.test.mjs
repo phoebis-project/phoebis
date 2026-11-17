@@ -832,7 +832,7 @@ test("a plan-funded row with no token joins the session fold's plan count and no
 
 /** An account's hour as the accounts route answers it, the peaks and counts empty, the windows as given. */
 const rollup = (accountId, hourMs, windows) => ({ accountId, cooldownSeconds: 0, hour: new Date(hourMs).toISOString(), overageSeconds: 0, peak: { '5h': null, '7d': null, '7d_fable': null }, pins: { created: 0, migratedIn: 0, migratedOut: 0 }, windows });
-const windowSample = (over = {}) => ({ lead: 0.1, resetsAt: '2026-09-16T12:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5, ...over });
+const windowSample = (over = {}) => ({ deadline: '2026-09-16T12:55:00.000Z', lead: 0.1, resetsAt: '2026-09-16T12:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5, ...over });
 
 test("the window lines fold each account's utilization and lead per bucket and leave a gap where no sample is or the lead is null", () => {
   const t = Date.UTC(2026, 8, 16, 10);
@@ -841,21 +841,22 @@ test("the window lines fold each account's utilization and lead per bucket and l
     rollup('a', t, { five_hour: windowSample({ lead: 0.2, utilization: 0.6 }), seven_day: windowSample({ lead: -0.1, utilization: 0.3 }) }),
     rollup('b', t, { five_hour: windowSample({ lead: null, resetsAt: '2026-09-16T11:00:00.000Z', utilization: null }) }),
     rollup('a', t + 2 * HOUR, { five_hour: windowSample({ lead: -0.05, utilization: 0.45 }) }),
+    rollup('a', t + 3 * HOUR, { five_hour: windowSample({ lead: null, resetsAt: '2026-09-16T11:00:00.000Z', utilization: null }) }),
   ];
   const usage = d.windowLines(rows, 'five_hour', 'usage', span, HOUR);
-  assert.deepEqual(usage.accounts, ['a', 'b']);
+  assert.deepEqual(usage.accounts, ['a'], "b's one sample is reset-only, so b draws no point and the card lists a alone");
   assert.deepEqual(
     usage.data,
     [
-      { at: t, a: 60, b: null },
-      { at: t + HOUR, a: null, b: null },
-      { at: t + 2 * HOUR, a: 45, b: null },
-      { at: t + 3 * HOUR, a: null, b: null },
+      { at: t, a: 60 },
+      { at: t + HOUR, a: null },
+      { at: t + 2 * HOUR, a: 45 },
+      { at: t + 3 * HOUR, a: null },
     ],
     'the utilization in percent per bucket, a gap for a bucket without a sample and for a reset-only sample',
   );
   const pace = d.windowLines(rows, 'five_hour', 'pace', span, HOUR);
-  assert.deepEqual(pace.data.map((r) => [r.a, r.b, r['b:score']]), [[20, null, null], [null, null, null], [-5, null, null], [null, null, null]], 'the lead in percent, the reset-only sample a gap on the pace side with no score');
+  assert.deepEqual([pace.accounts, pace.data.map((r) => r.a), pace.data[3]['a:score']], [['a'], [20, null, -5, null], null], 'the lead in percent, the reset-only sample a gap on the pace side with no score');
   assert.ok(Math.abs(pace.data[0]['a:score'] - 0.2) < 1e-9, `the pace score of the sample the lead was read from rides beside it: ${pace.data[0]['a:score']}`);
   assert.equal(pace.data[1]['a:score'], null, 'and a gap carries none');
   const seven = d.windowLines(rows, 'seven_day', 'pace', span, HOUR);
@@ -881,19 +882,27 @@ test("the Peak grid keeps a bucket's largest peak, starts at the span's first ed
   ]);
 });
 
-test("the pace score is the remaining share over the hours from the sample's instant to the reset", () => {
-  const late = windowSample({ resetsAt: '2026-09-16T11:00:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 });
-  assert.ok(Math.abs(d.paceScoreOf(late) - 6) < 1e-9, `five minutes to the reset, not the hour from the bucket's start: ${d.paceScoreOf(late)}`);
-  const start = windowSample({ resetsAt: '2026-09-16T11:00:00.000Z', sampledAt: '2026-09-16T10:00:00.000Z', utilization: 0.5 });
+test("the pace score is the remaining share over the hours from the sample's instant to the deadline", () => {
+  const late = windowSample({ deadline: '2026-09-16T11:00:00.000Z', resetsAt: '2026-09-16T11:00:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 });
+  assert.ok(Math.abs(d.paceScoreOf(late) - 6) < 1e-9, `five minutes to the deadline, not the hour from the bucket's start: ${d.paceScoreOf(late)}`);
+  const start = windowSample({ deadline: '2026-09-16T11:00:00.000Z', resetsAt: '2026-09-16T11:00:00.000Z', sampledAt: '2026-09-16T10:00:00.000Z', utilization: 0.5 });
   assert.ok(Math.abs(d.paceScoreOf(start) - 0.5) < 1e-9, "scored from the hour's start the same sample would read 0.5");
-  assert.equal(d.paceScoreOf(windowSample({ resetsAt: '2026-09-16T10:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 })), null, "a reset at the sample's instant is a stale sample");
-  assert.equal(d.paceScoreOf(windowSample({ resetsAt: '2026-09-16T10:00:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 })), null, 'and so is a reset before it');
+  assert.equal(d.paceScoreOf(windowSample({ deadline: '2026-09-16T10:55:00.000Z', resetsAt: '2026-09-16T10:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 })), null, "a deadline at the sample's instant is a stale sample");
+  assert.equal(d.paceScoreOf(windowSample({ deadline: '2026-09-16T10:00:00.000Z', resetsAt: '2026-09-16T10:00:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 0.5 })), null, 'and so is a deadline before it');
   assert.equal(d.paceScoreOf(windowSample({ resetsAt: '2026-09-16T12:55:00.000Z', sampledAt: '2026-09-16T10:55:00.000Z', utilization: 1.2 })), 0, 'a utilization past 1 has nothing remaining rather than a negative share');
+});
+
+test('the Pace score divides by the hours to the deadline', () => {
+  const t = Date.UTC(2026, 8, 16, 10);
+  // The account's end comes before the window's reset, so the lead and the score both run to the end.
+  const sample = windowSample({ deadline: '2026-09-17T22:00:00.000Z', lead: 0.05, resetsAt: '2026-09-19T06:00:00.000Z', sampledAt: '2026-09-16T10:00:00.000Z', utilization: 0.13 });
+  const { data } = d.windowLines([rollup('a', t, { seven_day: sample })], 'seven_day', 'pace', { fromMs: t, toMs: t }, HOUR);
+  assert.ok(Math.abs(data[0]['a:score'] - 0.87 / 36) < 1e-12, `0.87 over the 36 hours to the deadline, 0.0241667, never over the 68 to the reset: ${data[0]['a:score']}`);
 });
 
 test('a sample without a utilization has no pace score', () => {
   assert.equal(d.paceScoreOf(windowSample({ lead: null, resetsAt: '2026-09-16T11:00:00.000Z', utilization: null })), null, 'a reset-only sample');
-  assert.equal(d.paceScoreOf(windowSample({ resetsAt: null, utilization: 0.5 })), null, 'and a sample without a reset has no horizon');
+  assert.equal(d.paceScoreOf(windowSample({ deadline: null, resetsAt: null, utilization: 0.5 })), null, 'and a sample without a reset has no horizon');
 });
 
 test('a figure reads in the chosen week, and a dash where none was priced', () => {

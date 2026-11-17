@@ -3261,7 +3261,11 @@ function accountRollups(): AccountRollup[] {
       if (key === undefined || sample === undefined) continue;
       const sampledMs = Date.parse(sample.at);
       const { resetsAt } = walkBack(w, sampledMs, () => SERVED_FACTOR);
-      const read: WindowSample = { lead: leadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, endOf(account, sampledMs)), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
+      const end = endOf(account, sampledMs);
+      const reset = resetsAt === null ? null : Date.parse(resetsAt);
+      // The route answers no deadline without a reset, even where the account's end stands.
+      const deadline = reset === null ? null : iso(Math.min(reset, end ?? reset));
+      const read: WindowSample = { deadline, lead: leadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, end), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
       windows[key] = read;
     }
     return windows;
@@ -3291,11 +3295,15 @@ function accountRollups(): AccountRollup[] {
       drift5 = Math.max(0, Math.min(1, drift5 + h.float(-0.12, 0.12)));
       drift7 = Math.max(0, Math.min(1, drift7 + h.float(-0.03, 0.03)));
       driftF = Math.max(0, Math.min(1, driftF + h.float(-0.03, 0.03)));
-      const peak5 = fiveHour ? (sampled5 ?? drift5) : null;
-      const peak7 = sampled7 ?? drift7;
-      const peakF = last.fableWindow ? sampledF ?? driftF : null;
-      const cooldown = peak5 !== null && peak5 >= 0.97 ? h.int(600, 3_600) : 0;
-      const overage = account.extraUsage?.enabled && peak5 !== null && peak5 >= 0.9 ? h.int(300, 3_600) : 0;
+      // The drawn figure stands for the heads' readings, so an hour's peak is the larger of it and the hour's highest
+      // sample, as the ledger takes both. The cooldown and overage draws key off the sampled figure where one stands,
+      // so a peak the drawn figure lifts moves no draw of the stream and no later account's hours.
+      const keyed5 = fiveHour ? (sampled5 ?? drift5) : null;
+      const peak5 = fiveHour ? Math.max(drift5, sampled5 ?? 0) : null;
+      const peak7 = Math.max(drift7, sampled7 ?? 0);
+      const peakF = last.fableWindow ? Math.max(driftF, sampledF ?? 0) : null;
+      const cooldown = keyed5 !== null && keyed5 >= 0.97 ? h.int(600, 3_600) : 0;
+      const overage = account.extraUsage?.enabled && keyed5 !== null && keyed5 >= 0.9 ? h.int(300, 3_600) : 0;
       const busy = new Date(t).getHours() >= 8 && new Date(t).getHours() <= 19;
       const row: AccountRollup = {
         ...ACCOUNT_ROLLUP_SAMPLE,
@@ -3308,6 +3316,28 @@ function accountRollups(): AccountRollup[] {
         windows: sampledWindows(account, t),
       };
       if (t >= from && t <= until) out.push(row);
+    }
+    // The current hour holds no attempt, so the route lists it with zero counts and its samples' peaks, the poll's
+    // reading among them, since the history writes no sample of a window without a reset. Its cooldown counts each row
+    // the account holds from the later of its start and the hour's start to the earlier of its end and the read, as
+    // the route cuts the part it booked past the clock. It draws nothing, so the stream of the hours before it stays.
+    if (end >= from && end <= until) {
+      const hourPeak = (id: WindowId): number | null => {
+        const reading = readWindows(last).find((w) => w.id === id);
+        const seen = [sampleIndex.get(`${account.id}|${id}`)?.get(end), reading !== undefined && startOfHour(Date.parse(reading.observedAt)) === end ? reading.utilization : undefined].filter((p): p is number => p !== undefined);
+        return seen.length === 0 ? null : round(Math.max(...seen), 3);
+      };
+      const cooledMs = account.cooldowns.reduce((n, c) => n + Math.max(0, Math.min(Date.parse(c.until), NOW) - Math.max(Date.parse(c.setAt), end)), 0);
+      out.push({
+        ...ACCOUNT_ROLLUP_SAMPLE,
+        accountId: account.id,
+        hour: iso(end),
+        peak: { '5h': fiveHour ? hourPeak('5h') : null, '7d': hourPeak('7d'), '7d_fable': last.fableWindow ? hourPeak('7d_fable') : null },
+        cooldownSeconds: Math.round(cooledMs / 1_000),
+        overageSeconds: 0,
+        pins: { created: 0, migratedIn: 0, migratedOut: 0 },
+        windows: sampledWindows(account, end),
+      });
     }
   }
   return out;

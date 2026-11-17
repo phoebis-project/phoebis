@@ -533,14 +533,15 @@ export function slotIndex(keys: readonly string[], key: string): number {
 }
 
 /**
- * The Pace score beside a lead: the remaining share over the hours from the sample's instant to the reset, floored at
- * nothing remaining, the ratio the routing preview scores an account by (the preview adds its own deadline cap and
- * minute floor over the engine's prediction rather than a raw sample). Null without a reset or a utilization, and null
- * for a reset at or before the sample, since the window has reset since and left the sample stale.
+ * The Pace score beside a lead: the remaining share, floored at nothing remaining, over the hours from the sample's
+ * instant to its deadline, the earlier of the window's reset and the account's end. It is the ratio the routing preview
+ * scores an account by (the preview adds its own minute floor over the engine's prediction rather than a raw sample).
+ * Null without a deadline or a utilization, and null for a deadline at or before the sample, since the window has reset
+ * or the account's end has passed since and left the sample stale.
  */
 export const paceScoreOf = (sample: WindowSample): number | null => {
-  if (sample.resetsAt === null || sample.utilization === null) return null;
-  const hours = (Date.parse(sample.resetsAt) - Date.parse(sample.sampledAt)) / HOUR;
+  if (sample.deadline === null || sample.utilization === null) return null;
+  const hours = (Date.parse(sample.deadline) - Date.parse(sample.sampledAt)) / HOUR;
   return hours > 0 ? Math.max(1 - sample.utilization, 0) / hours : null;
 };
 
@@ -568,11 +569,13 @@ function bucketRows(accounts: string[], span: { fromMs: number; toMs: number }, 
  * null for a gap: a bucket no hour of which holds a sample of the window, or a sample without the figure (a
  * reset-only sample has neither). A bucket wider than an hour reads the latest hour inside it that holds a sample.
  * Under `pace` each row also carries `${account}:score`, the Pace score of the sample the lead was read from, null
- * where the lead is, so the tooltip reads both off the row.
+ * where the lead is, so the tooltip reads both off the row. The accounts are those that draw a point, a bucket with the
+ * read's figure (a utilization under `usage`, a lead under `pace`), and the rows hold their keys alone.
  */
 export function windowLines(rollups: AccountRollup[], window: string, read: 'pace' | 'usage', span: { fromMs: number; toMs: number }, bucketMs: number): { accounts: string[]; data: Record<string, number | null>[] } {
-  const accounts = [...new Set(rollups.map((r) => r.accountId))].sort((a, b) => a.localeCompare(b));
-  const { bucketOf, byAt, data } = bucketRows(accounts, span, bucketMs, read === 'pace' ? (a) => [a, `${a}:score`] : undefined);
+  const listed = [...new Set(rollups.map((r) => r.accountId))].sort((a, b) => a.localeCompare(b));
+  const keysOf = read === 'pace' ? (a: string) => [a, `${a}:score`] : (a: string) => [a];
+  const { bucketOf, byAt, data } = bucketRows(listed, span, bucketMs, keysOf);
   const drawn = new Map<string, number>();
   for (const r of rollups) {
     const sample = r.windows[window];
@@ -588,7 +591,10 @@ export function windowLines(rollups: AccountRollup[], window: string, read: 'pac
     row[r.accountId] = figure === null ? null : figure * 100;
     if (read === 'pace') row[`${r.accountId}:score`] = sample.lead === null ? null : paceScoreOf(sample);
   }
-  return { accounts, data };
+  // Read after the fold, since a reset-only sample in a bucket's later hour leaves the bucket without a point.
+  const accounts = listed.filter((a) => data.some((row) => row[a] !== null));
+  const keys = ['at', ...accounts.flatMap(keysOf)];
+  return { accounts, data: data.map((row) => Object.fromEntries(keys.map((k) => [k, row[k]]))) };
 }
 
 /**

@@ -497,6 +497,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(withWindow.filter((r) => typeof r.peak['5h'] !== 'number').map((r) => `${r.accountId} ${r.hour}`), [], 'an account with the window reads its 5-hour peak');
   });
 
+  test(`the accounts answer ends at the current hour and cuts an open cooldown at the read, at ${at}`, async () => {
+    const s = await story;
+    // Secondary's account row and its model row (mock/accounts.ts) stand open at the read, each counted from the later
+    // of its start and the hour's start: 1,229 s and 1,800 s at 14:30, where the model row started at 13:56, and 1,229 s
+    // and 2,040 s at 03:40.
+    const want = { '2026-09-16T14:30:00Z': 3_029, '2026-09-20T03:40:00Z': 3_269 }[at];
+    const rows = (await s.api.listAccountRollups(iso(s.now - DAY), iso(s.now + DAY))).filter((r) => r.accountId === 'secondary');
+    const newest = rows.map((r) => r.hour).sort().at(-1);
+    assert.deepEqual([newest, rows.find((r) => r.hour === newest)?.cooldownSeconds], [iso(startOfHour(s.now)), want]);
+  });
+
   test(`no retired story name and no harness name reaches a row, at ${at}`, async () => {
     const s = await story;
     const names = [
