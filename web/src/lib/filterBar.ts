@@ -224,6 +224,7 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
   CATALOG_MODEL,
   POOL,
   { field: 'cacheMissReasons', group: 'Outcome', kind: 'list', label: 'Cache miss reason', word: 'cache miss reason' },
+  { field: 'inputTransformations', group: 'Outcome', kind: 'list', label: 'Dropped thinking', word: 'dropped thinking' },
   { anyLabel: 'Either', field: 'fallback', group: 'Outcome', kind: 'choice', label: 'Fallback', text: (v) => worded('fallback', v === 'true' ? 'yes' : 'no'), word: 'fallback' },
   { field: 'guardrails', group: 'Outcome', kind: 'list', label: 'Guardrail', word: 'guardrail' },
   { field: 'held', group: 'Outcome', kind: 'flag', label: 'Held only', word: 'held only' },

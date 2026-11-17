@@ -48,6 +48,9 @@ export { CACHE_MISS_LABEL, CACHE_MISS_REASONS, CACHE_MISS_SHORT, missLabel, miss
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
 export { earlierHolderLabel, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, shortModel, spanText, undatedModel, weekShort } from '@/lib/format';
+// The dropped thinking keys and their labels, so the Select all check reads each label the Requests list draws back to
+// its key.
+export { TRANSFORMATION_KEYS, transformationLabel } from '@/lib/inputTransformations';
 // The pace mark's offset, so the check and the meter place it by one arithmetic.
 export { remainingTimeShare } from '@/lib/quota';
 // The projection's phrase, its burn and the span it spells, so a check computes the words a window draws from the one

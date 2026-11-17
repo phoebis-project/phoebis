@@ -34,7 +34,7 @@ import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, row
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, modelTitle, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
-import { transformationLabel, transformationOrder } from '@/lib/inputTransformations';
+import { TRANSFORMATION_KEYS, transformationLabel, transformationOrder } from '@/lib/inputTransformations';
 import { costCellOf, costHeaderTitle, type CostTable, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, orderedTokens, requestCostUnit, requestHintArgs, requestOrder, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink, words } from '@/lib/routingLog';
@@ -95,6 +95,15 @@ const missReasonOptions = (rows: RequestLog[], selected: string[]) => {
   const served = rows.flatMap((r) => servedMissReason(r) ?? []);
   const others = new Set([...served, ...selected].filter((name) => !CACHE_MISS_REASONS.includes(name)));
   return [...CACHE_MISS_REASONS, ...[...others].sort()].map((name) => ({ label: missLabel(name), value: name }));
+};
+/**
+ * The known keys of the dropped thinking blocks in their order, then every other key the loaded rows' serving attempts
+ * or the address carry, by name, so a link naming a key the console has no label for still shows as chosen.
+ */
+const transformationOptions = (rows: RequestLog[], selected: string[]) => {
+  const served = rows.flatMap((r) => Object.keys(servingResponse(r)?.inputTransformations ?? {}));
+  const keys = Object.fromEntries([...TRANSFORMATION_KEYS, ...served, ...selected].map((key) => [key, true]));
+  return transformationOrder(keys).map((key) => ({ label: transformationLabel(key), value: key }));
 };
 /** The known words, then the loaded rows' other values and the filter's own, each as itself, then `-` labeled `none`. */
 function wordOptions(known: readonly string[], loaded: (string | null)[], chosen: string[]): Option[] {
@@ -296,7 +305,7 @@ export function RequestsPage() {
   const order = REQUEST_ORDER_OF[filters.sort];
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    () => ({ accountIds: filters.accounts, agentId: filters.agentId || undefined, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, classifiers: filters.classifiers, client: filters.client, cursor, dir, efforts: filters.efforts, fallback: filters.fallback === '' ? undefined : filters.fallback === 'true', from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, order, outcomes: filters.outcomes, poolIds: filters.pools, refusalCategories: filters.refusalCategories, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), stopReasons: filters.stopReasons, to: cursor !== undefined && !custom ? undefined : iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    () => ({ accountIds: filters.accounts, agentId: filters.agentId || undefined, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, classifiers: filters.classifiers, client: filters.client, cursor, dir, efforts: filters.efforts, fallback: filters.fallback === '' ? undefined : filters.fallback === 'true', from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', inputTransformations: filters.inputTransformations, keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, order, outcomes: filters.outcomes, poolIds: filters.pools, refusalCategories: filters.refusalCategories, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), stopReasons: filters.stopReasons, to: cursor !== undefined && !custom ? undefined : iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
     [filters, cursor, custom, dir, order, span, pagedTo],
   );
   const requests = useAsync(() => api.listRequests(query), [query]);
@@ -329,7 +338,7 @@ export function RequestsPage() {
   // The page size and the order are how the operator reads the log rather than what it narrows to, so Reset filters
   // keeps them.
   const reset = () => replace({ ...REQUESTS_CODEC.defaults, dir: filters.dir, rows: filters.rows, sort: filters.sort });
-  // Six of the lists scan the drawn rows, which grow while the log follows, and the page re-renders on every poll and
+  // Seven of the lists scan the drawn rows, which grow while the log follows, and the page re-renders on every poll and
   // clock tick, so the lists follow their reads, the filters and the rows alone.
   const options = useMemo<Record<string, Option[]>>(
     () => ({
@@ -343,6 +352,7 @@ export function RequestsPage() {
         { label: 'no', value: 'false' },
       ],
       guardrails: guardrailOptions(guardrails.data, rows, filters.guardrails),
+      inputTransformations: transformationOptions(rows, filters.inputTransformations),
       keys: keyOptions(keys.data, filters.keys),
       kind: (['inference', 'count_tokens', 'probe'] as const).map((value) => ({ label: REQUEST_KIND_LABEL[value], value })),
       models: (catalog.data ?? []).map((m) => ({ label: m.id, value: m.id })),

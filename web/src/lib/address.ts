@@ -241,6 +241,7 @@ export interface RequestsAddress extends SortFields<(typeof REQUEST_SORT_KEYS)[n
   /** Guardrail ids, `-` for a request no guardrail matched. */
   guardrails: string[];
   held: boolean;
+  inputTransformations: string[];
   keys: string[];
   kind: '' | RequestKind;
   models: string[];
@@ -308,6 +309,7 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   statuses: { accepts: isStatus, kind: 'list', name: 'statuses' },
   outcomes: { accepts: isOutcome, kind: 'list', name: 'outcomes' },
   cacheMissReasons: list('cache_miss_reasons'),
+  inputTransformations: list('input_transformations'),
   guardrails: list('guardrails'),
   refusalCategories: list('refusal_categories'),
   stopReasons: list('stop_reasons'),

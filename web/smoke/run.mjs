@@ -71,7 +71,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareIn, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareIn, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, TRANSFORMATION_KEYS, transformationLabel, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a plan row priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced: its model has no weight in the cost model';
@@ -14384,6 +14384,24 @@ await forView('/requests', async () => {
     missing: [mounted.trigger, `${mounted.rows.length} rows`, JSON.stringify(cleared)],
   });
   again.unmount();
+
+  // The forced move and the next request of its session, `req_5b2e8d47-c19` and `req_5d6f1b3a-e27` at 11:01 in
+  // `web/src/mock/requests.ts`, are the day's two requests whose answer dropped a block made for another end user.
+  const droppedCheck = '/requests filters by a dropped thinking block';
+  const droppedPage = await mount('/requests', { now: CLOCK_ORIGIN });
+  const droppedSpy = countCalls('listRequests');
+  await choose(droppedPage, 'Dropped thinking', 'Dropped, other end user');
+  droppedSpy.restore();
+  const droppedRows = listed(droppedPage).map((r) => r?.id ?? null);
+  results.push({
+    name: droppedCheck,
+    ok:
+      JSON.stringify(droppedRows.sort()) === '["req_5b2e8d47-c19","req_5d6f1b3a-e27"]' &&
+      param(droppedPage, 'input_transformations') === 'thinking_dropped.end_user_binding_mismatch' &&
+      JSON.stringify(droppedSpy.calls.at(-1)?.[0]?.inputTransformations) === '["thinking_dropped.end_user_binding_mismatch"]',
+    missing: [droppedPage.location().search, JSON.stringify(droppedSpy.calls.map(([q]) => q?.inputTransformations ?? null)), JSON.stringify(droppedRows)],
+  });
+  droppedPage.unmount();
 
   const FROM = '2026-09-16T12:00:00.000Z';
   const TO = '2026-09-16T13:00:00.000Z';
@@ -30662,11 +30680,14 @@ await forView(['/analytics', '/requests', '/routing-log'], async () => {
   const brief = (r) => `${r.trigger}, row ${JSON.stringify(r.head)}, ${r.checked.length} of ${r.choices.length} checked, ${r.address === null ? 'no address key' : `address ${r.address.length}`}`;
   // The Cache miss reason list's labels as the page writes them, each by the reason it names.
   const MISS_REASON = Object.fromEntries(Object.entries(CACHE_MISS_LABEL).map(([reason, label]) => [label, reason]));
+  // The Dropped thinking list's labels as the page writes them, each by the key it names.
+  const TRANSFORMATION = Object.fromEntries(TRANSFORMATION_KEYS.map((key) => [transformationLabel(key), key]));
   /**
    * Each picker's value by its row's label, from the lists the view's options come from: the Analytics page's from the
    * breakdown under `range`, the page's own, the other views' keys, pools, accounts and models from the mock's lists, a
-   * status by its code, a cache miss reason by the label above, the unattributed request class by the key the
-   * breakdown files it under, and the label itself on every other list, whose options are their values.
+   * status by its code, a cache miss reason and a dropped thinking key by the labels above, the unattributed request
+   * class by the key the breakdown files it under, and the label itself on every other list, whose options are their
+   * values.
    */
   const valueMaps = async (view, range) => {
     const byLabel = (pairs) => {
@@ -30684,12 +30705,12 @@ await forView(['/analytics', '/requests', '/routing-log'], async () => {
     if (view !== '/requests') return lists;
     const same = (label) => label;
     const classes = await groups('request_class', new Date(CLOCK_ORIGIN - 31 * 86_400_000).toISOString(), new Date(CLOCK_ORIGIN).toISOString());
-    return { ...lists, 'Agent type': same, 'Cache miss reason': (label) => MISS_REASON[label] ?? label, Effort: same, Outcome: same, 'Request class': (label) => classes(label) ?? label, Speed: same, Status: (label) => label.split(' ')[0], 'Turn origin': same };
+    return { ...lists, 'Agent type': same, 'Cache miss reason': (label) => MISS_REASON[label] ?? label, 'Dropped thinking': (label) => TRANSFORMATION[label] ?? label, Effort: same, Outcome: same, 'Request class': (label) => classes(label) ?? label, Speed: same, Status: (label) => label.split(' ')[0], 'Turn origin': same };
   };
 
   const PICKERS = [
     ['/analytics', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models']]],
-    ['/requests', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models'], ['Status', 'statuses'], ['Outcome', 'outcomes'], ['Cache miss reason', 'cache_miss_reasons'], ['Agent type', 'agent_types'], ['Turn origin', 'turn_origins'], ['Effort', 'efforts'], ['Request class', 'request_classes'], ['Speed', 'speeds']]],
+    ['/requests', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models'], ['Status', 'statuses'], ['Outcome', 'outcomes'], ['Cache miss reason', 'cache_miss_reasons'], ['Dropped thinking', 'input_transformations'], ['Agent type', 'agent_types'], ['Turn origin', 'turn_origins'], ['Effort', 'efforts'], ['Request class', 'request_classes'], ['Speed', 'speeds']]],
     ['/routing-log', [['Kinds', 'kinds'], ['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models']]],
   ];
   // The list each view searches under a query, and the query: one whose options draw a search field.

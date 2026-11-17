@@ -11,7 +11,7 @@ import type {
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
 import { AFFINITY_MODE_VALUES, ATTENTION_KIND_VALUES, COMPANION_PERMISSION_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
-import { lookup } from '@/lib/counts';
+import { has, lookup } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
@@ -477,6 +477,12 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   const serving = servingResponse(r);
   if (q.stopReasons?.length && !q.stopReasons.includes(serving?.stopReason ?? '-')) return false;
   if (q.refusalCategories?.length && !q.refusalCategories.includes(serving?.refusalCategory ?? '-')) return false;
+  // The ledger reads the serving answer's own keys through `json_each`, so a null map and an empty one match no key,
+  // and an inherited name such as `constructor` matches none either.
+  if (q.inputTransformations?.length) {
+    const dropped = serving?.inputTransformations ?? {};
+    if (!q.inputTransformations.some((key) => has(dropped, key))) return false;
+  }
   if (q.efforts?.length && !q.efforts.includes(foldEffort(r.shape.effort))) return false;
   if (q.requestClasses?.length && !q.requestClasses.includes(foldRequestClass(r.requestClass))) return false;
   if (q.classifiers?.length && !q.classifiers.includes(foldClassifier(r.classifier))) return false;

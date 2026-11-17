@@ -298,13 +298,16 @@ test('listRequests passes the speeds as one comma list', async () => {
   assert.ok(!String(calls[1].url).includes('speeds'), 'no speed filter, no parameter');
 });
 
-test('listRequests passes the cache miss reasons, the efforts and the request classes as comma lists', async () => {
+test('listRequests passes the cache miss reasons, the efforts, the dropped thinking keys and the request classes as comma lists', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
-  await new HttpApi().listRequests({ cacheMissReasons: ['previous_message_not_found', 'tools_changed'], efforts: ['high', 'none'], requestClasses: ['main', 'other'] });
+  await new HttpApi().listRequests({ cacheMissReasons: ['previous_message_not_found', 'tools_changed'], efforts: ['high', 'none'], inputTransformations: ['thinking_dropped.end_user_binding_mismatch', 'thinking_dropped.prefix_binding_mismatch'], requestClasses: ['main', 'other'] });
   const params = new URL(calls[0].url, 'http://x').searchParams;
-  assert.deepEqual([params.get('cache_miss_reasons'), params.get('efforts'), params.get('request_classes')], ['previous_message_not_found,tools_changed', 'high,none', 'main,other']);
+  assert.deepEqual(
+    [params.get('cache_miss_reasons'), params.get('efforts'), params.get('input_transformations'), params.get('request_classes')],
+    ['previous_message_not_found,tools_changed', 'high,none', 'thinking_dropped.end_user_binding_mismatch,thinking_dropped.prefix_binding_mismatch', 'main,other'],
+  );
   await new HttpApi().listRequests({});
-  for (const name of ['cache_miss_reasons', 'efforts', 'request_classes']) assert.ok(!String(calls[1].url).includes(name), `no ${name} filter, no parameter`);
+  for (const name of ['cache_miss_reasons', 'efforts', 'input_transformations', 'request_classes']) assert.ok(!String(calls[1].url).includes(name), `no ${name} filter, no parameter`);
 });
 
 test('the_classifiers_filter_serializes_beside_the_request_classes', async () => {

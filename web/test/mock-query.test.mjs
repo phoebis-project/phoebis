@@ -40,6 +40,23 @@ test('the mock keeps a request under the cache miss reason of its serving attemp
   assert.deepEqual(await listed({ cacheMissReasons: ['none'] }), ids(expected));
 });
 
+test('the mock lists the requests whose serving answer holds a listed dropped block', async () => {
+  const key = 'thinking_dropped.end_user_binding_mismatch';
+  const dropped = (r) => r.attempts.at(-1)?.response.inputTransformations ?? null;
+  // The list leaves out a request that dropped a block under another key alone and one whose answer listed none.
+  narrowed(
+    unprobed.filter((r) => dropped(r) !== null && Object.keys(dropped(r)).length > 0 && !Object.hasOwn(dropped(r), key)),
+    'whose serving answer dropped a block under another key alone',
+  );
+  narrowed(
+    unprobed.filter((r) => dropped(r) !== null && Object.keys(dropped(r)).length === 0),
+    'whose serving answer listed no dropped block',
+  );
+  // The forced move and the next request of its session (`mock/requests.ts`), each of which dropped a block made for
+  // another end user.
+  assert.deepEqual(await listed({ inputTransformations: [key] }), ['req_5b2e8d47-c19', 'req_5d6f1b3a-e27']);
+});
+
 test("the mock keeps a request under its serving attempt's stop reason and refusal category, the dash for none, as the route does", async () => {
   const served = (r) => r.attempts.at(-1)?.response ?? null;
   const refused = unprobed.filter((r) => served(r)?.stopReason === 'refusal');

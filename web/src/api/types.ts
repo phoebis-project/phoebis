@@ -1084,6 +1084,8 @@ export interface RequestQuery {
   /** Keep the requests that waited for a slot. */
   held?: boolean;
   includeProbes?: boolean;
+  /** Keys of the thinking blocks the serving attempt's answer dropped, any key the upstream sent. */
+  inputTransformations?: string[];
   keyIds?: string[];
   kind?: RequestKind | null;
   /** Unix milliseconds: the rows the ledger wrote after this instant, the `landedThrough` of a poll's last answer. */

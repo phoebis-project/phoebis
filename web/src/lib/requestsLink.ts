@@ -9,6 +9,8 @@ import { HOUR } from './time';
 export interface RequestsLinkInput {
   /** The reason the count is under, any name the beta sent. */
   reason?: string;
+  /** One key of the dropped thinking blocks, which sets `input_transformations` as `reason` sets the miss reasons. */
+  transformation?: string;
   /** The category of the upstream's refusals the count is under, `-` for a refusal with none. */
   refusalCategory?: string;
   count: number;
@@ -91,16 +93,17 @@ export function linkedKeyIds(selected: string[], sessionKey: string | null): str
 
 /**
  * The Requests address for a count of the cache miss reasons panel or the refusals card: `cache_miss_reasons` set to
- * the reason where one is given, `stop_reasons` set to `refusal` and `refusal_categories` to the category where one is
- * given, the window as two ISO instants (the start of the hour holding the panel's start to one millisecond before the
- * hour ceiling of its end, capped at now, or the exact window where `exact` is set), the page's selections as
+ * the reason where one is given, `input_transformations` set to the key of a dropped thinking block where one is given,
+ * `stop_reasons` set to `refusal` and `refusal_categories` to the category where one is given, the window as two ISO
+ * instants (the start of the hour holding the panel's start to one millisecond before the hour ceiling of its end,
+ * capped at now, or the exact window where `exact` is set), the page's selections as
  * `accounts`, `keys`, `models` and `pools`, the class pattern as `client`, a session id as `session`, an agent id as
  * `agent_id`, and a breakdown row's group as its own filter: `accounts`, `classifiers`, `client`, `efforts`, `keys`,
  * `kind`, `models`, `pools`, `request_classes` or `speeds`. A client group keyed `other`, or keyed with a class the
  * rollups would fold, answers no address, and outside the client grouping neither does a class pattern that matches
  * `other`, unless it is stars alone, which matches the raw and the folded alike.
  */
-export function requestsLink({ count, filters, group, reason, refusalCategory, window }: RequestsLinkInput): RequestsLinkTarget {
+export function requestsLink({ count, filters, group, reason, refusalCategory, transformation, window }: RequestsLinkInput): RequestsLinkTarget {
   if (count === 0) return { href: null, title: NOTHING_TO_LIST };
   if (filters.userAgentPattern !== '') return { href: null, title: AGENT_PATTERN_PLAIN };
   if (group?.by === 'user_agent') return { href: null, title: AGENT_GROUP_PLAIN };
@@ -114,6 +117,7 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
     agentId: filters.agentId,
     cacheMissReasons: reason === undefined ? [] : [reason],
     client: filters.clientPattern,
+    inputTransformations: transformation === undefined ? [] : [transformation],
     keys: filters.keyIds,
     models: filters.models,
     pools: filters.poolIds,
@@ -138,7 +142,7 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
  *  reads. The two patterns pass through as the route reads them, so the count reads plain under a user agent pattern or
  *  a client pattern the request log cannot list, as the reasons panel's counts do, and its link lists the rows the bar
  *  counts. */
-export function refusalLink(input: Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory'>, category: string, count: number, model: string): RequestsLinkTarget {
+export function refusalLink(input: Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory' | 'transformation'>, category: string, count: number, model: string): RequestsLinkTarget {
   return requestsLink({ ...input, count, filters: { ...input.filters, agentId: '', models: [model], sessionId: null }, refusalCategory: category, window: { ...input.window, exact: false } });
 }
 

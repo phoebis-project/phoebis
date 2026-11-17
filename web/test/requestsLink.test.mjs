@@ -54,6 +54,11 @@ test('a count links to the Requests page under its reason, from the hour holding
   assert.doesNotMatch(answer.title, /probes/);
 });
 
+test("a count's link for a dropped block carries the key", () => {
+  const answer = link({ reason: undefined, transformation: 'thinking_dropped.end_user_binding_mismatch' });
+  assert.deepEqual(target(answer.href), { from: '2026-09-16T11:00:00.000Z', input_transformations: 'thinking_dropped.end_user_binding_mismatch', path: '/requests', to: '2026-09-16T14:30:00.000Z' });
+});
+
 test('the link ends one millisecond before the hour ceiling of the panel end, so an end on the hour stays in its own hour', () => {
   assert.equal(target(link({ window: { nowMs: at('2026-09-16T15:30:00Z') } }).href).to, '2026-09-16T14:59:59.999Z');
   assert.equal(target(link({ window: { nowMs: at('2026-09-16T14:30:00Z'), toMs: at('2026-09-16T12:00:00.000Z') } }).href).to, '2026-09-16T11:59:59.999Z');
