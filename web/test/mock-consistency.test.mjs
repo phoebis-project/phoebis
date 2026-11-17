@@ -1129,6 +1129,20 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(overview.limits.agents.count, 33, 'the cap counts every record');
   });
 
+  test(`a probed line of a session row on an account inside an account-wide cooldown reads held on the retry ladder, never scheduled, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    // The router answers a probe whose pinned member cools with that cooldown as a 429, which the keepalive holds on
+    // its retry ladder. Secondary cools from 20 minutes and 29 seconds back to 25 minutes ahead, and of its lines
+    // 229bf72c's two are probed, while e5a17c3d's main ended on its idle limit.
+    const cooling = new Set(s.accounts.filter((a) => a.cooldowns.some((c) => c.scope === 'account' && Date.parse(c.setAt) <= s.now && s.now < Date.parse(c.until))).map((a) => a.id));
+    const probed = recipes.filter((r) => cooling.has(r.accountId) && r.state !== 'ended' && r.state !== 'not_retained');
+    assert.deepEqual(probed.map((r) => [r.accountId, r.sessionId.slice(0, 8), r.agentId, r.cause, r.state]), [
+      ['secondary', '229bf72c', 'main', 'probe_quota_exhausted', 'held'],
+      ['secondary', '229bf72c', 'a7f3', 'probe_quota_exhausted', 'held'],
+    ]);
+  });
+
   test(`the all-released session lists every record released, keeps its row and the pin its last probe renewed, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();

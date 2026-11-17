@@ -604,8 +604,8 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const endsAt = sub?.endsAt ? Date.parse(sub.endsAt) : null;
     // Drawn for every member, so a count the story sets moves no later draw. A drawn count stands under the cap, so a
     // member reads full only where the story's own pins or the marks of `fillDrawnRivals` hold it there. A row outside
-    // the seeded streams draws none, and neither does a probe's pinned answer, so the decisions after the story's one
-    // keep their draws.
+    // the seeded streams draws none, and neither does a probe's pinned answer, which reads the counts its leg's
+    // decision drew (`buildDecisions`), so the decisions after it keep their draws.
     const drawn = UNSEEDED_IDS.has(r.id) || pinnedAnswerOf(spec) ? 0 : inFlightRng.int(0, 5);
     const drawnInFlight = Math.min(drawn, pool.inFlightCap - 1);
     const obstacle = obstacleOf(a, pool, at, r.canonicalModel, fast, spec.attempted);
@@ -2440,7 +2440,11 @@ function buildDecisions() {
   const messageRows = new Map<string, number>();
   for (const spec of specs) messageRows.set(spec.request.id, Math.max(messageRows.get(spec.request.id) ?? 1, spec.cacheMap?.messages ?? 1));
   for (const spec of specs) {
-    const { record, summary } = build(spec, messageRows.get(spec.request.id) ?? 1);
+    // The router reads its live counters at both of a probe's selections, a second apart, so a pinned answer carries
+    // the counts its leg's decision drew, its pinned member's less the probe's own slot.
+    const leg = pinnedAnswerOf(spec) ? decisions.get(`${spec.request.id}/${spec.seq - 1}`) : undefined;
+    const counted = leg === undefined ? spec : { ...spec, inFlight: Object.fromEntries(leg.candidates.map((c) => [c.accountId, c.accountId === leg.outcome.accountId ? Math.max(0, c.inFlight - 1) : c.inFlight])) };
+    const { record, summary } = build(counted, messageRows.get(spec.request.id) ?? 1);
     // The mock answers the record as it built it, so the card's copy is the record itself.
     const { raw: _, ...answered } = record;
     decisions.set(`${record.requestId}/${record.seq}`, { ...record, raw: answered });

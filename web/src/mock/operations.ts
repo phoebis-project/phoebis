@@ -133,8 +133,9 @@ const sessionSpec: ({
   // Its second subagent compacted, while its first stays paused on its cold probes.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', lastUseFromRows: true, subagents: { model: 'claude-sonnet-5', accountId: 'nightly' }, cause: 'awaiting_cache_evidence', compactedAgent: 2, subagentHold: 'repeated_cold_probe' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting', cause: 'expired' },
-  // Its keepalive probe renewed the pin on secondary and met a 429 there, so main waits on the retry ladder.
-  { keyId: 'desktop', accountId: 'secondary', model: 'claude-sonnet-4-5', state: 'idle', agents: 2, companion: 'silent', lastUseFromRows: true, cause: 'probe_quota_exhausted', placedBy: { renewedBy: 'req_c41d0311-200', requestId: 'req_d4e8a7b2-916' } },
+  // Its keepalive probe renewed the pin on secondary and met a 429 there, and secondary cools until 14:55, so the
+  // router answers each later probe of main and of its subagent the cooldown, and both wait on the retry ladder.
+  { keyId: 'desktop', accountId: 'secondary', model: 'claude-sonnet-4-5', state: 'idle', agents: 2, companion: 'silent', lastUseFromRows: true, cause: 'probe_quota_exhausted', subagentHold: 'probe_quota_exhausted', placedBy: { renewedBy: 'req_c41d0311-200', requestId: 'req_d4e8a7b2-916' } },
   // A parked main agent on a wakeup further away than the pool's horizon, held with its prompt kept. The other parked
   // session's agent stays retained, parked on a background command with its deadline.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting', cause: 'horizon' },
@@ -654,11 +655,12 @@ const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
   unsupported_shape: 'not_retained',
 };
 
-// The causes the story holds on the engine's retry ladder: each line reads `held` with the next rung ahead of the
-// clock, inside the ladder's 300 s cap and the entry's TTL. A rung is written rather than drawn, so the rows after the
-// line keep their rolls. A probe answered 429 waits at least the answer's retry-after, and secondary's cooldown runs
-// past the cap until 14:55, so the probe after main's last one, three minutes back, stands the cap's 300 s after it.
-const LADDER_NEXT_PROBE: Partial<Record<RecipeCause, string>> = { probe_pool_exhausted: ahead(3 * MINUTE), probe_quota_exhausted: ahead(2 * MINUTE) };
+// The causes the story holds on the engine's retry ladder, each line `held`. A held line waits at least its answer's
+// retry-after, capped at the ladder's 300 s, and each such line of the story waits past the cap, so its next probe
+// stands the cap after its own last one, ahead of the clock and inside the entry's TTL. The rung is read rather than
+// drawn, so the rows after the line keep their rolls.
+const LADDER_CAUSES: ReadonlySet<RecipeCause> = new Set<RecipeCause>(['probe_pool_exhausted', 'probe_quota_exhausted']);
+const LADDER_CAP_MS = 300_000;
 
 /**
  * What every line of a session the mod released whole reads, written over the drawn row. The row keeps its last request
@@ -731,9 +733,9 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const writtenProbe = fixedAgents?.[j].lastProbeMinutes;
     const lastProbeAt = writtenProbe !== undefined ? ago(writtenProbe * MINUTE) : cause === 'awaiting_cache_evidence' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
-    // A main the retry ladder holds was scheduled before the probe that put it there, so its draw is taken and set
-    // aside, and the rows after it keep their rolls.
-    const scheduledAt = !fixedAgents && (cause === 'scheduled' || (j === 0 && LADDER_NEXT_PROBE[cause] !== undefined)) ? ahead(rng.int(20, 280) * 1000) : null;
+    // A line held for its probe's 429 was scheduled before that probe, so its draw is taken and set aside, and the rows
+    // after it keep their rolls. A line held for its pool's own answer never drew one.
+    const scheduledAt = !fixedAgents && (cause === 'scheduled' || cause === 'probe_quota_exhausted') ? ahead(rng.int(20, 280) * 1000) : null;
     // The written session's rows past its drawn pair are written, so a reader meets every lifecycle word. A session the
     // mod released whole keeps its draws, so the rows after it keep theirs.
     const written = sessionSpec[i].released
@@ -759,7 +761,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       lastRequestAt,
       model,
       // A probe in flight leaves the due time it went out at, which the engine keeps showing until it lands.
-      nextProbeAt: fixedAgents ? (fixedAgents[j].nextProbeSeconds === null ? null : ahead(fixedAgents[j].nextProbeSeconds * 1000)) : cause === 'scheduled' ? scheduledAt : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : (LADDER_NEXT_PROBE[cause] ?? null),
+      nextProbeAt: fixedAgents ? (fixedAgents[j].nextProbeSeconds === null ? null : ahead(fixedAgents[j].nextProbeSeconds * 1000)) : cause === 'scheduled' ? scheduledAt : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : LADDER_CAUSES.has(cause) && lastProbeAt !== null ? iso(Date.parse(lastProbeAt) + LADDER_CAP_MS) : null,
       parkKind,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
       probesToday,
