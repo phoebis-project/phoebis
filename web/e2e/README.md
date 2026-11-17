@@ -352,11 +352,13 @@ which opens once the request list's shot is taken (its compact table with Time t
 its chips in the status badge's type, and the Estimated cost row's figure chip and muted equivalent on one line each
 inside the cell and its hint's chips on a row of their own under it, each on one line inside that row's one cell across
 the table, at 1280 by 800 and 1440 by 900, the story's Fable request reading its figure in the Ultra week alone on the
-cost row, then its plan, and a 5-hour, a 7-day and a Fable week share in that order, and scrolled 600 px at 1280 by 800
-the drawer's top at or under the section bar's bottom), the Requests view's Feature calls section (mock pass, on its
-first page at 1280 by 800: the table as wide as its card with Time the one fill, every Path cell on one line with its
-whole path in its title, a cut path drawn at 48 characters with the ellipsis, the cut paths recorded, and its pager's
-three buttons 32 px square with the footer one control tall), a reasons panel link landing on
+cost row, then its plan, and a 5-hour, a 7-day and a Fable week share in that order, and scrolled up to 600 px at 1280
+by 800 the drawer's top at or under the section bar's bottom, the scroll recorded in both passes, where a page that does
+not scroll fails the mock pass alone and the router pass's two requests can leave it too short to), the Requests view's
+Feature calls section (mock pass, on its first page at 1280 by 800: the table as wide as its card with Time the one
+fill, every Path cell on one line with its whole path in its title, a cut path drawn at 48 characters with the ellipsis,
+the cut paths recorded, and its pager's three buttons 32 px square with the footer one control tall), a reasons panel
+link landing on
 a list whose first row's drawer reads the reason (mock pass, on a load of its own in the part behind the walks), the
 attempt count's hover card at the request log's bottom (mock pass, on the log read at 50 rows a page, where the story's
 last row of two or more attempts sits below the window's fold, the bare log loaded again after: that row scrolled to
