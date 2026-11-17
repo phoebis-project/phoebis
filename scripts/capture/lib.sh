@@ -1,6 +1,7 @@
-# The preamble scripts/capture-baseline.sh, scripts/capture-control.sh and scripts/capture-count-tokens.sh share, so
-# one loopback-only namespace, one credential refusal, one set of client state directories, and one runcli serve
-# every capture and a change to any of them cannot land in one script and not the others.
+# The preamble scripts/capture-baseline.sh, scripts/capture-control.sh, scripts/capture-count-tokens.sh and
+# scripts/capture-feature-hellos.sh share, so one loopback-only namespace, one credential refusal, one set of client
+# state directories, and one runcli serve every capture and a change to any of them cannot land in one script and not
+# the others.
 # scripts/capture-through-router.sh shares the namespace alone: it keeps its own checks and state.
 #
 # Sourced, never run on its own: it reads the sourcing script's own arguments and re-executes that script
@@ -149,10 +150,11 @@ stop_receiver() {
   RECEIVER_PID=
 }
 
-# The control capture starts this receiver per phase while the inference receiver of start_receiver serves the whole
-# variant, so each keeps a pid of its own. The receiver writes its empty recording once its port is bound, so the
-# file's appearance is its readiness, and a receiver that exits first, as on a port already held, fails the start.
-start_control_receiver() { # $1=output $2=seconds $3=certs dir $4=responses dir
+# The control capture starts this receiver per phase, and the feature capture once, while the inference receiver of
+# start_receiver serves the whole variant or run, so each keeps a pid of its own. The receiver writes its empty
+# recording once its port is bound, so the file's appearance is its readiness, and a receiver that exits first, as on a
+# port already held, fails the start.
+start_control_receiver() { # $1=output $2=seconds $3=certs dir $4=responses dir [$5=hellos file]
   local status=0 step
   # A recording an earlier run left would read as a receiver already listening.
   rm -f "$1"

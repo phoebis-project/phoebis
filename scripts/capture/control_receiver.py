@@ -113,8 +113,10 @@ def read_head(sock):
 
 
 def peek_hello(sock):
-    """The client's first TLS record, left on the socket for the handshake to read."""
+    """The client's first TLS record, left on the socket for the handshake to read. A record that is not whole within
+    IDLE_TIMEOUT is a stalled connection, as the constant has it, and raises."""
     want = 5
+    deadline = time.monotonic() + IDLE_TIMEOUT
     while True:
         record = sock.recv(want, socket.MSG_PEEK)
         if not record:
@@ -123,6 +125,8 @@ def peek_hello(sock):
             want = 5 + int.from_bytes(record[3:5], "big")
         if len(record) >= want:
             return record
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"{len(record)} of a {want}-byte first record after {IDLE_TIMEOUT} seconds")
         # A peek answers at once with the bytes already there, so a record still arriving is waited for here.
         time.sleep(0.01)
 
