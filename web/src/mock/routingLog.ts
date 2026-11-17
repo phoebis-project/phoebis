@@ -14,8 +14,8 @@ import { promptOf } from './catalog';
 import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
-import { KEY_REVOKED_AT, WORST_BUCKET, keyById, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, DELETED_ACCOUNTS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, RETIRED, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById, resentInPlace } from './requests';
+import { DELETED_ACCOUNTS, KEY_REVOKED_AT, POOL_EDITED_AT, RETIRED, WORST_BUCKET, keyById, poolById, type PoolSeed } from './pools';
+import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById, resentInPlace } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { drawnWindows, proWeekRewriteOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
@@ -165,7 +165,7 @@ interface ShedRound {
 }
 
 /**
- * The settings and the keepalive policy a pool's edit at its `updatedAt` moved, each at its value before the edit,
+ * The settings and the keepalive policy a pool's edit at `POOL_EDITED_AT` moved, each at its value before the edit,
  * which the edit's registry change carries as each pair's old value, and the instant the settings before it took force.
  * The story's other rows read neither, so no row before the edit contradicts them, and a record carries no policy.
  */
@@ -174,14 +174,25 @@ const BEFORE_EDIT: Record<string, Partial<RecordSettings> & { keepalive: Partial
 };
 
 /**
- * The pool's settings as the record decided at `at` names them, by the pool fields they are read from: a record
- * decided before the pool's edit carries the values the edit moved.
+ * The stamp a pool's row held at `at`: its last write by then, the edit or the members write that placed a deleted
+ * account, else the row's own stamp. The delete of an account moves none, as its member row leaves by the cascade.
+ */
+function stampAt(pool: PoolSeed, at: number): string {
+  const writes = [POOL_EDITED_AT[pool.id], ...DELETED_ACCOUNTS.filter((d) => d.poolId === pool.id).map((d) => d.createdAt)].filter((w): w is number => w !== undefined && w <= at);
+  return writes.length === 0 ? pool.updatedAt : iso(Math.max(...writes));
+}
+
+/**
+ * The pool's settings as the record decided at `at` names them, by the pool fields they are read from, under the stamp
+ * the pool held then: a record decided before the pool's edit carries the values the edit moved.
  */
 function settingsOf(pool: PoolSeed, at: number): RecordSettings {
   const { keepalive: _policy, ...before } = BEFORE_EDIT[pool.id] ?? { keepalive: {} };
+  const editedAt = POOL_EDITED_AT[pool.id] ?? Date.parse(pool.updatedAt);
   return {
     ...settingsNow(pool),
-    ...(at < Date.parse(pool.updatedAt) ? before : {}),
+    poolUpdatedAt: stampAt(pool, at),
+    ...(at < editedAt ? before : {}),
   };
 }
 
@@ -3023,12 +3034,11 @@ function buildEvents(): RoutingEvent[] {
       kind: 'fast_credits_changed',
     },
     { accountId: 'nightly', at: iso(OVERAGE_FROM), detail: {}, kind: 'overage_started' },
-    // The edit that raised the pool's shared prefix floor and its slow-down hold and cut its idle window, at the stamp
-    // the pool carries.
+    // The edit that raised the pool's shared prefix floor and its slow-down hold and cut its idle window.
     {
       accountId: null,
       actor: 'admin',
-      at: pool.updatedAt,
+      at: iso(POOL_EDITED_AT[pool.id]),
       detail: {
         diff: poolDiff(pool, { min_shared_prefix_tokens: BEFORE_EDIT.all.minSharedPrefixTokens, slow_down_hold_seconds: BEFORE_EDIT.all.slowDownHoldSeconds, 'keepalive.max_idle_seconds': BEFORE_EDIT.all.keepalive.maxIdleSeconds }),
         kind: 'pool_updated',

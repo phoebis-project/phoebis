@@ -1997,7 +1997,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(ended?.detail.attempts === 1 && ended.detail.duration_ms > 0, `the run before the plan ended reads its attempt and its span: ${JSON.stringify(ended?.detail)}`);
   });
 
-  test(`every registry change carries the diff its writer stores, at ${at}`, async () => {
+  test(`every registry change carries the diff its writer stores, and a record reads the pool's stamp at its instant, at ${at}`, async () => {
     const s = await story;
     const changes = (await logOf(s)).filter((x) => x.type === 'event' && x.kind === 'registry_changed');
     const isChange = (v) => v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === 'from,to';
@@ -2044,9 +2044,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           assert.deepEqual([...new Set(before.map((r) => r.settings[setting]))], [change.from], `${e.id}: ${field} on the records before the edit`);
           assert.deepEqual([...new Set(after.map((r) => r.settings[setting]))], [change.to], `${e.id}: ${field} on the records after it`);
         }
-        // The instant the settings took force moves with them.
+        // The instant the settings took force moves with them, and a later write of the pool's members moves the stamp
+        // again, so a record reads the edit's stamp up to that write and the write's from it on.
+        const written = changes.filter((c) => c.detail.kind === 'pool_members_set' && c.detail.target === e.detail.target && Date.parse(c.at) > Date.parse(e.at)).map((c) => Date.parse(c.at));
+        const heldAt = (at) => Math.max(Date.parse(e.at), ...written.filter((w) => w <= at));
+        assert.ok(written.length > 0 && after.some((r) => Date.parse(r.request.at) < written[0]) && after.some((r) => Date.parse(r.request.at) >= written[0]), `${e.id}: records stand on both sides of the members write`);
         assert.ok(before.every((r) => Date.parse(r.settings.poolUpdatedAt) < Date.parse(e.at)), `${e.id}: the records before the edit read an earlier stamp`);
-        assert.ok(after.every((r) => Date.parse(r.settings.poolUpdatedAt) === Date.parse(e.at)), `${e.id}: the records after it read the edit's stamp`);
+        assert.ok(after.every((r) => Date.parse(r.settings.poolUpdatedAt) === heldAt(Date.parse(r.request.at))), `${e.id}: the records after it read the stamp the pool held at their instant`);
       }
       if (e.detail.kind === 'account_updated') {
         const pairs = pairsOf(e, ACCOUNT_DIFF_MEMBERS);

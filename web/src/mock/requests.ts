@@ -1,6 +1,6 @@
 import { agentTokenOf, couldNotCache, plus } from '@/api/fold';
 import type {
-  Account, AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
+  AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import type { GuardrailMatch } from '@/api/types';
@@ -15,14 +15,14 @@ import { fnv1a } from '@/lib/hash';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { MODEL_SCOPE_PREFIX, endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { WINDOW_KEY } from '@/lib/windows';
-import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, SHARED_WINDOWS, accountById, lastReadingOf, rankTier, sharedWindowsOf } from './accounts';
+import { ACCOUNTS, QUOTA_HISTORY, SHARED_WINDOWS, accountById, lastReadingOf, rankTier, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor, promptOf } from './catalog';
 import { leadOf, leftPerHour, paceDeadline } from './lead';
-import { keyById, poolById, type PoolSeed } from './pools';
+import { DELETED_ACCOUNTS, RETIRED, keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
 import { round } from './round';
-import { ACCOUNT_ROLLUP_SAMPLE, ACCOUNT_SAMPLE, REQUEST_SAMPLE, TABLES, tablesFor } from './samples';
+import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES, tablesFor } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, daysAgo, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
@@ -41,49 +41,6 @@ const storyUpstreamIds = (seedId: string, attempt: number): ((prefix: string) =>
 const phaseRng = createRng(3_571);
 /** The stream's close lands this many milliseconds before the finish at most, so the first content never passes it. */
 const STREAM_TAIL = 30;
-/** An account the story deletes during the day, as it stood in its one pool from its creation up to its delete. */
-export interface DeletedAccount {
-  account: Account;
-  createdAt: number;
-  deletedAt: number;
-  member: PoolSeed['members'][number];
-  poolId: string;
-}
-/**
- * The API key account the operator creates in the morning, places in all and deletes once its one conversation's first
- * turn has ended. The builders read it, the records decided while it stood among them, and the registry, the Accounts
- * list, the pools and each answer on today's state never do.
- */
-export const RETIRED: DeletedAccount = {
-  account: {
-    ...ACCOUNT_SAMPLE,
-    cooldowns: [],
-    credential: NO_CREDENTIAL,
-    email: null,
-    extraUsage: null,
-    fableWindow: null,
-    fastLane: null,
-    id: 'retired',
-    kind: 'api_key',
-    label: 'Retired workspace',
-    limitResets: null,
-    plan: null,
-    pool: null,
-    requests: { last24h: 0, last7d: 0, lifetime: 0 },
-    routingEnabled: true,
-    status: 'ready',
-    subscription: null,
-    usage: null,
-    usageBased: false,
-    windows: [],
-  },
-  createdAt: clock(9, 39),
-  deletedAt: clock(9, 40, 30),
-  // The pool's other API key account's priority, so the two share the paid tier behind the plans.
-  member: { accountId: 'retired', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 1, spends: [] },
-  poolId: 'all',
-};
-export const DELETED_ACCOUNTS: readonly DeletedAccount[] = [RETIRED];
 /**
  * The registry's kind of an account the story names, or a deleted one's. A wrong id fails the mock build rather than
  * reading a default.

@@ -1,9 +1,9 @@
 import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
-import type { AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range } from '@/api/types';
+import type { Account, AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range } from '@/api/types';
 import { lookup } from '@/lib/counts';
-import { accountById } from './accounts';
+import { NO_CREDENTIAL, accountById } from './accounts';
 import { paceOf } from './lead';
-import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
+import { ACCOUNT_SAMPLE, KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, endOfMonth, iso, startOfDay } from './time';
 
 /**
@@ -63,6 +63,54 @@ function periodEndAfter(period: BudgetPeriod, now: number): string {
 
 /** The instant the ci key was revoked, on the story's pinned day at 14:17:30. */
 export const KEY_REVOKED_AT = clock(14, 17, 30);
+
+/** The 09:05:12 edit of all's shared prefix floor and its slow-down hold, the registry change the routing log records. */
+export const POOL_EDITED_AT: Readonly<Record<string, number>> = { all: clock(9, 5, 12) };
+
+/** An account the story deletes during the day, as it stood in its one pool from its creation up to its delete. */
+export interface DeletedAccount {
+  account: Account;
+  createdAt: number;
+  deletedAt: number;
+  member: MemberSeed;
+  poolId: string;
+}
+/**
+ * The API key account the operator creates in the morning, places in all and deletes once its one conversation's first
+ * turn has ended. The members write that places it runs at its creation's instant and stamps the pool. The builders
+ * read it, the records decided while it stood among them, and the registry, the Accounts list, the pools' members and
+ * each answer on today's state never do.
+ */
+export const RETIRED: DeletedAccount = {
+  account: {
+    ...ACCOUNT_SAMPLE,
+    cooldowns: [],
+    credential: NO_CREDENTIAL,
+    email: null,
+    extraUsage: null,
+    fableWindow: null,
+    fastLane: null,
+    id: 'retired',
+    kind: 'api_key',
+    label: 'Retired workspace',
+    limitResets: null,
+    plan: null,
+    pool: null,
+    requests: { last24h: 0, last7d: 0, lifetime: 0 },
+    routingEnabled: true,
+    status: 'ready',
+    subscription: null,
+    usage: null,
+    usageBased: false,
+    windows: [],
+  },
+  createdAt: clock(9, 39),
+  deletedAt: clock(9, 40, 30),
+  // The pool's other API key account's priority, so the two share the paid tier behind the plans.
+  member: unbudgeted('retired', 1),
+  poolId: 'all',
+};
+export const DELETED_ACCOUNTS: readonly DeletedAccount[] = [RETIRED];
 
 type Resolved = NonNullable<Pool['keepaliveResolved']>;
 
@@ -212,8 +260,9 @@ const POOL_ROWS: PoolSeed[] = [
       },
     ],
     ...UNTIL_DRAWN,
-    // The 09:05:12 edit of its shared prefix floor and its slow-down hold, the registry change the routing log records.
-    updatedAt: iso(clock(9, 5, 12)),
+    // The members write that placed the retired workspace (`RETIRED`) is the pool's last write. The store's delete of
+    // the account takes its member row by the cascade and moves no stamp.
+    updatedAt: iso(RETIRED.createdAt),
     // The sample's failover settings are the store's defaults, so this pool reads balanced on both groups. The last
     // hour's moves are the routing log's story: three failovers, a fast lane's and two by the spent rule.
     movesPerHour: { cooldown: 3, fast_lane: 1, spent: 2 },
