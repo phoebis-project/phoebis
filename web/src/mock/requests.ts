@@ -1,4 +1,4 @@
-import { agentTokenOf, countDropped, couldNotCache, plus } from '@/api/fold';
+import { agentTokenOf, couldNotCache, countDropped, plus } from '@/api/fold';
 import type {
   AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, InputTransformations, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
@@ -2565,7 +2565,7 @@ function walkSessionTurns() {
   }
 }
 
-/** The client's standing entry once its session compacted, which the upstream lists on each later request of it. */
+/** The entry the upstream lists for the client's standing block once its session compacted. */
 const PREFIX_KEY = 'thinking_dropped.prefix_binding_mismatch';
 /** A block that another end user's account wrote, which the upstream drops from an answer on this one. */
 const ACCOUNT_KEY = 'thinking_dropped.end_user_binding_mismatch';
@@ -2581,15 +2581,19 @@ function bindsThinking(model: string): boolean {
   return ['claude-fable-5-2', 'claude-haiku-5-5', 'claude-mythos-5-2', 'claude-sonnet-5-5'].includes(model);
 }
 
-/** What one pin key's history holds for the upstream's binding checks, from its last compaction on. */
+/** What one pin key's history holds for the upstream's binding checks. */
 interface ThinkingHistory {
-  /** A compaction stands behind the turn, so the client sends its standing prefix block. */
-  compacted: boolean;
   /**
-   * The pin key's last move since the compaction: the account it landed on, the blocks it left behind, and whether the
-   * compaction's prefix block went with it.
+   * The account that wrote the block the last compaction carries, null before a compaction and, after one, until an
+   * account answers.
    */
-  move: { accountId: string; blocks: number; carried: boolean } | null;
+  carriedBy: string | null;
+  /** A compaction stands behind the turn, so the client sends its standing block. */
+  compacted: boolean;
+  /** The account that answered the pin key's last answered inference turn, whatever compaction came between. */
+  lastAnswered: string | null;
+  /** The pin key's last move since the compaction: the account it landed on and the blocks it left behind. */
+  move: { accountId: string; blocks: number } | null;
   /** The serving account of each answered turn that thought since the compaction. */
   thinkers: string[];
 }
@@ -2598,40 +2602,50 @@ interface ThinkingHistory {
  * The blocks each answered attempt's upstream dropped from the request's history, read off the rows as they finally
  * stand, per pin key (key, session, agent and canonical model) in arrival order, since a block binds by the model that
  * wrote it. An attempt reports where the request's head carried the thinking-binding token and the attempt answered,
- * a token count aside, whose answer holds no list. From a compaction on, each report lists the client's standing prefix
- * block. From a move to the next compaction, a report on the account the move landed on lists the blocks of the
- * account the move left, where the model binds them: one per earlier answered turn that thought there. A move with a
- * compaction behind it and no move between carries the prefix block over, which the upstream drops under the account
- * reason, so such a report lists the account key alone with one block more. A row names the token's sender beside a
- * reported map alone.
+ * a token count aside, whose answer holds no list.
+ *
+ * From a compaction on, the client sends one standing block, which the account that answered the pin key's last
+ * answered turn ahead of the compaction wrote, or the compaction turn's own where none stands. A report on that account
+ * lists the prefix key. Where the model binds its thinking, a report on any other account drops the block under the
+ * account reason, so it lists the account key with that block in place of the prefix key, with or without a move
+ * between, since the upstream reads the block's account and never the router's events. From a move to the next
+ * compaction, a report on the account the move landed on adds to the account key the blocks of the account the move
+ * left, where the model binds them: one per earlier answered turn that thought there. A row names the token's sender
+ * beside a reported map alone.
  */
 function fillDroppedBlocks() {
-  const fresh = (): ThinkingHistory => ({ compacted: false, move: null, thinkers: [] });
+  const fresh = (): ThinkingHistory => ({ carriedBy: null, compacted: false, lastAnswered: null, move: null, thinkers: [] });
   const histories = new Map<string, ThinkingHistory>();
   for (const r of byArrival()) {
     const pin = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
     const history = r.sessionId === null ? fresh() : (histories.get(pin) ?? fresh());
     if (r.sessionId !== null) histories.set(pin, history);
-    if (r.contextCompacted !== null) Object.assign(history, fresh(), { compacted: true });
-    // The builders wrote who sent the token, and only an answer to a head that carried one reports.
-    const token = r.thinkingDiagnosticsSource;
+    if (r.contextCompacted !== null) {
+      const own = r.kind === 'inference' ? (r.attempts.find((a) => a.upstreamStatus === 200)?.accountId ?? null) : null;
+      Object.assign(history, { carriedBy: history.lastAnswered ?? own, compacted: true, move: null, thinkers: [] });
+    }
+    // Only an answer to a head that carried the token reports, and the rule says whether one did whatever sender a
+    // builder wrote on the row.
+    const token = thinkingSourceOf(r.keyId, r.poolId, r.kind);
     for (const a of r.attempts) {
       const from = migrationAt(r, a)?.detail?.from_account;
-      if (typeof from === 'string') {
-        const carried = history.compacted && history.move === null;
-        history.move = { accountId: a.accountId, blocks: history.thinkers.filter((id) => id === from).length + (carried ? 1 : 0), carried };
-      }
+      if (typeof from === 'string') history.move = { accountId: a.accountId, blocks: history.thinkers.filter((id) => id === from).length };
+      // A compaction with no answer behind it carries the block the first answer after it writes.
+      if (history.compacted && history.carriedBy === null && a.upstreamStatus === 200) history.carriedBy = a.accountId;
       let dropped: InputTransformations | null = null;
       if (token !== null && r.kind !== 'count_tokens' && a.upstreamStatus === 200) {
-        const left = history.move?.accountId === a.accountId && history.move.blocks > 0 && bindsThinking(r.canonicalModel) ? history.move : null;
+        const binds = bindsThinking(r.canonicalModel);
+        const away = binds && history.compacted && history.carriedBy !== a.accountId;
+        const blocks = (away ? 1 : 0) + (binds && history.move?.accountId === a.accountId ? history.move.blocks : 0);
         dropped = {};
-        if (history.compacted && !left?.carried) dropped[PREFIX_KEY] = { blocks: 1, firstMessage: FIRST_BLOCK_MESSAGE };
-        if (left !== null) dropped[ACCOUNT_KEY] = { blocks: left.blocks, firstMessage: FIRST_BLOCK_MESSAGE };
+        if (history.compacted && !away) dropped[PREFIX_KEY] = { blocks: 1, firstMessage: FIRST_BLOCK_MESSAGE };
+        if (blocks > 0) dropped[ACCOUNT_KEY] = { blocks, firstMessage: FIRST_BLOCK_MESSAGE };
       }
       // A failover's added legs share their response with the leg they copy, so each takes one of its own.
       a.response = { ...a.response, inputTransformations: dropped };
     }
     const serving = servingAttempt(r);
+    if (serving?.upstreamStatus === 200 && r.kind === 'inference') history.lastAnswered = serving.accountId;
     if (serving?.upstreamStatus === 200 && r.usage.thinking > 0) history.thinkers.push(serving.accountId);
     if ((serving?.response.inputTransformations ?? null) === null) r.thinkingDiagnosticsSource = null;
   }
@@ -2948,8 +2962,8 @@ function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean, draws = t
 /**
  * An hour's dropped thinking blocks, inside the bounds the router's fold keeps: each of the `answered` requests counts
  * once, under the client's standing prefix key where its session had compacted, else under none, and an hour whose
- * key sent no token reports nothing. No history row of a model that binds its thinking holds a thinking token, so no
- * hour lists the account key or counts a move.
+ * key sent no token reports nothing. No history row of a model that binds its thinking holds a thinking figure in its
+ * usage, so no hour lists the account key or counts a move.
  */
 function synthesizeDropped(hd: Rng, lane: Lane, kind: RequestKind, answered: number): Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone'> {
   const inputTransformations = emptyCounts();
@@ -2986,7 +3000,7 @@ function historicalRollups(): HourlyRollup[] {
   const hm = createRng(521);
   // Its own stream as well: the desktop key's Opus hours ran part in fast mode.
   const hf = createRng(7_373);
-  // And the dropped thinking blocks, so every draw of the hours above keeps its place.
+  // And the dropped thinking blocks, so every draw of the streams above keeps its place.
   const hd = createRng(5_519);
   // The desktop key asks for high effort throughout; one laptop hour asked for the most, so a grouping on
   // effort has a third group to show. The first eligible hour takes it rather than leaving it to a draw.
