@@ -95,6 +95,9 @@ const pin = (accountId, sessionId, burn, warm, over = {}) => ({
   mark: null,
   model: 'claude-sonnet-5',
   moveCost: null,
+  moveDropCost: null,
+  moveDropSize: null,
+  moveSize: null,
   pinned: true,
   sessionId,
   ...over,
@@ -537,15 +540,16 @@ test('with load shedding off the preview opens by saying no round runs, then nam
   assert.equal(line([near], [], { loadShedding: false }), `Load shedding is off: no round runs. No member projects over the ceiling on any window: the closest is near, 5h 85 % at ${d.instant(NOW + 2 * HOUR, NOW)}.`);
 });
 
-test('the round marks cold pins first, then warm ones by burn over the prompt they would rewrite, all by that under always, and cold ones alone under never', () => {
-  // The cap is half of the 4.9 points an hour the three pins burn, which no pin covers alone. By burn over rewrite
-  // warm-b's 2 over 100 tokens leads warm-e's 0.9 over 1000 and cold-a's 2 over 5000. Once one pin is marked, each pin
-  // left covers the rest of 0.45 points, and the round marks the cheapest move among those it may mark, each move
-  // costing its prompt's tokens at 1e-7 apiece.
+test('the round marks cold pins first, then warm ones by burn over the size of their move, all by that under always, and cold ones alone under never', () => {
+  // The cap is half of the 4.9 points an hour the three pins burn, which no pin covers alone. By burn over the size the
+  // round divides by warm-b's 2 over 100 tokens leads warm-e's 0.9 over 1000 and cold-a's 2 over 5000. Their prompts
+  // stand in the other order, so an order by burn over the prompt puts cold-a first under always. Once one pin is
+  // marked, each pin left covers the rest of 0.45 points, and the round marks the cheapest move among those it may
+  // mark, each move costing its size's tokens at 1e-7 apiece.
   const pins = [
-    pin('hot', 'cold-a', 0.02, false, { lastInputTokens: 5_000, moveCost: 0.0005 }),
-    pin('hot', 'warm-b', 0.02, true, { lastInputTokens: 100, moveCost: 0.00001 }),
-    pin('hot', 'warm-e', 0.009, true, { moveCost: 0.0001 }),
+    pin('hot', 'cold-a', 0.02, false, { lastInputTokens: 100, moveCost: 0.0005, moveSize: 5_000 }),
+    pin('hot', 'warm-b', 0.02, true, { lastInputTokens: 5_000, moveCost: 0.00001, moveSize: 100 }),
+    pin('hot', 'warm-e', 0.009, true, { moveCost: 0.0001, moveSize: 1_000 }),
   ];
   const read = (warmSessions) => {
     const p = d.shedPreview(pool([hot, cool], { warmSessions }), [hot, cool], pins, NOW);
@@ -558,9 +562,9 @@ test('the round marks cold pins first, then warm ones by burn over the prompt th
 
 test("the round marks the covering pin whose rewrite costs the least, though another stands before it in the order", () => {
   // A cap of a quarter puts the target at 1.75 of the 7 points an hour the two warm pins burn, and each covers it.
-  // warm-x leads the order by burn over prompt, 4 over 1,000 tokens against warm-y's 3 over 800, and warm-y's move,
-  // 0.00008 against warm-x's 0.0001, is the cheaper, so the round marks warm-y and removes its 3 points.
-  const pins = [pin('hot', 'warm-x', 0.04, true, { moveCost: 0.0001 }), pin('hot', 'warm-y', 0.03, true, { lastInputTokens: 800, moveCost: 0.00008 })];
+  // warm-x leads the order by burn over the size of its move, 4 over 1,000 tokens against warm-y's 3 over 800, and
+  // warm-y's move, 0.00008 against warm-x's 0.0001, is the cheaper, so the round marks warm-y and removes its 3 points.
+  const pins = [pin('hot', 'warm-x', 0.04, true, { moveCost: 0.0001, moveSize: 1_000 }), pin('hot', 'warm-y', 0.03, true, { moveCost: 0.00008, moveSize: 800 })];
   const preview = d.shedPreview(pool([hot, cool], { shedCap: 0.25 }), [hot, cool], pins, NOW);
   assert.deepEqual([preview.sessions, preview.warm, preview.covered], [1, 1, 0.03]);
 });
@@ -606,6 +610,9 @@ const agentLine = (accountId, agentId, burn, warm, over = {}) => ({
   lastInputTokens: 1_000,
   model: 'claude-sonnet-5',
   moveCost: null,
+  moveDropCost: null,
+  moveDropSize: null,
+  moveSize: null,
   warm,
   warmUntil: at(warm ? NOW + 4 * MINUTE : NOW - 5 * MINUTE),
   ...over,
@@ -675,10 +682,36 @@ test('an ended row with no line is out of the round', () => {
 });
 
 test('the pick compares the served cost of a move', () => {
-  // Under always both pins rank by burn over prompt: cold's 3 points an hour over 1,000 tokens ahead of warm's 3 over
-  // 2,000. The cap's half of their 6 is 3, which each covers, and each mark leaves the other's 3 on hot. warm's move
-  // costs a third of cold's though its prompt is twice cold's, so the round marks warm.
-  const pins = [pin('hot', 'cold', 0.03, false, { moveCost: 0.0003 }), pin('hot', 'warm', 0.03, true, { lastInputTokens: 2_000, moveCost: 0.0001 })];
+  // Under always both pins rank by burn over the size of their move: cold's 3 points an hour over 1,000 tokens ahead
+  // of warm's 3 over 2,000. The cap's half of their 6 is 3, which each covers, and each mark leaves the other's 3 on
+  // hot. warm's move costs a third of cold's though its size is twice cold's, so the round marks warm.
+  const pins = [pin('hot', 'cold', 0.03, false, { moveCost: 0.0003, moveSize: 1_000 }), pin('hot', 'warm', 0.03, true, { moveCost: 0.0001, moveSize: 2_000 })];
   const preview = d.shedPreview(pool([hot, cool], { warmSessions: 'always' }), [hot, cool], pins, NOW);
   assert.deepEqual([preview.sessions, preview.warm], [1, 1]);
+});
+
+test('a cold pin pays its dropped thinking, and nothing where it drops none', () => {
+  // The cap's half of the 6 points an hour the two pins burn is 3, which each covers, and each mark leaves the other's
+  // 3 on hot. cold walks first. Its move pays the share of the thinking it would drop, 0.0003 against warm's 0.0001, so
+  // the round marks warm. With nothing dropped cold's move pays nothing, under warm's and under its own rewrite of
+  // 0.0005, so the round marks cold.
+  const warm = pin('hot', 'warm', 0.03, true, { moveCost: 0.0001 });
+  const read = (drop) => {
+    const preview = d.shedPreview(pool([hot, cool]), [hot, cool], [pin('hot', 'cold', 0.03, false, { moveCost: 0.0005, ...drop }), warm], NOW);
+    return [preview.sessions, preview.warm];
+  };
+  assert.deepEqual(read({ moveDropCost: 0.0003, moveDropSize: 2_400 }), [1, 1]);
+  assert.deepEqual(read({ moveDropCost: null, moveDropSize: null }), [1, 0]);
+});
+
+test('the cold group walks the pins that drop nothing first', () => {
+  // At a cap of 1 the target is the two pins' whole 3 points an hour, which neither covers alone, and the guard refuses
+  // the second mark, which would leave hot no burn. So the round marks the pin it walks first, and the covered figure
+  // reads that pin's burn.
+  const read = (pins) => d.shedPreview(pool([hot, cool], { shedCap: 1 }), [hot, cool], pins, NOW).covered;
+  // A move that drops nothing walks ahead of one that drops thinking, though the latter burns twice as much.
+  assert.equal(read([pin('hot', 'none', 0.01, false), pin('hot', 'drops', 0.02, false, { moveDropCost: 0.0001, moveDropSize: 1_000 })]), 0.01);
+  // Of two that drop thinking, light's 1 point over 1,000 weighted tokens walks ahead of heavy's 2 over 10,000, though
+  // its burn is the smaller.
+  assert.equal(read([pin('hot', 'light', 0.01, false, { moveDropCost: 0.0001, moveDropSize: 1_000 }), pin('hot', 'heavy', 0.02, false, { moveDropCost: 0.001, moveDropSize: 10_000 })]), 0.01);
 });

@@ -2368,17 +2368,21 @@ test("a session row reads main's effort and every agent line with all its member
   const pinnedAt = new Date(1_791_719_000_000).toISOString();
   const warmUntil = new Date(1_791_721_300_000).toISOString();
   assert.deepEqual(s.agentContexts, [
-    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnAt: used, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnUsd: 0.0215, burnWindow: 'five_hour', cacheTtlMs: 300_000, effort: 'low', ended: true, fast: false, lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', moveCost: null, pinnedAt, warm: false, warmUntil },
-    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnAt: decayed, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, effort: 'high', ended: true, fast: false, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', moveCost: null, pinnedAt, warm: true, warmUntil },
+    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnAt: used, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnUsd: 0.0215, burnWindow: 'five_hour', cacheTtlMs: 300_000, effort: 'low', ended: true, fast: false, lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null, pinnedAt, warm: false, warmUntil },
+    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnAt: decayed, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, effort: 'high', ended: true, fast: false, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null, pinnedAt, warm: true, warmUntil },
   ]);
 });
 
 test("a session row and its line decode the round's three facts", () => {
   const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
-  const { burn_at: _b, ...sent } = agentLine('7b2e', 'claude-haiku-4-5', { fast: true, move_cost: 0.0004 });
-  const s = d.decodeSession({ ...row, agent_contexts: [sent], ended: true, fast: true, move_cost: 0.0021 });
+  // Each figure differs from every other, so a member read under its neighbor's wire name reads another's figure.
+  const { burn_at: _b, ...sent } = agentLine('7b2e', 'claude-haiku-4-5', { fast: true, move_cost: 0.0004, move_drop_cost: 0.0003, move_drop_size: 2_000, move_size: 14_000 });
+  const s = d.decodeSession({ ...row, agent_contexts: [sent], ended: true, fast: true, move_cost: 0.0021, move_drop_cost: 0.0011, move_drop_size: 8_000, move_size: 31_000 });
   const [line] = s.agentContexts;
-  assert.deepEqual([s.ended, s.fast, s.moveCost, line.fast, line.moveCost], [true, true, 0.0021, true, 0.0004]);
+  assert.deepEqual(
+    [s.ended, s.fast, s.moveCost, s.moveDropCost, s.moveDropSize, s.moveSize, line.fast, line.moveCost, line.moveDropCost, line.moveDropSize, line.moveSize],
+    [true, true, 0.0021, 0.0011, 8_000, 31_000, true, 0.0004, 0.0003, 2_000, 14_000],
+  );
 });
 
 test('an agent line reads null for each nullable member the route sends as null, and cold without warm', () => {

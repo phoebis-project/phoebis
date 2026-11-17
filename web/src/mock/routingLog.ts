@@ -17,7 +17,7 @@ import { SESSIONS } from './operations';
 import { DELETED_ACCOUNTS, KEY_REVOKED_AT, POOL_EDITED_AT, RETIRED, WORST_BUCKET, keyById, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById, resentInPlace } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
-import { drawnWindows, proWeekRewriteOf, rewriteWindowOf } from './rewrite';
+import { drawnWindows, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf, STRETCH_DROPPED_THINKING } from './rewrite';
 import { createRng } from './rng';
 import { round } from './round';
 import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, OVERFLOW_PAUSED_AT, RESEARCH_BUDGET_AT, clock, endOfMonth, iso, startOfDay, startOfMonth } from './time';
@@ -149,6 +149,8 @@ interface RoundPin {
   agentId: string;
   burn: number | null;
   cold: boolean;
+  /** The thinking the round read as dropped at the pin's destination, in tokens, null with no learned fact. */
+  droppedThinkingTokens?: number | null;
   keyId: string;
   lastInputTokens: number;
   marked: boolean;
@@ -1973,16 +1975,18 @@ const NO_RUNWAY_PINS: RoundPin[] = [
 
 /**
  * Studio's round fired by the stretch, its six pins in the round's order: a cold pin first, then the warm ones by their
- * demand over their prompt, each burn the pin's rate over the account's speed, the six summing to its demand. The
- * target is more than any one pin's burn, so no pin covers it at the cold pin, whose burn is under a tenth of the
- * target, and that pin stays warm as a sliver. The order marks the first warm pin, and the rest is less than each pin
- * left, so the pick marks the covering pin whose move costs least, the cost the pin's own Pro share of its rewrite and
- * the same on every destination, and the walk ends there. The current pin reads the prompt its turn of 14:03:36 stored,
- * since the slowed request's own answer lands after the round.
+ * demand over the size of their move, each burn the pin's rate over the account's speed, the six summing to its demand.
+ * A move's size is its prompt, but the first marked pin's move drops the 2,400 thinking tokens its account wrote: it
+ * rewrites 27,600 tokens and weighs the drop at four prompt tokens apiece, 37,200 in all, so its 0.028 still leads the
+ * next pin's 0.027 over 40,000. The target is more than any one pin's burn, so no pin covers it at the cold pin, whose
+ * burn is under a tenth of the target, and that pin stays warm as a sliver. The order marks the first warm pin, and the
+ * rest is less than each pin left, so the pick marks the covering pin whose move costs least, the cost the pin's own
+ * Pro share of its rewrite and the same on every destination, and the walk ends there. The current pin reads the
+ * prompt its turn of 14:03:36 stored, since the slowed request's own answer lands after the round.
  */
 const STRETCH_PINS: RoundPin[] = [
   { agentId: '3c9a', burn: 0.002, cold: true, keyId: 'notebook', lastInputTokens: 26_000, marked: false, model: HAIKU, note: null, sessionId: OPENING_SESSION_IDS[1], skip: 'sliver' },
-  { agentId: 'main', burn: 0.028, cold: false, keyId: 'notebook', lastInputTokens: 30_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: MARKED_SESSION_IDS[1], skip: null },
+  { agentId: 'main', burn: 0.028, cold: false, droppedThinkingTokens: STRETCH_DROPPED_THINKING.tokens, keyId: 'notebook', lastInputTokens: 30_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: MARKED_SESSION_IDS[1], skip: null },
   { agentId: 'main', burn: 0.027, cold: false, keyId: 'notebook', lastInputTokens: 40_000, marked: true, model: 'claude-sonnet-5-5', note: 'cheapest', sessionId: MARKED_SESSION_IDS[0], skip: null },
   { agentId: '7b2e', burn: 0.026, cold: false, keyId: 'notebook', lastInputTokens: 61_000, marked: false, model: HAIKU, note: null, sessionId: SLOWED_SESSION_ID, skip: null },
   { agentId: 'main', burn: 0.0206, cold: false, keyId: 'notebook', lastInputTokens: 52_000, marked: false, model: 'claude-sonnet-5-5', note: null, sessionId: OPENING_SESSION_IDS[1], skip: null },
@@ -2460,8 +2464,9 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
  * end horizon, the round's figures, and each pin with the rewrite and the runway it would take on the destination
  * planned for it, each planned move counted against the next one's runway there. The rewrite is the pin's Pro-week
  * figure under `rewrite_unit`, a figure of the pin alone, so an API-key destination reads it too, with the weekly
- * window the pick compared on named, and the share floor the round applied. An event of an earlier build (`earlier`)
- * stored the rewrite as the story's 20x equivalent of that window and names no unit and no floor.
+ * window the pick compared on named, and the share floor the round applied. Each pin names the thinking its move drops,
+ * null where the story learned no fact of it. An event of an earlier build (`earlier`) stored the rewrite as the
+ * story's 20x equivalent of that window and names no unit, no floor and no dropped thinking.
  */
 function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventSeed | null {
   const record = DECISIONS.get(decision);
@@ -2509,8 +2514,9 @@ function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventS
     chosen.base.burn = { ...chosen.base.burn, [window]: (chosen.base.burn[window] ?? 0) + (p.burn ?? 0) };
     planned.set(chosen.base.accountId, chosen.base);
     // A pin with no prompt size reported yet is unsized, so its rewrite reads nothing, and the Pro-week figure is null
-    // on a model without a weight of its own. The engine names the window the pick compared on beside a figure alone.
-    const figure = p.lastInputTokens === 0 ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(p.lastInputTokens, p.model, CLIENTS[p.keyId] ?? null);
+    // on a model without a weight of its own. It is the write alone, at the destination, which keeps none of the
+    // thinking the move drops. The engine names the window the pick compared on beside a figure alone.
+    const figure = p.lastInputTokens === 0 ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(rewriteTokensOf(p.lastInputTokens, p.droppedThinkingTokens ?? null), p.model, CLIENTS[p.keyId] ?? null);
     return { planned: chosen.base.accountId, rewrite: figure, runway: chosen.fit.runwayMs, window: figure === null ? null : rewriteWindowOf(p.model) };
   };
   return {
@@ -2532,9 +2538,12 @@ function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventS
       persisted: true,
       pins: pins.map((p) => {
         const figures = read(p);
+        // The burn per token of the move's size, the rewrite plus the dropped thinking at the output's weight. A pin
+        // with no prompt size divides by one token, the cheapest rewrite.
+        const size = moveSizeOf(p.lastInputTokens, p.droppedThinkingTokens ?? null, p.model, CLIENTS[p.keyId] ?? null) ?? 1;
         return {
-          agent_id: p.agentId, burn: p.burn, cold: p.cold, key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note,
-          per_rewrite: p.burn === null ? null : Number((p.burn / p.lastInputTokens).toPrecision(7)), planned: figures.planned, rewrite: figures.rewrite,
+          agent_id: p.agentId, burn: p.burn, cold: p.cold, ...(earlier ? {} : { dropped_thinking_tokens: p.droppedThinkingTokens ?? null }), key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note,
+          per_rewrite: p.burn === null ? null : Number((p.burn / size).toPrecision(7)), planned: figures.planned, rewrite: figures.rewrite,
           rewrite_window: figures.window, runway_ms: figures.runway, session_id: p.sessionId, skip: p.skip,
         };
       }),

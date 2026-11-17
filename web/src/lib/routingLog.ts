@@ -2237,16 +2237,20 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Warm sessions', text(d.warm_sessions));
       const pins = list(d.pins).map(rec);
       const rewriteUnit = str(d.rewrite_unit);
+      // A round stored before the router weighed the dropped thinking carries no such key, so it keeps its columns. A
+      // null is a move the round learned no fact for, never a move that drops nothing.
+      const thinking = pins.some((p) => 'dropped_thinking_tokens' in p);
       if (pins.length > 0) {
         pairs.push({
           chips: [],
           label: 'Pins',
           table: {
-            head: ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Rewrite', 'Destination', 'Mark'],
+            head: ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', ...(thinking ? ['Thinking dropped'] : []), 'Rewrite', 'Destination', 'Mark'],
             rows: pins.map((p) => {
               const id = str(p.session_id) ?? '';
               const b = num(p.burn);
               const last = num(p.last_input_tokens);
+              const dropped = num(p.dropped_thinking_tokens);
               const rewrite = num(p.rewrite);
               const rewriteWindow = str(p.rewrite_window);
               const planned = str(p.planned);
@@ -2257,6 +2261,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
                 plain(p.cold === true ? 'cold' : 'warm'),
                 plain(b === null ? '-' : hourlyShare(b)),
                 plain(last === null ? '-' : fmtCompact(last)),
+                ...(thinking ? [plain(dropped === null ? '-' : fmtCompact(dropped))] : []),
                 rewriteCell(rewrite, rewriteWindow, rewriteUnit, week),
                 planned === null ? plain('-') : accountChip(planned),
                 plain(p.marked === true ? 'marked' : skip !== null ? words(skip) : (str(p.note) ?? '-')),

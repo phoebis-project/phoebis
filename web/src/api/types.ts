@@ -2029,6 +2029,15 @@ export interface AgentContext extends BurnFigures {
   model: string;
   /** The cost a move of the pin pays as a warm pin, as the row's `moveCost`, null where the cost model sizes none. */
   moveCost: number | null;
+  /** The share of the dropped thinking as output on the window moveCost reads, which a cold pin's move pays, as the
+   *  row's `moveDropCost`. Null where moveDropSize is. */
+  moveDropCost: number | null;
+  /** The dropped thinking at the output's weight, in tokens, as the row's `moveDropSize`. Null where the move drops
+   *  nothing and where the cost model weighs none. */
+  moveDropSize: number | null;
+  /** The size the round's order divides the pin's burn by, in tokens, as the row's `moveSize`. Null on a pin with no
+   *  prompt size. */
+  moveSize: number | null;
   /** The instant the pin was written on the account it stands on. */
   pinnedAt: string | null;
   /** The route's reading of the selector's rule: whether the pin's last refresh is inside its cache TTL. */
@@ -2152,6 +2161,15 @@ export interface Session extends BurnFigures {
   /** The cost a move of the display pin pays as a warm pin, as a shedding round's pick compares it, null where the cost
    *  model sizes none and on a row with no pin. A reader takes a null as 0. */
   moveCost: number | null;
+  /** The share of the dropped thinking as output on the window moveCost reads, which a cold pin's move pays. Null
+   *  where moveDropSize is. */
+  moveDropCost: number | null;
+  /** The dropped thinking at the output's weight, in tokens, which orders a cold pin whose move drops thinking.
+   *  Null where the move drops nothing and where the cost model weighs none. */
+  moveDropSize: number | null;
+  /** The size the round's order divides the pin's burn by, in tokens: the rewrite at the pin's destination plus the
+   *  dropped thinking at the output's weight. Null on a row with no pin and on a pin with no prompt size. */
+  moveSize: number | null;
   /** Whether the session is pinned to its account for as long as affinity holds. */
   pinned: boolean;
   /** The instant the pin was written on the account it stands on, null on a row with no pin. */

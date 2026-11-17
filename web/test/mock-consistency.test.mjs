@@ -2667,16 +2667,20 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([round.detail.pins.filter((p) => p.marked).map((p) => p.planned), cap.inFlight === cap.inFlightCap], [['primary', 'primary'], true]);
   });
 
-  test(`every shedding round's pin reads its burn per token of its last prompt to seven digits, at ${at}`, async () => {
+  test(`every shedding round's pin whose move drops no thinking reads its burn per token of its last prompt to seven digits, and the stretch round's first marked pin per token of its weighted size, at ${at}`, async () => {
     const s = await story;
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
     assert.ok(rounds.length > 0);
     for (const e of rounds) {
-      for (const p of e.detail.pins.filter((x) => x.burn !== null)) {
+      for (const p of e.detail.pins.filter((x) => x.burn !== null && (x.dropped_thinking_tokens ?? null) === null)) {
         const want = p.burn / p.last_input_tokens;
         assert.ok(p.per_rewrite > 0 && Math.abs(p.per_rewrite - want) <= want * 1e-6, `${e.requestId}: ${p.session_id} reads ${p.per_rewrite}, not ${want}`);
       }
     }
+    // The stretch round's first marked pin drops 2,400 thinking tokens, so its move rewrites 27,600 of its 30,000 and
+    // weighs the 2,400 at the output's 5 over the write's 1.25, 9,600 more: its 0.028 over 37,200 is 7.526882e-7.
+    const stretch = rounds.find((e) => e.requestId === 'req_9f2e7c5a-c49')?.detail.pins.find((p) => p.marked);
+    assert.deepEqual([stretch?.dropped_thinking_tokens, stretch?.per_rewrite], [2_400, 7.526882e-7]);
   });
 
   test(`no 5-hour shedding round of the story fires inside the hold of its pool, and a held shed line names the window's age and hold beside its mark, at ${at}`, async () => {
@@ -2728,11 +2732,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(rounds.map((e) => [older.has(e), e.detail.rewrite_unit]).sort(), [[false, 'pro_week'], [false, 'pro_week'], [true, undefined], [true, undefined]], 'the newer rounds name the unit and the older ones none');
     // An earlier build stored a marked Sonnet pin's rewrite as its tokens times 1.4e-8, the share of the 7-day window
     // one token takes, times the Sonnet weight of 0.25, to five places: 0.00008 and 0.00031 for the 11:00 round's
-    // 22,000 and 88,000 tokens. A newer round prices the prompt written to the cache again as the Pro-week figure: the
-    // stretch's 30,000 and 40,000 Sonnet 5.5 tokens at its weight 1.5 and the 5-minute write's 1.25 are 56,250 and
-    // 75,000 units, over the Pro tier's 90,000,000 on the week.
+    // 22,000 and 88,000 tokens. A newer round prices the prompt written to the cache again at the destination as the
+    // Pro-week figure, the last prompt less the thinking the move drops: the stretch's 27,600 tokens, 30,000 less
+    // 2,400, and 40,000 Sonnet 5.5 tokens at its weight 1.5 and the 5-minute write's 1.25 are 51,750 and 75,000 units,
+    // over the Pro tier's 90,000,000 on the week.
     const storedRewrite = { 22_000: 0.00008, 88_000: 0.00031 };
-    const proWeekRewrite = { 30_000: 56_250 / 90_000_000, 40_000: 75_000 / 90_000_000 };
+    const proWeekRewrite = { 27_600: 51_750 / 90_000_000, 40_000: 75_000 / 90_000_000 };
     const read = { api_key: 0, oauth: 0 };
     let stored = 0;
     for (const e of rounds) {
@@ -2742,7 +2747,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           assert.deepEqual([p.rewrite, p.rewrite_window], [null, null], where);
           continue;
         }
-        const figure = older.has(e) ? storedRewrite[p.last_input_tokens] : proWeekRewrite[p.last_input_tokens];
+        const figure = older.has(e) ? storedRewrite[p.last_input_tokens] : proWeekRewrite[p.last_input_tokens - (p.dropped_thinking_tokens ?? 0)];
         assert.equal(p.rewrite_window, weekOf(p.model), where);
         // The figure the console reads off the cost model reaches its last digit by another order of operations.
         assert.ok(Math.abs(p.rewrite - figure) <= figure * 1e-12, `${where}: ${p.rewrite} against ${figure}`);

@@ -10,7 +10,7 @@ import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById, servedFigures } from './pools';
 import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, fastTurn } from './requests';
-import { proWeekRewriteOf } from './rewrite';
+import { dropSizeOf, droppedThinkingOf, moveSizeOf, proWeekRewriteOf } from './rewrite';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, tablesFor } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead, iso, startOfHour } from './time';
@@ -330,11 +330,20 @@ const burnUsdOf = (dollars: number | null, unit: BurnUnit | null, model: string)
 /** A built row's dollar burn per hour, which its lines scale: a billed pin's `burn`, a plan pin's `burnUsd`. */
 const dollarBurnOf = (pin: BurnFigures): number | null => (pin.burnUnit === 'usd' ? pin.burn : pin.burnUsd);
 /**
- * A pin's move cost as the mock's rounds price their pick: its prompt's rewrite as the Pro-week figure, under the
- * regime its key's client label names, null where the pin holds no prompt size or the model has no weight of its own.
- * A prompt of 0 tokens is no size, as the route answers null where nothing is priced above zero.
+ * A pin's move as the mock's rounds read it, under the regime its key's client label names: the size the round divides
+ * its burn by, the dropped thinking at the output's weight, and the Pro-week figure of each, the cost a warm move and a
+ * cold one pay. The size reads null where the pin holds no prompt size and the drop where it drops nothing, each with
+ * its cost, and a cost reads null for a model without a weight of its own. A prompt of 0 tokens is no size, as the
+ * route answers null where nothing is priced above zero.
  */
-const moveCostOf = (tokens: number | null, model: string, keyId: string): number | null => (tokens === null || tokens === 0 ? null : proWeekRewriteOf(tokens, model, CLIENTS[keyId] ?? null));
+const moveFiguresOf = (tokens: number | null, dropped: number | null, model: string, keyId: string): Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
+  const client = CLIENTS[keyId] ?? null;
+  const size = moveSizeOf(tokens, dropped, model, client);
+  const drop = dropSizeOf(dropped, model, client);
+  return { moveCost: size === null ? null : proWeekRewriteOf(size, model, client), moveDropCost: drop === null ? null : proWeekRewriteOf(drop, model, client), moveDropSize: drop, moveSize: size };
+};
+/** A row with no pin, which answers none of its move's figures. */
+const NO_MOVE: Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> = { moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null };
 /** A pin's lane by the story's rule for its key's turns on its model, which the router stores on the pin. */
 const fastPin = (keyId: string, model: string): boolean => fastTurn(keyId, model, 'inference');
 /**
@@ -388,12 +397,14 @@ type UndatedLine = Omit<AgentContext, 'pinnedAt'> & Partial<Pick<AgentContext, '
 /**
  * A pin's line as the route answers it: warm until its last refresh plus its cache TTL, the refresh its caller names,
  * its served burn and dollars priced on the pin's own account and model, in that account's unit and window, as the
- * row's are for the display pin, and its lane and move cost as the row's are. Its burn reads at its last use unless its
- * caller names the instant, as the display pin's line takes its row's, since the route answers one instant per pin.
+ * row's are for the display pin, and its lane and its move's figures as the row's are. Its burn reads at its last use
+ * unless its caller names the instant, as the display pin's line takes its row's, since the route answers one instant
+ * per pin.
  */
 const pinLine = (
-  line: Omit<UndatedLine, keyof BurnFigures | 'burnAt' | 'fast' | 'moveCost' | 'warm' | 'warmUntil'> & Partial<Pick<AgentContext, 'burnAt'>>,
+  line: Omit<UndatedLine, keyof BurnFigures | 'burnAt' | 'fast' | 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize' | 'warm' | 'warmUntil'> & Partial<Pick<AgentContext, 'burnAt'>>,
   keyId: string,
+  sessionId: string,
   served: { burn: number | null; dollars: number | null },
   lastRefreshAt: string | null,
 ): UndatedLine => {
@@ -407,7 +418,7 @@ const pinLine = (
     ...burnReadingOf(line.accountId, keyId, burn, unit),
     burnUsd: burnUsdOf(served.dollars, unit, line.model),
     fast: fastPin(keyId, line.model),
-    moveCost: moveCostOf(line.lastInputTokens, line.model, keyId),
+    ...moveFiguresOf(line.lastInputTokens, droppedThinkingOf(sessionId, line.agentId, line.model), line.model, keyId),
     warm: warmAt(warmUntil),
     warmUntil,
   };
@@ -533,7 +544,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     // Read off the display pin's line once the lines are written.
     ended: null,
     fast: pinned ? fastPin(spec.keyId, spec.model) : null,
-    moveCost: pinned ? moveCostOf(lastInputRoll, spec.model, spec.keyId) : null,
+    ...(pinned ? moveFiguresOf(lastInputRoll, droppedThinkingOf(sessionId, 'main', spec.model), spec.model, spec.keyId) : NO_MOVE),
     ...NO_MARK,
     shed: pinWrite?.shed ?? null,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
@@ -588,7 +599,7 @@ SESSIONS.push({
   lifecycle: 'registered',
   ...NO_MARK,
   model: null,
-  moveCost: null,
+  ...NO_MOVE,
   pinned: false,
   pinnedAt: null,
   placements: 0,
@@ -783,11 +794,11 @@ SESSIONS.forEach((pin, i) => {
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
         const line = { ...own, burnAt: pin.burnAt, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: pin.pinnedAt };
-        return [pinLine(line, pin.keyId, display, pin.lastRefreshAt)];
+        return [pinLine(line, pin.keyId, pin.sessionId, display, pin.lastRefreshAt)];
       }
       const ended = i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT;
       const line = { ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState };
-      return [pinLine(line, pin.keyId, servedBeside(display, line, firstSeen), line.lastUsedAt)];
+      return [pinLine(line, pin.keyId, pin.sessionId, servedBeside(display, line, firstSeen), line.lastUsedAt)];
     }),
   );
   pin.warm = pin.pinned ? warmAt(warmUntilOf(pin.lastRefreshAt, pin.cacheTtlMs)) : null;
@@ -814,7 +825,7 @@ const writtenRow = (
   const keyGeneration = Date.parse(keyById.get(row.keyId)!.createdAt);
   const key = activityOf(row.keyId, keyGeneration, row.sessionId);
   const display = { burn: row.burn, dollars: burnUnitOf(row.accountId) === 'usd' ? row.burn : (dollars ?? null), lastInputTokens: lines[0].lastInputTokens };
-  const priced = lines.map((l, j) => pinLine(l, row.keyId, j === 0 ? display : servedBeside(display, l, firstSeen), l.lastUsedAt));
+  const priced = lines.map((l, j) => pinLine(l, row.keyId, row.sessionId, j === 0 ? display : servedBeside(display, l, firstSeen), l.lastUsedAt));
   const line = priced[0];
   const agentContexts = datedLines(firstSeen, key, priced);
   const seen = ledgered.get(key);
@@ -848,6 +859,9 @@ const writtenRow = (
     ...NO_MARK,
     model: line.model,
     moveCost: line.moveCost,
+    moveDropCost: line.moveDropCost,
+    moveDropSize: line.moveDropSize,
+    moveSize: line.moveSize,
     pinned: true,
     pinnedAt: agentContexts.find((l) => l.agentId === line.agentId && l.model === line.model)!.pinnedAt,
     // The placement the router's ledger holds for the pin, which the listing counts with the routing log's.
@@ -889,7 +903,7 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   lastUsedAt: fields.lastRequestAt,
   lifecycle: null,
   ...NO_MARK,
-  moveCost: null,
+  ...NO_MOVE,
   pinned: false,
   pinnedAt: null,
   placements: 0,

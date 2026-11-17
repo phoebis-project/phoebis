@@ -1086,6 +1086,19 @@ test("a mark's move reads as a failover with its cause, an event with no account
   assert.deepEqual(texts(restart.chips), ['persisted']);
 });
 
+test("a round's Pins table draws the thinking each pin would drop, and a dash where the round read none", () => {
+  const [first, second] = DETAIL_EVENTS.shedding_round.pins;
+  const drawn = (pins) => {
+    const { head, rows } = d.detailPairs(event('shedding_round', { ...DETAIL_EVENTS.shedding_round, pins }), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Pins').table;
+    return { head, thinking: rows.map((r) => chipText(r[5])) };
+  };
+  const head = ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Thinking dropped', 'Rewrite', 'Destination', 'Mark'];
+  // A null is a move the round learned no fact for, which a zero would misread as a move that drops nothing.
+  assert.deepEqual(drawn([{ ...first, dropped_thinking_tokens: 2_400 }, { ...second, dropped_thinking_tokens: null }]), { head, thinking: ['2.4K', '-'] });
+  // The key on a pin is what draws the column, so a round whose every pin holds it at null still draws it.
+  assert.deepEqual(drawn([{ ...first, dropped_thinking_tokens: null }, { ...second, dropped_thinking_tokens: null }]), { head, thinking: ['-', '-'] });
+});
+
 test('a used limit reset claim draws its Cleared pair and a Resets left of 0 between its Result and its Status', () => {
   // The smoke's per-kind read takes workshop's refused claim, which draws neither of these two pairs.
   const used = { cleared: ['seven_day_fable'], cooldown_until: null, error: null, grant_id: 'rg-a-1', label: 'Launch reset', outcome: 'used', reason: null, request_id: '00000000-0000-4000-8000-0000000000c1', resets_left: 0, result: 'reset', status: 200, weekly_resets_at: null };

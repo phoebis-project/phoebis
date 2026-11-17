@@ -1954,7 +1954,11 @@ async function shedRewriteCells(theme) {
           const s = getComputedStyle(td);
           return { text: td.textContent ?? '', title: td.getAttribute('title'), top: Math.round(td.getBoundingClientRect().top * 10) / 10, type: `${s.fontSize} ${s.fontWeight} ${s.fontFamily}` };
         };
-        return [...(panel?.querySelectorAll('.event-detail__pins tbody tr') ?? [])].filter((r) => r.children[7]?.textContent === 'marked').map((r) => ({ burn: cell(r.children[3]), rewrite: cell(r.children[5]) }));
+        // A round of the current build draws the dropped thinking's column ahead of Rewrite, so each cell is read by
+        // its column's head.
+        const head = [...(panel?.querySelectorAll('.event-detail__pins thead th') ?? [])].map((th) => th.textContent ?? '');
+        const at = (r, label) => r.children[head.indexOf(label)];
+        return [...(panel?.querySelectorAll('.event-detail__pins tbody tr') ?? [])].filter((r) => at(r, 'Mark')?.textContent === 'marked').map((r) => ({ burn: cell(at(r, 'Burn')), rewrite: cell(at(r, 'Rewrite')) }));
       });
     }
   } finally {

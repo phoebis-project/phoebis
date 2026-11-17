@@ -17992,9 +17992,22 @@ await forView('/routing-log', async () => {
           const pairs = Object.fromEntries(kvRows(detail?.querySelector(':scope > .kv')).map((p) => [p.label, ddWords(p.dd)]));
           // The round names its rewrite unit, so each marked pin's Rewrite cell reads its Pro-week rewrite in the Ultra
           // week the shell names, titled with the 7-day window the pick compared on, on the API-key annex the pick
-          // planned it for as much as on a plan.
-          const rewrites = [...(detail?.querySelectorAll('.event-detail__pins tbody tr') ?? [])].map((tr) => [tr.children[5]?.textContent ?? '', tr.children[5]?.getAttribute('title') ?? null]);
+          // planned it for as much as on a plan. A cell is read by its column's head, since the round's pins carry the
+          // dropped thinking's column ahead of Rewrite.
+          const head = [...(detail?.querySelectorAll('.event-detail__pins thead th') ?? [])].map((th) => th.textContent ?? '');
+          const cellOf = (tr, label) => tr.children[head.indexOf(label)];
+          const rows = [...(detail?.querySelectorAll('.event-detail__pins tbody tr') ?? [])];
+          const rewrites = rows.map((tr) => [cellOf(tr, 'Rewrite')?.textContent ?? '', cellOf(tr, 'Rewrite')?.getAttribute('title') ?? null]);
           const marked = (e?.detail.pins ?? []).flatMap((p, i) => (p.marked ? [[rewrites[i], p.rewrite === null || p.rewrite_window !== 'seven_day' ? null : [weekCell(p.rewrite), 'compared on the 7-day window']]] : []));
+          // A round of the current build writes the thinking each pin's move would drop, which the mock's stretch round
+          // seeds on its first marked pin, `STRETCH_DROPPED_THINKING`'s 2,400 tokens.
+          const dropped = rows.map((tr) => cellOf(tr, 'Thinking dropped')?.textContent ?? null);
+          const first = (e?.detail.pins ?? []).findIndex((p) => p.marked);
+          results.push({
+            name: '/routing-log the round fired by the stretch draws the thinking its first marked pin would drop under Thinking dropped',
+            ok: head.includes('Thinking dropped') && dropped[first] === '2.4K',
+            missing: [head.join(' / '), JSON.stringify(dropped)],
+          });
           return (
             named &&
             (popoverRowOf(round, 'fired by') ?? []).includes('fired by slow-down') && (popoverRowOf(round, 'stretch') ?? []).includes('stretch 42 min') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
