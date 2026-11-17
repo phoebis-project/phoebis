@@ -589,8 +589,8 @@ pub async fn run_until(
                 if let Err(error) = tls::renew_feature_certificates(&leaves, &acceptor) {
                     tracing::warn!(
                         %error,
-                        "the feature listener's certificates were not renewed, and the current ones serve until the \
-                         next try"
+                        "the feature listener's certificates were not renewed, so the listener keeps the acceptor it \
+                         had and the next tick runs the whole step again"
                     );
                 }
             }

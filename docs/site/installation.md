@@ -850,8 +850,9 @@ walks it. The dashboard raises `certificate_expiring` and `certificate_reload_fa
 - `proxy.tls.cert_file {path}: not valid before {date}`
 - `proxy.tls: {error}` for a pair the TLS library refuses for another reason, with its own text
 
-The admin listener's lines carry `admin.tls` in place of `proxy.tls`. The start logs `serving TLS` for each listener
-that terminates TLS, with its leaf's names and `not_after`, and the `listening` line names each listener's scheme.
+The admin listener's lines carry `admin.tls` in place of `proxy.tls`. The start logs `serving TLS` for the proxy and
+the admin listener where each terminates TLS, with its leaf's names and `not_after`, and the `listening` line names
+each listener's scheme.
 
 The scheme in a caller's URL has to match the listener. A plain-HTTP request to a listener that terminates TLS ends at
 the handshake with no HTTP answer, and the router logs it at debug only. An `https://` URL against a plain listener
@@ -884,6 +885,10 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 The other is a rule of the host's firewall that maps port 443 of that address to the listener's port, 8443 on these
 pages. In the container the listener binds its port inside the container, and `deploy/compose.yaml` carries the line
 that publishes it as port 443 of the host, `- "443:8443"`, commented out under its published ports.
+
+Where another program holds port 443 of that address, it passes a connection through to the listener by its TLS name
+without ending the TLS. The router alone holds the certificates for the two names, and a request's head has to reach
+it in the client's spelling.
 
 ## Storage
 

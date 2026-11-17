@@ -196,16 +196,16 @@ pub(crate) fn feature_acceptor(leaves: &FeatureLeaves) -> Result<SslAcceptor, Tl
     Ok(builder.build())
 }
 
-/// The renewal's step: issues each certificate that is due and, where one was issued, puts an acceptor over the
-/// current certificates in front of the next connection. Answers how many it issued.
+/// The renewal's step: issues each certificate that is due, then puts an acceptor over the current certificates in
+/// front of the next connection. Answers how many it issued. The acceptor is built at each call, whatever was issued,
+/// since an issue the leaves took stays taken when the build behind it fails: a step that failed is tried whole at the
+/// next call.
 pub(crate) fn renew_feature_certificates(
     leaves: &FeatureLeaves,
     live: &LiveAcceptor,
 ) -> Result<usize, FeatureCaError> {
     let issued = leaves.renew_due()?;
-    if issued > 0 {
-        live.replace(feature_acceptor(leaves)?);
-    }
+    live.replace(feature_acceptor(leaves)?);
     Ok(issued)
 }
 

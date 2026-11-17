@@ -1116,7 +1116,9 @@ impl FeatureListener {
         tls.write_all(request).await.unwrap();
         let mut answer = Vec::new();
         // A peer that closes without a TLS close_notify ends the read with an error after the whole answer.
-        let _ = tokio::time::timeout(Duration::from_secs(30), tls.read_to_end(&mut answer)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(30), tls.read_to_end(&mut answer))
+            .await
+            .expect("the answer stalled before the connection ended");
         let split = answer
             .windows(4)
             .position(|window| window == b"\r\n\r\n")
