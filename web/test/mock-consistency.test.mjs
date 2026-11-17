@@ -604,9 +604,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const fleetIds = new Set(s.requests.filter((r) => r.keyId === 'fleet').map((r) => r.id));
     const records = (await decisionsOf(s)).filter((r) => fleetIds.has(r.requestId));
     assert.deepEqual([...new Set(records.map((r) => r.requestId))].sort(), ['req_3f6a9c21-d48', 'req_7b2e5d93-a16', 'req_c94d1e07-b35'], "the key's three rows");
-    // The engine scores a paid source by its remaining allowance with no hours, no window and no burn, and the seat
-    // reads no plan window, so all of its allowance is left.
-    const paid = { burn: 0, deadline: null, end: null, hours: null, remaining: 1, reset: null, score: 1, window: null };
+    // The engine scores a paid source by its remaining allowance with no hours, no window, no burn and no Fable
+    // reservation, and the seat reads no plan window, so all of its allowance is left.
+    const paid = { burn: 0, deadline: null, end: null, fableReservation: null, hours: null, remaining: 1, reset: null, score: 1, window: null };
     const rows = (await logOf(s)).filter((x) => x.type === 'decision' && fleetIds.has(x.requestId));
     for (const r of records) {
       const seat = r.candidates.find((c) => c.accountId === 'contract');

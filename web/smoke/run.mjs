@@ -18261,17 +18261,25 @@ await forView('/routing-log', async () => {
     const paceTitle = (tr) => tr.children[tr.children.length - 3]?.getAttribute('title') ?? '';
     const titles = candidateRows(card).map((tr) => ({ id: tr.querySelector('td a')?.textContent, title: paceTitle(tr) }));
     const kind = (id) => record.candidates.find((c) => c.accountId === id)?.kind;
+    // A member of the pick's first tier with a Fable reading carries its reservation, and every other member none.
+    const reserved = (id) => (record.candidates.find((c) => c.accountId === id)?.pace?.fableReservation ?? null) !== null;
     const oauth = titles.filter((t) => kind(t.id) === 'oauth');
     const keys = titles.filter((t) => kind(t.id) === 'api_key');
     const chip = rowOf(page, 'req_ef099b34-453/1')?.querySelector('td.routing-log__by .chip');
     const hint = chip?.getAttribute('title') ?? '';
     results.push({
-      name: "/routing-log the open card's Pace header names the story's window, every Pace cell of a subscription member carries its hover in minutes or whole hours and the tier sentence, and the By chip its hint",
+      name: "/routing-log the open card's Pace header names the story's window, every Pace cell of a subscription member carries its hover in minutes or whole hours, its Fable reservation where the record holds one and the tier sentence, and the By chip its hint",
       ok:
         header === paceWord(record) &&
         header !== 'Pace' &&
         oauth.length > 0 &&
-        oauth.every((t) => /^\d+% of (the 7-day window|the 7-day Fable window|its window) left over \d+ (min|h) .*, less -?\d+\.\d\d %\/h of burn: -?\d+\.\d\d %\/h\. /.test(t.title) && t.title.endsWith('. Inside its tier, the highest spare rate wins.')) &&
+        oauth.every(
+          (t) =>
+            (reserved(t.id)
+              ? /^\d+% of (the 7-day window|the 7-day Fable window|its window) left, less \d+% reserved for Fable, over \d+ (min|h) .*, less -?\d+\.\d\d %\/h of burn: -?\d+\.\d\d %\/h\. /
+              : /^\d+% of (the 7-day window|the 7-day Fable window|its window) left over \d+ (min|h) .*, less -?\d+\.\d\d %\/h of burn: -?\d+\.\d\d %\/h\. /
+            ).test(t.title) && t.title.endsWith('. Inside its tier, the highest spare rate wins.'),
+        ) &&
         keys.length > 0 && keys.every((t) => /worst live bucket left/.test(t.title)) && hint.startsWith('Pace: the account with the most of its window left'),
       missing: [header, ...titles.map((t) => `${t.id}: ${t.title}`), hint],
     });

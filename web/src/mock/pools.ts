@@ -2,8 +2,7 @@ import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '
 import type { AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range } from '@/api/types';
 import { lookup } from '@/lib/counts';
 import { accountById } from './accounts';
-import { paceDeadline, paceHours } from './lead';
-import { round } from './round';
+import { paceOf } from './lead';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, endOfMonth, iso, startOfDay } from './time';
 
@@ -18,9 +17,10 @@ export const WORST_BUCKET: Readonly<Record<string, number>> = { annex: 0.02, ove
 
 /**
  * A member's four figures as the pools route serves them: the 7-day window's burn, the router's Pace score, the spare
- * rate on the 7-day window for an OAuth member (its remaining share per hour to the earlier of the reset and the end,
- * less the burn) and the remaining worst bucket for an API-key member, which burns no plan window, and the factor and
- * the realized speed of the account's slow-down where the member's pool has the switch on.
+ * rate on the 7-day window for an OAuth member (`paceOf` with no model, its Fable reservation held whatever the
+ * member's tier, since the route reads the score with none) and the remaining worst bucket for an API-key member,
+ * which burns no plan window, and the factor and the realized speed of the account's slow-down where the member's pool
+ * has the switch on.
  */
 export function servedFigures(accountId: string, now: number, slowDown: boolean): Pick<PoolMember, 'burn' | 'factor' | 'paceScore' | 'speed'> {
   const account = accountById.get(accountId);
@@ -31,10 +31,13 @@ export function servedFigures(accountId: string, now: number, slowDown: boolean)
   const speed = slowed?.speed ?? null;
   const week = account.windows.find((w) => w.id === '7d');
   if (week === undefined) return { burn: null, factor, paceScore: null, speed };
-  const reset = week.resetsAt === null ? null : Date.parse(week.resetsAt);
-  const hours = paceHours(paceDeadline(account, reset, now), now);
-  const burn = week.burn ?? 0;
-  return { burn: week.burn, factor, paceScore: round((1 - week.utilization) / hours - burn, 5), speed };
+  const fable = account.fableWindow;
+  const pace = paceOf(account, now, null, {
+    burns: { seven_day: week.burn ?? 0, seven_day_fable: fable?.burn ?? 0 },
+    readings: { seven_day: { reset: week.resetsAt, utilization: week.utilization }, seven_day_fable: fable === null ? undefined : { reset: fable.resetsAt, utilization: fable.utilization } },
+    reserve: true,
+  });
+  return { burn: week.burn, factor, paceScore: pace.score, speed };
 }
 /**
  * A pool as the story seeds it and the mock stores it, over its kind of member. The route lists a pool's keys from the

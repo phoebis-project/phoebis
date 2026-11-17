@@ -161,6 +161,16 @@ test("a routing log candidate's term decodes its canceled flag", () => {
   assert.deepEqual([c.term.canceled, c.term.endsAt, c.term.windingDown], [true, d.iso(5_000), true]);
 });
 
+test("a routing log candidate's pace decodes its Fable reservation, and null where none applies", () => {
+  // The capture holds null on each candidate, so only a number here tells a misspelled key or a reader that turns null
+  // into 0 from the member.
+  const body = fixture('decision');
+  const [wire] = body.candidates;
+  const pace = (fable_reservation) => d.decodeDecisionRecord({ ...body, candidates: [{ ...wire, pace: { ...wire.pace, fable_reservation } }] }).candidates[0].pace.fableReservation;
+  assert.equal(pace(0.12), 0.12);
+  assert.equal(pace(null), null);
+});
+
 test("an account's windows read the router's lead over pace, null while the utilization is unknown", () => {
   const body = fixture('account');
   const a = d.decodeAccount(body);

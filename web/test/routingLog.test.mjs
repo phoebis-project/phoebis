@@ -1703,6 +1703,18 @@ test("the Pace cell's title names the share, the hours, the deadline, the burn a
   assert.equal(d.paceHeader(record({ candidates: [key] })), 'Pace', 'API key members alone name no window');
 });
 
+test("a Pace hover names the Fable reservation where the candidate carries one", () => {
+  // A null read as zero would draw the clause on a Fable request, on a member outside the first tier, on a member with
+  // no Fable reading and on a seat with no spend entry.
+  const title = (pace) => d.candidateCells(candidate({ pace }), record(), NOW).paceTitle;
+  const reset = Date.UTC(2026, 8, 19, 8, 30);
+  const read = { burn: 0.004, deadline: iso(reset), end: null, hours: 66, remaining: 0.66, reset: iso(reset), score: 0.006, window: 'seven_day' };
+  const tail = '. Inside its tier, the highest spare rate wins.';
+  // (0.66 less 0.12) over 66 h less 0.004 of burn.
+  assert.equal(title({ ...read, fableReservation: 0.12, score: 0.00418 }), `66% of the 7-day window left, less 12% reserved for Fable, over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.42 %/h${tail}`);
+  assert.equal(title({ ...read, fableReservation: null }), `66% of the 7-day window left over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
+});
+
 test("a Pace row's By chip carries the strategy's hint and a rung row's none", () => {
   const placed = d.byOf(decision({ by: strategy('pace', [0, 0, 0]), tier: [0, 0, 0] }));
   assert.deepEqual([placed.value, placed.title], ['Pace P0', d.PACE_HINT]);

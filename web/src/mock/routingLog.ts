@@ -12,7 +12,7 @@ import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SHARED_WINDOWS, SUNSET_WEEK_RESETS_IN, accountById, lastReadingOf, rankTier } from './accounts';
 import { promptOf } from './catalog';
 import { GUARDRAILS } from './guardrails';
-import { leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
+import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, keyById, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById, resentInPlace } from './requests';
@@ -522,6 +522,16 @@ function rampAt(accountId: string, pool: PoolSeed, at: number): number {
  */
 const SPEND_UNREAD: ReadonlySet<string> = new Set(['req_c94d1e07-b35']);
 
+/**
+ * A candidate's Pace facts off the readings and the burns its record holds, with the Fable reservation where `reserve`
+ * says the member stands in the pick's first tier.
+ */
+function paceFactsOf(a: Account, at: number, model: string, c: Pick<RecordCandidate, 'burn' | 'windows'>, reserve: boolean): NonNullable<RecordCandidate['pace']> {
+  const p = paceOf(a, at, model, { burns: c.burn, readings: c.windows, reserve });
+  const instant = (ms: number | null) => (ms === null ? null : iso(ms));
+  return { burn: p.burn, deadline: instant(p.deadline), end: instant(p.end), fableReservation: p.fableReservation, hours: p.hours === null ? null : round(p.hours, 1), remaining: p.remaining, reset: instant(p.reset), score: p.score, window: p.window };
+}
+
 /** Every pool member's standing at the decision's time, eligible or not. */
 function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
   const r = spec.request;
@@ -572,18 +582,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const drawn = UNSEEDED_IDS.has(r.id) ? 0 : inFlightRng.int(0, 5);
     const drawnInFlight = Math.min(drawn, pool.inFlightCap - 1);
     const obstacle = obstacleOf(a, pool, at, r.canonicalModel, fast, spec.attempted);
-    // Pace reads one window as the engine does, chosen by the model alone: the 7-day Fable window for a Fable request,
-    // else the 7-day window, one the account has not read counting as untouched. A paid source scores by its remaining
-    // allowance with no hours, no window and no burn: an API key its worst live bucket, and a usage-based seat, which
-    // reads no plan window, the whole of it.
     const paid = isPaidSource(a);
-    const windowName = r.canonicalModel.includes('fable') ? 'seven_day_fable' : 'seven_day';
-    const reading = a.kind === 'api_key' ? windows.worst_bucket : paid ? undefined : windows[windowName];
-    const remaining = reading === undefined ? 1 : Math.max(0, 1 - reading.utilization);
-    const reset = paid ? null : (reading?.reset ?? null);
-    const deadlineMs = paid ? null : paceDeadline(a, reset ? Date.parse(reset) : null, at);
-    const hours = paid ? null : paceHours(deadlineMs, at);
-    const paceBurn = paid ? 0 : (burn[windowName] ?? 0);
     return {
       accountId: a.id,
       // A paid source, an API key or a usage-based seat, knows its allowance, as the engine's paid-source arm answers,
@@ -604,8 +603,8 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       kind: a.kind,
       obstacle,
       overage: overage ? { observedAt: iso(at - 40_000), reset: a.overage?.reset ?? null, since: iso(OVERAGE_FROM), source: 'head' } : null,
-      // The spare rate: the share left per hour to the deadline less the burn the account's sessions already spend.
-      pace: pool.strategy === 'pace' ? { burn: paceBurn, deadline: deadlineMs === null ? null : iso(deadlineMs), end: paid || end === null ? null : iso(end), hours: hours === null ? null : round(hours, 1), remaining, reset, score: hours === null ? remaining : round5(remaining / hours - paceBurn), window: paid ? null : windowName } : null,
+      // The first tier is known once the partitions have run, so the pick gives its members their reservation.
+      pace: pool.strategy === 'pace' ? paceFactsOf(a, at, r.canonicalModel, { burn, windows }, false) : null,
       partition: null,
       planTier: sub?.plan ?? null,
       prefix: { ...NO_PREFIX, ...spec.prefix?.[a.id] },
@@ -1029,13 +1028,16 @@ const scoreUnitOf = (c: RecordCandidate) => (isPaidSource(accountById.get(c.acco
 
 /**
  * The pick among the members the partitions kept in the chosen account's tier, the set the engine's `choose` orders:
- * the chosen account first, the rest by score.
+ * the chosen account first, the rest by score. Under Pace each of them ranks by the figures `reserve` gives it, which
+ * hold the Fable reservation, since that tier is the first one and is known here alone.
  */
-function pickOf(candidates: RecordCandidate[], kept: RecordCandidate[], chosen: string | null, strategy: string, source: string | undefined): { runnerUp: Score | null; score: Score | null; tierSize: number } {
+function pickOf(candidates: RecordCandidate[], kept: RecordCandidate[], chosen: string | null, strategy: string, source: string | undefined, reserve: (c: RecordCandidate) => RecordCandidate['pace']): { runnerUp: Score | null; score: Score | null; tierSize: number } {
   const winner = candidates.find((c) => c.accountId === chosen);
   if (!winner) return { runnerUp: null, score: null, tierSize: 0 };
   const scoreOf = (c: RecordCandidate) => c.pace?.score ?? 0;
-  const rest = kept.filter((c) => c !== winner && c.accountId !== source && tierKey(c.tier) === tierKey(winner.tier)).sort((x, y) => scoreOf(y) - scoreOf(x));
+  const rest = kept.filter((c) => c !== winner && c.accountId !== source && tierKey(c.tier) === tierKey(winner.tier));
+  if (strategy === 'pace') for (const c of [winner, ...rest]) c.pace = reserve(c);
+  rest.sort((x, y) => scoreOf(y) - scoreOf(x));
   winner.rank = 1;
   winner.score = strategy === 'pace' ? scoreOf(winner) : null;
   rest.forEach((c, i) => {
@@ -1398,12 +1400,19 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
     else if (!matched) {
       // A hold's pick ranks the members as a placement's does and names the account it waits on, while its row reads
       // the hold rather than a score.
-      const ranked = pickOf(candidates, partitions.left, spec.accountId, pool.strategy, spec.kind === 'moved' ? spec.from : undefined);
+      const reserve = (c: RecordCandidate) => paceFactsOf(accountById.get(c.accountId)!, spec.at, r.canonicalModel, c, true);
+      const ranked = pickOf(candidates, partitions.left, spec.accountId, pool.strategy, spec.kind === 'moved' ? spec.from : undefined, reserve);
       if (spec.kind !== 'held') pick = ranked;
       tierSize = ranked.tierSize;
       const tier = member(spec.accountId)?.tier ?? [0, 0, 0];
-      // A burn fact follows each score, the burn the spare rate took off.
-      const scores = candidates.filter((c) => c.score !== null).flatMap((c) => [fact('score', c.score, scoreUnitOf(c), c.accountId), fact('burn', c.pace?.burn ?? 0, 'percent_per_hour', c.accountId)]);
+      // A burn fact follows each score, the burn the spare rate took off, and a member that holds a Fable reservation
+      // names it after its burn.
+      const scores = candidates
+        .filter((c) => c.score !== null)
+        .flatMap((c) => {
+          const reserved = c.pace?.fableReservation ?? null;
+          return [fact('score', c.score, scoreUnitOf(c), c.accountId), fact('burn', c.pace?.burn ?? 0, 'percent_per_hour', c.accountId), ...(reserved === null ? [] : [fact('fable_reservation', reserved, 'percent', c.accountId)])];
+        });
       // The strategy's ties are the ranked tier's best scores under Pace and the whole tier under Priority. The runway
       // breaks them for a move whose gate answered the fitting order and for a failover by its fitting members' reads,
       // and round robin's cursor picks alone.

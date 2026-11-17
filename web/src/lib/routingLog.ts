@@ -277,7 +277,7 @@ const KEY_REFUSAL_WORD: Record<string, string> = {
 };
 
 /** How the strategy ranks, the hover of a Pace chip on a routing log row. */
-export const PACE_HINT = "Pace: the account with the most of its window left per hour until the window resets or the subscription ends, less the burn of the sessions already on it, wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched.";
+export const PACE_HINT = "Pace: the account with the most of its window left per hour until the window resets or the subscription ends, less the burn of the sessions already on it, wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched. A request of a model without a week of its own first sets aside the room the account's expected Fable use needs.";
 
 /** The strategy's word with the tier's priority when the tier is known: `Pace P0`, `round robin`. */
 export function strategyWord(strategy: string, tier: number[] | null): string {
@@ -954,6 +954,7 @@ export const WALK_KEY: Record<string, string> = {
   epoch: 'epoch',
   excess: 'excess',
   expires_at: 'expires at',
+  fable_reservation: 'Fable reservation',
   factor: 'speed',
   fast: 'fast',
   fired_by: 'fired by',
@@ -1521,7 +1522,10 @@ const scoreUnit = (c: RecordCandidate, record: DecisionRecord): FactUnit => {
   return c.pace !== null && c.pace.hours === null && (c.pace.window ?? null) === null ? 'percent' : 'percent_per_hour';
 };
 
-/** A Pace cell's hover: the share left, the hours it is spread over and the rate, or an API key's share alone. */
+/**
+ * A Pace cell's hover: the share left, the Fable reservation where one applies, the hours it is spread over and the
+ * rate, or an API key's share alone.
+ */
 function paceTitle(c: RecordCandidate, record: DecisionRecord, now: number): string | null {
   const p = c.pace;
   if (p === null) return null;
@@ -1530,6 +1534,9 @@ function paceTitle(c: RecordCandidate, record: DecisionRecord, now: number): str
   // A pace built by hand without the key names no window, as a null one does.
   const id = p.window ?? null;
   const share = id === null ? 'its window' : `the ${paceWindowWord(id)} window`;
+  // A pace built by hand without the key holds no reservation, as a null one does, so it never reads "NaN%".
+  const reserved = p.fableReservation ?? null;
+  const left = `${fmtPct(p.remaining)} of ${share} left${reserved === null ? '' : `, less ${fmtPct(reserved)} reserved for Fable,`}`;
   // Whole hours would read a deadline under half an hour away as "0 h".
   const over = p.hours === null ? '' : ` over ${p.hours < 1 ? `${Math.round(p.hours * 60)} min` : `${Math.round(p.hours)} h`}`;
   // The deadline is the earlier of the two, so one equal to the reset is the reset whatever the end reads.
@@ -1537,8 +1544,8 @@ function paceTitle(c: RecordCandidate, record: DecisionRecord, now: number): str
   const score = formatFact(p.score, scoreUnit(c, record), now);
   // A version 1 record read no burn, and its score was the share left an hour above the pace floor.
   const burn = p.burn ?? null;
-  if (burn === null) return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}: ${score}. Inside its tier, the highest above the pace floor wins.`;
-  return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}, less ${formatFact(burn, 'percent_per_hour', now)} of burn: ${score}. Inside its tier, the highest spare rate wins.`;
+  if (burn === null) return `${left}${over}${deadline}: ${score}. Inside its tier, the highest above the pace floor wins.`;
+  return `${left}${over}${deadline}, less ${formatFact(burn, 'percent_per_hour', now)} of burn: ${score}. Inside its tier, the highest spare rate wins.`;
 }
 
 /**
