@@ -9,6 +9,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::body::Body;
+use axum::http::Request;
+use bytes::Bytes;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use phoebis_relay::{Limits, Relay};
@@ -596,6 +599,20 @@ async fn a_body_one_byte_past_the_bound_is_refused_before_the_upstream() {
         )
         .await;
     assert_eq!(status, 413, "{headers:?}");
+    // The same 1,025 bytes in one chunk of 0x401, with no length the head could be refused by.
+    let chunked = [&b"401\r\n"[..], &[b'x'; 1_025], b"\r\n0\r\n\r\n"].concat();
+    let (status, headers, _) = listener
+        .send(
+            API,
+            &keyed(
+                "POST /api/frame/artifacts",
+                API,
+                "Transfer-Encoding: chunked\r\n",
+                &chunked,
+            ),
+        )
+        .await;
+    assert_eq!(status, 413, "{headers:?}");
     let (status, headers, _) = listener
         .send(
             API,
@@ -616,6 +633,145 @@ async fn a_body_one_byte_past_the_bound_is_refused_before_the_upstream() {
         (arrived.line.as_str(), arrived.body.len()),
         ("POST /api/frame/artifacts HTTP/1.1", 1_024)
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_call_without_a_body_takes_no_place_in_the_body_bounds() {
+    let up = fake(vec![
+        ("/api/frame/", json_200()),
+        ("/v1/mcp_servers", json_200()),
+    ])
+    .await;
+    // No body may arrive on the key, and the budget holds less than the bound of one body.
+    let h = harness_with(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        Limits {
+            body_budget_bytes: 512,
+            key_body_reads: 0,
+            max_request_bytes: 1_024,
+            ..default_limits()
+        },
+    )
+    .await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(
+            API,
+            &keyed("POST /api/frame/x", API, "Content-Length: 2\r\n", b"{}"),
+        )
+        .await;
+    assert_eq!(status, 429, "{headers:?}");
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /v1/mcp_servers", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    assert_eq!(feature_lines(&up), ["GET /v1/mcp_servers HTTP/1.1"]);
+    up.shutdown().await;
+}
+
+type BodySender = tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>;
+
+/// A keyed `POST /api/frame/x` for the feature module's routes in process, its head declaring `declared` bytes, and the
+/// sender its body arrives through. The channel holds one chunk, so a second send returns once the read took the first.
+fn held_body_request(declared: usize) -> (Request<Body>, BodySender) {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    let request = Request::post("/api/frame/x")
+        .header("host", API)
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-length", declared)
+        .body(Body::from_stream(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        ))
+        .unwrap();
+    (request, tx)
+}
+
+/// The status and the `x-phoebis-error-code` and `retry-after` lines of an answer, an absent line read as empty.
+fn refusal_of(answer: &axum::http::Response<Body>) -> (u16, &str, &str) {
+    let line = |name: &str| {
+        answer
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+    };
+    (
+        answer.status().as_u16(),
+        line("x-phoebis-error-code"),
+        line("retry-after"),
+    )
+}
+
+#[tokio::test]
+async fn a_body_past_the_keys_read_slots_is_refused() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = harness_with(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        Limits {
+            key_body_reads: 1,
+            ..default_limits()
+        },
+    )
+    .await;
+    let app = phoebis_relay::features::router(h.relay.clone());
+    let (held, tx) = held_body_request(16);
+    let first = tokio::spawn({
+        let app = app.clone();
+        async move { app.oneshot(held).await.unwrap() }
+    });
+    for chunk in [&b"{\"a\":"[..], b" "] {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tx.send(Ok(Bytes::from_static(chunk))),
+        )
+        .await
+        .expect("the read takes the chunk")
+        .expect("the read is open");
+    }
+    let second = Request::post("/api/frame/x")
+        .header("host", API)
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-length", 2)
+        .body(Body::from("{}"))
+        .unwrap();
+    let refused = tokio::time::timeout(Duration::from_secs(5), app.oneshot(second))
+        .await
+        .expect("refused at once")
+        .unwrap();
+    assert_eq!(refusal_of(&refused), (429, "key_body_reads", "1"));
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
+    first.abort();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_body_that_stalls_is_ended_at_the_reads_deadline() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = harness_with(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        Limits {
+            body_read_timeout: Duration::from_millis(200),
+            ..default_limits()
+        },
+    )
+    .await;
+    let (request, _tx) = held_body_request(16);
+    let answer = tokio::time::timeout(
+        Duration::from_secs(5),
+        phoebis_relay::features::router(h.relay.clone()).oneshot(request),
+    )
+    .await
+    .expect("answered within a few seconds")
+    .unwrap();
+    assert_eq!(refusal_of(&answer), (408, "request_timeout", ""));
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
     up.shutdown().await;
 }
 

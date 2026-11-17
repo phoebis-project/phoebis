@@ -38,13 +38,20 @@ pub(crate) enum Unanswered {
 
 /// The body read whole under the model route's four bounds: the key's count of arriving bodies, the size, the
 /// process's byte budget and the read's deadline. The reservation counts the body's bytes in the budget for as long as
-/// the caller holds it.
+/// the caller holds it. A head with neither `Content-Length` nor `Transfer-Encoding` frames no body, so it answers
+/// `None` and takes no place in any of the bounds.
 pub(crate) async fn read_body(
     relay: &Relay,
     key: &ApiKeyRow,
     headers: &HeaderMap,
     body: Body,
-) -> Result<(Bytes, Reservation), Failure> {
+) -> Result<Option<(Bytes, Reservation)>, Failure> {
+    let framed = [header::CONTENT_LENGTH, header::TRANSFER_ENCODING]
+        .iter()
+        .any(|name| headers.contains_key(name));
+    if !framed {
+        return Ok(None);
+    }
     let Some(permit) = relay
         .body_reads
         .try_acquire(&key.id, relay.limits.key_body_reads)
@@ -88,18 +95,19 @@ pub(crate) async fn read_body(
     // The declared length frames the body and the bound caps a chunked one, so this only shrinks.
     let shrunk = reservation.resize(raw.len() as u64);
     debug_assert!(shrunk.is_ok(), "the read outgrew its reservation");
-    Ok((raw, reservation))
+    Ok(Some((raw, reservation)))
 }
 
 /// Sends the admitted call under `account`'s token on a fresh control-plane connection and hands back the upstream's
-/// answer, its body streaming as it arrives.
+/// answer, its body streaming as it arrives. `body` is `None` for a head that framed none, which then leaves with no
+/// length line, and a framed body, an empty one among them, keeps its line.
 pub(crate) async fn forward(
     relay: &Relay,
     account: &AccountRow,
     row: &FeatureRow,
     method: &'static str,
     parts: &Parts,
-    body: Bytes,
+    body: Option<Bytes>,
 ) -> Result<Response, Unanswered> {
     let Some(control) = relay.control.as_ref() else {
         return Err(Unanswered::Failed("unreachable"));
@@ -125,17 +133,13 @@ pub(crate) async fn forward(
             });
         }
     };
-    // A head that framed a body, an empty one among them, keeps a length line, and a head without one gets none.
-    let framed = [header::CONTENT_LENGTH, header::TRANSFER_ENCODING]
-        .iter()
-        .any(|name| parts.headers.contains_key(name));
     let headers = feature_headers(
         &parts.headers,
         parts.extensions.get::<OriginalHead>(),
         Some(&token.secret),
         row.host,
         CONTROL_CONNECTION,
-        (framed || !body.is_empty()).then_some(body.len()),
+        body.as_ref().map(Bytes::len),
     );
     let target = parts
         .uri
@@ -146,7 +150,7 @@ pub(crate) async fn forward(
         method,
         target,
         headers,
-        body,
+        body: body.unwrap_or_default(),
     };
     match control
         .send_streaming(

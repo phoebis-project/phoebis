@@ -73,7 +73,7 @@ async fn feature_call(State(relay): State<Arc<Relay>>, request: Request) -> Resp
     };
     // The reservation stands until the answer's head, so the body counts in the byte budget while the forward holds it.
     let (body, _reservation) = match read_body(&relay, key, &parts.headers, body).await {
-        Ok(read) => read,
+        Ok(read) => read.unzip(),
         Err(failure) => return refused(&failure),
     };
     match forward(&relay, account, row, method, &parts, body).await {
