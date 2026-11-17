@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import { effectiveLabel } from '@/api/decode';
 import type { FeatureSettings } from '@/api/types';
@@ -155,6 +155,7 @@ export function SettingsPage() {
   const { theme, setTheme, palette, setPalette, timeFormat, setTimeFormat, unit, setUnit, week, setWeek } = useAppSettings();
   const now = useNow(60_000);
   const [setup, setSetup] = useState<Setup>('base');
+  const setupId = useId();
   const s = settings.data;
   const snippet = snippetFor(setup, s?.listeners ?? null, s?.features ?? null);
   const featureSetup = setup !== 'base';
@@ -282,53 +283,55 @@ export function SettingsPage() {
           </span>
         }
       >
-        <Tabs<Setup> label="Setup" value={setup} onChange={setSetup} tabs={SETUPS.map((value) => ({ label: SETUP_LABEL[value], value }))} />
-        {snippet === null ? (
-          s ? (
-            <p className="muted">
-              This router serves no feature call until its configuration names <code>features.listen</code>.{' '}
-              <a href={docsHref('installation', 'features')} target="_blank" rel="noreferrer">
-                Installation
-              </a>
-            </p>
-          ) : settings.error ? (
-            <ErrorState title="Could not load the settings" body={settings.error} retry={settings.reload} />
+        <Tabs<Setup> label="Setup" value={setup} onChange={setSetup} tabs={SETUPS.map((value) => ({ controls: value === setup ? `${setupId}-panel` : undefined, id: `${setupId}-${value}`, label: SETUP_LABEL[value], value }))} />
+        <div id={`${setupId}-panel`} role="tabpanel" aria-labelledby={`${setupId}-${setup}`}>
+          {snippet === null ? (
+            s ? (
+              <p className="muted">
+                This router serves no feature call until its configuration names <code>features.listen</code>.{' '}
+                <a href={docsHref('installation', 'features')} target="_blank" rel="noreferrer">
+                  Installation
+                </a>
+              </p>
+            ) : settings.error ? (
+              <ErrorState title="Could not load the settings" body={settings.error} retry={settings.reload} />
+            ) : (
+              <Skeleton height={60} />
+            )
           ) : (
-            <Skeleton height={60} />
-          )
-        ) : (
-          <>
-            <pre className="snippet">{snippet}</pre>
-            {s && (
-              <p className="muted snippet__hint">
-                Inference is served on <code>{s.listeners.proxy}</code>, the address the proxy listener binds, so the base
-                URL carries its scheme and port. Replace the placeholder host with the name that reaches the listener, and
-                the scheme and the port too where a TLS proxy or a port mapping stands between Claude Code and it.
-              </p>
-            )}
-            {featureSetup && (
-              <p className="muted snippet__hint">
-                <a href={docsHref('claude-ai-features', 'the-launch-script')} target="_blank" rel="noreferrer">
-                  The launch script
-                </a>{' '}
-                of the claude.ai features page sets these lines. The script fetches the CA, compares the fingerprint,
-                checks the road and writes the env file before it starts the client.
-                {setup === 'redirect' && " The machine's name resolution must lead api.anthropic.com and mcp-proxy.anthropic.com to the router's feature listener on port 443."}
-              </p>
-            )}
-            {featureSetup && s?.features && <FeatureCaLine features={s.features} />}
-            <dl className="envdl">
-              {ENV_TERMS.filter((t) => t.setups.includes(setup)).map((t) => (
-                <div className="envdl__row" key={t.term}>
-                  <dt>
-                    <code>{t.term}</code>
-                  </dt>
-                  <dd>{featureSetup && t.feature !== undefined ? `${t.body} ${t.feature}` : t.body}</dd>
-                </div>
-              ))}
-            </dl>
-          </>
-        )}
+            <>
+              <pre className="snippet">{snippet}</pre>
+              {s && (
+                <p className="muted snippet__hint">
+                  Inference is served on <code>{s.listeners.proxy}</code>, the address the proxy listener binds, so the base
+                  URL carries its scheme and port. Replace the placeholder host with the name that reaches the listener, and
+                  the scheme and the port too where a TLS proxy or a port mapping stands between Claude Code and it.
+                </p>
+              )}
+              {featureSetup && (
+                <p className="muted snippet__hint">
+                  <a href={docsHref('claude-ai-features', 'the-launch-script')} target="_blank" rel="noreferrer">
+                    The launch script
+                  </a>{' '}
+                  of the claude.ai features page sets these lines. The script fetches the CA, compares the fingerprint,
+                  checks the road and writes the env file before it starts the client.
+                  {setup === 'redirect' && " The machine's name resolution must lead api.anthropic.com and mcp-proxy.anthropic.com to the router's feature listener on port 443."}
+                </p>
+              )}
+              {featureSetup && s?.features && <FeatureCaLine features={s.features} />}
+              <dl className="envdl">
+                {ENV_TERMS.filter((t) => t.setups.includes(setup)).map((t) => (
+                  <div className="envdl__row" key={t.term}>
+                    <dt>
+                      <code>{t.term}</code>
+                    </dt>
+                    <dd>{featureSetup && t.feature !== undefined ? `${t.body} ${t.feature}` : t.body}</dd>
+                  </div>
+                ))}
+              </dl>
+            </>
+          )}
+        </div>
       </Card>
     </div>
   );
