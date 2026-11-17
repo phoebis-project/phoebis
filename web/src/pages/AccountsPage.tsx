@@ -793,6 +793,9 @@ const lineOf = (use: AccountUse): string => {
   }
 };
 
+// The store holds no pool name and no key name unique, so a line's key reads its owner's id.
+const listKeyOf = (use: AccountUse): string => (use.kind === 'key_feature' ? `key:${use.keyId}:${use.feature}` : use.kind === 'member' ? `member:${use.poolId}` : `pool:${use.poolId}:${use.feature}`);
+
 /**
  * Delete account's confirmation, which names each use of the account above the deletion's sentence. It reads the pool
  * and key lists as it opens and holds Delete until both answered, so the operator never confirms a deletion whose uses
@@ -842,8 +845,8 @@ function DeleteAccountDialog({ account, onClose, onDelete, open }: { account: Ac
           <>
             <p className="secondary">{`${account.label} is in use:`}</p>
             <ul className="plain-list secondary">
-              {uses.map(lineOf).map((line) => (
-                <li key={line}>{line}</li>
+              {uses.map((use) => (
+                <li key={listKeyOf(use)}>{lineOf(use)}</li>
               ))}
             </ul>
             {/* A membership alone leaves no selection behind to set to none. */}
