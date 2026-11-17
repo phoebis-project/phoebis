@@ -623,6 +623,9 @@ export interface Pool {
   status: (typeof POOL_STATUS_VALUES)[number];
   strategy: PoolStrategy;
   subagentPlacement: SubagentPlacement;
+  /** The pool's switch for the thinking-binding beta, which the relay adds where thinking is on and the client sent
+   *  none. Off by default. */
+  thinkingDiagnostics: boolean;
   traffic24h: TrafficBucket[];
   /** The stamp of the row's last write, which `revision` carries. */
   updatedAt: string;

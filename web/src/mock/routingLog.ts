@@ -2447,6 +2447,7 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
     slow_down_stretch_seconds: p.slowDownStretchSeconds,
     strategy: p.strategy,
     subagent_placement: p.subagentPlacement,
+    thinking_diagnostics: p.thinkingDiagnostics,
     warm_sessions: p.warmSessions,
     weekly_ceiling: p.weeklyCeiling,
     wind_down_minutes: p.windDownMinutes,

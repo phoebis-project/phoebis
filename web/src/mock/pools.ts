@@ -224,6 +224,7 @@ const POOL_ROWS: PoolSeed[] = [
     keepaliveResolved: merged(FIGURES.plan['1h'], FIGURES.dollars['5m']),
     autoModeServer: true,
     cacheDiagnostics: true,
+    thinkingDiagnostics: true,
     cacheTtl: {
       enabled: true,
       injectWhenAbsent: true,

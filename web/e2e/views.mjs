@@ -2349,7 +2349,7 @@ async function closeByEscape(dialog, label, say) {
 }
 
 /**
- * The Cache TTL, Cache diagnostics, Body capture and Keepalive groups of a served pool in the expert view: the TTL
+ * The Cache TTL, Diagnostics, Body capture and Keepalive groups of a served pool in the expert view: the TTL
  * policy toggle, the marker toggle under it, the grid's two main selects, the diagnostics switch, the capture switch
  * and the subagent switch, each reached the way an operator reaches it and measured while its group shows. The
  * metered main select is measured against the plan one beside it, the marker toggle against the policy toggle and the
@@ -2375,8 +2375,8 @@ async function poolCachingControls(theme) {
   const policy = toggle('Set the cache TTL for this pool');
   if ((await policy.count()) !== 1) say('no cache TTL policy toggle');
   if ((await toggle('Cache diagnostics').count()) !== 1) say('no cache diagnostics switch');
-  const diagnosticsSelects = await dialog.locator('section.dialog-group[aria-label="Cache diagnostics"] select').count();
-  if (diagnosticsSelects !== 0) say(`the Cache diagnostics group draws ${diagnosticsSelects} selects beside its switch`);
+  const diagnosticsSelects = await dialog.locator('section.dialog-group[aria-label="Diagnostics"] select').count();
+  if (diagnosticsSelects !== 0) say(`the Diagnostics group draws ${diagnosticsSelects} selects beside its switch`);
   // The grid and the marker toggle are compared while the policy is on, the state an operator edits them in.
   if ((await policy.count()) === 1 && (await policy.getAttribute('aria-checked')) === 'false') await policy.click();
   await settle();
@@ -2412,7 +2412,7 @@ async function poolCachingControls(theme) {
   // A field under the pointer draws the hover border, so the pointer leaves the dialog before the selects are compared.
   await page.mouse.move(0, 0);
   const pair = await dialog.evaluate(read);
-  await railEntry(dialog, 'Cache diagnostics').click();
+  await railEntry(dialog, 'Diagnostics').click();
   await settle();
   pair.diagnostics = (await dialog.evaluate(read)).diagnostics;
   await railEntry(dialog, 'Body capture').click();
@@ -3079,9 +3079,9 @@ async function poolCardAges(theme, say, where) {
 }
 
 /** The pool dialog's groups in rail order. */
-const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Diagnostics'];
 /** The groups whose every field is expert, which the rail leaves out while the mode is off. */
-const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Slow-down', 'Failover', 'Cache diagnostics'];
+const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Slow-down', 'Failover', 'Diagnostics'];
 /**
  * Per group, the switches whose dependents the geometry pass turns off, and the controls that must go disabled. An
  * `expert` switch and the `expertControls` are drawn in the expert view alone, so the plain walk leaves them out.

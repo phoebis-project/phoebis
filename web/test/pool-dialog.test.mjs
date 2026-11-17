@@ -32,7 +32,7 @@ const { MockApi } = await import('./dist/api.js');
 const LIMIT = 72;
 
 const roots = [];
-const reads = { getKeepaliveOverview: api.getKeepaliveOverview, getKeyModels: api.getKeyModels, listCatalogOf: api.listCatalogOf, listSessions: api.listSessions, updateKey: api.updateKey };
+const reads = { getKeepaliveOverview: api.getKeepaliveOverview, getKeyModels: api.getKeyModels, listCatalogOf: api.listCatalogOf, listSessions: api.listSessions, updateKey: api.updateKey, updatePool: api.updatePool };
 beforeEach(() => {
   // A frozen clock, so the dialog's ticking instant arms no window timer.
   const clock = fakeClock();
@@ -316,6 +316,32 @@ test('a new pool opens with the switch to keep prompt caches warm off, and free 
   assert.ok(warm, 'the Keepalive group holds the switch');
   assert.equal(warm.getAttribute('aria-checked'), 'false', 'the switch starts off');
   assert.equal(warm.disabled, false, "the new form's affinity of an hour leaves the switch enabled, so off is the form's own value");
+});
+
+test('a save hands the client the Thinking diagnostics switch as the dialog shows it', async () => {
+  // The pool jobs stores both diagnostics switches off (`web/src/mock/pools.ts`).
+  const pool = pools.find((p) => p.id === 'jobs');
+  assert.ok(pool && !pool.cacheDiagnostics && !pool.thinkingDiagnostics, 'the mock holds the pool jobs with both diagnostics switches off');
+  const sent = [];
+  api.updatePool = async (id, input) => {
+    sent.push(input.thinkingDiagnostics);
+    return pool;
+  };
+  const switchIn = (container, label) => container.querySelector(`dialog[open] button[role="switch"][aria-label="${label}"]`);
+  const save = (container) => act(() => [...container.querySelectorAll('dialog[open] .dialog__actions button')].find((b) => b.textContent?.trim() === 'Save pool')?.click());
+  // Each field of the group is expert, so opening on it turns the expert view on.
+  const untouched = mount();
+  await untouched.draw(poolDialog({ accounts: accountsRead(accounts), initialGroup: 'cacheDiagnostics', pool }));
+  save(untouched.container);
+  await settled();
+  const ticked = mount();
+  await ticked.draw(poolDialog({ accounts: accountsRead(accounts), initialGroup: 'cacheDiagnostics', pool }));
+  // Cache diagnostics goes on first, so a Thinking switch that showed its neighbor's state would turn itself off.
+  act(() => switchIn(ticked.container, 'Cache diagnostics')?.click());
+  act(() => switchIn(ticked.container, 'Thinking diagnostics')?.click());
+  save(ticked.container);
+  await settled();
+  assert.deepEqual(sent, [false, true], 'the untouched dialog sends the switch off and the ticked one sends it on');
 });
 
 test("a key move sends the stored key's settings with the new pool, the name trimmed and an empty note as none", async () => {

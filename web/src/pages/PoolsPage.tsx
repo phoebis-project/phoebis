@@ -1088,6 +1088,7 @@ interface PoolForm {
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
   subagentPlacement: SubagentPlacement;
+  thinkingDiagnostics: boolean;
 }
 
 const NO_BUDGET: PoolForm['budgets'][string] = { daily: null, monthly: null };
@@ -1128,6 +1129,7 @@ const blankForm = (): PoolForm => ({
   status: 'active',
   strategy: 'pace',
   subagentPlacement: POOL_AFFINITY_DEFAULTS.subagentPlacement,
+  thinkingDiagnostics: false,
 });
 
 const formFrom = (pool: Pool): PoolForm => ({
@@ -1184,6 +1186,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   status: pool.status === 'disabled' ? 'disabled' : 'active',
   strategy: pool.strategy,
   subagentPlacement: pool.subagentPlacement,
+  thinkingDiagnostics: pool.thinkingDiagnostics,
 });
 
 export function PoolDialog({
@@ -1387,6 +1390,7 @@ export function PoolDialog({
     status: form.status,
     strategy: form.strategy,
     subagentPlacement: form.subagentPlacement,
+    thinkingDiagnostics: form.thinkingDiagnostics,
   };
   const listed = new Set(accounts.map((a) => a.id));
   // Until the list answers every stored member stands, so nothing is refused for an id the list may yet hold.
@@ -2392,6 +2396,19 @@ export function PoolDialog({
               }
             >
               <Toggle checked={form.cacheDiagnostics} onChange={(v) => set('cacheDiagnostics', v)} label="Cache diagnostics" />
+            </Field>
+          </Expert>
+          <Expert>
+            <Field
+              label="Thinking diagnostics"
+              beside
+              hint={
+                <>
+                  On asks the upstream which thinking blocks it dropped, for each request with thinking on whose client did not ask, and the answer lands in the <PageLink to="/requests">request log</PageLink>.
+                </>
+              }
+            >
+              <Toggle checked={form.thinkingDiagnostics} onChange={(v) => set('thinkingDiagnostics', v)} label="Thinking diagnostics" />
             </Field>
           </Expert>
         </div>

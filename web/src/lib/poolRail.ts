@@ -4,7 +4,7 @@ import type { PoolGroup } from './forms';
 export const POOL_RAIL: Record<PoolGroup, { label: string; parent: string }> = {
   autoMode: { label: 'Auto mode', parent: 'Pool' },
   bodyCapture: { label: 'Body capture', parent: 'Visibility' },
-  cacheDiagnostics: { label: 'Cache diagnostics', parent: 'Visibility' },
+  cacheDiagnostics: { label: 'Diagnostics', parent: 'Visibility' },
   cacheTtl: { label: 'Cache TTL', parent: 'Caching' },
   failover: { label: 'Failover', parent: 'Load' },
   guardrails: { label: 'Guardrails', parent: 'Pool' },

@@ -164,6 +164,7 @@ export interface PoolInput extends PoolEngineFields, PoolAffinityFields {
   preferSubscription: boolean;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
+  thinkingDiagnostics: boolean;
 }
 
 /**

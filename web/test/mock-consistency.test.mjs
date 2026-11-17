@@ -166,7 +166,7 @@ const POOL_DIFF_MEMBERS = [
   'keepalive.enabled', 'keepalive.max_idle_seconds', 'keepalive.max_parked_seconds', 'keepalive.scheduled_horizon_seconds', 'label', 'load_shedding',
   'migrate_when_spent', 'min_shared_prefix_tokens', 'model_rules', 'overage_move_grace_minutes', 'overage_policy', 'prefer_subscription', 'retry_in_place_seconds', 'return_to_plan',
   'return_to_plan_dwell_seconds', 'session_placement', 'shed_cap', 'shed_dwell_seconds', 'slow_down', 'slow_down_hold_seconds', 'slow_down_stretch_seconds', 'strategy', 'subagent_placement',
-  'warm_sessions', 'weekly_ceiling', 'wind_down_minutes',
+  'thinking_diagnostics', 'warm_sessions', 'weekly_ceiling', 'wind_down_minutes',
 ];
 /** The fields an account edit carries as pairs, beside the flag a staged secret sets. */
 const ACCOUNT_DIFF_MEMBERS = ['canceled', 'enabled', 'label', 'state', 'subscription_ends_at'];

@@ -1074,6 +1074,7 @@ test("a pool's cache TTL decodes the two rule sets and encodes them back", () =>
       metered: { main: '5m', subagent: '5m', models: [] },
     },
     cache_diagnostics: true,
+    thinking_diagnostics: true,
     keepalive: { ...row.keepalive, max_parked_seconds: 7_200 },
   };
   const p = d.decodePool(wire);
@@ -1081,6 +1082,7 @@ test("a pool's cache TTL decodes the two rule sets and encodes them back", () =>
   assert.deepEqual(p.cacheTtl.plan.models, [{ main: '5m', model: 'claude-haiku-4-5-20251001', subagent: '5m' }]);
   assert.deepEqual([p.cacheTtl.metered.main, p.cacheTtl.metered.subagent], ['5m', '5m']);
   assert.equal(p.cacheDiagnostics, true);
+  assert.equal(p.thinkingDiagnostics, true);
   assert.equal(p.keepalive.maxParkedSeconds, 7_200);
   const back = d.encodePool({ ...p, name: p.name, status: 'active' });
   assert.equal(back.cache_ttl.enabled, true);
@@ -1088,9 +1090,13 @@ test("a pool's cache TTL decodes the two rule sets and encodes them back", () =>
   assert.equal(back.cache_ttl.plan.models[0].model, 'claude-haiku-4-5-20251001');
   assert.equal(back.cache_ttl.metered.main, '5m');
   assert.equal(back.cache_diagnostics, true);
+  assert.equal(back.thinking_diagnostics, true);
   assert.deepEqual(back.keepalive, { enabled: true, max_idle_seconds: 3_600, max_parked_seconds: 7_200, scheduled_horizon_seconds: null }, 'the four fields go back under the names the route reads, a null ceiling as null');
   assert.equal(d.decodePool({ ...row, cache_diagnostics: false }).cacheDiagnostics, false);
   assert.equal(d.encodePool({ ...p, name: p.name, cacheDiagnostics: false, status: 'active' }).cache_diagnostics, false, 'the switch is sent off as it is sent on');
+  // Off beside a neighbor that reads on, so a switch read or sent off the neighbor's member fails.
+  assert.equal(d.decodePool({ ...wire, thinking_diagnostics: false }).thinkingDiagnostics, false);
+  assert.equal(d.encodePool({ ...p, name: p.name, thinkingDiagnostics: false, status: 'active' }).thinking_diagnostics, false, 'the thinking switch is sent off as it is sent on');
 });
 
 test('a pool decodes its server-side auto mode switch, on when the row carries none, and encodes it back', () => {

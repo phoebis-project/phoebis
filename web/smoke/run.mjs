@@ -7040,7 +7040,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools keys section is not a multi-select', ok: keysGroup !== undefined && keysMulti.length === 0, missing: keysGroup === undefined ? ['no Keys group'] : keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
-  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Diagnostics'];
   const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   results.push({
@@ -7611,7 +7611,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 
   {
     const visibility = [...(dlg?.querySelector('.dialog-rail__parent[data-parent="Visibility"]')?.parentElement?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
-    results.push({ name: '/pools dialog lists Body capture and Cache diagnostics under Visibility, in that order', ok: JSON.stringify(visibility) === '["Body capture","Cache diagnostics"]', missing: visibility });
+    results.push({ name: '/pools dialog lists Body capture and Diagnostics under Visibility, in that order', ok: JSON.stringify(visibility) === '["Body capture","Diagnostics"]', missing: visibility });
     expect('/pools capture section', group(dlg, 'Body capture')?.textContent ?? '', [
       'Capture request and response bodies',
       "Keeps the request and response bodies of this pool's keys for the request drawer on the Requests page",
@@ -8752,7 +8752,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const ttlToggle = [...(group(dlg, 'Cache TTL')?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Set the cache TTL for this pool');
-  const diagnostics = () => group(dlg, 'Cache diagnostics')?.querySelector('button[role="switch"][aria-label="Cache diagnostics"]');
+  const diagnostics = () => group(dlg, 'Diagnostics')?.querySelector('button[role="switch"][aria-label="Cache diagnostics"]');
   results.push({
     name: '/pools a pool that rewrites no breakpoint still offers the TTL block and the diagnostics switch',
     ok: ttlToggle?.getAttribute('aria-checked') === 'false' && diagnostics()?.getAttribute('aria-checked') === 'false',
@@ -8766,7 +8766,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     diagnostics()?.click();
     await m.settle(120);
     states.push(diagnostics()?.getAttribute('aria-checked'));
-    const section = group(dlg, 'Cache diagnostics');
+    const section = group(dlg, 'Diagnostics');
     const hint = diagnostics()?.closest('.field')?.querySelector('.field__hint')?.textContent?.trim();
     results.push({
       name: '/pools the Cache diagnostics switch has two states, off and on, and no inherit choice',
@@ -9700,7 +9700,7 @@ await forView(['/keys', '/pools'], async () => {
   const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const PARENTS = ['Pool', 'Routing', 'Load', 'Caching', 'Visibility'];
   const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Selection', 'Pinning', 'Windows', 'Load shedding', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
-  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Diagnostics'];
   const KEEPALIVE = ['Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Return rate by idle age'];
   // Each group's labels and line with the mode off, the Interfaces' plain fields; the line is null where none draws.
   const PLAIN_FIELDS = {
@@ -9729,7 +9729,7 @@ await forView(['/keys', '/pools'], async () => {
     Failover: ['Preset', 'In flight', 'Retry in place (s)', 'Migrate when spent'],
     'Overage and plan end': ['Overage policy', 'Overage grace (min)', 'Return to plan', 'Return dwell (s)', 'Wind down (min)'],
     'Cache TTL': ['Set the cache TTL for this pool', 'Add a cache marker to a request without one', 'Write cost', 'Plan writes', 'Metered writes'],
-    'Cache diagnostics': ['Cache diagnostics'],
+    Diagnostics: ['Cache diagnostics', 'Thinking diagnostics'],
   };
 
   let p = await mount('/pools');
