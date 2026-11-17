@@ -18746,13 +18746,14 @@ await forView('/routing-log', async () => {
       });
     }
     {
-      // The story's one move an account's state forced: the conversation the Overflow workspace answered at 11:27:40
-      // sends its next turn at 11:31:10, after the workspace's balance ran out at 11:30:12, and the placement moves
-      // the live pin to primary (the seeds `LAPSED_TURN_ID` and `CAUSED_MOVE_ID` in `web/src/mock/requests.ts`). The
-      // row and the panel word the cause as the release reads it, and say the account's state moved the pin.
+      // The story holds two moves an account's state forced, and this read takes the one off the Overflow workspace:
+      // the conversation the workspace answered at 11:27:40 sends its next turn at 11:31:10, after its balance ran out
+      // at 11:30:12, and the placement moves the live pin to primary (the seeds `LAPSED_TURN_ID` and `CAUSED_MOVE_ID`
+      // in `web/src/mock/requests.ts`). The row and the panel word the cause as the release reads it, and say the
+      // account's state moved the pin. The read after the next takes the move off the deleted account.
       const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: ['pin_migrated'], limit: 200, to: iso(CLOCK_ORIGIN) })).rows;
       const forced = listed.filter((r) => Array.isArray(r.detail.reasons));
-      const e = forced[0];
+      const e = forced.find((r) => r.detail.from_account === 'overflow');
       const at = e === undefined ? CLOCK_ORIGIN : Date.parse(e.at);
       const page = await mount(`/routing-log?kinds=pin_migrated&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
       const row = e === undefined ? null : rowOf(page, `event/${e.id}`);
@@ -18767,16 +18768,16 @@ await forView('/routing-log', async () => {
       results.push({
         name: "/routing-log the story's move an account's state forced reads its cause in the release's words, the account it left, and the account's state as what moved it",
         ok:
-          forced.length === 1 &&
+          forced.length === 2 &&
           JSON.stringify(read) === JSON.stringify({ accounts: ['/accounts/overflow', '/accounts/primary'], by: 'funding required', kind: 'pin moved' }) &&
           JSON.stringify([pairs.Reason, pairs.Reasons, pairs['Moved by']]) === JSON.stringify([['funding required'], ['funding required'], ["the account's state"]]),
         missing: [`${forced.length} moves with a list`, JSON.stringify(read), JSON.stringify([pairs.Reason, pairs.Reasons, pairs['Moved by']])],
       });
     }
     {
-      // The story's forced move lists under the account it left, the Overflow workspace, as its decision does.
+      // The story's forced move off the Overflow workspace lists under the account it left, as its decision does.
       const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: ['pin_migrated'], limit: 200, to: iso(CLOCK_ORIGIN) })).rows;
-      const e = listed.find((r) => Array.isArray(r.detail.reasons));
+      const e = listed.find((r) => Array.isArray(r.detail.reasons) && r.detail.from_account === 'overflow');
       const at = e === undefined ? CLOCK_ORIGIN : Date.parse(e.at);
       const page = await mount(`/routing-log?kinds=pin_migrated&accounts=overflow&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
       const drawn = [...page.container.querySelectorAll('.routing-log__table tbody tr.routing-log__row')].map((tr) => tr.getAttribute('data-row'));
@@ -18785,6 +18786,31 @@ await forView('/routing-log', async () => {
         name: '/routing-log a move lists under an Account filter on the account it left',
         ok: e !== undefined && e.accountId === 'primary' && e.detail.from_account === 'overflow' && drawn.includes(`event/${e.id}`),
         missing: [JSON.stringify(e === undefined ? null : [e.id, e.accountId, e.detail.from_account]), JSON.stringify(drawn)],
+      });
+    }
+    {
+      // The story's move off the account the operator deleted at 09:40:30, which the registry no longer holds: the
+      // conversation the retired workspace answered at 09:40:20 sends its next turn at 09:47:30, which lands on primary
+      // (the seeds `RETIRED`, `RETIRED_TURN_ID` and `DELETED_MOVE_ID` in `web/src/mock/requests.ts`). The row words the
+      // cause as the release reads it and draws the id it left with the link each account id carries, and the panel
+      // names the account's state as what moved it and the same id as its From.
+      const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: ['pin_migrated'], limit: 200, to: iso(CLOCK_ORIGIN) })).rows;
+      const e = listed.find((r) => r.detail.from_account === 'retired');
+      const at = e === undefined ? CLOCK_ORIGIN : Date.parse(e.at);
+      const page = await mount(`/routing-log?kinds=pin_migrated&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+      const row = e === undefined ? null : rowOf(page, `event/${e.id}`);
+      const links = (el) => [...(el?.querySelectorAll('a[href^="/accounts/"]') ?? [])].map((a) => [a.textContent, a.getAttribute('href')]);
+      const cell = { accounts: links(row?.querySelector('td.routing-log__account')), by: row?.querySelector('td.routing-log__by')?.textContent?.trim() ?? null };
+      const panel = e === undefined ? null : await openRow(page, `event/${e.id}`);
+      const pairs = kvRows(panel?.querySelector('.event-detail > .kv'));
+      const opened = { from: links(pairs.find((p) => p.label === 'From')?.dd), movedBy: ddWords(pairs.find((p) => p.label === 'Moved by')?.dd) };
+      page.unmount();
+      results.push({
+        name: '/routing-log words a move off a deleted account by its cause and names the account it left',
+        ok:
+          JSON.stringify(cell) === JSON.stringify({ accounts: [['retired', '/accounts/retired'], ['primary', '/accounts/primary']], by: 'account deleted' }) &&
+          JSON.stringify(opened) === JSON.stringify({ from: [['retired', '/accounts/retired']], movedBy: ["the account's state"] }),
+        missing: [JSON.stringify(e === undefined ? null : [e.id, e.accountId, e.detail.from_account]), JSON.stringify(cell), JSON.stringify(opened)],
       });
     }
     {
@@ -19903,14 +19929,15 @@ await forView('/analytics', async () => {
     results.push({ name: '/analytics the Burn tab grouped by key under one key of the Keys filter draws that key alone', ok: JSON.stringify(legend) === JSON.stringify(['desktop']), missing: legend });
   }
   {
-    // Primary's moves of the day are its rollup's move in at 10:00, whose turn files it as winding down, and the move
-    // its funding requirement forced off overflow at 11:31. The whole day holds 17 moves under seven reasons.
+    // Primary's moves of the day are the move off the deleted retired workspace at 09:47, its rollup's move in at
+    // 10:00, whose turn files it as winding down, and the move its funding requirement forced off overflow at 11:31.
+    // The whole day holds 18 moves under eight reasons.
     const page = await mount('/analytics?accounts=primary', { now: CLOCK_ORIGIN });
     const moves = [...(cardOf(page, 'Migration rewrites')?.querySelectorAll('.hbars--moves li') ?? [])].map((li) => [li.querySelector('.hbars__label')?.textContent?.trim() ?? '', li.querySelector('.hbars__value')?.textContent?.trim() ?? '']);
     page.unmount();
     results.push({
       name: "/analytics Migration rewrites under one account of the Accounts filter lists that account's moves alone",
-      ok: JSON.stringify(moves) === JSON.stringify([['Winding down', '1'], ['Funding required', '1']]),
+      ok: JSON.stringify(moves) === JSON.stringify([['Account deleted', '1'], ['Winding down', '1'], ['Funding required', '1']]),
       missing: moves.map((m) => m.join(' ')),
     });
   }
@@ -20228,9 +20255,11 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // Ultra's two rows on bench, the four turns of the desktop session the mod ended, story 4's Explore turn, the
   // classifier call that ran on primary, `req_7c2e9f41-d03`, the held conversation's turn that replaced its expired
   // row, `req_6f3e1b84-d29`, the two turns of the conversation the Overflow workspace's lapse moved,
-  // `req_5f2a9c64-b18` and `req_c7e41d93-a26`, the two subagent turns the laptop session's classifier calls judge,
-  // `req_a5e17c42-d19` and `req_d8f3b6e0-a74`, and the first turn of the subagent f2c8, `req_f2c8d417-a60`, each
-  // answered. Desktop's Failed and the line's errors count the turn the upstream answered 400, `req_c1e40a95-b28`.
+  // `req_5f2a9c64-b18` and `req_c7e41d93-a26`, the two turns of the conversation that moved off the deleted retired
+  // workspace, `req_9e4b2d71-c35` and `req_d71c5a3e-f48`, the two subagent turns the laptop session's classifier
+  // calls judge, `req_a5e17c42-d19` and `req_d8f3b6e0-a74`, and the first turn of the subagent f2c8,
+  // `req_f2c8d417-a60`, each answered. Desktop's Failed and the line's errors count the turn the upstream answered 400,
+  // `req_c1e40a95-b28`.
   // Laptop's Failed and the line's errors count the bare 502 of the range's first hour, `req_8f5a2d16-c47`, and the
   // line's errors the rejection beside it, `req_4c1e8b27-d93`, which counts under Rejected. The line's requests count
   // the hour's request the relay sent once more on primary after a failed connect, `req_0e5a7c3b-f92`, which answered.
@@ -20248,7 +20277,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '16', '3'], ['ci', '0', '3'], ['laptop', '7', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '235 requests, 16.6% errors',
+      line === '237 requests, 16.5% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -25313,8 +25342,9 @@ await forView('/keys', async () => {
   const shown = (arrow, rows, search, label, word, lines = [], lineTitle = null) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native', lines, lineTitle });
   const ascending = shown('up', ['batch', 'from-pool', 'fleet', 'bench', 'ci', 'notebook', 'laptop', 'desktop'], '?sort=cost&dir=asc', 'Cost, 7d', 'ascending');
   // Laptop's week holds the rejection, the bare 502 and the request sent again after a failed connect of the log's first
-  // hour, `req_4c1e8b27-d93`, `req_8f5a2d16-c47` and `req_0e5a7c3b-f92`, each a request the rollups count.
-  const weeks = ['229 requests, 7d', '117 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
+  // hour, `req_4c1e8b27-d93`, `req_8f5a2d16-c47` and `req_0e5a7c3b-f92`, each a request the rollups count. Desktop's
+  // holds the two turns of the conversation that moved off the deleted retired workspace.
+  const weeks = ['229 requests, 7d', '119 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
     lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },

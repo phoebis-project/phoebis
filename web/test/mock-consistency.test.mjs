@@ -330,12 +330,14 @@ let loading = Promise.resolve();
 for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   const story = (loading = loading.then(() => storyAt(at)));
 
-  test(`every id a row names is in the mock's own lists, under the one label the list gives it, at ${at}`, async () => {
+  test(`every id a row names is in the mock's own lists or an account the story deleted, under the one label the list gives it, at ${at}`, async () => {
     const s = await story;
     const accountLabel = new Map(s.accounts.map((a) => [a.id, a.label]));
     const poolName = new Map(s.pools.map((p) => [p.id, p.name]));
     const keyName = new Map(s.keys.map((k) => [k.id, k.name]));
-    const named = (map, id, where) => assert.ok(map.has(id), `${where} names ${id}, which the list lacks`);
+    // The rows an account wrote before its delete keep naming it, as the ledger keeps them.
+    const deleted = new Set((await logOf(s)).filter((x) => x.type === 'event' && x.kind === 'registry_changed' && x.detail.kind === 'account_deleted').map((x) => x.detail.target));
+    const named = (map, id, where) => assert.ok(map.has(id) || (map === accountLabel && deleted.has(id)), `${where} names ${id}, which the list lacks`);
     for (const a of s.accounts) if (a.pool) named(poolName, a.pool.poolId, `account ${a.id}`);
     for (const p of s.pools) {
       for (const m of p.members) named(accountLabel, m.accountId, `pool ${p.id}`);
@@ -3004,16 +3006,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`no row the story writes whole carries a placement on an attempt's trace, and none lists a pin event but the three rows the story writes one event on, at ${at}`, async () => {
+  test(`no row the story writes whole carries a placement on an attempt's trace, and none lists a pin event but the four rows the story writes one event on, at ${at}`, async () => {
     const s = await story;
     const details = await Promise.all([...s.lib.UNSEEDED_IDS].map((id) => s.api.getRequest(id)));
     const placed = details.filter((d) => d.request.attempts.some((a) => a.selection?.placement)).map((d) => d.request.id);
     assert.deepEqual(placed, [], 'the written rows whose trace carries a placement');
     // The story seats one event by hand on the replaced pin's row, for what its placement did to the row it found idle,
-    // one on the turn whose placement moved the pin off the Overflow workspace once its balance ran out, and one on the
-    // turn the upstream answered 400, for the release of the pin its placement created.
+    // one on the turn whose placement moved the pin off the Overflow workspace once its balance ran out, one on the
+    // turn the upstream answered 400, for the release of the pin its placement created, and one on the turn that moved
+    // the session off the retired workspace after its delete.
     const listing = details.map((d) => [d.request.id, d.events.filter((e) => e.kind.startsWith('pin_')).length]).filter(([, n]) => n > 0);
-    assert.deepEqual(listing, [['req_6f3e1b84-d29', 1], ['req_c1e40a95-b28', 1], ['req_c7e41d93-a26', 1]], 'the written rows that list a pin event, with their counts');
+    assert.deepEqual(listing, [['req_6f3e1b84-d29', 1], ['req_c1e40a95-b28', 1], ['req_c7e41d93-a26', 1], ['req_d71c5a3e-f48', 1]], 'the written rows that list a pin event, with their counts');
   });
 
   test(`a release beside a pin created on another account names the idle row, and a placement names a source where it moved a pin, at ${at}`, async () => {
@@ -3029,9 +3032,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const named = records.filter((r) => r.outcome.kind === 'placed' && (r.outcome.fromAccountId !== null) !== r.outcome.pinEvents.some((e) => e.kind === 'pin_migrated'));
     assert.deepEqual(named.map((r) => `${r.requestId}/${r.seq} from ${r.outcome.fromAccountId}`), [], 'the placements whose source and pin move part');
     // A first attempt's placement that moved a pin moved it for its account's state, as no rule did, so the router
-    // writes the new row as created (the seed `CAUSED_MOVE_ID` in `web/src/mock/requests.ts`).
+    // writes the new row as created (the seeds `CAUSED_MOVE_ID` and `DELETED_MOVE_ID` in `web/src/mock/requests.ts`),
+    // newest first.
     const forced = records.filter((r) => r.outcome.kind === 'placed' && r.request.attempted.length === 0 && r.outcome.pinEvents.some((e) => e.kind === 'pin_migrated'));
-    assert.deepEqual(forced.map((r) => [`${r.requestId}/${r.seq}`, r.outcome.pinWritten?.action]), [['req_c7e41d93-a26/1', 'created']], 'the forced moves and the pin each writes');
+    assert.deepEqual(forced.map((r) => [`${r.requestId}/${r.seq}`, r.outcome.pinWritten?.action]), [['req_c7e41d93-a26/1', 'created'], ['req_d71c5a3e-f48/1', 'created']], 'the forced moves and the pin each writes');
   });
 
   test(`a wall reads the newest round on its newest wall's window before it by the round's trigger, at ${at}`, async () => {

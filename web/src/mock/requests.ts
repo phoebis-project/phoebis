@@ -1,6 +1,6 @@
 import { agentTokenOf, couldNotCache, plus } from '@/api/fold';
 import type {
-  AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
+  Account, AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import type { GuardrailMatch } from '@/api/types';
@@ -15,14 +15,14 @@ import { fnv1a } from '@/lib/hash';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { MODEL_SCOPE_PREFIX, endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { WINDOW_KEY } from '@/lib/windows';
-import { ACCOUNTS, QUOTA_HISTORY, SHARED_WINDOWS, accountById, lastReadingOf, rankTier, sharedWindowsOf } from './accounts';
+import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, SHARED_WINDOWS, accountById, lastReadingOf, rankTier, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor, promptOf } from './catalog';
 import { leadOf, leftPerHour, paceDeadline } from './lead';
-import { keyById, poolById } from './pools';
+import { keyById, poolById, type PoolSeed } from './pools';
 import { createRng, type Rng } from './rng';
 import { round } from './round';
-import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES, tablesFor } from './samples';
+import { ACCOUNT_ROLLUP_SAMPLE, ACCOUNT_SAMPLE, REQUEST_SAMPLE, TABLES, tablesFor } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, daysAgo, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
@@ -41,9 +41,55 @@ const storyUpstreamIds = (seedId: string, attempt: number): ((prefix: string) =>
 const phaseRng = createRng(3_571);
 /** The stream's close lands this many milliseconds before the finish at most, so the first content never passes it. */
 const STREAM_TAIL = 30;
-/** The registry's kind of an account the story names. A wrong id fails the mock build rather than reading a default. */
+/** An account the story deletes during the day, as it stood in its one pool from its creation up to its delete. */
+export interface DeletedAccount {
+  account: Account;
+  createdAt: number;
+  deletedAt: number;
+  member: PoolSeed['members'][number];
+  poolId: string;
+}
+/**
+ * The API key account the operator creates in the morning, places in all and deletes once its one conversation's first
+ * turn has ended. The builders read it, the records decided while it stood among them, and the registry, the Accounts
+ * list, the pools and each answer on today's state never do.
+ */
+export const RETIRED: DeletedAccount = {
+  account: {
+    ...ACCOUNT_SAMPLE,
+    cooldowns: [],
+    credential: NO_CREDENTIAL,
+    email: null,
+    extraUsage: null,
+    fableWindow: null,
+    fastLane: null,
+    id: 'retired',
+    kind: 'api_key',
+    label: 'Retired workspace',
+    limitResets: null,
+    plan: null,
+    pool: null,
+    requests: { last24h: 0, last7d: 0, lifetime: 0 },
+    routingEnabled: true,
+    status: 'ready',
+    subscription: null,
+    usage: null,
+    usageBased: false,
+    windows: [],
+  },
+  createdAt: clock(9, 39),
+  deletedAt: clock(9, 40, 30),
+  // The pool's other API key account's priority, so the two share the paid tier behind the plans.
+  member: { accountId: 'retired', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 1, spends: [] },
+  poolId: 'all',
+};
+export const DELETED_ACCOUNTS: readonly DeletedAccount[] = [RETIRED];
+/**
+ * The registry's kind of an account the story names, or a deleted one's. A wrong id fails the mock build rather than
+ * reading a default.
+ */
 const kindOf = (accountId: string): AccountKind => {
-  const kind = accountById.get(accountId)?.kind;
+  const kind = accountById.get(accountId)?.kind ?? DELETED_ACCOUNTS.find((d) => d.account.id === accountId)?.account.kind;
   if (kind === undefined) throw new Error(`the story names an account the registry lacks: ${accountId}`);
   return kind;
 };
@@ -1102,7 +1148,8 @@ interface StorySeed {
    * ended, the one turn of story 4's Explore subagent, the classifier call its judged account could not take, the turn
    * whose placement replaced an expired row, the two turns of the conversation the Overflow workspace's lapse moves,
    * the two subagent turns the laptop session's classifier calls judge, the first turn of the subagent `f2c8` that the
-   * 11:00 round reads and the turn the upstream answered 400.
+   * 11:00 round reads, the turn the upstream answered 400 and the two turns of the conversation that moves off the
+   * deleted account.
    */
   unseeded?: true;
   usage?: Partial<Usage>;
@@ -1176,6 +1223,11 @@ const LAPSED_SESSION_ID = 'e8c3a6f1-2d94-4b57-9a1e-6f0d3c7b2a85';
 const LAPSED_TURN_ID = 'req_5f2a9c64-b18';
 /** That conversation's next turn, whose placement moves the pin off the workspace with its state as the cause. */
 const CAUSED_MOVE_ID = 'req_c7e41d93-a26';
+/** The desktop conversation the retired workspace answers in the morning, before the operator deletes the account. */
+const RETIRED_SESSION_ID = 'c2a7e5f1-8d34-4b96-a0e7-5b3f9d1c6a28';
+const RETIRED_TURN_ID = 'req_9e4b2d71-c35';
+/** That conversation's next turn, which lands the session as a move off the deleted account. */
+const DELETED_MOVE_ID = 'req_d71c5a3e-f48';
 /**
  * The first turn of a desktop conversation that the upstream answered 400, so the router released the pin its
  * placement created as the request ended, the release's reason `client_error`.
@@ -1720,6 +1772,13 @@ function storySeeds(): StorySeed[] {
     // five minutes after it. The pin is live and younger than all's return dwell, so no rule moves it. The workspace
     // is out of the eligible set, so the placement moves the pin to primary and writes the conversation's prefix there.
     { agentId: 'main', at: t(11, 31, 10), attempts: [{ accountId: 'primary', at: t(11, 31, 10), ms: 8_600, status: 200 }], id: CAUSED_MOVE_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: LAPSED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 38_200, input: 1_600, output: 940 } },
+    // A new conversation the retired workspace takes in the morning with the plan accounts full, inside the span the
+    // account stood in all (`RETIRED`).
+    { agentId: 'main', at: t(9, 40, 20), attempts: [{ accountId: RETIRED.account.id, at: t(9, 40, 20), ms: 7_800, status: 200 }], id: RETIRED_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'main', session: RETIRED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 33_600, input: 2_100, output: 1_050 } },
+    // Its next turn 430 s on, inside all's affinity window and after the delete. The reload's purge took the pin and
+    // kept its trace, so the placement lands the session on primary as a move off the deleted account and writes the
+    // conversation's prefix there afresh.
+    { agentId: 'main', at: t(9, 47, 30), attempts: [{ accountId: 'primary', at: t(9, 47, 30), ms: 8_100, status: 200 }], id: DELETED_MOVE_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5', requestClass: 'main', session: RETIRED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 41_800, input: 1_700, output: 980 } },
     // Two laptop turns in the request log's first hour, which the Dashboard's day leaves out. The relay answers the
     // rejection with the 503 it raises on the chosen account's body, and the router files the bare 502 under its status,
     // since the body names no error type.
@@ -2092,6 +2151,10 @@ function storyEvents(): Map<string, RequestEvent[]> {
   // The move the workspace's state forced, which carries the live pin's whole list and takes its word from it.
   const caused = requestById.get(CAUSED_MOVE_ID);
   if (caused) out.set(caused.id, [{ ...pinFieldsOf(caused), accountId: 'primary', at: caused.at, detail: { agent_id: caused.agentId, epoch: 0, from_account: 'overflow', reason: 'funding_required', reasons: ['funding_required'] }, kind: 'pin_migrated' }]);
+  // The move off the deleted account: the reload's purge kept the pin's trace with its word and its list, and the
+  // session's next request lands on it.
+  const deletedMove = requestById.get(DELETED_MOVE_ID);
+  if (deletedMove) out.set(deletedMove.id, [{ ...pinFieldsOf(deletedMove), accountId: 'primary', at: deletedMove.at, detail: { agent_id: deletedMove.agentId, epoch: 0, from_account: RETIRED.account.id, reason: 'deleted', reasons: ['deleted'] }, kind: 'pin_migrated' }]);
   const rejected = requestById.get('req_2e7c90a1-6d4');
   if (rejected) {
     const pin = pinFieldsOf(rejected);

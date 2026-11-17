@@ -15,7 +15,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, keyById, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById, resentInPlace } from './requests';
+import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, DELETED_ACCOUNTS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, RETIRED, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById, resentInPlace } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { drawnWindows, proWeekRewriteOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
@@ -425,11 +425,17 @@ function horizonOf(name: string, resetsAt: string | null, end: number | null, at
 const ceilingOn = (pool: Pick<PoolSeed, 'fiveHourCeiling' | 'weeklyCeiling'>, window: string): number => (window === 'five_hour' ? pool.fiveHourCeiling : pool.weeklyCeiling);
 
 /**
+ * The account a candidate names: the registry's, or a deleted account's as it stood, which a record decided before its
+ * delete still lists.
+ */
+const accountOf = (id: string): Account => accountById.get(id) ?? DELETED_ACCOUNTS.find((d) => d.account.id === id)!.account;
+
+/**
  * The line a window's projection is tested against, as the router's `HorizonBound::limit` reads it: the wall, 1, at a
  * horizon a reset or the account's end set, and the window's own ceiling at the five-hour bound.
  */
 const lineOf = (c: RecordCandidate, window: string, pool: Pick<PoolSeed, 'fiveHourCeiling' | 'weeklyCeiling'>, at: number): number =>
-  horizonOf(window, c.windows[window]?.reset ?? null, endOf(accountById.get(c.accountId)!, at), at).bound === 'wall' ? 1 : ceilingOn(pool, window);
+  horizonOf(window, c.windows[window]?.reset ?? null, endOf(accountOf(c.accountId), at), at).bound === 'wall' ? 1 : ceilingOn(pool, window);
 
 /**
  * A read of an account's slow-down entry: its factor, the speed its holds realize, its stretch, when the stretch first
@@ -532,13 +538,21 @@ function paceFactsOf(a: Account, at: number, model: string, c: Pick<RecordCandid
   return { burn: p.burn, deadline: instant(p.deadline), end: instant(p.end), fableReservation: p.fableReservation, hours: p.hours === null ? null : round(p.hours, 1), remaining: p.remaining, reset: instant(p.reset), score: p.score, window: p.window };
 }
 
+/**
+ * The pool's members at `at` with their accounts: today's, and each account the story deleted that stood in the pool
+ * from its creation up to its delete.
+ */
+const membersAt = (pool: PoolSeed, at: number) => [
+  ...pool.members.map((member) => ({ account: accountById.get(member.accountId)!, member })),
+  ...DELETED_ACCOUNTS.filter((d) => d.poolId === pool.id && d.createdAt <= at && at < d.deletedAt),
+];
+
 /** Every pool member's standing at the decision's time, eligible or not. */
 function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
   const r = spec.request;
   const fast = r.shape.requestedSpeed === 'fast';
   const at = spec.at;
-  return pool.members.map((m) => {
-    const a = accountById.get(m.accountId)!;
+  return membersAt(pool, at).map(({ account: a, member: m }) => {
     const overage = inOverageAt(a.id, at);
     const windows: RecordCandidate['windows'] = {};
     const entry = a.kind === 'oauth' ? slowReadAt(a.id, pool, at) : null;
@@ -742,7 +756,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const dwellMs = pool.returnToPlanDwellSeconds * 1_000;
   const windows = drawnWindows(r.canonicalModel);
   const holdsAllowance = (c: RecordCandidate) => c.kind === 'api_key' || windows.every((w) => (c.windows[w]?.utilization ?? 0) < 1);
-  const allowanceKnown = (c: RecordCandidate) => isPaidSource(accountById.get(c.accountId)!) || windows.every((w) => c.windows[w] !== undefined);
+  const allowanceKnown = (c: RecordCandidate) => isPaidSource(accountOf(c.accountId)) || windows.every((w) => c.windows[w] !== undefined);
   const siblings = candidates.filter((c) => c.obstacle === null && c.accountId !== source?.accountId);
   const lines: WalkStep[] = [];
   const no = (i: number, facts: WalkFact[]) => lines.push(step(`move:${RULES[i]}`, 'no', facts));
@@ -1024,7 +1038,7 @@ function roundOf(round: ShedRound, excess: number, pool: PoolSeed) {
 
 const tierKey = (t: [number, number, number]) => t.join('/');
 /** The unit a member's score reads in: a paid source's remaining share, any other's share per hour. */
-const scoreUnitOf = (c: RecordCandidate) => (isPaidSource(accountById.get(c.accountId)!) ? 'percent' : 'percent_per_hour');
+const scoreUnitOf = (c: RecordCandidate) => (isPaidSource(accountOf(c.accountId)) ? 'percent' : 'percent_per_hour');
 
 /**
  * The pick among the members the partitions kept in the chosen account's tier, the set the engine's `choose` orders:
@@ -1400,7 +1414,7 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
     else if (!matched) {
       // A hold's pick ranks the members as a placement's does and names the account it waits on, while its row reads
       // the hold rather than a score.
-      const reserve = (c: RecordCandidate) => paceFactsOf(accountById.get(c.accountId)!, spec.at, r.canonicalModel, c, true);
+      const reserve = (c: RecordCandidate) => paceFactsOf(accountOf(c.accountId), spec.at, r.canonicalModel, c, true);
       const ranked = pickOf(candidates, partitions.left, spec.accountId, pool.strategy, spec.kind === 'moved' ? spec.from : undefined, reserve);
       if (spec.kind !== 'held') pick = ranked;
       tierSize = ranked.tierSize;
@@ -1874,7 +1888,10 @@ function derivedSpecs(r: RequestLog): Spec[] {
     const replacedOn = expired?.accountId ?? null;
     const replaced = replacedOn === null ? undefined : { accountId: replacedOn, reasons: releasedReasons(expired) };
     const from = failover ? attempted[attempted.length - 1] : rule ? (String(REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_migrated')?.detail?.from_account ?? '') || undefined) : undefined;
-    const live = kind === 'renewed' || kind === 'moved' || failover !== undefined || reasons !== undefined;
+    // The reload's purge takes the pin of an account the registry no longer holds before any selection reads it, so the
+    // move off such an account lands on the trace the purge kept and finds no pin.
+    const purged = reasons !== undefined && from !== undefined && !accountById.has(from);
+    const live = kind === 'renewed' || kind === 'moved' || failover !== undefined || (reasons !== undefined && !purged);
     // A probe and a token count leave the pin's warmth untouched. A written row takes no draw, and neither does a drawn
     // row moved onto its live pin, whose drawn placement took none: its live pin is the row its session's last turn
     // wrote, whose idle age the Pin step reads.
@@ -3033,6 +3050,24 @@ function buildEvents(): RoutingEvent[] {
     { accountId: null, actor: 'admin', at: iso(OVERFLOW_PAUSED_AT), detail: { diff: { enabled: { from: true, to: false } }, kind: 'account_updated', target: 'overflow' }, kind: 'registry_changed' },
     // The ci key's revocation, after the last request it reached selection with.
     { accountId: null, actor: 'admin', at: iso(KEY_REVOKED_AT), detail: { diff: {}, kind: 'key_revoked', target: 'ci' }, kind: 'registry_changed' },
+    // The retired workspace's life: the store's creation, which names its kind and label, and the members write that
+    // places it in its pool, which stores the whole list. An API key account is born ready, so no state row opens its
+    // history. At its delete, the store's change, which stores no diff, and the account's last state row.
+    { accountId: null, actor: 'admin', at: iso(RETIRED.createdAt), detail: { diff: { kind: RETIRED.account.kind, label: RETIRED.account.label }, kind: 'account_created', target: RETIRED.account.id }, kind: 'registry_changed' },
+    {
+      accountId: null,
+      actor: 'admin',
+      at: iso(RETIRED.createdAt),
+      detail: {
+        diff: { members: [...(poolById.get(RETIRED.poolId)?.members ?? []), RETIRED.member].map((m) => ({ account_id: m.accountId, budget_daily_usd: m.budgetDailyUsd, budget_monthly_usd: m.budgetMonthlyUsd, priority: m.priority })) },
+        kind: 'pool_members_set',
+        target: RETIRED.poolId,
+      },
+      kind: 'registry_changed',
+      poolId: RETIRED.poolId,
+    },
+    { accountId: null, actor: 'admin', at: iso(RETIRED.deletedAt), detail: { diff: {}, kind: 'account_deleted', target: RETIRED.account.id }, kind: 'registry_changed' },
+    { accountId: RETIRED.account.id, at: iso(RETIRED.deletedAt), detail: { cause: 'deleted', detail: null, from: 'ready', to: 'deleted' }, kind: 'account_state_changed' },
     { accountId: 'primary', at: iso(t(9, 0, 41)), detail: { added: ['claude-opus-5-5'], count: 12, removed: [] }, kind: 'catalog_changed' },
     { accountId: null, at: iso(t(6, 12, 40)), detail: { affinity_entries_loaded: 34, down_since: t(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, kind: 'router_started' },
     // Once each outside the hour.
