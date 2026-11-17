@@ -20,7 +20,7 @@ expert field's wrapper (a half cell beside the plain one, a lone field the grid'
 mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight 600 on one line and inside the
 sidebar's content box), the dashboard's attention line (one 22 px row in every state, each badge and the "+N more" badge
 the pool card's strip badge on the row's one top edge, in the content box and clear of the tiles, with the story's
-twenty-three items folded behind the dashed "+N more" badge in the mock pass, the seeded exhaustion or the quiet line in
+twenty-four items folded behind the dashed "+N more" badge in the mock pass, the seeded exhaustion or the quiet line in
 the router pass), the list the "+N more" badge opens (every item, one badge per row inside the box's left and right
 edges, 8 px under the badge and 8 px inside the window, every badge inside the box's top and bottom where the list fits,
 and where the box is capped at the room under the badge and scrolls, its overflow-y auto or scroll, the first badge
