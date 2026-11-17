@@ -1045,9 +1045,11 @@ fn admits_null(schema: &Value) -> bool {
 async fn a_key_the_route_leaves_out_rather_than_writing_null_does_not_render_nullable() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];
-    let fields: [(&str, &[&str]); 6] = [
+    let fields: [(&str, &[&str]); 7] = [
         ("ConditionView", &["name", "path", "selector", "value"]),
         ("GuardrailTestSample", &["key_id", "pool_id"]),
+        // The route refuses a present null for a key's feature word, so the document must not offer one.
+        ("KeyFeatureAccountsInput", &["artifacts", "connectors"]),
         ("ModelRowView", &["fast", "long_context"]),
         ("OverrideView", &["type_multiplier", "weight_by_window"]),
         ("RoutingLog", &["counts"]),

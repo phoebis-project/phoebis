@@ -3090,6 +3090,12 @@ async fn an_oauth_accounts_grants_follow_its_stored_scopes() {
             )
             .unwrap();
     }
+    store
+        .insert_account(&phoebis_store::AccountRow::for_tests(
+            "c",
+            phoebis_store::AccountKind::Oauth,
+        ))
+        .unwrap();
     let listed = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
     let grants = |id: &str| {
         listed["accounts"]
@@ -3101,11 +3107,13 @@ async fn an_oauth_accounts_grants_follow_its_stored_scopes() {
             .clone()
     };
     assert_eq!(
-        (grants("a"), grants("b")),
+        (grants("a"), grants("b"), grants("c")),
         (
             serde_json::json!(["artifacts"]),
-            serde_json::json!(["artifacts", "connectors"])
-        )
+            serde_json::json!(["artifacts", "connectors"]),
+            serde_json::json!([]),
+        ),
+        "an OAuth account that stores no credential holds no scope, and still reads a list"
     );
 }
 

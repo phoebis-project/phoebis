@@ -109,10 +109,10 @@ pub(crate) struct KeyFeatureAccountsInput {
     // The raw value, kept apart from an absent word, so a present null is refused rather than read as "not sent":
     // a bare null could mean either `inherit` or `none`.
     #[serde(default, deserialize_with = "present")]
-    #[schema(value_type = Option<KeyFeatureAccountView>)]
+    #[schema(value_type = KeyFeatureAccountView)]
     artifacts: Option<Value>,
     #[serde(default, deserialize_with = "present")]
-    #[schema(value_type = Option<KeyFeatureAccountView>)]
+    #[schema(value_type = KeyFeatureAccountView)]
     connectors: Option<Value>,
 }
 

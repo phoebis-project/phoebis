@@ -39,6 +39,7 @@ pub struct Control {
     pub read_user_agent: &'static str,
     pub refresh_fallback_scopes: &'static str,
 }
+
 /// The OAuth scope each claude.ai feature needs, as this client build asks for it.
 pub struct FeatureScopes {
     pub artifacts: &'static str,

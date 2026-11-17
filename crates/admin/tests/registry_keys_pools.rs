@@ -5050,45 +5050,57 @@ async fn a_feature_selection_names_any_oauth_account_and_refuses_an_api_key_acco
         "a member of another pool is selected"
     );
     let mut refusals = Vec::new();
-    for (path, body) in [
+    for (method, path, body) in [
         (
+            "PATCH",
             "/admin/pools/two",
             r#"{"feature_accounts":{"connectors":"direct"}}"#,
         ),
         (
+            "PATCH",
             "/admin/pools/two",
             r#"{"feature_accounts":{"connectors":"ghost"}}"#,
         ),
         (
+            "PATCH",
             "/admin/keys/k",
             r#"{"feature_accounts":{"artifacts":{"mode":"account","account_id":"direct"}}}"#,
         ),
+        (
+            "POST",
+            "/admin/pools",
+            r#"{"id":"three","label":"Three","strategy":"priority","feature_accounts":{"connectors":"direct"}}"#,
+        ),
+        (
+            "POST",
+            "/admin/keys",
+            r#"{"id":"j","label":"J","pool_id":"one","feature_accounts":{"artifacts":{"mode":"account","account_id":"direct"}}}"#,
+        ),
     ] {
-        let refused = patch(&app, path, body, Some(&cookie)).await;
+        let refused = match method {
+            "POST" => post(&app, path, body, Some(&cookie)).await,
+            _ => patch(&app, path, body, Some(&cookie)).await,
+        };
         refusals.push((
             refused.status().as_u16(),
             json(refused).await["error"].clone(),
         ));
     }
+    let api_key_account = (
+        400,
+        serde_json::json!("feature_accounts names account direct, which is an API-key account"),
+    );
     assert_eq!(
         refusals,
         [
-            (
-                400,
-                serde_json::json!(
-                    "feature_accounts names account direct, which is an API-key account"
-                )
-            ),
+            api_key_account.clone(),
             (
                 400,
                 serde_json::json!("feature_accounts names account ghost, which does not exist")
             ),
-            (
-                400,
-                serde_json::json!(
-                    "feature_accounts names account direct, which is an API-key account"
-                )
-            ),
+            api_key_account.clone(),
+            api_key_account.clone(),
+            api_key_account,
         ]
     );
     assert_eq!(
@@ -5112,8 +5124,13 @@ async fn a_pool_save_that_drops_the_selected_member_keeps_the_selection() {
         ],
     )
     .await;
-    let saved =
-        json(patch(&app, "/admin/pools/one", r#"{"members":[]}"#, Some(&cookie)).await).await;
+    assert_eq!(
+        patch(&app, "/admin/pools/one", r#"{"members":[]}"#, Some(&cookie))
+            .await
+            .status(),
+        200
+    );
+    let saved = listed(&app, &cookie, "pools", "one").await;
     assert_eq!(
         (&saved["members"], &saved["feature_accounts"]),
         (
@@ -5147,8 +5164,13 @@ async fn a_key_moved_to_another_pool_keeps_its_overrides() {
         ],
     )
     .await;
-    let moved =
-        json(patch(&app, "/admin/keys/k", r#"{"pool_id":"two"}"#, Some(&cookie)).await).await;
+    assert_eq!(
+        patch(&app, "/admin/keys/k", r#"{"pool_id":"two"}"#, Some(&cookie))
+            .await
+            .status(),
+        200
+    );
+    let moved = listed(&app, &cookie, "keys", "k").await;
     assert_eq!(
         (&moved["pool_id"], &moved["feature_accounts"]),
         (
