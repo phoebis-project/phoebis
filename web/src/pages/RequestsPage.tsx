@@ -8,7 +8,7 @@ import { useAppSettings } from '@/app/settings';
 import { useFollow, usePaging } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
 import { Chips } from '@/components/ChipView';
-import { FeatureCallsTable } from '@/components/FeatureCallsTable';
+import { type FeatureCallFilters, FeatureCallsTable, NO_FEATURE_CALL_FILTERS } from '@/components/FeatureCallsTable';
 import { FilterBar } from '@/components/FilterBar';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { SectionBar } from '@/components/SectionBar';
@@ -301,6 +301,10 @@ export function RequestsPage() {
   const { cause: holdCause, host } = useHoldHost();
   const rangeTakenAt = useRangeTakenAt(filters.range);
   const [section, chooseSection] = useHashSection(REQUEST_SECTIONS, 'requests');
+  // The feature calls' section leaves with its panel, so its filters and its interval stand here and outlast a look at
+  // the other section, out of the address as the logs' interval is.
+  const [featureFilters, setFeatureFilters] = useState<FeatureCallFilters>(NO_FEATURE_CALL_FILTERS);
+  const [featureIntervalMs, setFeatureIntervalMs] = useState(0);
 
   // A custom range names its own window, which Refresh reads again rather than moving it to now.
   const custom = filters.range.preset === 'custom';
@@ -581,7 +585,11 @@ export function RequestsPage() {
             <FeatureCallsTable
               accounts={accounts.data ?? []}
               disabled={{ ...notLoadedReason('keys', 'key', keys), ...notLoadedReason('accounts', 'account', accounts) }}
+              filters={featureFilters}
+              intervalMs={featureIntervalMs}
               keys={keys.data ?? []}
+              onFiltersChange={setFeatureFilters}
+              onIntervalChange={setFeatureIntervalMs}
               onRangeChange={(next) => update({ range: next })}
               range={filters.range}
               refresh={{ disabled: ended ? ENDED_RANGE : undefined, onRefresh: refresh }}

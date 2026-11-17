@@ -16513,6 +16513,25 @@ await forView('/requests', async () => {
       api.listFeatureCalls = listFeatureCalls;
     }
   }
+  {
+    // The filters belong to the page, so a look at the other section and back finds them standing.
+    const page = await mount('/requests#feature-calls', { now: CLOCK_ORIGIN });
+    const tab = (label) => [...page.container.querySelectorAll('[role="tab"]')].find((t) => t.textContent?.trim() === label);
+    const picked = await pick(page, 'Feature', 'Connectors');
+    await closeBoxes(page);
+    tab('Model requests')?.click();
+    await page.settle();
+    tab('Feature calls')?.click();
+    await page.settle(700);
+    const features = [...new Set(callRows(page).map((r) => r.Feature))];
+    const chip = chipRead(page, 'feature');
+    results.push({
+      name: '/requests a filter of the feature calls stands behind a look at Model requests',
+      ok: picked && chip === 'feature: Connectors' && JSON.stringify(features) === JSON.stringify(['Connectors']),
+      missing: [chip, JSON.stringify(features)],
+    });
+    page.unmount();
+  }
 });
 
 // The routing log's Models filter lists the catalog in the cost model's tier order, which the shell reads off its

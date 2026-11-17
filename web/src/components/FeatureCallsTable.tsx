@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo, useState } from 'react';
+import { type Dispatch, type ReactNode, type SetStateAction, useMemo } from 'react';
 import { api } from '@/api';
 import type { Account, ApiKey, FeatureCall, FeatureCallQuery } from '@/api/types';
 import { FEATURE_OUTCOME_VALUES, FEATURE_WORD_VALUES } from '@/api/types';
@@ -23,13 +23,13 @@ const COLUMNS = 8;
 const PATH_SHOWN = 48;
 const cutPath = (path: string) => (path.length > PATH_SHOWN ? `${path.slice(0, 24)}…${path.slice(-23)}` : path);
 
-interface Filters {
+export interface FeatureCallFilters {
   accounts: string[];
   features: string[];
   keys: string[];
   outcomes: string[];
 }
-const NO_FILTERS: Filters = { accounts: [], features: [], keys: [], outcomes: [] };
+export const NO_FEATURE_CALL_FILTERS: FeatureCallFilters = { accounts: [], features: [], keys: [], outcomes: [] };
 
 const FEATURE_OPTIONS: Option[] = FEATURE_WORD_VALUES.map((f) => ({ label: FEATURE_LABEL[f], value: f }));
 const OUTCOME_OPTIONS: Option[] = FEATURE_OUTCOME_VALUES.map((o) => ({ label: o, value: o }));
@@ -58,13 +58,17 @@ function statusOf(call: FeatureCall): ReactNode {
 /**
  * The Requests view's Feature calls section: a bar with the view's range, four filters and Refresh, the table of the
  * calls the router sent to a feature host under an account, newest first, and the pager over the route's cursor. The
- * filters and the interval are the section's own state, so a link carries the range alone. A row opens nothing, since
- * the table shows all it holds.
+ * page holds the filters and the interval out of the address, so a link carries the range alone and a look at the
+ * other section keeps them. A row opens nothing, since the table shows all it holds.
  */
 export function FeatureCallsTable({
   accounts,
   disabled,
+  filters,
+  intervalMs,
   keys,
+  onFiltersChange,
+  onIntervalChange,
   onRangeChange,
   range,
   refresh,
@@ -73,7 +77,12 @@ export function FeatureCallsTable({
   accounts: readonly Account[];
   /** The reason Add filter gives a dimension whose option list did not load. */
   disabled: Record<string, string>;
+  filters: FeatureCallFilters;
+  /** The auto reload interval in milliseconds, 0 for off. */
+  intervalMs: number;
   keys: readonly ApiKey[];
+  onFiltersChange: Dispatch<SetStateAction<FeatureCallFilters>>;
+  onIntervalChange: (ms: number) => void;
   onRangeChange: (range: RangeValue) => void;
   range: RangeValue;
   /** The page's Refresh, which takes the range again for both sections, and why it reads nothing new. */
@@ -82,9 +91,6 @@ export function FeatureCallsTable({
   span: { from: number; to: number };
 }): JSX.Element {
   const { timeFormat } = useAppSettings();
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
-  // Off when the section opens, and out of the address, as on the request list.
-  const [intervalMs, setIntervalMs] = useState(0);
   const { cause: holdCause, host } = useHoldHost();
   // A cursor belongs to the range and the filters it was read under, so a change of either starts the walk again.
   const address = JSON.stringify([range, span.from, span.to, filters]);
@@ -108,10 +114,10 @@ export function FeatureCallsTable({
     [accounts, keys],
   );
   const filtered = Object.values(filters).some((values) => values.length > 0);
-  const update = (patch: Partial<Filters & { range: RangeValue }>) => {
+  const update = (patch: Partial<FeatureCallFilters & { range: RangeValue }>) => {
     const { range: next, ...picked } = patch;
     if (next !== undefined) onRangeChange(next);
-    if (Object.keys(picked).length > 0) setFilters((f) => ({ ...f, ...picked }));
+    if (Object.keys(picked).length > 0) onFiltersChange((f) => ({ ...f, ...picked }));
   };
   const goNext = () => {
     if (nextCursor !== null) setPaging({ cursor: nextCursor, for: address, stack: [...stack, cursor] });
@@ -134,7 +140,7 @@ export function FeatureCallsTable({
         refresh={{
           disabled: refresh.disabled,
           intervalMs,
-          onIntervalChange: setIntervalMs,
+          onIntervalChange,
           onRefresh: refresh.onRefresh,
           paused: holdCause ?? (cursor !== undefined ? 'olderPage' : null),
           refreshTitle: custom ? rowsRefreshTitle(true, range.from, range.to) : 'Reads the list again now',
