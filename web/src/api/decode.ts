@@ -756,9 +756,9 @@ export const decodeBurnPoint = (v: unknown): BurnPoint => {
   return {
     at: isoOr(p.at, epoch),
     cachedTokens: num(p.cached_tokens),
-    equivalent: numOrNull(p.equivalent),
-    fableEquivalent: numOrNull(p.fable_equivalent),
-    fiveHourEquivalent: numOrNull(p.five_hour_equivalent),
+    equivalentByTier: nullableNumberMap(p.equivalent_by_tier),
+    fableEquivalentByTier: nullableNumberMap(p.fable_equivalent_by_tier),
+    fiveHourEquivalentByTier: nullableNumberMap(p.five_hour_equivalent_by_tier),
     fiveHourShare: numOrNull(p.five_hour_share),
     group: str(p.group),
     modelWeekShare: numOrNull(p.model_week_share),

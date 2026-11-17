@@ -7,7 +7,7 @@ const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.js
 
 const HOUR = 3_600_000;
 const point = (at, group, over = {}) => {
-  const p = { at: new Date(at).toISOString(), cachedTokens: 0, equivalent: null, fiveHourShare: null, group, planUsd: 0, sevenDayShare: null, uncachedTokens: 0, unit: null, unpriced: false, usd: 0, ...over };
+  const p = { at: new Date(at).toISOString(), cachedTokens: 0, equivalentByTier: {}, fableEquivalentByTier: {}, figure: null, fiveHourEquivalentByTier: {}, fiveHourShare: null, group, planUsd: 0, sevenDayShare: null, uncachedTokens: 0, unit: null, unpriced: false, unsized: false, usd: 0, ...over };
   return { tokens: p.cachedTokens + p.uncachedTokens, ...p };
 };
 const NONE = new Set();
@@ -31,9 +31,9 @@ test('a conversation class and an overhead class split as the legend says', () =
   assert.deepEqual([rows[0].cached, rows[0].uncached], [[600, 120], [60, 60]], 'a one-minute bucket reads its tokens as they are');
 });
 
-test('the burn fold reads every token and dollar figure per minute of its bucket and the Pro-week figure per hour', () => {
+test("the burn fold reads every token and dollar figure per minute of its bucket and the card's figure per hour", () => {
   const { lines, rows } = d.foldBurn(
-    [point(0, 'primary', { cachedTokens: 36_000, equivalent: 0.06, uncachedTokens: 3_600, unit: 'window_share' }), point(6 * HOUR, 'primary', { unit: 'window_share' })],
+    [point(0, 'primary', { cachedTokens: 36_000, figure: 0.06, uncachedTokens: 3_600, unit: 'window_share' }), point(6 * HOUR, 'primary', { unit: 'window_share' })],
     'account',
     6 * 3_600,
     new Set(['primary']),
@@ -51,9 +51,9 @@ test('a range ending now, twenty minutes into the running hour, rates that bucke
   const end = at13 + HOUR + 20 * 60_000;
   const { lines, rows } = d.foldBurn(
     [
-      point(at13, 'primary', { equivalent: 0.3, planUsd: 0.3, uncachedTokens: 6_000, unit: 'window_share' }),
+      point(at13, 'primary', { figure: 0.3, planUsd: 0.3, uncachedTokens: 6_000, unit: 'window_share' }),
       point(at13, 'overflow', { unit: 'usd', usd: 6 }),
-      point(at13 + HOUR, 'primary', { equivalent: 0.2, planUsd: 0.2, uncachedTokens: 4_000, unit: 'window_share' }),
+      point(at13 + HOUR, 'primary', { figure: 0.2, planUsd: 0.2, uncachedTokens: 4_000, unit: 'window_share' }),
       point(at13 + HOUR, 'overflow', { unit: 'usd', usd: 4 }),
     ],
     'account',
@@ -94,7 +94,7 @@ test('a past range ending inside a 6-hour bucket rates it over the hours read', 
 
 test('a range ending on a bucket boundary rates every bucket over the full width', () => {
   const at12 = Date.UTC(2026, 8, 16, 12);
-  const points = [point(at12, 'overflow', { cachedTokens: 1_200, equivalent: 0.1, unit: 'window_share' }), point(at12 + HOUR, 'overflow', { uncachedTokens: 600, equivalent: 0.05, unit: 'window_share' })];
+  const points = [point(at12, 'overflow', { cachedTokens: 1_200, figure: 0.1, unit: 'window_share' }), point(at12 + HOUR, 'overflow', { uncachedTokens: 600, figure: 0.05, unit: 'window_share' })];
   const sized = new Set(['overflow']);
   const ended = d.foldBurn(points, 'account', 3_600, sized, at12 + 2 * HOUR, at12 + 2 * HOUR);
   assert.deepEqual(ended.rows.map((r) => r.seconds), [3_600, 3_600]);
@@ -109,7 +109,7 @@ test('a range that ended inside the running hour, read ten minutes later, rates 
 
 test('a running bucket sets the peak and the axis only once it covers a tenth of its width', () => {
   const at13 = Date.UTC(2026, 8, 16, 13);
-  const points = [point(at13, 'primary', { equivalent: 0.06, planUsd: 0.06, uncachedTokens: 600, unit: 'window_share' }), point(at13 + HOUR, 'primary', { equivalent: 0.02, planUsd: 0.02, uncachedTokens: 100, unit: 'window_share' })];
+  const points = [point(at13, 'primary', { figure: 0.06, planUsd: 0.06, uncachedTokens: 600, unit: 'window_share' }), point(at13 + HOUR, 'primary', { figure: 0.02, planUsd: 0.02, uncachedTokens: 100, unit: 'window_share' })];
   const sized = new Set(['primary']);
   const fold = (seconds) => d.foldBurn(points, 'account', 3_600, sized, at13 + HOUR + seconds * 1_000, at13 + HOUR + seconds * 1_000);
 
@@ -177,9 +177,9 @@ test('a capped axis top rises to the last of the five ticks recharts would draw 
 test('an account burns in the unit its figures come in, a subscription the cost model does not size whose points carry no figure in none, and every other grouping in dollars', () => {
   const answered = [
     point(0, 'overflow', { unit: 'usd', usd: 1.2 }),
-    point(0, 'nightly', { equivalent: 0.001, unit: 'window_share' }),
+    point(0, 'nightly', { figure: 0.001, unit: 'window_share' }),
     point(0, 'tierless', { uncachedTokens: 40, unit: 'window_share' }),
-    point(0, 'idle', { equivalent: 0, unit: 'window_share' }),
+    point(0, 'idle', { figure: 0, unit: 'window_share' }),
     point(0, 'departed', { uncachedTokens: 20 }),
   ];
   const { lines } = d.foldBurn(answered, 'account', 3_600, new Set(['idle', 'nightly']));
@@ -196,8 +196,8 @@ test('an account burns in the unit its figures come in, a subscription the cost 
 
 test('an account the cost model no longer sizes charts as a plan line where its points carry a figure, so its priced buckets stay drawn', () => {
   // A plan-ended account whose profile reads a free plan: the router prices no tier for it now, and the ledger priced
-  // the range's buckets from the tier on their rows.
-  const answered = [point(0, 'ended', { equivalent: 0.002, uncachedTokens: 40, unit: 'window_share' }), point(HOUR, 'ended', { uncachedTokens: 40, unit: 'window_share' })];
+  // the range's buckets from the tier on their rows. A figure is a number under any tier of the point's week map.
+  const answered = [point(0, 'ended', { equivalentByTier: { default_claude_ai: 0.002 }, figure: 0.002, uncachedTokens: 40, unit: 'window_share' }), point(HOUR, 'ended', { uncachedTokens: 40, unit: 'window_share' })];
   const [line] = d.foldBurn(answered, 'account', 3_600, NONE).lines;
   assert.deepEqual([line.unit, line.perHour], ['window_share', 0.001], 'the priced bucket and the idle one');
 });
@@ -221,10 +221,10 @@ test('a burn line under the classifier grouping names the reserved id none, as t
 test('under the account grouping the rest folds into one other per unit, so no dollars hide behind a window share', () => {
   // Seven accounts burn the most; the three smallest are a priced subscription, a tier-unknown one and an
   // API key.
-  const kept = Array.from({ length: 7 }, (_, i) => point(0, `u${i}`, { cachedTokens: 1_000 * (i + 2), equivalent: 0.001, unit: 'window_share' }));
+  const kept = Array.from({ length: 7 }, (_, i) => point(0, `u${i}`, { cachedTokens: 1_000 * (i + 2), figure: 0.001, unit: 'window_share' }));
   const answered = [
     ...kept,
-    point(0, 'small-plan', { cachedTokens: 120, equivalent: 0.002, unit: 'window_share' }),
+    point(0, 'small-plan', { cachedTokens: 120, figure: 0.002, unit: 'window_share' }),
     point(0, 'small-tierless', { cachedTokens: 90, unit: 'window_share' }),
     point(0, 'small-key', { cachedTokens: 60, unit: 'usd', usd: 0.6 }),
   ];
@@ -250,15 +250,15 @@ test('a line that priced no bucket keeps its idle buckets null, so its legend re
 test('a bucket whose rows carried no token is idle whatever figure its rows answered', () => {
   // A failed request books a row with no token, which a listed model prices at zero.
   const plan = (at, over) => point(at * HOUR, 'primary', { unit: 'window_share', ...over });
-  const { rows } = d.foldBurn([plan(0, { equivalent: 0.08, tokens: 100 }), plan(1, { equivalent: 0, tokens: 0 })], 'account', 3_600, new Set(['primary']));
+  const { rows } = d.foldBurn([plan(0, { figure: 0.08, tokens: 100 }), plan(1, { figure: 0, tokens: 0 })], 'account', 3_600, new Set(['primary']));
   assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.08, 0]);
-  const failed = d.foldBurn([plan(0, { equivalent: 0, tokens: 0 })], 'account', 3_600, new Set(['primary']));
+  const failed = d.foldBurn([plan(0, { figure: 0, tokens: 0 })], 'account', 3_600, new Set(['primary']));
   assert.deepEqual([failed.rows[0].equivalent[0], failed.lines[0].perHour], [null, null], 'no bucket priced traffic, so its legend reads a dash rather than 0%');
 });
 
 test('a bucket with cache writes and output alone is not idle', () => {
   const plan = (at, over) => point(at * HOUR, 'primary', { unit: 'window_share', ...over });
-  const { lines, rows } = d.foldBurn([plan(0, { cachedTokens: 0, equivalent: 0.02, tokens: 50, uncachedTokens: 0 })], 'account', 3_600, new Set(['primary']));
+  const { lines, rows } = d.foldBurn([plan(0, { cachedTokens: 0, figure: 0.02, tokens: 50, uncachedTokens: 0 })], 'account', 3_600, new Set(['primary']));
   assert.deepEqual([rows[0].equivalent[0], lines[0].perHour], [0.02, 0.02], 'its traffic priced rather than absent');
 });
 
@@ -294,7 +294,7 @@ test("the mock's burn fold sums the rows' own shares, prices only rows with toke
   const usageOf = (input) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input, output: 0 });
   // A row carries its requests' shares, each priced at its completion, which can land past the hour it arrived in.
   const sharesAt = (model, input, at) => Object.fromEntries(['five_hour', 'seven_day'].map((w) => [w, d.shareIn(costs, w, tier, model, usageOf(input), d.inBand(costs, at))]));
-  const row = (model, uncachedInput, completedAt = hour) => ({ accountId: 'primary', costUsd: 0, equivalent: d.equivalentIn(costs, model, usageOf(uncachedInput), d.inBand(costs, completedAt)), funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', shares: sharesAt(model, uncachedInput, completedAt), tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
+  const row = (model, uncachedInput, completedAt = hour) => ({ accountId: 'primary', client: '-', costUsd: 0, equivalent: d.equivalentIn(costs, model, usageOf(uncachedInput), d.inBand(costs, completedAt)), funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', shares: sharesAt(model, uncachedInput, completedAt), tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
   // Two hours, so a token in the second keeps a group whose first hour holds rows with no token alone.
   const range = { from: new Date(hour).toISOString(), to: new Date(hour + 2 * HOUR).toISOString() };
   const shareOf = (rows) => d.burnOf(rows, range, 'account').points.find((p) => p.group === 'primary' && Date.parse(p.at) === hour).fiveHourShare;
@@ -414,14 +414,14 @@ test('a burn read where the shares do not answer reads no accounts, so a failed 
   await assert.rejects(d.readBurn(source, range, 'model', { accountIds: ['primary'] }), /the accounts read failed/, 'so does a filter naming one account, whose shares answer under any grouping');
 });
 
-test('the plan card reads the Pro-week figure under any grouping', () => {
-  const p = (at, group, over) => point(at * HOUR, group, { equivalent: 0.004, tokens: 100, uncachedTokens: 100, ...over });
+test("the plan card reads the card's figure under any grouping", () => {
+  const p = (at, group, over) => point(at * HOUR, group, { figure: 0.004, tokens: 100, uncachedTokens: 100, ...over });
   const { lines, rows } = d.foldBurn([p(0, 'desktop'), p(1, 'desktop'), p(0, 'laptop')], 'key', 3_600, NONE);
   const [desktop, laptop] = ['desktop', 'laptop'].map((k) => lines.findIndex((l) => l.key === k));
   assert.deepEqual(rows.map((r) => r.equivalent[desktop]), [0.004, 0.004], 'the figure per hour, which no account tier reads');
   assert.equal(lines[desktop].perHour, 0.004);
   assert.deepEqual([rows[1].equivalent[laptop], lines[laptop].unpriced], [0, false], 'an idle bucket reads zero once the line priced the figure');
-  const unpriced = d.foldBurn([p(0, 'desktop', { equivalent: null, unpriced: true })], 'key', 3_600, NONE);
+  const unpriced = d.foldBurn([p(0, 'desktop', { figure: null, unpriced: true })], 'key', 3_600, NONE);
   assert.equal(unpriced.lines[0].unpriced, true, 'traffic on a model without a weight prices no figure, flagged, and lists as model unlisted');
 });
 
@@ -458,7 +458,7 @@ test("a deleted key's group reads its creation minute in the viewer's zone, and 
 
 test('a priced bucket between unpriced ones, or at an end beside one, is an isolated slot the plan chart marks', () => {
   const plan = (at, over) => point(at * HOUR, 'primary', { tokens: 100, uncachedTokens: 100, unit: 'window_share', unpriced: true, ...over });
-  const { rows } = d.foldBurn([plan(0), plan(1, { equivalent: 0.05, unpriced: false }), plan(2)], 'account', 3_600, new Set(['primary']));
+  const { rows } = d.foldBurn([plan(0), plan(1, { figure: 0.05, unpriced: false }), plan(2)], 'account', 3_600, new Set(['primary']));
   const figures = rows.map((r) => r.equivalent[0]);
   assert.deepEqual(figures, [null, 0.05, null], 'a priced hour between two whose traffic went unpriced');
   assert.deepEqual(d.isolatedSlots(figures), [false, true, false], 'the line draws no segment through it, so it takes a dot');
@@ -704,48 +704,35 @@ test("one named account's whole is unavailable where a group with plan usage ans
 });
 
 test('the idle slots of the plan card zero-fill against the flag, and an unpriced slot stays a gap', () => {
-  const p = (at, over) => point(at * HOUR, 'desktop', { equivalent: 0.004, tokens: 100, uncachedTokens: 100, ...over });
-  // The route answers a null figure with the flag unset for an idle bucket, and with the flag set for one holding a row
+  const p = (at, over) => point(at * HOUR, 'desktop', { figure: 0.004, tokens: 100, uncachedTokens: 100, ...over });
+  // The card answers a null figure with no cause for an idle bucket, and with the model's cause for one holding a row
   // the cost model could not price.
-  const { lines, rows } = d.foldBurn([p(0), p(1, { equivalent: null }), p(2, { equivalent: null, unpriced: true })], 'key', 3_600, NONE);
+  const { lines, rows } = d.foldBurn([p(0), p(1, { figure: null }), p(2, { figure: null, unpriced: true })], 'key', 3_600, NONE);
   assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.004, 0, null], 'the idle slot reads zero and the unpriced one stays a gap');
   assert.ok(Math.abs(lines[0].perHour - 0.002) < 1e-12, 'the mean counts the idle slot and leaves the gap out');
   assert.equal(lines[0].unpriced, true, 'the legend reads the flag');
 });
 
-test("a plan card scales a bucket by the anchor's capacity at the read over the chosen tier's at the bucket, on the card's window", () => {
-  // Under the Max week Pro, the anchor, reads 100 on the 7-day window and 10 on the 5-hour one in the first revision
-  // and 200 and 40 in the second, which is in force at the read. Max 5x reads 200 and 20 in both, and the Fable week
-  // is 0.5 of the 7-day window and then 0.25. The bucket falls in the first revision.
-  const table = (pro, fable) => ({ ...EMPTY, capacity: { default_claude_ai: pro, default_claude_max_5x: { fiveHour: 20, sevenDay: 200 } }, modelWindows: { seven_day_fable: { capacityFactor: fable, of: 'seven_day' } } });
-  const [first, second] = [table({ fiveHour: 10, sevenDay: 100 }, 0.5), table({ fiveHour: 40, sevenDay: 200 }, 0.25)];
-  const costs = { ...second, revisions: [{ content: first, effective: '2026-09-01', effectiveDate: '2026-09-01T00:00:00.000Z' }, { content: second, effective: '2026-09-10', effectiveDate: '2026-09-10T00:00:00.000Z' }] };
-  const readAt = Date.parse('2026-09-16T12:00:00Z');
-  const points = [point(Date.parse('2026-09-05T12:00:00Z'), 'a', { equivalent: 0.1, fableEquivalent: 0.1, fiveHourEquivalent: 0.1, uncachedTokens: 100 })];
-  assert.deepEqual(
-    [
-      d.scalePoints(points, d.weekScaleAt(costs, 'max', readAt))[0].equivalent,
-      d.scalePoints(points, d.fiveHourScaleAt(costs, 'max', readAt), 'fiveHourEquivalent')[0].equivalent,
-      d.scalePoints(points, d.fableWeekScaleAt(costs, 'max', readAt), 'fableEquivalent')[0].equivalent,
-    ],
-    [0.1, 0.2, 0.2],
-    'the week 200 over 200, the 5-hour window 40 over 20, the Fable week 200 over half of 200',
-  );
-  const unsized = { ...EMPTY, revisions: [] };
-  assert.deepEqual([d.weekScaleAt(unsized, 'max', readAt), d.fiveHourScaleAt(unsized, 'max', readAt), d.fableWeekScaleAt(unsized, 'max', readAt)], [null, null, null], 'a cost model with no anchor capacity scales no card');
+test("each plan card reads its own map's figure under the chosen week's tier", () => {
+  // One busy point whose three maps differ, and whose two tiers differ inside each map, so a card that reads another
+  // card's map or another tier's entry reads a figure apart. Under the Max week the tier is Max 5x.
+  const maps = {
+    equivalentByTier: { default_claude_ai: 0.5, default_claude_max_5x: 0.1 },
+    fableEquivalentByTier: { default_claude_ai: 0.6, default_claude_max_5x: 0.3 },
+    fiveHourEquivalentByTier: { default_claude_ai: 0.8, default_claude_max_5x: 0.2 },
+  };
+  const points = [point(0, 'a', { ...maps, uncachedTokens: 100 })];
+  assert.deepEqual([d.weekCard(points, 'max'), d.fiveHourCard(points, 'max'), d.fableWeekCard(points, 'max')].map((card) => card.points[0].figure), [0.1, 0.2, 0.3]);
 });
 
-test("a range whose later revision drops the chosen tier's capacity draws its earlier buckets and leaves its later ones as gaps", () => {
-  // Under the Max week Max 5x reads 200 on the 7-day window beside Pro's 100 in the first revision and nothing in the
-  // second, which takes effect between the first two hours and is in force at the read. The third hour's rows were
-  // billed, a figure of 0, which drew nothing from the plan whatever the scale.
-  const table = (max) => ({ ...EMPTY, capacity: { default_claude_ai: { fiveHour: null, sevenDay: 100 }, default_claude_max_5x: { fiveHour: null, sevenDay: max } } });
-  const start = Date.parse('2026-09-10T00:00:00Z');
-  const costs = { ...table(null), revisions: [{ content: table(200), effective: '2026-09-01', effectiveDate: '2026-09-01T00:00:00.000Z' }, { content: table(null), effective: '2026-09-10', effectiveDate: '2026-09-10T00:00:00.000Z' }] };
-  const points = [point(start - HOUR, 'a', { equivalent: 0.2, uncachedTokens: 100 }), point(start, 'a', { equivalent: 0.2, uncachedTokens: 100 }), point(start + HOUR, 'a', { equivalent: 0, uncachedTokens: 100 })];
-  const { lines, rows } = d.foldBurn(d.scalePoints(points, d.weekScaleAt(costs, 'max', start + HOUR)), 'model', 3_600, NONE);
-  assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.1, null, 0], "the first hour at Pro's 100 over Max 5x's 200, the second a gap, the third's billed zero");
-  assert.equal(lines[0].unpriced, true, 'the gap reads unpriced rather than idle');
+test("a range whose later revision drops the chosen tier's capacity draws its earlier buckets and leaves its later ones as the tier's gaps", () => {
+  // The card hands the first hour its figure under the chosen tier, the second the tier's gap its revision left, and
+  // the third the zero its billed rows add, which drew nothing from the plan.
+  const points = [point(0, 'a', { figure: 0.1, uncachedTokens: 100 }), point(HOUR, 'a', { uncachedTokens: 100, unsized: true }), point(2 * HOUR, 'a', { figure: 0, uncachedTokens: 100 })];
+  const { lines, rows } = d.foldBurn(points, 'model', 3_600, NONE);
+  assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.1, null, 0], 'the gap stays null on a line that priced another bucket');
+  assert.deepEqual([lines[0].unsized, lines[0].unpriced], [true, false], "the line carries the tier's gap alone");
+  assert.deepEqual(rows.map((r) => r.unsized[0]), [false, true, false], 'each slot reads its own cause');
 });
 
 test("the plan cards' colors read one order, every fold's named lines, so a group one card draws and another folds into its rest keeps a color", () => {
@@ -755,13 +742,14 @@ test("the plan cards' colors read one order, every fold's named lines, so a grou
 });
 
 test('the Fable week card folds the Fable figure, a null beside tokens its gap, and draws no line for a group whose figure reads 0 wherever it has traffic', () => {
+  const everyTier = (entry) => ({ default_claude_ai: entry, default_claude_max_5x: entry });
   const points = [
-    point(0, 'a', { fableEquivalent: 0.02, uncachedTokens: 100 }),
-    point(HOUR, 'a', { fableEquivalent: null, uncachedTokens: 100 }),
-    point(0, 'b', { equivalent: 0.05, fableEquivalent: 0, uncachedTokens: 100 }),
-    point(HOUR, 'b', { equivalent: 0.05, fableEquivalent: 0, uncachedTokens: 100 }),
+    point(0, 'a', { fableEquivalentByTier: everyTier(0.02), uncachedTokens: 100 }),
+    point(HOUR, 'a', { fableEquivalentByTier: everyTier(null), uncachedTokens: 100 }),
+    point(0, 'b', { equivalentByTier: everyTier(0.05), fableEquivalentByTier: everyTier(0), uncachedTokens: 100 }),
+    point(HOUR, 'b', { equivalentByTier: everyTier(0.05), fableEquivalentByTier: everyTier(0), uncachedTokens: 100 }),
   ];
-  const { lines, rows } = d.foldBurn(d.scalePoints(d.figuredGroups(points, 'fableEquivalent'), () => 1, 'fableEquivalent'), 'model', 3_600, NONE);
+  const { lines, rows } = d.foldBurn(d.fableWeekCard(points, 'max').points, 'model', 3_600, NONE);
   assert.deepEqual(lines.map((l) => l.key), ['a'], 'b ran on no Fable model');
   assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.02, null]);
   assert.equal(lines[0].unpriced, true, 'the null beside tokens reads unpriced');

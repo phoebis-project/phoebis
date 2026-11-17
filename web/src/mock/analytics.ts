@@ -1,12 +1,12 @@
 import { agentTokenOf, plus } from '@/api/fold';
 import type {
   Account, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, QuotaHistory, Reconciliation, ReconciliationsAnswer,
-  RefusalCategoriesAnswer, RefusalCategoryRow, RequestKind, RequestLog, RewritePoint, RewritesAnswer, RoutingEvent, UnusedAllowanceAnswer, WastedProbeReason,
+  RefusalCategoriesAnswer, RefusalCategoryRow, RequestKind, RequestLog, RewritePoint, RewritesAnswer, RoutingEvent, SubscriptionCosts, UnusedAllowanceAnswer, WastedProbeReason,
 } from '@/api/types';
 import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
-import { anchorTier, equivalentIn, modelWeeks, pricedWindow, shareIn, tierCapacity, type Usage } from '@/lib/costs';
+import { anchorTier, equivalentIn, modelWeeks, pricedWindow, shareIn, tableAt, tierCapacity, withRegime, type CostWindow, type Usage } from '@/lib/costs';
 import { countOf, emptyCounts, groupInto } from '@/lib/counts';
 import { servingResponse } from '@/lib/dimensions';
 import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
@@ -514,23 +514,97 @@ const fiveHourEquivalentOf = (r: HourlyRollup): number | null => {
   return figure;
 };
 
-/** A bucket's sums, each window's shares and the figures kept per row so one unpriced row nulls the window, as the
- *  route reads it. The model week's list holds the rows on a model with a week of its own alone, and the Fable figure's
- *  list a zero for every row on another model. */
+/** The plan tiers a burn answer keys its figures by, as the route reads them: every tier of a cost revision's base
+ *  capacity rows, so each point holds the same keys whatever revision priced it. */
+const BURN_TIERS = [...new Set(TABLES.revisions.flatMap((r) => Object.keys(r.content.capacity)))];
+const emptyTiers = (): Record<string, (number | null)[]> => Object.fromEntries(BURN_TIERS.map((tier) => [tier, []]));
+const ZERO_TIERS: Record<string, number | null> = Object.fromEntries(BURN_TIERS.map((tier) => [tier, 0]));
+
+/** The label prefix a row's client carries before its entrypoint token, as `tablesFor` reads it. */
+const ENTRYPOINT_PREFIX = 'claude-code/';
+/**
+ * The cost model a row's tiers scale under, as the route prices a whole rollup row: the revision in force at the last
+ * millisecond of the row's hour, under that revision's regime whose entrypoints name the row's client.
+ */
+const tierTablesOf = (r: HourlyRollup): SubscriptionCosts => {
+  const revision = tableAt(TABLES, Date.parse(r.hour) + HOUR - 1);
+  const token = r.client.startsWith(ENTRYPOINT_PREFIX) ? r.client.slice(ENTRYPOINT_PREFIX.length) : null;
+  const regime = token === null ? undefined : Object.keys(revision.regimes).find((name) => revision.regimes[name].entrypoints.includes(token));
+  return withRegime(revision, regime ?? null);
+};
+/**
+ * A row's base figure, a share of the anchor tier's `window`, as each plan tier's share of its own window over
+ * `divisor`, the row's units over the tier's capacity in place of the anchor's. Null on every tier where the base is
+ * and on a tier the table sizes no `window` for.
+ */
+const byTier = (table: SubscriptionCosts, base: number | null, window: CostWindow, divisor = 1): Record<string, number | null> => {
+  const anchor = tierCapacity(table, anchorTier(table), window);
+  return Object.fromEntries(
+    BURN_TIERS.map((tier) => {
+      const capacity = tierCapacity(table, tier, window);
+      return [tier, base === null || anchor === null || capacity === null ? null : (base * anchor) / capacity / divisor];
+    }),
+  );
+};
+const pushTiers = (lists: Record<string, (number | null)[]>, figures: Record<string, number | null>) => {
+  for (const tier of BURN_TIERS) lists[tier].push(figures[tier]);
+};
+/** A row that spends no plan window adds a zero on every tier of each plan figure, a tier no revision sizes too. */
+const addZeros = (s: BurnSum) => {
+  for (const lists of [s.equivalentByTier, s.fableEquivalentByTier, s.fiveHourEquivalentByTier]) pushTiers(lists, ZERO_TIERS);
+};
+const bucketTiers = (lists: Record<string, (number | null)[]>): Record<string, number | null> => Object.fromEntries(BURN_TIERS.map((tier) => [tier, bucketShare(lists[tier])]));
+
+/** A bucket's sums, each window's shares and each plan figure kept per row and per tier, so one row priced nothing
+ *  nulls the window or the tier, as the route reads it. The model week's list holds the rows on a model with a week of
+ *  its own alone, and the Fable figures' lists a zero for every row on another model. `unpriced` is the route's flag,
+ *  set by a plan row with tokens whose base week figure is null, which reads the model's weight and no tier's size. */
 interface BurnSum {
   cached: number;
-  equivalent: (number | null)[];
-  fableEquivalent: (number | null)[];
+  equivalentByTier: Record<string, (number | null)[]>;
+  fableEquivalentByTier: Record<string, (number | null)[]>;
   fiveHour: (number | null)[];
-  fiveHourEquivalent: (number | null)[];
+  fiveHourEquivalentByTier: Record<string, (number | null)[]>;
   planUsd: number;
   sevenDay: (number | null)[];
   tokens: number;
   uncached: number;
+  unpriced: boolean;
   usd: number;
   week: (number | null)[];
 }
-const emptyBurn = (): BurnSum => ({ cached: 0, equivalent: [], fableEquivalent: [], fiveHour: [], fiveHourEquivalent: [], planUsd: 0, sevenDay: [], tokens: 0, uncached: 0, usd: 0, week: [] });
+/**
+ * A plan row's figures on each tier, as the route prices them. A free classifier call spends no plan window, so it adds
+ * a billed row's zeros, and every other row its own units over each tier's capacity under its revision and regime. The
+ * Fable week takes its share of the 7-day window off that revision, the whole window where it holds no Fable week, and a
+ * row off the week adds a zero. A null base week figure sets the route's flag.
+ */
+const addPlanFigures = (s: BurnSum, r: HourlyRollup, week: string | undefined) => {
+  if (freedPart(r)) {
+    addZeros(s);
+    return;
+  }
+  const table = tierTablesOf(r);
+  const fable = pricedWindow(table, 'seven_day_fable');
+  pushTiers(s.equivalentByTier, byTier(table, r.equivalent, 'seven_day'));
+  pushTiers(s.fableEquivalentByTier, week !== 'seven_day_fable' ? ZERO_TIERS : byTier(table, fable === null ? null : r.equivalent, 'seven_day', fable?.divisor));
+  pushTiers(s.fiveHourEquivalentByTier, byTier(table, fiveHourEquivalentOf(r), 'five_hour'));
+  s.unpriced ||= r.equivalent === null;
+};
+const emptyBurn = (): BurnSum => ({
+  cached: 0,
+  equivalentByTier: emptyTiers(),
+  fableEquivalentByTier: emptyTiers(),
+  fiveHour: [],
+  fiveHourEquivalentByTier: emptyTiers(),
+  planUsd: 0,
+  sevenDay: [],
+  tokens: 0,
+  uncached: 0,
+  unpriced: false,
+  usd: 0,
+  week: [],
+});
 
 /** How many sessions the session grouping keeps, the route's cut. */
 const BURN_SESSIONS = 20;
@@ -601,9 +675,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
       // Every billed row adds a zero figure, so a bucket with tokens and no plan row reads 0 and only an idle one null.
       // The zero share rests on the tier alone, as the route reads a dollar-billed row, and an API key account has no
       // window to share.
-      s.equivalent.push(0);
-      s.fableEquivalent.push(0);
-      s.fiveHourEquivalent.push(0);
+      addZeros(s);
       const sized = (window: 'five_hour' | 'seven_day') => tier !== undefined && tierCapacity(TABLES, tier, window) !== null;
       if (sized('five_hour')) s.fiveHour.push(0);
       if (sized('seven_day')) s.sevenDay.push(0);
@@ -616,9 +688,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     // account tier.
     s.fiveHour.push(tier === undefined ? null : (r.shares.five_hour ?? null));
     s.sevenDay.push(tier === undefined ? null : (r.shares.seven_day ?? null));
-    s.equivalent.push(r.equivalent);
-    s.fableEquivalent.push(week === 'seven_day_fable' ? r.equivalent : 0);
-    s.fiveHourEquivalent.push(fiveHourEquivalentOf(r));
+    addPlanFigures(s, r, week);
     if (week !== undefined) s.week.push(tier === undefined ? null : (r.shares[week] ?? null));
   }
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
@@ -642,9 +712,9 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
       return {
         at: iso(at),
         cachedTokens: Math.round(s.cached),
-        equivalent: bucketShare(s.equivalent),
-        fableEquivalent: bucketShare(s.fableEquivalent),
-        fiveHourEquivalent: bucketShare(s.fiveHourEquivalent),
+        equivalentByTier: bucketTiers(s.equivalentByTier),
+        fableEquivalentByTier: bucketTiers(s.fableEquivalentByTier),
+        fiveHourEquivalentByTier: bucketTiers(s.fiveHourEquivalentByTier),
         fiveHourShare: lacks('five_hour') ? null : share(s.fiveHour),
         group,
         modelWeekShare: share(s.week),
@@ -653,8 +723,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
         tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),
         unit,
-        // Every row the list holds carried tokens, so a null among the figures is a row priced nothing.
-        unpriced: s.equivalent.some((v) => v === null),
+        unpriced: s.unpriced,
         usd: s.usd,
       };
     });

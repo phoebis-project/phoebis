@@ -13,11 +13,15 @@ const tables = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', im
 const costs = d.decodeSubscriptionCosts(tables.subscription_costs.content, tables.subscription_costs.unit);
 
 const MAX_20X = 'default_claude_max_20x';
+const MAX_5X = 'default_claude_max_5x';
+const PRO = 'default_claude_ai';
 const OPUS = 'claude-opus-5-5';
 // Wednesday 16 September 2026 at 08:00 in Los Angeles, inside the band.
 const IN = Date.UTC(2026, 8, 16, 15, 0);
 const usage = (over) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0, ...over });
 const close = (actual, expected, what) => assert.ok(actual !== null && Math.abs(actual - expected) <= Math.abs(expected) * 1e-12, `${what}: ${actual} against ${expected}`);
+/** A burn point with traffic and no plan figure, which a case fills with the maps it reads. */
+const busyPoint = (at, over) => ({ at: new Date(at).toISOString(), cachedTokens: 0, equivalentByTier: {}, fableEquivalentByTier: {}, fiveHourEquivalentByTier: {}, fiveHourShare: null, group: 'a', modelWeekShare: null, planUsd: 0, sevenDayShare: null, tokens: 100, uncachedTokens: 100, unit: null, unpriced: false, usd: 0, ...over });
 
 test("the rates are the weight times the type's multiplier over the tier's capacity, per million tokens", () => {
   const rates = d.ratesOf(costs, 'five_hour', MAX_20X, OPUS);
@@ -76,21 +80,31 @@ test("the chosen week's scale is the anchor tier's 7-day capacity over the chose
   close(d.weekScale(halved, 'ultra'), 50 / 500, 'the 7-day window, not the 5-hour one');
 });
 
-test("the 5-hour reading's scale is the anchor's 5-hour capacity over the chosen tier's 5-hour one, and the Fable week's over its share of the chosen tier's week", () => {
-  // The fixture's anchor (Pro) and Fable week (0.5 of the 7-day window) over three rows, Pro 5 and 50, Max 5x 25 and
-  // 250 and Ultra 100 and 1000.
-  const table = { ...costs, capacity: { default_claude_ai: { fiveHour: 5, sevenDay: 50 }, default_claude_max_5x: { fiveHour: 25, sevenDay: 250 }, [MAX_20X]: { fiveHour: 100, sevenDay: 1000 } } };
-  close(d.fiveHourReadingOf(table, null, 'ultra').scale, 5 / 100, "Pro's 5-hour window over Ultra's");
-  close(d.fableWeekReadingOf(table, null, 'max').scale, 50 / 125, "Pro's week over half Max 5x's week");
-});
-
 test("a loaded table that sizes no window for the chosen tier reads unpriced, and with no table the reading waits or carries the read's failure", () => {
   // Max 5x's week unsized while Pro's stays, so the Max week has no scale over a table that did load.
   const maxless = { ...costs, capacity: { ...costs.capacity, default_claude_max_5x: { fiveHour: 25, sevenDay: null } } };
   assert.deepEqual(d.weekReadingOf(maxless, null, 'max'), { failure: { text: 'Unpriced: the cost model holds no 7-day capacity for the Max week', unpriced: true }, scale: null, week: 'max' }, 'a loaded table never reads pending');
-  assert.deepEqual(d.fableWeekReadingOf({ ...costs, modelWindows: {} }, null, 'max'), { failure: { text: 'Unpriced: the cost model holds no Fable week for the Max week', unpriced: true }, scale: null, week: 'max' }, 'a model with no Fable week');
   assert.deepEqual(d.weekReadingOf(null, null, 'max'), { failure: null, scale: null, week: 'max' }, 'the read still out');
   assert.deepEqual(d.weekReadingOf(null, 'HTTP 503', 'max'), { failure: { text: 'HTTP 503', unpriced: false }, scale: null, week: 'max' }, "the read's failure");
+});
+
+test("a bucket whose revision sizes no window for the chosen tier draws the tier's gap, and a bucket no tier prices the model's", () => {
+  // Under the Max week the chosen tier is Max 5x. A busy bucket with a number under Pro and none under Max 5x ran under
+  // a revision that sizes no Max 5x window, and one with no number under any tier ran on a model with no weight.
+  const at = Date.UTC(2026, 8, 16, 12);
+  const causes = (card) => card.points.map((p) => [p.unsized, p.unpriced]);
+  const fiveHour = d.fiveHourCard([busyPoint(at, { fiveHourEquivalentByTier: { [MAX_5X]: null, [PRO]: 0.4 } }), busyPoint(at, { fiveHourEquivalentByTier: { [MAX_5X]: null, [PRO]: null } })], 'max');
+  assert.deepEqual(causes(fiveHour), [[true, false], [false, true]], "the tier's gap beside another tier's number, the model's where no tier holds one");
+  // The route's flag names the week's model gap, so a week map of nulls with the flag unset is the tier's.
+  const week = d.weekCard([busyPoint(at, { equivalentByTier: { [MAX_5X]: null, [PRO]: null } }), busyPoint(at, { equivalentByTier: { [MAX_5X]: null, [PRO]: null }, unpriced: true })], 'max');
+  assert.deepEqual(causes(week), [[true, false], [false, true]], "the week card's tier gap with the flag unset and its model gap with the flag set");
+});
+
+test("a card reads its unpriced sentence only where no bucket holds the chosen tier's figure", () => {
+  const [first, second] = [Date.UTC(2026, 8, 16, 12), Date.UTC(2026, 8, 16, 13)];
+  const gap = (at) => busyPoint(at, { fiveHourEquivalentByTier: { [MAX_5X]: null, [PRO]: 0.4 } });
+  assert.notEqual(d.fiveHourCard([gap(first), gap(second)], 'max').unpriced, null, "a range of the tier's gaps alone reads the sentence");
+  assert.equal(d.fiveHourCard([gap(first), busyPoint(second, { fiveHourEquivalentByTier: { [MAX_5X]: 0.08, [PRO]: 0.4 } })], 'max').unpriced, null, 'one figure under the chosen tier keeps the chart');
 });
 
 test("a tier's capacity is read as stored, then with the default_ prefix taken off or put on", () => {

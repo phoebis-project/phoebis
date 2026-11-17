@@ -1,4 +1,4 @@
-import type { Attempt, ModelTiers, Settings, SubscriptionCosts, TypeMultiplier, WindowFactors } from '@/api/types';
+import type { Attempt, BurnPoint, ModelTiers, Settings, SubscriptionCosts, TypeMultiplier, WindowFactors } from '@/api/types';
 import type { WeekReading } from '@/lib/analytics';
 import { has, lookup } from '@/lib/counts';
 import { type FormatOptions, formatIn, listWords, undatedModel } from '@/lib/format';
@@ -200,19 +200,11 @@ export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, 
 export const equivalentIn = (costs: SubscriptionCosts, model: string, usage: Usage, inside: boolean): number | null => shareIn(costs, 'seven_day', anchorTier(costs), model, usage, inside);
 
 /** The anchor tier's capacity on `window` in `anchorTable` over the chosen tier's on the same window in `chosenTable`
- *  times `divisor`, null where either capacity or the divisor is null: the 7-day ratio for a Pro-week figure, the
- *  5-hour one for the Pro 5-hour figure. */
+ *  times `divisor`, null where either capacity or the divisor is null: the 7-day ratio for a Pro-week figure. */
 const capacityRatio = (anchorTable: SubscriptionCosts, chosenTable: SubscriptionCosts, week: WeekPosition, window: CostWindow, divisor: number | null = 1): number | null => {
   const anchor = tierCapacity(anchorTable, anchorTier(anchorTable), window);
   const chosen = tierCapacity(chosenTable, WEEK_TIER[week], window);
   return anchor === null || chosen === null || divisor === null ? null : anchor / (chosen * divisor);
-};
-
-/** The Fable week's capacity factor, its share of the 7-day window, null where the table holds no Fable week. */
-const fableDivisor = (costs: SubscriptionCosts): number | null => {
-  // Read off the model's own row rather than `pricedWindow`, which prices an absent model week as the whole 7-day one.
-  const fable = lookup(costs.modelWindows, 'seven_day_fable');
-  return fable === undefined || fable.of !== 'seven_day' ? null : fable.capacityFactor;
 };
 
 /** The chosen week's figure per Pro-week figure: the anchor tier's 7-day capacity over the chosen tier's in the
@@ -245,23 +237,60 @@ export const weekReadingOf = (costs: SubscriptionCosts | null, error: string | n
   return { failure: { text: weekUnpricedTitle(week), unpriced: true }, scale, week };
 };
 
-const tableReading = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition, scaleOf: (c: SubscriptionCosts) => number | null, what: string): WeekReading => {
-  if (costs === null) return pendingReading(error, week);
-  const scale = scaleOf(costs);
-  if (scale === null) return { failure: { text: unpricedFor(what, week), unpriced: true }, scale, week };
-  return { failure: null, scale, week };
+/** A burn point with one plan card's figure under the chosen tier, and the cause where the bucket draws a gap:
+ *  `unsized` where the tier's entry is missing beside another tier's number above 0, `unpriced` where no tier holds a
+ *  number, or on the week card where the route flags the bucket. An idle bucket and a row the cost model cannot weigh
+ *  read null on every tier. */
+export interface FiguredPoint extends BurnPoint { figure: number | null; unpriced: boolean; unsized: boolean }
+/** One plan card over a range: its points, and the sentence it reads in place of its chart, null where it draws. */
+export interface PlanCardFigures { points: FiguredPoint[]; unpriced: string | null }
+
+type TierMap = Record<string, number | null>;
+type GapCause = 'unpriced' | 'unsized' | null;
+
+/**
+ * A plan card's points read under the chosen week's tier: a number there is the figure, a 0 reading as idle, and a
+ * busy point with none takes the cause `causeOf` names. The card reads its unpriced sentence where the range holds a
+ * tier's gap and no figure under the tier, so one figure keeps the chart and draws each gap as a gap.
+ */
+const planCardOf = (points: BurnPoint[], week: WeekPosition, mapOf: (p: BurnPoint) => TierMap, causeOf: (p: BurnPoint, map: TierMap) => GapCause, what: string): PlanCardFigures => {
+  const tier = WEEK_TIER[week];
+  const figured = points.map((p): FiguredPoint => {
+    const figure = lookup(mapOf(p), tier) ?? null;
+    const cause = p.tokens > 0 && figure === null ? causeOf(p, mapOf(p)) : null;
+    return { ...p, figure, unpriced: cause === 'unpriced', unsized: cause === 'unsized' };
+  });
+  const unpriced = figured.some((p) => p.unsized) && figured.every((p) => p.figure === null) ? unpricedFor(what, week) : null;
+  return { points: figured, unpriced };
 };
 
-/** The 5-hour card's reading, as `weekReadingOf` reads the week's. Its `scale` is the anchor tier's 5-hour capacity
- *  over the chosen tier's, the capacities alone, since the route's figure carries each row's band. A table that sizes
- *  no 5-hour window for the chosen tier reads unpriced, since a later read changes nothing. */
-export const fiveHourReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => tableReading(costs, error, week, (c) => capacityRatio(c, c, week, 'five_hour'), '5-hour capacity');
+/** The cause off the maps alone, for a card the route flags nothing on: the tier's gap beside a figure above 0 under
+ *  another tier, the model's where no tier holds a number. A null beside zeros alone drew nothing from any tier's
+ *  window, so it reads as idle. */
+const causeOfMap = (_p: BurnPoint, map: TierMap): GapCause => {
+  const entries = Object.values(map);
+  if (entries.some((v) => v !== null && v > 0)) return 'unsized';
+  return entries.every((v) => v === null) ? 'unpriced' : null;
+};
 
-/** The Fable week card's reading, as `weekReadingOf` reads the week's. Its `scale` is the chosen tier's Fable-week
- *  share per Pro-week figure: the anchor tier's 7-day capacity over the chosen tier's, scaled by the Fable week's
- *  capacity factor (half the window in the shipped model). Null where either capacity is null or the model holds no
- *  Fable week. */
-export const fableWeekReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => tableReading(costs, error, week, (c) => capacityRatio(c, c, week, 'seven_day', fableDivisor(c)), 'Fable week');
+/** The week card: the route's flag names the model's gap, so a null under the tier with the flag unset is the tier's,
+ *  whatever the other tiers hold. */
+export const weekCard = (points: BurnPoint[], week: WeekPosition): PlanCardFigures => planCardOf(points, week, (p) => p.equivalentByTier, (p) => (p.unpriced ? 'unpriced' : 'unsized'), '7-day capacity');
+export const fiveHourCard = (points: BurnPoint[], week: WeekPosition): PlanCardFigures => planCardOf(points, week, (p) => p.fiveHourEquivalentByTier, causeOfMap, '5-hour capacity');
+
+/** Whether every tier's entry of the map reads 0: a bucket whose traffic drew no Fable week. */
+const offFableWeek = (map: TierMap): boolean => {
+  const entries = Object.values(map);
+  return entries.length > 0 && entries.every((v) => v === 0);
+};
+/** The Fable week card, less every group that holds traffic and whose Fable entries read 0 under every tier in each
+ *  bucket that has any, so it draws no line and no legend entry for it. A group with no traffic in the range stays and
+ *  folds as an idle group does. */
+export const fableWeekCard = (points: BurnPoint[], week: WeekPosition): PlanCardFigures => {
+  const busy = new Set(points.filter((p) => p.tokens > 0).map((p) => p.group));
+  const drawn = new Set(points.filter((p) => p.tokens > 0 && !offFableWeek(p.fableEquivalentByTier)).map((p) => p.group));
+  return planCardOf(points.filter((p) => drawn.has(p.group) || !busy.has(p.group)), week, (p) => p.fableEquivalentByTier, causeOfMap, 'Fable week');
+};
 
 /** The account tiers a model week applies to: the cost model sizes the Fable week for every tier, and Pro has no
  *  Fable access, so the hint and the cost reference draw the week for these tiers alone. Each tier is listed in both
@@ -281,34 +310,8 @@ export const revisionAt = <T extends { effective: string; effectiveDate: string 
   return found ?? revisions[0] ?? null;
 };
 
-/** A plan card's scale at a bucket's instant, null where the cost revision in force then sizes no window for the
- *  chosen tier, which draws the bucket as a gap. */
-export type ScaleAt = (at: number) => number | null;
 /** The cost table in force at `at`: the revision's content, and the loaded table where the list holds no entry. */
 export const tableAt = <C extends Pick<Settings['subscriptionCosts'], 'revisions'>>(costs: C, at: number): SubscriptionCosts | C => revisionAt(costs.revisions, at)?.content ?? costs;
-/**
- * A plan card's scale by instant on `window`, as the router divides the figures it answers: the anchor tier's capacity
- * on the window in the revision in force at `readAt`, the read's instant, over the chosen tier's capacity there times
- * `divisorOf`, both in the revision in force at each bucket. The router divides a row's figure by the anchor row of the
- * row's own regime, which this ratio of the base rows matches while a regime scales every tier of a window by one
- * factor, as the shipped cost model does. Null where the read's revision names no anchor capacity on the window, which
- * the card reads as unpriced whole.
- */
-const scaleAt = (costs: Settings['subscriptionCosts'], week: WeekPosition, readAt: number, window: CostWindow, divisorOf: (bucket: SubscriptionCosts) => number | null = () => 1): ScaleAt | null => {
-  const read = tableAt(costs, readAt);
-  if (tierCapacity(read, anchorTier(read), window) === null) return null;
-  return (at) => {
-    const bucket = tableAt(costs, at);
-    return capacityRatio(read, bucket, week, window, divisorOf(bucket));
-  };
-};
-/** The week card's scale by instant, on the 7-day window. */
-export const weekScaleAt = (costs: Settings['subscriptionCosts'], week: WeekPosition, readAt: number): ScaleAt | null => scaleAt(costs, week, readAt, 'seven_day');
-/** The 5-hour card's scale by instant, on the 5-hour window: the route's figure is a share of the anchor tier's 5-hour
- *  window and carries each row's band, so the capacities alone scale it. */
-export const fiveHourScaleAt = (costs: Settings['subscriptionCosts'], week: WeekPosition, readAt: number): ScaleAt | null => scaleAt(costs, week, readAt, 'five_hour');
-/** The Fable week card's scale by instant: the 7-day ratio over the Fable week's factor in each bucket's revision. */
-export const fableWeekScaleAt = (costs: Settings['subscriptionCosts'], week: WeekPosition, readAt: number): ScaleAt | null => scaleAt(costs, week, readAt, 'seven_day', fableDivisor);
 
 /** Who paid for an attempt: the subscription's window, its overage, a fast answer's usage credits, an API key, or a
  *  usage-based seat's dollars. */

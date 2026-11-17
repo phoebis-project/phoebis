@@ -1777,17 +1777,20 @@ export interface BurnPoint {
   at: string;
   /** Cache-read tokens. */
   cachedTokens: number;
-  /** The bucket's plan rows as the Pro-week figure, under every grouping. A billed row adds a zero, so a bucket with
-   *  tokens and no plan row reads 0. Null for an idle bucket and for one holding a row the cost model cannot price. */
-  equivalent: number | null;
-  /** The Pro-week figure of the bucket's plan rows whose model draws the Fable week, under every grouping. A bucket
-   *  with traffic and no such row reads 0. Null for an idle bucket and for one holding a Fable-week row the cost model
-   *  cannot price. It carries no flag of its own: null beside `tokens` above 0 is the unpriced case. */
-  fableEquivalent: number | null;
-  /** The bucket's plan rows as the Pro 5-hour figure, the share of the anchor tier's 5-hour window, each row priced
-   *  under its own regime and the band of its hour, under every grouping and bucket size. A billed row adds a zero.
-   *  Null where `equivalent` is and where the cost model sizes no 5-hour window for a row of the bucket. */
-  fiveHourEquivalent: number | null;
+  /** The bucket's plan rows as each plan tier's share of its own 7-day window, under every grouping, keyed by the tiers
+   *  of the cost model's capacity rows, the same keys on every point. Each row prices under the cost revision in force
+   *  when it arrived and its own regime before the sum. A billed row adds a zero on every tier, so a bucket with tokens
+   *  and no plan row reads 0. Null on every tier for an idle bucket and for one holding a row the cost model cannot
+   *  weigh, and on one tier where a row's revision does not size that tier's window. */
+  equivalentByTier: Record<string, number | null>;
+  /** The same over the bucket's plan rows whose model draws the Fable week, as each tier's share of its Fable week. A
+   *  bucket with traffic and no such row reads 0 on every tier. Null as `equivalentByTier` reads it, on the Fable week.
+   *  It carries no flag of its own. */
+  fableEquivalentByTier: Record<string, number | null>;
+  /** The bucket's plan rows as each plan tier's share of its own 5-hour window, each row under its own regime and the
+   *  band of its hour, under every grouping and bucket size. A billed row adds a zero on every tier. Null as
+   *  `equivalentByTier` reads it, on the 5-hour window. It carries no flag of its own. */
+  fiveHourEquivalentByTier: Record<string, number | null>;
   /** A subscription account's spend in the bucket as a fraction of its own 5-hour window, the band weighed in, and
    *  `null` for an API-key account, one whose tier is unknown, one whose window set lacks the window, a bucket with no
    *  row the cost model prices (an idle hour among them) or one holding a row the cost model cannot price, and wherever
@@ -1809,8 +1812,9 @@ export interface BurnPoint {
   tokens: number;
   /** Uncached input tokens. */
   uncachedTokens: number;
-  /** Whether the bucket holds a plan row with tokens the cost model could not price, so a null `equivalent` with the
-   *  flag unset is an idle bucket. The shares carry no flag of their own. */
+  /** Whether the bucket holds a plan row with tokens whose model has no weight on the 7-day window, which nulls every
+   *  week entry. So a null week entry with the flag unset is an idle bucket or a tier a row's revision does not size.
+   *  The shares carry no flag of their own. */
   unpriced: boolean;
   /** What the account spends in: a subscription's window share, even while no tier prices it, or an API key's
    *  dollars. Null where the shares are, and for an account the registry no longer holds. */

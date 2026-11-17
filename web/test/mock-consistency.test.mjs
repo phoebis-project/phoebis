@@ -326,7 +326,7 @@ test("the burn answer keeps an unregistered account's plan row in its share and 
   const d = await import('./dist/api.js');
   const hour = '2026-09-16T10:00:00.000Z';
   const tokens = (uncachedInput) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput });
-  const row = (accountId, over) => ({ accountId, costUsd: 0, equivalent: 0.01, funding: 'plan', hour, model: 'claude-opus-5-5', tokens: tokens(0), ...over });
+  const row = (accountId, over) => ({ accountId, client: '-', costUsd: 0, equivalent: 0.01, funding: 'plan', hour, model: 'claude-opus-5-5', tokens: tokens(0), ...over });
   // Three accounts the registry no longer holds, one group each under the account grouping.
   const rows = [
     row('gone-plan', { costUsd: 0.25, tokens: tokens(1_000) }),
@@ -812,7 +812,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const burn = await s.api.getAnalyticsBurn(range, 'model');
     assert.ok(burn.points.some((p) => p.group === 'claude-sonnet-4-5' && p.unpriced), 'a bucket of it reads flagged');
     assert.deepEqual([...new Set(burn.points.filter((p) => p.unpriced).map((p) => p.group))], ['claude-sonnet-4-5'], 'and no other model flags one');
-    assert.ok(burn.points.every((p) => !p.unpriced || p.equivalent === null), 'a flagged bucket reads null');
+    const anchor = s.lib.anchorTier(s.settings.subscriptionCosts);
+    assert.ok(burn.points.every((p) => !p.unpriced || p.equivalentByTier[anchor] === null), 'a flagged bucket reads null');
+    // A share is the row's units over the tier's own capacity, so a tier larger than the anchor reads less of its week.
+    const priced = burn.points.filter((p) => p.equivalentByTier[anchor] > 0);
+    assert.ok(priced.length > 0 && priced.every((p) => p.equivalentByTier.default_claude_max_20x < p.equivalentByTier[anchor]), 'a priced bucket reads less of an Ultra week than of the anchor tier');
     assert.ok(holds(s.totalled), "the dashboard's day holds one");
     assert.equal(s.overview.day24h.equivalent, null, "so the dashboard's day reads null");
     for (const p of s.pools) assert.equal(p.day24h.equivalent === null, holds(s.totalled.filter((r) => r.poolId === p.id && !r.refused)), `${p.id}'s day`);

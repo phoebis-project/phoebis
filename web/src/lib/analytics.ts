@@ -1,7 +1,7 @@
 import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundedSum, HeldPoint, KeepaliveOverview, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import type { AnalyticsAddress } from '@/lib/address';
-import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
+import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow, type FiguredPoint } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
 import { earlierHolderLabel, fmtCompact, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, joinPresent, parseKeyLifetime, plural, weekShort } from '@/lib/format';
 import { planLabel, pricedTier } from '@/lib/quota';
@@ -117,21 +117,25 @@ export interface BurnLine {
    * API-key one dollars; every other grouping mixes both, so it charts dollars.
    */
   unit: BurnLineUnit;
-  /** Whether a bucket of the line holds traffic the route flagged as priced on no weight. False on a folded rest. */
+  /** Whether a bucket of the line holds the model's gap the card handed in: traffic no tier priced, or on the week card
+   *  traffic the route flagged as priced on no weight. False on a folded rest. */
   unpriced: boolean;
+  /** Whether a bucket of the line holds the tier's gap the card handed in: traffic a cost revision priced with no
+   *  capacity for the chosen tier on the card's window. False on a folded rest. */
+  unsized: boolean;
   usdPerMinute: number;
 }
 
 /**
  * One bucket, indexed like the lines: the cached and uncached tokens and the dollars per minute of the time it covers,
- * its raw token count, and the Pro-week figure per hour.
+ * its raw token count, and the card's figure per hour.
  */
 export interface BurnRow {
   at: number;
   cached: number[];
   /**
-   * The Pro-week figure per hour, which the page scales to the chosen week. Null where the slot's traffic could not be
-   * priced, on a line that never priced traffic and on a folded rest. An idle slot reads zero on a line that priced.
+   * The figure per hour the card handed in under the chosen tier. Null where the slot holds a gap, on a line that never
+   * priced traffic and on a folded rest. An idle slot reads zero on a line that priced.
    */
   equivalent: (number | null)[];
   /** The bucket covers less than its width, so its rate rests on that part alone. */
@@ -154,14 +158,17 @@ export interface BurnRow {
    */
   tokens: number[];
   uncached: number[];
+  /** Whether the slot holds a bucket with the tier's gap, so its tooltip names that cause. False on a folded rest. */
+  unsized: boolean[];
   usd: number[];
 }
 
-/** A slot's running figure over its points: null until a point carries one, and latched once a point reads unpriced,
- *  since a partial sum would read as the slot's figure. */
+/** A slot's running figure over its points: null until a point carries one, and latched once a point reads a gap of
+ *  either cause, since a partial sum would read as the slot's figure. */
 interface FigureFold {
   sum: number | null;
   unpriced: boolean;
+  unsized: boolean;
 }
 
 interface Sum {
@@ -606,39 +613,6 @@ const SCALE_FLOOR = 0.1;
 
 const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
 
-/** The figure a plan card charts off a burn point. */
-export type BurnFigure = 'equivalent' | 'fableEquivalent' | 'fiveHourEquivalent';
-
-/**
- * The points with a card's figure in the plan slots `foldBurn` reads: `equivalent` holds `figure` scaled by `scaleAt`
- * at the bucket's instant, null where the figure or the scale is, and `unpriced` the card's flag. The week card keeps
- * the route's flag. The 5-hour and the Fable week figures carry none, so a null figure beside tokens is their unpriced
- * bucket, and so is a bucket with a figure above 0 whose revision sizes no window for the chosen tier. A figure of 0
- * drew nothing from the plan whatever the scale, so that bucket reads as idle.
- */
-export const scalePoints = (points: BurnPoint[], scaleAt: (at: number) => number | null, figure: BurnFigure = 'equivalent'): BurnPoint[] => {
-  // Every group's point of a bucket shares the bucket's instant, so the scale is read once per instant.
-  const scales = new Map<number, number | null>();
-  return points.map((p) => {
-    const at = Date.parse(p.at);
-    if (!scales.has(at)) scales.set(at, scaleAt(at));
-    const scale = scales.get(at) ?? null;
-    const value = p[figure];
-    const unpriced = (figure === 'equivalent' ? p.unpriced : slotUnpriced(value, p.tokens)) || (scale === null && value !== null && value !== 0 && p.tokens > 0);
-    return { ...p, equivalent: value === null || scale === null ? null : value * scale, unpriced };
-  });
-};
-
-/**
- * The points less every group that holds traffic and whose `figure` reads 0 in each bucket that has any, so a card
- * draws no line and no legend entry for it. A group with no traffic in the range stays and folds as an idle group does.
- */
-export const figuredGroups = (points: BurnPoint[], figure: BurnFigure): BurnPoint[] => {
-  const busy = new Set(points.filter((p) => p.tokens > 0).map((p) => p.group));
-  const drawn = new Set(points.filter((p) => p.tokens > 0 && p[figure] !== 0).map((p) => p.group));
-  return points.filter((p) => drawn.has(p.group) || !busy.has(p.group));
-};
-
 /**
  * The named groups the Burn tab's plan cards draw, in the one order every card's colors read: the sorted union of
  * each fold's lines less its rests, so a group one card draws while another folds it into its rest keeps a color.
@@ -648,21 +622,22 @@ export const burnColorOrder = (folds: readonly { lines: readonly BurnLine[] }[])
 const coveredEnd = (rangeEndMs: number, readAt: number, wholeHours: boolean): number => Math.min(wholeHours ? hourCeil(rangeEndMs) : rangeEndMs, readAt);
 
 /**
- * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries, and
- * every other grouping keeps the groups with the most tokens and sums the rest as other, which draws no line of the
- * week's share, so its Pro-week figure stays empty while its dollars and plan dollars sum. Under the account grouping
- * the rest folds once per unit, since a subscription account's plan share and an API-key account's dollars chart on
- * different axes. Where each group holds one account's rows (that grouping, or `account`, the one account the Accounts
- * filter names) a line's unit is its account's. `sized` names the accounts whose plan the router prices on a tier the
- * cost model sizes (`pricedTier`, so a free plan and a usage-based seat are out). Each slot carries the Pro-week figure
- * per hour, which adds across accounts and tiers, and the plan side's list dollars per hour.
+ * The burn route's points, each with the figure a plan card hands in, as chart lines and rows. The request-class
+ * grouping folds into its two legend entries, and every other grouping keeps the groups with the most tokens and sums
+ * the rest as other, which draws no line of the card's share, so its figure stays empty while its dollars and plan
+ * dollars sum. Under the account grouping the rest folds once per unit, since a subscription account's plan share and
+ * an API-key account's dollars chart on different axes. Where each group holds one account's rows (that grouping, or
+ * `account`, the one account the Accounts filter names) a line's unit is its account's. `sized` names the accounts
+ * whose plan the router prices on a tier the cost model sizes (`pricedTier`, so a free plan and a usage-based seat are
+ * out). Each slot carries the card's figure per hour under the chosen tier, which adds across accounts, the cause of a
+ * gap it holds, and the plan side's list dollars per hour.
  *
  * `rangeEndMs` is the end of the range the points were read for and `nowMs` the instant of that read, the end when
  * absent. The route reads whole hours through the hour ceiling of the end, so a bucket covers its width up to the hour
  * ceiling of the range's end, no later than the read's instant, and its full width without an end.
  */
 export function foldBurn(
-  points: BurnPoint[],
+  points: FiguredPoint[],
   groupBy: BurnGroup,
   bucketSeconds: number,
   sized: ReadonlySet<string>,
@@ -681,7 +656,8 @@ export function foldBurn(
   // A subscription line charts in the plan's unit where the account is in the sized set or its points carry a figure:
   // the sized set keeps a line whose range ran on unpriced models alone, its gaps shown, and a figure keeps the buckets
   // the ledger priced from the tier on their rows for an account the router no longer sizes, such as a plan that ended.
-  const figured = new Set(points.filter((p) => p.equivalent !== null).map((p) => lineOf(p.group)));
+  // A figure is a number under any tier of the week map, whichever card folds, so a line's unit reads no week position.
+  const figured = new Set(points.filter((p) => Object.values(p.equivalentByTier).some((v) => v !== null)).map((p) => lineOf(p.group)));
   const unitOf = (group: string): BurnLineUnit => (subscribed.has(group) ? (sized.has(byAccount ? group : (account ?? '')) || figured.has(group) ? 'window_share' : 'unknown') : 'usd');
   const ranked = [...tokens.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
   const kept: string[] = groupBy === 'request_class' ? LEGEND_ORDER : ranked.slice(0, MAX_BURN_LINES);
@@ -694,7 +670,7 @@ export function foldBurn(
   const byAt = new Map<number, Sum[]>();
   for (const p of points) {
     const at = Date.parse(p.at);
-    const sums = byAt.get(at) ?? Array.from({ length: slots }, (): Sum => ({ cached: 0, equivalent: { sum: null, unpriced: false }, planUsd: 0, tokens: 0, uncached: 0, usd: 0 }));
+    const sums = byAt.get(at) ?? Array.from({ length: slots }, (): Sum => ({ cached: 0, equivalent: { sum: null, unpriced: false, unsized: false }, planUsd: 0, tokens: 0, uncached: 0, usd: 0 }));
     byAt.set(at, sums);
     const slot = slotOf(p.group);
     const s = sums[slot];
@@ -704,15 +680,16 @@ export function foldBurn(
     s.uncached += p.uncachedTokens;
     s.usd += p.usd;
     if (slot >= kept.length) continue;
-    if (p.equivalent !== null) s.equivalent.sum = (s.equivalent.sum ?? 0) + p.equivalent;
+    if (p.figure !== null) s.equivalent.sum = (s.equivalent.sum ?? 0) + p.figure;
     if (p.unpriced) s.equivalent.unpriced = true;
+    if (p.unsized) s.equivalent.unsized = true;
   }
   const secondsOf = (at: number) => {
     if (rangeEndMs === undefined) return bucketSeconds;
     const covered = Math.min(at + bucketSeconds * 1_000, coveredEnd(rangeEndMs, nowMs ?? rangeEndMs, true));
     return Math.max(1, (covered - at) / 1_000);
   };
-  const perHour = (f: FigureFold, hours: number) => (f.unpriced || f.sum === null ? null : f.sum / hours);
+  const perHour = (f: FigureFold, hours: number) => (f.unpriced || f.unsized || f.sum === null ? null : f.sum / hours);
   const buckets = [...byAt.entries()].sort((a, b) => a[0] - b[0]);
   const rows = buckets
     .map(([at, sums]): BurnRow => {
@@ -729,6 +706,7 @@ export function foldBurn(
         setsScale: seconds >= bucketSeconds * SCALE_FLOOR,
         tokens: sums.map((s) => s.tokens),
         uncached: sums.map((s) => s.uncached / minutes),
+        unsized: sums.map((s) => s.equivalent.unsized),
         usd: sums.map((s) => s.usd / minutes),
       };
     });
@@ -741,11 +719,11 @@ export function foldBurn(
   const lines = Array.from({ length: slots }, (_, i): BurnLine => {
     const rest = i >= kept.length ? rests[i - kept.length] : null;
     // A line that never priced traffic stays null in every slot, idle ones included, so its legend reads a dash. One
-    // that priced counts an idle slot as zero and keeps an unpriced one null. An idle slot's own figure never makes the
-    // line priced: a failed request's row carries no token and a listed model prices it at zero. The route flags a slot
-    // it could not price, so a slot with no token or with no figure and no flag is idle.
-    const flagged = (k: number) => buckets[k][1][i].equivalent.unpriced;
-    const idle = (r: BurnRow, k: number) => r.tokens[i] === 0 || (r.equivalent[i] === null && !flagged(k));
+    // that priced counts an idle slot as zero and keeps a gap null. An idle slot's own figure never makes the line
+    // priced: a failed request's row carries no token and a listed model prices it at zero. The card names the cause of
+    // each gap, so a slot with no token or with no figure and neither cause is idle.
+    const fold = (k: number) => buckets[k][1][i].equivalent;
+    const idle = (r: BurnRow, k: number) => r.tokens[i] === 0 || (r.equivalent[i] === null && !fold(k).unpriced && !fold(k).unsized);
     const priced = rows.some((r) => r.tokens[i] > 0 && r.equivalent[i] !== null);
     rows.forEach((r, k) => {
       if (idle(r, k)) r.equivalent[i] = priced ? 0 : null;
@@ -759,7 +737,8 @@ export function foldBurn(
       planUsdPeak: planPeaks.length ? Math.max(...planPeaks) : null,
       planUsdPerHour: mean((r) => r.planUsd[i]),
       tokensPerMinute: mean((r) => r.cached[i] + r.uncached[i]),
-      unpriced: rest === null && rows.some((_, k) => flagged(k)),
+      unpriced: rest === null && rows.some((_, k) => fold(k).unpriced),
+      unsized: rest === null && rows.some((_, k) => fold(k).unsized),
       usdPerMinute: mean((r) => r.usd[i]),
     };
     if (rest === null) return { ...figuresOf, key: kept[i], label: burnLabelOf(groupBy, kept[i]), other: false, unit: unitOf(kept[i]) };

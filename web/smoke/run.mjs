@@ -576,11 +576,13 @@ const pageGroupBy = (page) => {
   const select = groupBySelect(page);
   return select !== null && [...select.options].some((o) => o.value === 'session') ? select : null;
 };
+/** A map with `entry` under each plan tier a week names, as the burn route keys each plan figure by tier. */
+const eachTier = (entry) => Object.fromEntries(Object.values(WEEK_TIERS).map((tier) => [tier, entry]));
 /**
- * A burn point as the route answers it, idle and priced nothing unless `over` says otherwise: an API-key bucket with
- * tokens reads a zero Pro-week figure, and a subscription one its figure and its shares.
+ * A burn point as the route answers it, idle and priced nothing unless `over` says otherwise: an idle bucket reads null
+ * on every tier, an API-key bucket with tokens a zero figure on each, and a subscription one its figures and its shares.
  */
-const burnPoint = (over) => ({ cachedTokens: 0, equivalent: null, fableEquivalent: null, fiveHourEquivalent: null, fiveHourShare: null, modelWeekShare: null, planUsd: 0, sevenDayShare: null, tokens: 0, uncachedTokens: 0, unit: null, unpriced: false, usd: 0, ...over });
+const burnPoint = (over) => ({ cachedTokens: 0, equivalentByTier: eachTier(null), fableEquivalentByTier: eachTier(null), fiveHourEquivalentByTier: eachTier(null), fiveHourShare: null, modelWeekShare: null, planUsd: 0, sevenDayShare: null, tokens: 0, uncachedTokens: 0, unit: null, unpriced: false, usd: 0, ...over });
 
 // The generator skips overnight rows by wall-clock hour, so pick rows by the
 // shape each check needs rather than by position.
@@ -19846,7 +19848,7 @@ await forView('/analytics', async () => {
   // list holds, so its bucket prices no share, reads flagged and adds no plan dollars, and its Fable figure reads the
   // zero the route adds for a model off the Fable week.
   const at = new Date(Date.UTC(2026, 8, 16, 13)).toISOString();
-  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at, fableEquivalent: 0, group: 'claude-unlisted', tokens: 1_000, uncachedTokens: 1_000, unpriced: true })] });
+  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at, fableEquivalentByTier: eachTier(0), group: 'claude-unlisted', tokens: 1_000, uncachedTokens: 1_000, unpriced: true })] });
   const planSentence = (p) => [...p.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour')?.querySelector('p.muted')?.textContent?.trim() ?? null;
   localStorage.setItem('phoebis.unit', 'all');
   const unlisted = await mount('/analytics?by=model#burn', { now: CLOCK_ORIGIN });
@@ -22109,12 +22111,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
   const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
   // A line's entry carries a line swatch in a color of its own, and the muted entries name what no line draws.
-  const MUTED = ['model unlisted'];
+  const MUTED = ['model unlisted', 'tier unsized'];
   const lineLabels = (t) => legendItems(t).filter((li) => !MUTED.includes(labelOf(li)) && valueOf(li) !== 'tier unknown').map(labelOf);
   const PLAN = 'Plan per hour';
   const MODEL_UNLISTED = 'A bucket whose traffic ran on a model without a weight in the cost model prices no share and draws no point';
   const subtitleOf = (t) => card(t)?.querySelector('.card__subtitle')?.textContent ?? '';
   const lastDay = () => ({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
+  // A read with no week position of its own reads the anchor tier's entry, the route's unit.
+  const anchorOf = (map) => map[anchorTier(SERVED_COSTS)] ?? null;
   {
     // Under native and the Ultra week the one plan card draws each subscription account a plan paid for, named by its
     // account, its legend figure in the week's short form with its full form on its own hover and its highest hour on
@@ -22126,7 +22130,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const burnt = new Map();
     for (const p of answer.points) burnt.set(p.group, (burnt.get(p.group) ?? 0) + p.cachedTokens + p.uncachedTokens);
     const kept = [...burnt.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, MAX_BURN_LINES).map(([group]) => group);
-    const planned = [...new Set(answer.points.filter((p) => kept.includes(p.group) && p.unit === 'window_share' && (p.unpriced || (p.equivalent ?? 0) > 0)).map((p) => p.group))].sort();
+    const planned = [...new Set(answer.points.filter((p) => kept.includes(p.group) && p.unit === 'window_share' && (p.unpriced || (anchorOf(p.equivalentByTier) ?? 0) > 0)).map((p) => p.group))].sort();
     const items = legendItems(PLAN);
     const entries = items.filter((li) => planned.includes(labelOf(li))).map((li) => ({ account: labelOf(li), entry: li.getAttribute('title'), title: li.querySelector('.legend__value [title]')?.getAttribute('title') ?? null, value: valueOf(li) }));
     const wrong = entries.filter((e) => (e.value === '-' ? e.title !== null : !/^\d[\d.e-]*% Ultra week$/.test(e.value) || !/^(\d[\d.e-]*% of an Ultra week|0%)$/.test(e.title ?? '')) || (e.entry !== null && !/^Highest hour (\d[\d.e-]*% of an Ultra week|0%)$/.test(e.entry)));
@@ -22150,7 +22154,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const ranSonnet45 = (p) => sonnet45.some((r) => r.accountId === p.group && Date.parse(r.at) >= Date.parse(p.at) && Date.parse(r.at) < Date.parse(p.at) + answer.bucketSeconds * 1_000);
     const carried = answer.points.filter((p) => p.unit === 'window_share' && p.tokens > 0 && ranSonnet45(p));
     const keyed = answer.points.filter((p) => p.unit === 'usd' && p.tokens > 0);
-    const gaps = [...carried.filter((p) => p.equivalent !== null || !p.unpriced).map((p) => `${p.group} ${p.at} reads ${p.equivalent}`), ...keyed.filter((p) => p.equivalent !== 0).map((p) => `${p.group} ${p.at} reads ${p.equivalent}`)];
+    const gaps = [...carried.filter((p) => anchorOf(p.equivalentByTier) !== null || !p.unpriced), ...keyed.filter((p) => anchorOf(p.equivalentByTier) !== 0)].map((p) => `${p.group} ${p.at} reads ${anchorOf(p.equivalentByTier)}`);
     results.push({ name: '/analytics every bucket with tokens a Sonnet 4.5 request ran in reads no figure and the flag, and an API-key bucket a zero figure', ok: carried.length > 0 && keyed.length > 0 && gaps.length === 0, missing: gaps });
   }
   {
@@ -22224,7 +22228,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       spy.restore();
       const plan = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === PLAN);
       const lines = [...(plan?.querySelectorAll('.legend li') ?? [])].filter((li) => !MUTED.includes(labelOf(li)) && valueOf(li) !== 'tier unknown').map(labelOf);
-      const groups = new Set((await api.getAnalyticsBurn(lastDay(), by, { accountIds: [named] })).points.filter((p) => p.unpriced || (p.equivalent ?? 0) > 0).map((p) => p.group));
+      const groups = new Set((await api.getAnalyticsBurn(lastDay(), by, { accountIds: [named] })).points.filter((p) => p.unpriced || (anchorOf(p.equivalentByTier) ?? 0) > 0).map((p) => p.group));
       reads.push({ agents: agents ?? null, by, groups: [...groups], lines, sent: [sent[1], sent[2]?.accountIds, sent[2]?.userAgentGroups ?? null] });
       page.unmount();
     }
@@ -22257,7 +22261,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // The route groups an earlier holder of a key id under `<id>@<generation>`, which the legend names as the
     // breakdown labels it.
     const at = new Date(Date.now() - 3_600_000).toISOString();
-    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at, equivalent: 0, group: 'desktop', tokens: 600, uncachedTokens: 600, usd: 0.6 }), burnPoint({ at, equivalent: 0, group: `desktop@${DELETED_HOLDER_GENERATION}`, tokens: 300, uncachedTokens: 300, usd: 0.3 })] });
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at, equivalentByTier: eachTier(0), group: 'desktop', tokens: 600, uncachedTokens: 600, usd: 0.6 }), burnPoint({ at, equivalentByTier: eachTier(0), group: `desktop@${DELETED_HOLDER_GENERATION}`, tokens: 300, uncachedTokens: 300, usd: 0.3 })] });
     await burnGroup('model');
     await burnGroup('key');
     const holders = legendOf('Spend per minute');
@@ -22277,7 +22281,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // carries them, under a label that names the dollars rather than the plan unit. The eighth is the story's
     // primary account, whose Ultra tier is one the table sizes.
     const at = new Date(Date.now() - 3_600_000).toISOString();
-    const stub = { bucketSeconds: 3_600, points: Array.from({ length: 8 }, (_, i) => burnPoint({ at, equivalent: i < 7 ? 0.001 : 0, group: i < 7 ? `plan-${i}` : 'primary', tokens: 1_000 * (8 - i), uncachedTokens: 1_000 * (8 - i), unit: 'window_share', usd: i < 7 ? 0 : 0.6 })) };
+    const stub = { bucketSeconds: 3_600, points: Array.from({ length: 8 }, (_, i) => burnPoint({ at, equivalentByTier: eachTier(i < 7 ? 0.001 : 0), group: i < 7 ? `plan-${i}` : 'primary', tokens: 1_000 * (8 - i), uncachedTokens: 1_000 * (8 - i), unit: 'window_share', usd: i < 7 ? 0 : 0.6 })) };
     api.getAnalyticsBurn = async () => stub;
     await burnGroup('key');
     await burnGroup('account');
@@ -22338,7 +22342,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // whose window set lacks the window. A bucket has no one completion, so no band word. Under the key grouping a
       // line sums the accounts of its key, so no hint.
       const at = new Date(Date.UTC(2026, 8, 16, 11)).toISOString();
-      const point = (group, over) => burnPoint({ at, equivalent: 0.002, group, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', ...over });
+      const point = (group, over) => burnPoint({ at, equivalentByTier: eachTier(0.002), group, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', ...over });
       const stub = { bucketSeconds: 3_600, points: [point('primary', { fiveHourShare: 0.01, modelWeekShare: 0.004, sevenDayShare: 0.002 }), point('workshop', { modelWeekShare: 0.004, sevenDayShare: 0.002 })] };
       api.getAnalyticsBurn = async () => stub;
       await burnGroup('key');
@@ -22354,9 +22358,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ok:
           JSON.stringify(rows) ===
             JSON.stringify([
-              ['primary', weekFull(0.002)],
+              ['primary', fmtWeek(0.002, 'ultra')],
               ['Ultra: 1% of the 5-hour window, 0.2% of the 7-day window, 0.4% of the Fable week', ''],
-              ['workshop', weekFull(0.002)],
+              ['workshop', fmtWeek(0.002, 'ultra')],
               ['Ultra: 0.2% of the 7-day window, 0.4% of the Fable week', ''],
             ]) && keyed.rows.every((r) => !(r.label ?? '').startsWith('Ultra: ')),
         missing: [JSON.stringify(tip), JSON.stringify(keyed)],
@@ -22366,7 +22370,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // `primary`'s middle hour priced, and the hours either side carried traffic the cost model could not price, so
       // the stub flags those hours as the route flags them and the line reads [null, x, null].
       const hours = [11, 12, 13].map((h) => Date.UTC(2026, 8, 16, h));
-      api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at, h) => burnPoint({ at: new Date(at).toISOString(), equivalent: h === 1 ? 0.005 : null, group: 'primary', tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', unpriced: h !== 1 })) });
+      api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at, h) => burnPoint({ at: new Date(at).toISOString(), equivalentByTier: eachTier(h === 1 ? 0.005 : null), group: 'primary', tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', unpriced: h !== 1 })) });
       await burnGroup('key');
       await burnGroup('account');
       const dots = dotsOf(PLAN, '.recharts-line-dot').length;
@@ -22392,33 +22396,50 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await burnGroup('account');
   }
   {
-    // The two cards beside the plan card scale each bucket's own figure to their window, each figure apart from the
-    // Pro-week one. The 5-hour card reads the route's 5-hour figure by the anchor's 5-hour capacity over the Ultra
-    // tier's, with no band of its own, and the Fable week card the route's Fable figure by the anchor's 7-day capacity
-    // over the Ultra tier's times the Fable week's capacity factor, each read off the served cost model's capacity rows
-    // and its seven_day_fable row. `primary` burns at 04:00 in Los Angeles, outside the band, and at 06:00, inside it,
-    // two hours the clock's origin has closed, which read alike since the route's figure carries the band.
+    // Each plan card reads its own map's entry under the chosen tier, the Ultra week's stored default. The stub's three
+    // maps differ, and so do the tiers inside each, so a card handed another card's function, or one that reads
+    // another tier's entry, reads a figure apart. `primary` burns in two hours the clock's origin has closed.
     const hours = [Date.UTC(2026, 8, 16, 11), Date.UTC(2026, 8, 16, 13)];
-    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at) => burnPoint({ at: new Date(at).toISOString(), equivalent: 0.002, fableEquivalent: 0.001, fiveHourEquivalent: 0.01, fiveHourShare: 0.01, group: 'primary', modelWeekShare: 0.004, sevenDayShare: 0.002, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' })) });
+    const maps = {
+      equivalentByTier: { [WEEK_TIERS.max]: 0.004, [WEEK_TIERS.pro]: 0.02, [WEEK_TIERS.ultra]: 0.002 },
+      fableEquivalentByTier: { [WEEK_TIERS.max]: 0.008, [WEEK_TIERS.pro]: 0.04, [WEEK_TIERS.ultra]: 0.004 },
+      fiveHourEquivalentByTier: { [WEEK_TIERS.max]: 0.01, [WEEK_TIERS.pro]: 0.05, [WEEK_TIERS.ultra]: 0.0025 },
+    };
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at) => burnPoint({ at: new Date(at).toISOString(), ...maps, fiveHourShare: 0.01, group: 'primary', modelWeekShare: 0.004, sevenDayShare: 0.002, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' })) });
     await burnGroup('key');
     await burnGroup('account');
     const primaryIn = (t) => {
       const li = legendItems(t).find((item) => labelOf(item) === 'primary');
       return li === undefined ? null : valueOf(li);
     };
-    const read = { fable: primaryIn('Fable week per hour'), fiveHour: primaryIn('5-hour per hour') };
+    const read = { fable: primaryIn('Fable week per hour'), fiveHour: primaryIn('5-hour per hour'), plan: primaryIn(PLAN) };
     delete api.getAnalyticsBurn;
     await burnGroup('key');
     await burnGroup('account');
-    const anchor = anchorTier(SERVED_COSTS);
-    const fiveHour = tierCapacity(SERVED_COSTS, anchor, 'five_hour') / tierCapacity(SERVED_COSTS, WEEK_TIERS.ultra, 'five_hour');
-    const fable = tierCapacity(SERVED_COSTS, anchor, 'seven_day') / (tierCapacity(SERVED_COSTS, WEEK_TIERS.ultra, 'seven_day') * SERVED_COSTS.modelWindows.seven_day_fable.capacityFactor);
-    const want = { fable: `${fmtShare(0.001 * fable)} Ultra Fable week`, fiveHour: `${fmtShare(0.01 * fiveHour)} Ultra 5-hour` };
+    const want = { fable: `${fmtShare(0.004)} Ultra Fable week`, fiveHour: `${fmtShare(0.0025)} Ultra 5-hour`, plan: weekShort(0.002, 'ultra') };
     results.push({
-      name: "/analytics the 5-hour card scales each hour's 5-hour figure by the capacities alone and the Fable week card the Fable figure by the Fable week's share, each legend figure in its card's short form",
+      name: "/analytics each plan card's legend reads its own map's figure under the chosen tier, in its card's short form",
       ok: JSON.stringify(read) === JSON.stringify(want),
       missing: [`read ${JSON.stringify(read)}`, `want ${JSON.stringify(want)}`],
     });
+  }
+  {
+    // Under the Max week the 5-hour card reads Max 5x's entry. The stub's middle hour holds the other tiers' figures
+    // beside a null for Max 5x, as a revision that sizes no Max 5x 5-hour window answers it, so the hour is the tier's
+    // gap, which the legend names apart from a model without a weight. The page reads the week at its load.
+    const hours = [11, 12, 13].map((h) => Date.UTC(2026, 8, 16, h));
+    const fiveHour = (max) => ({ [WEEK_TIERS.max]: max, [WEEK_TIERS.pro]: 0.05, [WEEK_TIERS.ultra]: 0.0025 });
+    api.getAnalyticsBurn = async () => ({
+      bucketSeconds: 3_600,
+      points: hours.map((at, h) => burnPoint({ at: new Date(at).toISOString(), equivalentByTier: eachTier(0.002), fableEquivalentByTier: eachTier(0), fiveHourEquivalentByTier: fiveHour(h === 1 ? null : 0.01), group: 'desktop', tokens: 1_000, uncachedTokens: 1_000 })),
+    });
+    localStorage.setItem('phoebis.week', 'max');
+    const max = await mount('/analytics#burn');
+    const labels = [...([...max.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === '5-hour per hour')?.querySelectorAll('.legend li') ?? [])].map(labelOf);
+    max.unmount();
+    localStorage.removeItem('phoebis.week');
+    delete api.getAnalyticsBurn;
+    results.push({ name: "/analytics Burn names a tier's gap on the 5-hour card", ok: labels.includes('desktop') && labels.includes('tier unsized') && !labels.includes('model unlisted'), missing: labels });
   }
   {
     // Under the model grouping the Fable week card draws the plan traffic on the story's one Fable model,
@@ -22455,7 +22476,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // of the story sizes, as a subscription account with no tier on file or a plan that ended reads.
     const sizedId = (await api.listAccounts()).find((a) => a.subscription?.rateLimitTier === 'default_claude_max_20x')?.id;
     const at = new Date(Date.now() - 3_600_000).toISOString();
-    const point = (group, equivalent) => burnPoint({ at, equivalent, group, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', unpriced: equivalent === null });
+    const point = (group, equivalent) => burnPoint({ at, equivalentByTier: eachTier(equivalent), group, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', unpriced: equivalent === null });
     api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [point(sizedId, 0.01), point('nightly', null), point('ended', 0.004), point('tierless', null)] });
     await burnGroup('key');
     await burnGroup('account');
@@ -22497,28 +22518,27 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
 
   {
-    // The plan card's figure waits on the chosen week's scale, so a failed settings read draws its error under the
-    // Ultra week, while Spend per minute under the key grouping, which sizes nothing, still draws. Under the Pro week
-    // the figure reads without the cost model, and the 5-hour and Fable week cards, which scale through it, draw the
-    // error. Under the account grouping the plan card sizes its lines by the tiers the cost model holds, so the Pro
-    // week's plan card draws the error too. Under All in dollars the plan card charts the plan dollars, which read no
-    // cost model, so it draws its lines under the Ultra week. The page reads the settings once per load, so each read
-    // mounts a page.
+    // Each plan card's figure is the burn read's own, so under the key grouping a failed settings read blanks no card,
+    // under the Ultra week or the Pro week, and Spend per minute, which sizes nothing, draws too. Under the account
+    // grouping a line's unit reads the tiers the cost model holds, so each plan card draws the error. Under All in
+    // dollars the plan card charts the plan dollars, which read no cost model, so it draws its lines under the Ultra
+    // week. The page reads the settings once per load, so each read mounts a page.
     const { getSettings } = api;
     api.getSettings = () => Promise.reject(new Error('the settings read failed'));
-    const cardIn = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.textContent ?? '';
+    const cardOf = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+    const cardIn = (page, title) => cardOf(page, title)?.textContent ?? '';
+    const entriesIn = (page, title) => cardOf(page, title)?.querySelectorAll('.legend li').length ?? 0;
     const ultra = await mount('/analytics#burn');
-    const failed = { plan: cardIn(ultra, PLAN), spend: cardIn(ultra, 'Spend per minute') };
+    const failed = { entries: entriesIn(ultra, PLAN), plan: cardIn(ultra, PLAN), spend: cardIn(ultra, 'Spend per minute') };
     ultra.unmount();
     localStorage.setItem('phoebis.week', 'pro');
     const pro = await mount('/analytics#burn');
     const proPlan = cardIn(pro, PLAN);
-    const proCard = [...pro.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === PLAN);
-    const proEntries = proCard?.querySelectorAll('.legend li').length ?? 0;
-    const proSiblings = { fable: cardIn(pro, 'Fable week per hour'), fiveHour: cardIn(pro, '5-hour per hour') };
+    const proEntries = entriesIn(pro, PLAN);
+    const proSiblings = { fable: cardIn(pro, 'Fable week per hour'), fableEntries: entriesIn(pro, 'Fable week per hour'), fiveHour: cardIn(pro, '5-hour per hour'), fiveHourEntries: entriesIn(pro, '5-hour per hour') };
     pro.unmount();
     const proByAccount = await mount('/analytics?by=account#burn');
-    const proAccountPlan = cardIn(proByAccount, PLAN);
+    const proAccount = { fable: cardIn(proByAccount, 'Fable week per hour'), fiveHour: cardIn(proByAccount, '5-hour per hour'), plan: cardIn(proByAccount, PLAN) };
     proByAccount.unmount();
     localStorage.removeItem('phoebis.week');
     localStorage.setItem('phoebis.unit', 'all');
@@ -22529,18 +22549,23 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     localStorage.removeItem('phoebis.unit');
     api.getSettings = getSettings;
     results.push({
-      name: "/analytics a failed settings read draws the plan card's error under the Ultra week and leaves Spend per minute under the key grouping, the Pro week reads the plan card without the cost model, the 5-hour and Fable week cards' error and under the account grouping the plan card's error, and All in dollars draws the plan card's dollar lines",
+      name: "/analytics a failed settings read blanks no plan card under the key grouping, under the Ultra week or the Pro week, and leaves Spend per minute, draws the error on each plan card under the account grouping, and All in dollars draws the plan card's dollar lines",
       ok:
-        failed.plan.includes('Could not load plan per hour') &&
+        !failed.plan.includes('Could not load') &&
+        failed.entries > 0 &&
         !failed.spend.includes('Could not load') &&
         !proPlan.includes('Could not load') &&
         proEntries > 0 &&
-        proSiblings.fiveHour.includes('Could not load 5-hour per hour') &&
-        proSiblings.fable.includes('Could not load fable week per hour') &&
-        proAccountPlan.includes('Could not load plan per hour') &&
+        !proSiblings.fiveHour.includes('Could not load') &&
+        proSiblings.fiveHourEntries > 0 &&
+        !proSiblings.fable.includes('Could not load') &&
+        proSiblings.fableEntries > 0 &&
+        proAccount.plan.includes('Could not load plan per hour') &&
+        proAccount.fiveHour.includes('Could not load 5-hour per hour') &&
+        proAccount.fable.includes('Could not load fable week per hour') &&
         !dollarPlan.text.includes('Could not load') &&
         dollarPlan.entries > 0,
-      missing: [`plan: ${failed.plan.slice(0, 120)}`, `spend: ${failed.spend.slice(0, 120)}`, `pro: ${proPlan.slice(0, 120)}`, `${proEntries} legend entries on the Pro card`, `Pro 5-hour: ${proSiblings.fiveHour.slice(0, 120)}`, `Pro Fable week: ${proSiblings.fable.slice(0, 120)}`, `Pro by account: ${proAccountPlan.slice(0, 120)}`, `All in dollars: ${dollarPlan.entries} legend entries, ${dollarPlan.text.slice(0, 120)}`],
+      missing: [`plan: ${failed.entries} legend entries, ${failed.plan.slice(0, 120)}`, `spend: ${failed.spend.slice(0, 120)}`, `pro: ${proPlan.slice(0, 120)}`, `${proEntries} legend entries on the Pro card`, `Pro 5-hour: ${proSiblings.fiveHourEntries} legend entries, ${proSiblings.fiveHour.slice(0, 120)}`, `Pro Fable week: ${proSiblings.fableEntries} legend entries, ${proSiblings.fable.slice(0, 120)}`, `Pro by account: ${JSON.stringify(Object.fromEntries(Object.entries(proAccount).map(([k, v]) => [k, v.slice(0, 120)])))}`, `All in dollars: ${dollarPlan.entries} legend entries, ${dollarPlan.text.slice(0, 120)}`],
     });
   }
   await burnGroup('key');

@@ -1340,9 +1340,13 @@ test('a one-number member keeps its null and the display name reads off the prof
   const group = d.decodeAnalyticsGroup({ cache_equivalent: null, cost_equivalent: null, equivalent_split: null, probe_equivalent: null, saving_equivalent: null });
   assert.deepEqual([group.costEquivalent, group.cacheEquivalent, group.probeEquivalent, group.savingEquivalent, group.equivalentSplit], [null, null, null, null, null], 'a group whose plan rows priced nothing');
   assert.equal(d.decodeAnalyticsGroup({ cost_equivalent: 0.0042 }).costEquivalent, 0.0042, 'a priced group reads its figure');
-  const unpriced = d.decodeBurnPoint({ equivalent: null, unpriced: true });
-  const priced = d.decodeBurnPoint({ equivalent: 0.0042, unpriced: false });
-  assert.deepEqual([unpriced.equivalent, unpriced.unpriced, priced.equivalent, priced.unpriced], [null, true, 0.0042, false], 'a burn point reads its figure and the flag apart');
+  const unpriced = d.decodeBurnPoint({ equivalent_by_tier: { default_claude_ai: null }, fable_equivalent_by_tier: { default_claude_ai: null }, five_hour_equivalent_by_tier: { default_claude_ai: null }, unpriced: true });
+  const priced = d.decodeBurnPoint({ equivalent_by_tier: { default_claude_ai: 0.0042 }, unpriced: false });
+  assert.deepEqual(
+    [unpriced.equivalentByTier, unpriced.fableEquivalentByTier, unpriced.fiveHourEquivalentByTier, unpriced.unpriced, priced.equivalentByTier, priced.unpriced],
+    [{ default_claude_ai: null }, { default_claude_ai: null }, { default_claude_ai: null }, true, { default_claude_ai: 0.0042 }, false],
+    "a burn point reads each tier's figure and the flag apart",
+  );
   assert.deepEqual([d.decodeSubscription({ plan_display_name: 'Ultra' }, null).planDisplayName, d.decodeSubscription({}, null).planDisplayName], ['Ultra', null], "the profile's display name, none where the document lacks it");
 });
 
@@ -1354,7 +1358,7 @@ test('an answer without the Pro-week members reads them null and the billed doll
     'a group',
   );
   const point = d.decodeBurnPoint({});
-  assert.deepEqual([point.equivalent, point.unpriced, point.modelWeekShare], [null, false, null], 'a burn point');
+  assert.deepEqual([point.equivalentByTier, point.fableEquivalentByTier, point.fiveHourEquivalentByTier, point.unpriced, point.modelWeekShare], [{}, {}, {}, false, null], 'a burn point, each map empty');
   const day = d.decodeDashboard({ hourly: [{ at: 0 }] });
   assert.deepEqual([day.day24h.billedUsd, day.day24h.equivalent, day.hourly[0].billed, day.hourly[0].equivalent], [0, null, 0, null], 'the dashboard');
   const key = d.decodeKey({});
@@ -1605,13 +1609,14 @@ test('the burn series decodes each point with its instant, both token sides, and
     wire.five_hour_share > 0 && wire.seven_day_share > 0 && wire.cached_tokens > 0 && wire.uncached_tokens > 0 && wire.tokens > wire.cached_tokens + wire.uncached_tokens,
     'the fixture reports a subscription point with both window shares priced, output tokens among its count',
   );
-  assert.ok(wire.equivalent > 0, 'the fixture prices the point in the Pro-week figure too');
+  const maps = [wire.equivalent_by_tier, wire.five_hour_equivalent_by_tier, wire.fable_equivalent_by_tier].map(Object.values);
+  assert.ok(maps.every((entries) => entries.length > 0) && maps[0].every((v) => v > 0), "the fixture keys each map by tier and prices the point in each tier's week figure too");
   assert.deepEqual(last, {
     at: new Date(wire.at).toISOString(),
     cachedTokens: wire.cached_tokens,
-    equivalent: wire.equivalent,
-    fableEquivalent: wire.fable_equivalent,
-    fiveHourEquivalent: wire.five_hour_equivalent,
+    equivalentByTier: wire.equivalent_by_tier,
+    fableEquivalentByTier: wire.fable_equivalent_by_tier,
+    fiveHourEquivalentByTier: wire.five_hour_equivalent_by_tier,
     fiveHourShare: wire.five_hour_share,
     group: 'business',
     modelWeekShare: wire.model_week_share,
@@ -1630,26 +1635,26 @@ test('the burn series decodes each point with its instant, both token sides, and
   const directAt = body.points.findLastIndex((p) => p.group === 'direct');
   const direct = burn.points[directAt];
   assert.deepEqual(
-    [direct.group, direct.fiveHourShare, direct.sevenDayShare, direct.equivalent, direct.unit, direct.usd],
-    ['direct', null, null, 0, 'usd', body.points[directAt].usd],
-    'an API-key point spends dollars, reads no window share and a zero Pro-week figure',
+    [direct.group, direct.fiveHourShare, direct.sevenDayShare, [...new Set(Object.values(direct.equivalentByTier))], direct.unit, direct.usd],
+    ['direct', null, null, [0], 'usd', body.points[directAt].usd],
+    'an API-key point spends dollars, reads no window share and a zero week figure on each tier',
   );
   const seatAt = body.points.findIndex((p) => p.group === 'usage-seat' && p.usd > 0);
   const seat = burn.points[seatAt];
   assert.deepEqual(
-    [seat.group, seat.fiveHourShare, seat.sevenDayShare, seat.equivalent, seat.unit, seat.usd],
-    ['usage-seat', null, null, 0, 'usd', body.points[seatAt].usd],
+    [seat.group, seat.fiveHourShare, seat.sevenDayShare, [...new Set(Object.values(seat.equivalentByTier))], seat.unit, seat.usd],
+    ['usage-seat', null, null, [0], 'usd', body.points[seatAt].usd],
     'a usage-based seat spends dollars as an API-key account does',
   );
   assert.ok(burn.points.every((p) => isIso(p.at)));
   // Every grouping but the account one answers the shares and the unit as null, and the figure under every one.
   const [keyed] = d.decodeBurn({ bucket_seconds: 21_600, points: [{ ...wire, five_hour_share: null, group: 'desktop', seven_day_share: null, unit: null }] }).points;
   assert.deepEqual([keyed.fiveHourShare, keyed.sevenDayShare, keyed.unit], [null, null, null]);
-  assert.equal(keyed.equivalent, wire.equivalent);
+  assert.deepEqual(keyed.equivalentByTier, wire.equivalent_by_tier);
   assert.ok(body.points.every((p) => typeof p.unpriced === 'boolean'), 'every captured point carries the flag');
   // The priced point reads false, as a missing field decodes, so a copy that sets the flag proves the wire name.
-  const unpriced = d.decodeBurnPoint({ ...wire, equivalent: null, unpriced: true });
-  assert.deepEqual([unpriced.unpriced, unpriced.equivalent], [true, null], 'a bucket holding a plan row the cost model could not price reads flagged');
+  const unpriced = d.decodeBurnPoint({ ...wire, equivalent_by_tier: { default_claude_ai: null }, unpriced: true });
+  assert.deepEqual([unpriced.unpriced, unpriced.equivalentByTier], [true, { default_claude_ai: null }], 'a bucket holding a plan row the cost model could not price reads flagged');
   const { tokens: _, ...untold } = wire;
   assert.equal(d.decodeBurn({ bucket_seconds: 3_600, points: [untold] }).points[0].tokens, 0, 'a point without the count decodes it as zero');
   assert.equal(d.decodeBurn({ bucket_seconds: 21_600, points: [] }).bucketSeconds, 21_600);
