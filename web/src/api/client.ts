@@ -15,6 +15,8 @@ import type {
   CompanionPermission,
   CreatedApiKey,
   DecisionRecord,
+  FeatureCallPage,
+  FeatureCallQuery,
   KeepaliveOverview,
   KeepaliveRecipe,
   KeyModels,
@@ -272,6 +274,7 @@ export interface Api {
   listCatalog(): Promise<CatalogModel[]>;
   /** The union by id of the named accounts' live catalogs; a failed fetch contributes nothing. */
   listCatalogOf(accountIds: string[]): Promise<CatalogModel[]>;
+  listFeatureCalls(query?: FeatureCallQuery): Promise<FeatureCallPage>;
   /** The presets this build ships, each at its current version. */
   listGuardrailPresets(): Promise<GuardrailPreset[]>;
   listGuardrails(): Promise<Guardrail[]>;

@@ -8,6 +8,7 @@ mod accounts;
 mod analytics;
 mod attention;
 mod dashboard;
+mod feature_calls;
 mod guardrails;
 mod keepalive;
 mod keys;

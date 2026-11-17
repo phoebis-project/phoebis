@@ -1,6 +1,6 @@
 import { agentTokenOf, clientLeft, couldNotCache, countDropped, plus } from '@/api/fold';
 import type {
-  AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, InputTransformations, LatencyHistograms, PinMigrationReason, Placement,
+  AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, FeatureCall, InputTransformations, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import type { GuardrailMatch } from '@/api/types';
@@ -3665,3 +3665,14 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
     responseTruncated: request.responseTruncated,
   };
 }
+
+/**
+ * The calls the router sent to a feature host, newest first: both features, each outcome, and the failed call the
+ * router answered itself, with its code and no status, beside calls that carry the upstream's status.
+ */
+export const FEATURE_CALLS: FeatureCall[] = [
+  { accountId: 'primary', durationMs: 412, errorCode: null, feature: 'artifacts', id: 'req_phoebis_3f9a1c27e4b5408d9a6c1e2f7b8d0a31', keyId: 'desktop', method: 'POST', outcome: 'forwarded', path: '/api/frame/artifacts', receivedAt: iso(NOW - 2 * MINUTE), status: 200 },
+  { accountId: 'secondary', durationMs: 186, errorCode: null, feature: 'connectors', id: 'req_phoebis_8b04d6e2a1f9437c85e3b7d1c0a96f24', keyId: 'desktop', method: 'POST', outcome: 'forwarded', path: '/v1/mcp/srv_example', receivedAt: iso(NOW - 5 * MINUTE), status: 200 },
+  { accountId: 'secondary', durationMs: 10_004, errorCode: 'upstream_unreachable', feature: 'connectors', id: 'req_phoebis_c51e9a07b3d24f6e9f18a2c4d7e0b593', keyId: 'desktop', method: 'GET', outcome: 'failed', path: '/v1/mcp_servers', receivedAt: iso(NOW - 9 * MINUTE), status: null },
+  { accountId: 'secondary', durationMs: 2_351, errorCode: null, feature: 'connectors', id: 'req_phoebis_6d2f8b41c9e0473a8b5d1f6e2a7c3094', keyId: 'laptop', method: 'POST', outcome: 'canceled', path: '/v1/mcp/srv_example', receivedAt: iso(NOW - 14 * MINUTE), status: 200 },
+];

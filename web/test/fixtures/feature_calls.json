@@ -1,0 +1,60 @@
+{
+  "route": "GET /admin/feature-calls",
+  "body": {
+    "feature_calls": [
+      {
+        "account_id": "usage-seat",
+        "duration_ms": 240,
+        "error_code": null,
+        "feature": "artifacts",
+        "id": "fc-artifacts",
+        "key_id": "desktop",
+        "method": "POST",
+        "outcome": "forwarded",
+        "path": "/api/frame/artifacts",
+        "received_at": 1791720940000,
+        "status": 200
+      },
+      {
+        "account_id": "business",
+        "duration_ms": 240,
+        "error_code": null,
+        "feature": "connectors",
+        "id": "fc-connector",
+        "key_id": "desktop",
+        "method": "POST",
+        "outcome": "forwarded",
+        "path": "/v1/mcp/srv_example",
+        "received_at": 1791720880000,
+        "status": 200
+      },
+      {
+        "account_id": "business",
+        "duration_ms": 240,
+        "error_code": "upstream_unreachable",
+        "feature": "connectors",
+        "id": "fc-servers",
+        "key_id": "desktop",
+        "method": "GET",
+        "outcome": "failed",
+        "path": "/v1/mcp_servers",
+        "received_at": 1791720820000,
+        "status": null
+      },
+      {
+        "account_id": "business",
+        "duration_ms": 240,
+        "error_code": null,
+        "feature": "connectors",
+        "id": "fc-canceled",
+        "key_id": "desktop",
+        "method": "POST",
+        "outcome": "canceled",
+        "path": "/v1/mcp/srv_example",
+        "received_at": 1791720760000,
+        "status": 200
+      }
+    ],
+    "next_cursor": null
+  }
+}

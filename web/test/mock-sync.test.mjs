@@ -73,6 +73,7 @@ const SYNC = {
   dashboard: { decode: (b) => d.decodeDashboard(b), mock: (api) => api.getOverview(), opaque: (path) => (path === '.topRefusalCode' ? ['string', 'null'] : false) },
   // The story's static placement, whose `raw` is the record the mock answers where the fixture's is the route's body.
   decision: { decode: (b) => recordShape(d.decodeDecisionRecord(b)), mock: async (api) => recordShape(await api.getDecision('req_b2bed817-a58', 1)), opaque: (path) => path === '.settings' || path === '.raw' },
+  feature_calls: { decode: (b) => d.decodeFeatureCallPage(b), mock: (api) => api.listFeatureCalls() },
   // From the preset with a pool, so the answer carries the stamp and an attachment as the captured create does.
   guardrail_created: { decode: (b) => d.decodeGuardrail(b), mock: (api) => api.createGuardrail({ description: '', enabled: true, mode: 'observe', name: 'sync', pools: ['all'], preset: 'subagent-status-summary' }) },
   guardrail_presets: { decode: (b) => b.presets.map(d.decodeGuardrailPreset), mock: (api) => api.listGuardrailPresets() },

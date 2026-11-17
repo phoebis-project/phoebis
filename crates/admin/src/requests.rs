@@ -22,8 +22,8 @@ use crate::openapi::{ErrorBody, LedgerFailure};
 use crate::routes::{failure, reported_samples, windows_lacked, AdminQuery};
 use crate::AdminState;
 
-const DEFAULT_LIMIT: usize = 50;
-const MAX_LIMIT: usize = 500;
+pub(crate) const DEFAULT_LIMIT: usize = 50;
+pub(crate) const MAX_LIMIT: usize = 500;
 
 /// What a request's figures are priced with, read once per handler call: the cost model, whose revision in force at
 /// the request's receipt prices the serving attempt's shares under the account tier that attempt recorded and its

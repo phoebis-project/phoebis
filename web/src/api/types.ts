@@ -1173,6 +1173,48 @@ export interface RequestPage {
   requests: RequestLog[];
 }
 
+export const FEATURE_OUTCOME_VALUES = ['canceled', 'failed', 'forwarded'] as const;
+/** How a feature call ended, in the ledger's own words. */
+export type FeatureOutcome = (typeof FEATURE_OUTCOME_VALUES)[number];
+
+/** One call the router sent to a feature host under an account. */
+export interface FeatureCall {
+  accountId: string;
+  durationMs: number;
+  /** The router's code where it answered a forward that could not complete. */
+  errorCode: string | null;
+  feature: FeatureWord;
+  id: string;
+  keyId: string;
+  method: string;
+  outcome: FeatureOutcome;
+  /** The path without its query. */
+  path: string;
+  receivedAt: string;
+  /** Null where no upstream head arrived. */
+  status: number | null;
+}
+
+export interface FeatureCallPage {
+  featureCalls: FeatureCall[];
+  /** Set only while a row lies beyond the page. */
+  nextCursor: string | null;
+}
+
+/** Each list narrows to the rows whose value it holds, and both ends of the range hold their own instant. */
+export interface FeatureCallQuery {
+  accounts?: string[];
+  cursor?: string;
+  features?: FeatureWord[];
+  /** Unix milliseconds. */
+  from?: number;
+  keys?: string[];
+  limit?: number;
+  outcomes?: FeatureOutcome[];
+  /** Unix milliseconds. */
+  to?: number;
+}
+
 export const DECISION_KIND_VALUES = ['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed'] as const;
 /** A decision's kind as the routing log names it. A probe's decision keeps its kind and the row's `probe` marks it. */
 export type DecisionKind = (typeof DECISION_KIND_VALUES)[number];

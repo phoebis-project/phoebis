@@ -5,7 +5,7 @@ import { decodeStreamCut } from '@/api/decode';
 import { clientLeft } from '@/api/fold';
 import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, LimitResetsRead, MemberEligibility,
+  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, FeatureCall, FeatureCallPage, FeatureCallQuery, KeepaliveOverview, KeyModels, LimitResetsRead, MemberEligibility,
   ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RateLimitWindow, RequestDetail, RequestEvent, RequestLog, RequestOrder, RequestPage, RequestQuery, ResetUse, RoutingEvent, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
@@ -28,7 +28,7 @@ import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, rowsOfDeletedKey, sessionsListedAt } from './operations';
 import { KEYS, POOLS, UNLOADED_MEMBERS, UNTIL_DRAWN, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, FEATURE_CALLS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
 import { createRng } from './rng';
@@ -317,6 +317,7 @@ const ledger = () => {
     catalog: empty ? [] : CATALOG,
     dayRows: empty ? [] : DAY_ROWS,
     decisionOf: (requestId: string, seq: number): DecisionRecord | null => (empty ? null : getDecision(requestId, seq)),
+    featureCalls: empty ? [] : FEATURE_CALLS,
     keepalive: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW,
     keepalive30d: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW_30D,
     quotaHistory: empty ? [] : QUOTA_HISTORY,
@@ -513,6 +514,18 @@ const cursorKeyOf = (cursor: string, order: RequestOrder): OrderKey | null => {
   const figure = cursorInteger(value);
   return figure === null ? null : { figure, id };
 };
+
+/** The pair the route orders the feature call list by and its cursor names: the receipt, then the id. */
+const featureCallKey = (c: FeatureCall): OrderKey => ({ figure: Date.parse(c.receivedAt), id: c.id });
+
+/** As the route reads its query: an absent or empty list narrows nothing, and each end of the range holds its instant. */
+const matchesFeatureCall = (c: FeatureCall, q: FeatureCallQuery): boolean =>
+  (!q.accounts?.length || q.accounts.includes(c.accountId)) &&
+  (!q.features?.length || q.features.includes(c.feature)) &&
+  (!q.keys?.length || q.keys.includes(c.keyId)) &&
+  (!q.outcomes?.length || q.outcomes.includes(c.outcome)) &&
+  (q.from === undefined || Date.parse(c.receivedAt) >= q.from) &&
+  (q.to === undefined || Date.parse(c.receivedAt) <= q.to);
 
 /** A window as the poll after a reset reads it: `by` taken off its use, and its lead and projection with it. */
 const lowered = (w: RateLimitWindow, by: number, at: number): RateLimitWindow => {
@@ -1323,6 +1336,20 @@ export class MockApi implements Api {
       }),
     );
     return catalogUnion(fetched);
+  }
+
+  listFeatureCalls(query: FeatureCallQuery = {}): Promise<FeatureCallPage> {
+    const cursor = query.cursor === undefined ? undefined : cursorKeyOf(query.cursor, 'received_at');
+    if (cursor === null) return Promise.reject(new ApiError(400, 'cursor is <received_at>:<id>', null));
+    const compare = compareOrderKeys('desc');
+    const matched = ledger()
+      .featureCalls.filter((c) => matchesFeatureCall(c, query))
+      .sort((a, b) => compare(featureCallKey(a), featureCallKey(b)));
+    const after = cursor === undefined ? matched : matched.filter((c) => compare(featureCallKey(c), cursor) > 0);
+    const limit = query.limit ?? 50;
+    const page = after.slice(0, limit);
+    const last = page[page.length - 1];
+    return latency({ featureCalls: page, nextCursor: after.length > limit && last ? `${Date.parse(last.receivedAt)}:${last.id}` : null });
   }
 
   /** The presets are the binary's, so a fresh installation lists them too. */

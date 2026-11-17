@@ -9,8 +9,8 @@ use std::time::Duration;
 use common::{get, json, login, patch, post, wait_json};
 use fake_upstream::stays_for;
 use phoebis_bus::{
-    AccountSelected, Event, Kind, Origin, RequestComplete, RequestObserved, RequestShape,
-    ResponseFacts, Usage,
+    AccountSelected, Event, FeatureCall, FeatureEnd, FeatureOutcome, Kind, Origin, RequestComplete,
+    RequestObserved, RequestShape, ResponseFacts, Usage,
 };
 use phoebis_ledger::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, GuardrailMatchRecord,
@@ -2733,6 +2733,86 @@ async fn every_route_is_captured_and_holds_its_shape() {
             json(response).await,
         );
     }
+    // Behind the loop, whose `system.json` holds the ledger's count of written records. Each call ends as sent, the one
+    // end that leaves a row, under the account the key's or the pool's selection above names, and the four carry both
+    // arms of `status` and of `error_code`.
+    let call = |id: &str,
+                received_at: i64,
+                feature: &'static str,
+                method: &str,
+                path: &str,
+                end: FeatureEnd| {
+        Event::FeatureCall(FeatureCall {
+            duration_ms: 240,
+            end,
+            feature: Some(feature),
+            id: id.into(),
+            key_id: Some("desktop".into()),
+            method: method.into(),
+            path: path.into(),
+            received_at,
+        })
+    };
+    let sent = |account: &str,
+                outcome: FeatureOutcome,
+                status: Option<u16>,
+                error_code: Option<&'static str>| FeatureEnd::Sent {
+        account_id: account.into(),
+        error_code,
+        outcome,
+        status,
+    };
+    for event in [
+        call(
+            "fc-artifacts",
+            now - 60_000,
+            "artifacts",
+            "POST",
+            "/api/frame/artifacts",
+            sent("usage-seat", FeatureOutcome::Forwarded, Some(200), None),
+        ),
+        call(
+            "fc-connector",
+            now - 120_000,
+            "connectors",
+            "POST",
+            "/v1/mcp/srv_example",
+            sent("business", FeatureOutcome::Forwarded, Some(200), None),
+        ),
+        call(
+            "fc-servers",
+            now - 180_000,
+            "connectors",
+            "GET",
+            "/v1/mcp_servers",
+            sent(
+                "business",
+                FeatureOutcome::Failed,
+                None,
+                Some("upstream_unreachable"),
+            ),
+        ),
+        call(
+            "fc-canceled",
+            now - 240_000,
+            "connectors",
+            "POST",
+            "/v1/mcp/srv_example",
+            sent("business", FeatureOutcome::Canceled, Some(200), None),
+        ),
+    ] {
+        parts.bus.publish_fact(event).await;
+    }
+    let feature_calls = wait_json(app, "/admin/feature-calls", &cookie, |page| {
+        page["feature_calls"].as_array().unwrap().len() == 4
+    })
+    .await;
+    hold(
+        &planted,
+        "feature_calls",
+        "GET /admin/feature-calls",
+        feature_calls,
+    );
     // The route reads the block again, so the fake answers `business`'s once more and the read lands the same block at
     // the same instant, which leaves every capture after it as it was.
     parts.up.set_rule_after(
