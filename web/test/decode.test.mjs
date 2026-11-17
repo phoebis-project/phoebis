@@ -1260,7 +1260,7 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(failover.usage.thinking, 40);
   assert.deepEqual(failover.shape, { contextEdits: ['clear_thinking_20251015'], effort: 'high', maxTokens: 32_000, messageCount: 1, requestedServiceTier: null, requestedSpeed: null, systemBlocks: 4, temperature: null, thinkingBudget: 31_999, thinkingType: 'enabled', toolCount: 12 });
   assert.equal(failover.autoMode, 'server');
-  assert.deepEqual(failover.attempts[1].response, { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'fast', stopReason: 'tool_use', stopSequence: null });
+  assert.deepEqual(failover.attempts[1].response, { clearedInputTokens: null, inferenceGeo: 'us', inputTransformations: null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'fast', stopReason: 'tool_use', stopSequence: null });
   assert.deepEqual([failover.attempts[1].accountKind, failover.attempts[1].overageInUse], ['oauth', null], "the serving attempt's account kind and its unread overage flag");
   assert.equal(failover.responseTruncated, false);
   const failed = page.requests.find((r) => r.id === 'r-failed');
@@ -1397,6 +1397,13 @@ test("an attempt reads the answer's service tier, and none where the answer carr
   assert.equal(d.decodeRequest({ attempts: [{ index: 1 }] }).attempts[0].serviceTier, null, 'an attempt without the field reads none');
 });
 
+test('an attempt decodes its dropped thinking blocks, an empty answer apart from none', () => {
+  const dropped = (input_transformations) => d.decodeRequest({ attempts: [{ index: 1, response: { input_transformations } }] }).attempts[0].response.inputTransformations;
+  assert.deepEqual(dropped({ 'thinking_dropped.model_binding_mismatch': { blocks: 154, first_message: 3 } }), { 'thinking_dropped.model_binding_mismatch': { blocks: 154, firstMessage: 3 } }, 'a key with its blocks and its first message');
+  assert.deepEqual(dropped({}), {}, 'an answer that listed nothing');
+  assert.equal(dropped(null), null, 'an answer without the member');
+});
+
 test('a stream that ended before its end decodes as incomplete and a group reads its own counter', () => {
   const cut = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-incomplete');
   assert.deepEqual([cut.outcome, cut.status, cut.errorCode, cut.transport], ['incomplete', 200, 'stream_incomplete', 'sse'], 'the sixth outcome reads as itself, not the failed fallback');
@@ -1411,6 +1418,11 @@ test("a group reads the client's cancels off the route", () => {
   // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
   const row = fixture('analytics_breakdown').rows[0];
   assert.equal(d.decodeAnalyticsGroup({ ...row, client_canceled: 3 }).clientCanceled, 3);
+});
+
+test('a group row decodes the two counts beside the map', () => {
+  const group = d.decodeAnalyticsGroup({ input_transformations: { 'thinking_dropped.model_binding_mismatch': 2 }, input_transformations_moved: 1, input_transformations_none: 3 });
+  assert.deepEqual([{ ...group.inputTransformations }, group.inputTransformationsMoved, group.inputTransformationsNone], [{ 'thinking_dropped.model_binding_mismatch': 2 }, 1, 3]);
 });
 
 test("a request decodes a count the route never stored as null beside the sum's zero", () => {
@@ -1454,6 +1466,11 @@ test('a request reads who put the diagnostics member on its body, and any other 
     [null, null, null],
     'null, an absent member and a word the console does not know read as none',
   );
+});
+
+test('a row decodes the two senders apart', () => {
+  const row = d.decodeRequest({ attempts: [], diagnostics_source: 'client', thinking_diagnostics_source: 'router' });
+  assert.deepEqual([row.diagnosticsSource, row.thinkingDiagnosticsSource], ['client', 'router']);
 });
 
 test('a request row carries the generation of the key it was read under', () => {
@@ -2053,13 +2070,19 @@ test("a latency sample leaves the slow-down's hold out", () => {
   assert.deepEqual([reset.histograms.ttfbMs[57], reset.histograms.ttftMs[57], reset.histograms.durationMs[58]], [1, 1, 1], 'each timing keeps the reset wait');
 });
 
-test('a cache-miss reason the console does not know keeps its own name on the attempt and in every sum', () => {
+test('a cache-miss reason or a dropped thinking key the console does not know keeps its own name in every sum, the reason on the attempt too', () => {
   const body = fixture('requests');
   const wire = body.requests.find((r) => r.id === 'r-captured');
   const row = d.decodeRequest({ ...wire, attempts: wire.attempts.map((a) => ({ ...a, cache_miss_reason: 'future_reason' })) });
   assert.ok(row.attempts.every((a) => a.cacheMissReason === 'future_reason'), 'the attempt answers the reason as sent rather than reading unavailable');
   assert.equal(d.decodeRequest({ ...wire, attempts: wire.attempts.map((a) => ({ ...a, cache_miss_reason: null })) }).attempts[0].cacheMissReason, null);
-  const group = d.decodeAnalyticsGroup({ ...fixture('analytics_breakdown').rows[0], cache_miss_reasons: { future_reason: 3, none: 2 } });
+  const group = d.decodeAnalyticsGroup({
+    ...fixture('analytics_breakdown').rows[0],
+    cache_miss_reasons: { future_reason: 3, none: 2 },
+    input_transformations: { 'thinking_dropped.future_reason': 1 },
+    input_transformations_moved: 1,
+    input_transformations_none: 1,
+  });
   assert.equal(group.cacheMissReasons.future_reason, 3, 'the breakdown keeps the unknown key under its name');
   assert.equal(group.cacheMissReasons.none, 2);
   assert.equal(group.cacheMissReasons.not_requested, 0, 'every known reason stays present so each column draws');
@@ -2068,9 +2091,44 @@ test('a cache-miss reason the console does not know keeps its own name on the at
   const summed = d.sumGroups([group, group, folded]);
   assert.equal(summed.cacheMissReasons.future_reason, 7);
   assert.equal(summed.cacheMissReasons.none, 4);
+  // The folded row's attempts carry no map, so the dropped blocks sum the two decoded groups alone.
+  assert.deepEqual([{ ...summed.inputTransformations }, summed.inputTransformationsMoved, summed.inputTransformationsNone], [{ 'thinking_dropped.future_reason': 2 }, 2, 2], 'the dropped blocks sum per key and in both counts');
   assert.deepEqual(d.missReasonOrder([group, { cacheMissReasons: { a_reason: 1, none: 0 } }]), [...d.CACHE_MISS_REASONS, 'a_reason', 'future_reason'], 'the known ten in reading order, then the rest alphabetically');
   assert.equal(d.missLabel('future_reason'), 'future_reason');
   assert.equal(d.missLabel('messages_changed'), 'History edited');
+});
+
+// A decoded row whose attempts carry the given maps and moves, written past the decoder so the fold's cases read the
+// fold alone.
+const droppedRow = (...attempts) => {
+  const base = d.decodeRequest({ attempts: [{ index: 1 }] });
+  return { ...base, attempts: attempts.map(([inputTransformations, moved = null]) => ({ ...base.attempts[0], response: { ...base.attempts[0].response, inputTransformations }, selection: d.decodeSelection({ moved }) })) };
+};
+
+test('the fold counts a request once under each key and an empty answer apart', () => {
+  const [group] = d.foldGroups(
+    [
+      droppedRow([{ 'thinking_dropped.model_binding_mismatch': { blocks: 154, firstMessage: 3 } }]),
+      droppedRow([{}]),
+      // The fold reads the serving attempt alone, so the first attempt's key counts nowhere.
+      droppedRow([{ 'thinking_dropped.prefix_binding_mismatch': { blocks: 2, firstMessage: 1 } }], [null]),
+    ],
+    'all',
+  );
+  assert.deepEqual([{ ...group.inputTransformations }, group.inputTransformationsNone], [{ 'thinking_dropped.model_binding_mismatch': 1 }, 1]);
+});
+
+test('the fold counts a move only where an account key is listed', () => {
+  const [group] = d.foldGroups(
+    [
+      droppedRow([{ 'thinking_dropped.prefix_binding_mismatch': { blocks: 1, firstMessage: 0 } }, 'shed']),
+      // A word of a key may hold a dot, so this type holds one, and a test at the first dot reads no account reason here.
+      droppedRow([{ 'thinking.dropped.organization_binding_mismatch': { blocks: 1, firstMessage: 0 } }, 'shed']),
+      droppedRow([{ 'thinking_dropped.end_user_binding_mismatch': { blocks: 1, firstMessage: 0 } }, null]),
+    ],
+    'all',
+  );
+  assert.equal(group.inputTransformationsMoved, 1);
 });
 
 test('a cache-miss reason named like an object member keeps its name as its label and its count as a number in every sum', async () => {

@@ -4,6 +4,7 @@ import { countOf, emptyCounts } from '@/lib/counts';
 import { expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, hitUnderReason, latencySamples, servedMissReason, servingAttempt } from '@/lib/dimensions';
 import { earlierHolderLabel, keyLifetime, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, quartet } from '@/lib/histogram';
+import { accountBound } from '@/lib/inputTransformations';
 import { matchesPattern } from '@/lib/pattern';
 import { iso } from './decode';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, RequestLog, RequestPage } from './types';
@@ -37,6 +38,9 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   failovers: 0,
   histograms: { durationMs: emptyHistogram(), outputTps: emptyHistogram(), ttfbMs: emptyHistogram(), ttftMs: emptyHistogram() },
   incomplete: 0,
+  inputTransformations: emptyCounts(),
+  inputTransformationsMoved: 0,
+  inputTransformationsNone: 0,
   keptWarm: { planRequests: 0, planTokens1h: 0, planTokens5m: 0, requests: 0, tokens1h: 0, tokens5m: 0 },
   key,
   keyCreatedAt: null,
@@ -327,6 +331,16 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
       if (hitUnderReason(r)) g.cacheMissReasonHits[reason] = countOf(g.cacheMissReasonHits, reason) + 1;
     }
     if (expiredBetweenTurns(r)) g.expiredBetweenTurns += 1;
+    // The rollup's rule: a request counts once under each key whatever its blocks, since the readers count requests,
+    // and an answer without the member counts nowhere.
+    const served = servingAttempt(r);
+    const dropped = served?.response.inputTransformations ?? null;
+    if (served && dropped) {
+      const keys = Object.keys(dropped);
+      for (const key of keys) g.inputTransformations[key] = countOf(g.inputTransformations, key) + 1;
+      if (keys.length === 0) g.inputTransformationsNone += 1;
+      if ((served.selection?.moved ?? null) !== null && keys.some(accountBound)) g.inputTransformationsMoved += 1;
+    }
   }
   for (const { group: g, rows: list } of groups.values()) {
     const samples = list.map(latencySamples);
@@ -402,7 +416,7 @@ const plusBoth = <K extends string>(a: Record<K, number> | null, b: Record<K, nu
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
   for (const g of groups) {
-    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'clientCanceled', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'probeCostUsd', 'rateLimited', 'refused', 'rejected', 'requests', 'savingUsd', 'succeeded', 'uncacheable', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
+    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'clientCanceled', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'inputTransformationsMoved', 'inputTransformationsNone', 'probeCostUsd', 'rateLimited', 'refused', 'rejected', 'requests', 'savingUsd', 'succeeded', 'uncacheable', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
     out.cost = plusSplit(out.cost, g.cost);
     out.billed = plusSplit(out.billed, g.billed);
     out.costEquivalent = plus(out.costEquivalent, g.costEquivalent);
@@ -417,6 +431,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     for (const [code, n] of Object.entries(g.refusals)) out.refusals[code] = countOf(out.refusals, code) + n;
     for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = countOf(out.cacheMissReasons, reason) + n;
     for (const [reason, n] of Object.entries(g.cacheMissReasonHits)) out.cacheMissReasonHits[reason] = countOf(out.cacheMissReasonHits, reason) + n;
+    for (const [key, n] of Object.entries(g.inputTransformations)) out.inputTransformations[key] = countOf(out.inputTransformations, key) + n;
     if (g.fromRequests) out.fromRequests = true;
     out.keptWarm = plusBoth(out.keptWarm, g.keptWarm);
     for (const k of ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'] as const) out.probes[k] += g.probes[k];

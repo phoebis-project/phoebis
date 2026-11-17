@@ -366,6 +366,10 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     failovers,
     histograms,
     incomplete: outcomes.incomplete,
+    // Every mock hour reads as one the router folded before it counted the dropped thinking blocks.
+    inputTransformations: emptyCounts(),
+    inputTransformationsMoved: 0,
+    inputTransformationsNone: 0,
     // A row's funding is its credited request's, so the plan-funded credits are the plan rows' own.
     keptWarm: { planRequests: planKept.requests, planTokens1h: planKept.tokens1h, planTokens5m: planKept.tokens5m, ...kept },
     key,

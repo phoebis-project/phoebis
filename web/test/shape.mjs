@@ -26,9 +26,11 @@ export const OPAQUE = (path) => path.endsWith('.detail');
  * session spend part's `billedUsdByAccount` holds one entry per account that billed the part's requests, so its keys
  * are the accounts and differ from one session to another. A burn point's three plan figure maps hold one entry per
  * plan tier of the cost model's capacity rows, so their keys are the cost model's.
+ * An attempt's `inputTransformations` holds one entry per `<type>.<reason>` key the upstream named for the thinking
+ * blocks it dropped, and a group's one count per such key, so their keys are the upstream's words.
  * Matched by path only where the fixture's own shape there is an object, so a same-named scalar
  * (`Overview.hourly[].errors`, a plain count) still takes the ordinary type check below. */
-const MAP_PATHS = ['.errors', '.refusals', '.cacheMissReasons', '.cacheMissReasonHits', '.movesPerHour', '.moves', '.corrections', '.costShares', '.windows', '.billedUsdByAccount', '.equivalentByTier', '.fableEquivalentByTier', '.fiveHourEquivalentByTier'];
+const MAP_PATHS = ['.errors', '.refusals', '.cacheMissReasons', '.cacheMissReasonHits', '.movesPerHour', '.moves', '.corrections', '.costShares', '.windows', '.billedUsdByAccount', '.equivalentByTier', '.fableEquivalentByTier', '.fiveHourEquivalentByTier', '.inputTransformations'];
 const MAP = (path, want) => MAP_PATHS.some((suffix) => path.endsWith(suffix)) && typeof want === 'object' && want !== null && !Array.isArray(want);
 /**
  * The entry kinds a map admits beside its first entry's own, by the path the map sits at: a request row's share map

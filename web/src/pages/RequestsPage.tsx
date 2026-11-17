@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import type { Account, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings } from '@/api/types';
+import type { Account, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, InputTransformations, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings } from '@/api/types';
 import { CLASSIFIER_VALUES, REFUSAL_CATEGORIES, REQUEST_OUTCOME_VALUES, STOP_REASONS } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useFollow, usePaging } from '@/app/useFollow';
@@ -34,6 +34,7 @@ import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, row
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, modelTitle, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
+import { transformationLabel, transformationOrder } from '@/lib/inputTransformations';
 import { costCellOf, costHeaderTitle, type CostTable, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, orderedTokens, requestCostUnit, requestHintArgs, requestOrder, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink, words } from '@/lib/routingLog';
@@ -648,6 +649,7 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
                       { label: 'Answer', value: answer.length ? <Chips chips={answer} /> : <span className="muted">none</span> },
                       { label: 'Cache', value: <CacheValue attempt={serving} request={r} /> },
                       { label: 'Diagnostics', title: 'Who put diagnostics.previous_message_id on the body the upstream compared', value: <DiagnosticsValue source={r.diagnosticsSource} /> },
+                      { label: 'Dropped thinking', title: DROPPED_THINKING_TITLE, value: <DroppedThinkingValue dropped={serving.response.inputTransformations} source={r.thinkingDiagnosticsSource} /> },
                     ]
                   : []),
               ]}
@@ -888,6 +890,37 @@ function DiagnosticsValue({ source }: { source: DiagnosticsSource | null }) {
   if (source === 'client') return <>sent by the client</>;
   if (source === 'router') return <>added by the router</>;
   return <span className="muted">none</span>;
+}
+
+const DROPPED_THINKING_TITLE = "The thinking blocks the upstream dropped from this request's history, and who sent the token that asks for the report";
+const NOT_REQUESTED_TITLE = 'No thinking-binding token is on record for this request, so nothing asked the upstream for the report. A request stored before the router kept the sender reads the same';
+const THINKING_SENDER: Record<DiagnosticsSource, string> = { client: 'token sent by the client', router: 'token added by the router' };
+
+/**
+ * The serving answer's dropped thinking blocks beside who sent the token that asks for them. An answer that listed
+ * nothing and one without the list read apart, and a request that sent no token asked for no report at all.
+ */
+function DroppedThinkingValue({ dropped, source }: { dropped: InputTransformations | null; source: DiagnosticsSource | null }) {
+  const sender = source === null ? null : THINKING_SENDER[source];
+  if (dropped === null) {
+    if (sender === null) return <span className="muted" title={NOT_REQUESTED_TITLE}>not requested</span>;
+    return <>not reported, {sender}</>;
+  }
+  const keys = transformationOrder(dropped);
+  if (keys.length === 0) return <>{sender === null ? 'none dropped' : `none dropped, ${sender}`}</>;
+  return (
+    <>
+      {keys.map((key) => {
+        const { blocks, firstMessage } = dropped[key];
+        return (
+          <div key={key}>
+            {transformationLabel(key)}: {fmtInt(blocks)} {blocks === 1 ? 'block' : 'blocks'}, first at messages.{firstMessage}
+          </div>
+        );
+      })}
+      {sender !== null && <div className="secondary">{sender}</div>}
+    </>
+  );
 }
 
 /** A reader of `read`'s value that runs it once, the first time the value is asked for. */

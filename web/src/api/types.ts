@@ -698,7 +698,11 @@ export interface CreatedApiKey {
  */
 export type AutoMode = (typeof AUTO_MODE_VALUES)[number];
 export const AUTO_MODE_VALUES = ['body_shape', 'server', 'stripped'] as const;
-/** Who put `diagnostics.previous_message_id` on the body the upstream compared. */
+/**
+ * Who sent a token that asks the upstream for a report: `diagnostics.previous_message_id` on the body the upstream
+ * compared, for the cache diagnostics, or the `thinking-binding-controls-2026-08-01` beta, for the dropped thinking
+ * blocks.
+ */
 export type DiagnosticsSource = (typeof DIAGNOSTICS_SOURCE_VALUES)[number];
 export const DIAGNOSTICS_SOURCE_VALUES = ['client', 'router'] as const;
 export const REQUEST_KIND_VALUES = ['count_tokens', 'inference', 'probe'] as const;
@@ -723,10 +727,22 @@ export interface AttemptWindow {
  */
 export type CacheMissReason = string;
 
+/**
+ * The thinking blocks an answer dropped from the request's history, or let through, per `<type>.<reason>` key in the
+ * upstream's two words (`other` for a word past 64 bytes): the blocks under the key and the lowest index `i` of their
+ * `messages.{i}` paths. The keys are data, so a key the console does not know is kept as sent.
+ */
+export type InputTransformations = Record<string, { blocks: number; firstMessage: number }>;
+
 /** What the answer said about itself; `servedModel` only when it differs from the resolved model. */
 export interface AttemptResponse {
   clearedInputTokens: number | null;
   inferenceGeo: string | null;
+  /**
+   * An empty map for an answer that listed nothing, and null for an answer without the member and for an attempt the
+   * router recorded before it kept it.
+   */
+  inputTransformations: InputTransformations | null;
   refusalCategory: string | null;
   refusalRecommendedModel: string | null;
   servedModel: string | null;
@@ -910,7 +926,7 @@ export interface RequestLog {
   costEquivalent: number | null;
   costShares: CostShares | null;
   costUsd: number;
-  /** The member's source on the serving leg's body, and `null` for a body that went without one. */
+  /** Who put `diagnostics.previous_message_id` on the serving leg's body, `null` for a body that went without it. */
   diagnosticsSource: DiagnosticsSource | null;
   durationMs: number | null;
   errorCode: string | null;
@@ -954,6 +970,12 @@ export interface RequestLog {
    * there, so every sum over it keeps a number.
    */
   storedTokens: { input: number | null; output: number | null };
+  /**
+   * Who put `thinking-binding-controls-2026-08-01` on the request: `client` where the caller's `anthropic-beta` list
+   * carried it, `router` where the relay added it under the pool's `thinking_diagnostics` switch, and `null` for a
+   * request that went without it and on a row stored before the router kept the sender.
+   */
+  thinkingDiagnosticsSource: DiagnosticsSource | null;
   /**
    * The serving attempt's account tier, null for an API-key account, a request no attempt served and an unknown tier.
    */
@@ -1667,6 +1689,15 @@ export interface AnalyticsGroup {
   fromRequests?: true;
   histograms: LatencyHistograms;
   incomplete: number;
+  /**
+   * The requests per key of the blocks their serving attempt's answer dropped, a request counted once under each key it
+   * listed whatever its blocks. Empty for an hour the router folded before it counted the blocks.
+   */
+  inputTransformations: Record<string, number>;
+  /** The moved requests whose serving attempt's answer dropped a block under one of the two account reasons. */
+  inputTransformationsMoved: number;
+  /** The requests whose serving attempt's answer listed no dropped block. */
+  inputTransformationsNone: number;
   /**
    * The kept-warm requests and the tokens they read warm, booked per TTL, each with its plan-funded part: the credits
    * whose request a plan account served.

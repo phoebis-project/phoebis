@@ -563,7 +563,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       overageInUse: kind === 'oauth' ? false : null,
       // Read off the day's rows once each stands as it ends (`walkSessionTurns`).
       previousInputTokens: null,
-      response: { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
+      response: { clearedInputTokens: null, inferenceGeo: 'us', inputTransformations: null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
       // Drawn once the events exist, since a trace names the move an event records.
       selection: null,
       // An answer's usage names the tier it ran on, and a token count's answer carries no usage. Every drawn answer ran
@@ -733,6 +733,7 @@ function buildRequests(): RequestLog[] {
       usage,
       costUsd: round(costOf(model, usage, false, atMs), 4),
       diagnosticsSource: source,
+      thinkingDiagnosticsSource: null,
       errorCode,
       sessionId,
       agentId: agent.id,
@@ -1264,7 +1265,7 @@ function storyRow(seed: StorySeed): RequestLog {
       overageInUse: oauth && !usageBased ? false : null,
       // Read off the day's rows once each stands as it ends (`walkSessionTurns`).
       previousInputTokens: null,
-      response: { clearedInputTokens: null, inferenceGeo: answer ? (seed.geo ?? 'us') : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: answer ? (fast ? 'fast' : 'standard') : null, stopReason: answer && !stopless ? 'end_turn' : null, stopSequence: null },
+      response: { clearedInputTokens: null, inferenceGeo: answer ? (seed.geo ?? 'us') : null, inputTransformations: null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: answer ? (fast ? 'fast' : 'standard') : null, stopReason: answer && !stopless ? 'end_turn' : null, stopSequence: null },
       // The routing log's records write each story attempt's trace, so the drawer and the card read one decision.
       selection: null,
       // The tier is read off the answer's usage, which a token count's answer carries none of.
@@ -1330,6 +1331,7 @@ function storyRow(seed: StorySeed): RequestLog {
     sessionId,
     shape: { ...REQUEST_SAMPLE.shape, requestedSpeed: fast ? 'fast' : null },
     status,
+    thinkingDiagnosticsSource: null,
     transport: kind === 'inference' ? 'sse' : 'json',
     ttfbMs,
     ttftMs,

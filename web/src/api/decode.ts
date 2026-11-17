@@ -1,6 +1,6 @@
 import type {
   Account, AccountCatalog, AccountKind, AccountRollup, AgentRequests, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FundedSum, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyFigures, KeyModels, Lifecycle, LimitResets, LimitResetsRead, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FundedSum, GuardVerdict, InputTransformations, KeepaliveOverview, KeepaliveRecipe, KeyFigures, KeyModels, Lifecycle, LimitResets, LimitResetsRead, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, ResetUse, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionDay, SessionInfo, SessionSpend, SessionSpendPart, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
@@ -449,7 +449,13 @@ const attemptWindows = (v: unknown) => list(v).map(rec).flatMap((w) => { const i
 const usageOf = (v: unknown) => { const u = rec(v); return { cacheRead: num(u.cache_read), cacheWrite1h: num(u.cache_write_1h), cacheWrite5m: num(u.cache_write_5m), input: num(u.input), output: num(u.output), thinking: num(u.thinking), webFetch: num(u.web_fetch), webSearch: num(u.web_search) }; };
 const phasesOf = (v: unknown, at: string): RequestPhases => { const p = rec(v); return { finishedAt: isoOrNull(p.finished_at), firstContentAt: isoOrNull(p.first_content_at), headAt: isoOrNull(p.head_at), receivedAt: isoOr(p.received_at, at), selectedAt: isoOrNull(p.selected_at), streamEndAt: isoOrNull(p.stream_end_at), writtenAt: isoOrNull(p.written_at) }; };
 const shapeOf = (v: unknown): RequestShape => { const s = rec(v); return { contextEdits: strings(s.context_edits), effort: strOrNull(s.effort), maxTokens: numOrNull(s.max_tokens), messageCount: num(s.message_count), requestedServiceTier: strOrNull(s.requested_service_tier), requestedSpeed: strOrNull(s.requested_speed), systemBlocks: num(s.system_blocks), temperature: numOrNull(s.temperature), thinkingBudget: numOrNull(s.thinking_budget), thinkingType: strOrNull(s.thinking_type), toolCount: num(s.tool_count) }; };
-const responseOf = (v: unknown): AttemptResponse => { const r = rec(v); return { clearedInputTokens: numOrNull(r.cleared_input_tokens), inferenceGeo: strOrNull(r.inference_geo), refusalCategory: strOrNull(r.refusal_category), refusalRecommendedModel: strOrNull(r.refusal_recommended_model), servedModel: strOrNull(r.served_model), speed: strOrNull(r.speed), stopReason: strOrNull(r.stop_reason), stopSequence: strOrNull(r.stop_sequence) }; };
+/**
+ * The blocks an answer dropped, per key. An empty object stays an empty map apart from a null, since the none count
+ * and the drawer's words read an answer that listed nothing apart from one without the member.
+ */
+const inputTransformationsOf = (v: unknown): InputTransformations | null =>
+  orNull(v, (m) => Object.fromEntries(Object.entries(m).map(([key, x]) => [key, { blocks: num(rec(x).blocks), firstMessage: num(rec(x).first_message) }])));
+const responseOf = (v: unknown): AttemptResponse => { const r = rec(v); return { clearedInputTokens: numOrNull(r.cleared_input_tokens), inferenceGeo: strOrNull(r.inference_geo), inputTransformations: inputTransformationsOf(r.input_transformations), refusalCategory: strOrNull(r.refusal_category), refusalRecommendedModel: strOrNull(r.refusal_recommended_model), servedModel: strOrNull(r.served_model), speed: strOrNull(r.speed), stopReason: strOrNull(r.stop_reason), stopSequence: strOrNull(r.stop_sequence) }; };
 
 /**
  * The obstacles the router names for a candidate it passed over: the eligibility checks (`attempted`, `budget`,
@@ -497,7 +503,7 @@ export function decodeRequest(v: unknown): RequestLog {
     outcome: oneOf(REQUEST_OUTCOME_VALUES, r.outcome) ?? 'failed',
     phases: phasesOf(r.phases, isoOr(r.at, epoch)),
     poolId: strOrNull(r.pool_id), prevToolMs: numOrNull(r.prev_tool_ms), refused: bool(r.refused), requestClass: strOrNull(r.request_class), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape), shareReason: r.share_reason === 'client_classifier' ? 'client_classifier' : null,
-    status: numOrNull(r.status), storedTokens: { input: numOrNull(rec(r.usage).input), output: numOrNull(rec(r.usage).output) }, tier: strOrNull(r.tier), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), turnOrigin: strOrNull(r.turn_origin), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
+    status: numOrNull(r.status), storedTokens: { input: numOrNull(rec(r.usage).input), output: numOrNull(rec(r.usage).output) }, thinkingDiagnosticsSource: oneOf(DIAGNOSTICS_SOURCE_VALUES, r.thinking_diagnostics_source), tier: strOrNull(r.tier), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), turnOrigin: strOrNull(r.turn_origin), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
   };
 }
 
@@ -727,6 +733,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     errors: counts(g.errors), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
     incomplete: num(g.incomplete),
+    inputTransformations: counts(g.input_transformations), inputTransformationsMoved: num(g.input_transformations_moved), inputTransformationsNone: num(g.input_transformations_none),
     keptWarm: {
       planRequests: num(rec(g.kept_warm).plan_requests), planTokens1h: num(rec(g.kept_warm).plan_tokens_1h), planTokens5m: num(rec(g.kept_warm).plan_tokens_5m),
       requests: num(rec(g.kept_warm).requests), tokens1h: num(rec(g.kept_warm).tokens_1h), tokens5m: num(rec(g.kept_warm).tokens_5m),
