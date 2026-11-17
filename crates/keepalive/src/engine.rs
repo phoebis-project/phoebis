@@ -2749,6 +2749,8 @@ impl Engine {
             BusEvent::ResponseHead(head) => self.on_head(head),
             BusEvent::ResponseChunk(chunk) => self.on_chunk(chunk),
             BusEvent::RequestComplete(complete) => self.on_complete(complete),
+            // A feature call carries no session and no model, so it moves nothing the engine keeps warm.
+            BusEvent::FeatureCall(_) => {}
         }
         self.counted_down();
         if flushes {

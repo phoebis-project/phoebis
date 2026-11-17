@@ -346,6 +346,7 @@ pub(crate) fn observe(state: &mut ReaderState, event: &Event) {
             }
         }
         Event::AccountSelected(_)
+        | Event::FeatureCall(_)
         | Event::RequestObserved(_)
         | Event::ResponseChunk(_)
         | Event::ResponseHead(_) => {}

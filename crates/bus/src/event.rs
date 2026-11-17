@@ -536,6 +536,56 @@ pub struct RequestComplete {
     pub finished_at: i64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeatureOutcome {
+    Canceled,
+    Failed,
+    Forwarded,
+}
+
+impl FeatureOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FeatureOutcome::Canceled => "canceled",
+            FeatureOutcome::Failed => "failed",
+            FeatureOutcome::Forwarded => "forwarded",
+        }
+    }
+}
+
+/// How a feature endpoint request ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FeatureEnd {
+    /// The domain check, sent upstream without an account. It leaves no row.
+    DomainCheck { outcome: FeatureOutcome },
+    /// Refused by the router with a 401 or a 403. It leaves no row.
+    Refused { code: &'static str },
+    /// Sent upstream under an account, the one end that leaves a row. `status` is the status that went back,
+    /// `None` where no upstream head arrived, and `error_code` the router's code where it answered by itself.
+    Sent {
+        account_id: String,
+        error_code: Option<&'static str>,
+        outcome: FeatureOutcome,
+        status: Option<u16>,
+    },
+}
+
+/// One feature endpoint request at its end.
+#[derive(Clone, Debug)]
+pub struct FeatureCall {
+    pub duration_ms: u64,
+    pub end: FeatureEnd,
+    /// `artifacts` or `connectors`, `None` for the domain check and for a request that matched no row.
+    pub feature: Option<&'static str>,
+    pub id: String,
+    /// `None` on a 401 and on the domain check.
+    pub key_id: Option<String>,
+    pub method: String,
+    /// The path without its query.
+    pub path: String,
+    pub received_at: i64,
+}
+
 /// One queue carries every variant, so a subscriber sees a request's chunks between its head and its
 /// completion and never has to reconcile two receivers.
 // Boxing the completion would put an allocation on every clone the bus makes per subscriber, to shrink a
@@ -544,6 +594,7 @@ pub struct RequestComplete {
 #[derive(Clone, Debug)]
 pub enum Event {
     AccountSelected(AccountSelected),
+    FeatureCall(FeatureCall),
     RequestComplete(RequestComplete),
     RequestObserved(RequestObserved),
     ResponseChunk(ResponseChunk),
@@ -554,6 +605,7 @@ impl Event {
     pub fn request_id(&self) -> &str {
         match self {
             Event::AccountSelected(e) => &e.request_id,
+            Event::FeatureCall(e) => &e.id,
             Event::RequestComplete(e) => &e.request_id,
             Event::RequestObserved(e) => &e.request_id,
             Event::ResponseChunk(e) => &e.request_id,

@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_bus::{spawn_subscriber, Bus, Delivery, Subscriber, SubscriberStats};
+use phoebis_bus::{
+    spawn_subscriber, Bus, Delivery, FeatureCall, FeatureEnd, Subscriber, SubscriberStats,
+};
 use phoebis_oauth::Clock;
 use phoebis_relay::CatalogChange;
 use phoebis_routing::{MemberSpend, RegistrySnapshot, Report, RouterHandle, SEVEN_DAY};
@@ -609,12 +611,12 @@ async fn assemble(
     }
 }
 
-/// A request record waits for the writer's channel, since the row it names can never be written again once
-/// the request that produced it is gone. An event or a sample keeps the drop-and-count `record` always used.
+/// A request record and a feature call wait for the writer's channel, since neither can be offered again once the
+/// request that produced it is gone. An event or a sample keeps the drop-and-count `record` always used.
 async fn land_all(ledger: &Ledger, records: Vec<Record>) {
     for record in records {
         match record {
-            Record::Request { .. } => ledger.record_request(record).await,
+            Record::FeatureCall(_) | Record::Request { .. } => ledger.record_request(record).await,
             other => ledger.record(other),
         }
     }
@@ -1558,11 +1560,48 @@ fn table_of(record: &Record) -> &'static str {
         Record::CacheMap(_) => "cache_map",
         Record::Decision(_) => "decisions",
         Record::Event(_) => "events",
+        Record::FeatureCall(_) => "feature_calls",
         Record::Keepalive(_) => "rollups",
         Record::Request { .. } => "requests",
         Record::RouterStarted { .. } => "events",
         Record::Samples { .. } => "samples",
     }
+}
+
+/// The row of a call sent upstream under an account. A refusal and a domain check leave none, since no account's
+/// credential left Phoebis for them, and the landing counts them alone.
+fn insert_feature_call_in(
+    conn: &rusqlite::Connection,
+    call: &FeatureCall,
+) -> Result<(), LedgerError> {
+    let FeatureEnd::Sent {
+        account_id,
+        error_code,
+        outcome,
+        status,
+    } = &call.end
+    else {
+        return Ok(());
+    };
+    conn.prepare_cached(
+        "INSERT INTO feature_calls (id, received_at, key_id, feature, account_id, method, path, status, outcome, \
+         error_code, duration_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+    )?
+    .execute(rusqlite::params![
+        call.id,
+        call.received_at,
+        // A sent call passed the key check and matched a row, so both are set.
+        call.key_id.as_deref().unwrap_or_default(),
+        call.feature.unwrap_or_default(),
+        account_id,
+        call.method,
+        call.path,
+        status,
+        outcome.as_str(),
+        error_code,
+        call.duration_ms as i64,
+    ])?;
+    Ok(())
 }
 
 impl Handles {
@@ -1618,6 +1657,7 @@ impl Handles {
                             insert_event_in(&tx, event)?;
                             crate::rollup::fold_event(&tx, event)?;
                         }
+                        Record::FeatureCall(call) => insert_feature_call_in(&tx, call)?,
                         Record::Keepalive(delta) => {
                             crate::rollup::fold_keepalive(&tx, delta)?;
                         }
@@ -1729,6 +1769,7 @@ impl Handles {
                         Record::Samples { quota, poll, .. } => {
                             metrics.observe_samples(quota, *poll)
                         }
+                        Record::FeatureCall(call) => metrics.observe_feature_call(call),
                         _ => {}
                     }
                 }

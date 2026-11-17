@@ -767,6 +767,128 @@ pub fn list_request_page(
     })
 }
 
+/// The feature call list's filters, each list empty for no filter and each end of the range inclusive, as the request
+/// list's are.
+#[derive(Clone, Debug, Default)]
+pub struct FeatureCallFilter {
+    pub accounts: Vec<String>,
+    pub features: Vec<String>,
+    pub from: Option<i64>,
+    pub keys: Vec<String>,
+    pub outcomes: Vec<String>,
+    pub to: Option<i64>,
+}
+
+/// One row of `feature_calls`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeatureCallRow {
+    pub account_id: String,
+    pub duration_ms: i64,
+    pub error_code: Option<String>,
+    pub feature: String,
+    pub id: String,
+    pub key_id: String,
+    pub method: String,
+    pub outcome: String,
+    pub path: String,
+    pub received_at: i64,
+    pub status: Option<i64>,
+}
+
+/// `<received_at>:<id>`, the feature call list's cursor: a page's last row. The page after it starts past that row in
+/// the list's order, newest first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeatureCallCursor {
+    pub id: String,
+    pub received_at: i64,
+}
+
+impl FeatureCallCursor {
+    /// The id may hold a `:` of its own, so the time is read off the first.
+    pub fn parse(s: &str) -> Option<FeatureCallCursor> {
+        let (received_at, id) = s.split_once(':')?;
+        Some(FeatureCallCursor {
+            id: id.to_string(),
+            received_at: received_at.parse().ok()?,
+        })
+    }
+
+    pub fn encode(&self) -> String {
+        format!("{}:{}", self.received_at, self.id)
+    }
+}
+
+/// The feature calls under `filter`, newest first by `received_at` and then by id, from `cursor` on. The second
+/// value is the cursor past the page's last row, set only while a row lies beyond it.
+pub fn list_feature_calls(
+    conn: &Connection,
+    filter: &FeatureCallFilter,
+    cursor: Option<&FeatureCallCursor>,
+    limit: usize,
+) -> Result<(Vec<FeatureCallRow>, Option<String>), LedgerError> {
+    let mut args = Vec::new();
+    let mut clauses = Vec::new();
+    in_list("account_id", &filter.accounts, &mut args, &mut clauses);
+    in_list("feature", &filter.features, &mut args, &mut clauses);
+    in_list("key_id", &filter.keys, &mut args, &mut clauses);
+    in_list("outcome", &filter.outcomes, &mut args, &mut clauses);
+    if let Some(from) = filter.from {
+        args.push(from.into());
+        clauses.push(format!("received_at >= ?{}", args.len()));
+    }
+    if let Some(to) = filter.to {
+        args.push(to.into());
+        clauses.push(format!("received_at <= ?{}", args.len()));
+    }
+    if let Some(cursor) = cursor {
+        args.push(cursor.received_at.into());
+        let n = args.len();
+        args.push(cursor.id.clone().into());
+        clauses.push(format!(
+            "(received_at < ?{n} OR (received_at = ?{n} AND id < ?{}))",
+            n + 1
+        ));
+    }
+    let r#where = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    };
+    // One row past the page says whether a next page exists.
+    args.push(((limit + 1) as i64).into());
+    let sql = format!(
+        "SELECT account_id, duration_ms, error_code, feature, id, key_id, method, outcome, path, received_at, status \
+         FROM feature_calls{where} ORDER BY received_at DESC, id DESC LIMIT ?{}",
+        args.len()
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt
+        .query_map(params_from_iter(args), |r| {
+            Ok(FeatureCallRow {
+                account_id: r.get(0)?,
+                duration_ms: r.get(1)?,
+                error_code: r.get(2)?,
+                feature: r.get(3)?,
+                id: r.get(4)?,
+                key_id: r.get(5)?,
+                method: r.get(6)?,
+                outcome: r.get(7)?,
+                path: r.get(8)?,
+                received_at: r.get(9)?,
+                status: r.get(10)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let next = next_page(&mut rows, limit, |row| {
+        FeatureCallCursor {
+            id: row.id.clone(),
+            received_at: row.received_at,
+        }
+        .encode()
+    });
+    Ok((rows, next))
+}
+
 /// One refusal row: the request's canonical model, the category (`-` for none) and the refused requests.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefusalCount {

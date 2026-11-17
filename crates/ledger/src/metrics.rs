@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use phoebis_bus::{Bus, SubscriberStats};
+use phoebis_bus::{Bus, FeatureCall, FeatureEnd, SubscriberStats};
 use phoebis_oauth::Clock;
 use phoebis_routing::{RouterHandle, WriterStatus, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::CooldownScope;
@@ -25,6 +25,13 @@ use crate::rollup::UNATTRIBUTED;
 use crate::task::Ledger;
 
 const LOCK_POISONED: &str = "metrics registry poisoned by a prior panic";
+
+/// The feature word of the domain check, which acts for no feature of its own.
+const DOMAIN_CHECK: &str = "domain_check";
+
+/// The feature word of a refusal that matched no row. A 401 is one of them, since the key check runs ahead of the
+/// table.
+const NO_FEATURE: &str = "none";
 
 type Labels = Vec<(&'static str, String)>;
 
@@ -173,6 +180,36 @@ impl Metrics {
         }
     }
 
+    /// One feature endpoint request at its end: a call sent upstream, the domain check among them, or a refusal. No
+    /// label holds a path, a status or an account, so the series stay bounded by the keys.
+    pub fn observe_feature_call(&self, call: &FeatureCall) {
+        let key = call.key_id.clone().unwrap_or_else(|| UNATTRIBUTED.into());
+        let feature = call.feature.unwrap_or(NO_FEATURE).to_string();
+        let (family, labels) = match &call.end {
+            FeatureEnd::DomainCheck { outcome } => (
+                Family::FeatureCallsTotal,
+                vec![
+                    ("feature", DOMAIN_CHECK.into()),
+                    ("key", key),
+                    ("outcome", outcome.as_str().into()),
+                ],
+            ),
+            FeatureEnd::Refused { code } => (
+                Family::FeatureRefusalsTotal,
+                vec![("code", (*code).into()), ("feature", feature), ("key", key)],
+            ),
+            FeatureEnd::Sent { outcome, .. } => (
+                Family::FeatureCallsTotal,
+                vec![
+                    ("feature", feature),
+                    ("key", key),
+                    ("outcome", outcome.as_str().into()),
+                ],
+            ),
+        };
+        self.add(family, labels, 1.0);
+    }
+
     /// Sets each sample's series and, under `poll`, removes the `phoebis_account_ratelimit_utilization` series of a
     /// shared window the account's samples lack where they carry at least one shared window, so a dropped window's
     /// series leaves with it. A head removes nothing, and it sets no shared window the account's newest clean poll
@@ -266,6 +303,8 @@ impl Metrics {
             };
             match family {
                 Family::AttemptsTotal
+                | Family::FeatureCallsTotal
+                | Family::FeatureRefusalsTotal
                 | Family::KeepaliveChainContradictionsTotal
                 | Family::KeepaliveProbesTotal
                 | Family::KeepaliveSkippedTotal
@@ -498,6 +537,8 @@ metric_families! {
     Attention => ("phoebis_attention", "gauge"),
     BusDroppedTotal => ("phoebis_bus_dropped_total", "counter"),
     BusSubscriberPanicsTotal => ("phoebis_bus_subscriber_panics_total", "counter"),
+    FeatureCallsTotal => ("phoebis_feature_calls_total", "counter"),
+    FeatureRefusalsTotal => ("phoebis_feature_refusals_total", "counter"),
     KeepaliveAgents => ("phoebis_keepalive_agents", "gauge"),
     KeepaliveChainContradictionsTotal => ("phoebis_keepalive_chain_contradictions_total", "counter"),
     KeepaliveProbesTotal => ("phoebis_keepalive_probes_total", "counter"),

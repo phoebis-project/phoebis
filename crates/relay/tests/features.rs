@@ -14,6 +14,7 @@ use axum::http::Request;
 use bytes::Bytes;
 use common::*;
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule, SseEvent};
+use phoebis_bus::{Bus, Delivery, Event, FeatureEnd, FeatureOutcome};
 use phoebis_relay::{Limits, Relay};
 use phoebis_store::{
     AccountState, Cancellation, FeatureOverride, KeyFeatureAccounts, PoolFeatureAccounts,
@@ -915,6 +916,52 @@ async fn each_plane_takes_its_rows() {
     );
     up.shutdown().await;
     connectors.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_call_on_each_plane_publishes_its_end() {
+    let up = fake(vec![
+        ("/api/artifacts/mcp", json_200()),
+        ("/api/frame/", json_200()),
+    ])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", SECRET_A, 0)], both_features_at_a(), bus).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let (status, headers, _) = listener
+        .send(API, &keyed_post("/api/artifacts/mcp", API))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let mut ends = Vec::new();
+    while ends.len() < 2 {
+        let event = tokio::time::timeout(Duration::from_secs(5), sub.events.recv())
+            .await
+            .expect("a call's end stayed off the bus")
+            .expect("the bus stays open");
+        if let Event::FeatureCall(call) = event {
+            ends.push((call.path, call.end));
+        }
+    }
+    ends.sort_by(|a, b| a.0.cmp(&b.0));
+    let sent = FeatureEnd::Sent {
+        account_id: "a".into(),
+        error_code: None,
+        outcome: FeatureOutcome::Forwarded,
+        status: Some(200),
+    };
+    assert_eq!(
+        ends,
+        [
+            ("/api/artifacts/mcp".to_owned(), sent.clone()),
+            ("/api/frame/x".to_owned(), sent)
+        ]
+    );
+    up.shutdown().await;
 }
 
 #[tokio::test]

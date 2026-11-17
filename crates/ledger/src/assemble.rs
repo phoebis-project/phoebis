@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use phoebis_bus::{
-    user_agent_of, AccountSelected, AutoMode, Event, Outcome, Phase, RequestComplete,
+    user_agent_of, AccountSelected, AutoMode, Event, FeatureCall, Outcome, Phase, RequestComplete,
     RequestObserved, ResponseChunk, ResponseHead, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_oauth::Clock;
@@ -42,6 +42,8 @@ pub const MAX_CAPTURE_BYTES: usize = 64 << 20;
 #[allow(clippy::large_enum_variant)]
 pub enum Record {
     Event(EventRecord),
+    /// A feature endpoint request's end, which the writer counts and, for a call sent under an account, lands as a row.
+    FeatureCall(FeatureCall),
     Keepalive(KeepaliveDelta),
     Request {
         request: RequestRecord,
@@ -290,6 +292,8 @@ impl Assembler {
                 Some(entry) => finish(entry, complete, now),
                 None => Vec::new(),
             },
+            // One event carries the whole call, so nothing waits in the map for it.
+            Event::FeatureCall(call) => vec![Record::FeatureCall(call)],
         }
     }
 

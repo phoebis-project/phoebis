@@ -303,11 +303,11 @@ pub struct Probe {
 pub struct Relay {
     accounting: Option<AccountingSource>,
     /// Every body task `relay_body` spawns runs under this, so a shutdown can wait for the completion a body
-    /// task publishes after its connection was cut.
-    bodies: TaskTracker,
+    /// task publishes after its connection was cut. A feature call's end publishes under it too.
+    pub(crate) bodies: TaskTracker,
     pub(crate) body_budget: Arc<BodyBudget>,
     pub(crate) body_reads: BodyReads,
-    bus: Option<Bus>,
+    pub(crate) bus: Option<Bus>,
     catalog: Arc<CatalogService>,
     pub(crate) clock: Clock,
     /// The client the feature calls of the control plane leave through. Without one each of them answers that the

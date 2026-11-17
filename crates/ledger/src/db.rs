@@ -1759,7 +1759,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 4);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 5);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -1922,7 +1922,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 4, "and answered what the connection holds");
+        assert_eq!(version, 5, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -1959,7 +1959,7 @@ mod tests {
                     beside
                         .expect("a read never waited behind an unrelated held read")
                         .unwrap(),
-                    4
+                    5
                 );
             }
         }
@@ -1998,7 +1998,7 @@ mod tests {
         })
         .await;
         let (a, b) = both.expect("two returns woke two waiters");
-        assert_eq!((a.unwrap(), b.unwrap()), (4, 4));
+        assert_eq!((a.unwrap(), b.unwrap()), (5, 5));
         for release in releases {
             release.send(()).unwrap();
         }
@@ -2008,7 +2008,7 @@ mod tests {
         let short = "every connection came back to the pool";
         for (release, task) in hold_every_reader(&db, short).await {
             release.send(()).unwrap();
-            assert_eq!(task.await.unwrap().unwrap(), 4);
+            assert_eq!(task.await.unwrap().unwrap(), 5);
         }
     }
 
@@ -2024,12 +2024,12 @@ mod tests {
         fake_upstream::stays_for(Duration::from_millis(200), || !blocked.is_finished()).await;
         let (release, task) = held.pop().unwrap();
         release.send(()).unwrap();
-        assert_eq!(task.await.unwrap().unwrap(), 4);
+        assert_eq!(task.await.unwrap().unwrap(), 5);
         fake_upstream::wait_for(Duration::from_secs(1), || {
             blocked.is_finished().then_some(())
         })
         .await;
-        assert_eq!(blocked.join().unwrap().unwrap(), 4);
+        assert_eq!(blocked.join().unwrap().unwrap(), 5);
         for (release, task) in held {
             release.send(()).unwrap();
             task.await.unwrap().unwrap();
@@ -2224,11 +2224,11 @@ mod tests {
             "{failed:?}"
         );
         std::fs::rename(&away, &path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 4);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 5);
         let short = "the reader whose reopen failed came back to the pool";
         for (release, task) in hold_every_reader(&db, short).await {
             release.send(()).unwrap();
-            assert_eq!(task.await.unwrap().unwrap(), 4);
+            assert_eq!(task.await.unwrap().unwrap(), 5);
         }
     }
 
@@ -2243,7 +2243,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCanceled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            4,
+            5,
             "the poisoned guard recovered rather than turning every later read into ReadCanceled too"
         );
         let dir = tempfile::tempdir().unwrap();
@@ -2257,7 +2257,7 @@ mod tests {
         let short = "the panicked closure's connection came back to the pool";
         for (release, task) in hold_every_reader(&db, short).await {
             release.send(()).unwrap();
-            assert_eq!(task.await.unwrap().unwrap(), 4);
+            assert_eq!(task.await.unwrap().unwrap(), 5);
         }
     }
 
@@ -2372,7 +2372,7 @@ mod tests {
                 refused,
                 LedgerError::SchemaTooNew {
                     found: 99,
-                    supported: 4,
+                    supported: 5,
                     ..
                 }
             ),
@@ -2443,7 +2443,7 @@ mod tests {
         );
         assert_eq!(
             (estimated_columns(&conn), read_version(&conn).unwrap()),
-            (0, 4)
+            (0, 5)
         );
     }
 
@@ -2560,7 +2560,7 @@ mod tests {
             Some(1),
             "an account hour with a single count stays"
         );
-        assert_eq!(read_version(&conn).unwrap(), 4);
+        assert_eq!(read_version(&conn).unwrap(), 5);
     }
 
     #[tokio::test]

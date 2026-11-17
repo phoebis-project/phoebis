@@ -552,7 +552,7 @@ the new figures.
 
 | Data | Kept for |
 | --- | --- |
-| Requests and their per-session totals, attempts, events, decisions, kept-warm marks | `stats.retention_days` (365 days by default, 0 keeps them forever) |
+| Attempts, decisions, events, feature calls, kept-warm marks, requests and their per-session totals | `stats.retention_days` (365 days by default, 0 keeps them forever) |
 | Quota and extra-usage samples | `stats.retention_days` (365 days by default, 0 keeps them forever) |
 | Resolved credential refresh attempts and registry changes | `stats.retention_days` (365 days by default, 0 keeps them forever) |
 | Captured bodies | The hours the capture named |
@@ -593,7 +593,7 @@ changes how the Latency samples are counted folds the retained requests again be
 ## Metrics
 
 `stats.metrics_listen` (`127.0.0.1:9464` by default) serves `/metrics` in Prometheus text format and nothing else. It
-speaks plain HTTP and asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-five
+speaks plain HTTP and asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-seven
 families are rendered, each with a `# TYPE` line and no `# HELP` line:
 
 | Metric | Type | Labels |
@@ -605,6 +605,8 @@ families are rendered, each with a `# TYPE` line and no `# HELP` line:
 | `phoebis_attention` | gauge | `kind`, `subject` |
 | `phoebis_bus_dropped_total` | counter | `subscriber` |
 | `phoebis_bus_subscriber_panics_total` | counter | `subscriber` |
+| `phoebis_feature_calls_total` | counter | `feature`, `key`, `outcome` |
+| `phoebis_feature_refusals_total` | counter | `code`, `feature`, `key` |
 | `phoebis_keepalive_agents` | gauge | `state` |
 | `phoebis_keepalive_chain_contradictions_total` | counter | `client_version` |
 | `phoebis_keepalive_probes_total` | counter | `outcome`, `pool` |
@@ -667,6 +669,10 @@ Each family means what its entry below says, the text a `# HELP` line would hold
   A subscriber that reads one kind of event counts that kind alone: the attention reader's series counts lost
   completions.
 - `phoebis_bus_subscriber_panics_total` counts the panics that stopped a subscriber of the event bus.
+- `phoebis_feature_calls_total` counts the claude.ai feature calls the router sent upstream, by feature, key and
+  outcome (`canceled`, `failed` or `forwarded`), with the domain check under the feature `domain_check` and the key `-`.
+- `phoebis_feature_refusals_total` counts the claude.ai feature calls the router refused with a 401 or a 403, by code,
+  feature and key, under the feature `none` for a call that matched no feature, each 401 among them.
 - `phoebis_keepalive_agents` reads the agents the keepalive engine retains, one series per state.
 - `phoebis_keepalive_probes_total` counts the keepalive engine's probes, by outcome and pool.
 - `phoebis_keepalive_skipped_total` counts the due probes the keepalive engine withheld, by pool and recipe state.

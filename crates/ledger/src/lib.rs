@@ -84,6 +84,7 @@ pub use query::{
     MAX_POINTS, MAX_RANGE_MS,
 };
 pub use query::{guardrail_sample_page, request_body, request_body_held, SampleRow};
+pub use query::{list_feature_calls, FeatureCallCursor, FeatureCallFilter, FeatureCallRow};
 pub use query::{list_request_page, refusal_categories, RefusalCount, Refusals, RequestPage};
 pub use query::{Direction, RequestOrder};
 pub use quota::{

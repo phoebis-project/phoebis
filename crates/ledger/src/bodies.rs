@@ -40,6 +40,8 @@ pub struct Purged {
     pub decisions: usize,
     pub events: usize,
     pub extra_usage_samples: usize,
+    /// Apart from `requests`, since a feature call is no request row.
+    pub feature_calls: usize,
     pub quota_samples: usize,
     pub requests: usize,
     pub rollups: usize,
@@ -57,6 +59,7 @@ enum Family {
     /// between them until the next pass, a sums row counts requests the purge took, which the next pass closes.
     SessionTotals,
     KeptWarmMarks,
+    FeatureCalls,
     Events,
     Decisions,
     QuotaSamples,
@@ -66,11 +69,12 @@ enum Family {
 }
 
 impl Family {
-    const ALL: [Family; 10] = [
+    const ALL: [Family; 11] = [
         Family::Bodies,
         Family::Requests,
         Family::SessionTotals,
         Family::KeptWarmMarks,
+        Family::FeatureCalls,
         Family::Events,
         Family::Decisions,
         Family::QuotaSamples,
@@ -86,6 +90,7 @@ impl Family {
             Family::Requests
             | Family::SessionTotals
             | Family::KeptWarmMarks
+            | Family::FeatureCalls
             | Family::Events
             | Family::Decisions => cutoffs.request,
             Family::QuotaSamples | Family::ExtraUsageSamples => cutoffs.sample,
@@ -325,6 +330,11 @@ fn purge_slice(
                 "DELETE FROM kept_warm_marks WHERE rowid IN (SELECT rowid FROM kept_warm_marks WHERE marked_at < ?1 LIMIT ?2)",
                 cutoff,
                 &mut purged.requests,
+            )?,
+            Family::FeatureCalls => cut(
+                "DELETE FROM feature_calls WHERE rowid IN (SELECT rowid FROM feature_calls WHERE received_at < ?1 ORDER BY received_at, id LIMIT ?2)",
+                cutoff,
+                &mut purged.feature_calls,
             )?,
             Family::Events => cut(
                 "DELETE FROM events WHERE rowid IN (SELECT rowid FROM events WHERE at < ?1 ORDER BY at, rowid LIMIT ?2)",

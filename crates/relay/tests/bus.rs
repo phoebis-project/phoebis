@@ -484,6 +484,7 @@ async fn a_failover_publishes_a_head_per_attempt_and_the_completion_names_the_se
             Event::ResponseHead(_) => "head",
             Event::RequestComplete(_) => "complete",
             Event::ResponseChunk(_) => "chunk",
+            Event::FeatureCall(_) => "feature_call",
         })
         .collect();
     assert_eq!(
@@ -1737,6 +1738,7 @@ async fn a_rejection_body_that_cannot_be_read_still_completes_the_request() {
             Event::ResponseHead(_) => "head",
             Event::RequestComplete(_) => "complete",
             Event::ResponseChunk(_) => "chunk",
+            Event::FeatureCall(_) => "feature_call",
         })
         .collect();
     assert_eq!(
@@ -1930,6 +1932,7 @@ async fn a_buffered_body_that_does_not_decode_answers_502_upstream_undecodable_a
             Event::ResponseHead(_) => "head",
             Event::RequestComplete(_) => "complete",
             Event::ResponseChunk(_) => "chunk",
+            Event::FeatureCall(_) => "feature_call",
         })
         .collect();
     assert_eq!(kinds, ["observed", "selected", "head", "complete"]);
@@ -1998,6 +2001,7 @@ async fn a_stream_that_does_not_decode_ends_the_callers_body_in_an_error_publish
             Event::ResponseHead(_) => "head",
             Event::RequestComplete(_) => "complete",
             Event::ResponseChunk(_) => "chunk",
+            Event::FeatureCall(_) => "feature_call",
         })
         .collect();
     assert_eq!(kinds, ["observed", "selected", "head", "complete"]);

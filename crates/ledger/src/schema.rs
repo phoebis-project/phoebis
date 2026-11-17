@@ -1,14 +1,8 @@
 //! The ledger schema at version 1: `account_rollups_hourly`, `attempts`, `bodies`, `cooldown_segments`,
 //! `cooldown_spans`, `decisions`, `events`, `extra_usage_samples`, `kept_warm_marks`, `parked_records`,
 //! `quota_samples`, `request_guardrails`, `requests`, `rollups_hourly`, `routing_conditions` and
-//! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 4, the last step
-//! dropping the unused `requests.request_truncated`, adding `attempts.input_transformations`,
-//! `attempts.previous_input_tokens`, `requests.cache_marker`, `requests.input_transformations`,
-//! `requests.thinking_diagnostics_source`, `events.from_account_id`, `rollups_hourly.client_canceled`,
-//! `rollups_hourly.input_transformations_json` and `rollups_hourly.uncacheable`, creating the per-session totals
-//! `session_sums` and `session_facts` with the index `session_sums_received_hour`, filling the stored events' move
-//! sources and pools, filling the client's cancels from the stored rollups' errors maps, and deleting the stored
-//! account hours that hold nothing.
+//! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 5, the last step
+//! adding `feature_calls`, the rows of the claude.ai feature calls sent upstream under an account.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -502,6 +496,24 @@ const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
     ) WITHOUT ROWID; \
     CREATE INDEX session_sums_received_hour ON session_sums (received_hour)";
 
+/// Step 5 adds the feature calls, one row per call sent upstream under an account. The list reads newest first with the
+/// id breaking a tie, so the first index serves its order and its cursor, and the second a key's calls.
+const STEP_5: &str = "CREATE TABLE feature_calls (
+  id TEXT PRIMARY KEY,
+  received_at INTEGER NOT NULL,
+  key_id TEXT NOT NULL,
+  feature TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  status INTEGER,
+  outcome TEXT NOT NULL,
+  error_code TEXT,
+  duration_ms INTEGER NOT NULL
+);
+CREATE INDEX feature_calls_received ON feature_calls (received_at, id);
+CREATE INDEX feature_calls_key ON feature_calls (key_id, received_at);";
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.
 pub const MIGRATIONS: &[(u32, &str)] = &[
@@ -511,4 +523,5 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     ),
     (3, STEP_3),
     (4, STEP_4),
+    (5, STEP_5),
 ];

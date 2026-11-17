@@ -21,8 +21,8 @@ use phoebis_relay::{router, Accounting, CatalogService, Limits, Relay, UpstreamG
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountUpdate, ApiKeyRow, CompanionPermissions, Identity,
-    KeyFeatureAccounts, MemberWrite, NewBundle, PoolRow, RulesMode, Secret, StorageKey, Store,
-    StoreError, Strategy,
+    KeyFeatureAccounts, MemberWrite, NewBundle, PoolFeatureAccounts, PoolRow, RulesMode, Secret,
+    StorageKey, Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
@@ -98,6 +98,41 @@ pub async fn harness_with_poll(
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     harness_on(store, db, up, accounts, capture, config, true).await
+}
+
+/// `harness` with the pool's feature accounts at `pool` and the key's overrides at `key`, written once the harness
+/// stands, since a selection must name an OAuth account and most suites build the pool without one.
+pub async fn harness_with_features(
+    up: &FakeUpstream,
+    accounts: &[Account],
+    pool: PoolFeatureAccounts,
+    key: KeyFeatureAccounts,
+) -> Harness {
+    let h = harness(up, accounts, (0, None), LedgerConfig::default()).await;
+    let main = h.store.pool("main").unwrap().unwrap();
+    h.store
+        .update_pool(
+            &PoolRow {
+                feature_accounts: pool,
+                ..main.clone()
+            },
+            main.updated_at,
+            "test",
+        )
+        .unwrap();
+    let desktop = h.store.api_key("desktop").unwrap().unwrap();
+    h.store
+        .update_api_key(
+            &ApiKeyRow {
+                feature_accounts: key,
+                ..desktop.clone()
+            },
+            desktop.updated_at,
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    h
 }
 
 /// `with_usage` builds the harness's `UsageService`, and `false` builds none.
@@ -277,7 +312,7 @@ pub async fn harness_on_tables(
     let usage = with_usage.then(|| {
         Arc::new(phoebis_oauth::UsageService::new(
             manager.clone(),
-            control,
+            control.clone(),
             p,
             4,
             clock.clone(),
@@ -343,6 +378,7 @@ pub async fn harness_on_tables(
             catalog,
         )
         .with_bus(bus.clone())
+        .with_control(control)
         .with_accounting({
             let ledger = ledger.clone();
             Arc::new(move |counts: bool| Accounting {

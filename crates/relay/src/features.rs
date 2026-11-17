@@ -13,6 +13,7 @@ use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, Uri};
 use axum::response::Response;
 use axum::Router;
+use phoebis_bus::FeatureEnd;
 use phoebis_profile::{
     claude_code_2_1_310_linux_x64, FeatureRow, FeatureTable, KeylessRow, PathRule,
 };
@@ -29,7 +30,7 @@ use crate::messages::{new_request_id, Relay};
 use crate::serve::PeerAddr;
 
 use self::cap::DomainCheckCap;
-use self::forward::{forward, keyless, read_body, Unanswered};
+use self::forward::{forward, keyless, read_body, Call, Ending, Unanswered};
 
 /// The longest value of the domain check's one query parameter.
 const DOMAIN_MAX_BYTES: usize = 512;
@@ -68,6 +69,14 @@ async fn feature_call(
     if keyless_method(&table.hello, method, host.as_deref(), parts.uri.path()).is_some() {
         return Response::new(Body::empty());
     }
+    let mut call = Call {
+        feature: None,
+        id: new_request_id(),
+        key_id: None,
+        method: method.to_owned(),
+        path: parts.uri.path().to_owned(),
+        received_at: (relay.clock)(),
+    };
     if let Some(method) = is_domain_check(
         &table.domain_check,
         method,
@@ -75,54 +84,64 @@ async fn feature_call(
         &parts.uri,
         &parts.headers,
     ) {
-        return domain_check(&relay, &cap, &table.domain_check, method, &parts, arrived).await;
+        return domain_check(
+            &relay,
+            &cap,
+            &table.domain_check,
+            method,
+            &parts,
+            arrived,
+            call,
+        )
+        .await;
     }
     let snapshot = relay.router().snapshot();
     let now = (relay.clock)();
     let key = match resolve_key(&snapshot, &parts.headers, now) {
         Ok((key, _)) => key,
-        Err(failure) => return failure.response(&new_request_id()),
+        Err(failure) => return refusal(&relay, call, &failure, UNATTRIBUTED_POOL).await,
     };
-    let refused = |failure: &Failure| {
-        tracing::debug!(
-            code = failure.code,
-            method = %parts.method,
-            path = parts.uri.path(),
-            key = %key.label,
-            "a feature call was refused"
-        );
-        failure.response(&new_request_id())
-    };
+    call.key_id = Some(key.id.clone());
     let Some((feature, row, method)) = matched(
         table,
         parts.method.as_str(),
         host.as_deref(),
         parts.uri.path(),
     ) else {
-        return refused(&FEATURE_NOT_ALLOWED);
+        return refusal(&relay, call, &FEATURE_NOT_ALLOWED, &key.label).await;
     };
+    call.feature = Some(feature.as_str());
     let Some(account_id) = snapshot.feature_account(key, feature) else {
-        return refused(&feature_account_unset(feature));
+        return refusal(&relay, call, &feature_account_unset(feature), &key.label).await;
     };
     let account = match (
         feature_obstacle(&snapshot, account_id, now),
         snapshot.account(account_id),
     ) {
         (None, Some(account)) => account,
-        (Some(obstacle), _) => return refused(&feature_account_unavailable(obstacle.name())),
+        (Some(obstacle), _) => {
+            let failure = feature_account_unavailable(obstacle.name());
+            return refusal(&relay, call, &failure, &key.label).await;
+        }
         // Not taken: `feature_obstacle` answers `Deleted` for an id the snapshot lacks.
         (None, None) => {
-            return refused(&feature_account_unavailable(Obstacle::Deleted.name()));
+            let failure = feature_account_unavailable(Obstacle::Deleted.name());
+            return refusal(&relay, call, &failure, &key.label).await;
         }
     };
     // The reservation stands until the answer's head, so the body counts in the byte budget while the forward holds it.
     let (body, _reservation) = match read_body(&relay, key, &parts.headers, body).await {
         Ok(read) => read.unzip(),
-        Err(failure) => return refused(&failure),
+        // Nothing left for the call, so the body's own bounds count in no family and publish no end.
+        Err(failure) => {
+            refused_line(&failure, &call, &key.label);
+            return failure.response(&call.id);
+        }
     };
-    match forward(&relay, account, row, method, &parts, body).await {
+    let ending = Ending::sent(&relay, call.clone(), account.id.clone());
+    match forward(&relay, account, row, method, &parts, body, ending).await {
         Ok(answer) => answer,
-        Err(Unanswered::Refused(failure)) => refused(&failure),
+        Err(Unanswered::Refused(failure)) => refusal(&relay, call, &failure, &key.label).await,
         Err(Unanswered::Failed(case, detail)) => {
             tracing::debug!(
                 outcome = "failed",
@@ -133,13 +152,38 @@ async fn feature_call(
                 detail = detail.as_deref(),
                 "a feature call failed ahead of the upstream's answer"
             );
-            UPSTREAM_UNREACHABLE.response(&new_request_id())
+            UPSTREAM_UNREACHABLE.response(&call.id)
         }
     }
 }
 
+/// A refusal of the key, the table, the selection or the account's state: its DEBUG line, its end, which the ledger
+/// counts and writes no row for, and its answer. `key` is the key's label, `-` where none resolved. The end is a fact
+/// published ahead of the answer, so it reaches the ledger ahead of any later call of the same caller.
+async fn refusal(relay: &Relay, call: Call, failure: &Failure, key: &str) -> Response {
+    refused_line(failure, &call, key);
+    let answer = failure.response(&call.id);
+    if let Some(bus) = &relay.bus {
+        let end = FeatureEnd::Refused { code: failure.code };
+        bus.publish_fact(call.ended(end, (relay.clock)())).await;
+    }
+    answer
+}
+
+/// The DEBUG line of a refused feature endpoint request, with the path alone.
+fn refused_line(failure: &Failure, call: &Call, key: &str) {
+    tracing::debug!(
+        code = failure.code,
+        method = %call.method,
+        path = call.path.as_str(),
+        key = %key,
+        "a feature call was refused"
+    );
+}
+
 /// A domain check under the cap and its one deadline from `arrived`, which bounds the wait for a place, the send and
-/// each read of the answer's body. Its lines hold the path alone, since the query names the domain.
+/// each read of the answer's body. Its lines hold the path alone, since the query names the domain. A check whose time
+/// ends in the wait publishes no end.
 async fn domain_check(
     relay: &Relay,
     cap: &Arc<DomainCheckCap>,
@@ -147,6 +191,7 @@ async fn domain_check(
     method: &'static str,
     parts: &Parts,
     arrived: Instant,
+    call: Call,
 ) -> Response {
     let deadline = arrived + relay.limits.domain_check_timeout;
     // Each connection the system names no peer for counts under one source, so none of them passes the cap.
@@ -165,19 +210,10 @@ async fn domain_check(
         );
         return failure.response(&new_request_id());
     };
-    let path = parts.uri.path().to_owned();
-    // The place rides in the answer's body to its end, whether the body ended whole, failed or the caller left.
-    let ended = move |outcome: &'static str| {
-        drop(place);
-        tracing::debug!(
-            outcome,
-            method,
-            path = path.as_str(),
-            key = UNATTRIBUTED_POOL,
-            "a domain check ended"
-        );
-    };
-    match keyless(relay, row.host, method, parts, deadline, ended).await {
+    let id = call.id.clone();
+    // The place rides in the ending to the answer's end, whether the body ended whole, failed or the caller left.
+    let ending = Ending::domain_check(relay, call, place);
+    match keyless(relay, row.host, method, parts, deadline, ending).await {
         Ok(answer) => answer,
         Err(case) => {
             tracing::debug!(
@@ -188,7 +224,7 @@ async fn domain_check(
                 case,
                 "a domain check failed ahead of the upstream's answer"
             );
-            UPSTREAM_UNREACHABLE.response(&new_request_id())
+            UPSTREAM_UNREACHABLE.response(&id)
         }
     }
 }

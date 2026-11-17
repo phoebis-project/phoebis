@@ -14,10 +14,10 @@ use tokio::sync::mpsc;
 
 pub use event::{
     header_published, user_agent_cut, user_agent_of, AccountSelected, AttemptOutcome, AutoMode,
-    Classifier, ClientFacts, CooldownSet, DiagnosticsSource, Event, Fork, GuardrailMatch,
-    InputTransformation, Interruption, Kind, Origin, Outcome, Phase, RequestComplete,
-    RequestObserved, RequestShape, ResponseChunk, ResponseFacts, ResponseHead, Usage,
-    BODY_SHAPE_ERROR_CODE, NEVER_COPIED, OTHER_CLIENT, USER_AGENT_MAX_BYTES,
+    Classifier, ClientFacts, CooldownSet, DiagnosticsSource, Event, FeatureCall, FeatureEnd,
+    FeatureOutcome, Fork, GuardrailMatch, InputTransformation, Interruption, Kind, Origin, Outcome,
+    Phase, RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
+    ResponseHead, Usage, BODY_SHAPE_ERROR_CODE, NEVER_COPIED, OTHER_CLIENT, USER_AGENT_MAX_BYTES,
 };
 
 /// Deep enough to hold a whole streamed answer's chunks behind a consumer that is busy for a moment; a
