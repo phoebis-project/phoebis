@@ -546,18 +546,21 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
   const { bucketMs, slotOf, starts } = bucketsOf(range);
   const first = starts[0] ?? 0;
   const end = (starts[starts.length - 1] ?? 0) + bucketMs;
+  const hours = wholeHoursOf(range);
   const accounts = filters.accountIds ?? [];
   const keys = filters.keyIds ?? [];
   const pools = filters.poolIds ?? [];
   const groupOf = burnGroupOf(groupBy, filters.userAgentGroups ?? []);
   const sums = new Map<string, Map<number, BurnSum>>();
+  // Per group, whether a row of the range's own hours holds a token and whether a row with a token was plan funded.
+  const tokened = new Map<string, { inRange: boolean; plan: boolean }>();
   for (const r of rows) {
     const hour = Date.parse(r.hour);
-    // The route prices a row by its account's kind and skips a row whose account left the registry.
+    // The route prices each row by the funding it recorded whatever the registry holds now, so a row whose account left
+    // the registry stays.
     const kept =
       hour >= first &&
       hour < end &&
-      accountById.has(r.accountId) &&
       (accounts.length === 0 || accounts.includes(r.accountId)) &&
       (keys.length === 0 || keys.some((selector) => selectsKey(selector, r))) &&
       (pools.length === 0 || pools.includes(r.poolId));
@@ -580,11 +583,18 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     // The route prices each row at the read, at the revision in force at the row, and splits the dollars by the row's
     // funding: a plan row's list dollars to the plan side and every other row's to the billed side. A free classifier
     // call prices at zero, so it adds nothing.
-    if (oauth && !billed) s.planUsd += r.costUsd;
+    if (!billed) s.planUsd += r.costUsd;
     else s.usd += r.costUsd;
     // A row with no token has nothing to price, as the route reads it: a failed request on a model the cost model has
     // no weight for never nulls a priced bucket.
     if (tokens === 0) continue;
+    // A token is what the route prices, whatever the tables then answer, so a group whose model has no weight stays.
+    // Only a token in the range's own hours answers a group, while one in the first bucket's reach back still names
+    // its unit.
+    const held = tokened.get(group) ?? { inRange: false, plan: false };
+    held.inRange ||= hour >= hours.fromMs && hour < hours.toMs;
+    held.plan ||= !billed;
+    tokened.set(group, held);
     const week = modelWeeks(TABLES, r.model)[0];
     const tier = oauth ? accountById.get(r.accountId)?.subscription?.rateLimitTier : undefined;
     if (billed) {
@@ -612,10 +622,11 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     if (week !== undefined) s.week.push(tier === undefined ? null : (r.shares[week] ?? null));
   }
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
-  let groups = [...sums.keys()].sort();
+  let groups = [...sums.keys()].filter((group) => tokened.get(group)?.inRange === true).sort();
   if (groupBy === 'session') groups = [...groups].sort((a, b) => tokensOf(b) - tokensOf(a)).slice(0, BURN_SESSIONS).sort();
   // The route answers the shares and the unit where each group holds one account's rows: the account grouping, or a
-  // filter naming exactly one account.
+  // filter naming exactly one account. A group of an account the registry no longer holds takes its unit from its own
+  // rows: the window share where a row with a token was plan funded, dollars where each such row was billed.
   const points = groups.flatMap((group) => {
     const byAt = sums.get(group);
     const account = shareAccountOf(group, groupBy, filters.accountIds);
@@ -625,7 +636,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     const shared = account === null ? null : sharedWindowsOf(account);
     const lacks = (w: 'five_hour' | 'seven_day') => shared !== null && !shared.includes(w);
     // A usage-based seat is a paid source, so its burn reads in dollars as an API key's does.
-    const unit = account === null ? null : burnUnitOf(account);
+    const unit = account === null ? null : (burnUnitOf(account) ?? (tokened.get(group)?.plan ? 'window_share' : 'usd'));
     return starts.map((at): BurnPoint => {
       const s = byAt?.get(at) ?? emptyBurn();
       return {

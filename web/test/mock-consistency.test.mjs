@@ -322,6 +322,27 @@ test("the mock counts a probe's cancel under the client's code as failed, as the
   assert.deepEqual(all && [all.clientCanceled, all.failed, { ...all.errors }], [0, 1, { client_gone: 1 }]);
 });
 
+test("the burn answer keeps an unregistered account's plan row in its share and plan dollars, and answers a group only where a row holds a token, priced or not", async () => {
+  const d = await import('./dist/api.js');
+  const hour = '2026-09-16T10:00:00.000Z';
+  const tokens = (uncachedInput) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput });
+  const row = (accountId, over) => ({ accountId, costUsd: 0, equivalent: 0.01, funding: 'plan', hour, model: 'claude-opus-5-5', tokens: tokens(0), ...over });
+  // Three accounts the registry no longer holds, one group each under the account grouping.
+  const rows = [
+    row('gone-plan', { costUsd: 0.25, tokens: tokens(1_000) }),
+    // A request the upstream rate limited, which books the account a row with no token.
+    row('gone-failed', {}),
+    // A model the cost model has no weight for, so the row's tokens carry no figure.
+    row('gone-unpriced', { equivalent: null, model: 'claude-unknown-1', tokens: tokens(1_000) }),
+  ];
+  const { points } = d.burnOf(rows, { from: hour, to: '2026-09-16T11:00:00.000Z' }, 'account', { accountIds: ['gone-plan', 'gone-failed', 'gone-unpriced'] });
+  const units = Object.fromEntries(points.map((p) => [p.group, p.unit]));
+  const plan = points.find((p) => p.group === 'gone-plan');
+  assert.deepEqual([units['gone-plan'], plan?.planUsd, plan?.usd], ['window_share', 0.25, 0], 'its plan row reads a window share with its dollars on the plan side');
+  assert.equal(units['gone-failed'], undefined, 'a group whose rows hold no token is left out');
+  assert.equal(units['gone-unpriced'], 'window_share', 'a token the cost model cannot weigh keeps its group');
+});
+
 // One load at a time, since each pins the clock its bundle reads while it loads.
 let loading = Promise.resolve();
 

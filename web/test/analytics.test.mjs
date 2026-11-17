@@ -295,7 +295,8 @@ test("the mock's burn fold sums the rows' own shares, prices only rows with toke
   // A row carries its requests' shares, each priced at its completion, which can land past the hour it arrived in.
   const sharesAt = (model, input, at) => Object.fromEntries(['five_hour', 'seven_day'].map((w) => [w, d.shareIn(costs, w, tier, model, usageOf(input), d.inBand(costs, at))]));
   const row = (model, uncachedInput, completedAt = hour) => ({ accountId: 'primary', costUsd: 0, equivalent: d.equivalentIn(costs, model, usageOf(uncachedInput), d.inBand(costs, completedAt)), funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', shares: sharesAt(model, uncachedInput, completedAt), tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
-  const range = { from: new Date(hour).toISOString(), to: new Date(hour + HOUR).toISOString() };
+  // Two hours, so a token in the second keeps a group whose first hour holds rows with no token alone.
+  const range = { from: new Date(hour).toISOString(), to: new Date(hour + 2 * HOUR).toISOString() };
   const shareOf = (rows) => d.burnOf(rows, range, 'account').points.find((p) => p.group === 'primary' && Date.parse(p.at) === hour).fiveHourShare;
   // A request that arrived before the band opened and completed inside it, so the band's factor prices it.
   const priced = row('claude-opus-5-5', 1_000_000, edge + 60_000);
@@ -305,7 +306,8 @@ test("the mock's burn fold sums the rows' own shares, prices only rows with toke
   // A failed request on Sonnet 4.5, which the cost model has no weight for, carries no token.
   const failed = row('claude-sonnet-4-5', 0);
   for (const rows of [[priced, failed], [failed, priced]]) assert.ok(Math.abs(shareOf(rows) - want) < 1e-12, 'a row with no token leaves the priced share, the row\'s own and not its tokens\' at the hour');
-  assert.equal(shareOf([failed, row('claude-opus-5-5', 0)]), null, 'rows with no token alone are an idle bucket, not a share of zero');
+  const later = { ...row('claude-opus-5-5', 1_000), hour: new Date(hour + HOUR).toISOString() };
+  assert.equal(shareOf([failed, row('claude-opus-5-5', 0), later]), null, 'rows with no token alone are an idle bucket, not a share of zero');
   // An id whose segment names no model tier, which no fallback prices.
   const unpriced = row('claude-unknown-1', 1_000);
   for (const rows of [[priced, unpriced], [unpriced, priced]]) assert.equal(shareOf(rows), null, 'a row the cost model cannot price nulls the window');
