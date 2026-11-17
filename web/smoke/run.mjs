@@ -30780,8 +30780,9 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
 {
   const titles = [...m.container.querySelectorAll('.settings > .card .card__title')].map((t) => t.textContent?.trim());
   results.push({ name: '/settings the cards run Appearance, About, client block', ok: JSON.stringify(titles) === JSON.stringify(['Appearance', 'About', 'Downstream client configuration']) && m.container.querySelector('.price-table') === null, missing: titles });
-  const subtitle = [...m.container.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Downstream client configuration')?.querySelector('.card__subtitle .client-config__subtitle:not(.client-config__unshown)')?.textContent;
-  results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
+  // The card keeps both subtitles in its head and marks the one that does not show, so each shown one is read.
+  const subtitles = [...([...m.container.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Downstream client configuration')?.querySelectorAll('.card__subtitle .client-config__subtitle') ?? [])].filter((s) => s.closest('.client-config__unshown') === null).map((s) => s.textContent ?? '');
+  results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitles.join(' ') === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: subtitles.length === 0 ? ['no subtitle'] : subtitles });
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   // The two cost files' rows open on the shipped table's words, since both captured tables read `shipped` beside the
@@ -30932,10 +30933,14 @@ m.unmount();
     const card = clientCard(page);
     const link = [...(card?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Installation');
     const text = (card?.textContent ?? '').replace(/\s+/g, ' ');
+    // The head keeps both subtitles and the copy control in place under their mark, so each is read where it shows.
+    const shown = (node) => node.closest('.client-config__unshown') === null;
+    const subtitles = [...(card?.querySelectorAll('.card__subtitle .client-config__subtitle') ?? [])].filter(shown).map((s) => s.textContent ?? '');
+    const copies = [...(card?.querySelectorAll('button') ?? [])].filter((b) => b.textContent?.trim() === 'Copy snippet' && shown(b));
     results.push({
       name: '/settings a feature block on a router without the listener shows the stand-in',
-      ok: text.includes('This router serves no feature call until its configuration names features.listen.') && link !== undefined && card?.querySelector('pre.snippet') === null && card?.querySelector('.skeleton') === null,
-      missing: [text.slice(0, 200), link ? 'the Installation link' : 'no Installation link', card?.querySelector('pre.snippet')?.textContent?.split('\n').at(-1) ?? 'no block'],
+      ok: text.includes('This router serves no feature call until its configuration names features.listen.') && link !== undefined && card?.querySelector('pre.snippet') === null && card?.querySelector('.skeleton') === null && subtitles.length === 0 && copies.length === 0,
+      missing: [text.slice(0, 200), link ? 'the Installation link' : 'no Installation link', card?.querySelector('pre.snippet')?.textContent?.split('\n').at(-1) ?? 'no block', ...subtitles.map((s) => `a subtitle shows: ${s}`), ...(copies.length === 0 ? [] : ['the copy control shows'])],
     });
     await showSetup(page, 'Base URL');
     page.unmount();
