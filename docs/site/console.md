@@ -855,11 +855,11 @@ which follows the pool's selection and names its account, or `Inherit (None (ref
 then "None (refused)", which refuses the feature's calls for this key, then the accounts the pool dialog's group lists,
 in its order and with its disabled options. The first option follows the pool the dialog shows, so a change of Pool
 changes that text and no choice, and a key moved to another pool keeps an account it names and a "None (refused)". The
-selects wait for the account list, a failed read of it draws "The account list did not load" with "Try again", a named
-account the list does not hold reads `{id} (not listed)`, and a pool's account the list does not hold reads
-`Inherit ({id}, not listed)`, neither with a line under it. Under a named account, and under Inherit for the pool's
-account, the line of the pool dialog's group names the account's state: why it cannot serve, or that its features keep
-working while it is paused. Each save sends both choices.
+selects wait for the account list and for the key's pool, a failed read of it draws "The account list did not load" with
+"Try again", a named account the list does not hold reads `{id} (not listed)`, and a pool's account the list does not
+hold reads `Inherit ({id}, not listed)`, neither with a line under it. Under a named account, and under Inherit for the
+pool's account, the line of the pool dialog's group names the account's state: why it cannot serve, or that its features
+keep working while it is paused. Each save sends both choices.
 
 A saved key's dialog shows its Effective list under the Models group: the list the key is judged by, top to bottom, with
 the level each entry comes from and, where accounts cool for a model the entry names, a cooling count whose hover names
