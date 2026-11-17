@@ -147,6 +147,7 @@ const STATES = [
   { open: null, path: '/keys', slug: 'keys', wait: '.card--table tbody tr', widths: AT_REST },
   { open: null, path: '/guardrails', slug: 'guardrails', wait: '.guardrails__table', widths: AT_REST },
   { open: null, path: '/requests', slug: 'requests', wait: '.requests__table', widths: AT_REST },
+  { open: null, path: '/requests#feature-calls', slug: 'requests-feature-calls', wait: '#feature-calls .requests__table tbody .sub.mono', widths: AT_REST },
   { open: null, path: '/analytics', slug: 'analytics', wait: '.analytics-section#traffic', widths: AT_REST },
   { open: null, path: '/analytics#cache-warming', slug: 'analytics-cache-warming', wait: '.analytics-section#cache-warming', widths: AT_REST },
   { open: null, path: '/sessions', slug: 'sessions', wait: '.sessions-table', widths: AT_REST },
