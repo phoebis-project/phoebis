@@ -381,6 +381,7 @@ export function decodePool(v: unknown): Pool {
     cacheDiagnostics: bool(p.cache_diagnostics),
     cacheTtl: decodeCacheTtl(p.cache_ttl),
     day24h: daySum(p),
+    fableReservationShedding: bool(p.fable_reservation_shedding, POOL_ENGINE_DEFAULTS.fableReservationShedding),
     fiveHourCeiling: num(p.five_hour_ceiling, POOL_ENGINE_DEFAULTS.fiveHourCeiling),
     guardrails: guardrailRefs(p.guardrails),
     id: str(p.id),
@@ -401,6 +402,7 @@ export function decodePool(v: unknown): Pool {
       burn: numOrNull(m.burn),
       // A row from before the router reported eligibility reads as not servable rather than as servable.
       eligible: oneOf(ELIGIBILITY_VALUES, m.eligible) ?? 'unavailable',
+      fableReservation: numOrNull(m.fable_reservation),
       factor: numOrNull(m.factor),
       // The route answers null for an account it cannot find, which is no API-key account either.
       kind: accountKind(m.kind),
@@ -1145,7 +1147,7 @@ export const encodePool = (i: PoolInput) => ({
   label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, budget_daily_usd: m.budgetDailyUsd, budget_monthly_usd: m.budgetMonthlyUsd, priority: m.priority })),
   min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription,
   session_placement: i.sessionPlacement, strategy: i.strategy, subagent_placement: i.subagentPlacement, thinking_diagnostics: i.thinkingDiagnostics,
-  burn_average_seconds: i.burnAverageSeconds, five_hour_ceiling: i.fiveHourCeiling, in_flight_cap: i.inFlightCap, load_shedding: i.loadShedding, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes,
+  burn_average_seconds: i.burnAverageSeconds, fable_reservation_shedding: i.fableReservationShedding, five_hour_ceiling: i.fiveHourCeiling, in_flight_cap: i.inFlightCap, load_shedding: i.loadShedding, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes,
   retry_in_place_seconds: i.retryInPlaceSeconds, return_to_plan: i.returnToPlan, return_to_plan_dwell_seconds: i.returnToPlanDwellSeconds, shed_cap: i.shedCap, shed_dwell_seconds: i.shedDwellSeconds,
   slow_down: i.slowDown, slow_down_hold_seconds: i.slowDownHoldSeconds, slow_down_stretch_seconds: i.slowDownStretchSeconds, warm_sessions: i.warmSessions, weekly_ceiling: i.weeklyCeiling, wind_down_minutes: i.windDownMinutes,
   ...(i.guardrails === undefined ? {} : { guardrails: i.guardrails }),

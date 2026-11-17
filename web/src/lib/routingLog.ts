@@ -27,6 +27,8 @@ const LABELS = {
   client: 'client',
   depth: 'depth',
   epoch: 'epoch',
+  fable_model: 'Fable model',
+  fable_reservation: 'Fable reservation',
   factor: 'speed',
   factor_min: 'slowest',
   field: 'field',
@@ -993,6 +995,7 @@ export const WALK_KEY: Record<string, string> = {
   obstacles: 'obstacles',
   over_ms: 'over for',
   over_since: 'over since',
+  over_since_fable_reservation: 'under since Fable reservation',
   over_since_five_hour: 'over since 5h',
   over_since_seven_day: 'over since 7d',
   over_since_seven_day_fable: 'over since Fable',
@@ -1032,6 +1035,7 @@ export const WALK_KEY: Record<string, string> = {
   trigger: 'trigger',
   turn: 'turn',
   verdict: 'verdict',
+  wait_fable_reservation: 'wait Fable reservation',
   wait_five_hour: 'wait 5h',
   wait_ms: 'wait',
   wait_seven_day: 'wait 7d',
@@ -1147,7 +1151,7 @@ export function markChip(text: string): Chip {
  * `key/session/agent/model`, then the reason.
  */
 function skipChip(session: string, reason: string, title: string, label?: string): Chip {
-  return { ...(session ? { href: entityHref('session', session) } : {}), ...(label === undefined ? {} : { label }), title, value: `${session.slice(0, 8)}: ${words(reason)}` };
+  return { ...(session ? { href: entityHref('session', session) } : {}), ...(label === undefined ? {} : { label }), title, value: `${session.slice(0, 8)}: ${wordOf(LABELS, reason)}` };
 }
 
 /** A drift refusal's client version: the summary's `client` fact carries it, the record's reason the trigger alone. */
@@ -2231,18 +2235,27 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const trigger = str(d.trigger);
       const stretch = num(d.stretch_ms);
       const threshold = num(d.threshold_ms);
+      const utilization = num(d.utilization);
+      const reservation = num(d.fable_reservation);
+      const reserved = trigger === 'fable_reservation';
       if (trigger === 'slow_down' && stretch !== null && threshold !== null) {
         // The stretch's round moves its horizon earlier by the threshold and reads the demand, so the reset is the
         // horizon put back and the burn the round weighed is the demand.
         add('Trigger', plain(`${w} stretch ${span(stretch)} over the threshold ${span(threshold)}`));
         const demand = num(d.burn_sum);
         add('Demand', demand === null ? null : plain(`${hourlyShare(demand)}${horizon === null ? '' : ` to the reset at ${formatFact(horizon + threshold, 'time', now)}`}`));
+      } else if (reserved) {
+        // The reservation's test reads the room the reading leaves, floored at 0 as the router floors it, and no
+        // projection.
+        add('Trigger', utilization === null || reservation === null ? null : plain(`${w} room ${fmtPct(Math.max(0, 1 - utilization))} under the Fable reservation ${fmtPct(reservation)}`));
       } else {
         // A round that tested the wall records a ceiling of 1, the window's whole share.
         add('Trigger', projection === null || ceiling === null ? null : plain(`${w} projection ${fmtPct(projection)}${when} over ${lineWords(ceiling)}`));
       }
       add('Fired by', trigger === null ? null : plain(`the ${wordOf(LABELS, trigger)}`));
-      add('Excess', rate(d.excess));
+      add('Fable reservation', pct(reservation));
+      // The reservation's test names no rate, so the router records the burn of the pins the round walked in its place.
+      add(reserved ? 'Walked burn' : 'Excess', rate(d.excess));
       add('Cap', pct(d.shed_cap), rate(d.target, 'target'), rate(d.removed, 'removed'));
       add('Mark share', pct(d.mark_share));
       add('Unit', text(d.unit));
@@ -2277,7 +2290,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
                 ...(thinking ? [plain(dropped === null ? '-' : fmtCompact(dropped))] : []),
                 rewriteCell(rewrite, rewriteWindow, rewriteUnit, week),
                 planned === null ? plain('-') : accountChip(planned),
-                plain(p.marked === true ? 'marked' : skip !== null ? words(skip) : (str(p.note) ?? '-')),
+                plain(p.marked === true ? 'marked' : skip !== null ? wordOf(LABELS, skip) : (str(p.note) ?? '-')),
               ];
             }),
           },
@@ -2287,7 +2300,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Planned destinations', ...[...new Set(pins.flatMap((p) => (str(p.planned) === null ? [] : [str(p.planned) ?? ''])))].map((id) => accountChip(id)));
       const outcome = str(d.outcome);
       const reason = str(d.reason);
-      add('Outcome', outcome === null ? null : plain(outcome === 'nothing_to_mark' ? `nothing to mark${reason === null ? '' : `: ${words(reason)}`}` : words(outcome)));
+      add('Outcome', outcome === null ? null : plain(outcome === 'nothing_to_mark' ? `nothing to mark${reason === null ? '' : `: ${wordOf(LABELS, reason)}`}` : words(outcome)));
       add('Next round after', time(d.dwell_until));
       add('Dwell', seconds(d.dwell_seconds));
       if (typeof d.persisted === 'boolean') add('Survive a restart', plain(d.persisted ? 'persisted' : 'not persisted'));

@@ -498,6 +498,11 @@ export interface PoolMember {
    */
   burn: number | null;
   eligible: MemberEligibility;
+  /**
+   * The share of the member's 7-day room Pace holds back for its expected Fable use, the reservation `paceScore`
+   * subtracts. Null on an API-key member, a usage-based seat and a member with no Fable reading.
+   */
+  fableReservation: number | null;
   /** The factor the pool's slow-down computed for the account, null where the account route answers no `slowDown`. */
   factor: number | null;
   kind: AccountKind;
@@ -565,6 +570,11 @@ export interface Pool {
   /** The day's sum: the billed rows' dollars, every row's cost and the plan rows as the Pro-week figure, 0 with no
    *  plan-funded request. */
   day24h: FundedSum;
+  /**
+   * Whether a round also fires on a member whose 7-day room stands under its Fable reservation, on a Pace pool with
+   * load shedding on. Such a round marks non-Fable sessions alone.
+   */
+  fableReservationShedding: boolean;
   /**
    * The share of the 5-hour window a move or a new session must stay under until the window resets, and the line a
    * shedding round tests the window against at the five-hour bound.

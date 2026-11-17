@@ -7377,7 +7377,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       ok:
         introOf('Load shedding') ===
           'A member whose window would pass the ceiling before its reset, or within five hours on a weekly window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next request. With the slow-down on, a round fires when the time the slow-down adds passes the stretch threshold, and removes only what the slow-down cannot cover.' &&
-        JSON.stringify(labelsOf('Load shedding')) === JSON.stringify(['Load shedding', 'Preset', 'Shed cap (%)', 'Shed dwell (s)', 'Warm sessions', 'Preview']) &&
+        JSON.stringify(labelsOf('Load shedding')) === JSON.stringify(['Load shedding', 'Preset', 'Shed cap (%)', 'Shed dwell (s)', 'Warm sessions', 'Fable reservation shedding', 'Preview']) &&
         shedSwitch()?.getAttribute('aria-checked') === 'true' &&
         shedSwitch()?.closest('.field')?.className === migrate?.closest('.field')?.className &&
         migrate?.closest('.field')?.classList.contains('field--beside') === true &&
@@ -9719,7 +9719,7 @@ await forView(['/keys', '/pools'], async () => {
     Selection: [['Strategy', 'Prioritize subscription accounts'], null],
     Pinning: [['Session affinity'], '1 more setting in the '],
     Windows: [['5-hour ceiling (%)', 'Weekly ceiling (%)', 'Member utilization'], '1 more setting in the '],
-    'Load shedding': [['Load shedding'], '5 more settings in the '],
+    'Load shedding': [['Load shedding'], '6 more settings in the '],
     'Overage and plan end': [['Overage policy'], '4 more settings in the '],
     'Cache TTL': [['Set the cache TTL for this pool', 'Write cost'], '3 more settings in the '],
     Keepalive: [KEEPALIVE, null],
@@ -9731,7 +9731,7 @@ await forView(['/keys', '/pools'], async () => {
     Placement: ['Subagent placement', 'Session placement', 'Minimum shared prefix, tokens'],
     Pinning: ['Session affinity', 'Pin sessions'],
     Windows: ['5-hour ceiling (%)', 'Weekly ceiling (%)', 'Burn average (s)', 'Member utilization'],
-    'Load shedding': ['Load shedding', 'Preset', 'Shed cap (%)', 'Shed dwell (s)', 'Warm sessions', 'Preview'],
+    'Load shedding': ['Load shedding', 'Preset', 'Shed cap (%)', 'Shed dwell (s)', 'Warm sessions', 'Fable reservation shedding', 'Preview'],
     'Slow-down': ['Slow-down', 'Stretch (s)', 'Hold (s)', 'Preview'],
     Failover: ['Preset', 'In flight', 'Retry in place (s)', 'Migrate when spent'],
     'Overage and plan end': ['Overage policy', 'Overage grace (min)', 'Return to plan', 'Return dwell (s)', 'Wind down (min)'],
@@ -9902,8 +9902,8 @@ await forView(['/keys', '/pools'], async () => {
   results.push({
     name: '/pools a refusal on a field the plain view hides shows the field, and the footer names it and reaches it with the mode still off',
     ok:
-      JSON.stringify(before) === '["hidden","5 more settings in the "]' &&
-      JSON.stringify(refused) === JSON.stringify(['off', 'true', 'Save is held: Shed cap (%) is from 10 to 100.Go to Load shedding', true, '4 more settings in the ']) &&
+      JSON.stringify(before) === '["hidden","6 more settings in the "]' &&
+      JSON.stringify(refused) === JSON.stringify(['off', 'true', 'Save is held: Shed cap (%) is from 10 to 100.Go to Load shedding', true, '5 more settings in the ']) &&
       shed()?.hidden === false &&
       !!cap() &&
       document.activeElement === cap() &&
@@ -17662,6 +17662,31 @@ await forView('/routing-log', async () => {
           JSON.stringify(pins.map((cells) => [cells[3], cells[5], cells[7]])) === JSON.stringify([['3.0 %/h', '-', 'last pin'], ['-', '-', 'off window']]) &&
           JSON.stringify(pairs.Outcome) === JSON.stringify(['nothing to mark: last pin']),
         missing: [labels.join(' / '), rowsRead(round), facts.join(' / '), JSON.stringify(pins), JSON.stringify(pairs.Outcome ?? null)],
+      });
+      page.unmount();
+    }
+  }
+  {
+    // Primary's Fable reservation round at 11:13:40. Pace holds back half of what primary's Fable week burn of 0.008 an
+    // hour spends over the 80.9 hours to the reset, 0.32376 (`RESERVATION_FABLE_BURN` in mock/routingLog.ts), which a
+    // 7-day reading of 0.7 leaves 0.3 of room for (`RESERVATION_WEEK_USED`). The panel names the reservation as what
+    // fired the round, draws it as a whole percent, and reads the Fable pin as left out under the Fable model.
+    const name = '/routing-log opens a round the Fable reservation fired';
+    const id = 'req_5d1f8c3a-b27';
+    if ((await api.getDecision(id, 1)) === null) results.push({ name, ok: false, missing: ['no decision of the story at 11:13:40 on primary'] });
+    else {
+      const { page, record } = await story(id);
+      const at = Date.parse(record.request.at);
+      const e = (await api.listRoutingLog({ from: iso(at - MINUTE), kinds: ['shedding_round'], limit: 25, request: id, to: iso(at + MINUTE) })).rows[0];
+      const detail = e === undefined ? null : ((await openRow(page, `event/${e.id}`))?.querySelector('.event-detail') ?? null);
+      scan('Fable reservation round event', detail);
+      const pairs = Object.fromEntries(kvRows(detail?.querySelector(':scope > .kv')).map((p) => [p.label, ddWords(p.dd)]));
+      const marks = [...(detail?.querySelectorAll('.event-detail__pins tbody tr') ?? [])].map((tr) => tr.lastElementChild?.textContent ?? '');
+      const read = [pairs['Fired by'] ?? null, pairs['Fable reservation'] ?? null, marks];
+      results.push({
+        name,
+        ok: JSON.stringify(read) === JSON.stringify([['the Fable reservation'], ['32%'], ['marked', 'unpriced', 'Fable model']]),
+        missing: [JSON.stringify(read)],
       });
       page.unmount();
     }

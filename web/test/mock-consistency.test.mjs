@@ -162,7 +162,7 @@ async function logOf(s) {
 
 /** The members the store's `pool_diff` names, whose changed ones a pool edit carries as pairs. */
 const POOL_DIFF_MEMBERS = [
-  'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_average_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'five_hour_ceiling', 'in_flight_cap',
+  'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_average_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'fable_reservation_shedding', 'five_hour_ceiling', 'in_flight_cap',
   'keepalive.enabled', 'keepalive.max_idle_seconds', 'keepalive.max_parked_seconds', 'keepalive.scheduled_horizon_seconds', 'label', 'load_shedding',
   'migrate_when_spent', 'min_shared_prefix_tokens', 'model_rules', 'overage_move_grace_minutes', 'overage_policy', 'prefer_subscription', 'retry_in_place_seconds', 'return_to_plan',
   'return_to_plan_dwell_seconds', 'session_placement', 'shed_cap', 'shed_dwell_seconds', 'slow_down', 'slow_down_hold_seconds', 'slow_down_stretch_seconds', 'strategy', 'subagent_placement',
@@ -2729,15 +2729,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const weekOf = (model) => (model.includes('fable') ? 'seven_day_fable' : 'seven_day');
     // The 08:30 and 11:00 rounds, which an earlier build wrote before the unit.
     const older = new Set([...rounds].sort((x, y) => Date.parse(x.at) - Date.parse(y.at)).slice(0, 2));
-    assert.deepEqual(rounds.map((e) => [older.has(e), e.detail.rewrite_unit]).sort(), [[false, 'pro_week'], [false, 'pro_week'], [true, undefined], [true, undefined]], 'the newer rounds name the unit and the older ones none');
+    assert.deepEqual(rounds.map((e) => [older.has(e), e.detail.rewrite_unit]).sort(), [[false, 'pro_week'], [false, 'pro_week'], [false, 'pro_week'], [true, undefined], [true, undefined]], 'the newer rounds name the unit and the older ones none');
     // An earlier build stored a marked Sonnet pin's rewrite as its tokens times 1.4e-8, the share of the 7-day window
     // one token takes, times the Sonnet weight of 0.25, to five places: 0.00008 and 0.00031 for the 11:00 round's
     // 22,000 and 88,000 tokens. A newer round prices the prompt written to the cache again at the destination as the
     // Pro-week figure, the last prompt less the thinking the move drops: the stretch's 27,600 tokens, 30,000 less
     // 2,400, and 40,000 Sonnet 5.5 tokens at its weight 1.5 and the 5-minute write's 1.25 are 51,750 and 75,000 units,
-    // over the Pro tier's 90,000,000 on the week.
+    // over the Pro tier's 90,000,000 on the week. The reservation round's 36,000 tokens are 67,500 units on the desktop
+    // key, whose CLI client prices under the interactive regime's Pro week of 112,500,000.
     const storedRewrite = { 22_000: 0.00008, 88_000: 0.00031 };
-    const proWeekRewrite = { 27_600: 51_750 / 90_000_000, 40_000: 75_000 / 90_000_000 };
+    const proWeekRewrite = { 27_600: 51_750 / 90_000_000, 36_000: 67_500 / 112_500_000, 40_000: 75_000 / 90_000_000 };
     const read = { api_key: 0, oauth: 0 };
     let stored = 0;
     for (const e of rounds) {
@@ -2819,12 +2820,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round').sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
     // The 08:30 round's 7-day Fable reset lies days past the five-hour bound, so it tests all's weekly ceiling of 0.78
-    // (`weeklyCeiling` in mock/pools.ts). The stretch tests work's 5-hour ceiling of 0.95 at every horizon.
+    // (`weeklyCeiling` in mock/pools.ts), and so does the 11:13:40 round's 7-day projection, which the Fable
+    // reservation's round reads as a projection round does. The stretch tests work's 5-hour ceiling of 0.95 at every
+    // horizon.
     assert.deepEqual(
       rounds.map((e) => [e.requestId, e.detail.window, e.detail.trigger, e.detail.ceiling]),
       [
         ['req_3e7a5c19-f84', 'seven_day_fable', 'projection', 0.78],
         ['req_1eaa9bc1-a18', 'five_hour', 'projection', 1],
+        ['req_5d1f8c3a-b27', 'seven_day', 'fable_reservation', 0.78],
         ['req_9f2e7c5a-c49', 'five_hour', 'slow_down', 0.95],
         ['req_6e1f3b98-a24', 'five_hour', 'projection', 1],
       ],
@@ -2840,7 +2844,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // `FABLE_WEEK_BURN`, the 0.0052 and 0.0071 `ROUND_PINS` leave of their 0.0299, the 0.002, 0.026, 0.0206 and 0.025
     // `STRETCH_PINS` leave of their 0.1286, and the 0.224 of the one priced pin of `NO_RUNWAY_PINS`, which an unpriced
     // pin stands beside. The afternoon round lists the pin of the session the mod released whole under `ended` with no
-    // burn, so its sum is its priced pin's alone.
+    // burn, so its sum is its priced pin's alone. The one priced pin of `RESERVATION_PINS` takes its whole 0.0016 and
+    // leaves nothing, which its unpriced current pin allows.
     assert.deepEqual(
       {
         ended: rounds.flatMap((e) => e.detail.pins.filter((p) => p.skip === 'ended').map((p) => [e.requestId, p.burn])),
@@ -2856,6 +2861,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         left: [
           ['req_3e7a5c19-f84', 0.03, 0.03, false],
           ['req_1eaa9bc1-a18', 0.0299, 0.0123, false],
+          ['req_5d1f8c3a-b27', 0.0016, 0, true],
           ['req_9f2e7c5a-c49', 0.1286, 0.0736, false],
           ['req_6e1f3b98-a24', 0.224, 0.224, true],
         ],
@@ -2863,18 +2869,21 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     );
   });
 
-  test(`a story round's burn sum is the burn its account's row reads on the trigger's window, the demand there for a round the stretch fired, at ${at}`, async () => {
+  test(`a story round's burn sum is the burn its account's row reads on the trigger's window, the demand there for a round the stretch fired and the rate it records for a round the Fable reservation fired, at ${at}`, async () => {
     const s = await story;
     const records = await decisionsOf(s);
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
     // The router's projection sums the burn of the pool's pins on the account and of its bookings in flight, and the
-    // round sums the same pins, so the two read one figure where the record holds no booking on the window.
+    // round sums the same pins, so the two read one figure where the record holds no booking on the window. A round
+    // the Fable reservation fired walks the pins whose model draws no Fable week alone, and the router records their
+    // burn as the round's rate, since its test names none.
     const read = rounds.flatMap((e) => {
       const r = records.find((x) => x.requestId === e.requestId && x.request.at === e.at);
       const source = r.candidates.find((c) => c.accountId === e.accountId);
       const window = source.windows[e.detail.window];
       if ((window?.reserved ?? 0) !== 0) return [];
-      return [[e.requestId, e.detail.burn_sum, e.detail.trigger === 'slow_down' ? window.demand : source.burn[e.detail.window]]];
+      const burn = e.detail.trigger === 'slow_down' ? window.demand : e.detail.trigger === 'fable_reservation' ? e.detail.excess : source.burn[e.detail.window];
+      return [[e.requestId, e.detail.burn_sum, burn]];
     });
     assert.ok(read.length > 0, 'a round whose record holds no booking in flight');
     for (const [id, sum, burn] of read) assert.equal(sum, burn, `${id}: a burn sum of ${sum} against a burn of ${burn}`);
@@ -3257,7 +3266,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       ['work', 'studio', 'slow_down', 2_520_000, 1_800_000, 0.5, ['annex', 'annex']],
     );
     assert.deepEqual(renewal.outcome.shedMarks.length, 2);
-    for (const e of rounds.filter((x) => x !== stretched)) assert.deepEqual([e.detail.trigger, e.detail.stretch_ms, e.detail.threshold_ms, e.detail.factor], ['projection', null, null, null], `${e.requestId}'s round`);
+    // The round primary's Fable reservation fired at 11:13:40 is no stretch's either.
+    for (const e of rounds.filter((x) => x !== stretched)) assert.deepEqual([e.detail.trigger, e.detail.stretch_ms, e.detail.threshold_ms, e.detail.factor], [e.requestId === 'req_5d1f8c3a-b27' ? 'fable_reservation' : 'projection', null, null, null], `${e.requestId}'s round`);
     assert.equal(rounds.reduce((a, b) => (Date.parse(b.at) > Date.parse(a.at) ? b : a)).detail.trigger, 'projection', 'the newest round is a projection round');
     assert.ok(Date.parse(held.request.at) < Date.parse(stretched.at), 'the hold comes before the round');
 

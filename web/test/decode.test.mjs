@@ -574,19 +574,24 @@ test('a pool decodes the ceilings the router resolved for it, and a pool with no
 const SHEDDING_FIELDS = ['load_shedding', 'five_hour_ceiling', 'weekly_ceiling', 'shed_cap', 'burn_average_seconds', 'shed_dwell_seconds'];
 const shedding = (p) => [p.loadShedding, p.fiveHourCeiling, p.weeklyCeiling, p.shedCap, p.burnAverageSeconds, p.shedDwellSeconds];
 
-test('a pool decodes its switch, its two ceilings, its cap, its average and its dwell and encodes them back', () => {
+test('a pool decodes its switch, its Fable reservation option, its two ceilings, its cap, its average and its dwell and encodes them back', () => {
+  // A record's settings carry no Fable reservation option, so the pool's read takes it beside the shared fields.
+  const fields = [...SHEDDING_FIELDS, 'fable_reservation_shedding'];
+  const read = (p) => [...shedding(p), p.fableReservationShedding];
   const row = fixture('pools').pools[0];
-  assert.deepEqual(shedding(d.decodePool(row)), SHEDDING_FIELDS.map((f) => row[f]), 'the captured pool reads as the route answered it');
-  const wire = { ...row, burn_average_seconds: 3_600, five_hour_ceiling: 0.8, load_shedding: false, shed_cap: 0.3, shed_dwell_seconds: 1_800, weekly_ceiling: 0.9 };
+  assert.deepEqual(read(d.decodePool(row)), fields.map((f) => row[f]), 'the captured pool reads as the route answered it');
+  // The option reads the other way from the switch, so a read of the switch's own member fails.
+  const wire = { ...row, burn_average_seconds: 3_600, fable_reservation_shedding: true, five_hour_ceiling: 0.8, load_shedding: false, shed_cap: 0.3, shed_dwell_seconds: 1_800, weekly_ceiling: 0.9 };
   const p = d.decodePool(wire);
-  assert.deepEqual(shedding(p), [false, 0.8, 0.9, 0.3, 3_600, 1_800], 'a pool with its switch off reads it off');
+  assert.deepEqual(read(p), [false, 0.8, 0.9, 0.3, 3_600, 1_800, true], 'a pool with its switch off reads it off, and its option on reads it on');
   const back = d.encodePool({ ...p, name: p.name, status: 'active' });
-  assert.deepEqual(Object.fromEntries(SHEDDING_FIELDS.map((f) => [f, back[f]])), Object.fromEntries(SHEDDING_FIELDS.map((f) => [f, wire[f]])), 'each goes back under the name the route reads');
-  assert.equal(d.encodePool({ ...p, loadShedding: true, name: p.name, status: 'active' }).load_shedding, true, 'the switch is sent on as it is sent off');
+  assert.deepEqual(Object.fromEntries(fields.map((f) => [f, back[f]])), Object.fromEntries(fields.map((f) => [f, wire[f]])), 'each goes back under the name the route reads');
+  const flipped = d.encodePool({ ...p, fableReservationShedding: false, loadShedding: true, name: p.name, status: 'active' });
+  assert.deepEqual([flipped.load_shedding, flipped.fable_reservation_shedding], [true, false], 'the switch is sent on as it is sent off, and the option off as it is sent on');
   const bare = { ...row };
-  for (const f of SHEDDING_FIELDS) delete bare[f];
+  for (const f of fields) delete bare[f];
   const balanced = d.SHEDDING_PRESETS.balanced;
-  assert.deepEqual(shedding(d.decodePool(bare)), [true, 0.95, 1, balanced.shedCap, balanced.burnAverageSeconds, balanced.shedDwellSeconds], 'a row without the fields reads the switch on, the ceilings at 95 % and 100 % and the balanced preset');
+  assert.deepEqual(read(d.decodePool(bare)), [true, 0.95, 1, balanced.shedCap, balanced.burnAverageSeconds, balanced.shedDwellSeconds, false], 'a row without the fields reads the switch on, the ceilings at 95 % and 100 %, the balanced preset and the option off');
 });
 
 const SLOW_FIELDS = ['return_to_plan', 'return_to_plan_dwell_seconds', 'slow_down', 'slow_down_hold_seconds', 'slow_down_stretch_seconds'];
@@ -615,7 +620,7 @@ test("a pool body carries none of the six names the route refuses as unknown fie
   assert.deepEqual(old.filter((f) => f in back), []);
 });
 
-test("a pool decodes its warnings and a member's pace score and burn", () => {
+test("a pool decodes its warnings and a member's pace score, burn and Fable reservation", () => {
   const row = fixture('pools').pools[0];
   const p = d.decodePool(row);
   assert.deepEqual(p.warnings, row.warnings.map((w) => ({ code: w.code, fields: w.fields, text: w.text })));
@@ -627,10 +632,10 @@ test("a pool decodes its warnings and a member's pace score and burn", () => {
   assert.deepEqual(p.members.map((m) => [m.accountId, m.paceScore, m.burn]), row.members.map((m) => [m.account_id, m.pace_score, m.burn]));
   const keyed = p.members.find((m) => m.kind === 'api_key');
   assert.deepEqual([typeof keyed.paceScore, keyed.burn], ['number', null], "an API-key member's score is its remaining allowance, with no burn");
-  const spending = d.decodePool({ ...row, members: [{ ...row.members[0], burn: 0.085, pace_score: -0.02 }] }).members[0];
-  assert.deepEqual([spending.paceScore, spending.burn], [-0.02, 0.085], 'a spare rate under the burn reads negative');
+  const spending = d.decodePool({ ...row, members: [{ ...row.members[0], burn: 0.085, fable_reservation: 0.31, pace_score: -0.02 }] }).members[0];
+  assert.deepEqual([spending.paceScore, spending.burn, spending.fableReservation], [-0.02, 0.085, 0.31], 'a spare rate under the burn reads negative, beside a reservation of its own');
   const unread = d.decodePool({ ...row, members: [{ account_id: 'business', priority: 0 }] }).members[0];
-  assert.deepEqual([unread.paceScore, unread.burn], [null, null], 'a member row without the figures reads none');
+  assert.deepEqual([unread.paceScore, unread.burn, unread.fableReservation], [null, null, null], 'a member row without the figures reads none');
 });
 
 test('a window decodes its projection, horizon and burn and nulls without them', () => {

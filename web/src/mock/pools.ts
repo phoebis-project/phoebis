@@ -10,34 +10,34 @@ import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, endOf
  * A member as the story seeds it. The mock reads its kind, its eligibility, its burn, its Pace score, its factor and
  * its speed off the account, as the route does, and its pins off the recipes once they are drawn.
  */
-type MemberSeed = Omit<PoolMember, 'activePins' | 'budgetUntil' | 'burn' | 'eligible' | 'factor' | 'kind' | 'paceScore' | 'speed'>;
+type MemberSeed = Omit<PoolMember, 'activePins' | 'budgetUntil' | 'burn' | 'eligible' | 'fableReservation' | 'factor' | 'kind' | 'paceScore' | 'speed'>;
 
 /** The worst live bucket of each API-key account, which the router reads as its room. */
 export const WORST_BUCKET: Readonly<Record<string, number>> = { annex: 0.02, overflow: 0.04, research: 0.1 };
 
 /**
- * A member's four figures as the pools route serves them: the 7-day window's burn, the router's Pace score, the spare
+ * A member's five figures as the pools route serves them: the 7-day window's burn, the router's Pace score, the spare
  * rate on the 7-day window for an OAuth member (`paceOf` with no model, its Fable reservation held whatever the
  * member's tier, since the route reads the score with none) and the remaining worst bucket for an API-key member,
- * which burns no plan window, and the factor and the realized speed of the account's slow-down where the member's pool
- * has the switch on.
+ * which burns no plan window, the Fable reservation that score holds back, null where none applies, and the factor and
+ * the realized speed of the account's slow-down where the member's pool has the switch on.
  */
-export function servedFigures(accountId: string, now: number, slowDown: boolean): Pick<PoolMember, 'burn' | 'factor' | 'paceScore' | 'speed'> {
+export function servedFigures(accountId: string, now: number, slowDown: boolean): Pick<PoolMember, 'burn' | 'fableReservation' | 'factor' | 'paceScore' | 'speed'> {
   const account = accountById.get(accountId);
-  if (account === undefined) return { burn: null, factor: null, paceScore: null, speed: null };
-  if (account.kind === 'api_key') return { burn: null, factor: null, paceScore: 1 - (lookup(WORST_BUCKET, accountId) ?? 0), speed: null };
+  if (account === undefined) return { burn: null, fableReservation: null, factor: null, paceScore: null, speed: null };
+  if (account.kind === 'api_key') return { burn: null, fableReservation: null, factor: null, paceScore: 1 - (lookup(WORST_BUCKET, accountId) ?? 0), speed: null };
   const slowed = slowDown ? account.slowDown : null;
   const factor = slowed?.factor ?? null;
   const speed = slowed?.speed ?? null;
   const week = account.windows.find((w) => w.id === '7d');
-  if (week === undefined) return { burn: null, factor, paceScore: null, speed };
+  if (week === undefined) return { burn: null, fableReservation: null, factor, paceScore: null, speed };
   const fable = account.fableWindow;
   const pace = paceOf(account, now, null, {
     burns: { seven_day: week.burn ?? 0, seven_day_fable: fable?.burn ?? 0 },
     readings: { seven_day: { reset: week.resetsAt, utilization: week.utilization }, seven_day_fable: fable === null ? undefined : { reset: fable.resetsAt, utilization: fable.utilization } },
     reserve: true,
   });
-  return { burn: week.burn, factor, paceScore: pace.score, speed };
+  return { burn: week.burn, fableReservation: pace.fableReservation, factor, paceScore: pace.score, speed };
 }
 /**
  * A pool as the story seeds it and the mock stores it, over its kind of member. The route lists a pool's keys from the
@@ -202,6 +202,8 @@ const POOL_ROWS: PoolSeed[] = [
     fiveHourCeiling: 0.75,
     weeklyCeiling: 0.78,
     loadShedding: true,
+    // On, so a member whose 7-day room stands under its Fable reservation runs a round on its non-Fable sessions.
+    fableReservationShedding: true,
     shedCap: 0.5,
     burnAverageSeconds: 1_800,
     shedDwellSeconds: 900,

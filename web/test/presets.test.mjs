@@ -715,3 +715,44 @@ test('the cold group walks the pins that drop nothing first', () => {
   // its burn is the smaller.
   assert.equal(read([pin('hot', 'light', 0.01, false, { moveDropCost: 0.0001, moveDropSize: 1_000 }), pin('hot', 'heavy', 0.02, false, { moveDropCost: 0.001, moveDropSize: 10_000 })]), 0.01);
 });
+
+/** `res`, an account whose 7-day window reads `utilization` under a projection of `projection` five hours out. */
+const reserving = (utilization, five = 0.3, projection = 0.85) => ({ ...oauth('res', five, projection, 0.3), windows: [win('5h', five), { ...win('7d', projection, 5 * HOUR), utilization }] });
+/** A sibling with runway on every window a pin of `res` draws, its Fable week too. */
+const runway = oauth('cool', 0.3, 0.2, 0.1);
+/** res's three cold pins: a Fable one, which draws the Fable week, and two Sonnet ones, which do not. */
+const reservingPins = [pin('res', 'f', 0.03, false, { model: 'claude-fable-5-1' }), pin('res', 's1', 0.03, false), pin('res', 's2', 0.02, false)];
+/** The preview of a Pace pool with the option on, its member res holding `reservation`. */
+const reservationPreview = (account, reservation, over = {}) =>
+  d.shedPreview(pool([account, runway], { fableReservationShedding: true, members: [{ accountId: 'res', fableReservation: reservation, priority: 0 }, member('cool')], strategy: 'pace', ...over }), [account, runway], reservingPins, NOW);
+
+test('the preview mirrors a Fable reservation round on the non-Fable pins of a member whose 7-day room stands under its reservation', () => {
+  // res's 7-day room is 1 less its reading of 0.8, 0.2, under its reservation of 0.25, while no window crosses the
+  // ceiling of 0.9, the closest its 7-day projection of 85 %. The round walks s1 and s2 alone, whose 5 points an hour
+  // the cap halves to 2.5, which s1's 3 covers, leaving s2's 2 over a tenth of the 5. A walk of f's 3 beside them would
+  // halve 8 to 4, which no pin covers, and mark f and then s1.
+  const none = { labels: [], sessions: 0, warm: 0 };
+  assert.deepEqual(
+    {
+      equalRoom: reservationPreview(reserving(0.75), 0.25).reservation,
+      floor: reservationPreview(reserving(1.05), 0).reservation,
+      on: d.shedPreviewLine(reservationPreview(reserving(0.8), 0.25), NOW),
+      optionOff: reservationPreview(reserving(0.8), 0.25, { fableReservationShedding: false }).reservation,
+      priority: reservationPreview(reserving(0.8), 0.25, { strategy: 'priority' }).reservation,
+      sheddingOff: reservationPreview(reserving(0.8), 0.25, { loadShedding: false }).reservation,
+      windowFires: reservationPreview(reserving(0.8, 0.95), 0.25).reservation,
+    },
+    {
+      // 0.75 used leaves a room of 0.25, the whole reservation.
+      equalRoom: none,
+      // 1.05 used leaves no room, which is no room under a reservation of 0.
+      floor: none,
+      on: 'No member projects over the ceiling on any window: the closest is res, 7d 85 % in 5h. 1 member holds less 7-day room than its Fable reservation: res. A round there would mark 1 non-Fable session (0 warm), to move to a sibling with runway.',
+      optionOff: none,
+      priority: none,
+      sheddingOff: none,
+      // res's 5-hour projection of 95 % fires its own round, which the reservation's test never follows.
+      windowFires: none,
+    },
+  );
+});

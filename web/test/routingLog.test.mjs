@@ -1232,6 +1232,25 @@ test("a round's Trigger reads the stretch under the slow-down, its Demand pair t
   assert.deepEqual([unnamed.Trigger, unnamed['Fired by']], [['5h projection 99% at 16:00 over the ceiling 95%'], undefined]);
 });
 
+test("a round the Fable reservation fired reads its 7-day room under the reservation and the burn its pins walked", () => {
+  const pairs = Object.fromEntries(
+    d.detailPairs(
+      event(
+        'shedding_round',
+        { burn_average_seconds: 1_800, burn_sum: 0.004, ceiling: 0.78, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.004, fable_reservation: 0.32, factor: null, horizon: ms(19, 0), marks: [], outcome: 'nothing_to_mark', persisted: true, pins: [], projection: 0.85, reason: 'unpriced', removed: 0, shed_cap: 0.5, stretch_ms: null, target: 0.002, threshold_ms: null, trigger: 'fable_reservation', unit: 'window_share', utilization: 0.7, warm_sessions: 'when_needed', window: 'seven_day' },
+        { requestId: 'req_1', sessionId: 's1-0000-4000' },
+      ),
+      NOW,
+      [],
+      PRO,
+      NO_TIERS,
+    ).map((p) => [p.label, texts(p.chips)]),
+  );
+  // The room is 1 less the 7-day reading of 0.7, under the reservation of 0.32, and the projection of 0.85 is no part
+  // of the trigger. The rate the router records for such a round is the burn of the pins it walked.
+  assert.deepEqual([pairs.Trigger, pairs['Walked burn'], pairs.Excess], [['7d room 30% under the Fable reservation 32%'], ['0.4 %/h'], undefined]);
+});
+
 test('a mark healed under the threshold says so', () => {
   const page = d.decodeRoutingLogPage({
     counts: null,

@@ -100,6 +100,7 @@ export const CACHE_TTL_DEFAULTS: PoolCacheTtl = { enabled: false, injectWhenAbse
 export type PoolEngineFields = Pick<
   Pool,
   | 'burnAverageSeconds'
+  | 'fableReservationShedding'
   | 'fiveHourCeiling'
   | 'inFlightCap'
   | 'loadShedding'
@@ -122,6 +123,7 @@ export type PoolEngineFields = Pick<
 export const POOL_ENGINE_DEFAULTS: PoolEngineFields = {
   ...SHEDDING_PRESETS.balanced,
   ...FAILOVER_PRESETS.balanced,
+  fableReservationShedding: false,
   fiveHourCeiling: 0.95,
   loadShedding: true,
   migrateWhenSpent: true,

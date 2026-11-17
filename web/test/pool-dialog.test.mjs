@@ -344,6 +344,31 @@ test('a save hands the client the Thinking diagnostics switch as the dialog show
   assert.deepEqual(sent, [false, true], 'the untouched dialog sends the switch off and the ticked one sends it on');
 });
 
+test('a save hands the client the Fable reservation option as the dialog shows it', async () => {
+  // The pool jobs stores load shedding on and the option off (`web/src/mock/pools.ts`), so a form that opened the
+  // option from load shedding would send it on untouched, and a toggle that wrote load shedding would leave it off.
+  const pool = pools.find((p) => p.id === 'jobs');
+  assert.ok(pool && pool.loadShedding && !pool.fableReservationShedding, 'the mock holds the pool jobs with load shedding on and the option off');
+  const sent = [];
+  api.updatePool = async (id, input) => {
+    sent.push(input.fableReservationShedding);
+    return pool;
+  };
+  const save = (container) => act(() => [...container.querySelectorAll('dialog[open] .dialog__actions button')].find((b) => b.textContent?.trim() === 'Save pool')?.click());
+  const untouched = mount();
+  await untouched.draw(poolDialog({ accounts: accountsRead(accounts), initialGroup: 'shedding', pool }));
+  save(untouched.container);
+  await settled();
+  const ticked = mount();
+  await ticked.draw(poolDialog({ accounts: accountsRead(accounts), initialGroup: 'shedding', pool }));
+  // The option is an expert field of a group whose switch is plain, so the group's line turns the expert view on.
+  act(() => ticked.container.querySelector('dialog[open] section.dialog-group[aria-label="Load shedding"] button[aria-label="Turn on the expert view"]')?.click());
+  act(() => ticked.container.querySelector('dialog[open] button[role="switch"][aria-label="Fable reservation shedding"]')?.click());
+  save(ticked.container);
+  await settled();
+  assert.deepEqual(sent, [false, true], 'the untouched dialog sends the option off and the ticked one sends it on');
+});
+
 test("a key move sends the stored key's settings with the new pool, the name trimmed and an empty note as none", async () => {
   const pool = pools[0];
   const target = pools.find((p) => p.id !== pool.id);

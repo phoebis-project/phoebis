@@ -1148,6 +1148,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   customAffinity: !isPreset(pool.affinityTtlSeconds),
   engine: {
     burnAverageSeconds: pool.burnAverageSeconds,
+    fableReservationShedding: pool.fableReservationShedding,
     fiveHourCeiling: pool.fiveHourCeiling,
     inFlightCap: pool.inFlightCap,
     loadShedding: pool.loadShedding,
@@ -1501,10 +1502,11 @@ export function PoolDialog({
       };
       return { fiveHour: shared('5h'), id: a.id, label: a.label, sevenDay: shared('7d') };
     });
-    // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
-    const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
+    // The route's verdict and Fable reservation per stored member, so a member in cooldown is no destination for a shed
+    // session and a member not saved yet holds no reservation.
+    const stored = new Map((pool?.members ?? []).map((m) => [m.accountId, m]));
     const previewed = previewInput(input, form, opened);
-    const preview = shedPreview({ ...previewed, members: previewed.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now);
+    const preview = shedPreview({ ...previewed, members: previewed.members.map((m) => ({ ...m, eligible: stored.get(m.accountId)?.eligible, fableReservation: stored.get(m.accountId)?.fableReservation ?? null })) }, accounts, sessions, now);
     // The route's factor per stored member, which a member whose account did not load is read by.
     const factorOf = new Map((pool?.members ?? []).map((m) => [m.accountId, m.factor]));
     const slowPreview = slowDownPreview({ ...previewed, members: previewed.members.map((m) => ({ ...m, factor: factorOf.get(m.accountId) ?? null })) }, accounts);
@@ -2027,6 +2029,11 @@ export function PoolDialog({
                 }
               >
                 <ChoiceList choices={WARM_CHOICES} invalid={invalid('Warm sessions')} label="Warm sessions" name={`warm-${pool?.id ?? 'new'}`} onChange={(v) => setEngine('warmSessions', v)} value={form.engine.warmSessions} />
+              </Field>
+            </Expert>
+            <Expert>
+              <Field label="Fable reservation shedding" beside hint="On, under the Pace strategy, a round also runs on a member whose 7-day room is smaller than its Fable reservation. It marks non-Fable sessions alone, up to the shed cap.">
+                <Toggle checked={form.engine.fableReservationShedding} onChange={(v) => setEngine('fableReservationShedding', v)} label="Fable reservation shedding" />
               </Field>
             </Expert>
             <Expert>
