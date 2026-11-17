@@ -174,6 +174,25 @@ test("a key's named feature account the list lacks stays shown and marked", asyn
   assert.ok(option?.textContent?.includes('not listed'), `the option reads ${JSON.stringify(option?.textContent ?? null)}`);
 });
 
+test('a key that inherits an account that cannot serve draws the line under Inherit', async () => {
+  const oauth = accounts.find((a) => a.kind === 'oauth');
+  assert.ok(oauth, 'the mock holds an OAuth account to build the two from');
+  const serving = { ...oauth, canceled: false, featureGrants: ['artifacts', 'connectors'], id: 'serving', label: 'Serving', planEndedAt: null, pool: null, routingEnabled: true, status: 'ready', subscription: null };
+  const signedOut = { ...serving, id: 'signed-out', label: 'Signed out', status: 'reauth_required' };
+  const pool = { ...pools[0], featureAccounts: { artifacts: 'serving', connectors: 'signed-out' } };
+  const desktop = (await mock.listKeys()).find((k) => k.id === 'desktop');
+  assert.ok(desktop, 'the mock holds the desktop key');
+  const inherit = { accountId: null, mode: 'inherit' };
+  const key = { ...desktop, featureAccounts: { artifacts: inherit, connectors: inherit }, poolId: pool.id };
+  const { container, draw } = mount();
+  await draw(h(KeyDialog, { accounts: accountsRead([serving, signedOut]), existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools: [pool] }));
+  const connectors = fieldIn(container, 'Connectors')?.querySelector('.field__hint')?.textContent ?? null;
+  assert.ok(connectors?.includes('Signed out'), `the line under Connectors reads ${JSON.stringify(connectors)}`);
+  const artifacts = fieldIn(container, 'Artifacts');
+  assert.ok(artifacts, 'the group draws the Artifacts field');
+  assert.equal(artifacts.querySelector('.field__hint'), null, 'an account that serves draws no line');
+});
+
 test('a pool dialog whose account list failed draws the failure with its retry, and no member row waits', async () => {
   const pool = pools.find((p) => p.members.length > 0);
   assert.ok(pool, 'the mock holds a pool with members');
