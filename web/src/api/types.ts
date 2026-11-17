@@ -410,8 +410,8 @@ export interface AttentionItem {
   /**
    * An account or a pool by id and label, a client version as both, a model's undated id as both, or one of the
    * router's own components as both: the ledger or the routing state writer, a listener's pair by its key
-   * (`proxy.tls`, `admin.tls`), or `-` for a parked record without a pool. The keepalive engine and its caps read
-   * `keepalive` and `keepalive.<cap>` under the label `Keepalive`.
+   * (`proxy.tls`, `admin.tls`), the feature CA as `features.ca`, or `-` for a parked record without a pool. The
+   * keepalive engine and its caps read `keepalive` and `keepalive.<cap>` under the label `Keepalive`.
    */
   subject: { id: string; label: string; type: (typeof ATTENTION_SUBJECT_VALUES)[number] };
 }
@@ -2424,6 +2424,17 @@ export interface CostRevision {
   effectiveDate: string | null;
 }
 
+/** The feature listener's address and its CA. */
+export interface FeatureSettings {
+  /** The CA's end, as an ISO instant. */
+  caExpires: string;
+  /** The SHA-256 of the bytes the CA download serves, as 64 lowercase hex characters, which each launcher compares. */
+  caFingerprint: string;
+  /** The CA's certificate as PEM text. */
+  caPem: string;
+  listen: string;
+}
+
 export interface Settings {
   /** `build` is the commit the router was built from, or `unknown` where it names none. */
   about: { build: string; profile: string; version: string };
@@ -2434,6 +2445,8 @@ export interface Settings {
    * of the file, ascending by date, the entry in force among them.
    */
   apiPrices: { effective: string; effectiveDate: string | null; models: ModelPrice[]; revisions: PriceRevision[]; source: string };
+  /** Null on a router without the feature listener. */
+  features: FeatureSettings | null;
   /** `proxyTls`: whether the proxy listener terminates TLS itself, which sets the client snippet's scheme. */
   listeners: { metrics: string; proxy: string; proxyTls: boolean };
   /** The two day counts are file settings of the `stats` section, 0 for forever. */

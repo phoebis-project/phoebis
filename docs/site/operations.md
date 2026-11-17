@@ -245,8 +245,8 @@ present, and lets the next start create an empty registry, in which every accoun
 
 `phoebis status` is the operator's read and `phoebis health` the orchestrator's: `health` sends one `HEAD /api/ready`
 to the proxy listener and prints one line, while `status` runs that probe beside its reads of `GET /admin/system`,
-`/admin/attention`, `/admin/pools`, `/admin/accounts` and `/admin/sessions`, which it makes in that order with the admin
-secret from the environment, each call under the `--timeout` deadline, and prints one screen:
+`/admin/attention`, `/admin/pools`, `/admin/accounts`, `/admin/sessions` and `/admin/settings`, which it makes in that
+order with the admin secret from the environment, each call under the `--timeout` deadline, and prints one screen:
 
 ```text title="phoebis status"
 phoebis 0.1.0, up 3d 4h, ready
@@ -283,15 +283,19 @@ answer, the full commit the router was built from or `unknown` for a build that 
 `PHOEBIS_BUILD_COMMIT` set names that value, trimmed and lowercased, in place of the checkout's commit, and a blank
 value reads as unset. When the admin API could not be read, the header carries the binary's own version and
 `readiness unknown`, unless the proxy is down, and the line under it the binary's own build. The listeners follow with
-their schemes as the file names them. Under them, a listener's certificate whose leaf expires within 30 days prints
+their schemes as the file names them, `features https://{listen}` among them where the file has the `features` block.
+Under them, a listener's certificate whose leaf expires within 30 days prints
 `proxy.tls.cert_file {path} expires in {n} days ({date})` (or `admin.tls.cert_file`), and a certificate file the loader
 refuses when the operator reads it prints the loader's line for it
 ([TLS on the listeners](installation.md#tls-on-the-listeners)). The running router keeps the pair it loaded until
-`phoebis tls reload`. `ledger:` prints only when a figure needs a look, and lists each one on its own line under it:
-records `queued` in the writer channel, `behind` while admission refuses, `degraded` after a failed batch, priced
-records `parked` in the ledger file, a batch `retrying`, and after `writer:` the state writer's `deferred` writes and
-its `degraded` flag (see [API reference](api-reference.md)). `attention:` lists every attention item on its own line
-under it as `{kind} {subject} since {HH:MM}`, in the items' order, or reads `attention: none`.
+`phoebis tls reload`. A router with the feature listener then prints `feature CA {fingerprint}, expires {date}`, the
+end as a UTC date, from its settings answer, with a file or with `--url` alone, since the CA's files are the service
+user's to read, and a settings read that failed prints `settings:` with its failure in that line's place. `ledger:`
+prints only when a figure needs a look, and lists each one on its own line under it: records `queued` in the writer
+channel, `behind` while admission refuses, `degraded` after a failed batch, priced records `parked` in the ledger
+file, a batch `retrying`, and after `writer:` the state writer's `deferred` writes and its `degraded` flag (see
+[API reference](api-reference.md)). `attention:` lists every attention item on its own line under it as
+`{kind} {subject} since {HH:MM}`, in the items' order, or reads `attention: none`.
 
 Under `pools` each pool prints by id with its status, its member, key and pin counts and its requests in the last 24
 hours, then one line per member by priority, then account id: the account's label, its state (`paused` when routing is

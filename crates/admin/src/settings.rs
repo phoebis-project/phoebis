@@ -18,6 +18,7 @@ pub(crate) struct Settings {
     pub access: Access,
     /// The price table's envelope as `GET /admin/pricing` answers it.
     pub api_prices: crate::pricing::Envelope<crate::pricing::PriceTableContent>,
+    pub features: Option<FeaturesSettings>,
     pub listeners: Listeners,
     pub retention: Retention,
     pub sessions: SessionsSettings,
@@ -41,6 +42,20 @@ pub(crate) struct About {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Access {
     pub admin_configured: bool,
+}
+
+/// The feature listener and its CA. Null on a router without the listener.
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FeaturesSettings {
+    /// The CA's end, in Unix milliseconds.
+    pub ca_expires: i64,
+    /// The SHA-256 of the bytes `GET /v0/features/ca.pem` serves, as 64 lowercase hex characters.
+    pub ca_fingerprint: String,
+    /// The CA's certificate as PEM text.
+    pub ca_pem: String,
+    pub listen: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -121,6 +136,12 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
             admin_configured: true,
         },
         api_prices,
+        features: s.features.as_ref().map(|f| FeaturesSettings {
+            ca_expires: f.ca_expires,
+            ca_fingerprint: f.ca_fingerprint.clone(),
+            ca_pem: f.ca_pem.clone(),
+            listen: f.listen.clone(),
+        }),
         listeners: Listeners {
             metrics: s.metrics_listen.clone(),
             proxy: s.proxy_listen.clone(),
@@ -160,6 +181,7 @@ mod tests {
         about: About,
         access: Access,
         api_prices: serde_json::Value,
+        features: Option<FeaturesSettings>,
         listeners: Listeners,
         retention: Retention,
         sessions: SessionsSettings,

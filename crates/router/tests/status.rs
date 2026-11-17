@@ -29,8 +29,15 @@ fn build_line() -> String {
     format!("  build {}", phoebis_router::BUILD_COMMIT)
 }
 
-/// The five reads as the screen and the JSON's `errors` name them.
-const READS: [&str; 5] = ["system", "attention", "pools", "accounts", "sessions"];
+/// The six reads as the screen and the JSON's `errors` name them.
+const READS: [&str; 6] = [
+    "system",
+    "attention",
+    "pools",
+    "accounts",
+    "sessions",
+    "settings",
+];
 
 /// A port from a hundred-port slice below the kernel's ephemeral range (32768 upward on Linux), spread by pid as
 /// `end_to_end.rs` spreads its own, so no outbound connection takes it between the probe and the router's bind.
@@ -285,7 +292,7 @@ async fn a_refused_secret_spends_one_failed_login_so_the_corrected_run_reads_rea
     assert_eq!(refused.status.code(), Some(1), "{stdout}\n{stderr}");
     assert_eq!(
         stdout.matches("the admin secret was refused").count(),
-        5,
+        6,
         "every section names the refusal: {stdout}"
     );
 
@@ -375,7 +382,7 @@ async fn the_url_and_the_secret_variable_stand_in_for_the_file_and_skip_the_prob
     running.stop().await;
 }
 
-/// The paused clock advances to the next deadline whenever the runtime waits on nothing else, so the five deadlines
+/// The paused clock advances to the next deadline whenever the runtime waits on nothing else, so the six deadlines
 /// pass at once in wall time while the test clock reads their sum.
 #[tokio::test(start_paused = true)]
 async fn a_route_that_never_answers_ends_each_read_at_the_deadline() {
@@ -416,8 +423,8 @@ async fn a_route_that_never_answers_ends_each_read_at_the_deadline() {
     }
     assert!(reads.health.is_none());
     assert!(
-        spent >= Duration::from_secs(10) && spent < Duration::from_secs(11),
-        "five reads at the client's two seconds each: {spent:?}"
+        spent >= Duration::from_secs(12) && spent < Duration::from_secs(13),
+        "six reads at the client's two seconds each: {spent:?}"
     );
     assert_eq!(status::exit_code(&reads), 1);
     drop(silent);
@@ -474,7 +481,7 @@ async fn a_refused_secret_or_a_throttled_login_is_asked_once_and_named_in_every_
             "503 Service Unavailable",
             "the admin listener answered 503 refused for the test, 503 Service Unavailable"
                 .to_owned(),
-            5,
+            6,
         ),
     ] {
         let body = format!(r#"{{"error":"refused for the test, {status_line}"}}"#);
@@ -634,6 +641,7 @@ fn a_usage_based_seats_row_prints_its_spend_share_its_amounts_and_its_reset_mark
             "id": "main", "status": "ok", "members": members, "keys": [], "active_pins": 0, "requests_24h": 0
         }]})),
         sessions: Ok(json!({"sessions": []})),
+        settings: Ok(json!({"features": null})),
         system: Ok(json!({"ready": true})),
     };
     // The day before the estimate's: a head's reset prints as a time of the clock's day, the estimate by its date.
@@ -710,6 +718,7 @@ fn an_account_flagged_plan_ended_prints_plan_ended_beside_its_state_word() {
             ]
         }]})),
         sessions: Ok(json!({"sessions": []})),
+        settings: Ok(json!({"features": null})),
         system: Ok(json!({"ready": true})),
     };
     let screen = render_at(&reads, OCT_31_NOON);
@@ -735,6 +744,7 @@ fn render_at(reads: &status::Reads, at_ms: i64) -> String {
     let listeners = status::Listeners {
         admin: "http://127.0.0.1:8081".to_owned(),
         certificates: Vec::new(),
+        features: None,
         metrics: None,
         proxy: None,
     };
@@ -789,6 +799,7 @@ fn the_fixtures_seat_row_prints_whole_inside_eighty_columns_on_its_own_day_and_t
         health: None,
         pools: Ok(fixture("pools")),
         sessions: Ok(fixture("sessions")),
+        settings: Ok(fixture("settings")),
         system: Ok(fixture("system")),
     };
     let seat = fixture("accounts")["accounts"]

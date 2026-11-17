@@ -759,7 +759,7 @@ ledger's hourly rollups, holds again at the first read.
 | `funding_required` | serious | the API-key account | a retry succeeds after five minutes (or the [model rejection interval](routing.md#cooldowns-and-failover) when that is shorter), or the operator clears funding |
 | `refresh_failed` | serious | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `pairing_expiring` | warning | the OAuth account | a re-pair stores an end more than 3 days away, or the account is disconnected or deleted |
-| `certificate_expiring` | warning | the listener key | a pair with more than 30 days left is loaded |
+| `certificate_expiring` | warning | the listener key, or `features.ca` | a pair with more than 30 days left is loaded, or for `features.ca` a router runs that holds a new CA with more than 30 days left |
 | `limit_reset_ending` | warning | the account | every reset that ends within the threshold is used or has ended, a confirmed pairing clears the stored resets until a read stores them again, the usage poll no longer reads the account, a plan-ended pause included, or the threshold is set to 0 |
 | `ledger_record_parked` | serious | the pool, or `-` for a record without one | the next start or the Replay button lands them |
 | `keepalive_bus_gaps` | serious | the keepalive engine | 24 hours pass without a gap, or the router restarts |
@@ -833,7 +833,10 @@ It reads the pair the router loaded rather than the files, so a pair replaced on
 loads it. The subject is the listener key, and the item opens nothing. It dates from 30 days before the leaf's end, so a
 restart keeps the date, and the detail names the certificate file, the end and the whole days left, negative once past,
 which the dashboard's line words as `expires in 12 days` or `expired 3 days ago`, and as `expires today` and
-`expired today` in the day before the end and the day after it.
+`expired today` in the day before the end and the day after it. The item also holds for the feature CA from 30 days
+ahead of its end, under the subject `features.ca`, with the same detail. No reload reads a CA: the operator replaces it
+by removing `feature-ca.pem` and `feature-ca-key.pem` from the data directory and starting the router again, which
+creates a new CA, and hands each user its new fingerprint from the Settings view.
 
 **`limit_reset_ending`** holds while an account the usage poll reads holds an unused limit reset whose grant ends within
 `usage.limit_reset_warning_days` ([usage](installation.md#usage)), 5 days unless set, and for no account at 0. It reads

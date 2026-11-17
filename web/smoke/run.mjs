@@ -782,6 +782,18 @@ await forView('/', async () => {
     ['Refresh token expiring: legacy', 'badge--warning', '/accounts/legacy', ["legacy's refresh token expired 3 days ago (Sep 14, 2026, 12:30:00). Re-pair the account.", 'account: legacy', 'days_left: -3', 'expires: <instant>', 'label: legacy']],
     ['Refresh token expiring: reserve', 'badge--warning', '/accounts/reserve', ["reserve's refresh token expires in 2 days (Sep 18, 2026, 14:30:00). Re-pair the account before then.", 'account: reserve', 'days_left: 2', 'expires: <instant>', 'label: reserve']],
     ['Certificate expiring: proxy.tls', 'badge--warning', null, ["The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (<instant>). Replace the pair and run phoebis tls reload.", 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
+    // The feature CA's end lies 20 days after the mock's load, dated in UTC as the refresh tokens' are.
+    [
+      'Certificate expiring: features.ca',
+      'badge--warning',
+      null,
+      [
+        'The feature CA ./data/feature-ca.pem expires in 20 days (Oct 06, 2026, 14:30:00). To replace it, remove feature-ca.pem and feature-ca-key.pem from the data directory, start the router again, and give each user the new fingerprint from the Settings view.',
+        'cert_file: ./data/feature-ca.pem',
+        'days_left: 20',
+        'expires: <instant>',
+      ],
+    ],
     // nightly's reset ends 4 days and 12 hours out, inside the mock's five days, and its item opens nightly's card.
     ['nightly: a reset ends in 4 days', 'badge--warning', '/quota#nightly', ['account: nightly', 'clears: ["five_hour","seven_day_fable"]', 'days_left: 4', 'ending: 1', 'ends_at: <instant>', 'grant: rg-nightly-1', 'grant_label: Launch reset', 'resets_left: 1']],
     ['Priced record parked: jobs', 'badge--serious', '/pools#jobs', ['accounts: ["research"]', 'count: 1', 'pool: jobs']],
@@ -870,16 +882,16 @@ await forView('/', async () => {
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's without a usable reset the routing log, a reset item's and a wall's that a reset can clear the account's Quota card, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all twenty-three, nightly's reset item among them, while no layout folds it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's without a usable reset the routing log, a reset item's and a wall's that a reset can clear the account's Quota card, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all twenty-four, nightly's reset item among them, while no layout folds it",
     ok:
-      lead() === '23 need attention' &&
+      lead() === '24 need attention' &&
       unpriced !== undefined &&
       drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
       ages[8] === 'started 18d ago' &&
-      /^started 1h( 1m)? ago$/.test(ages[10] ?? '') &&
-      /^started 4[23]m ago$/.test(ages[12] ?? '') &&
+      /^started 1h( 1m)? ago$/.test(ages[11] ?? '') &&
+      /^started 4[23]m ago$/.test(ages[13] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
     missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],

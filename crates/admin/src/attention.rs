@@ -101,8 +101,9 @@ pub(crate) struct AttentionSubject {
     pub kind: String,
     pub id: String,
     /// The account's or the pool's label, a deleted pool's id, the client version, the router's component
-    /// (`ledger`, `routing`, a listener's pair as `proxy.tls` or `admin.tls`, `Keepalive` for the keepalive engine and
-    /// its caps, or `-` for a parked record without a pool), or a model's undated id.
+    /// (`ledger`, `routing`, a listener's pair as `proxy.tls` or `admin.tls`, the feature CA as `features.ca`,
+    /// `Keepalive` for the keepalive engine and its caps, or `-` for a parked record without a pool), or a model's
+    /// undated id.
     pub label: String,
 }
 

@@ -340,19 +340,21 @@ const RESET_ITEMS: AttentionItem[] = ACCOUNTS.flatMap((a) => {
 
 /**
  * One item per kind but a failed certificate reload, a refresh token near its end, which `pairingExpiringOf` reads off
- * the live accounts, and a wall, which holds on three, on the story's accounts, pools, keys, proxy listener, models and
- * keepalive engine, in the route's order: jobs exhausted from the runner's first request after its one member spent the
- * day's budget, a client build refused on the laptop key, the routing state writer keeping its writes in memory,
- * legacy's lapsed credential, the Overflow workspace out of funding as its account reads, legacy's refreshes failing,
- * the proxy listener's certificate 12 days from its end, nightly's reset 4 days from its end, a priced record of the
- * jobs pool's one member parked in the ledger file, the keepalive engine's bus gaps, the backoff secondary's poll is
- * in, Sonnet 4.5 priced nothing, nightly's 5-hour window charged twice the table up to its 13:11 reset, nightly's wall
- * at 12:01, secondary's after the 11:00 round, which secondary's reset can clear, and studio's at 14:20 after its
- * stretch round, nightly spent after the least-bad move onto it, the all pool's round that found no destination with
- * runway, studio slowed in work for 2 h 8 min of the day, the engine's retained prompts at 92 percent of their cap, and
- * the day's expiries between turns a probe could have prevented. The meter drift reads the reconciled windows, the four
- * routing conditions the routing log's events, as the ledger folds them, the reset item and the wall's reset the stored
- * blocks, the two keepalive items the overview's figures, and the expiries the ledger rows of the day.
+ * the live accounts, a certificate near its end, which holds on the proxy listener and the feature CA, and a wall,
+ * which holds on three, on the story's accounts, pools, keys, proxy listener, feature CA, models and keepalive engine,
+ * in the route's order: jobs exhausted from the runner's first request after its one member spent the day's budget, a
+ * client build refused on the laptop key, the routing state writer keeping its writes in memory, legacy's lapsed
+ * credential, the Overflow workspace out of funding as its account reads, legacy's refreshes failing, the proxy
+ * listener's certificate 12 days from its end, the feature CA in the data directory of the story's storage path 20 days
+ * from its end, nightly's reset 4 days from its end, a priced record of the jobs pool's one member parked in the ledger
+ * file, the keepalive engine's bus gaps, the backoff secondary's poll is in, Sonnet 4.5 priced nothing, nightly's
+ * 5-hour window charged twice the table up to its 13:11 reset, nightly's wall at 12:01, secondary's after the 11:00
+ * round, which secondary's reset can clear, and studio's at 14:20 after its stretch round, nightly spent after the
+ * least-bad move onto it, the all pool's round that found no destination with runway, studio slowed in work for 2 h 8
+ * min of the day, the engine's retained prompts at 92 percent of their cap, and the day's expiries between turns a
+ * probe could have prevented. The meter drift reads the reconciled windows, the four routing conditions the routing
+ * log's events, as the ledger folds them, the reset item and the wall's reset the stored blocks, the two keepalive
+ * items the overview's figures, and the expiries the ledger rows of the day.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted
@@ -410,6 +412,13 @@ export const ATTENTION: AttentionItem[] = [
     detail: { cert_file: '/etc/phoebis/proxy.pem', days_left: 12, expires: NOW + 12 * DAY },
     kind: 'certificate_expiring',
     since: ago(18 * DAY),
+  },
+  {
+    ...ATTENTION_ITEM_SAMPLE,
+    ...ofRouter('features.ca', 'features.ca'),
+    detail: { cert_file: './data/feature-ca.pem', days_left: 20, expires: NOW + 20 * DAY },
+    kind: 'certificate_expiring',
+    since: ago(10 * DAY),
   },
   ...RESET_ITEMS,
   {

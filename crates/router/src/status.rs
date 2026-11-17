@@ -1,4 +1,4 @@
-//! `phoebis status`: the proxy listener's readiness probe beside five admin reads through the subcommand client,
+//! `phoebis status`: the proxy listener's readiness probe beside six admin reads through the subcommand client,
 //! printed as one screen of at most 80 columns or as one JSON object.
 
 use std::collections::BTreeMap;
@@ -23,7 +23,7 @@ pub struct StatusArgs {
     pub common: Common,
 }
 
-/// The six reads, each kept with its failure so the screen prints what it could read and names what it could not.
+/// The seven reads, each kept with its failure so the screen prints what it could read and names what it could not.
 pub struct Reads {
     pub accounts: Result<Value, String>,
     pub attention: Result<Value, String>,
@@ -31,14 +31,18 @@ pub struct Reads {
     pub health: Option<Result<SocketAddr, String>>,
     pub pools: Result<Value, String>,
     pub sessions: Result<Value, String>,
+    /// The one source of the feature CA's fingerprint and end, since the data directory is the service user's alone.
+    pub settings: Result<Value, String>,
     pub system: Result<Value, String>,
 }
 
-/// The three listeners as the file names them, with their schemes.
+/// The listeners as the file names them, with their schemes.
 pub struct Listeners {
     pub admin: String,
     /// `certificate_lines`' answer for the file's pairs, printed under the listeners.
     pub certificates: Vec<String>,
+    /// The feature listener's `https` URL, where the file has the `features` block.
+    pub features: Option<String>,
     pub metrics: Option<String>,
     pub proxy: Option<String>,
 }
@@ -83,7 +87,7 @@ const SESSION_CHARS: usize = 12;
 /// Where a wrapped line carries on.
 const CARRY: &str = "    ";
 
-/// The probe, blocking on a worker, runs beside the five GETs, so a wedged proxy listener does not hold the admin reads
+/// The probe, blocking on a worker, runs beside the six GETs, so a wedged proxy listener does not hold the admin reads
 /// back by its budget. The GETs run one after another in the order `operations.md` lists them, each under the client's
 /// deadline.
 pub async fn read(client: &AdminClient, proxy: Option<(SocketAddr, bool)>) -> Reads {
@@ -110,20 +114,23 @@ pub async fn read(client: &AdminClient, proxy: Option<(SocketAddr, bool)>) -> Re
         let pools = reader.get("/admin/pools").await;
         let accounts = reader.get("/admin/accounts").await;
         let sessions = reader.get("/admin/sessions").await;
-        (system, attention, pools, accounts, sessions)
+        let settings = reader.get("/admin/settings").await;
+        (system, attention, pools, accounts, sessions, settings)
     };
-    let (health, (system, attention, pools, accounts, sessions)) = tokio::join!(probe, admin);
+    let (health, (system, attention, pools, accounts, sessions, settings)) =
+        tokio::join!(probe, admin);
     Reads {
         accounts,
         attention,
         health,
         pools,
         sessions,
+        settings,
         system,
     }
 }
 
-/// The five GETs one after another, each under the client's deadline.
+/// The six GETs one after another, each under the client's deadline.
 struct Reader<'a> {
     client: &'a AdminClient,
     /// The line of a refused secret or a throttled login, once one answers. The admin listener counts every refused
@@ -210,15 +217,25 @@ pub fn render(
         ("proxy", listeners.proxy.as_deref()),
         ("admin", Some(listeners.admin.as_str())),
         ("metrics", listeners.metrics.as_deref()),
+        ("features", listeners.features.as_deref()),
     ]
     .into_iter()
     .filter_map(|(name, url)| url.map(|url| format!("{name} {url}")))
     .collect();
-    // Three URLs pass 80 columns at the default addresses, so the line breaks between listeners rather than inside
-    // one.
+    // Three URLs or more pass 80 columns at the default addresses, so the line breaks between listeners rather than
+    // inside one.
     screen.flow("  ", &named, "  ", "  ");
     for line in &listeners.certificates {
         screen.wrap(&format!("  {line}"));
+    }
+    // The running router's CA whatever the file says, since the answer is the router's and the file may name none.
+    match &reads.settings {
+        Ok(settings) => {
+            if let Some(line) = feature_ca_line(&settings["features"]) {
+                screen.wrap(&format!("  {line}"));
+            }
+        }
+        Err(reason) => screen.wrap(&format!("  settings: {reason}")),
     }
     if reads.health.is_none() {
         screen.push("  proxy: not probed, no configuration file names the listener");
@@ -309,6 +326,22 @@ pub fn render(
         .join("\n");
     out.push('\n');
     out
+}
+
+/// `feature CA {fingerprint}, expires {date}` for the settings answer's `features` object, `None` for its `null`.
+fn feature_ca_line(features: &Value) -> Option<String> {
+    features.is_object().then(|| {
+        let expires = features["ca_expires"]
+            .as_i64()
+            .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+            .map_or("-".to_owned(), |at| {
+                at.to_zoned(TimeZone::UTC).strftime("%Y-%m-%d").to_string()
+            });
+        format!(
+            "feature CA {}, expires {expires}",
+            text(&features["ca_fingerprint"])
+        )
+    })
 }
 
 /// Each of the ledger's figures that is non-zero or true, then each of the state writer's as `writer: ...`, one per
@@ -901,8 +934,8 @@ fn cut(text: &str, width: usize) -> String {
     kept
 }
 
-/// `{"health": {"ready", "addr", "reason"}, "system", "attention", "pools", "accounts", "sessions", "errors": {...}}`;
-/// `health` is `null` when no probe ran.
+/// `{"health": {"ready", "addr", "reason"}, "system", "attention", "pools", "accounts", "sessions", "settings",
+/// "errors": {...}}`, where `health` is `null` when no probe ran.
 pub fn render_json(reads: &Reads) -> Value {
     let health = match &reads.health {
         None => Value::Null,
@@ -922,6 +955,7 @@ pub fn render_json(reads: &Reads) -> Value {
     let pools = answer("pools", &reads.pools);
     let accounts = answer("accounts", &reads.accounts);
     let sessions = answer("sessions", &reads.sessions);
+    let settings = answer("settings", &reads.settings);
     json!({
         "health": health,
         "system": system,
@@ -929,6 +963,7 @@ pub fn render_json(reads: &Reads) -> Value {
         "pools": pools,
         "accounts": accounts,
         "sessions": sessions,
+        "settings": settings,
         "errors": errors,
     })
 }
@@ -972,6 +1007,7 @@ mod tests {
             health: Some(Ok("127.0.0.1:8317".parse().unwrap())),
             pools: Ok(fixture("pools")),
             sessions: Ok(fixture("sessions")),
+            settings: Ok(fixture("settings")),
             system: Ok(fixture("system")),
         }
     }
@@ -1017,6 +1053,7 @@ mod tests {
             metrics: Some("http://127.0.0.1:9464".to_owned()),
             proxy: Some("https://0.0.0.0:8317".to_owned()),
             certificates: Vec::new(),
+            features: None,
         }
     }
 

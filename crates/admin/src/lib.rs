@@ -190,6 +190,8 @@ impl Drop for ClaimRunning {
 /// at where a credential lives.
 pub struct SettingsView {
     pub api_prices_path: Option<String>,
+    /// `None` on a router without the feature listener.
+    pub features: Option<FeaturesView>,
     pub ledger_path: String,
     /// `usage.limit_reset_warning_days`, 0 for never.
     pub limit_reset_warning_days: u32,
@@ -201,6 +203,16 @@ pub struct SettingsView {
     pub rollup_retention_days: u32,
     pub storage_path: String,
     pub subscription_costs_path: Option<String>,
+}
+
+/// The feature listener's address and the CA it serves under, as the router opened it at the start.
+pub struct FeaturesView {
+    /// The CA's end, in Unix milliseconds.
+    pub ca_expires: i64,
+    /// The SHA-256 of `ca_pem`'s bytes, as 64 lowercase hex characters.
+    pub ca_fingerprint: String,
+    pub ca_pem: String,
+    pub listen: String,
 }
 
 /// Credentials exchanged during pairing, held between the callback and the operator's confirmation.

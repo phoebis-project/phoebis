@@ -45,9 +45,19 @@ pub struct PairFacts {
     pub failed: Option<(i64, String)>,
 }
 
-/// The router's loaded pairs, in the listeners' order, a listener serving plain HTTP left out.
+/// The feature CA as the running router holds it: what `certificate_expiring` reads under `features.ca`.
+#[derive(Clone, Debug)]
+pub struct FeatureCaFacts {
+    pub cert_file: PathBuf,
+    /// The certificate's `not_after`, in Unix milliseconds.
+    pub not_after_ms: i64,
+}
+
+/// The router's loaded pairs, in the listeners' order, a listener serving plain HTTP left out, and its feature CA.
 pub trait TlsPairs: Send + Sync {
     fn pairs(&self) -> Vec<PairFacts>;
+    /// The feature CA, `None` on a router without the feature listener.
+    fn feature_ca(&self) -> Option<FeatureCaFacts>;
 }
 
 /// What the keepalive engine stands at when a read runs: the gap counter and the last gap's instant, the three caps
@@ -89,8 +99,8 @@ pub struct AttentionParts {
     pub limit_reset_warning_days: u32,
     pub router: RouterHandle,
     pub store: Arc<Store>,
-    /// The router's loaded pairs; `None` where a harness builds no listeners, and then neither certificate kind has
-    /// a series.
+    /// The router's loaded pairs and its feature CA, `None` where a harness builds no listeners, and then neither
+    /// certificate kind has a series.
     pub tls: Option<Arc<dyn TlsPairs>>,
     /// Where the poll's standing and the latest snapshot per account are read. It is `None` where a harness builds no
     /// usage service, and no account then reads a backoff and no wall names a reset.
@@ -172,6 +182,7 @@ impl Attention {
         // The pairs before the lock too: their lock is the router's, which a reload holds across a whole load from
         // disk.
         let pairs = self.tls.as_ref().map(|tls| tls.pairs());
+        let feature_ca = self.tls.as_ref().and_then(|tls| tls.feature_ca());
         // The engine's standing before the lock too, since it waits on the engine's own lock.
         let keepalive = self.keepalive.standing();
         let unpriced = self
@@ -193,6 +204,7 @@ impl Attention {
             ledger.as_ref(),
             &unpriced,
             pairs.as_deref(),
+            feature_ca.as_ref(),
             self.usage.as_deref(),
             &keepalive,
             now,

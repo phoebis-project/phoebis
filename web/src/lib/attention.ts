@@ -144,6 +144,8 @@ export function anchorOf(hash: string): string | null {
 const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
 /** The listener a certificate item's subject names: `proxy.tls` is the proxy listener's pair. */
 const listenerOf = ({ subject }: AttentionItem): string => subject.id.replace(/\.tls$/, '');
+/** The subject the feature CA's certificate item carries. */
+const FEATURE_CA = 'features.ca';
 /** "a reset ends in 4 days", "the first of 2 resets ends today": the item's subject and its whole days. */
 const resetEnds = (d: AttentionItem['detail']): string => {
   const ending = num(d.ending);
@@ -193,7 +195,12 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     }
     case 'certificate_expiring': {
       const file = text(d.cert_file);
-      return `The ${listenerOf(item)} listener's certificate${file ? ` ${file}` : ''} ${endWords(num(d.days_left))} (${fmtAbsolute(isoOrNull(d.expires))}). Replace the pair and run phoebis tls reload.`;
+      const ends = `${file ? ` ${file}` : ''} ${endWords(num(d.days_left))} (${fmtAbsolute(isoOrNull(d.expires))})`;
+      // No reload reads the CA, and a new one has a new fingerprint each launcher must be given.
+      if (item.subject.id === FEATURE_CA) {
+        return `The feature CA${ends}. To replace it, remove feature-ca.pem and feature-ca-key.pem from the data directory, start the router again, and give each user the new fingerprint from the Settings view.`;
+      }
+      return `The ${listenerOf(item)} listener's certificate${ends}. Replace the pair and run phoebis tls reload.`;
     }
     case 'certificate_reload_failed':
       return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(isoOrNull(d.serving_since))}.`;

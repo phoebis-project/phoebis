@@ -101,6 +101,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             "api_prices",
             &["content", "effective", "revisions", "source"],
         ),
+        ("features", &[]),
         ("listeners", &["metrics", "proxy", "proxy_tls"]),
         (
             "retention",

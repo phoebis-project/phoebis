@@ -101,6 +101,13 @@ test("a listener's certificate items read the listener, the file, the date and w
   );
 });
 
+test("the feature CA's item reads its file and the replacement, never a reload", () => {
+  const ca = { cert_file: '/var/lib/phoebis/feature-ca.pem', days_left: 20, expires: NOW + 20 * 86_400_000 };
+  const line = attentionDetail(item('certificate_expiring', { detail: ca, subject: { id: 'features.ca', label: 'features.ca', type: 'router' } }), NOW);
+  assert.ok(line.includes('/var/lib/phoebis/feature-ca.pem'), line);
+  assert.ok(!line.includes('tls reload'), `nothing reloads the CA: ${line}`);
+});
+
 test("a certificate item reads its last day and its first day past the end as today, and the floored days elsewhere", () => {
   const words = (left) => {
     const expires = NOW + left * 86_400_000;

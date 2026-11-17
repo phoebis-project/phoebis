@@ -1,6 +1,6 @@
 import type {
   Account, AccountCatalog, AccountKind, AccountRollup, AgentRequests, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FeatureAccountIds, FeatureCall, FeatureCallPage, FundedSum, GuardVerdict, InputTransformations, KeepaliveOverview, KeepaliveRecipe, KeyFeatureAccount, KeyFigures, KeyModels, Lifecycle, LimitResets, LimitResetsRead, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FeatureAccountIds, FeatureCall, FeatureCallPage, FeatureSettings, FundedSum, GuardVerdict, InputTransformations, KeepaliveOverview, KeepaliveRecipe, KeyFeatureAccount, KeyFigures, KeyModels, Lifecycle, LimitResets, LimitResetsRead, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, ResetUse, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionDay, SessionInfo, SessionSpend, SessionSpendPart, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
@@ -1133,6 +1133,11 @@ export const decodeSessionInfo = (v: unknown): SessionInfo => {
   return { persistent: r.persistent === true, sessionId: r.session_id };
 };
 
+const featureSettingsOf = (v: unknown): FeatureSettings | null => {
+  if (!isMap(v)) return null;
+  return { caExpires: isoOr(v.ca_expires, epoch), caFingerprint: str(v.ca_fingerprint), caPem: str(v.ca_pem), listen: str(v.listen) };
+};
+
 export function decodeSettings(v: unknown): Settings {
   const s = rec(v);
   const l = rec(s.listeners);
@@ -1142,6 +1147,7 @@ export function decodeSettings(v: unknown): Settings {
     about: { build: str(rec(s.about).build, 'unknown'), profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
     apiPrices: decodePricing(s.api_prices),
+    features: featureSettingsOf(s.features),
     listeners: { metrics: str(l.metrics), proxy: str(l.proxy), proxyTls: bool(l.proxy_tls) },
     retention: { bodyCaptureMaxHours: num(kept.body_capture_max_hours), retentionDays: num(kept.retention_days), rollupRetentionDays: num(kept.rollup_retention_days) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds), nonCompanionIdleSeconds: num(rec(s.sessions).non_companion_idle_seconds) },

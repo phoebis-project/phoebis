@@ -10,8 +10,8 @@ use axum::Router;
 use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_admin::{
-    router, AdminState, Claims, EngineFacts, OldTotals, PairingVault, Readiness, Sessions,
-    SettingsView, TlsReload,
+    router, AdminState, Claims, EngineFacts, FeaturesView, OldTotals, PairingVault, Readiness,
+    Sessions, SettingsView, TlsReload,
 };
 use phoebis_attention::{Attention, AttentionHandles, AttentionParts, TlsPairs};
 use phoebis_bus::Bus;
@@ -151,6 +151,7 @@ pub async fn admin_parts_full_on_disk() -> (tempfile::TempDir, Full) {
         Duration::from_secs(3_600),
         Some(dir.path().join("ledger.sqlite")),
         None,
+        false,
     )
     .await;
     (dir, full_from(parts))
@@ -184,7 +185,8 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 /// the default's 5 s, so a wait for the mirror's copy of a registry write costs a tick of that length. The same
 /// interval paces the writer's revision poll, which lands pending budget rows, and the retry of a failed spend read on
 /// the ledger's clock, so a budget row a seed provokes lands on that cadence as well. Its router prices a pin's rewrite
-/// through the shipped cost model, as `admin_parts_full_on_equivalent` wires it.
+/// through the shipped cost model, as `admin_parts_full_on_equivalent` wires it. The settings answer carries the
+/// feature listener over the committed certificate, which the capture's fixture alone reads.
 pub async fn admin_parts_full_on_polled(store: Arc<Store>, event_poll: Duration) -> Full {
     admin_parts_full_on_equivalent(
         store,
@@ -208,7 +210,7 @@ pub async fn admin_parts_full_on_equivalent(
 ) -> Full {
     let tables = costs.clone();
     full_from(
-        build_app_routed(
+        build_app_bounded(
             None,
             ACCOUNT_UUID,
             false,
@@ -226,6 +228,11 @@ pub async fn admin_parts_full_on_equivalent(
                 ..RouterConfig::default()
             },
             ledger_config,
+            Duration::from_secs(86_400),
+            Duration::from_secs(3_600),
+            None,
+            None,
+            true,
         )
         .await,
     )
@@ -414,6 +421,7 @@ pub async fn admin_parts_full_on_bounded(
             non_companion_idle,
             None,
             None,
+            false,
         )
         .await,
     )
@@ -438,6 +446,7 @@ pub async fn admin_parts_full_with_pairs(pairs: Arc<dyn TlsPairs>) -> Full {
             Duration::from_secs(3_600),
             None,
             Some(pairs),
+            false,
         )
         .await,
     )
@@ -1121,12 +1130,14 @@ async fn build_app_routed(
         Duration::from_secs(3_600),
         None,
         None,
+        false,
     )
     .await
 }
 
 /// `build_app_routed` with the sessions route bounded by `session_expiry` and `non_companion_idle`, which the settings
-/// view mirrors, and the ledger on the file at `ledger_path` where one is given, in memory otherwise.
+/// view mirrors, and the ledger on the file at `ledger_path` where one is given, in memory otherwise. `features` gives
+/// the settings answer a feature listener, which a router without the `features` block answers as null.
 #[allow(clippy::too_many_arguments)]
 async fn build_app_bounded(
     identity: Option<Identity>,
@@ -1143,6 +1154,7 @@ async fn build_app_bounded(
     non_companion_idle: Duration,
     ledger_path: Option<PathBuf>,
     pairs: Option<Arc<dyn TlsPairs>>,
+    features: bool,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_310_linux_x64();
@@ -1340,6 +1352,15 @@ async fn build_app_bounded(
     });
     let settings = Arc::new(SettingsView {
         api_prices_path: None,
+        features: features.then(|| FeaturesView {
+            // Made with the committed file: `sha256sum tests/fixtures/feature-ca.pem` and the certificate's end,
+            // `date -d "$(openssl x509 -noout -enddate -in tests/fixtures/feature-ca.pem | cut -d= -f2)" +%s000`.
+            ca_expires: 2_106_432_000_000,
+            ca_fingerprint: "70a9e2bcbca574e633d412ec31bdfd221c61147a8379c66a043c33bc2b44feee"
+                .into(),
+            ca_pem: include_str!("../fixtures/feature-ca.pem").into(),
+            listen: "127.0.0.1:8443".into(),
+        }),
         ledger_path: "test".into(),
         limit_reset_warning_days: 5,
         metrics_listen: "127.0.0.1:9464".into(),

@@ -1,9 +1,9 @@
 //! The twenty-one conditions, read fresh on every call: the account states, the pools and the stored limit resets from
 //! the registry, the refresh runs and the refresh token ends from the store, the parked records, the ledger's degraded
 //! state, the unpriced models its landing or a catalog listing saw, the routing conditions its hourly fold wrote and
-//! the expiries between turns its rollups count from the ledger, the routing state writer's and the listeners' pairs
-//! from the router, the bus gaps and the caps from the keepalive engine, the poll's standing from the usage service,
-//! and the exhaustions and drift refusals from the request outcomes the bus arm keeps.
+//! the expiries between turns its rollups count from the ledger, the routing state writer's, the listeners' pairs and
+//! the feature CA from the router, the bus gaps and the caps from the keepalive engine, the poll's standing from the
+//! usage service, and the exhaustions and drift refusals from the request outcomes the bus arm keeps.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -21,7 +21,7 @@ use phoebis_store::{
 };
 use serde_json::json;
 
-use crate::{AttentionError, KeepaliveStanding, LedgerFacts, PairFacts};
+use crate::{AttentionError, FeatureCaFacts, KeepaliveStanding, LedgerFacts, PairFacts};
 
 /// How long after a run's first 429 the poll backoff condition holds, so a single 429 or a short run never reads 1.
 pub const BACKOFF_ATTENTION_AFTER_MS: i64 = 30 * 60 * 1_000;
@@ -55,6 +55,9 @@ const NO_POOL: &str = "-";
 
 /// The keepalive engine's subject, and the stem of its caps' subjects.
 const KEEPALIVE: &str = "keepalive";
+
+/// The feature CA's subject, the key its warning line names in the router's commands too.
+const FEATURE_CA: &str = "features.ca";
 
 /// The subject of a drift refusal whose version does not read as a release, so a malformed or oversized label shares
 /// one series.
@@ -170,8 +173,8 @@ phoebis_store::text_enum! {
         Client => "client",
         Pool => "pool",
         /// One of the process's own components: the ledger or the routing state writer, a listener's pair by its key
-        /// (`proxy.tls`, `admin.tls`), the keepalive engine (`keepalive`, and `keepalive.<cap>` for one of its caps),
-        /// or `-` for a parked record served under no pool.
+        /// (`proxy.tls`, `admin.tls`), the feature CA as `features.ca`, the keepalive engine (`keepalive`, and
+        /// `keepalive.<cap>` for one of its caps), or `-` for a parked record served under no pool.
         Router => "router",
         /// A model by its undated id.
         Model => "model",
@@ -536,8 +539,9 @@ impl ResetFacts<'_> {
 /// routing conditions (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) and
 /// `expired_between_turns` then has a series. Where one is built, `destination_spent` stops holding once a
 /// `window_cleared` followed its spent window. `pairs` is `None` where no listener is built, and neither certificate
-/// kind then has a series. `pairing_expiring` has a series for an OAuth account whose credential holds a refresh token
-/// end and for no other account. `unpriced` is the ledger's map, empty where no ledger is built.
+/// kind then has a series. `feature_ca` is `None` on a router without the feature listener, and `features.ca` then
+/// has no series. `pairing_expiring` has a series for an OAuth account whose credential holds a refresh token end and
+/// for no other account. `unpriced` is the ledger's map, empty where no ledger is built.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
@@ -549,6 +553,7 @@ pub(crate) fn conditions(
     ledger: Option<&LedgerFacts>,
     unpriced: &[UnpricedModel],
     pairs: Option<&[PairFacts]>,
+    feature_ca: Option<&FeatureCaFacts>,
     usage: Option<&UsageService>,
     keepalive: &KeepaliveStanding,
     now: i64,
@@ -619,6 +624,22 @@ pub(crate) fn conditions(
             expiring,
             since,
             json!({ "cert_file": cert_file, "days_left": days_left, "expires": pair.not_after_ms }),
+        ));
+    }
+    // Nothing reloads the CA, so it raises the end's kind alone, judged on this read's clock as a pair's is.
+    if let Some(ca) = feature_ca {
+        let (expiring, since, days_left) = ahead_of(ca.not_after_ms, CERTIFICATE_WARNING_DAYS, now);
+        out.push(condition_for(
+            Kind::CertificateExpiring,
+            Subject::router(FEATURE_CA),
+            None,
+            expiring,
+            since,
+            json!({
+                "cert_file": ca.cert_file.display().to_string(),
+                "days_left": days_left,
+                "expires": ca.not_after_ms,
+            }),
         ));
     }
     if let Some(parked) = ledger.map(|l| l.parked.as_slice()) {

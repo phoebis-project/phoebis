@@ -232,7 +232,9 @@ fn main() -> anyhow::Result<()> {
             .chain(tls::warnings(&proxy_tls))
             .chain(tls::warnings(&admin_tls))
             .chain(ca_facts.iter().flat_map(|facts| {
-                phoebis_store::permissions::check_private_file(&facts.key_file, 0o600)
+                tls::feature_ca_expiry_line(facts).into_iter().chain(
+                    phoebis_store::permissions::check_private_file(&facts.key_file, 0o600),
+                )
             }))
             .chain(phoebis_store::permissions::check_private_dir(data_dir))
             .chain(phoebis_store::permissions::check_private_file(
@@ -381,12 +383,17 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
                 Some(_) => called,
                 None => tls::url(&config.admin.tls, config.admin.listen),
             },
+            features: config
+                .features
+                .as_ref()
+                .map(|block| format!("https://{}", block.listen)),
             metrics: Some(tls::url(&None, config.stats.metrics_listen)),
             proxy: Some(tls::url(&config.proxy.tls, config.proxy.listen)),
         },
         None => Listeners {
             admin: called,
             certificates: Vec::new(),
+            features: None,
             metrics: None,
             proxy: None,
         },

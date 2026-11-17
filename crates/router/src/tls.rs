@@ -15,12 +15,12 @@ use boring::ssl::{
 };
 use boring::x509::X509;
 use phoebis_admin::{Reloaded, TlsReload};
-use phoebis_attention::{PairFacts, TlsPairs};
+use phoebis_attention::{FeatureCaFacts, PairFacts, TlsPairs};
 use phoebis_relay::LiveAcceptor;
 use phoebis_transport::ALPN_HTTP1;
 
 use crate::config::ListenerTls;
-use crate::feature_ca::{FeatureCaError, FeatureLeaves, IssuedLeaf, FEATURE_HOSTS};
+use crate::feature_ca::{CaFacts, FeatureCaError, FeatureLeaves, IssuedLeaf, FEATURE_HOSTS};
 
 /// The acceptor an accept loop takes: `None` is plain HTTP.
 pub type Acceptor = Option<Arc<LiveAcceptor>>;
@@ -471,6 +471,11 @@ pub fn expiry_line(key: &str, cert_file: &Path, leaf: &LeafFacts) -> Option<Stri
         })
 }
 
+/// `expiry_line` for the feature CA under `features.ca`, the key its refusals and its attention item name it by.
+pub fn feature_ca_expiry_line(ca: &CaFacts) -> Option<String> {
+    expiry_line("features.ca", &ca.cert_file, &ca.leaf)
+}
+
 /// `permissions::check_private_file(key_file, 0o600)`'s lines, except for the shape the service unit reads a key
 /// through, which the installation page recommends: owned by root and readable by its group alone
 /// (`0640 root:phoebis`). That shape passes when this process holds the file's group, as the service does, or
@@ -594,29 +599,48 @@ impl Live {
     }
 }
 
-/// The set the start shares with the admin state before the pairs load: created empty, filled once by `fill`, and
-/// read by the reload route (`TlsReload`) and by the attention reader (`TlsPairs`).
+/// The set the start shares with the admin state before the pairs load: created empty, filled once by `fill` with the
+/// feature CA's facts beside the pairs, and read by the reload route (`TlsReload`) and by the attention reader
+/// (`TlsPairs`).
 pub struct LiveSet {
-    listeners: OnceLock<Vec<(PublicListener, Option<Live>)>>,
+    filled: OnceLock<Filled>,
+}
+
+struct Filled {
+    listeners: Vec<(PublicListener, Option<Live>)>,
+    /// Read once at the start, since nothing replaces the CA under a running router.
+    feature_ca: Option<FeatureCaFacts>,
 }
 
 impl LiveSet {
     pub fn new() -> Arc<Self> {
         Arc::new(LiveSet {
-            listeners: OnceLock::new(),
+            filled: OnceLock::new(),
         })
     }
 
     /// The public listeners in their order, `(PublicListener::Proxy, ..)` then `(PublicListener::Admin, ..)`, each
-    /// with its `Live` or `None` for plain HTTP.
-    pub fn fill(&self, listeners: Vec<(PublicListener, Option<Live>)>) {
-        let filled = self.listeners.set(listeners).is_ok();
+    /// with its `Live` or `None` for plain HTTP, and the feature CA, `None` without the `features` block.
+    pub fn fill(
+        &self,
+        listeners: Vec<(PublicListener, Option<Live>)>,
+        feature_ca: Option<FeatureCaFacts>,
+    ) {
+        let filled = self
+            .filled
+            .set(Filled {
+                listeners,
+                feature_ca,
+            })
+            .is_ok();
         debug_assert!(filled, "the start fills the listeners' pairs once");
     }
 
     /// Empty until the start fills the set, which it does before any listener binds.
     fn listeners(&self) -> &[(PublicListener, Option<Live>)] {
-        self.listeners.get().map_or(&[], Vec::as_slice)
+        self.filled
+            .get()
+            .map_or(&[], |filled| filled.listeners.as_slice())
     }
 }
 
@@ -663,6 +687,10 @@ impl TlsPairs for LiveSet {
             .iter()
             .filter_map(|(_, live)| live.as_ref().map(Live::facts))
             .collect()
+    }
+
+    fn feature_ca(&self) -> Option<FeatureCaFacts> {
+        self.filled.get()?.feature_ca.clone()
     }
 }
 
@@ -860,10 +888,13 @@ mod tests {
         let (cert, key) =
             generate_pair_valid_until(&["localhost"], not_after).write_to(dir.path(), "admin");
         let loaded = load_pair(PublicListener::Admin, &cert, &key).unwrap();
-        set.fill(vec![
-            (PublicListener::Proxy, None),
-            (PublicListener::Admin, Some(Live::new(loaded, 1_000))),
-        ]);
+        set.fill(
+            vec![
+                (PublicListener::Proxy, None),
+                (PublicListener::Admin, Some(Live::new(loaded, 1_000))),
+            ],
+            None,
+        );
         assert_eq!(
             set.reload(2_000),
             [

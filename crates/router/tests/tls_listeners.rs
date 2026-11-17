@@ -3,7 +3,8 @@
 //! TLS, a pair the start cannot serve refused before any port is taken, and `POST /admin/tls/reload` putting a new pair
 //! in front of the next connection or keeping the old one when the new one does not load, with an attention item until
 //! a reload lands. The feature listener serves each feature host its own certificate under the feature CA, which a
-//! client trusts by the download's bytes and which signs for no other name.
+//! client trusts by the download's bytes and which signs for no other name. The settings answer names the digest of
+//! those bytes, and a CA near its end raises its attention item.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -26,7 +27,7 @@ use fake_upstream::{
 use hyper::Method;
 use phoebis_router::admin_client::{AdminClient, Answer, Common};
 use phoebis_router::config::{Config, FeaturesConfig};
-use phoebis_router::feature_ca::CA_KEY_FILE;
+use phoebis_router::feature_ca::{CA_CERT_FILE, CA_KEY_FILE};
 use phoebis_router::status;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -315,6 +316,7 @@ async fn attention(admin_port: u16, config: &Path) -> (Vec<serde_json::Value>, V
     let listeners = status::Listeners {
         admin: format!("http://127.0.0.1:{admin_port}"),
         certificates: Vec::new(),
+        features: None,
         metrics: None,
         proxy: None,
     };
@@ -546,6 +548,7 @@ async fn a_reload_with_a_mismatched_key_keeps_the_old_pair_serving() {
 
 /// The ports of a router started with a `features` block.
 struct FeaturePorts {
+    admin: u16,
     features: u16,
     proxy: u16,
 }
@@ -577,6 +580,7 @@ async fn start_with_features(
         stop_tx,
         server,
         FeaturePorts {
+            admin: admin_port,
             features: features_port,
             proxy: proxy_port,
         },
@@ -731,5 +735,87 @@ async fn the_feature_ca_is_bound_to_the_two_hosts() {
         verifies(&ca, &served),
         "the certificate served for api.anthropic.com"
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_served_certificate_matches_the_fingerprint() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (stop_tx, server, ports) = start_with_features(dir.path(), &up).await;
+
+    let served = download(ports.proxy).await;
+    let digest: String = boring::sha::sha256(&served)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let settings = admin_client(ports.admin, &dir.path().join("config.yaml"))
+        .call(Method::GET, "/admin/settings", None)
+        .await
+        .unwrap_or_else(|error| panic!("the settings call failed: {error}"));
+    assert_eq!(settings.status, 200, "{}", settings.body);
+    assert_eq!(
+        settings.body["features"]["ca_fingerprint"],
+        json!(digest),
+        "{}",
+        settings.body["features"]
+    );
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
+/// Each `features.ca` item of the list, as its kind and its whole days left.
+fn feature_ca_items(items: &[serde_json::Value]) -> Vec<(serde_json::Value, serde_json::Value)> {
+    items
+        .iter()
+        .filter(|item| item["subject"]["id"] == "features.ca")
+        .map(|item| (item["kind"].clone(), item["detail"]["days_left"].clone()))
+        .collect()
+}
+
+#[tokio::test]
+async fn the_cas_end_raises_the_item() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+
+    let (stop_tx, server, ports) = start_with_features(dir.path(), &up).await;
+    let (created, _) = attention(ports.admin, &config).await;
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    assert!(
+        feature_ca_items(&created).is_empty(),
+        "a CA the start created: {created:?}"
+    );
+
+    // Under the router's own subject, since the start refuses a CA under another. The reader counts whole days to the
+    // end, so the half day keeps 20 for the first 12 hours after the making.
+    let key = rcgen::KeyPair::generate().unwrap();
+    let mut params = rcgen::CertificateParams::default();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+    let mut name = rcgen::DistinguishedName::new();
+    name.push(rcgen::DnType::CommonName, "Phoebis feature CA");
+    params.distinguished_name = name;
+    let end = jiff::Timestamp::now().as_second() + 20 * 86_400 + 12 * 3_600;
+    params.not_after = rcgen::date_time_ymd(1970, 1, 1) + Duration::from_secs(end as u64);
+    std::fs::write(
+        dir.path().join(CA_CERT_FILE),
+        params.self_signed(&key).unwrap().pem(),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join(CA_KEY_FILE), key.serialize_pem()).unwrap();
+
+    let (stop_tx, server, ports) = start_with_features(dir.path(), &up).await;
+    let (ending, _) = attention(ports.admin, &config).await;
+    assert_eq!(
+        feature_ca_items(&ending),
+        vec![(json!("certificate_expiring"), json!(20))],
+        "{ending:?}"
+    );
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
     up.shutdown().await;
 }

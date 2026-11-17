@@ -8,8 +8,10 @@ use std::time::Duration;
 use anyhow::{anyhow, Context};
 use axum::Router;
 use phoebis_admin::{
-    AdminState, Claims, EngineFacts, OldTotals, PairingVault, Readiness, Sessions, SettingsView,
+    AdminState, Claims, EngineFacts, FeaturesView, OldTotals, PairingVault, Readiness, Sessions,
+    SettingsView,
 };
+use phoebis_attention::FeatureCaFacts;
 use phoebis_bus::Bus;
 use phoebis_keepalive::{
     companion_router, keepalive_router, spawn_observer, Engine, EngineParts, KeepaliveTiming,
@@ -31,7 +33,7 @@ use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use tokio::task::JoinSet;
 
 use crate::config::{Config, RoutingConfig, StatsConfig, StorageConfig, UpstreamConfig};
-use crate::feature_ca::{FeatureCa, FeatureLeaves, FEATURE_HOSTS};
+use crate::feature_ca::{CaFacts, FeatureCa, FeatureLeaves, FEATURE_HOSTS};
 use crate::tls::PublicListener;
 use crate::{listen, tls};
 
@@ -460,7 +462,10 @@ pub async fn run_until(
         metrics: metrics.clone(),
         pricing: pricing.clone(),
         tables: tables.clone(),
-        settings: Arc::new(settings_view(&config)),
+        settings: Arc::new(settings_view(
+            &config,
+            feature_ca.as_ref().map(FeatureCa::facts),
+        )),
         // Cloned rather than moved: the local binding still serves the companion router and the shutdown
         // sequence below.
         keepalive: keepalive.clone(),
@@ -518,10 +523,16 @@ pub async fn run_until(
     let admin_live = live_pair(admin_tls, loaded_at);
     let proxy_acceptor = acceptor(&proxy_live);
     let admin_acceptor = acceptor(&admin_live);
-    tls_live.fill(vec![
-        (PublicListener::Proxy, proxy_live),
-        (PublicListener::Admin, admin_live),
-    ]);
+    tls_live.fill(
+        vec![
+            (PublicListener::Proxy, proxy_live),
+            (PublicListener::Admin, admin_live),
+        ],
+        feature_ca.as_ref().map(|ca| FeatureCaFacts {
+            cert_file: ca.facts().cert_file.clone(),
+            not_after_ms: ca.facts().leaf.not_after_ms,
+        }),
+    );
     // Issued before any bind as the pairs are read, so a certificate the start cannot issue refuses with its line and
     // no port is taken. The listener joins no reload, since it has no pair of the operator's to read again.
     let features = match feature_ca.zip(config.features.as_ref()) {
@@ -900,13 +911,23 @@ fn log_ledger_opened(
     );
 }
 
-fn settings_view(config: &Config) -> SettingsView {
+fn settings_view(config: &Config, feature_ca: Option<&CaFacts>) -> SettingsView {
     SettingsView {
         api_prices_path: config
             .stats
             .api_prices_path
             .as_ref()
             .map(|p| p.display().to_string()),
+        features: config
+            .features
+            .as_ref()
+            .zip(feature_ca)
+            .map(|(block, ca)| FeaturesView {
+                ca_expires: ca.leaf.not_after_ms,
+                ca_fingerprint: ca.fingerprint.clone(),
+                ca_pem: ca.pem.clone(),
+                listen: block.listen.to_string(),
+            }),
         ledger_path: config.stats.ledger_path.display().to_string(),
         limit_reset_warning_days: config.usage.limit_reset_warning_days,
         metrics_listen: config.stats.metrics_listen.to_string(),
@@ -961,7 +982,10 @@ fn open_feature_ca(config: &Config, now: i64) -> anyhow::Result<Option<FeatureCa
             "feature CA created"
         );
     }
-    for warning in check_private_file(&facts.key_file, 0o600) {
+    for warning in tls::feature_ca_expiry_line(facts)
+        .into_iter()
+        .chain(check_private_file(&facts.key_file, 0o600))
+    {
         tracing::warn!("{warning}");
     }
     Ok(Some(ca))
@@ -1880,10 +1904,11 @@ revisions:
             ))
             .unwrap()
         };
-        let plain = settings_view(&config(""));
-        let paired = settings_view(&config(
-            "  tls:\n    cert_file: cert.pem\n    key_file: key.pem\n",
-        ));
+        let plain = settings_view(&config(""), None);
+        let paired = settings_view(
+            &config("  tls:\n    cert_file: cert.pem\n    key_file: key.pem\n"),
+            None,
+        );
         assert_eq!((plain.proxy_tls, paired.proxy_tls), (false, true));
     }
 
@@ -1896,7 +1921,7 @@ revisions:
              storage:\n  encryption_key_file: storage.key\n  path: router.sqlite\n",
         )
         .unwrap();
-        let view = settings_view(&config);
+        let view = settings_view(&config, None);
         assert_eq!((view.retention_days, view.rollup_retention_days), (30, 0));
     }
 

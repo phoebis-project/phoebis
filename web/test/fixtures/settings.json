@@ -467,6 +467,12 @@
         }
       ]
     },
+    "features": {
+      "ca_expires": 2106432000000,
+      "ca_fingerprint": "70a9e2bcbca574e633d412ec31bdfd221c61147a8379c66a043c33bc2b44feee",
+      "ca_pem": "-----BEGIN CERTIFICATE-----\nMIIBozCCAUqgAwIBAgIUUXyyvhz19F0QchS0ND2I9K7pHncwCgYIKoZIzj0EAwIw\nHjEcMBoGA1UEAwwTU2V0dGluZ3MgZml4dHVyZSBDQTAeFw0yNjEwMDEwMDAwMDBa\nFw0zNjEwMDEwMDAwMDBaMB4xHDAaBgNVBAMME1NldHRpbmdzIGZpeHR1cmUgQ0Ew\nWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQ2qRFFlMS7p7njtnC0Fh5VUe12NL83\narSOGEskQAW20v1wArlvsX0heg/d8MCVAg7L+yupwSY3AM+Q+ZUq11Fxo2YwZDAd\nBgNVHQ4EFgQUz9vGsgh0CyBbJmZ4lU1vq8st6vgwHwYDVR0jBBgwFoAUz9vGsgh0\nCyBbJmZ4lU1vq8st6vgwEgYDVR0TAQH/BAgwBgEB/wIBADAOBgNVHQ8BAf8EBAMC\nAgQwCgYIKoZIzj0EAwIDRwAwRAIgXQy/KTDgO47ZmaSlOFaDEg/vJIFBWGknQMnO\n2jMqSwMCIHsauz7gKxyewVsXy7bgsLhlKZxMt2xQx1U4/kOYOZzK\n-----END CERTIFICATE-----\n",
+      "listen": "127.0.0.1:8443"
+    },
     "listeners": {
       "metrics": "127.0.0.1:9464",
       "proxy": "test",
