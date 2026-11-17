@@ -2383,6 +2383,20 @@
   margin-bottom: 12px;
 }
 
+/* The card's two subtitles in one cell, so the taller sets the head's height whichever shows. */
+.client-config__subtitles {
+  display: grid;
+}
+
+.client-config__subtitle {
+  grid-area: 1 / 1;
+}
+
+/* Keeps its room in the head and takes no pointer, no focus and no place in the accessibility tree. */
+.client-config__unshown {
+  visibility: hidden;
+}
+
 .feature-ca {
   display: flex;
   flex-wrap: wrap;

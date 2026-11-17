@@ -261,17 +261,26 @@ export function SettingsPage() {
         )}
       </Card>
 
+      {/* Both subtitles share one cell and the copy control keeps its room while unshown, so the head holds one height
+          under each tab and state and the switch below it stays where the last click left it. */}
       <Card
         className="client-config"
         title="Downstream client configuration"
         subtitle={
-          snippet === null
-            ? undefined
-            : featureSetup
-              ? 'The launch script sets these lines. Give the script the base URL, a key from the Keys page and the fingerprint below.'
-              : "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page."
+          <span className="client-config__subtitles">
+            <span className={snippet === null || featureSetup ? 'client-config__subtitle client-config__unshown' : 'client-config__subtitle'}>
+              Put it in the env block of the client&apos;s settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.
+            </span>
+            <span className={snippet === null || !featureSetup ? 'client-config__subtitle client-config__unshown' : 'client-config__subtitle'}>
+              The launch script sets these lines. Give the script the base URL, a key from the Keys page and the fingerprint below.
+            </span>
+          </span>
         }
-        actions={snippet === null ? undefined : <CopyButton text={snippet} label="Copy snippet" size="md" />}
+        actions={
+          <span className={snippet === null ? 'client-config__unshown' : undefined}>
+            <CopyButton text={snippet ?? ''} label="Copy snippet" size="md" />
+          </span>
+        }
       >
         <Tabs<Setup> label="Setup" value={setup} onChange={setSetup} tabs={SETUPS.map((value) => ({ label: SETUP_LABEL[value], value }))} />
         {snippet === null ? (

@@ -4233,8 +4233,10 @@ async function settingsAboutRows(theme) {
  * The client card's two feature blocks, each shown through the Setup switch: the block's lines, the listener hint, the
  * feature hint, the fingerprint's line and the variable list in that order, at the base block's gaps of 10 px under the
  * block and each hint and 14 px over the list, with the fingerprint's line inside the card's content box at the pass's
- * viewport and in the phone window. Every figure is recorded. The switch ends on Base URL with the pointer and the focus
- * at rest, so the view's shot and the copy check behind it read the base block.
+ * viewport and in the phone window. The switch's own top stands at one place below the card's top under each of the
+ * three tabs at both sizes, so a click never moves the strip under the pointer. Every figure is recorded. The switch
+ * ends on Base URL with the pointer and the focus at rest, so the view's shot and the copy check behind it read the
+ * base block.
  */
 async function settingsSetups(theme) {
   const say = (what) => failures.push(`${theme} /settings client card: ${what}`);
@@ -4248,6 +4250,7 @@ async function settingsSetups(theme) {
       for (let el = pre; el; el = el.nextElementSibling) parts.push(el);
       const nameOf = (el) => (el.matches('pre.snippet') ? 'block' : el.matches('p.snippet__hint') ? 'hint' : el.matches('.feature-ca') ? 'fingerprint' : el.matches('.envdl') ? 'list' : el.tagName.toLowerCase());
       const line = card?.querySelector('.feature-ca') ?? null;
+      const strip = card?.querySelector('[role="tablist"]') ?? null;
       return {
         edge: card ? round(card.getBoundingClientRect().right - parseFloat(getComputedStyle(card).paddingRight)) : null,
         fingerprint: line ? { right: round(Math.max(line.getBoundingClientRect().right, ...[...line.children].map((c) => c.getBoundingClientRect().right))), text: line.textContent?.trim() ?? '' } : null,
@@ -4255,15 +4258,27 @@ async function settingsSetups(theme) {
         hints: parts.filter((el) => el.matches('p.snippet__hint')).map((el) => el.textContent?.replace(/\s+/g, ' ').trim() ?? ''),
         lines: pre?.textContent?.split('\n') ?? [],
         parts: parts.map(nameOf),
+        strip: card && strip ? round(strip.getBoundingClientRect().top - card.getBoundingClientRect().top) : null,
         terms: [...(card?.querySelectorAll('.envdl dt') ?? [])].map((dt) => dt.textContent?.trim() ?? ''),
       };
     });
+  const strips = { 'at 1280 px': {}, 'in the phone window': {} };
+  try {
+    await tab('Base URL').click();
+    await settle();
+    strips['at 1280 px']['Base URL'] = (await reading()).strip;
+    strips['in the phone window']['Base URL'] = (await inPhoneWindow(reading)).strip;
+  } catch (error) {
+    say(`Base URL never measured (${error instanceof Error ? error.message : String(error)})`);
+  }
   for (const label of ['Base URL and proxy', 'Base URL and DNS redirect']) {
     try {
       await tab(label).click();
       await settle();
       const read = await reading();
       const phone = await inPhoneWindow(reading);
+      strips['at 1280 px'][label] = read.strip;
+      strips['in the phone window'][label] = phone.strip;
       measurements.push(`${theme} /settings client card ${label} ${JSON.stringify(read)}`);
       measurements.push(`${theme} /settings client card ${label} in the phone window ${JSON.stringify({ edge: phone.edge, fingerprint: phone.fingerprint?.right ?? null, gaps: phone.gaps })}`);
       const want = ['block', 'hint', 'hint', 'fingerprint', 'list'];
@@ -4276,6 +4291,11 @@ async function settingsSetups(theme) {
     } catch (error) {
       say(`${label} never measured (${error instanceof Error ? error.message : String(error)})`);
     }
+  }
+  for (const [where, tops] of Object.entries(strips)) {
+    measurements.push(`${theme} /settings client card Setup switch's top below the card's top ${where} ${JSON.stringify(tops)}`);
+    const values = Object.values(tops);
+    if (values.length !== 3 || values.some((top) => top === null || top !== values[0])) say(`the Setup switch stands ${JSON.stringify(tops)} px below the card's top ${where}, not at one place under each of the three tabs`);
   }
   await tab('Base URL').click();
   await settle();

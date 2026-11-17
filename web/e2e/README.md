@@ -131,8 +131,9 @@ Non-companion timeout lines (the label's type and ink, the value's type, the row
 value's left edges of the Body capture line above them, each line's text and hover recorded), the client card's two
 feature blocks (mock pass: each shown through the Setup switch, its block, the listener hint, the feature hint, the
 fingerprint's line and the variable list in that order, 10 px apart under the block and each hint and 14 px over the
-list, the fingerprint's line inside the card's content box at 1280 px and in the phone window, every figure recorded,
-the switch ending on Base URL at rest), the Settings page's Unit
+list, the fingerprint's line inside the card's content box at 1280 px and in the phone window, the switch's top at one
+place below the card's top under each of the three tabs at both sizes, every figure recorded, the switch ending on
+Base URL at rest), the Settings page's Unit
 row at 1280 and 400 px (the legend's button on the select's line, and its popover inside the viewport's width, at or
 below its button's bottom, uncovered, in the legend's 12 px type and closed by Escape), the Appearance card's Theme,
 Palette, Time format and Unit rows at 400 px (each control under its label), the cooling-down block's columns (Reason
