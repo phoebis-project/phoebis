@@ -303,7 +303,9 @@ async fn send(
 
 /// Sends the call over `account`'s pooled connections toward `host`, as the model path sends a request, under the
 /// connect and head bounds `attempt` holds. A reused connection that died before the request was in it whole is tried
-/// once more on a fresh one. Nothing else is sent twice: the upstream may have acted on a request that was written.
+/// once more on a fresh one. A connection that could not be opened answers the 502 at once, with no wait and no second
+/// try as the model path makes, since a feature call has one account and no failover to go on with, and the client can
+/// send the call again. Nothing else is sent twice: the upstream may have acted on a request that was written.
 async fn pooled(
     relay: &Relay,
     account: &AccountRow,

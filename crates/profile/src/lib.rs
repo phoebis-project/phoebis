@@ -138,7 +138,8 @@ static PROFILE_2_1_310: Profile = Profile {
         artifacts: "user:inference",
         connectors: "user:mcp_servers",
     },
-    // The methods are the ones this build sends on each row. `POST /api/frame/track` is the client's event report,
+    // The methods are the ones this build sends on each row, and the `DELETE` of the two MCP session rows is the
+    // session end the build defines and no site of it calls. `POST /api/frame/track` is the client's event report,
     // which the router forwards under no account. The MCP sessions leave on the inference plane, since the client opens
     // them through its fetch path, whose hello the inference connector shows each of the two hosts.
     features: FeatureTable {
