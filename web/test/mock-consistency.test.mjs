@@ -130,21 +130,25 @@ async function decisionsOf(s) {
 
 /**
  * The members a record's partitions kept, the set the engine's pick orders by tier and then by score: a member stays
- * through a partition that dropped others only by passing it alone. A failover's no-fit partition keeps the rung its
- * `ladder` fact names, which a member alone always reaches, so there a member stays by the rung's verdict, the
- * rewrite-only rung narrowed to the longest runway.
+ * through a partition that dropped others only by passing it alone. A landing's no-fit partition keeps the rung its
+ * `ladder` fact names, which a member alone always reaches, so there a member stays by the rung's verdict and its
+ * figures: the rewrite-only rung at the longest runway, the least-bad rung's members that hold allowance at the longest
+ * runway, the one to 1.0 its row states, the winding-down rung's members that hold allowance, and the last rung's whole
+ * set. A member holds allowance while no plan window the request's model draws reads 1 or more.
  */
 function keptOf(d, r) {
   const facts = r.walk.find((w) => w.step === 'partitions')?.facts ?? [];
   const kept = narrowedSetOf(r).filter((c) => {
-    const alone = d.partitionsOf([{ ...c }], d.poolById.get(r.request.poolId), d.requestById.get(r.requestId), moving(r), failedOver(r));
+    const alone = d.partitionsOf([{ ...c }], d.poolById.get(r.request.poolId), d.requestById.get(r.requestId), moving(r));
     return facts.every((f, i) => typeof f.value !== 'number' || alone[i].value === 0);
   });
   const rung = facts.find((f) => f.key === 'ladder')?.value;
   if (rung === undefined || rung === 'every') return kept;
-  const onRung = kept.filter((c) => (rung === 'least_bad' ? c.fit !== 'ending' : c.fit === rung || (rung === 'fits' && c.fit === null)));
+  const drawn = Object.keys(d.rewriteOf(0, r.request.canonicalModel));
+  const holds = (c) => c.kind === 'api_key' || drawn.every((w) => (c.windows[w]?.utilization ?? 0) < 1);
+  const onRung = kept.filter((c) => (rung === 'fits' ? c.fit === 'fits' || c.fit === null : c.fit === rung && (rung === 'rewrite_only' || holds(c))));
   const runway = (c) => c.runwayMs ?? Number.POSITIVE_INFINITY;
-  return rung === 'rewrite_only' ? onRung.filter((c) => runway(c) === Math.max(...onRung.map(runway))) : onRung;
+  return rung === 'rewrite_only' || rung === 'least_bad' ? onRung.filter((c) => runway(c) === Math.max(...onRung.map(runway))) : onRung;
 }
 
 /** Every row of the story's routing log under the route's default kinds, a decision as its summary, newest first. */
@@ -2313,7 +2317,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(records.some((r) => r.requestId === 'req_51d0e2b8-7a0' && r.walk.some((w) => w.step === 'partitions')), 'the empty-eligible exhaustion walks the partitions');
   });
 
-  test(`every partitions step reads its four facts bare and within the record's own set, a failover's ladder after its no-fit count, at ${at}`, async () => {
+  test(`every partitions step reads its four facts bare and within the record's own set, a landing's ladder after its no-fit count, at ${at}`, async () => {
     const s = await story;
     const d = s.lib;
     const records = await decisionsOf(s);
@@ -2342,28 +2346,31 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       }
       for (const w of r.walk.filter((x) => x.step === 'partitions')) {
         seen += 1;
-        // A failover's line names the rung of the ladder its no-fit partition reached, after the no-fit count.
-        assert.deepEqual(w.facts.map((f) => f.key), failedOver(r) ? ['spent', 'at_cap', 'no_fit', 'ladder', 'winding_down'] : ['spent', 'at_cap', 'no_fit', 'winding_down'], `${r.requestId}/${r.seq}`);
-        if (failedOver(r)) ladders += 1;
+        // A landing that is no move's destination set names the rung of the ladder its no-fit partition reached, after
+        // the no-fit count, unless the spent partition left no member to reach it.
+        const spent = w.facts.find((f) => f.key === 'spent')?.value;
+        const laddered = !moving(r) && set.length - (typeof spent === 'number' ? spent : 0) > 0;
+        assert.deepEqual(w.facts.map((f) => f.key), laddered ? ['spent', 'at_cap', 'no_fit', 'ladder', 'winding_down'] : ['spent', 'at_cap', 'no_fit', 'winding_down'], `${r.requestId}/${r.seq}`);
+        if (laddered) ladders += 1;
         // The engine writes a partition's count bare, as it writes its words.
         assert.ok(w.facts.every((f) => f.unit === null), `${r.requestId}/${r.seq}: ${w.facts.map((f) => f.unit).join(', ')}`);
         for (const f of w.facts) {
           if (typeof f.value === 'number') assert.ok(f.value >= 0 && f.value <= set.length, `${r.requestId}: ${f.key} ${f.value} over ${set.length}`);
-          else assert.ok((f.key === 'ladder' ? ['every', 'fits', 'least_bad', 'rewrite_only'] : ['fell_through', 'held', 'off']).includes(String(f.value)), `${r.requestId}: ${f.key} ${f.value}`);
+          else assert.ok((f.key === 'ladder' ? ['ending', 'every', 'fits', 'least_bad', 'rewrite_only'] : ['fell_through', 'held', 'off']).includes(String(f.value)), `${r.requestId}: ${f.key} ${f.value}`);
         }
       }
     }
     assert.ok(seen > 10);
-    assert.ok(ladders >= 4, `${ladders} failover lines`);
+    assert.ok(ladders > 10, `${ladders} ladder lines`);
     assert.ok(fitted > 10 && unfit > 0, `${fitted} members read a fit, ${unfit} of the drawn placements' not fitting`);
 
     const read = (id, keys) => {
       const w = records.find((r) => `${r.requestId}/${r.seq}` === id)?.walk.find((x) => x.step === 'partitions');
       return [w?.verdict, (w?.facts ?? []).filter((f) => keys.includes(f.key)).map((f) => [f.key, f.value])];
     };
-    // The cohort hold waits with every member it could take at its cap, under a non-Fable model, and with neither
-    // fitting under the ceiling the set stays whole.
-    assert.deepEqual(read('req_69e30548-32e/1', ['spent', 'at_cap', 'no_fit']), ['match', [['spent', 'off'], ['at_cap', 'held'], ['no_fit', 'fell_through']]]);
+    // The cohort hold waits with every member it could take at its cap, under a non-Fable model. Neither fits, and the
+    // ladder keeps primary, whose rewrite lands under the ceiling, over nightly, whose rewrite does not.
+    assert.deepEqual(read('req_69e30548-32e/1', ['spent', 'at_cap', 'no_fit', 'ladder']), ['match', [['spent', 'off'], ['at_cap', 'held'], ['no_fit', 1], ['ladder', 'rewrite_only']]]);
     // The spare-rate placement passes over secondary, which falls short of the ceiling.
     assert.deepEqual(read('req_2c7d9f15-b63/1', ['no_fit']), ['match', [['no_fit', 1]]]);
     // Nothing is left to narrow, so the step reads none with every count 0 or off.
@@ -2384,19 +2391,23 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const member = (accountId, o = {}) => ({ accountId, credits: null, fit: null, inFlight: 0, inFlightCap: 4, kind: 'oauth', pace: { remaining: 0.5 }, term: { windingDown: false }, windows: {}, ...o });
     const haiku = { canonicalModel: 'claude-haiku-4-5-20251001', kind: 'inference' };
     const fable = { canonicalModel: 'claude-fable-5-1', kind: 'inference' };
-    // The cap drops the member at it, and the wind-down then falls through rather than empty the set.
-    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { term: { windingDown: true } })], d.poolById.get('jobs'), haiku)), [['spent', 'off'], ['at_cap', 1], ['no_fit', 0], ['winding_down', 'fell_through']]);
-    // A Fable request draws on the shared windows too, and a spent member drops outright, even when none is left.
+    // The cap drops the member at it, the one left with no fit read stands on the fitting rung, and the wind-down then
+    // falls through rather than empty the set.
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { term: { windingDown: true } })], d.poolById.get('jobs'), haiku)), [['spent', 'off'], ['at_cap', 1], ['no_fit', 0], ['ladder', 'fits'], ['winding_down', 'fell_through']]);
+    // A Fable request draws on the shared windows too, and a spent member drops outright, even when none is left. A walk
+    // over no member names no rung.
     const spentOn = (name) => ({ windows: { [name]: { utilization: 1 } } });
-    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('five_hour')), member('b')], d.poolById.get('all'), fable)), [['spent', 1], ['at_cap', 0], ['no_fit', 0], ['winding_down', 0]]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('five_hour')), member('b')], d.poolById.get('all'), fable)), [['spent', 1], ['at_cap', 0], ['no_fit', 0], ['ladder', 'fits'], ['winding_down', 0]]);
     assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('seven_day')), member('b', spentOn('seven_day_fable'))], d.poolById.get('all'), fable)), [['spent', 2], ['at_cap', 0], ['no_fit', 0], ['winding_down', 0]]);
-    // A member the request does not fit drops while one it fits is left, and with none fitting the set stays whole.
+    // A member the request does not fit drops while one it fits is left, and with none fitting the rewrite-only one
+    // stands.
     const all = d.poolById.get('all');
-    assert.deepEqual(pairs(d.partitionsOf([member('a'), member('b', { fit: 'least_bad' })], all, haiku)), [['spent', 'off'], ['at_cap', 0], ['no_fit', 1], ['winding_down', 0]]);
-    assert.deepEqual(pairs(d.partitionsOf([member('a', { fit: 'rewrite_only' }), member('b', { fit: 'least_bad' })], all, haiku)), [['spent', 'off'], ['at_cap', 0], ['no_fit', 'fell_through'], ['winding_down', 0]]);
-    // A failed-over request walks the ladder: the fitting members where any, else the rewrite-only ones at the longest
-    // runway, else every member not ending, else the whole set, which falls through. The no-fit count follows the rung.
-    const ladder = (members) => pairs(d.partitionsOf(members, all, haiku, false, true));
+    assert.deepEqual(pairs(d.partitionsOf([member('a'), member('b', { fit: 'least_bad' })], all, haiku)), [['spent', 'off'], ['at_cap', 0], ['no_fit', 1], ['ladder', 'fits'], ['winding_down', 0]]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { fit: 'rewrite_only' }), member('b', { fit: 'least_bad' })], all, haiku)), [['spent', 'off'], ['at_cap', 0], ['no_fit', 1], ['ladder', 'rewrite_only'], ['winding_down', 0]]);
+    // The ladder: the fitting members where any, else the rewrite-only ones at the longest runway, else the least-bad
+    // ones holding allowance, else the ones inside their wind-down holding it, else the whole set, which falls through.
+    // The no-fit count follows the rung.
+    const ladder = (members) => pairs(d.partitionsOf(members, all, haiku));
     const ending = { fit: 'ending', term: { windingDown: true } };
     assert.deepEqual(ladder([member('a'), member('b', { fit: 'least_bad' })]), [['spent', 'off'], ['at_cap', 0], ['no_fit', 1], ['ladder', 'fits'], ['winding_down', 0]]);
     assert.deepEqual(
@@ -2404,12 +2415,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       [['spent', 'off'], ['at_cap', 0], ['no_fit', 2], ['ladder', 'rewrite_only'], ['winding_down', 0]],
     );
     assert.deepEqual(ladder([member('a', { fit: 'least_bad' }), member('b', ending)]), [['spent', 'off'], ['at_cap', 0], ['no_fit', 1], ['ladder', 'least_bad'], ['winding_down', 0]]);
-    assert.deepEqual(ladder([member('a', ending), member('b', ending)]), [['spent', 'off'], ['at_cap', 0], ['no_fit', 'fell_through'], ['ladder', 'every'], ['winding_down', 'fell_through']]);
+    assert.deepEqual(ladder([member('a', ending), member('b', ending)]), [['spent', 'off'], ['at_cap', 0], ['no_fit', 0], ['ladder', 'ending'], ['winding_down', 'fell_through']]);
+    // A least-bad member with a shared window at 1 holds no allowance, so with no other member the whole set stands.
+    assert.deepEqual(ladder([member('a', { fit: 'least_bad', ...spentOn('five_hour') }), member('b', { fit: 'least_bad', ...spentOn('seven_day') })]), [['spent', 'off'], ['at_cap', 0], ['no_fit', 'fell_through'], ['ladder', 'every'], ['winding_down', 0]]);
     // A token count takes no slot, so the cap keeps every member, even with each at it.
-    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { inFlight: 4 })], d.poolById.get('jobs'), { ...haiku, kind: 'count_tokens' })), [['spent', 'off'], ['at_cap', 0], ['no_fit', 0], ['winding_down', 0]]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { inFlight: 4 })], d.poolById.get('jobs'), { ...haiku, kind: 'count_tokens' })), [['spent', 'off'], ['at_cap', 0], ['no_fit', 0], ['ladder', 'fits'], ['winding_down', 0]]);
     // With every member at its cap, a Fable request's spent member drops before the cap holds the rest, so it is never
     // the account the request waits on or passes over.
-    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4, ...spentOn('five_hour') }), member('b', { inFlight: 4 })], all, fable)), [['spent', 1], ['at_cap', 'held'], ['no_fit', 0], ['winding_down', 0]]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4, ...spentOn('five_hour') }), member('b', { inFlight: 4 })], all, fable)), [['spent', 1], ['at_cap', 'held'], ['no_fit', 0], ['ladder', 'fits'], ['winding_down', 0]]);
   });
 
   test(`the member a placement, a move or a hold names is one the partitions kept, at ${at}`, async () => {

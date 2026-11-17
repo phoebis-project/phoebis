@@ -128,7 +128,7 @@ test("the story's records give their stations, states, host and termini", async 
   assert.deepEqual([fresh.shape, fresh.decisive, fresh.host, fresh.branch], ['fresh', 'pick', 'pick', null]);
   assert.deepEqual(terminiOf(fresh), THREE_TERMINI(['chosen', 'placed']));
   assert.deepEqual(stationOf(fresh, 'pick').second, ['Pace P0']);
-  assert.deepEqual(fresh.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => [s.head, s.badge, s.tone]), [['Spent', 'off', 'neutral'], ['At cap', '0 out', 'good'], ['No fit', 'fell through', 'warning'], ['Winding down', '0 out', 'good']]);
+  assert.deepEqual(fresh.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => [s.head, s.badge, s.tone]), [['Spent', 'off', 'neutral'], ['At cap', '0 out', 'good'], ['No fit', '1 out', 'warning'], ['Winding down', '0 out', 'good']]);
   assert.deepEqual(fresh.brackets.map((b) => [b.word, b.level, b.stations.length]), [['Partitions', 'line', 4], ['Rungs', 'line', 3]]);
   assert.deepEqual(fresh.stations.filter((s) => s.stub !== null).map((s) => `${s.id} ${s.stub}`), ['rung:content match', 'rung:with_main match', 'rung:static match']);
   assert.deepEqual(stationOf(fresh, 'rung:content').head, 'Rung: content');
@@ -166,8 +166,8 @@ test("the story's records give their stations, states, host and termini", async 
 
   // A placement beside main reaches Reserve past the idle Pick, and the booking it made stands taken there. The second
   // lands on secondary past the pool's ceiling and its rivals that fit read full, so the cap leaves secondary alone and
-  // No fit falls through.
-  for (const [id, noFit, reserve] of [['req_d4a518a7-cd0/1', '1 out', 'Reserve: booked (taken)'], ['req_a0f5c94d-8f0/1', 'fell through', 'Reserve: booked (taken)']]) {
+  // No fit keeps it on the least-bad rung.
+  for (const [id, noFit, reserve] of [['req_d4a518a7-cd0/1', '1 out', 'Reserve: booked (taken)'], ['req_a0f5c94d-8f0/1', '0 out', 'Reserve: booked (taken)']]) {
     const withMain = modelOf(await recordOf(id));
     assert.deepEqual(read(withMain), [...FRESH_LINE('none', 'match'), 'content: none (taken)', 'with main: match (taken)', 'static: not run (idle)', 'Pick: not run (idle)', reserve], id);
     assert.deepEqual([withMain.decisive, withMain.host, withMain.branch], ['rung:with_main', 'pick', { from: 'rung:with_main', kind: 'rung' }], id);
@@ -250,7 +250,7 @@ test('a move draws Fit after Move and Reserve after its pick or its static rung,
   assert.deepEqual(d.layoutStrip(spent, 958).paths.filter((p) => p.kind === 'track').map((p) => p.state), ['taken']);
   // A fresh line draws the engine's four partitions, then Reserve after Pick before the termini.
   const fresh = modelOf(await recordOf('req_ef099b34-453/1'));
-  assert.deepEqual(fresh.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => [s.word, s.badge]), [['Spent', 'off'], ['At cap', '0 out'], ['No fit', 'fell through'], ['Winding down', '0 out']]);
+  assert.deepEqual(fresh.stations.filter((s) => s.id.startsWith('partitions:')).map((s) => [s.word, s.badge]), [['Spent', 'off'], ['At cap', '0 out'], ['No fit', '1 out'], ['Winding down', '0 out']]);
   assert.deepEqual(fresh.stations.slice(-2).map((s) => [s.id, s.badge, s.state]), [['pick', 'chosen', 'taken'], ['reserve', 'booked', 'taken']]);
   const layout = d.layoutStrip(fresh, 958);
   const taken = layout.paths.find((p) => p.kind === 'curve' && p.state === 'taken');

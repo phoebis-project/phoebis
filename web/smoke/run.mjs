@@ -17939,7 +17939,7 @@ await forView('/routing-log', async () => {
       ['Eligible', 'match'],
       ['Spent', 'off'],
       ['At cap', '0 out'],
-      ['No fit', 'fell through'],
+      ['No fit', '1 out'],
       ['Winding down', '0 out'],
       ['content', 'none'],
       ['with main', 'none'],
