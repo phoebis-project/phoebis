@@ -126,22 +126,41 @@ static PROFILE_2_1_310: Profile = Profile {
         connectors: "user:mcp_servers",
     },
     // The methods are the ones this build sends on each row. `POST /api/frame/track` is the client's event report,
-    // which the router forwards under no account.
+    // which the router forwards under no account. The MCP sessions leave on the inference plane, since the client opens
+    // them through its fetch path, whose hello the inference connector shows each of the two hosts.
     features: FeatureTable {
-        artifacts: &[FeatureRow {
-            except: &[("POST", "/api/frame/track")],
-            host: "api.anthropic.com",
-            methods: &["DELETE", "GET", "PATCH", "POST"],
-            path: PathRule::Under("/api/frame/"),
-            plane: Plane::Control,
-        }],
-        connectors: &[FeatureRow {
-            except: &[],
-            host: "api.anthropic.com",
-            methods: &["GET"],
-            path: PathRule::Whole("/v1/mcp_servers"),
-            plane: Plane::Control,
-        }],
+        artifacts: &[
+            FeatureRow {
+                except: &[],
+                host: "api.anthropic.com",
+                methods: &["DELETE", "GET", "POST"],
+                path: PathRule::Whole("/api/artifacts/mcp"),
+                plane: Plane::Inference,
+            },
+            FeatureRow {
+                except: &[("POST", "/api/frame/track")],
+                host: "api.anthropic.com",
+                methods: &["DELETE", "GET", "PATCH", "POST"],
+                path: PathRule::Under("/api/frame/"),
+                plane: Plane::Control,
+            },
+        ],
+        connectors: &[
+            FeatureRow {
+                except: &[],
+                host: "api.anthropic.com",
+                methods: &["GET"],
+                path: PathRule::Whole("/v1/mcp_servers"),
+                plane: Plane::Control,
+            },
+            FeatureRow {
+                except: &[],
+                host: "mcp-proxy.anthropic.com",
+                methods: &["DELETE", "GET", "POST"],
+                path: PathRule::Under("/v1/mcp/"),
+                plane: Plane::Inference,
+            },
+        ],
     },
     tls: TlsProfiles {
         curves: "X25519MLKEM768:X25519:P-256:P-384",

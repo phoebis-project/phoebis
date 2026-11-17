@@ -41,6 +41,8 @@ pub use fake_upstream::{stays_for, wait_for, wait_for_async};
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 /// The Claude Code CLI's user agent, so a test whose point is not the client class needs no shape of its own.
 pub const CLAUDE_CLI_USER_AGENT: &str = "claude-cli/2.1.269 (external, sdk-cli)";
+/// The host of the connectors' sessions, which the harness of `harness_with_connector_host` sends to its second fake.
+pub const CONNECTOR_HOST: &str = "mcp-proxy.anthropic.com";
 /// The session id the first-party fixture's head carries.
 pub const FIRST_PARTY_SESSION: &str = "11111111-1111-4111-8111-111111111111";
 pub const KEY: &str = "phoebis-testkey";
@@ -400,6 +402,7 @@ pub async fn harness_with_router_config(
         config,
         None,
         None,
+        None,
     )
     .await
 }
@@ -431,6 +434,39 @@ pub async fn harness_with(
 ) -> Harness {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     harness_on(store, up, accounts, pool, limits).await
+}
+
+/// A fake that plays `CONNECTOR_HOST`, its leaf naming that host, answering as `rules` say.
+pub async fn connector_host_fake(rules: Vec<Rule>) -> FakeUpstream {
+    FakeUpstream::start_tls_for(rules, &[CONNECTOR_HOST]).await
+}
+
+/// `harness_with` with a second fake, one of `connector_host_fake`: the resolver sends `CONNECTOR_HOST` to it, and
+/// both connectors trust its CA beside `up`'s.
+pub async fn harness_with_connector_host(
+    up: &FakeUpstream,
+    connector_host: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    limits: Limits,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        limits,
+        None,
+        false,
+        None,
+        None,
+        RouterConfig::default(),
+        None,
+        None,
+        Some(connector_host),
+    )
+    .await
 }
 
 /// `harness_with`, named for the case that only needs to override `Limits`; kept as its own name since every
@@ -466,6 +502,7 @@ pub async fn harness_on(
         RouterConfig::default(),
         None,
         None,
+        None,
     )
     .await
 }
@@ -489,6 +526,7 @@ pub async fn harness_on_with_bus(
         None,
         None,
         RouterConfig::default(),
+        None,
         None,
         None,
     )
@@ -517,6 +555,7 @@ pub async fn harness_with_memory_cap(
         RouterConfig::default(),
         None,
         None,
+        None,
     )
     .await
 }
@@ -540,6 +579,7 @@ pub async fn harness_with_signed_placeholder(
         None,
         None,
         RouterConfig::default(),
+        None,
         None,
         None,
     )
@@ -578,6 +618,7 @@ pub async fn harness_with_bus_limits(
         RouterConfig::default(),
         None,
         None,
+        None,
     )
     .await
 }
@@ -605,6 +646,7 @@ pub async fn harness_with_shutdown_mark(
         RouterConfig::default(),
         None,
         Some(mark),
+        None,
     )
     .await
 }
@@ -628,6 +670,7 @@ pub async fn harness_with_accounting(
         None,
         RouterConfig::default(),
         Some(source),
+        None,
         None,
     )
     .await
@@ -655,6 +698,7 @@ pub async fn harness_with_bus_and_accounting(
         None,
         RouterConfig::default(),
         Some(source),
+        None,
         None,
     )
     .await
@@ -705,6 +749,7 @@ pub async fn harness_with_catalog_and_head_timeout(
         RouterConfig::default(),
         None,
         None,
+        None,
     )
     .await
 }
@@ -737,6 +782,7 @@ pub async fn harness_on_with_bus_and_catalog(
         router_config,
         accounting,
         None,
+        None,
     )
     .await
 }
@@ -763,6 +809,7 @@ pub async fn harness_with_store_and_catalog(
         RouterConfig::default(),
         None,
         None,
+        None,
     )
     .await
 }
@@ -781,6 +828,7 @@ async fn build(
     router_config: RouterConfig,
     accounting: Option<AccountingSource>,
     shutdown_mark: Option<ShutdownMark>,
+    connector_host: Option<&FakeUpstream>,
 ) -> Harness {
     let p = claude_code_2_1_310_linux_x64();
     if store.accounts().unwrap().is_empty() {
@@ -908,18 +956,26 @@ async fn build(
         phoebis_transport::connector_builder(p, phoebis_transport::Plane::Inference).unwrap();
     trust_fake_ca(&mut b, up);
     let addr = up.addr();
-    // An authority with an explicit port names another loopback fake on that port; everything else is `up`.
+    let connector_addr = connector_host.map(FakeUpstream::addr);
+    // An authority with an explicit port names another loopback fake on that port, the connectors' host names
+    // `connector_host` where there is one, and everything else is `up`.
     let resolver: phoebis_transport::control::Resolver = Arc::new(move |authority: &str| {
         let resolved = authority
             .rsplit_once(':')
             .and_then(|(_, p)| p.parse::<u16>().ok())
             .map(|p| std::net::SocketAddr::from(([127, 0, 0, 1], p)))
+            .or(connector_addr.filter(|_| authority == CONNECTOR_HOST))
             .or(Some(addr));
         Box::pin(async move { resolved }) as phoebis_transport::control::ResolveFuture
     });
     let mut cb =
         phoebis_transport::connector_builder(p, phoebis_transport::Plane::Control).unwrap();
     trust_fake_ca(&mut cb, up);
+    // Both connectors, so a forward that sent the connectors' host on the wrong plane still reaches its fake.
+    if let Some(second) = connector_host {
+        trust_fake_ca(&mut b, second);
+        trust_fake_ca(&mut cb, second);
+    }
     let control = Arc::new(phoebis_transport::control::ControlClient::new(
         p,
         cb.build(),

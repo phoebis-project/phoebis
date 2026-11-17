@@ -1,7 +1,7 @@
 //! The feature module as the feature listener serves it, over TLS under a pair of the test's own making: the key is
 //! checked as on a keyed route of the proxy listener, no model route answers there, no feature path answers on the
-//! proxy listener, and a call on the table leaves under the feature account's token toward the harness's one fake,
-//! which plays `api.anthropic.com`.
+//! proxy listener, and a call on the table leaves under the feature account's token toward the harness's fake of
+//! `api.anthropic.com`, or toward its second fake, which plays `mcp-proxy.anthropic.com` for the connectors' sessions.
 
 mod common;
 
@@ -819,6 +819,235 @@ async fn a_body_that_stalls_is_ended_at_the_reads_deadline() {
     .unwrap();
     assert_eq!(refusal_of(&answer), (408, "request_timeout", ""));
     assert_eq!(feature_lines(&up), Vec::<String>::new());
+    up.shutdown().await;
+}
+
+/// The harness of `features_harness` with `connectors` as the fake of `CONNECTOR_HOST`.
+async fn connectors_harness(
+    up: &FakeUpstream,
+    connectors: &FakeUpstream,
+    limits: Limits,
+) -> Harness {
+    harness_with_connector_host(
+        up,
+        connectors,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        limits,
+    )
+    .await
+}
+
+/// A keyed `POST` of the two bytes `{}` to `path` under the `Host` line `host`.
+fn keyed_post(path: &str, host: &str) -> Vec<u8> {
+    keyed(
+        &format!("POST {path}"),
+        host,
+        "Content-Length: 2\r\n",
+        b"{}",
+    )
+}
+
+/// The request lines a fake recorded.
+fn lines(fake: &FakeUpstream) -> Vec<String> {
+    fake.requests()
+        .into_iter()
+        .map(|request| request.line)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_rows_host_binds() {
+    let up = fake(vec![("/v1/mcp/", json_200())]).await;
+    let connectors = connector_host_fake(vec![Rule {
+        path_prefix: "/v1/mcp/".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = connectors_harness(&up, &connectors, default_limits()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener.send(API, &keyed_post("/v1/mcp/x", API)).await;
+    assert_eq!(status, 403, "{headers:?}");
+    assert_eq!(
+        (lines(&up), lines(&connectors)),
+        (Vec::<String>::new(), Vec::<String>::new())
+    );
+    let (status, headers, _) = listener
+        .send(CONNECTOR_HOST, &keyed_post("/v1/mcp/x", CONNECTOR_HOST))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    assert_eq!(
+        (lines(&up), lines(&connectors)),
+        (
+            Vec::<String>::new(),
+            vec!["POST /v1/mcp/x HTTP/1.1".to_owned()]
+        )
+    );
+    up.shutdown().await;
+    connectors.shutdown().await;
+}
+
+#[tokio::test]
+async fn each_plane_takes_its_rows() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let connectors = connector_host_fake(vec![Rule {
+        path_prefix: "/v1/mcp/".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = connectors_harness(&up, &connectors, default_limits()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let (status, headers, _) = listener
+        .send(CONNECTOR_HOST, &keyed_post("/v1/mcp/x", CONNECTOR_HOST))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let offered = |fake: &FakeUpstream| -> Vec<(String, Vec<String>)> {
+        fake.requests()
+            .into_iter()
+            .map(|request| (request.line, request.alpn))
+            .collect()
+    };
+    assert_eq!(
+        offered(&up),
+        [("GET /api/frame/x HTTP/1.1".to_owned(), Vec::<String>::new())]
+    );
+    assert_eq!(
+        offered(&connectors),
+        [(
+            "POST /v1/mcp/x HTTP/1.1".to_owned(),
+            vec!["http/1.1".to_owned()]
+        )]
+    );
+    up.shutdown().await;
+    connectors.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_caller_that_leaves_mid_stream_ends_the_upstream_read_and_its_connection_is_not_reused() {
+    let up = fake(vec![]).await;
+    let connectors = connector_host_fake(vec![
+        Rule {
+            path_prefix: "/v1/mcp/stream".into(),
+            respond: Respond::SseGatedKeptOpen {
+                status: 200,
+                headers: vec![],
+                events: vec![
+                    SseEvent {
+                        event: "message".into(),
+                        data: "first".into(),
+                    },
+                    SseEvent {
+                        event: "message".into(),
+                        data: "second".into(),
+                    },
+                ],
+            },
+        },
+        Rule {
+            path_prefix: "/v1/mcp/x".into(),
+            respond: json_200(),
+        },
+    ])
+    .await;
+    let h = connectors_harness(&up, &connectors, default_limits()).await;
+    let listener = feature_listener(&h).await;
+    for _ in 0..2 {
+        let (status, headers, _) = listener
+            .send(CONNECTOR_HOST, &keyed_post("/v1/mcp/x", CONNECTOR_HOST))
+            .await;
+        assert_eq!(status, 200, "{headers:?}");
+    }
+    let (status, headers, mut body) = listener
+        .open(
+            CONNECTOR_HOST,
+            &keyed_post("/v1/mcp/stream", CONNECTOR_HOST),
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let mut read = Vec::new();
+    while !String::from_utf8_lossy(&read).contains("data: first") {
+        let piece = body
+            .next()
+            .await
+            .expect("the body ended before its first event");
+        read.extend_from_slice(&piece);
+    }
+    drop(body);
+    connectors.release_one().await;
+    let requests = connectors.requests();
+    let [whole, next, stream] = requests.as_slice() else {
+        panic!("{} requests arrived", requests.len())
+    };
+    assert_eq!(
+        whole.connection, next.connection,
+        "a call read to its end left its connection to the next call"
+    );
+    wait_for(Duration::from_secs(5), || {
+        (!connectors.is_open(stream.connection)).then_some(())
+    })
+    .await;
+    let (status, headers, _) = listener
+        .send(CONNECTOR_HOST, &keyed_post("/v1/mcp/x", CONNECTOR_HOST))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let requests = connectors.requests();
+    let after = requests.last().expect("the last call arrived");
+    assert_eq!(after.line, "POST /v1/mcp/x HTTP/1.1");
+    assert_ne!(
+        after.connection, stream.connection,
+        "the call after the one its caller left arrived on that call's connection"
+    );
+    up.shutdown().await;
+    connectors.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_body_past_the_free_byte_budget_is_refused() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    // A body of 600 bytes fits the size bound and not the budget.
+    let h = harness_with(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        Limits {
+            body_budget_bytes: 512,
+            max_request_bytes: 1_024,
+            ..default_limits()
+        },
+    )
+    .await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(
+            API,
+            &keyed(
+                "POST /api/frame/x",
+                API,
+                "Content-Length: 600\r\n",
+                &[b'x'; 600],
+            ),
+        )
+        .await;
+    assert_eq!(status, 503, "{headers:?}");
+    assert!(
+        headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("x-phoebis-error-code") && value == "body_budget_exhausted"
+        }),
+        "{headers:?}"
+    );
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
+    let (status, headers, _) = listener
+        .send(
+            API,
+            &keyed("POST /api/frame/x", API, "Content-Length: 2\r\n", b"{}"),
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    assert_eq!(feature_lines(&up), ["POST /api/frame/x HTTP/1.1"]);
     up.shutdown().await;
 }
 

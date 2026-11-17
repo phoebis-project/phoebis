@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Makes the throwaway CA and the leaf that a control capture's receiver presents for api.anthropic.com,
-# platform.claude.com and claude.com, the control hosts the client hardcodes and ANTHROPIC_BASE_URL cannot
-# redirect. The capture's client trusts the CA through NODE_EXTRA_CA_CERTS in its own environment, so the CA
-# never enters a system or user trust store.
+# Makes the throwaway CA and the leaf that a capture's receiver presents for api.anthropic.com, platform.claude.com
+# and claude.com, the control hosts the client hardcodes and ANTHROPIC_BASE_URL cannot redirect, and for
+# mcp-proxy.anthropic.com, where the feature capture's client opens its connector session. The capture's client
+# trusts the CA through NODE_EXTRA_CA_CERTS in its own environment, so the CA never enters a system or user trust
+# store.
 #
 # Usage: scripts/capture/mkcerts.sh <out-dir>
 #
@@ -36,6 +37,7 @@ openssl req -newkey rsa:2048 -nodes -subj "/CN=api.anthropic.com" \
   -keyout "$certs/leaf.key" -out "$certs/leaf.csr"
 printf '%s\n' "basicConstraints = CA:FALSE" "extendedKeyUsage = serverAuth" \
   "keyUsage = digitalSignature, keyEncipherment" \
-  "subjectAltName = DNS:api.anthropic.com,DNS:platform.claude.com,DNS:claude.com" > "$certs/ext.cnf"
+  "subjectAltName = DNS:api.anthropic.com,DNS:platform.claude.com,DNS:claude.com,DNS:mcp-proxy.anthropic.com" \
+  > "$certs/ext.cnf"
 openssl x509 -req -in "$certs/leaf.csr" -CA "$certs/ca.pem" -CAkey "$certs/ca.key" -CAcreateserial -days 7 \
   -extfile "$certs/ext.cnf" -out "$certs/leaf.pem"

@@ -228,6 +228,22 @@ output to `<variant>/check.txt` and exits with the first non-zero status of the 
 commands to run later. A baseline check without control recordings still compares: `--check` lists the control-plane
 fixtures under `not captured (control plane):` and grades everything it could reach.
 
+`scripts/capture-feature-hellos.sh <path-to-claude-binary> <output-dir>` records the TLS hellos of the claude.ai
+features in the same namespace, with the same throwaway CA and the dummy OAuth token. One print-mode run carries the
+variables of a feature setup with `CLAUDE_CODE_ARTIFACT=1` and the nonessential traffic left on, so the client opens the
+artifacts MCP session through its fetch path and, past an invented connector list the control receiver answers, a
+connector session toward `mcp-proxy.anthropic.com`. The receiver writes each connection's ClientHello beside its
+recording, and the script joins the two into `feature_hellos.json`: one entry per connection with the `CONNECT`
+authority, the hello as hex, and the first request's line and `User-Agent`.
+`python3 -I scripts/capture/hello_lib.py <first.hex> <second.hex>` compares two hellos with the random, the session id,
+the server name and the key shares masked, and names the first part that differs: the cipher list, the compression
+methods, or an extension by its type and place. The script reports the fetch path's hello toward `api.anthropic.com`
+against `hello_inference.hex` and the axios path's against `hello_control.hex`, and exits with the compare of the hello
+toward `mcp-proxy.anthropic.com` against the fetch path's: 0 where the two are equal under the masks, 3 where they
+differ, and 4 where one of them was not recorded. Its log ends with one verdict line. Measured on 2.1.325, the two are
+equal, which is why the router's inference connector serves the connectors' sessions toward `mcp-proxy.anthropic.com` as
+it serves `api.anthropic.com`.
+
 The written fixtures are redacted. `scripts/build-fixtures.py` puts a placeholder in for the device id, the session id
 (one value in the session header and in `metadata.user_id`), the prompt id (one value in the prompt id header and in
 the billing line's `cc_prompt_id`), the request id header, the tokens and the code grant's `code`, `code_verifier` and
@@ -288,6 +304,11 @@ the table after any accepted re-pin.
   the row `Error: Failed to load usage data` and no request reaches the wire, so `control_usage.http` is the read of
   the capture variant without the switch.
 - TLS record-level behavior after the ClientHello (key update, ticket handling) and the ServerHello path.
+- A connector stream that runs for minutes.
+- The paths under `/api/frame/` that no capture sent, and whether one of them asks for a protocol upgrade.
+- The upstream's answer to `POST /api/artifacts/mcp` in an interactive session. A headless client got 404.
+- The WebFetch domain check through the router.
+- Whether a feature answer carries the upstream's rate-limit headers, and whether the client reads them there.
 
 ## Re-pinning
 
@@ -328,7 +349,12 @@ refused until the router runs a build re-pinned to the client. To re-pin the pro
    `python3 -I scripts/build-fixtures.py --check --control <variant-dir> <baseline-dir>` for each variant and writes
    each output to `<variant>/check.txt`. Without control recordings `--check` lists those fixtures under
    `not captured (control plane):` rather than failing on them.
-4. Land the re-pin as a change to the repository.
+4. Read the feature table of the `Profile` value again from the new build: its rows, the methods each row takes and the
+   plane each row leaves on, which follow the client's own code for each call of Artifacts and the connectors. Then run
+   `scripts/capture-feature-hellos.sh <path-to-claude-binary> <output-dir>` again, whose verdict line says whether the
+   hello toward `mcp-proxy.anthropic.com` still equals the fetch path's toward `api.anthropic.com`, which the inference
+   connector's use for both hosts rests on.
+5. Land the re-pin as a change to the repository.
    `python3 -I scripts/build-fixtures.py --control <variant-dir> <baseline-dir>` writes the inference and control
    fixtures from the variant that recorded the usage read, and
    `python3 -I scripts/build-fixtures.py --count <count-dir>` writes the count fixtures. A new `Profile` value in
@@ -337,7 +363,7 @@ refused until the router runs a build re-pinned to the client. To re-pin the pro
    `every_fixture_matches_the_development_page_manifest` reads, so the re-pin regenerates it with the command shown
    there. The tests in the profile, relay and router crates grade the relay against the new fixtures. Until that change
    lands, the router is measured against the one profile this build carries.
-5. `scripts/capture-through-router.sh` captures what the router hands its own upstream from a real paired account and
+6. `scripts/capture-through-router.sh` captures what the router hands its own upstream from a real paired account and
    grades it with `--through-router`. With the service stopped, take a fresh native capture on the same host and the
    same day as in step 1, then run `PHOEBIS_CAPTURE_OAUTH_KEY=<router key> PHOEBIS_CAPTURE_API_KEY=<router key>
    PHOEBIS_ADMIN_SECRET=<secret> PHOEBIS_CAPTURE_BASELINE=<baseline-dir> scripts/capture-through-router.sh
@@ -356,7 +382,7 @@ refused until the router runs a build re-pinned to the client. To re-pin the pro
    unless `--skip-hash-check` is added by hand, so cargo must be on the host. Pair the account right before a run: the
    receiver's throwaway certificate carries `api.anthropic.com` alone, so a token refresh the router attempts mid-run
    fails at the TLS handshake and the capture fails with it.
-6. `scripts/capture-count-tokens.sh <path-to-claude-binary> <output-dir>` records the client's own token count in each
+7. `scripts/capture-count-tokens.sh <path-to-claude-binary> <output-dir>` records the client's own token count in each
    credential mode, inside the same namespace and past a receiver that answers the first request with a canned tool
    call, so the count the Read tool sends before a large file reaches the wire. `python3 -I scripts/build-fixtures.py
    --count <output-dir>` writes `count.json`, the one body the three modes send byte for byte, and the three

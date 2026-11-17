@@ -79,13 +79,14 @@ async fn feature_call(State(relay): State<Arc<Relay>>, request: Request) -> Resp
     match forward(&relay, account, row, method, &parts, body).await {
         Ok(answer) => answer,
         Err(Unanswered::Refused(failure)) => refused(&failure),
-        Err(Unanswered::Failed(case)) => {
+        Err(Unanswered::Failed(case, detail)) => {
             tracing::debug!(
                 outcome = "failed",
                 method = %parts.method,
                 path = parts.uri.path(),
                 key = %key.label,
                 case,
+                detail = detail.as_deref(),
                 "a feature call failed ahead of the upstream's answer"
             );
             UPSTREAM_UNREACHABLE.response(&new_request_id())

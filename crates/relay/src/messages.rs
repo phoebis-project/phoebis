@@ -330,7 +330,7 @@ pub struct Relay {
     /// The pinned profile's name, for the drift warn the operator reads; empty where nothing names one.
     profile_name: String,
     readiness: Option<ReadinessSource>,
-    resolver: Resolver,
+    pub(crate) resolver: Resolver,
     router: RouterHandle,
     /// The API keys legs dispatch with, by account id, so a leg reads no registry while its row's lineage
     /// and the snapshot's generation hold.

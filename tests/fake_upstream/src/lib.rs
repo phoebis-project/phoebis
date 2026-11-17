@@ -11,12 +11,13 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use boring::ex_data::Index;
 use boring::pkey::PKey;
 use boring::ssl::{
-    select_next_proto, AlpnError, ConnectConfiguration, SslAcceptor, SslConnector, SslMethod,
+    select_next_proto, AlpnError, ConnectConfiguration, Ssl, SslAcceptor, SslConnector, SslMethod,
 };
 use boring::x509::X509;
 use bytes::{Buf, BytesMut};
@@ -130,6 +131,13 @@ pub enum Respond {
         headers: Vec<(String, String)>,
         events: Vec<SseEvent>,
     },
+    /// `SseGated` on a connection the fake then keeps for the next request, as an upstream keeps one whose stream
+    /// ended whole, so a client that hands the connection on is seen to keep it open.
+    SseGatedKeptOpen {
+        status: u16,
+        headers: Vec<(String, String)>,
+        events: Vec<SseEvent>,
+    },
     /// Writes the head and then nothing until `release()`, which is what a stream that never commits looks like.
     Stall {
         status: u16,
@@ -146,6 +154,8 @@ pub struct SseEvent {
 
 #[derive(Clone)]
 pub struct RecordedRequest {
+    /// The protocols the request's connection offered through ALPN, in the client's order, empty for none.
+    pub alpn: Vec<String>,
     pub connection: u64,
     pub line: String,
     pub headers: Vec<(String, String)>,
@@ -287,6 +297,12 @@ impl FakeUpstream {
     /// fake's next write fails.
     pub fn open_connections(&self) -> usize {
         self.shared.conns.lock().unwrap().len()
+    }
+
+    /// Whether the connection with this id, the one a `RecordedRequest` names, is still open at the fake. A client
+    /// that dropped its end reads false once the fake's next write or read on it failed.
+    pub fn is_open(&self, connection: u64) -> bool {
+        self.shared.conns.lock().unwrap().contains_key(&connection)
     }
 
     /// Closes every connection that is sitting between requests, the way an upstream reaps a socket it
@@ -708,17 +724,27 @@ async fn handle_connection(shared: Arc<Shared>, sock: TcpStream, conn_id: u64, w
     match wire.as_ref() {
         Wire::Tls(acceptor) => {
             if let Ok(tls) = tokio_boring::accept(acceptor, sock).await {
-                serve(shared, tls, conn_id).await;
+                let alpn = tls
+                    .ssl()
+                    .ex_data(offered_alpn_index())
+                    .cloned()
+                    .unwrap_or_default();
+                serve(shared, tls, conn_id, alpn).await;
             }
         }
-        Wire::Plain => serve(shared, sock, conn_id).await,
+        Wire::Plain => serve(shared, sock, conn_id, Vec::new()).await,
         Wire::Silent => unreachable!("the accept task keeps a silent listener's sockets"),
     }
 }
 
-async fn serve<S: AsyncRead + AsyncWrite + Unpin>(shared: Arc<Shared>, stream: S, conn_id: u64) {
+async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
+    shared: Arc<Shared>,
+    stream: S,
+    conn_id: u64,
+    alpn: Vec<String>,
+) {
     let (closed, in_request) = shared.register_connection(conn_id);
-    serve_requests(&shared, stream, conn_id, closed, &in_request).await;
+    serve_requests(&shared, stream, conn_id, &alpn, closed, &in_request).await;
     shared.forget_connection(conn_id);
 }
 
@@ -726,6 +752,7 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
     shared: &Arc<Shared>,
     mut stream: S,
     conn_id: u64,
+    alpn: &[String],
     mut closed: watch::Receiver<bool>,
     in_request: &AtomicBool,
 ) {
@@ -736,7 +763,7 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
         let read = tokio::select! {
             biased;
             _ = closed.changed() => return,
-            read = read_request(&mut stream, &mut buf, conn_id) => read,
+            read = read_request(&mut stream, &mut buf, conn_id, alpn) => read,
         };
         let recorded = match read {
             Ok(Some(r)) => r,
@@ -844,6 +871,19 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                 }
                 return;
             }
+            Respond::SseGatedKeptOpen {
+                status,
+                headers,
+                events,
+            } => {
+                if write_sse_gated(shared, &mut stream, status, headers, events)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                shared.mark_written(index);
+            }
             Respond::Stall {
                 status,
                 headers,
@@ -885,6 +925,7 @@ async fn read_request<S: AsyncRead + Unpin>(
     stream: &mut S,
     buf: &mut BytesMut,
     connection: u64,
+    alpn: &[String],
 ) -> std::io::Result<Option<RecordedRequest>> {
     let (line, headers, content_length, chunked, head_len) = loop {
         let mut raw_headers = [httparse::EMPTY_HEADER; 64];
@@ -947,6 +988,7 @@ async fn read_request<S: AsyncRead + Unpin>(
         read_sized_body(stream, buf, content_length.unwrap_or(0)).await?
     };
     Ok(Some(RecordedRequest {
+        alpn: alpn.to_vec(),
         connection,
         line,
         headers,
@@ -1256,10 +1298,33 @@ pub fn acceptor_for(pair: &GeneratedPair) -> SslAcceptor {
     acceptor
         .check_private_key()
         .expect("leaf key matches certificate");
-    acceptor.set_alpn_select_callback(|_, offered| {
+    acceptor.set_alpn_select_callback(|ssl, offered| {
+        // The callback is the one place the offered list is seen, and the server's choice alone outlives the handshake.
+        ssl.set_ex_data(offered_alpn_index(), protocols(offered));
         select_next_proto(b"\x08http/1.1", offered).ok_or(AlpnError::NOACK)
     });
     acceptor.build()
+}
+
+/// Where a connection's offered ALPN protocols wait for its serve loop. BoringSSL calls the select callback only for
+/// a hello that carries the extension, so a connection without one has nothing here.
+fn offered_alpn_index() -> Index<Ssl, Vec<String>> {
+    static INDEX: OnceLock<Index<Ssl, Vec<String>>> = OnceLock::new();
+    *INDEX.get_or_init(|| Ssl::new_ex_index().expect("allocate an ex data index"))
+}
+
+/// The protocol names of an ALPN list in its wire form, each a length byte and the name.
+fn protocols(wire: &[u8]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = wire;
+    while let Some((&length, tail)) = rest.split_first() {
+        let Some((name, after)) = tail.split_at_checked(usize::from(length)) else {
+            break;
+        };
+        names.push(String::from_utf8_lossy(name).into_owned());
+        rest = after;
+    }
+    names
 }
 
 /// A client of a listener serving `pair`: it trusts the pair's CA and offers HTTP/1.1, as a listener's clients do.
@@ -1289,8 +1354,11 @@ fn signed_pair(leaf_params: CertificateParams) -> GeneratedPair {
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     let mut ca_name = DistinguishedName::new();
     // Must differ from the leaf's default distinguished name, or BoringSSL reads the leaf's issuer field as
-    // equal to its own subject and rejects the chain as self-signed.
-    ca_name.push(DnType::CommonName, "fake-upstream-ca");
+    // equal to its own subject and rejects the chain as self-signed. It differs from each other CA's too, since a
+    // client that trusts two fakes finds a leaf's issuer by its name, and the leaf names no key of its issuer.
+    static CAS: AtomicU64 = AtomicU64::new(0);
+    let ordinal = CAS.fetch_add(1, Ordering::Relaxed);
+    ca_name.push(DnType::CommonName, format!("fake-upstream-ca {ordinal}"));
     ca_params.distinguished_name = ca_name;
     let ca_key = KeyPair::generate().expect("generate CA key");
     let ca_cert = ca_params.self_signed(&ca_key).expect("self-sign CA cert");

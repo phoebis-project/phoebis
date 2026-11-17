@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 use axum::http::HeaderMap;
 use phoebis_bus::NEVER_COPIED;
+use phoebis_profile::Plane;
 use phoebis_store::{AccountKind, Secret};
 
 use crate::casing::OriginalHead;
@@ -217,17 +218,24 @@ pub fn outbound_headers(
 
 /// The head a feature call leaves with: each caller line as sent and in its place, except the never-copied set
 /// and a second credential line. The first credential line's place takes `bearer` as the model path writes an OAuth
-/// account's credential, under the name `credential_header` spells, and `None` drops each. `host` and `connection`
-/// take their lines' places, and `content_length` is `None` for a request without a body. Each of the three is
-/// appended where the caller sent no line of its own.
+/// account's credential, under the name `credential_header` spells, and `None` drops each. `host` takes its line's
+/// place, and `content_length` is `None` for a request without a body. Each of the two is appended where the caller
+/// sent no line of its own. `plane` decides the `Connection` line: the control plane opens a connection for each call
+/// and keeps none, so `close` takes the caller's line or is appended, as each control request of the router carries
+/// it, and the inference plane pools its connections, so `keep-alive` takes the caller's line alone, as the model path
+/// writes it.
 pub(crate) fn feature_headers(
     caller: &HeaderMap,
     original: Option<&OriginalHead>,
     bearer: Option<&Secret>,
     host: &str,
-    connection: &'static str,
+    plane: Plane,
     content_length: Option<usize>,
 ) -> Vec<(String, String)> {
+    let connection = match plane {
+        Plane::Control => "close",
+        Plane::Inference => "keep-alive",
+    };
     let sent = sent_lines(caller, original);
     let mut out: Vec<(String, String)> = Vec::with_capacity(sent.len() + 2);
     let (mut saw_connection, mut saw_credential, mut saw_host, mut saw_length) =
@@ -272,7 +280,7 @@ pub(crate) fn feature_headers(
     if !saw_host {
         out.push(("Host".into(), host.into()));
     }
-    if !saw_connection {
+    if !saw_connection && plane == Plane::Control {
         out.push(("Connection".into(), connection.into()));
     }
     if let (false, Some(length)) = (saw_length, content_length) {

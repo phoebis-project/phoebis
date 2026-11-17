@@ -9,31 +9,33 @@ use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::Response;
 use bytes::Bytes;
 use phoebis_oauth::AcquireError;
-use phoebis_profile::FeatureRow;
+use phoebis_profile::{FeatureRow, Plane};
 use phoebis_routing::{Obstacle, Report};
 use phoebis_store::{AccountRow, ApiKeyRow};
 use phoebis_transport::control::{ControlAnswer, StreamFailure};
+use phoebis_transport::pool::{Conn, PoolKey};
 use phoebis_transport::request::RawRequest;
-use phoebis_transport::response::ResponseHead;
+use phoebis_transport::response::{framing, keep_alive, BodyReader, ResponseHead};
+use tokio_util::sync::CancellationToken;
 
 use crate::budget::Reservation;
 use crate::casing::OriginalHead;
+use crate::dispatch::{attempt, AttemptFailure, Sent};
 use crate::errors::{
     body_budget_exhausted, feature_account_unavailable, key_body_reads, relay_failure, Failure,
 };
 use crate::headers::feature_headers;
 use crate::messages::{content_length, Relay, NOT_FORWARDED};
+use crate::stream::Checkin;
 use crate::RelayError;
-
-/// The control plane opens a connection for each call and keeps none, as each of its requests says today.
-const CONTROL_CONNECTION: &str = "close";
 
 /// Why a forward handed back no answer of the upstream's.
 pub(crate) enum Unanswered {
     /// The manager refused the account's token for a state only the operator cures.
     Refused(Failure),
-    /// A failure ahead of the upstream's answer head, by the word the DEBUG line names its case with.
-    Failed(&'static str),
+    /// A failure ahead of the upstream's answer head, by the word the DEBUG line names its case with, and the text a
+    /// pooled connection's loss carries, since that one word takes in a cut, a late head and an unreadable one.
+    Failed(&'static str, Option<String>),
 }
 
 /// The body read whole under the model route's four bounds: the key's count of arriving bodies, the size, the
@@ -98,9 +100,10 @@ pub(crate) async fn read_body(
     Ok(Some((raw, reservation)))
 }
 
-/// Sends the admitted call under `account`'s token on a fresh control-plane connection and hands back the upstream's
-/// answer, its body streaming as it arrives. `body` is `None` for a head that framed none, which then leaves with no
-/// length line, and a framed body, an empty one among them, keeps its line.
+/// Sends the admitted call under `account`'s token on the row's plane and hands back the upstream's answer, its body
+/// streaming as it arrives: on the control plane over a fresh connection, and on the inference plane over the
+/// account's pooled connections toward the row's host. `body` is `None` for a head that framed none, which then leaves
+/// with no length line, and a framed body, an empty one among them, keeps its line.
 pub(crate) async fn forward(
     relay: &Relay,
     account: &AccountRow,
@@ -109,8 +112,12 @@ pub(crate) async fn forward(
     parts: &Parts,
     body: Option<Bytes>,
 ) -> Result<Response, Unanswered> {
-    let Some(control) = relay.control.as_ref() else {
-        return Err(Unanswered::Failed("unreachable"));
+    let control = match row.plane {
+        Plane::Control => match relay.control.as_ref() {
+            Some(control) => Some(control),
+            None => return Err(Unanswered::Failed("unreachable", None)),
+        },
+        Plane::Inference => None,
     };
     let token = match relay.manager.acquire_for(account, None).await {
         Ok(token) => token,
@@ -129,7 +136,7 @@ pub(crate) async fn forward(
                 AcquireError::NotRefreshed
                 | AcquireError::ShuttingDown
                 | AcquireError::Store(_)
-                | AcquireError::Unavailable(_) => Unanswered::Failed("refresh_failed"),
+                | AcquireError::Unavailable(_) => Unanswered::Failed("refresh_failed", None),
             });
         }
     };
@@ -138,7 +145,7 @@ pub(crate) async fn forward(
         parts.extensions.get::<OriginalHead>(),
         Some(&token.secret),
         row.host,
-        CONTROL_CONNECTION,
+        row.plane,
         body.as_ref().map(Bytes::len),
     );
     let target = parts
@@ -152,6 +159,9 @@ pub(crate) async fn forward(
         headers,
         body: body.unwrap_or_default(),
     };
+    let Some(control) = control else {
+        return pooled(relay, account, row.host, &request).await;
+    };
     match control
         .send_streaming(
             request,
@@ -162,8 +172,80 @@ pub(crate) async fn forward(
         .await
     {
         Ok(answer) => Ok(answered(answer)),
-        Err(failure) => Err(Unanswered::Failed(case_of(&failure))),
+        Err(failure) => Err(Unanswered::Failed(case_of(&failure), None)),
     }
+}
+
+/// Sends the call over `account`'s pooled connections toward `host`, as the model path sends a request, under the
+/// connect and head bounds `attempt` holds. A reused connection that died before the request was in it whole is tried
+/// once more on a fresh one. Nothing else is sent twice: the upstream may have acted on a request that was written.
+async fn pooled(
+    relay: &Relay,
+    account: &AccountRow,
+    host: &'static str,
+    request: &RawRequest,
+) -> Result<Response, Unanswered> {
+    let Some(addr) = (relay.resolver)(host).await else {
+        return Err(Unanswered::Failed("unreachable", None));
+    };
+    let key = PoolKey {
+        account_id: account.id.clone(),
+        host: host.to_owned(),
+    };
+    // A feature call is placed by no routing selection, so no account's token is there to end it: a stop of the
+    // account's features refuses its next call, and a stream in flight runs to its own end.
+    let never = CancellationToken::new();
+    let mut fresh = false;
+    loop {
+        match attempt(relay, request, &key, addr, fresh, &never).await {
+            Ok(sent) => {
+                let checkin = Checkin {
+                    pool: relay.pool.clone(),
+                    key,
+                };
+                return Ok(pooled_answer(sent, checkin));
+            }
+            Err(AttemptFailure::Unsent { connect: false, .. }) if !fresh => fresh = true,
+            Err(AttemptFailure::Unsent { .. }) => {
+                return Err(Unanswered::Failed("unreachable", None));
+            }
+            Err(AttemptFailure::Lost(text)) => return Err(Unanswered::Failed("cut", Some(text))),
+            // The token above never fires, so this cannot arise, and it answers as a loss would.
+            Err(AttemptFailure::Canceled) => return Err(Unanswered::Failed("cut", None)),
+        }
+    }
+}
+
+/// The answer of a pooled call, its body passed on as on the control plane. The connection goes back to the pool
+/// once the body ended and the head lets it be kept. It goes with the stream where the caller left or a read failed,
+/// since a half-read connection would hand the account's next call the rest of this one.
+fn pooled_answer(sent: Sent<Conn>, checkin: Checkin) -> Response {
+    let Sent {
+        conn,
+        head,
+        leftover,
+        ..
+    } = sent;
+    let framing = framing(&head);
+    let kept = keep_alive(&head, &framing).then_some(checkin);
+    let reader = BodyReader::new(conn, leftover, framing);
+    let pieces = futures::stream::unfold(Some((reader, kept)), |state| async move {
+        let (mut reader, kept) = state?;
+        match reader.next_chunk().await {
+            Ok(Some(piece)) => Some((Ok(piece), Some((reader, kept)))),
+            Ok(None) => {
+                if let Some(checkin) = kept {
+                    checkin.put(reader.into_inner());
+                }
+                None
+            }
+            Err(error) => Some((Err(error), None)),
+        }
+    });
+    answer_head(&head)
+        .body(Body::from_stream(pieces))
+        // The status is a validated `StatusCode` and each line was parsed before it was added.
+        .expect("a forwarded answer's head is always well formed")
 }
 
 /// The head a caller gets: the upstream's status and each of its lines whose name `NOT_FORWARDED` does not hold.

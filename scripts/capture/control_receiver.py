@@ -3,11 +3,16 @@
 # points HTTPS_PROXY here and NODE_EXTRA_CA_CERTS at the run's CA. Each connection gets a 200 for its CONNECT, a TLS
 # handshake with the run's leaf, and a canned answer to the one request inside.
 #
-# Usage: control_receiver.py <port> <output-json> <seconds> <certs-dir> <responses-dir>
+# Usage: control_receiver.py <port> <output-json> <seconds> <certs-dir> <responses-dir> [<hellos-json>]
 #
 # The canned bodies come from <responses-dir>, which a capture points at crates/profile/fixtures/responses, the
 # canned responses the fixture builder keeps beside the control fixtures. The receiver's answers and the fixtures
 # then share one source and cannot drift apart. Any other request gets a 404 with {}.
+#
+# With <hellos-json>, as scripts/capture-feature-hellos.sh starts it, the receiver also writes each connection's
+# ClientHello there under the connection's seq, and answers the connector list and a connector's MCP initialize with
+# the invented bodies below, so the client goes on to open a connector session. The control capture leaves both out,
+# so its client meets the receiver its fixtures were captured against.
 #
 # It listens on 127.0.0.1 alone and never connects anywhere. The token endpoint answers any grant, so no account is
 # involved. Every header and body is recorded verbatim, the authorization header and the token grant's body
@@ -20,13 +25,14 @@
 # it saw.
 import json, pathlib, signal, socket, ssl, sys, threading, time
 
-if len(sys.argv) != 6:
-    sys.exit(f"usage: {sys.argv[0]} <port> <output-json> <seconds> <certs-dir> <responses-dir>")
+if len(sys.argv) not in (6, 7):
+    sys.exit(f"usage: {sys.argv[0]} <port> <output-json> <seconds> <certs-dir> <responses-dir> [<hellos-json>]")
 PORT = int(sys.argv[1])
 OUT = sys.argv[2]
 DUR = int(sys.argv[3])
 CERTS = pathlib.Path(sys.argv[4])
 RESPONSES = pathlib.Path(sys.argv[5])
+HELLOS = sys.argv[6] if len(sys.argv) == 7 else None
 
 # The query takes no part in the match: the usage read carries one, and a build that adds one to another read
 # still gets its canned body while the recording keeps the query.
@@ -38,17 +44,43 @@ ANSWERS = {
 }
 CANNED = {key: (RESPONSES / name).read_bytes() for key, name in ANSWERS.items()}
 
+# Invented for the feature capture, of no account: one connector under a name of its own, and the result an MCP
+# server gives an initialize request.
+CONNECTOR_LIST = json.dumps({
+    "data": [{
+        "additional_install": False,
+        "created_at": "2026-01-01T00:00:00Z",
+        "directory_entry_id": None,
+        "display_name": "Example Connector",
+        "icon_url": None,
+        "id": "srv_example",
+        "tools": [],
+        "url": "https://connector.example/mcp",
+    }],
+    "next_page": None,
+}).encode()
+INITIALIZE_RESULT = {
+    "capabilities": {"tools": {}},
+    "protocolVersion": "2026-07-28",
+    "serverInfo": {"name": "example-connector", "version": "1.0.0"},
+}
+
 # The receiver's clients sit on loopback and send their requests at once, so a connection idle this long has
 # stalled and is recorded as an error instead of holding its thread.
 IDLE_TIMEOUT = 15
 
 entries = []
+hellos = []
 lock = threading.RLock()
 
 
 def dump(*_):
-    with lock, open(OUT, "w") as f:
-        json.dump(entries, f, indent=1)
+    with lock:
+        with open(OUT, "w") as f:
+            json.dump(entries, f, indent=1)
+        if HELLOS is not None:
+            with open(HELLOS, "w") as f:
+                json.dump(hellos, f, indent=1)
 
 
 def record(entry):
@@ -63,6 +95,10 @@ context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(CERTS / "leaf.pem", CERTS / "leaf.key")
 # The receiver reads HTTP/1.1 alone, and a client that negotiated h2 would send frames it cannot parse.
 context.set_alpn_protocols(["http/1.1"])
+if HELLOS is not None:
+    # A client that resumes a session offers a pre-shared key its first hello lacks, so without a ticket each recorded
+    # hello is the one a connection to a new host opens with.
+    context.num_tickets = 0
 
 
 def read_head(sock):
@@ -74,6 +110,37 @@ def read_head(sock):
         buf += chunk
     head, _, rest = buf.partition(b"\r\n\r\n")
     return head.decode("latin1").split("\r\n"), rest
+
+
+def peek_hello(sock):
+    """The client's first TLS record, left on the socket for the handshake to read."""
+    want = 5
+    while True:
+        record = sock.recv(want, socket.MSG_PEEK)
+        if not record:
+            raise ConnectionError("closed before its ClientHello")
+        if len(record) >= 5:
+            want = 5 + int.from_bytes(record[3:5], "big")
+        if len(record) >= want:
+            return record
+        # A peek answers at once with the bytes already there, so a record still arriving is waited for here.
+        time.sleep(0.01)
+
+
+def feature_answer(method, path, body):
+    """The invented body of a feature call the capture serves, None for any other call. An initialize answer carries
+    the request's own id, which the client matches it by."""
+    if (method, path) == ("GET", "/v1/mcp_servers"):
+        return CONNECTOR_LIST
+    if method != "POST" or not path.startswith("/v1/mcp/"):
+        return None
+    try:
+        message = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(message, dict) or message.get("method") != "initialize":
+        return None
+    return json.dumps({"id": message.get("id"), "jsonrpc": "2.0", "result": INITIALIZE_RESULT}).encode()
 
 
 def response(code, reason, body):
@@ -91,6 +158,11 @@ def handle(conn, seq):
             raise ValueError(f"not a CONNECT request: {lines[0]}")
         target = lines[0].split(" ")[1]
         conn.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+        if HELLOS is not None:
+            hello = peek_hello(conn)
+            with lock:
+                hellos.append({"hello": hello.hex(), "seq": seq, "target": target})
+                dump()
         tls = context.wrap_socket(conn, server_side=True)
         lines, body = read_head(tls)
         length = 0
@@ -109,6 +181,8 @@ def handle(conn, seq):
         parts = lines[0].split(" ")
         path = parts[1].split("?", 1)[0] if len(parts) > 1 else ""
         canned = CANNED.get((parts[0], path))
+        if canned is None and HELLOS is not None:
+            canned = feature_answer(parts[0], path, body)
         code, reason, payload = (200, "OK", canned) if canned is not None else (404, "Not Found", b"{}")
         # Recorded before the answer goes out, so the entry is on disk by the time the client acts on the answer.
         record({"seq": seq, "target": target, "request_line": lines[0], "headers": lines[1:],

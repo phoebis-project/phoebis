@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Each case pins a rule a real capture leans on, checked here without the client: the leaf a receiver presents
 # chains to the run's own CA and names the control hosts, the CA carries the key usage a strict verifier asks for,
-# mkcerts.sh refuses to start on a host without openssl, and control_receiver.py answers the control calls with the
+# mkcerts.sh refuses to start on a host without openssl, hello_lib.py's compare tells the two pinned hellos apart and
+# finds one equal to itself, and control_receiver.py answers the control calls with the
 # committed canned bodies, records each call, keeps serving after a client that drops its tunnel before the handshake,
 # and records a chunked request as an error. The resign example's --write mode leaves a body stamped with the digits
 # the signer computes over its own bytes. drive_login.py logs stub_client.py in by either login method with the
@@ -61,6 +62,24 @@ status=0
 out=$(PATH="$tmp/empty-bin" "$BASH" "$capture/mkcerts.sh" "$tmp/no-openssl" 2>&1) || status=$?
 [[ "$status" -eq 1 ]] || fail "mkcerts.sh without openssl exited $status, want 1: $out"
 [[ ! -e "$tmp/no-openssl" ]] || fail "mkcerts.sh without openssl still wrote $tmp/no-openssl"
+
+# --- hello_lib.py's compare ---
+
+# The feature hellos' capture stops on this compare's status, so one that masked more than the fields a connection or
+# a host draws anew would answer "equal" for any two hellos and never stop. The two pinned hellos first differ in their
+# cipher lists, ahead of each extension.
+fixtures="$here/crates/profile/fixtures"
+status=0
+out=$(python3 -I "$capture/hello_lib.py" "$fixtures/hello_inference.hex" "$fixtures/hello_control.hex" 2>&1) \
+  || status=$?
+[[ "$status" -eq 3 ]] || fail "the compare of the two pinned hellos exited $status, want 3: $out"
+[[ "$(tail -n 1 <<<"$out")" == "differs at the cipher list" ]] \
+  || fail "the compare of the two pinned hellos printed: $out"
+status=0
+out=$(python3 -I "$capture/hello_lib.py" "$fixtures/hello_inference.hex" "$fixtures/hello_inference.hex" 2>&1) \
+  || status=$?
+[[ "$status" -eq 0 ]] || fail "the compare of a pinned hello with itself exited $status, want 0: $out"
+[[ "$out" == "equal under the masks" ]] || fail "the compare of a pinned hello with itself printed: $out"
 
 # --- control_receiver.py ---
 
