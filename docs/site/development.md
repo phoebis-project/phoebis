@@ -289,6 +289,7 @@ the table after any accepted re-pin.
 
 ### What remains unmeasured
 
+- A connector stream that runs for minutes.
 - Inference requests from the interactive (`cli`) and background (`cli-bg`) entrypoints, `x-cc-atis`,
   `anthropic-usage-limit: slow`, fallback headers, `x-anthropic-additional-protection`, and the `x-stainless-helper`
   markers.
@@ -298,16 +299,15 @@ the table after any accepted re-pin.
 - The Console login's client id and scopes. The 2.1.310 Console authorize URL carries the client id
   `41077d10-94b8-4194-be48-d251e9eb21b4` with the scopes `user:profile user:inference`, where the router's Console
   pairing sends the claude.ai client id and the full login scope list.
+- The paths under `/api/frame/` that no capture sent, and whether one of them asks for a protocol upgrade.
 - The quota-wall usage variant of token counting on the wire. The Read tool's pre-turn count is the measured one
   (`count.json` and the three `count_*.http` heads under the fixtures).
+- The upstream's answer to `POST /api/artifacts/mcp` in an interactive session. A headless client got 404.
 - The usage read under `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. With the switch set the `/usage` dialog opens on
   the row `Error: Failed to load usage data` and no request reaches the wire, so `control_usage.http` is the read of
   the capture variant without the switch.
-- TLS record-level behavior after the ClientHello (key update, ticket handling) and the ServerHello path.
-- A connector stream that runs for minutes.
-- The paths under `/api/frame/` that no capture sent, and whether one of them asks for a protocol upgrade.
-- The upstream's answer to `POST /api/artifacts/mcp` in an interactive session. A headless client got 404.
 - The WebFetch domain check through the router.
+- TLS record-level behavior after the ClientHello (key update, ticket handling) and the ServerHello path.
 - Whether a feature answer carries the upstream's rate-limit headers, and whether the client reads them there.
 
 ## Re-pinning
