@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use boring::error::ErrorStack;
+use boring::x509::{X509Ref, X509};
 use phoebis_store::permissions::create_private_file;
 use phoebis_store::Clock;
 use rcgen::{
@@ -17,7 +19,7 @@ use rcgen::{
 };
 
 use crate::config::FeaturesConfig;
-use crate::tls::read_checked;
+use crate::tls::{read_checked, TlsError};
 
 pub const CA_CERT_FILE: &str = "feature-ca.pem";
 pub const CA_KEY_FILE: &str = "feature-ca-key.pem";
@@ -38,10 +40,14 @@ const CA_NAME: &str = "Phoebis feature CA";
 
 #[derive(Debug, thiserror::Error)]
 pub enum FeatureCaError {
+    #[error("features.ca.cert_file {path}: holds no CA this router made")]
+    Foreign { path: PathBuf },
     #[error("features.ca: {present} stands without {missing}: restore the missing file, or remove both for a new CA")]
     Half { missing: PathBuf, present: PathBuf },
     #[error("features.ca: {0}")]
     Issue(String),
+    #[error("features.ca.key_file {path}: holds a key that cannot sign: {error}")]
+    KeyCannotSign { path: PathBuf, error: rcgen::Error },
     #[error(transparent)]
     Pair(#[from] crate::tls::TlsError),
     #[error("features.ca {path}: {error}")]
@@ -121,12 +127,18 @@ impl FeatureCa {
     fn read(cert_file: PathBuf, key_file: PathBuf) -> Result<FeatureCa, FeatureCaError> {
         let pair = read_checked(KEY, &cert_file, &key_file)?;
         let key = KeyPair::from_pem(&String::from_utf8_lossy(&pair.key_pem)).map_err(|error| {
-            FeatureCaError::Issue(format!(
-                "{} holds a key that cannot sign: {error}",
-                key_file.display()
-            ))
+            FeatureCaError::KeyCannotSign {
+                path: key_file.clone(),
+                error,
+            }
         })?;
         let issuer = ca_params().self_signed(&key).map_err(issue_error)?;
+        // Each certificate signed here names the rebuilt issuer's subject, so under a CA of another subject a client
+        // builds no chain and each handshake fails with no line on the router.
+        let rebuilt = X509::from_der(issuer.der()).map_err(stack)?;
+        if subject(&pair.leaf)? != subject(&rebuilt)? {
+            return Err(FeatureCaError::Foreign { path: cert_file });
+        }
         // Read once into text, so the fingerprint is taken over the very bytes the download serves.
         let pem = String::from_utf8_lossy(&pair.cert_pem).into_owned();
         Ok(FeatureCa {
@@ -324,6 +336,15 @@ fn millis(duration: Duration) -> i64 {
 
 fn issue_error(error: rcgen::Error) -> FeatureCaError {
     FeatureCaError::Issue(error.to_string())
+}
+
+fn stack(error: ErrorStack) -> FeatureCaError {
+    FeatureCaError::Pair(TlsError::Stack { key: KEY, error })
+}
+
+/// The subject as its encoding, the form a leaf's issuer field repeats.
+fn subject(cert: &X509Ref) -> Result<Vec<u8>, FeatureCaError> {
+    cert.subject_name().to_der().map_err(stack)
 }
 
 fn hex(bytes: &[u8]) -> String {

@@ -1,7 +1,7 @@
 //! The feature CA: a router started in-process with a `features` block serves the same CA at the download across a
-//! restart, refuses half of one and a key that does not match it, and writes its key at 0600. Through the CA's module
-//! with a clock the test moves, a certificate is issued again before it ends and holds for a client whose clock runs
-//! behind.
+//! restart, refuses half of one, a key that does not match it and a CA under another subject, and writes its key at
+//! 0600. Through the CA's module with a clock the test moves, a certificate is issued again before it ends and holds
+//! for a client whose clock runs behind.
 
 use std::cmp::Ordering;
 use std::os::unix::fs::PermissionsExt;
@@ -21,8 +21,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 
-/// `app::run` reads the admin secret from the process environment, so each test holds this across its set-then-run
-/// sequence.
+/// `app::run` reads the admin secret from the process environment. The lock covers each test's write of the variable,
+/// so no two tests write it at once, and each writes the same value.
 static ENV: Mutex<()> = Mutex::new(());
 
 /// How long a boot may take to bind its listeners, generous because it is reached only when the boot never ends.
@@ -129,7 +129,7 @@ async fn refused(dir: &Path, up: &FakeUpstream) -> String {
         phoebis_router::app::run(config, std::future::pending()),
     )
     .await
-    .expect("the start refused rather than serving")
+    .expect("the start served where it had to refuse")
     .unwrap_err()
     .to_string()
 }
@@ -254,6 +254,29 @@ async fn a_key_that_does_not_match_the_feature_ca_refuses_the_start() {
     assert!(
         line.starts_with(&format!("features.ca.key_file {}", key.display()))
             && line.contains("does not match"),
+        "{line}"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_feature_ca_under_another_subject_refuses_the_start() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cert = dir.path().join(CA_CERT_FILE);
+    // Its key matches and its dates hold, so its subject alone sets it apart from a CA the router made.
+    let key = rcgen::KeyPair::generate().unwrap();
+    let mut params = rcgen::CertificateParams::default();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+    let mut name = rcgen::DistinguishedName::new();
+    name.push(rcgen::DnType::CommonName, "A CA made by hand");
+    params.distinguished_name = name;
+    std::fs::write(&cert, params.self_signed(&key).unwrap().pem()).unwrap();
+    std::fs::write(dir.path().join(CA_KEY_FILE), key.serialize_pem()).unwrap();
+
+    let line = refused(dir.path(), &up).await;
+    assert!(
+        line.starts_with(&format!("features.ca.cert_file {}", cert.display())),
         "{line}"
     );
     up.shutdown().await;

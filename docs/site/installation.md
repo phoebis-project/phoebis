@@ -239,10 +239,10 @@ CA's two files read-only, so it is safe to run against a production file while t
 2. `proxy listens on {config.proxy.listen} over plain HTTP`, or `proxy listens on {config.proxy.listen} over TLS
    (certificate {cert_file}, expires {date})` for a certificate pair ([TLS on the listeners](#tls-on-the-listeners))
 3. the admin line in the same two shapes, with `admin` and `config.admin.listen`
-4. `features listener is off` without a `features` block, `features listens on {features.listen} over TLS (CA {path},
-   fingerprint {hex}, expires {date})` for the feature CA in the data directory, or `features listens on
-   {features.listen} over TLS, and the first start creates the CA at {path}` where neither of its files stands yet
-   ([features](#features))
+4. `features listener is off` without a `features` block, `features listens on {config.features.listen} over TLS (CA
+   {path}, fingerprint {hex}, expires {date})` for the feature CA in the data directory, or `features listens on
+   {config.features.listen} over TLS, and the first start creates the CA at {path}` where neither of its files stands
+   yet ([features](#features))
 5. `metrics listens on {config.stats.metrics_listen}`
 6. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
    {on|off}, upstream gzip {auto|on|off}`
@@ -820,7 +820,11 @@ A start with a `features` block reads the feature CA's two files as it reads a l
 refuses there, with the lines the list below gives for a pair under `features.ca` in place of `proxy.tls`, such as
 `features.ca.key_file {path}: does not match the certificate in {cert_file}`. It refuses one file without the other
 too, with `features.ca: {path} stands without {path}: restore the missing file, or remove both for a new CA`, and
-creates nothing, since a new CA written over half of an old one would change the fingerprint. `check-config` reads the
+creates nothing, since a new CA written over half of an old one would change the fingerprint. Two more lines are the
+CA's own: `features.ca.cert_file {path}: holds no CA this router made` for a certificate under another subject than the
+one the router gives its CA, since each certificate it issued would name an issuer the served CA does not carry, and
+`features.ca.key_file {path}: holds a key that cannot sign: {error}` for a key the router cannot sign with. A first
+start that cannot write one of the two files refuses with `features.ca {path}: {OS error}`. `check-config` reads the
 two files the same way with the block alone. A key file with a wider mode or another owner draws a warning from the
 start and from `check-config` and refuses nothing.
 

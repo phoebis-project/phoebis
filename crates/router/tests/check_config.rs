@@ -3,7 +3,8 @@
 //! does and proves the key against the registry's canary, or against the sealed rows of a registry from before the
 //! canary, refuses a registry or a ledger a newer build wrote, and warns about an unset secret variable while refusing
 //! a set one the start refuses. It reads each listener's certificate pair as the start does, prints each listener's
-//! scheme on any address, and refuses a pair the start refuses with the loader's line.
+//! scheme on any address, and refuses a pair the start refuses with the loader's line. It reads the feature CA's files
+//! with a `features` block alone.
 
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
@@ -1110,6 +1111,31 @@ fn a_listener_without_tls_on_an_unspecified_address_prints_over_plain_http() {
     assert_eq!(
         lines.get(4),
         Some(&"metrics listens on 127.0.0.1:9464"),
+        "{}",
+        printed(&out)
+    );
+}
+
+/// Half a CA that an earlier configuration left in the data directory: the start of a file without the block reads
+/// no CA file, so the check of that file passes, and the same file with the block refuses as its start does.
+#[test]
+fn check_config_reads_the_feature_ca_with_the_features_block_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("feature-ca.pem"),
+        fake_upstream::generate_pair(&["localhost"]).ca_pem,
+    )
+    .unwrap();
+    let missing = dir.path().join("feature-ca-key.pem");
+
+    let without = check_config(&mut phoebis(), &config_file(dir.path(), "without", ""));
+    assert!(without.status.success(), "{}", printed(&without));
+
+    let with = config_file(dir.path(), "with", "features:\n  listen: 127.0.0.1:0\n");
+    let out = check_config(&mut phoebis(), &with);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains(&missing.display().to_string()),
         "{}",
         printed(&out)
     );
