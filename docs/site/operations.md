@@ -329,7 +329,7 @@ labels, so a long account label is cut before them, and once it reaches its floo
 from` or `failed over from` is cut too. A cut label ends in `…`, and `--json` carries every label and id whole. A
 table line past 80 columns is cut and ends in `…`, and a line of text past 80 columns wraps. The pins and the accounts
 in no pool print 20 lines each and then `and {n} more`, and `--all` prints every one. `--json` prints the same reads as
-one object for a script: `health` (`ready`, `addr` and `reason`, or `null` when no probe ran), the five answers verbatim
+one object for a script: `health` (`ready`, `addr` and `reason`, or `null` when no probe ran), the six answers verbatim
 (`null` for a read that failed) and `errors`, each failed read's reason under its name. Neither output carries the admin
 secret.
 
