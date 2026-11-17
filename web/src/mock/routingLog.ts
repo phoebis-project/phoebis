@@ -11,6 +11,7 @@ import { compareRows, movedFrom } from '@/lib/routingLog';
 import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SHARED_WINDOWS, SUNSET_WEEK_RESETS_IN, accountById, lastReadingOf, rankTier } from './accounts';
 import { promptOf } from './catalog';
+import { PRIOR_BURN, bindingOf, ceilingOn, windowFitOf, type Runway } from './fit';
 import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
@@ -49,11 +50,6 @@ export const rewriteOf = (tokens: number, model: string): Record<string, number>
  * the estimate the mock keeps beside its row.
  */
 const bodyTokensOf = (r: RequestLog) => (r.kind === 'count_tokens' ? (COUNTED_BODY_TOKENS.get(r.id) ?? 0) : promptOf(r.usage));
-/**
- * A fresh session's burn per hour: the pool's warm pins' median as the story's hour reads it. The drawn day's
- * decisions read no burn at all, so they book the rewrite alone.
- */
-export const PRIOR_BURN: Record<string, number> = { five_hour: 0.01, seven_day: 0.0012, seven_day_fable: 0.0024 };
 
 // The in-flight counts draw from a stream of their own, so no other draw of the story moves.
 const inFlightRng = createRng(5_303);
@@ -434,9 +430,6 @@ function horizonOf(name: string, resetsAt: string | null, end: number | null, at
   return { at: Math.max(at, byEnd ? end : horizon), bound: byReset || byEnd ? 'wall' : 'span' };
 }
 
-/** A window's own ceiling on a pool by its wire key. */
-const ceilingOn = (pool: Pick<PoolSeed, 'fiveHourCeiling' | 'weeklyCeiling'>, window: string): number => (window === 'five_hour' ? pool.fiveHourCeiling : pool.weeklyCeiling);
-
 /**
  * The account a candidate names: the registry's, or a deleted account's as it stood, which a record decided before its
  * delete still lists.
@@ -672,32 +665,6 @@ interface FitRead {
   wallRunwayMs: number | null;
 }
 
-/** A bounded runway on a window, and whether it ends short of the window's horizon. */
-interface Runway {
-  runway: number;
-  short: boolean;
-  window: string | null;
-}
-
-/** One plan window's reading for a request with `rewrite` and `burn` on it: whether the rewrite lands under the
- *  window's ceiling, the runway to the ceiling, the runway to 1.0, and whether the window holds no allowance. */
-interface WindowFit {
-  lands: boolean;
-  runwayMs: number | null;
-  spent: boolean;
-  wallRunwayMs: number | null;
-}
-
-/**
- * Each runway is the time until the prediction with the rewrite, rising at `burn`, reaches its line: zero where it
- * stands there already and unbounded with no burn, as the router's `time_to` reads it.
- */
-function windowFitOf(reading: { reserved: number | null; utilization: number }, ceiling: number, rewrite: number, burn: number): WindowFit {
-  const predicted = reading.utilization + (reading.reserved ?? 0);
-  const runwayTo = (line: number) => (predicted + rewrite >= line ? 0 : burn <= 0 ? null : Math.round(((line - predicted - rewrite) / burn) * HOUR));
-  return { lands: predicted + rewrite < ceiling, runwayMs: runwayTo(ceiling), spent: reading.utilization >= 1, wallRunwayMs: runwayTo(1) };
-}
-
 const runwayOf = (c: Pick<RecordCandidate, 'runwayMs'>) => c.runwayMs ?? Number.POSITIVE_INFINITY;
 /** The candidates with the longest runway, an unbounded one longest of all, ties kept in the set's order. */
 const longestOf = <T extends Pick<RecordCandidate, 'runwayMs'>>(list: T[]): T[] => list.filter((c) => runwayOf(c) === Math.max(...list.map(runwayOf)));
@@ -766,8 +733,6 @@ function fitOf(c: RecordCandidate, at: number, pool: Pick<PoolSeed, 'fiveHourCei
     every = every && !short;
     bounded.push({ runway: window.runwayMs, short, window: w });
   }
-  const shortest = (list: Runway[]) => [...list].sort((a, b) => a.runway - b.runway)[0];
-  const bindingOf = (list: Runway[]) => shortest(list.filter((b) => b.short)) ?? shortest(list);
   const binding = bindingOf(bounded);
   const verdict = unread ? 'least_bad' : every ? 'fits' : lands ? 'rewrite_only' : 'least_bad';
   return read([...projections, ...(binding ? [fact('runway_ms', binding.runway, 'ms')] : []), ...rewrites, ...reserved, ...(binding ? [fact('binding', binding.window)] : [])], verdict, binding, bindingOf(walls));

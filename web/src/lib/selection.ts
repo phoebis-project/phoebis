@@ -1,4 +1,5 @@
-import type { Account, AccountSlowDown, MemberEligibility, Pool, PoolMember, PoolStrategy } from '@/api/types';
+import type { Account, AccountSlowDown, MemberEligibility, MemberFit, Pool, PoolMember, PoolStrategy } from '@/api/types';
+import { MEMBER_FIT_VALUES } from '@/api/types';
 import { sentences } from './analytics';
 import { fmtAbsolute, fmtDuration, fmtPct, fmtPeriodEnd, fmtRelative, fmtShortTime, instant, noun, sameLocalDay } from './format';
 import { endOf, isPaidSource, minuteSpan, planExtraUsage, planOverage, slowedOf } from './quota';
@@ -17,12 +18,9 @@ export const RULE_NOTE = 'A request for a Fable model is placed on the Fable win
 export type Ineligible = Exclude<MemberEligibility, 'eligible'>;
 export const INELIGIBLE_LABEL: Record<Ineligible, string> = { budget: 'at budget', budget_unknown: 'budget unknown', cooldown: 'in cooldown', overage: 'in overage', spent: 'spend cap reached', subscription_ended: 'subscription ended', unavailable: 'not available', unknown: 'unknown' };
 
-/**
- * Why an eligible member takes a fresh session only once no other member can: its subscription end is inside the
- * pool's wind-down, under every strategy.
- */
-export type LastResort = 'winding_down';
-export const LAST_RESORT_LABEL: Record<LastResort, string> = { winding_down: 'winding down' };
+/** Why an eligible member takes a fresh session only once no better member can: the word of its fit. */
+export type LastResort = Exclude<MemberFit, 'fits'>;
+export const LAST_RESORT_LABEL: Record<LastResort, string> = { ending: 'winding down', least_bad: 'least bad', rewrite_only: 'rewrite only', spent: 'window spent' };
 
 /**
  * `deferred`: eligible but in overage under prefer_plan, so ranked after the plan-funded members of its tier. `end`:
@@ -144,13 +142,21 @@ function keyOf(member: PoolMember | undefined, strategy: PoolStrategy): number {
 export const windingDown = (pool: Pick<Pool, 'windDownMinutes'>, end: number | null, now: number): boolean => end !== null && now >= end - pool.windDownMinutes * MINUTE;
 
 /**
- * Where a member falls in the router's fall-through for a fresh session, lowest first: not winding down, then winding
- * down. The router drops the group from the whole selection set before it picks a tier, so it trails every better
- * member of every tier.
+ * Where a member falls in the router's ladder for a fresh session, lowest first: its fit's rank, a member the router
+ * answers no fit for among the fitting ones, and every word past `fits` its last resort. The router lands on the best
+ * rung before it picks a tier, so a member trails every better member of every tier.
  */
-function resortOf(pool: Pool, account: Account, now: number): { lastResort: LastResort | null; order: number } {
-  const winding = windingDown(pool, endOf(account, now), now);
-  return { lastResort: winding ? 'winding_down' : null, order: winding ? 2 : 0 };
+function resortOf({ fit }: Pick<PoolMember, 'fit'>): { lastResort: LastResort | null; order: number } {
+  return fit === null || fit === 'fits' ? { lastResort: null, order: 0 } : { lastResort: fit, order: MEMBER_FIT_VALUES.indexOf(fit) };
+}
+
+/**
+ * The runway a placement ranks by on the rungs of `rewrite_only` and `least_bad`, an unbounded one the longest of all,
+ * and 0 on every other rung, where the strategy alone orders the members.
+ */
+function runwayOf(placement: Placement, member: Pick<PoolMember, 'runwayMs'> | undefined): number {
+  if (placement.lastResort !== 'rewrite_only' && placement.lastResort !== 'least_bad') return 0;
+  return member?.runwayMs ?? Number.POSITIVE_INFINITY;
 }
 
 /** A kind tier by `GROUP_LABEL`'s order: a paid source files with the metered sources whatever its overage reads. */
@@ -162,9 +168,14 @@ export const kindGroup = (paid: boolean, overage: boolean): 0 | 1 | 2 => (paid ?
  */
 const groupOf = (account: Account | undefined): 0 | 1 | 2 => (account === undefined ? 0 : kindGroup(isPaidSource(account), account.extraUsage?.inUse === true));
 
-/** The order the router walks for a fresh session of this pool, from the data the routes already serve. */
+/**
+ * The order the router walks for a fresh session of this pool, from the data the routes already serve. `next` is the
+ * lead of the first tier that holds a member of the best rung any eligible member reaches, and on a rung that ranks by
+ * the runway, the lead among the members with the longest runway over the whole pool.
+ */
 export function selectionOrder(pool: Pool, accounts: Account[], now: number = Date.now()): Tier[] {
   const byId = new Map(accounts.map((a) => [a.id, a]));
+  const memberOf = new Map(pool.members.map((m) => [m.accountId, m]));
   const grouped = kindOrdered(pool);
   const groupFor = (accountId: string) => (grouped ? groupOf(byId.get(accountId)) : 0);
   const tiers = [...new Map(pool.members.map((m) => [`${groupFor(m.accountId)}:${m.priority}`, { group: groupFor(m.accountId), priority: m.priority }])).values()].sort(
@@ -178,7 +189,7 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
         const account = byId.get(m.accountId);
         if (!account) return [];
         const ineligible = m.eligible === 'eligible' ? null : m.eligible;
-        const { lastResort, order } = resortOf(pool, account, now);
+        const { lastResort, order } = resortOf(m);
         if (ineligible === null) resort.set(account.id, order);
         return [
           {
@@ -198,38 +209,49 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
       });
     return { group, placements, priority };
   });
-  // The group the router settles in is the best one any eligible member of the pool reaches.
+  // The rung the router settles on is the best one any eligible member of the pool reaches.
   const settled = Math.min(...resort.values());
   const orderOf = (p: Placement) => resort.get(p.account.id) ?? 0;
-  const memberOf = new Map(pool.members.map((m) => [m.accountId, m]));
+  const runwayFor = (p: Placement) => runwayOf(p, memberOf.get(p.account.id));
+  // On a rung that ranks by the runway the router keeps the longest one over the whole pool before it picks a tier.
+  // Every other rung reads 0, so its first tier names `next` as the tier walk finds it.
+  const longest = Math.max(
+    ...built
+      .flatMap((t) => t.placements)
+      .filter((p) => p.ineligible === null && orderOf(p) === settled)
+      .map(runwayFor),
+  );
   const keyFor = (p: Placement) => keyOf(memberOf.get(p.account.id), pool.strategy);
   let nextFound = false;
   return built.map(({ group, placements, priority }) => {
-    // The last-resort group leads the sort, since the router narrows it away before it picks a tier. Inside a
-    // group the router's tier is (priority, deferred): plan-funded members rank ahead of deferred ones, then the
-    // strategy orders inside each half; equal scores share a rank because the router draws among them at random.
+    // The rung leads the sort, since the router lands on the best rung before it picks a tier, and on the rungs of
+    // `rewrite_only` and `least_bad` the longer runway follows it. Inside that the router's tier is (priority,
+    // deferred): plan-funded members rank ahead of deferred ones, then the strategy orders inside each half, and equal
+    // scores share a rank because the router draws among them at random.
     const eligible = placements
       .filter((p) => p.ineligible === null)
       .sort(
         (a, b) =>
           orderOf(a) - orderOf(b) ||
+          runwayFor(b) - runwayFor(a) ||
           Number(a.deferred) - Number(b.deferred) ||
           keyFor(a) - keyFor(b) ||
           a.account.label.localeCompare(b.account.label),
       );
     let rank = 0;
-    let previous: { deferred: boolean; order: number; score: number } | null = null;
+    let previous: { deferred: boolean; order: number; runway: number; score: number } | null = null;
     for (const p of eligible) {
       const score = keyFor(p);
-      if (!previous || previous.order !== orderOf(p) || previous.deferred !== p.deferred || previous.score !== score) rank += 1;
-      // Round robin and priority both score every member 0, so the rank only moves across the last-resort group
-      // boundary and the deferred one: each member of a subtier is equally the next, and the router rotates the
-      // plan-funded subtier on its own while it lasts, so an overage sibling ranks behind it rather than beside it.
+      const runway = runwayFor(p);
+      if (!previous || previous.order !== orderOf(p) || previous.runway !== runway || previous.deferred !== p.deferred || previous.score !== score) rank += 1;
+      // Round robin and priority both score every member 0, so the rank moves across a rung's boundary, a runway's and
+      // the deferred one alone: each member of a subtier is equally the next, and the router rotates the plan-funded
+      // subtier on its own while it lasts, so an overage sibling ranks behind it rather than beside it.
       p.rank = rank;
-      previous = { deferred: p.deferred, order: orderOf(p), score };
+      previous = { deferred: p.deferred, order: orderOf(p), runway, score };
     }
     const ordered = [...eligible, ...placements.filter((p) => p.ineligible !== null).sort((a, b) => a.account.label.localeCompare(b.account.label))];
-    const lead = eligible.find((p) => orderOf(p) === settled)?.rank;
+    const lead = eligible.find((p) => orderOf(p) === settled && runwayFor(p) === longest)?.rank;
     const next = !nextFound && lead !== undefined ? eligible.filter((p) => p.rank === lead).map((p) => p.account.id) : [];
     if (next.length) nextFound = true;
     return { group, next, placements: ordered, priority };

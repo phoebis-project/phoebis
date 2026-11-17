@@ -40,7 +40,7 @@ import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf,
 import { minuteSpan, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref, words } from '@/lib/routingLog';
 import { orderRows, type SortFigure } from '@/lib/sort';
-import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, spentBadge, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
+import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, spentBadge, type LastResort as LastResortWord, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
 
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
 // What a first pool needs, said on the create dialog's rail. The words stay while the refusal dots come and go.
@@ -717,7 +717,7 @@ function PoolCard({
                   : isNext
                     ? `${p.account.label}: where the next fresh session lands`
                     : p.lastResort
-                      ? `${p.account.label}: ${LAST_RESORT_LABEL[p.lastResort]}, taken only once no other account can take a fresh session`
+                      ? lastResortWhy(p.account.label, p.lastResort)
                       : p.deferred
                         ? `${p.account.label}: in overage, taken after the plan-funded members of this tier`
                         : `${p.account.label}: rank ${p.rank} in this tier`;
@@ -970,10 +970,33 @@ function Eligibility({ verdict, account, now, periodEnd }: { account: Account | 
   }
 }
 
-/** Why an eligible member waits for the rest: winding down, with the time left to its end. */
+/** The sentence each word of a fit draws on its chip's title. The wind-down's countdown carries its own. */
+const LAST_RESORT_TITLE: Record<Exclude<LastResortWord, 'ending'>, string> = {
+  least_bad: 'A shared window stands at or past its ceiling',
+  rewrite_only: "A fresh session's burn would carry a shared window past its ceiling before it resets",
+  spent: 'A shared window has no allowance left',
+};
+
+/**
+ * Why an eligible member waits for the rest, by the word of its fit: winding down with the time left to its end, the
+ * two words that do not fit in the warning tone, and a spent window in the serious one.
+ */
 function LastResort({ placement, now }: { now: number; placement: Placement }) {
-  if (placement.lastResort === 'winding_down' && placement.end !== null) return <WordedBadge tone="warning" badge={windingDownBadge(placement.end, now)} />;
-  return placement.lastResort && <Badge tone="warning">{LAST_RESORT_LABEL[placement.lastResort]}</Badge>;
+  const word = placement.lastResort;
+  if (word === null) return null;
+  if (word === 'ending') return placement.end === null ? <Badge tone="warning">{LAST_RESORT_LABEL[word]}</Badge> : <WordedBadge tone="warning" badge={windingDownBadge(placement.end, now)} />;
+  return (
+    <Badge tone={word === 'spent' ? 'serious' : 'warning'} title={LAST_RESORT_TITLE[word]}>
+      {LAST_RESORT_LABEL[word]}
+    </Badge>
+  );
+}
+
+/** The row's hover for a member that waits for the rest, by the word of its fit. */
+function lastResortWhy(label: string, word: LastResortWord): string {
+  if (word === 'ending') return `${label}: ${LAST_RESORT_LABEL[word]}, taken only once no other account can take a fresh session`;
+  if (word === 'spent') return `${label}: ${LAST_RESORT_LABEL[word]}, taken only once no other account has allowance left`;
+  return `${label}: ${LAST_RESORT_LABEL[word]}, taken only once no account fits a fresh session`;
 }
 
 /** The saved pool's warnings above the dialog's groups, each with a link to the group of its first field. */

@@ -29,9 +29,11 @@ const account = (id, over = {}) => ({
 });
 const window7d = (resetsAt, utilization = 0.5) => [{ id: '7d', label: '7-day', observedAt: '2026-09-18T00:00:00.000Z', periodHours: 168, resetsAt, utilization }];
 const extraUsageOn = { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 100, usedCredits: 10 };
-// The eligibility verdict and the Pace score ride on the member, because the router computes both against its own
-// live state. A case states them there rather than re-deriving them from the account.
-const member = (accountId, priority, eligible = 'eligible', paceScore = null) => ({ accountId, eligible, paceScore, priority });
+// The eligibility verdict, the Pace score, the fit and its runway ride on the member, because the router computes them
+// against its own live state. A case states them there rather than re-deriving them from the account.
+const member = (accountId, priority, eligible = 'eligible', paceScore = null) => ({ accountId, eligible, fit: null, paceScore, priority, runwayMs: null });
+/** An eligible member whose fit reads `fit` with the runway `runwayMs`, at `priority` with the served `paceScore`. */
+const fitted = (accountId, priority, fit, runwayMs, paceScore = null) => ({ ...member(accountId, priority, 'eligible', paceScore), fit, runwayMs });
 /** An eligible member at priority 0 whose served Pace score is `paceScore`. */
 const scored = (accountId, paceScore) => member(accountId, 0, 'eligible', paceScore);
 const pool = (strategy, overagePolicy, members, over = {}) => {
@@ -213,21 +215,23 @@ test('pace places a winding-down member last and knows no floor', () => {
     account('key', { kind: 'api_key' }),
   ];
   const scores = { ending: 0.05, fresh: 0.02, key: 0.03, other: 0.02, spent: 0.0009 };
-  const at = (id, priority = 0) => member(id, priority, 'eligible', scores[id]);
+  const at = (id, priority = 0, fit = null) => ({ ...member(id, priority, 'eligible', scores[id]), fit });
+  /** The member whose account ends inside the wind-down, as the route answers its fit. */
+  const winding = (priority = 0) => at('ending', priority, 'ending');
   const ranked = (tier) => tier.placements.map((p) => [p.account.id, p.lastResort, p.rank]);
-  assert.deepEqual(LAST_RESORT_LABEL, { winding_down: 'winding down' }, 'the wind-down is the one last resort');
-  const pace = selectionOrder(pool('pace', 'allow', [at('ending'), at('fresh'), at('spent')]), trio, NOW);
+  assert.deepEqual(LAST_RESORT_LABEL, { ending: 'winding down', least_bad: 'least bad', rewrite_only: 'rewrite only', spent: 'window spent' }, 'each word past fits is a last resort with its label');
+  const pace = selectionOrder(pool('pace', 'allow', [winding(), at('fresh'), at('spent')]), trio, NOW);
   assert.deepEqual(
     ranked(pace[0]),
     [
       ['fresh', null, 1],
       ['spent', null, 2],
-      ['ending', 'winding_down', 3],
+      ['ending', 'ending', 3],
     ],
     'the nearly spent member ranks by its score, and the member winding down trails it',
   );
   assert.deepEqual(pace[0].next, ['fresh']);
-  const lower = selectionOrder(pool('pace', 'allow', [at('ending'), at('other', 1)]), trio, NOW);
+  const lower = selectionOrder(pool('pace', 'allow', [winding(), at('other', 1)]), trio, NOW);
   assert.deepEqual(
     lower.map((t) => [t.priority, t.next]),
     [
@@ -236,14 +240,14 @@ test('pace places a winding-down member last and knows no floor', () => {
     ],
     'a member one tier down is taken before the member winding down in the tier above',
   );
-  const lastResort = selectionOrder(pool('pace', 'allow', [at('ending'), at('spent')]), trio, NOW);
+  const lastResort = selectionOrder(pool('pace', 'allow', [winding(), at('spent')]), trio, NOW);
   assert.deepEqual(lastResort[0].next, ['spent'], 'with nothing else left, the nearly spent member places before a member winding down');
-  const priority = selectionOrder(pool('priority', 'allow', [at('ending'), at('spent')]), trio, NOW);
+  const priority = selectionOrder(pool('priority', 'allow', [winding(), at('spent')]), trio, NOW);
   assert.deepEqual(
     ranked(priority[0]),
     [
       ['spent', null, 1],
-      ['ending', 'winding_down', 2],
+      ['ending', 'ending', 2],
     ],
     'the wind-down holds under every strategy',
   );
@@ -262,12 +266,12 @@ test('pace places a winding-down member last and knows no floor', () => {
 test("a winding-down placement carries the end it winds down to, and a member that is not winding down none", () => {
   const subscription = { billingType: 'monthly', endsAt: new Date(NOW + 10 * MINUTE).toISOString(), organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: null, trialEndsAt: null };
   const pair = [account('ending', { canceled: true, subscription, windows: window7d(hoursFromNow(24), 0.1) }), account('fresh', { windows: window7d(hoursFromNow(24), 0.5) })];
-  const [tier] = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('fresh', 0)]), pair, NOW);
+  const [tier] = selectionOrder(pool('pace', 'allow', [{ ...member('ending', 0), fit: 'ending' }, member('fresh', 0)]), pair, NOW);
   assert.deepEqual(
     tier.placements.map((p) => [p.account.id, p.lastResort, p.end]),
     [
       ['fresh', null, null],
-      ['ending', 'winding_down', NOW + 10 * MINUTE],
+      ['ending', 'ending', NOW + 10 * MINUTE],
     ],
   );
 });
@@ -369,6 +373,62 @@ const read = (p, accs = accounts) => {
 };
 const linked = (p, accs = accounts) => poolStatusSentence(p, accs, NOW).parts.filter((part) => 'accountId' in part).map((part) => part.accountId);
 const at = (p, status) => ({ ...p, status });
+
+test('a member that does not fit stands behind a fitting one, whatever its score', () => {
+  const pair = [account('roomy'), account('tight')];
+  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('roomy', 0, 'fits', null, 0.01), fitted('tight', 0, 'rewrite_only', HOUR, 0.05)]), pair, NOW);
+  assert.deepEqual(
+    tier.placements.map((p) => [p.account.id, p.lastResort, p.rank]),
+    [
+      ['roomy', null, 1],
+      ['tight', 'rewrite_only', 2],
+    ],
+    'the fit ranks ahead of the better score, and the word it reads is the last resort',
+  );
+  assert.deepEqual(tier.next, ['roomy']);
+});
+
+test('with no fitting member the better word leads', () => {
+  const pair = [account('tight'), account('worst')];
+  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('tight', 0, 'rewrite_only', HOUR, 0.01), fitted('worst', 0, 'least_bad', 3 * HOUR, 0.05)]), pair, NOW);
+  assert.deepEqual(tier.next, ['tight'], 'the rewrite lands on tight, so its word leads the longer runway and the better score');
+});
+
+test('the longest runway leads across tiers', () => {
+  const four = [account('p0'), account('p1'), account('q0'), account('q1')];
+  const nexts = (members) => selectionOrder(pool('priority', 'allow', members), four, NOW).map((t) => [t.priority, t.next]);
+  assert.deepEqual(
+    nexts([fitted('p0', 0, 'rewrite_only', HOUR), fitted('p1', 1, 'rewrite_only', 3 * HOUR)]),
+    [
+      [0, []],
+      [1, ['p1']],
+    ],
+    'the router keeps the longest runway over the pool before it picks a tier',
+  );
+  assert.deepEqual(
+    nexts([fitted('q0', 0, 'rewrite_only', 3 * HOUR), fitted('q1', 1, 'rewrite_only', 3 * HOUR)]),
+    [
+      [0, ['q0']],
+      [1, []],
+    ],
+    'of the tiers that share the longest runway the first one names next',
+  );
+});
+
+test('an unbounded runway is the longest', () => {
+  const pair = [account('bounded'), account('unbounded')];
+  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('bounded', 0, 'least_bad', 3 * HOUR, 0.05), fitted('unbounded', 0, 'least_bad', null, 0.01)]), pair, NOW);
+  assert.deepEqual(tier.next, ['unbounded'], 'a null runway is no bound, so it leads three hours and the better score');
+});
+
+test('a spent window ranks behind the wind-down, and a pool of spent members still names its next', () => {
+  const trio = [account('cooled'), account('ending'), account('spent')];
+  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('ending', 0, 'ending', null, 0.01), fitted('spent', 0, 'spent', null, 0.05)]), trio, NOW);
+  assert.deepEqual(tier.next, ['ending'], 'the member that only ends takes the session ahead of the spent one with the better score');
+  const spent = at(pool('pace', 'allow', [fitted('spent', 0, 'spent', null, 0.05), member('cooled', 0, 'cooldown')]), 'degraded');
+  assert.deepEqual(selectionOrder(spent, trio, NOW)[0].next, ['spent'], 'with every eligible member spent the router still lands on one');
+  assert.equal(read(spent, trio), 'Degraded: 1 of 2 members takes fresh sessions, and the next one goes to spent.', 'the sentence counts the spent member and names it');
+});
 
 test('the status sentence reads one row of the table per pool state', () => {
   assert.equal(read(at(pool('pace', 'allow', [member('plan', 0)]), 'disabled')), 'Disabled: the pool accepts no requests, but its keys and members stay.');

@@ -470,6 +470,9 @@ export interface TrafficBucket {
 export const ELIGIBILITY_VALUES = ['budget', 'budget_unknown', 'cooldown', 'eligible', 'overage', 'spent', 'subscription_ended', 'unavailable', 'unknown'] as const;
 /** Why routing would refuse a pool member, or `eligible` when it would not. */
 export type MemberEligibility = (typeof ELIGIBILITY_VALUES)[number];
+/** A member's fit for a fresh session, from best to worst: a word's rank is its place in the list. */
+export const MEMBER_FIT_VALUES = ['fits', 'rewrite_only', 'least_bad', 'ending', 'spent'] as const;
+export type MemberFit = (typeof MEMBER_FIT_VALUES)[number];
 
 export const AFFINITY_MODE_VALUES = ['always', 'when_cached'] as const;
 /** Whether a session's pin is made for every request, or only for one whose body carries a cache marker. */
@@ -505,6 +508,11 @@ export interface PoolMember {
   fableReservation: number | null;
   /** The factor the pool's slow-down computed for the account, null where the account route answers no `slowDown`. */
   factor: number | null;
+  /**
+   * The fit a fresh session reads on the member, the worst word of its 5-hour and 7-day windows, which a model's own
+   * week moves none of. Null while the router does not answer.
+   */
+  fit: MemberFit | null;
   kind: AccountKind;
   /**
    * The router's Pace score for the member whatever its kind: the spare rate for an OAuth member, the remaining
@@ -512,6 +520,12 @@ export interface PoolMember {
    */
   paceScore: number | null;
   priority: number;
+  /**
+   * The runway the router ranks the member by among the members of its fit, to the pool's ceiling under `fits` and
+   * `rewrite_only` and to 1.0 under `least_bad`. Null for an unbounded runway, under `ending` and `spent`, and while the
+   * router does not answer.
+   */
+  runwayMs: number | null;
   /** The speed the account's holds realized, from the factor to 1, null where `factor` is. */
   speed: number | null;
   /** One report per budgeted period the ledger has summed; empty until it reports. */

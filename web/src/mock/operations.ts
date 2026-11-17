@@ -929,7 +929,7 @@ const SLOWED_PINS: { agents: { agentId: string; model: string }[]; burn: number;
 // Every pin of the account reads the window's runway: until its burn carries the utilization to the pool's ceiling.
 const studioFive = accountById.get('studio')?.windows.find((w) => w.id === '5h');
 const studioRunwayMs = studioFive?.burn ? Math.round(((poolById.get('work')!.fiveHourCeiling - studioFive.utilization) / studioFive.burn) * HOUR) : null;
-const studioSlowed = servedFigures('studio', NOW, poolById.get('work')!.slowDown);
+const studioSlowed = servedFigures('studio', NOW, poolById.get('work')!);
 /**
  * The mark studio's stretch round set on the two sessions it marked, the round of 14:05 that the 5-hour window fired.
  * Neither session sent a request since, so the mark stands.

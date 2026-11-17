@@ -1,43 +1,88 @@
 import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
-import type { Account, AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range } from '@/api/types';
+import type { Account, AccountKind, ApiKey, BudgetPeriod, CacheTtl, MemberFit, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range } from '@/api/types';
+import { MEMBER_FIT_VALUES } from '@/api/types';
 import { lookup } from '@/lib/counts';
-import { NO_CREDENTIAL, accountById } from './accounts';
+import { endOf } from '@/lib/quota';
+import { windingDown } from '@/lib/selection';
+import { windowKeyId } from '@/lib/windows';
+import { NO_CREDENTIAL, SHARED_WINDOWS, accountById } from './accounts';
+import { PRIOR_BURN, bindingOf, ceilingOn, windowFitOf, type Runway } from './fit';
 import { paceOf } from './lead';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, endOfMonth, iso, startOfDay } from './time';
 
 /**
- * A member as the story seeds it. The mock reads its kind, its eligibility, its burn, its Pace score, its factor and
- * its speed off the account, as the route does, and its pins off the recipes once they are drawn.
+ * A member as the story seeds it. The mock reads its kind, its eligibility, its burn, its Pace score, its factor, its
+ * speed, its fit and its runway off the account, as the route does, and its pins off the recipes once they are drawn.
  */
-type MemberSeed = Omit<PoolMember, 'activePins' | 'budgetUntil' | 'burn' | 'eligible' | 'fableReservation' | 'factor' | 'kind' | 'paceScore' | 'speed'>;
+type MemberSeed = Omit<PoolMember, 'activePins' | 'budgetUntil' | 'burn' | 'eligible' | 'fableReservation' | 'factor' | 'fit' | 'kind' | 'paceScore' | 'runwayMs' | 'speed'>;
 
 /** The worst live bucket of each API-key account, which the router reads as its room. */
 export const WORST_BUCKET: Readonly<Record<string, number>> = { annex: 0.02, overflow: 0.04, research: 0.1 };
 
+/** The worst of `words` by the order the router lands a fresh session by, `fits` where there is none. */
+const worstOf = (words: MemberFit[]): MemberFit => words.reduce<MemberFit>((worst, word) => (MEMBER_FIT_VALUES.indexOf(word) > MEMBER_FIT_VALUES.indexOf(worst) ? word : worst), 'fits');
+
 /**
- * A member's five figures as the pools route serves them: the 7-day window's burn, the router's Pace score, the spare
+ * A member's fit and runway as the pools route answers them, for a fresh session whose request prices no rewrite. An
+ * API key fits while its worst bucket holds room and reads `least_bad` with a runway of 0 on a full one. Any other
+ * account reads `spent` where a shared window stands at 1 or more, whatever its end, then `ending` inside the pool's
+ * wind-down, else the worst word of its shared windows, `fits` where it holds none (a usage-based seat among them) and
+ * on a window with no projection. Each window reads the account's burn, its demand on the 5-hour window, with a fresh
+ * session's prior on it. The runway is the binding window's, to the ceiling under `fits` and `rewrite_only` and to 1.0
+ * under `least_bad`, and none under `ending` and `spent`.
+ */
+function memberFitOf(account: Account, now: number, pool: Pick<Pool, 'fiveHourCeiling' | 'weeklyCeiling' | 'windDownMinutes'>): Pick<PoolMember, 'fit' | 'runwayMs'> {
+  if (account.kind === 'api_key') return (lookup(WORST_BUCKET, account.id) ?? 0) < 1 ? { fit: 'fits', runwayMs: null } : { fit: 'least_bad', runwayMs: 0 };
+  const shared = SHARED_WINDOWS.flatMap((key) => {
+    const window = account.windows.find((w) => w.id === windowKeyId(key));
+    if (window === undefined) return [];
+    const burn = (key === 'five_hour' && window.demand !== null ? window.demand : (window.burn ?? 0)) + PRIOR_BURN[key];
+    // The account route answers no booking on a window, so the prediction is the reading alone.
+    return [{ key, read: windowFitOf({ reserved: null, utilization: window.utilization }, ceilingOn(pool, key), 0, burn), window }];
+  });
+  if (shared.some(({ read }) => read.spent)) return { fit: 'spent', runwayMs: null };
+  if (windingDown(pool, endOf(account, now), now)) return { fit: 'ending', runwayMs: null };
+  const words: MemberFit[] = [];
+  const bounded: Runway[] = [];
+  const walls: Runway[] = [];
+  for (const { key, read, window } of shared) {
+    if (window.projection === null || window.horizon === null) continue;
+    const span = Date.parse(window.horizon) - now;
+    const short = read.runwayMs !== null && read.runwayMs < span;
+    words.push(!read.lands ? 'least_bad' : short ? 'rewrite_only' : 'fits');
+    if (read.runwayMs !== null) bounded.push({ runway: read.runwayMs, short, window: key });
+    if (read.wallRunwayMs !== null) walls.push({ runway: read.wallRunwayMs, short: read.wallRunwayMs < span, window: key });
+  }
+  const fit = worstOf(words);
+  return { fit, runwayMs: bindingOf(fit === 'least_bad' ? walls : bounded)?.runway ?? null };
+}
+
+/**
+ * A member's seven figures as the pools route serves them: the 7-day window's burn, the router's Pace score, the spare
  * rate on the 7-day window for an OAuth member (`paceOf` with no model, its Fable reservation held whatever the
  * member's tier, since the route reads the score with none) and the remaining worst bucket for an API-key member,
- * which burns no plan window, the Fable reservation that score holds back, null where none applies, and the factor and
- * the realized speed of the account's slow-down where the member's pool has the switch on.
+ * which burns no plan window, the Fable reservation that score holds back, null where none applies, the factor and
+ * the realized speed of the account's slow-down where the member's pool has the switch on, and the fit and the runway
+ * of `memberFitOf`, which a member the router has not loaded reads none of.
  */
-export function servedFigures(accountId: string, now: number, slowDown: boolean): Pick<PoolMember, 'burn' | 'fableReservation' | 'factor' | 'paceScore' | 'speed'> {
+export function servedFigures(accountId: string, now: number, pool: Pick<Pool, 'fiveHourCeiling' | 'slowDown' | 'weeklyCeiling' | 'windDownMinutes'>): Pick<PoolMember, 'burn' | 'fableReservation' | 'factor' | 'fit' | 'paceScore' | 'runwayMs' | 'speed'> {
   const account = accountById.get(accountId);
-  if (account === undefined) return { burn: null, fableReservation: null, factor: null, paceScore: null, speed: null };
-  if (account.kind === 'api_key') return { burn: null, fableReservation: null, factor: null, paceScore: 1 - (lookup(WORST_BUCKET, accountId) ?? 0), speed: null };
-  const slowed = slowDown ? account.slowDown : null;
+  if (account === undefined) return { burn: null, fableReservation: null, factor: null, fit: null, paceScore: null, runwayMs: null, speed: null };
+  const fit = UNLOADED_MEMBERS.has(accountId) ? { fit: null, runwayMs: null } : memberFitOf(account, now, pool);
+  if (account.kind === 'api_key') return { burn: null, fableReservation: null, factor: null, ...fit, paceScore: 1 - (lookup(WORST_BUCKET, accountId) ?? 0), speed: null };
+  const slowed = pool.slowDown ? account.slowDown : null;
   const factor = slowed?.factor ?? null;
   const speed = slowed?.speed ?? null;
   const week = account.windows.find((w) => w.id === '7d');
-  if (week === undefined) return { burn: null, fableReservation: null, factor, paceScore: null, speed };
+  if (week === undefined) return { burn: null, fableReservation: null, factor, ...fit, paceScore: null, speed };
   const fable = account.fableWindow;
   const pace = paceOf(account, now, null, {
     burns: { seven_day: week.burn ?? 0, seven_day_fable: fable?.burn ?? 0 },
     readings: { seven_day: { reset: week.resetsAt, utilization: week.utilization }, seven_day_fable: fable === null ? undefined : { reset: fable.resetsAt, utilization: fable.utilization } },
     reserve: true,
   });
-  return { burn: week.burn, fableReservation: pace.fableReservation, factor, paceScore: pace.score, speed };
+  return { burn: week.burn, fableReservation: pace.fableReservation, factor, ...fit, paceScore: pace.score, speed };
 }
 /**
  * A pool as the story seeds it and the mock stores it, over its kind of member. The route lists a pool's keys from the

@@ -414,12 +414,12 @@ const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'
 };
 
 /**
- * A written member as the route answers it: the kind, the burn, the Pace score and the speed read off the account, and
- * no spend, since the mock keeps no ledger to price one from. A member sent without a budget field has no budget over
- * that period.
+ * A written member as the route answers it: the kind, the burn, the Pace score, the speed and the fit read off the
+ * account under the saved pool's settings, and no spend, since the mock keeps no ledger to price one from. A member sent
+ * without a budget field has no budget over that period.
  */
-const writtenMember = (m: PoolInput['members'][number], account: Account | undefined, slowDown: boolean, eligible: (member: Omit<PoolMember, 'activePins' | 'eligible'>) => MemberEligibility): Omit<PoolMember, 'activePins'> => {
-  const member = { accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd ?? null, budgetMonthlyUsd: m.budgetMonthlyUsd ?? null, budgetUntil: null, kind: account?.kind ?? 'oauth', priority: m.priority, spends: [], ...servedFigures(m.accountId, Date.now(), slowDown) };
+const writtenMember = (m: PoolInput['members'][number], account: Account | undefined, pool: Pick<PoolInput, 'fiveHourCeiling' | 'slowDown' | 'weeklyCeiling' | 'windDownMinutes'>, eligible: (member: Omit<PoolMember, 'activePins' | 'eligible'>) => MemberEligibility): Omit<PoolMember, 'activePins'> => {
+  const member = { accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd ?? null, budgetMonthlyUsd: m.budgetMonthlyUsd ?? null, budgetUntil: null, kind: account?.kind ?? 'oauth', priority: m.priority, spends: [], ...servedFigures(m.accountId, Date.now(), pool) };
   return { ...member, eligible: eligible(member) };
 };
 
@@ -583,7 +583,7 @@ export class MockApi implements Api {
     revision: stampToken(1, p.updatedAt),
     members: p.members.map((m) => {
       const account = this.accounts.find((a) => a.id === m.accountId);
-      return { ...m, budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p.slowDown) };
+      return { ...m, budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p) };
     }),
   }));
   /** The story's limit reset blocks, each use's answer folded in as the router's store folds it. */
@@ -1023,7 +1023,7 @@ export class MockApi implements Api {
       keepaliveResolved: this.resolvedOf(input),
       members: input.members.map((m) => {
         const account = this.accounts.find((a) => a.id === m.accountId);
-        return writtenMember(m, account, input.slowDown, (member) => eligibilityOf(account, input.overagePolicy, member));
+        return writtenMember(m, account, input, (member) => eligibilityOf(account, input.overagePolicy, member));
       }),
       // The route starts a pool with no list when the body leaves it out, whatever the sample row holds.
       modelRules: input.modelRules ?? [],
@@ -1670,7 +1670,7 @@ export class MockApi implements Api {
       members: input.members.map((m) => {
         const account = this.accounts.find((a) => a.id === m.accountId);
         const kept = verdict.get(m.accountId) ?? 'eligible';
-        return writtenMember(m, account, input.slowDown, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member) : kept));
+        return writtenMember(m, account, input, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member) : kept));
       }),
       ...restamp(current),
     };

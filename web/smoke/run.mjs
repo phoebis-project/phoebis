@@ -6190,8 +6190,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [...strip('all'), ...strip('jobs'), ...strip('work')].map((b) => b.join(' | ')),
   });
   {
-    // studio, work's subscription member, is slowed to half its speed: its Standing cell draws the chip after the next
-    // badge, with the account's slow-down in its hover, and annex, the API-key member, draws none.
+    // studio, work's subscription member, is slowed to half its speed: its Standing cell draws the chip after its
+    // verdict and its fit's chip, with the account's slow-down in its hover, and annex, the API-key member, draws none.
     const studio = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown ?? null;
     const servingRow = (label) => [...(card('work')?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === label);
     const chipsOf = (label) => [...(servingRow(label)?.children[2]?.querySelectorAll('.speed-chip .badge') ?? [])].map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']);
@@ -6204,7 +6204,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       ok:
         studio?.speed === 0.5 &&
         JSON.stringify(chipsOf('studio')) === JSON.stringify([['0.5x', 'badge--warning', hover]]) &&
-        JSON.stringify(standingOf('studio')) === '["next","0.5x"]' &&
+        JSON.stringify(standingOf('studio')) === '["eligible","rewrite only","0.5x"]' &&
         chipsOf('Studio annex').length === 0 &&
         (card('all')?.querySelector('.speed-chip') ?? null) === null,
       missing: [JSON.stringify(studio), ...chipsOf('studio').map((c) => c.join(' | ')), JSON.stringify(standingOf('studio')), String(chipsOf('Studio annex').length)],
@@ -6242,7 +6242,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       JSON.stringify(linked('all')) === '["/accounts/primary"]' &&
       sentence('jobs') === `Exhausted: no member can take a request until Research workspace's daily budget resets at ${dayEnd}.` &&
       JSON.stringify(linked('jobs')) === '["/accounts/research"]' &&
-      sentence('work') === 'Active: all 2 members take fresh sessions, and the next one goes to studio.',
+      sentence('work') === 'Active: all 2 members take fresh sessions, and the next one goes to Studio annex.',
     missing: [sentence('all'), sentence('jobs'), sentence('work')].map(String),
   });
   // The head totals the day from the hour a full day back, where the bars start, so the head reads the bars' sum.
@@ -6589,10 +6589,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   {
     // The serving table orders a tier by the score the route serves, so a member whose account row reads more of its
     // week left ranks behind one whose sessions leave it more spare rate: secondary out of its cooldown with a served
-    // score above primary's, though its 7-day window reads 88 % used to primary's 41 %.
+    // score above primary's, though its 7-day window reads 88 % used to primary's 41 %. Both read the one fit, so the
+    // score alone orders them.
     const { listPools } = api;
     api.listPools = async () =>
-      (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, members: p.members.map((x) => (x.accountId === 'secondary' ? { ...x, eligible: 'eligible', paceScore: 0.02 } : x.accountId === 'primary' ? { ...x, paceScore: 0.0016 } : x)) } : p));
+      (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, members: p.members.map((x) => (x.accountId === 'secondary' ? { ...x, eligible: 'eligible', fit: 'fits', paceScore: 0.02 } : x.accountId === 'primary' ? { ...x, fit: 'fits', paceScore: 0.0016 } : x)) } : p));
     const served = await mount('/pools');
     api.listPools = listPools;
     const allCard = [...served.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all');
@@ -6602,6 +6603,75 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       name: '/pools the serving table orders by the served pace score',
       ok: JSON.stringify(order) === JSON.stringify([['secondary', true], ['primary', false], ['nightly', false], ['Overflow workspace', false]]),
       missing: order.map((o) => JSON.stringify(o)),
+    });
+  }
+  {
+    // No member of all fits a fresh session in this stub: primary and nightly read rewrite only, nightly a tier down
+    // with the longer runway, secondary winds down with the best score, and the metered overflow reads its window spent.
+    // So the router lands on nightly across the tiers, where the score and the tier walk would name secondary. In work
+    // the annex reads least bad behind studio, which fits.
+    const HOUR = 3_600_000;
+    const end = (await api.listAccounts()).find((a) => a.id === 'secondary')?.subscription?.endsAt ?? '';
+    const fits = {
+      annex: { fit: 'least_bad', runwayMs: 0 },
+      nightly: { fit: 'rewrite_only', paceScore: 0.001, runwayMs: 2 * HOUR },
+      overflow: { fit: 'spent', runwayMs: null },
+      primary: { fit: 'rewrite_only', paceScore: 0.0016, runwayMs: HOUR },
+      secondary: { fit: 'ending', paceScore: 0.05, runwayMs: null },
+      studio: { fit: 'fits', runwayMs: null },
+    };
+    const { listPools } = api;
+    api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'all' || p.id === 'work' ? { ...p, members: p.members.map((x) => ({ ...x, eligible: 'eligible', ...fits[x.accountId] })) } : p));
+    const fitted = await mount('/pools');
+    api.listPools = listPools;
+    const rowOf = (name, label) => {
+      const card = [...fitted.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name);
+      const tr = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((r) => r.children[1]?.querySelector('a')?.textContent?.trim() === label);
+      const td = tr?.children[2];
+      return {
+        badges: [...(td?.querySelectorAll('.badge') ?? [])].map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']),
+        next: tr?.classList.contains('is-next') ?? false,
+        why: fitted.container.querySelector(`[id="${td?.getAttribute('aria-describedby') ?? ''}"]`)?.textContent ?? '',
+      };
+    };
+    const rows = { annex: rowOf('work', 'Studio annex'), nightly: rowOf('all', 'nightly'), overflow: rowOf('all', 'Overflow workspace'), primary: rowOf('all', 'primary'), secondary: rowOf('all', 'secondary') };
+    fitted.unmount();
+    const eligible = ['eligible', 'badge--good', ''];
+    const fitRead = (name, row, badges, why) => results.push({ name, ok: JSON.stringify(row.badges) === JSON.stringify(badges) && !row.next && row.why === why, missing: [JSON.stringify(row)] });
+    fitRead(
+      '/pools a member whose rewrite would land short of its reset draws rewrite only after its verdict, titled, with its hover',
+      rows.primary,
+      [eligible, ['rewrite only', 'badge--warning', "A fresh session's burn would carry a shared window past its ceiling before it resets"]],
+      'primary: rewrite only, taken only once no account fits a fresh session',
+    );
+    fitRead(
+      '/pools a member whose rewrite would not land draws least bad after its verdict, titled, with its hover',
+      rows.annex,
+      [eligible, ['least bad', 'badge--warning', 'A shared window stands at or past its ceiling']],
+      'Studio annex: least bad, taken only once no account fits a fresh session',
+    );
+    fitRead(
+      '/pools a member with a spent window draws window spent in the serious tone after its verdict, titled, with its hover',
+      rows.overflow,
+      [eligible, ['window spent', 'badge--serious', 'A shared window has no allowance left']],
+      'Overflow workspace: window spent, taken only once no other account has allowance left',
+    );
+    results.push({
+      name: '/pools a member whose fit reads ending draws the wind-down countdown after its verdict, with its hover',
+      ok:
+        end !== '' &&
+        JSON.stringify(rows.secondary.badges[0]) === JSON.stringify(eligible) &&
+        /^winding down \d+d/.test(rows.secondary.badges[1]?.[0] ?? '') &&
+        JSON.stringify(rows.secondary.badges[1]?.slice(1)) === JSON.stringify(['badge--warning', `Winding down to the plan's end at ${fmtAbsolute(end)}`]) &&
+        rows.secondary.badges.length === 2 &&
+        !rows.secondary.next &&
+        rows.secondary.why === 'secondary: winding down, taken only once no other account can take a fresh session',
+      missing: [JSON.stringify(rows.secondary)],
+    });
+    results.push({
+      name: '/pools where no member fits, next is the better word with the longest runway across the tiers and draws next alone',
+      ok: JSON.stringify(rows.nightly.badges) === '[["next","badge--accent",""]]' && rows.nightly.next && rows.nightly.why === 'nightly: where the next fresh session lands',
+      missing: [JSON.stringify(rows.nightly)],
     });
   }
   results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });

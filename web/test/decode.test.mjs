@@ -620,7 +620,7 @@ test("a pool body carries none of the six names the route refuses as unknown fie
   assert.deepEqual(old.filter((f) => f in back), []);
 });
 
-test("a pool decodes its warnings and a member's pace score, burn and Fable reservation", () => {
+test("a pool decodes its warnings and a member's pace score, burn, Fable reservation, fit and runway", () => {
   const row = fixture('pools').pools[0];
   const p = d.decodePool(row);
   assert.deepEqual(p.warnings, row.warnings.map((w) => ({ code: w.code, fields: w.fields, text: w.text })));
@@ -632,8 +632,12 @@ test("a pool decodes its warnings and a member's pace score, burn and Fable rese
   assert.deepEqual(p.members.map((m) => [m.accountId, m.paceScore, m.burn]), row.members.map((m) => [m.account_id, m.pace_score, m.burn]));
   const keyed = p.members.find((m) => m.kind === 'api_key');
   assert.deepEqual([typeof keyed.paceScore, keyed.burn], ['number', null], "an API-key member's score is its remaining allowance, with no burn");
-  const spending = d.decodePool({ ...row, members: [{ ...row.members[0], burn: 0.085, fable_reservation: 0.31, pace_score: -0.02 }] }).members[0];
-  assert.deepEqual([spending.paceScore, spending.burn, spending.fableReservation], [-0.02, 0.085, 0.31], 'a spare rate under the burn reads negative, beside a reservation of its own');
+  const spending = d.decodePool({ ...row, members: [{ ...row.members[0], burn: 0.085, fable_reservation: 0.31, fit: 'least_bad', pace_score: -0.02, runway_ms: 3_724_138 }] }).members[0];
+  assert.deepEqual(
+    [spending.paceScore, spending.burn, spending.fableReservation, spending.fit, spending.runwayMs],
+    [-0.02, 0.085, 0.31, 'least_bad', 3_724_138],
+    'a spare rate under the burn reads negative, beside a reservation, a fit and a runway of its own',
+  );
   const unread = d.decodePool({ ...row, members: [{ account_id: 'business', priority: 0 }] }).members[0];
   assert.deepEqual([unread.paceScore, unread.burn, unread.fableReservation], [null, null, null], 'a member row without the figures reads none');
 });
@@ -1237,13 +1241,13 @@ test('a pool decodes the pin and placement fields and its members\' budgets, and
   const odd = d.decodePool({
     ...wire,
     affinity_mode: 'sometimes',
-    members: [{ ...wire.members[0], eligible: 'maybe', kind: 'robot', spends: [{ period: 'week', period_end: null, spent_usd: 1 }] }],
+    members: [{ ...wire.members[0], eligible: 'maybe', fit: 'roomy', kind: 'robot', spends: [{ period: 'week', period_end: null, spent_usd: 1 }] }],
     session_placement: 'by_luck',
     subagent_placement: 'alone',
   });
   assert.deepEqual(
-    [odd.affinityMode, odd.sessionPlacement, odd.subagentPlacement, odd.members[0].spends[0].period, odd.members[0].eligible, odd.members[0].kind],
-    ['always', 'by_strategy', 'by_strategy', 'month', 'unavailable', 'oauth'],
+    [odd.affinityMode, odd.sessionPlacement, odd.subagentPlacement, odd.members[0].spends[0].period, odd.members[0].eligible, odd.members[0].kind, odd.members[0].fit],
+    ['always', 'by_strategy', 'by_strategy', 'month', 'unavailable', 'oauth', null],
     'every unknown spelling reads its default',
   );
 });
