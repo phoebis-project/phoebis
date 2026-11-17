@@ -1418,7 +1418,7 @@ mod tests {
             json["health"],
             json!({"ready": true, "addr": "127.0.0.1:8317", "reason": null})
         );
-        for name in ["system", "attention", "accounts", "sessions"] {
+        for name in ["system", "attention", "accounts", "sessions", "settings"] {
             assert_eq!(json[name], fixture(name), "{name}");
         }
         assert_eq!(json["pools"], pools_answer);

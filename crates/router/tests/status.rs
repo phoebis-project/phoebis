@@ -418,6 +418,7 @@ async fn a_route_that_never_answers_ends_each_read_at_the_deadline() {
         ("pools", &reads.pools),
         ("accounts", &reads.accounts),
         ("sessions", &reads.sessions),
+        ("settings", &reads.settings),
     ] {
         assert_eq!(read.as_ref().err(), Some(&line), "{name}");
     }
@@ -508,6 +509,7 @@ async fn a_refused_secret_or_a_throttled_login_is_asked_once_and_named_in_every_
             ("pools", &reads.pools),
             ("accounts", &reads.accounts),
             ("sessions", &reads.sessions),
+            ("settings", &reads.settings),
         ] {
             assert_eq!(read.as_ref().err(), Some(&line), "{status_line}: {name}");
         }
@@ -545,6 +547,7 @@ async fn a_listener_that_answers_something_else_is_named_as_answering() {
         ("pools", &reads.pools),
         ("accounts", &reads.accounts),
         ("sessions", &reads.sessions),
+        ("settings", &reads.settings),
     ] {
         assert_eq!(read.as_ref().err(), Some(&line), "{name}");
     }
