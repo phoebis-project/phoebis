@@ -799,6 +799,9 @@ Accounts view's words for its state: `{label} needs re-auth. Feature calls are r
 `{label} is paused. The pause stops its model requests, and its claude.ai features keep working.` Each save sends both
 choices.
 
+![The pool dialog's claude.ai features group with an account per feature](assets/pools-features-light.png#only-light)
+![The pool dialog's claude.ai features group with an account per feature](assets/pools-features-dark.png#only-dark)
+
 ## Keys
 
 ![The Keys view](assets/keys-light.png#only-light)
@@ -1135,6 +1138,9 @@ status for a forwarded call and `canceled` for a call whose client left before t
 its code, `upstream_unreachable`, where no upstream head arrived and the router answered with a 502, and its status with
 `ended early` behind it, such as `200 ended early`, where the answer stopped after its head went back. A call the router
 refused leaves no row, and a row opens no drawer, since the table shows all the row holds.
+
+![The Requests view: the Feature calls section on its first page](assets/requests-feature-calls-light.png#only-light)
+![The Requests view: the Feature calls section on its first page](assets/requests-feature-calls-dark.png#only-dark)
 
 Above the table the section draws a bar of its own, and nothing of the request list's bar shows there: the range, Add
 filter with Key, Feature, Account and Outcome (`canceled`, `failed` or `forwarded`), each filter in force a chip under

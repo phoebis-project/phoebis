@@ -143,10 +143,10 @@ of the browser's storage. The README lists its assertions, and
 
 The site's screenshots are the mock pass's. The committed names are `docs/site/assets/<view>-light.png` and
 `<view>-dark.png`, so after a pass that exited 0, copy `light/<view>.png` to `docs/site/assets/<view>-light.png` and
-`dark/<view>.png` to `docs/site/assets/<view>-dark.png` for the eighteen pairs the pages embed: `accounts`, `analytics`,
+`dark/<view>.png` to `docs/site/assets/<view>-dark.png` for the twenty pairs the pages embed: `accounts`, `analytics`,
 `analytics-burn`, `analytics-cache-warming`, `cost-reference-plan-rates`, `dashboard`, `guardrails`, `keys`, `meter`,
-`pools`, `quota`, `quota-reset-confirm`, `quota-reset-pick`, `quota-windows`, `requests`, `routing-log`, `sessions` and
-`settings`. The six other shots the pass writes take no page.
+`pools`, `pools-features`, `quota`, `quota-reset-confirm`, `quota-reset-pick`, `quota-windows`, `requests`,
+`requests-feature-calls`, `routing-log`, `sessions` and `settings`. The five other shots the pass writes take no page.
 
 ## The fixtures
 
