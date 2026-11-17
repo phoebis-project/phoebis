@@ -20,13 +20,14 @@ import { PopoverHost, useHold, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Refusal, Segmented, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
+import { accountUses, type AccountUse } from '@/lib/accountUses';
 import { accountHref, accountMeterHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, sortDirOf } from '@/lib/address';
 import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, drawnInstant, drawsFreeNote, newestResets, ownShareHover, pairOf, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayMonth, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, messageOf, pct, plural, upperFirst } from '@/lib/format';
-import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
+import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, FEATURE_LABEL, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { byWindow, meterGroups } from '@/lib/meter';
 import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, isQuotaListed, noWindowSentence, planExtraUsage, planOverage, planWordLabel, readWindows, resetOf, slowedOf } from '@/lib/quota';
@@ -286,6 +287,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
   const [busy, setBusy] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   // The revision the title editor opened with; the end editor's form carries its own, and this editor has no form.
@@ -495,15 +497,18 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
           )}
           <Button
             disabled={busy}
-            onClick={() =>
-              act(
-                paused ? 'Resume account' : 'Pause account',
-                'Paused accounts stay in their pool but receive no new sessions. Pinned sessions migrate on their next request.',
-                paused ? 'Resume' : 'Pause',
-                paused ? () => api.resumeAccount(account.id) : () => api.pauseAccount(account.id),
-                paused ? 'Resumed' : 'Paused',
-              )
-            }
+            onClick={() => {
+              // A resume gives back what the pause took and stops nothing, so it asks no confirmation.
+              if (paused) void run(() => api.resumeAccount(account.id), 'Resumed');
+              else
+                act(
+                  'Pause account',
+                  "Paused accounts stay in their pool but receive no new sessions. Pinned sessions migrate on their next request. The account's claude.ai features keep working where a pool or a key selects it.",
+                  'Pause',
+                  () => api.pauseAccount(account.id),
+                  'Paused',
+                );
+            }}
           >
             {paused ? 'Resume' : 'Pause'}
           </Button>
@@ -540,23 +545,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
           >
             Disconnect
           </Button>
-          <Button
-            variant="danger"
-            disabled={busy}
-            onClick={() =>
-              act(
-                'Delete account',
-                `Removes ${account.label} from its pool and deletes it. Request history stays in the ledger.`,
-                'Delete',
-                async () => {
-                  await api.deleteAccount(account.id);
-                  navigate('/accounts');
-                },
-                'Deleted',
-                true,
-              )
-            }
-          >
+          <Button variant="danger" disabled={busy} onClick={() => setDeleting(true)}>
             Delete account
           </Button>
         </div>
@@ -776,7 +765,94 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
 
       <CatalogDialog open={catalogOpen} accountId={account.id} label={account.label} now={now} onClose={() => setCatalogOpen(false)} />
       <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => confirm?.onConfirm()} />
+      <DeleteAccountDialog
+        account={account}
+        open={deleting}
+        onClose={() => setDeleting(false)}
+        onDelete={() =>
+          void run(async () => {
+            await api.deleteAccount(account.id);
+            navigate('/accounts');
+          }, 'Deleted')
+        }
+      />
     </div>
+  );
+}
+
+const USES_CLOSE = 'Deleting it sets those selections to none, so the feature is refused there until an operator selects another account.';
+
+const lineOf = (use: AccountUse): string => {
+  switch (use.kind) {
+    case 'key_feature':
+      return `The key ${use.keyName} selects it for ${FEATURE_LABEL[use.feature]}.`;
+    case 'member':
+      return `It serves model requests in the pool ${use.poolName}.`;
+    case 'pool_feature':
+      return `The pool ${use.poolName} selects it for ${FEATURE_LABEL[use.feature]}.`;
+  }
+};
+
+/**
+ * Delete account's confirmation, which names each use of the account above the deletion's sentence. It reads the pool
+ * and key lists as it opens and holds Delete until both answered, so the operator never confirms a deletion whose uses
+ * it could not show.
+ */
+function DeleteAccountDialog({ account, onClose, onDelete, open }: { account: Account; onClose: () => void; onDelete: () => void; open: boolean }) {
+  // Once per opening, a closed dialog answering null with no request, so a reopening reads both lists anew.
+  const pools = useAsync(() => (open ? api.listPools() : Promise.resolve(null)), [open]);
+  const keys = useAsync(() => (open ? api.listKeys() : Promise.resolve(null)), [open]);
+  // From the answers alone and never a loading flag, which a failed read clears as a landed one does.
+  const uses = pools.current !== null && keys.current !== null ? accountUses(account.id, pools.current, keys.current) : null;
+  const error = pools.error ?? keys.error;
+  const retry = () => {
+    if (pools.error !== null) pools.reload();
+    if (keys.error !== null) keys.reload();
+  };
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="Delete account"
+      width={440}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            disabled={uses === null}
+            onClick={() => {
+              onDelete();
+              onClose();
+            }}
+          >
+            Delete
+          </Button>
+        </>
+      }
+    >
+      {error !== null ? (
+        <ErrorState title="Could not load where this account is in use" body={error} retry={retry} />
+      ) : uses === null ? (
+        <Skeleton height={60} />
+      ) : (
+        uses.length > 0 && (
+          <>
+            <p className="secondary">{`${account.label} is in use:`}</p>
+            <ul className="plain-list secondary">
+              {uses.map(lineOf).map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+            {/* A membership alone leaves no selection behind to set to none. */}
+            {uses.some((u) => u.kind !== 'member') && <p className="secondary">{USES_CLOSE}</p>}
+          </>
+        )
+      )}
+      <p className="secondary">{`Removes ${account.label} from its pool and deletes it. Request history stays in the ledger.`}</p>
+    </Dialog>
   );
 }
 

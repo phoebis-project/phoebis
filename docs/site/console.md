@@ -424,11 +424,22 @@ it." The actions, with the dialog each opens:
 | --- | --- | --- |
 | "Pair" or "Re-pair", on a subscription account | `Pair {label}` or `Re-pair {label}` | Opens the pairing dialog described below. |
 | "Verify", on an API-key account | "Verify account" | "Sends a models request to the upstream with the stored key and reports the status.", and reads `Verify: upstream answered 200` on success. |
-| "Pause" or "Resume" | "Pause account" or "Resume account" | "Paused accounts stay in their pool but receive no new sessions. Pinned sessions migrate on their next request." |
+| "Pause" | "Pause account" | "Paused accounts stay in their pool but receive no new sessions. Pinned sessions migrate on their next request. The account's claude.ai features keep working where a pool or a key selects it." |
+| "Resume", on a paused account | none | Resumes the account at once and reads "Resumed". |
 | "Catalog" | `Catalog of {label}` | Opens the account's model list, described below. |
 | "Clear funding flag", while funding is required | "Clear funding flag" | "Overage becomes eligible again on the next request. If the provider still refuses to fund it, the flag comes back with the new reason." |
 | "Disconnect" | "Disconnect account" | `Deletes {label}'s credential. Pool memberships and request history stay, and re-pairing stores the credential again.` |
-| "Delete account" | "Delete account" | `Removes {label} from its pool and deletes it. Request history stays in the ledger.` |
+| "Delete account" | "Delete account" | `Removes {label} from its pool and deletes it. Request history stays in the ledger.`, below the account's uses where it has any. |
+
+Delete account's dialog reads the pool and key lists as it opens and names, above its sentence, where the account is in
+use: `{label} is in use:`, then one line per use, the pool it serves model requests in (`It serves model requests in
+the pool {pool}.`), each pool that selects it for a feature (`The pool {pool} selects it for {feature}.`) and each key
+that names it for one (`The key {key} selects it for {feature}.`), the feature "Artifacts" or "Connectors". Where a pool
+or a key selects it, `Deleting it sets those selections to none, so the feature is refused there until an operator
+selects another account.` follows the lines. A key that inherits its pool's account is no use of its own, and an account
+in no use shows the sentence alone. Until both lists answered the dialog draws a placeholder in the uses' place and
+holds Delete. A failed read draws "Could not load where this account is in use" with its error and Try again, which
+reads the failed list again, and Delete stays held.
 
 "Identity" lists, for a subscription account, Type ("OAuth login"), Plan, the plan the router resolved, with its start
 (`Ultra since {date}`, and `Free` with no date on an account whose plan ended, the plan the router resolved once the

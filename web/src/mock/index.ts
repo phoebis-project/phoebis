@@ -1089,10 +1089,24 @@ export class MockApi implements Api {
   async deleteAccount(accountId: string) {
     this.buried.set(accountId, Math.floor(this.account(accountId).revision / INCARNATION));
     this.accounts = this.accounts.filter((a) => a.id !== accountId);
+    // Each selection of the account goes to none, a key's never to inherit, which would act under an account the
+    // operator did not choose for it. A cleared row takes a new stamp, so a dialog read before the deletion cannot save
+    // the old selection onto an account created again under the id.
+    const cleared = { keys: new Set<string>(), pools: new Set<string>() };
     this.pools = this.pools.map((p) => {
       const members = p.members.filter((m) => m.accountId !== accountId);
-      return { ...p, keepaliveResolved: members.length === 0 ? null : p.keepaliveResolved, members };
+      const named = FEATURE_WORD_VALUES.filter((f) => p.featureAccounts[f] === accountId);
+      if (named.length > 0) cleared.pools.add(p.id);
+      const featureAccounts = named.length === 0 ? p.featureAccounts : { ...p.featureAccounts, ...Object.fromEntries(named.map((f) => [f, null])) };
+      return { ...p, featureAccounts, keepaliveResolved: members.length === 0 ? null : p.keepaliveResolved, members };
     });
+    this.keys = this.keys.map((k) => {
+      const named = FEATURE_WORD_VALUES.filter((f) => k.featureAccounts[f].mode === 'account' && k.featureAccounts[f].accountId === accountId);
+      if (named.length === 0) return k;
+      cleared.keys.add(k.id);
+      return { ...k, featureAccounts: { ...k.featureAccounts, ...Object.fromEntries(named.map((f) => [f, { accountId: null, mode: 'none' as const }])) } };
+    });
+    this.restampSubjects(cleared.pools, cleared.keys);
     return latency(undefined, 250);
   }
 

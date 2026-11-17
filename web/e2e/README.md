@@ -137,7 +137,10 @@ Base URL at rest), the Settings page's Unit
 row at 1280 and 400 px (the legend's button on the select's line, and its popover inside the viewport's width, at or
 below its button's bottom, uncovered, in the legend's 12 px type and closed by Escape), the Appearance card's Theme,
 Palette, Time format and Unit rows at 400 px (each control under its label), the cooling-down block's columns (Reason
-the fill), the Delete account button, the window bars on the dashboard and the Accounts page (each bar's line inside its
+the fill), the Delete account button, the deletion's dialog of an account in use (mock pass: on the story's `reserve`,
+the dialog inside the window, its three uses each on a row of its own inside the dialog's body and Delete enabled once
+both lists answered, every figure recorded, closed by Cancel with nothing deleted), the window bars on the dashboard and
+the Accounts page (each bar's line inside its
 bar, a compact bar's projection in its reset's place as two parts, its share and its horizon, a whole bar's reset and
 projection as two parts, each part whole on its line, and a window the account does not carry named muted in its slot's
 share place, on the line and in the ink of the neighboring bar's label (its own label where the 400 px window stacks the

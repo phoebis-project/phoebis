@@ -3997,10 +3997,9 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   results.push({ name: '/accounts Pause calls the API and the row reads paused', ok: pauseToast.includes('Paused') && [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Resume'), missing: [pauseToast || 'no toast'] });
   const resume = [...m.container.querySelectorAll('.detail__head button')].find((b) => b.textContent?.trim() === 'Resume');
   resume?.click();
-  await m.settle(250);
-  [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Resume')?.click();
-  await m.settle(600);
-  results.push({ name: '/accounts Resume restores the Pause action', ok: [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Pause'), missing: [] });
+  await m.settle(850);
+  const resumeToast = m.container.querySelector('.toast')?.textContent ?? '';
+  results.push({ name: '/accounts Resume restores the Pause action', ok: resumeToast.includes('Resumed') && [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Pause'), missing: [resumeToast || 'no toast'] });
   const rename = async (to) => {
     m.container.querySelector('button[aria-label="Edit label"]')?.click();
     await m.settle(150);
@@ -4904,11 +4903,13 @@ expect('/accounts/overflow', m.text(), ['Verify', 'does not report quota windows
   await confirmAction('Pause');
   const offersResume = headButton('Resume') !== undefined && [...m.container.querySelectorAll('.detail__badges .badge')].some((b) => b.textContent?.trim() === 'Needs funding');
   // Back to routing, since the pools and the later account checks read this account as the fixture left it.
-  await confirmAction('Resume');
+  headButton('Resume')?.click();
+  await m.settle(850);
+  const resumeToast = m.container.querySelector('.toast')?.textContent ?? '';
   results.push({
     name: '/accounts a flagged account pauses and resumes from the header',
-    ok: offersResume && headButton('Pause') !== undefined,
-    missing: [offersResume ? 'resume offered' : 'no Resume while paused', ...[...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '')],
+    ok: offersResume && resumeToast.includes('Resumed') && headButton('Pause') !== undefined,
+    missing: [offersResume ? 'resume offered' : 'no Resume while paused', resumeToast || 'no toast', ...[...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '')],
   });
 }
 {
@@ -9647,6 +9648,135 @@ await forView(['/accounts', '/pools'], async () => {
     name: "/pools the line under a choice of a paused account says its features keep working (the mock's reserve under work's Connectors)",
     ok: paused && line === 'reserve is paused. The pause stops its model requests, and its claude.ai features keep working.',
     missing: [paused ? 'paused' : 'no Resume after the pause', String(line)],
+  });
+});
+
+const headButtonOf = (page, name) => [...(page.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === name);
+/** The lines of the uses the deletion's dialog names, in its order. */
+const usesOf = (dlg) => [...(dlg?.querySelectorAll('.dialog__body li') ?? [])].map((li) => li.textContent?.trim() ?? '');
+const toastOf = (page) => page.container.querySelector('.toast')?.textContent ?? '';
+
+// The account detail's pause, resume and deletion. Each case reads its story row at its start and leaves the mock as
+// it found it, since every later block reads the one mock instance.
+await forView('/accounts', async () => {
+  {
+    // The story's legacy is paused, so its head offers Resume.
+    const story = (await api.listAccounts()).find((a) => a.id === 'legacy');
+    const page = await mount('/accounts/legacy');
+    headButtonOf(page, 'Resume')?.click();
+    const pause = await until(page, () => headButtonOf(page, 'Pause') !== undefined);
+    const toast = toastOf(page);
+    const dialogs = dialogTitles(page);
+    page.unmount();
+    api.putAccount(story);
+    results.push({
+      name: "/accounts Resume writes at once with its toast and opens no dialog (the mock's paused legacy)",
+      ok: story?.routingEnabled === false && pause && toast.includes('Resumed') && dialogs.length === 0,
+      missing: [`routing ${story?.routingEnabled}`, pause ? 'Pause offered' : 'no Pause after the resume', `toast ${JSON.stringify(toast)}`, `open dialogs ${JSON.stringify(dialogs)}`],
+    });
+  }
+  {
+    const story = (await api.listAccounts()).find((a) => a.id === 'studio');
+    const page = await mount('/accounts/studio');
+    headButtonOf(page, 'Pause')?.click();
+    await page.settle(250);
+    const dlg = openDialogs(page).pop();
+    const read = { body: dlg?.querySelector('.dialog__body')?.textContent ?? null, confirm: buttonIn(dlg, 'Pause') !== undefined, title: dlg?.querySelector('.dialog__title')?.textContent?.trim() ?? null };
+    buttonIn(dlg, 'Cancel')?.click();
+    await page.settle(200);
+    const closed = openDialogs(page).length === 0;
+    page.unmount();
+    const after = (await api.listAccounts()).find((a) => a.id === 'studio');
+    results.push({
+      name: "/accounts Pause opens its confirmation, which says the account's claude.ai features keep working, and its Cancel writes nothing (the mock's studio)",
+      ok:
+        read.title === 'Pause account' &&
+        read.confirm &&
+        (read.body ?? '').includes("The account's claude.ai features keep working where a pool or a key selects it.") &&
+        closed &&
+        after?.routingEnabled === story?.routingEnabled &&
+        after?.revision === story?.revision,
+      missing: [JSON.stringify(read), closed ? 'closed' : 'still open', `routing ${story?.routingEnabled} then ${after?.routingEnabled}, revision ${story?.revision} then ${after?.revision}`],
+    });
+  }
+  {
+    // The action stands on both lists' answers, so a failed read holds it behind the failure, and the retry that reads
+    // the list again frees it. The mock's reserve, which the key ci selects for Artifacts.
+    const page = await mount('/accounts/reserve');
+    failNextCall('listKeys', '/admin/keys', 'the key store is unavailable');
+    headButtonOf(page, 'Delete account')?.click();
+    await page.settle(400);
+    const dlg = openDialogs(page).pop();
+    const failed = { body: dlg?.querySelector('.empty__body')?.textContent ?? null, held: buttonIn(dlg, 'Delete')?.disabled ?? null, title: dlg?.querySelector('.empty__title')?.textContent ?? null };
+    buttonIn(dlg, 'Try again')?.click();
+    const freed = await until(page, () => buttonIn(dlg, 'Delete')?.disabled === false);
+    const uses = usesOf(dlg);
+    buttonIn(dlg, 'Cancel')?.click();
+    await page.settle(200);
+    const closed = openDialogs(page).length === 0;
+    page.unmount();
+    results.push({
+      name: "/accounts the deletion's dialog holds Delete behind a failed read and frees it once the retry draws the uses (the mock's reserve)",
+      ok:
+        failed.title === 'Could not load where this account is in use' &&
+        failed.body === 'the key store is unavailable' &&
+        failed.held === true &&
+        freed &&
+        uses.includes('The key ci selects it for Artifacts.') &&
+        closed,
+      missing: [JSON.stringify(failed), freed ? 'freed' : 'still held after the retry', JSON.stringify(uses), closed ? 'closed' : 'still open'],
+    });
+  }
+});
+
+// The deletion's dialog names each use of the account, and the deletion sets each selection of it to none. The
+// mock's reserve, which the pools all and work select for Connectors and the key ci for Artifacts, is read and
+// canceled. An account of the case's own that work selects is deleted from the Accounts view and read in the pool
+// dialog, then removed, with work's story row written back over the none the deletion left.
+await forView(['/accounts', '/pools'], async () => {
+  const deletionDialog = async (page) => {
+    headButtonOf(page, 'Delete account')?.click();
+    await until(page, () => buttonIn(openDialogs(page).pop(), 'Delete')?.disabled === false);
+    return openDialogs(page).pop();
+  };
+  let page = await mount('/accounts/reserve');
+  let dlg = await deletionDialog(page);
+  const reserve = usesOf(dlg);
+  buttonIn(dlg, 'Cancel')?.click();
+  await page.settle(200);
+  page.unmount();
+  results.push({
+    name: "/accounts the deletion's dialog names each pool and key that selects the account (the mock's reserve under all, work and ci)",
+    ok: JSON.stringify(reserve) === JSON.stringify(['The pool all selects it for Connectors.', 'The pool work selects it for Connectors.', 'The key ci selects it for Artifacts.']),
+    missing: reserve,
+  });
+  await api.createAccount({ id: 'departing', kind: 'oauth', label: 'Departing', secret: null });
+  const story = (await api.listPools()).find((x) => x.id === 'work');
+  const written = { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
+  await api.updatePool('work', { ...written, featureAccounts: { ...story.featureAccounts, connectors: 'departing' } });
+  page = await mount('/accounts/departing');
+  dlg = await deletionDialog(page);
+  const departing = usesOf(dlg);
+  buttonIn(dlg, 'Delete')?.click();
+  const deleted = await until(page, () => toastOf(page).includes('Deleted'));
+  page.unmount();
+  const p = await mount('/pools');
+  [...p.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
+  await p.settle(300);
+  const poolDlg = openDialogs(p).pop();
+  const select = group(poolDlg, 'claude.ai features')?.querySelector('select[aria-label="Connectors"]');
+  const connectors = [select?.value ?? null, select?.selectedOptions[0]?.textContent ?? null];
+  [...(poolDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await p.settle(200);
+  p.unmount();
+  await api.updatePool('work', written);
+  await api.deleteAccount('departing').catch((e) => {
+    if (e?.status !== 404) throw e;
+  });
+  results.push({
+    name: "/accounts the deletion of an account a pool selects names that pool, and the pool dialog then reads None (refused) for the feature (an account of the case's own under work's Connectors)",
+    ok: JSON.stringify(departing) === JSON.stringify(['The pool work selects it for Connectors.']) && deleted && JSON.stringify(connectors) === JSON.stringify(['none', 'None (refused)']),
+    missing: [JSON.stringify(departing), deleted ? 'Deleted toast' : 'no Deleted toast', JSON.stringify(connectors)],
   });
 });
 

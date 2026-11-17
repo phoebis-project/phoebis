@@ -28,6 +28,7 @@ export {
   TEST_VERDICT_VALUES,
 } from '@/api/types';
 export { accountColor, accountSlots } from '@/components/charts/theme';
+export * from '@/lib/accountUses';
 export * from '@/lib/address';
 export * from '@/lib/allowance';
 export * from '@/lib/analytics';

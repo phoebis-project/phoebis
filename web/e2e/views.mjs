@@ -4340,6 +4340,60 @@ async function deleteAccountButton(theme) {
   if (differs.length) say(`the Delete account button's ${differs.join(', ')} differs from the Disconnect button's`);
 }
 
+/**
+ * The deletion's dialog of the story's reserve, which the pools all and work select for Connectors and the key ci for
+ * Artifacts: the dialog inside the window, its three uses each on a row of its own inside the dialog's body, and
+ * Delete enabled once both lists answered, every figure recorded. Cancel closes it with nothing deleted, and the bare
+ * view loads again, so the measures after it and the shot read the detail the view first drew. The router's seed holds
+ * no such account, so only the story's pass reads it.
+ */
+async function deleteAccountUses(theme) {
+  const say = (what) => failures.push(`${theme} /accounts/reserve deletion dialog: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  let read = null;
+  try {
+    await loadAtOrigin('/accounts/reserve', '.detail__head');
+    await page.locator('.detail__head button', { hasText: 'Delete account' }).click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    // The two lists answer on the page's clock, which stands still between steps.
+    await advance(LOAD_MS);
+    read = await dialog.evaluate((el) => {
+      const tenths = (n) => Math.round(n * 10) / 10;
+      const box = (b) => ({ bottom: tenths(b.bottom), left: tenths(b.left), right: tenths(b.right), top: tenths(b.top) });
+      const body = el.querySelector('.dialog__body');
+      const remove = [...el.querySelectorAll('.dialog__foot button')].find((b) => b.textContent?.trim() === 'Delete');
+      return {
+        body: body ? box(body.getBoundingClientRect()) : null,
+        deleteDisabled: remove ? remove.disabled : null,
+        dialog: box(el.getBoundingClientRect()),
+        lines: [...(body?.querySelectorAll('li') ?? [])].map((li) => ({ ...box(li.getBoundingClientRect()), text: li.textContent?.trim() ?? '' })),
+        window: { height: window.innerHeight, width: window.innerWidth },
+      };
+    });
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Cancel'));
+  } catch (error) {
+    say(`never measured (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape').catch(() => {});
+  }
+  measurements.push(`${theme} /accounts/reserve deletion dialog ${JSON.stringify(read)}`);
+  if (read !== null) {
+    const { body, dialog: frame, lines } = read;
+    if (frame.left < 0 || frame.top < 0 || frame.right > read.window.width || frame.bottom > read.window.height) say(`the dialog ${JSON.stringify(frame)} runs past the ${read.window.width} by ${read.window.height} window`);
+    if (lines.length !== 3) say(`the dialog names ${lines.length} uses, where the story's reserve has the pools all and work and the key ci`);
+    for (const line of lines) {
+      if (body === null || line.left < body.left || line.right > body.right || line.top < body.top || line.bottom > body.bottom) say(`the use ${JSON.stringify(line.text)} runs past the dialog's body ${JSON.stringify(body)}`);
+    }
+    for (const [i, line] of lines.entries()) {
+      if (i > 0 && line.top < lines[i - 1].bottom) say(`the use ${JSON.stringify(line.text)} starts at ${line.top}px, above the end of the one before it at ${lines[i - 1].bottom}px`);
+    }
+    if (read.deleteDisabled !== false) say(`Delete reads disabled ${read.deleteDisabled} once both lists answered`);
+  }
+  await loadAtOrigin('/accounts', '.detail__head');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await atRest();
+}
+
 /** Every slot of a window triple whose window the account's poll does not carry, read off the page as it stands. */
 const readAbsentSlots = () =>
   page.evaluate(() =>
@@ -14278,6 +14332,7 @@ try {
         await tableColumns(theme, 'accounts', '.cooling-down table', ['Reason']);
         await fastLane(theme, view.path);
         await deleteAccountButton(theme);
+        if (mock) await deleteAccountUses(theme);
         await subscriptionEndForm(theme);
         await addAccountDialog(theme);
         await catalogDialog(theme);
