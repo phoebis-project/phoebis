@@ -11,18 +11,22 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_routing::RegistrySnapshot;
 use phoebis_store::{
-    stamp_token, ApiKeyRow, AttachmentSubject, CompanionPermission, CompanionPermissions,
-    KeyFeatureAccounts, StoreError, ROTATION_GRACE_MS,
+    stamp_token, ApiKeyRow, AttachmentSubject, CompanionPermission, CompanionPermissions, Feature,
+    FeatureOverride, KeyFeatureAccounts, StoreError, ROTATION_GRACE_MS,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
 use crate::accounts::{check_slug, within_text_bound, ACTOR};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
-use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
+use crate::openapi::{
+    ErrorBody, FeatureAccountIdsView, KeyFeatureAccountView, KeyFeatureAccountsView,
+    RegistryUnavailable, StorageFailure,
+};
 use crate::routes::{
-    api_key, double_option, failure, fence_token, parse_object, pool, present,
-    reload_or_no_content, reload_or_refuse, stale_edit, store_failure, CreatedId,
+    api_key, double_option, failure, feature_account_refusal, fence_token, parse_object, pool,
+    present, reload_or_no_content, reload_or_refuse, stale_edit, store_failure, CreatedId,
 };
 use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
@@ -75,6 +79,11 @@ pub(crate) struct KeyInput {
     #[serde(default, deserialize_with = "double_option")]
     #[schema(value_type = Option<bool>, nullable)]
     auto_mode_server: Option<Option<Value>>,
+    /// The features to change, each the object of the key row: `account` with an OAuth account of the router, whatever
+    /// its pool, `inherit` for the pool's, or `none`. A feature left out keeps its stored value, and a new key starts at
+    /// `inherit` for both.
+    #[serde(default)]
+    feature_accounts: Option<KeyFeatureAccountsInput>,
     /// The key's own guardrail ids in the order it runs them after its pool's, replacing the key's list whole, on an
     /// edit alone: a new key starts with none of its own, so a create refuses the field.
     #[serde(default)]
@@ -91,6 +100,20 @@ pub(crate) struct KeyInput {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = u64)]
     expected_revision: Option<Value>,
+}
+
+/// A key's claude.ai feature accounts, each optional.
+#[derive(serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KeyFeatureAccountsInput {
+    // The raw value, kept apart from an absent word, so a present null is refused rather than read as "not sent":
+    // a bare null could mean either `inherit` or `none`.
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = Option<KeyFeatureAccountView>)]
+    artifacts: Option<Value>,
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = Option<KeyFeatureAccountView>)]
+    connectors: Option<Value>,
 }
 
 /// The keys, one row each.
@@ -127,6 +150,11 @@ pub(crate) struct Key {
     pub auto_mode_server: Option<bool>,
     /// The key's own where set, else the pool's.
     pub effective_auto_mode_server: bool,
+    /// The key's own value for each claude.ai feature.
+    pub feature_accounts: KeyFeatureAccountsView,
+    /// The account each claude.ai feature of the key acts under, null for none: the key's own where it names an
+    /// account or none, else the pool's.
+    pub effective_feature_accounts: FeatureAccountIdsView,
     pub prefix: String,
     pub created_at: i64,
     /// The key's last create, edit, rotation or revocation. A use never moves it.
@@ -199,6 +227,8 @@ pub(crate) struct KeyCreated {
     pub effective_body_capture_hours: u32,
     pub auto_mode_server: Option<bool>,
     pub effective_auto_mode_server: bool,
+    pub feature_accounts: KeyFeatureAccountsView,
+    pub effective_feature_accounts: FeatureAccountIdsView,
     pub prefix: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -289,7 +319,46 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
             })
             .transpose()?;
     }
+    if let Some(words) = &input.feature_accounts {
+        for (feature, value) in [
+            (Feature::Artifacts, &words.artifacts),
+            (Feature::Connectors, &words.connectors),
+        ] {
+            if let Some(value) = value {
+                row.feature_accounts
+                    .set(feature, feature_override(feature, value)?);
+            }
+        }
+    }
     Ok(())
+}
+
+/// A key's value for one feature as the row's object spells it: an account id under `account` and under no other
+/// mode, since an id beside `inherit` or `none` would name an account the key does not act under.
+#[allow(clippy::result_large_err)]
+fn feature_override(feature: Feature, value: &Value) -> Result<FeatureOverride, Response> {
+    let word = feature.as_str();
+    let value = KeyFeatureAccountView::deserialize(value).map_err(|_| {
+        failure(
+            StatusCode::BAD_REQUEST,
+            &format!("feature_accounts.{word} must be an object with mode and account_id"),
+        )
+    })?;
+    match (value.mode.as_str(), value.account_id) {
+        ("account", Some(id)) => Ok(FeatureOverride::Account(id)),
+        ("inherit", None) => Ok(FeatureOverride::Inherit),
+        ("none", None) => Ok(FeatureOverride::NoAccount),
+        ("account" | "inherit" | "none", _) => Err(failure(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                "feature_accounts.{word}.account_id is an account id under the mode account and null under each other"
+            ),
+        )),
+        _ => Err(failure(
+            StatusCode::BAD_REQUEST,
+            &format!("feature_accounts.{word}.mode must be account, inherit, or none"),
+        )),
+    }
 }
 
 /// The two ledger totals every key row shares, read once per call rather than once per key.
@@ -451,7 +520,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     request_body(content = KeyInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The created key.", body = KeyCreated),
-        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id, label, and pool_id are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `companion_permissions holds allowance and keepalive, not {word}`: the first unknown word of the list\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails applies on edit`: a new key starts with none of its own", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id, label, and pool_id are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `feature_accounts.{feature} must be an object with mode and account_id`: a `null`, or a value that is no such object\n- `feature_accounts.{feature}.mode must be account, inherit, or none`\n- `feature_accounts.{feature}.account_id is an account id under the mode account and null under each other`\n- `feature_accounts names account {id}, which does not exist`, with nothing written\n- `feature_accounts names account {id}, which is an API-key account`, with nothing written\n- `companion_permissions holds allowance and keepalive, not {word}`: the first unknown word of the list\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails applies on edit`: a new key starts with none of its own", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "`pool not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
         (status = 409, description = "`a key with this id exists`", body = ErrorBody, example = json!({"error": "a key with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -522,6 +591,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         }
         // The check above reads outside the insert, so a create that lost the race for the id arrives here.
         Err(StoreError::IdTaken(_)) => return failure(StatusCode::CONFLICT, DUPLICATE_ID),
+        Err(
+            error @ (StoreError::FeatureAccountNotFound(_) | StoreError::FeatureAccountNotOauth(_)),
+        ) => return feature_account_refusal(error),
         Err(error) => return store_failure(error),
     }
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
@@ -546,7 +618,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     request_body(content = KeyInput, content_type = "application/json"),
     responses(
         (status = 200, description = "The key's fields, the same shape as `POST /admin/keys` without `secret`.", body = Key),
-        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `companion_permissions holds allowance and keepalive, not {word}`: the first unknown word of the list\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails lists {id} twice`\n- `key {id} would hold more than 64 guardrails`, with nothing written, also where a `pool_id` change alone moves the key under a pool whose guardrails take it over the bound", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `notes is at most 256 bytes`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `auto_mode_server must be true, false, or null`\n- `feature_accounts.{feature} must be an object with mode and account_id`: a `null`, or a value that is no such object\n- `feature_accounts.{feature}.mode must be account, inherit, or none`\n- `feature_accounts.{feature}.account_id is an account id under the mode account and null under each other`\n- `feature_accounts names account {id}, which does not exist`, with nothing written\n- `feature_accounts names account {id}, which is an API-key account`, with nothing written\n- `companion_permissions holds allowance and keepalive, not {word}`: the first unknown word of the list\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `model_rules_mode is extend or replace`\n- `guardrails lists {id} twice`\n- `key {id} would hold more than 64 guardrails`, with nothing written, also where a `pool_id` change alone moves the key under a pool whose guardrails take it over the bound", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `key not found`\n- `pool not found`\n- `guardrail {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "key not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.
@@ -612,6 +684,9 @@ pub(crate) async fn patch(
         }
         // The store counts the pool the row names, so a `pool_id` change alone is refused here too.
         Err(error @ StoreError::KeyGuardrailBound(_)) => return attachment_refusal(error),
+        Err(
+            error @ (StoreError::FeatureAccountNotFound(_) | StoreError::FeatureAccountNotOauth(_)),
+        ) => return feature_account_refusal(error),
         Err(error) => return store_failure(error),
     }
     if let Err(refusal) = reload_or_refuse(&state).await {
@@ -785,6 +860,15 @@ fn key_json(
         effective_body_capture_hours: snapshot.body_capture_hours(row),
         auto_mode_server: row.auto_mode_server,
         effective_auto_mode_server: snapshot.auto_mode_server(row),
+        feature_accounts: (&row.feature_accounts).into(),
+        effective_feature_accounts: FeatureAccountIdsView {
+            artifacts: snapshot
+                .feature_account(row, Feature::Artifacts)
+                .map(String::from),
+            connectors: snapshot
+                .feature_account(row, Feature::Connectors)
+                .map(String::from),
+        },
         prefix: row.prefix.clone(),
         created_at: row.created_at,
         updated_at: row.updated_at,

@@ -3058,6 +3058,58 @@ async fn the_account_view_answers_the_plan_the_profile_resolves_to() {
 }
 
 #[tokio::test]
+async fn an_oauth_accounts_grants_follow_its_stored_scopes() {
+    use common::{get, json, login};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    for (id, scopes) in [
+        ("a", "user:profile user:inference"),
+        ("b", "user:profile user:inference user:mcp_servers"),
+    ] {
+        store
+            .insert_account(&phoebis_store::AccountRow::for_tests(
+                id,
+                phoebis_store::AccountKind::Oauth,
+            ))
+            .unwrap();
+        store
+            .commit_credentials(
+                id,
+                1,
+                1,
+                None,
+                None,
+                &phoebis_store::NewBundle {
+                    access_token: phoebis_store::Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                    refresh_token: Some(phoebis_store::Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                    issued_at: common::NOW,
+                    expires_at: common::NOW + 3_600_000,
+                    refresh_expires_at: None,
+                    scopes: scopes.into(),
+                },
+            )
+            .unwrap();
+    }
+    let listed = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    let grants = |id: &str| {
+        listed["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|account| account["id"] == id)
+            .unwrap()["feature_grants"]
+            .clone()
+    };
+    assert_eq!(
+        (grants("a"), grants("b")),
+        (
+            serde_json::json!(["artifacts"]),
+            serde_json::json!(["artifacts", "connectors"])
+        )
+    );
+}
+
+#[tokio::test]
 async fn a_usage_based_account_answers_its_class_and_no_overage_whatever_a_head_or_an_older_row_says(
 ) {
     use common::{get, json, login};

@@ -110,6 +110,10 @@
         "observed_at": 1791720995000
       }
     },
+    "feature_grants": [
+      "artifacts",
+      "connectors"
+    ],
     "limit_resets": {
       "cooldown_until": null,
       "eligible": true,

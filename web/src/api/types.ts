@@ -3,6 +3,14 @@
 
 export const ACCOUNT_KIND_VALUES = ['api_key', 'oauth'] as const;
 export type AccountKind = (typeof ACCOUNT_KIND_VALUES)[number];
+export const FEATURE_WORD_VALUES = ['artifacts', 'connectors'] as const;
+export type FeatureWord = (typeof FEATURE_WORD_VALUES)[number];
+/** Per feature, the id of the account its calls act under, or null for none. */
+export type FeatureAccountIds = Record<FeatureWord, string | null>;
+export const KEY_FEATURE_MODE_VALUES = ['account', 'inherit', 'none'] as const;
+export type KeyFeatureMode = (typeof KEY_FEATURE_MODE_VALUES)[number];
+/** A key's value for one feature. `accountId` is set under `account` alone. */
+export interface KeyFeatureAccount { accountId: string | null; mode: KeyFeatureMode }
 export type AccountStatus = 'cooldown' | 'funding_required' | 'paused' | 'reauth_required' | 'ready' | 'unpaired';
 /** The three windows the pages know: the two shared ones and the model-scoped week. */
 export type KnownWindowId = '5h' | '7d' | '7d_fable';
@@ -212,6 +220,9 @@ export interface Account {
   /** The fast lane's input and output buckets as the router last read them, and `null` until an answer to a fast
    * request carried them. */
   fastLane: { input: FastLaneReading | null; output: FastLaneReading | null } | null;
+  /** The features the stored credential's scopes cover, in alphabetical order: empty for an OAuth account with no
+   * stored credential, and null for an api_key account. */
+  featureGrants: FeatureWord[] | null;
   id: string;
   kind: AccountKind;
   label: string;
@@ -592,6 +603,8 @@ export interface Pool {
    * load shedding on. Such a round marks non-Fable sessions alone.
    */
   fableReservationShedding: boolean;
+  /** The account each feature of the pool's keys acts under, null for none. A key may override it. */
+  featureAccounts: FeatureAccountIds;
   /**
    * The share of the 5-hour window a move or a new session must stay under until the window resets, and the line a
    * shedding round tests the window against at the five-hour bound.
@@ -682,9 +695,14 @@ export interface ApiKey {
   /** The companion routes the key permits, in the order `allowance`, `keepalive`: both for a new key. */
   companionPermissions: CompanionPermission[];
   createdAt: string;
+  /** The account each feature of the key acts under, null for none: the key's own where it names an account or none,
+   * else the pool's. */
+  effectiveFeatureAccounts: FeatureAccountIds;
   /** The stored switch, which `status` folds expiry and revocation over; an edit sends it back as it stands. */
   enabled: boolean;
   expiresAt: string | null;
+  /** The key's own value for each feature. */
+  featureAccounts: Record<FeatureWord, KeyFeatureAccount>;
   /** The key's own guardrails, which run after its pool's, ordered by `position`. */
   guardrails: GuardrailRef[];
   id: string;

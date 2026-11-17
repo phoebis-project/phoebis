@@ -13,7 +13,7 @@ use phoebis_keepalive::{pool_fundings, CeilingInputs, KeepalivePolicy};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy};
 use phoebis_routing::{AccountProjection, MemberSpend, Obstacle, RegistrySnapshot};
 use phoebis_store::{
-    stamp_token, AccountRow, AffinityMode, ApiKeyRow, AttachmentSubject, MemberWrite,
+    stamp_token, AccountRow, AffinityMode, ApiKeyRow, AttachmentSubject, Feature, MemberWrite,
     OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement, StoreError,
     Strategy, SubagentPlacement, WarmSessions,
 };
@@ -26,8 +26,8 @@ use crate::openapi::{
     chart_refusal, range_refusal, ErrorBody, RegistryUnavailable, StorageFailure,
 };
 use crate::routes::{
-    double_option, failure, fence_token, parse_object, pool, present, reload_or_no_content,
-    reload_or_refuse, stale_edit, store_failure, AdminQuery, CreatedId,
+    double_option, failure, feature_account_refusal, fence_token, parse_object, pool, present,
+    reload_or_no_content, reload_or_refuse, stale_edit, store_failure, AdminQuery, CreatedId,
 };
 use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
@@ -157,6 +157,10 @@ pub(crate) struct PoolInput {
     #[serde(default, deserialize_with = "double_option")]
     #[schema(value_type = bool)]
     auto_mode_server: Option<Option<Value>>,
+    /// The features to change, each an OAuth account of the router, whatever its pool, or null for none. A feature
+    /// left out keeps its stored account, and a new pool starts at none for both.
+    #[serde(default)]
+    feature_accounts: Option<PoolFeatureAccountsInput>,
     /// At most `stats.body_capture_max_hours`.
     #[serde(default)]
     body_capture_hours: Option<u32>,
@@ -253,6 +257,18 @@ pub(crate) struct PoolInput {
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = u64)]
     expected_revision: Option<Value>,
+}
+
+/// A pool's claude.ai feature accounts, each optional: an account id selects it, and null sets none.
+#[derive(serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PoolFeatureAccountsInput {
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<String>, nullable)]
+    artifacts: Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<String>, nullable)]
+    connectors: Option<Option<String>>,
 }
 
 /// The keepalive policy's four fields, each optional.
@@ -446,6 +462,16 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
             )
         })?;
     }
+    if let Some(words) = &input.feature_accounts {
+        for (feature, account) in [
+            (Feature::Artifacts, &words.artifacts),
+            (Feature::Connectors, &words.connectors),
+        ] {
+            if let Some(account) = account {
+                row.feature_accounts.set(feature, account.clone());
+            }
+        }
+    }
     if let Some(hours) = input.body_capture_hours {
         row.body_capture_hours = within(
             hours,
@@ -623,7 +649,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
 // A macro, since each `400`'s description joins it through `concat!`, which takes literals and no `const`.
 macro_rules! pool_field_refusals {
     () => {
-        "- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `thinking_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `five_hour_ceiling is between 0.5 and 1.0`\n- `weekly_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `return_to_plan must be always, when_cold, or never`\n- `return_to_plan_dwell_seconds is between 0 and 86400`\n- `slow_down_hold_seconds is between 1 and 300`\n- `slow_down_stretch_seconds is between 60 and 18000`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`"
+        "- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `thinking_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `feature_accounts names account {id}, which does not exist`, with nothing written\n- `feature_accounts names account {id}, which is an API-key account`, with nothing written\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `five_hour_ceiling is between 0.5 and 1.0`\n- `weekly_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `return_to_plan must be always, when_cold, or never`\n- `return_to_plan_dwell_seconds is between 0 and 86400`\n- `slow_down_hold_seconds is between 1 and 300`\n- `slow_down_stretch_seconds is between 60 and 18000`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`"
     };
 }
 
@@ -682,6 +708,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         Ok(written) => row = written,
         // The check above reads outside the insert, so a create that lost the race for the id arrives here.
         Err(StoreError::IdTaken(_)) => return failure(StatusCode::CONFLICT, DUPLICATE_ID),
+        Err(
+            error @ (StoreError::FeatureAccountNotFound(_) | StoreError::FeatureAccountNotOauth(_)),
+        ) => return feature_account_refusal(error),
         // The row and its members are one transaction, so a refused member leaves no pool to name.
         Err(error) => return membership_failure(error),
     }
@@ -791,6 +820,9 @@ pub(crate) async fn patch(
         Err(error @ (StoreError::PoolGuardrailBound(_) | StoreError::KeyGuardrailBound(_))) => {
             return attachment_refusal(error)
         }
+        Err(
+            error @ (StoreError::FeatureAccountNotFound(_) | StoreError::FeatureAccountNotOauth(_)),
+        ) => return feature_account_refusal(error),
         Err(error) => return membership_failure(error),
     }
     publish(&state, &row, StatusCode::OK).await
@@ -959,6 +991,8 @@ pub(crate) struct Pool {
     /// thinks and whose client sent none.
     pub thinking_diagnostics: bool,
     pub auto_mode_server: bool,
+    /// The account each claude.ai feature of the pool's keys acts under, null for none. A key may override it.
+    pub feature_accounts: crate::openapi::FeatureAccountIdsView,
     pub body_capture_hours: u32,
     pub created_at: i64,
     pub updated_at: i64,
@@ -1558,6 +1592,7 @@ pub(crate) fn pool_json_from(context: &PoolContext, row: &PoolRow) -> Pool {
         cache_diagnostics: row.cache_diagnostics,
         thinking_diagnostics: row.thinking_diagnostics,
         auto_mode_server: row.auto_mode_server,
+        feature_accounts: (&row.feature_accounts).into(),
         body_capture_hours: row.body_capture_hours,
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -1706,6 +1741,7 @@ mod tests {
         cache_diagnostics: bool,
         thinking_diagnostics: bool,
         auto_mode_server: bool,
+        feature_accounts: crate::openapi::FeatureAccountIdsView,
         body_capture_hours: u32,
         created_at: i64,
         updated_at: i64,

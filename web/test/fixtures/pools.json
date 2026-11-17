@@ -86,6 +86,10 @@
         "cache_diagnostics": false,
         "thinking_diagnostics": false,
         "auto_mode_server": true,
+        "feature_accounts": {
+          "artifacts": null,
+          "connectors": "business"
+        },
         "body_capture_hours": 24,
         "created_at": 1791721000000,
         "updated_at": 1791721000001,
@@ -495,6 +499,10 @@
         "cache_diagnostics": false,
         "thinking_diagnostics": false,
         "auto_mode_server": true,
+        "feature_accounts": {
+          "artifacts": null,
+          "connectors": null
+        },
         "body_capture_hours": 0,
         "created_at": 1791721000000,
         "updated_at": 1791721000000,

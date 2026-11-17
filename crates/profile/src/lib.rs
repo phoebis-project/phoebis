@@ -39,6 +39,12 @@ pub struct Control {
     pub read_user_agent: &'static str,
     pub refresh_fallback_scopes: &'static str,
 }
+/// The OAuth scope each claude.ai feature needs, as this client build asks for it.
+pub struct FeatureScopes {
+    pub artifacts: &'static str,
+    pub connectors: &'static str,
+}
+
 pub struct TlsProfiles {
     pub curves: &'static str,
     pub control_cipher_list: &'static str,
@@ -50,6 +56,7 @@ pub struct Profile {
     pub name: &'static str,
     pub user_agent_cli: &'static str,
     pub control: Control,
+    pub feature_scopes: FeatureScopes,
     pub tls: TlsProfiles,
 }
 
@@ -86,6 +93,11 @@ static PROFILE_2_1_310: Profile = Profile {
         default_login_scopes: "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins",
         read_user_agent: "claude-code/2.1.310",
         refresh_fallback_scopes: "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins",
+    },
+    // The client names no scope past inference for Artifacts, and opens the connectors under the MCP servers' scope.
+    feature_scopes: FeatureScopes {
+        artifacts: "user:inference",
+        connectors: "user:mcp_servers",
     },
     tls: TlsProfiles {
         curves: "X25519MLKEM768:X25519:P-256:P-384",

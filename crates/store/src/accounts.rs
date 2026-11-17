@@ -507,8 +507,25 @@ impl Store {
             &format!("DELETE FROM refresh_attempts WHERE account_id = ?1 AND ({PENDING_WHERE})"),
             params![id],
         )?;
-        crate::registry::clear_feature_accounts(&tx, id, now)?;
-        crate::registry::record_change(&tx, now, actor, "account_deleted", id, "{}")?;
+        let cleared = crate::registry::clear_feature_accounts(&tx, id, now)?;
+        // The change row names each selection the deletion took, so the audit trail shows what the id's pools and
+        // keys lost. A deletion that cleared nothing keeps the empty diff of a write with no pair.
+        let diff = if cleared.is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::json!({
+                "feature_accounts_cleared": cleared
+                    .iter()
+                    .map(|selection| serde_json::json!({
+                        "owner": selection.owner,
+                        "owner_id": selection.owner_id,
+                        "feature": selection.feature.as_str(),
+                        "account_id": id,
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        };
+        crate::registry::record_change(&tx, now, actor, "account_deleted", id, &diff.to_string())?;
         tx.commit()?;
         Ok(())
     }

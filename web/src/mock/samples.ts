@@ -1,5 +1,5 @@
 import { decodeAccount, decodeAccountRollups, decodeAnalyticsGroup, decodeAttention, decodeDashboard, decodeKeepaliveOverview, decodeKey, decodePairingSession, decodePool, decodeQuotaHistory, decodeRecipe, decodeRequest, decodeRequestEvent, decodeSession, decodeSettings, decodeSnapshot } from '@/api/decode';
-import type { SubscriptionCosts } from '@/api/types';
+import type { ApiKey, Pool, SubscriptionCosts } from '@/api/types';
 import { withRegime } from '@/lib/costs';
 import { FIXTURES } from './generated/fixtures';
 
@@ -12,10 +12,16 @@ export const ACCOUNT_ROLLUP_SAMPLE = decodeAccountRollups(body('analytics_accoun
 export const ANALYTICS_GROUP_SAMPLE = decodeAnalyticsGroup(first('analytics_breakdown', 'rows'));
 export const ATTENTION_ITEM_SAMPLE = decodeAttention(first('attention', 'items'));
 export const KEEPALIVE_OVERVIEW_SAMPLE = decodeKeepaliveOverview(body('keepalive_overview'));
-export const KEY_SAMPLE = decodeKey(first('keys', 'keys'));
+/** With no feature account of its own or its pool's, since the captured selections name accounts the mock lacks. */
+export const KEY_SAMPLE: ApiKey = {
+  ...decodeKey(first('keys', 'keys')),
+  effectiveFeatureAccounts: { artifacts: null, connectors: null },
+  featureAccounts: { artifacts: { accountId: null, mode: 'inherit' }, connectors: { accountId: null, mode: 'inherit' } },
+};
 export const OVERVIEW_SAMPLE = decodeDashboard(body('dashboard'));
 export const PAIRING_SAMPLE = decodePairingSession(body('pairing_started'));
-export const POOL_SAMPLE = decodePool(first('pools', 'pools'));
+/** With no feature account, since the captured selections name accounts the mock lacks. */
+export const POOL_SAMPLE: Pool = { ...decodePool(first('pools', 'pools')), featureAccounts: { artifacts: null, connectors: null } };
 export const QUOTA_HISTORY_SAMPLE = decodeQuotaHistory(body('account_quota'))[0];
 export const QUOTA_SNAPSHOT_SAMPLE = decodeSnapshot('business', body('account_usage'));
 export const RECIPE_SAMPLE = decodeRecipe(first('keepalive_recipes', 'recipes'));

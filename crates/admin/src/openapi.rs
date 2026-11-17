@@ -8,6 +8,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use phoebis_guardrails::{Condition, ConditionWords};
+use phoebis_store::{FeatureOverride, KeyFeatureAccounts, PoolFeatureAccounts};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::openapi::example::ExampleBuilder;
@@ -320,6 +321,65 @@ pub(crate) struct RecipeViewSchema {
 pub(crate) struct ModelRuleView {
     pub pattern: String,
     pub not: bool,
+}
+
+/// Per claude.ai feature, the id of the account its calls act under, or null for none.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FeatureAccountIdsView {
+    pub artifacts: Option<String>,
+    pub connectors: Option<String>,
+}
+
+impl From<&PoolFeatureAccounts> for FeatureAccountIdsView {
+    fn from(accounts: &PoolFeatureAccounts) -> FeatureAccountIdsView {
+        FeatureAccountIdsView {
+            artifacts: accounts.artifacts.clone(),
+            connectors: accounts.connectors.clone(),
+        }
+    }
+}
+
+/// A key's value for one claude.ai feature.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KeyFeatureAccountView {
+    /// `account`, `inherit` or `none`.
+    #[schema(example = "inherit")]
+    pub mode: String,
+    /// The account's id under `account`, null under each other mode.
+    pub account_id: Option<String>,
+}
+
+impl From<&FeatureOverride> for KeyFeatureAccountView {
+    fn from(value: &FeatureOverride) -> KeyFeatureAccountView {
+        let (mode, account_id) = match value {
+            FeatureOverride::Account(id) => ("account", Some(id.clone())),
+            FeatureOverride::Inherit => ("inherit", None),
+            FeatureOverride::NoAccount => ("none", None),
+        };
+        KeyFeatureAccountView {
+            mode: mode.to_string(),
+            account_id,
+        }
+    }
+}
+
+/// A key's value for each claude.ai feature.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct KeyFeatureAccountsView {
+    pub artifacts: KeyFeatureAccountView,
+    pub connectors: KeyFeatureAccountView,
+}
+
+impl From<&KeyFeatureAccounts> for KeyFeatureAccountsView {
+    fn from(accounts: &KeyFeatureAccounts) -> KeyFeatureAccountsView {
+        KeyFeatureAccountsView {
+            artifacts: (&accounts.artifacts).into(),
+            connectors: (&accounts.connectors).into(),
+        }
+    }
 }
 
 /// One condition of a guardrail, every member a string, so an unknown word is refused with its reason. `name` is the

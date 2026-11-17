@@ -26,6 +26,20 @@
         "effective_body_capture_hours": 24,
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
+        "feature_accounts": {
+          "artifacts": {
+            "mode": "account",
+            "account_id": "usage-seat"
+          },
+          "connectors": {
+            "mode": "inherit",
+            "account_id": null
+          }
+        },
+        "effective_feature_accounts": {
+          "artifacts": "usage-seat",
+          "connectors": "business"
+        },
         "prefix": "KxtrG2cq",
         "created_at": 1791721000000,
         "updated_at": 1791721000001,

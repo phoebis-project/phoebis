@@ -112,6 +112,10 @@
             "observed_at": 1791720995000
           }
         },
+        "feature_grants": [
+          "artifacts",
+          "connectors"
+        ],
         "limit_resets": {
           "cooldown_until": null,
           "eligible": true,
@@ -212,6 +216,7 @@
         "windows": [],
         "slow_down": null,
         "fast_lane": null,
+        "feature_grants": null,
         "limit_resets": null,
         "extra_usage": null,
         "pool": {
@@ -273,6 +278,9 @@
         "windows": [],
         "slow_down": null,
         "fast_lane": null,
+        "feature_grants": [
+          "artifacts"
+        ],
         "limit_resets": null,
         "extra_usage": null,
         "pool": {
@@ -325,6 +333,9 @@
         "windows": [],
         "slow_down": null,
         "fast_lane": null,
+        "feature_grants": [
+          "artifacts"
+        ],
         "limit_resets": {
           "cooldown_until": 1791806400000,
           "eligible": true,
@@ -400,6 +411,9 @@
         "windows": [],
         "slow_down": null,
         "fast_lane": null,
+        "feature_grants": [
+          "artifacts"
+        ],
         "limit_resets": {
           "cooldown_until": null,
           "eligible": true,
@@ -475,6 +489,9 @@
         "windows": [],
         "slow_down": null,
         "fast_lane": null,
+        "feature_grants": [
+          "artifacts"
+        ],
         "limit_resets": {
           "cooldown_until": null,
           "eligible": true,
@@ -564,6 +581,9 @@
         "windows": [],
         "slow_down": null,
         "fast_lane": null,
+        "feature_grants": [
+          "artifacts"
+        ],
         "limit_resets": {
           "cooldown_until": null,
           "eligible": false,

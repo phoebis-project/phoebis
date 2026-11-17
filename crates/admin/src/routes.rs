@@ -33,8 +33,8 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     answers_stamp_token, limit_resets_token, stamp_token, AccountExtras, AccountKind, AccountRow,
-    AccountState, ApiKeyRow, CooldownRow, CredentialStanding, Identity, NewBundle, PoolMember,
-    PoolRow, Settled, StateCause, StoreError,
+    AccountState, ApiKeyRow, CooldownRow, CredentialStanding, Feature, Identity, NewBundle,
+    PoolMember, PoolRow, Settled, StateCause, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::de::DeserializeOwned;
@@ -2630,6 +2630,11 @@ pub(crate) struct Account {
     pub slow_down: Option<AccountSlowDownView>,
     /// The whole object null until an answer to a fast request carried the fast headers.
     pub fast_lane: Option<FastLane>,
+    /// The claude.ai features whose scope the account's stored credential holds, in alphabetical order: empty for an
+    /// `oauth` account with no stored credential, and null for an `api_key` account. A pairing stores the scopes the
+    /// login granted, so an account paired before it asked for a feature's scope lacks that feature.
+    #[schema(example = json!(["artifacts", "connectors"]))]
+    pub feature_grants: Option<Vec<String>>,
     /// The account's limit resets. Null for an `api_key` account, for an account the poll does not ask (in the
     /// `disconnected`, `reauth_required` or `unpaired` state, or flagged `plan_ended_at`), for one whose limit resets
     /// were never read and for one whose last read carried none.
@@ -3258,6 +3263,21 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         windows,
         slow_down: slow_down_view(ctx, &row.id),
         fast_lane,
+        feature_grants: (row.kind == AccountKind::Oauth).then(|| {
+            let stored: Vec<&str> =
+                credential.map_or_else(Vec::new, |c| c.scopes.split_whitespace().collect());
+            let scopes = &state.profile.feature_scopes;
+            Feature::ALL
+                .into_iter()
+                .filter(|feature| {
+                    stored.contains(&match feature {
+                        Feature::Artifacts => scopes.artifacts,
+                        Feature::Connectors => scopes.connectors,
+                    })
+                })
+                .map(|feature| feature.as_str().to_string())
+                .collect()
+        }),
         limit_resets: limit_resets_view(
             state,
             row,
@@ -3743,6 +3763,22 @@ pub(crate) fn store_failure(error: StoreError) -> Response {
 pub(crate) fn account_write_failure(error: StoreError) -> Response {
     match error {
         StoreError::AccountNotFound(_) => failure(StatusCode::NOT_FOUND, "account not found"),
+        error => store_failure(error),
+    }
+}
+
+/// A pool or key write whose feature account selection the store refused, answered as an invalid body: the check
+/// reads the accounts inside the write's transaction, so the route maps its two errors and reads nothing itself.
+pub(crate) fn feature_account_refusal(error: StoreError) -> Response {
+    match error {
+        StoreError::FeatureAccountNotFound(id) => failure(
+            StatusCode::BAD_REQUEST,
+            &format!("feature_accounts names account {id}, which does not exist"),
+        ),
+        StoreError::FeatureAccountNotOauth(id) => failure(
+            StatusCode::BAD_REQUEST,
+            &format!("feature_accounts names account {id}, which is an API-key account"),
+        ),
         error => store_failure(error),
     }
 }

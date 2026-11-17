@@ -233,6 +233,12 @@ pub enum StoreError {
     Crypto,
     #[error("the slot was disconnected or replaced while the pairing ran")]
     Disconnected,
+    /// A feature account selection names an id no account holds.
+    #[error("feature account {0} not found")]
+    FeatureAccountNotFound(String),
+    /// A feature account selection names an account that holds no claude.ai token.
+    #[error("feature account {0} is not an OAuth account")]
+    FeatureAccountNotOauth(String),
     #[error("guardrail {0} not found")]
     GuardrailNotFound(String),
     #[error("another account already holds this identity")]

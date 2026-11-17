@@ -1,5 +1,6 @@
 import { decodeLimitResets, planName } from '@/api/decode';
 import type { Account, BurnUnit, PlanWord, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
+import { FEATURE_WORD_VALUES } from '@/api/types';
 import { lookup } from '@/lib/counts';
 import { endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { kindGroup } from '@/lib/selection';
@@ -127,6 +128,14 @@ type Seed = Omit<Account, 'subscription'> & { subscription: Omit<Subscription, '
 /** The credential of a row that holds no token. */
 export const NO_CREDENTIAL: Account['credential'] = { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null };
 
+/**
+ * The features an account's stored scopes cover, by the route's rule: none for an OAuth account that stores no
+ * credential, whose access expiry the route then answers null, and null for an API-key account. A credential the
+ * story stores holds the login's scopes, which cover both features.
+ */
+export const featureGrantsOf = (a: Pick<Account, 'credential' | 'kind'>): Account['featureGrants'] =>
+  a.kind === 'api_key' ? null : a.credential.accessTokenExpiresAt === null ? [] : [...FEATURE_WORD_VALUES];
+
 /** A row the router holds nothing for yet: no token, no plan, no window, no pool and no request. */
 export const blankAccountRow = (input: Pick<Account, 'id' | 'kind' | 'label'>, status: Account['status'], email: string | null): Account => ({
   ...ACCOUNT_SAMPLE,
@@ -136,6 +145,7 @@ export const blankAccountRow = (input: Pick<Account, 'id' | 'kind' | 'label'>, s
   extraUsage: null,
   fableWindow: null,
   fastLane: null,
+  featureGrants: featureGrantsOf({ credential: NO_CREDENTIAL, kind: input.kind }),
   id: input.id,
   kind: input.kind,
   label: input.label,
@@ -673,7 +683,7 @@ export const ACCOUNTS: Account[] = SEEDS.map((a) => {
   const reading = { fableWindow: a.planEndedAt === null && a.fableWindow !== null ? led(a.fableWindow) : null, windows: a.planEndedAt === null ? a.windows.map(led) : [] };
   READINGS.set(a.id, reading);
   const answered = withholdsWindows(a) ? { fableWindow: null, windows: [] } : reading;
-  return { ...a, fableWindow: answered.fableWindow, limitResets, plan: planName(subscription), pool: null, subscription, usage: usageOf(a), windows: answered.windows };
+  return { ...a, fableWindow: answered.fableWindow, featureGrants: featureGrantsOf(a), limitResets, plan: planName(subscription), pool: null, subscription, usage: usageOf(a), windows: answered.windows };
 });
 
 /**

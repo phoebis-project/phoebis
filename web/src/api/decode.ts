@@ -1,13 +1,13 @@
 import type {
   Account, AccountCatalog, AccountKind, AccountRollup, AgentRequests, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FundedSum, GuardVerdict, InputTransformations, KeepaliveOverview, KeepaliveRecipe, KeyFigures, KeyModels, Lifecycle, LimitResets, LimitResetsRead, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FeatureAccountIds, FundedSum, GuardVerdict, InputTransformations, KeepaliveOverview, KeepaliveRecipe, KeyFeatureAccount, KeyFigures, KeyModels, Lifecycle, LimitResets, LimitResetsRead, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, ResetUse, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionDay, SessionInfo, SessionSpend, SessionSpendPart, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
 import type { AgentContext, BurnFigures, MoveFigures, ShedStamp } from './types';
 import type { StreamCut } from './types';
 import type { Condition, Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailMatch, GuardrailMode, GuardrailPreset, GuardrailPresetState, GuardrailRef, GuardrailTestResult } from './types';
-import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, ATTEMPT_OUTCOME_VALUES, ATTENTION_KIND_VALUES, ATTENTION_PAGE_VALUES, ATTENTION_SUBJECT_VALUES, AUTO_MODE_VALUES, BUDGET_PERIOD_VALUES, BURN_UNIT_VALUES, BY_KIND_VALUES, CLASSIFIER_VALUES, COMPANION_PERMISSION_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, DECISION_KIND_VALUES, DIAGNOSTICS_SOURCE_VALUES, ELIGIBILITY_VALUES, FACT_ENTITY_VALUES, FACT_UNIT_VALUES, GUARDRAIL_MODE_VALUES, GUARD_VERDICT_VALUES, LIFECYCLE_VALUES, MEMBER_FIT_VALUES, MESSAGE_SELECTOR_VALUES, MODEL_RULES_MODE_VALUES, OVERAGE_POLICY_VALUES, PARK_KIND_VALUES, PIN_REASON_VALUES, PLACEMENT_RUNG_VALUES, POLL_OUTCOME_VALUES, POOL_STATUS_VALUES, POOL_STRATEGY_VALUES, RECIPE_CAUSE_VALUES, RECIPE_STATE_VALUES, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES, RESET_GRANT_STATE_VALUES, RESET_OUTCOME_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, TEST_VERDICT_VALUES, WARM_SESSIONS_VALUES } from './types';
+import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, ATTEMPT_OUTCOME_VALUES, ATTENTION_KIND_VALUES, ATTENTION_PAGE_VALUES, ATTENTION_SUBJECT_VALUES, AUTO_MODE_VALUES, BUDGET_PERIOD_VALUES, BURN_UNIT_VALUES, BY_KIND_VALUES, CLASSIFIER_VALUES, COMPANION_PERMISSION_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, DECISION_KIND_VALUES, DIAGNOSTICS_SOURCE_VALUES, ELIGIBILITY_VALUES, FACT_ENTITY_VALUES, FACT_UNIT_VALUES, FEATURE_WORD_VALUES, GUARDRAIL_MODE_VALUES, GUARD_VERDICT_VALUES, KEY_FEATURE_MODE_VALUES, LIFECYCLE_VALUES, MEMBER_FIT_VALUES, MESSAGE_SELECTOR_VALUES, MODEL_RULES_MODE_VALUES, OVERAGE_POLICY_VALUES, PARK_KIND_VALUES, PIN_REASON_VALUES, PLACEMENT_RUNG_VALUES, POLL_OUTCOME_VALUES, POOL_STATUS_VALUES, POOL_STRATEGY_VALUES, RECIPE_CAUSE_VALUES, RECIPE_STATE_VALUES, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES, RESET_GRANT_STATE_VALUES, RESET_OUTCOME_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, TEST_VERDICT_VALUES, WARM_SESSIONS_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import type { GuardrailInput, GuardrailTestInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
@@ -33,6 +33,15 @@ export const oneOf = <T extends string>(values: readonly T[], v: unknown): T | n
 const accountKind = (v: unknown): AccountKind => oneOf(ACCOUNT_KIND_VALUES, v) ?? 'oauth';
 const budgetPeriod = (v: unknown): BudgetPeriod => oneOf(BUDGET_PERIOD_VALUES, v) ?? 'month';
 const rulesMode = (v: unknown): ModelRulesMode => oneOf(MODEL_RULES_MODE_VALUES, v) ?? 'extend';
+const featureAccountIds = (v: unknown): FeatureAccountIds => {
+  const r = rec(v);
+  return { artifacts: strOrNull(r.artifacts), connectors: strOrNull(r.connectors) };
+};
+/** A mode this build does not know reads as the store's default for a key, the pool's account. */
+const keyFeatureAccount = (v: unknown): KeyFeatureAccount => {
+  const r = rec(v);
+  return { accountId: strOrNull(r.account_id), mode: oneOf(KEY_FEATURE_MODE_VALUES, r.mode) ?? 'inherit' };
+};
 /** A map the route keys by data (a move reason, a model id), with every entry that is not a number dropped. */
 const numberMap = (v: unknown): Record<string, number> => Object.fromEntries(Object.entries(rec(v)).filter((e): e is [string, number] => numOrNull(e[1]) !== null));
 const numberMaps = (v: unknown): Record<string, Record<string, number>> => Object.fromEntries(Object.entries(rec(v)).map(([k, x]) => [k, numberMap(x)]));
@@ -165,6 +174,7 @@ export function decodeAccount(v: unknown): Account {
     extraUsage: orNull(a.extra_usage, (x) => ({ disabledReason: strOrNull(x.disabled_reason), enabled: bool(x.is_enabled), inUse: bool(x.in_use), monthlyLimitCredits: numOrNull(x.monthly_limit), usedCredits: numOrNull(x.used_credits) })),
     fableWindow: windows.find((w) => w.id === '7d_fable') ?? null,
     fastLane: orNull(a.fast_lane, (f) => ({ input: fastLaneReading(f.input), output: fastLaneReading(f.output) })),
+    featureGrants: Array.isArray(a.feature_grants) ? FEATURE_WORD_VALUES.filter((w) => list(a.feature_grants).includes(w)) : null,
     id: str(a.id),
     kind: accountKind(a.kind),
     label: str(a.label),
@@ -301,8 +311,10 @@ export function decodeKey(v: unknown): ApiKey {
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     companionPermissions: COMPANION_PERMISSION_VALUES.filter((p) => list(k.companion_permissions).includes(p)),
     createdAt: isoOr(k.created_at, epoch),
+    effectiveFeatureAccounts: featureAccountIds(k.effective_feature_accounts),
     enabled,
     expiresAt: expires,
+    featureAccounts: { artifacts: keyFeatureAccount(rec(k.feature_accounts).artifacts), connectors: keyFeatureAccount(rec(k.feature_accounts).connectors) },
     guardrails: guardrailRefs(k.guardrails),
     id: str(k.id),
     lastUsedAt: isoOrNull(k.last_used_at),
@@ -382,6 +394,7 @@ export function decodePool(v: unknown): Pool {
     cacheTtl: decodeCacheTtl(p.cache_ttl),
     day24h: daySum(p),
     fableReservationShedding: bool(p.fable_reservation_shedding, POOL_ENGINE_DEFAULTS.fableReservationShedding),
+    featureAccounts: featureAccountIds(p.feature_accounts),
     fiveHourCeiling: num(p.five_hour_ceiling, POOL_ENGINE_DEFAULTS.fiveHourCeiling),
     guardrails: guardrailRefs(p.guardrails),
     id: str(p.id),

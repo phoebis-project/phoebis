@@ -502,7 +502,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 issued_at: now,
                 expires_at: now + 3_600_000,
                 refresh_expires_at: None,
-                scopes: "user:profile user:inference".into(),
+                // Both features' scopes, so the account fixtures carry a row that grants each feature beside the
+                // seat's, which grants Artifacts alone.
+                scopes: "user:profile user:inference user:mcp_servers".into(),
             },
         )
         .unwrap();
@@ -737,9 +739,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
         (transitions == 6).then_some(())
     })
     .await;
-    // A cap under a quarter, so the pool answers one warning and the console draws a non-empty list.
-    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0},{"account_id":"usage-seat","priority":2}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
-    let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
+    // A cap under a quarter, so the pool answers one warning and the console draws a non-empty list. The pool selects
+    // a connectors account and leaves Artifacts at none, and its key takes Artifacts from an account of its own and
+    // inherits the connectors, so the pool, key and created key fixtures carry each arm of both members.
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0},{"account_id":"usage-seat","priority":2}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}],"feature_accounts":{"connectors":"business"}}"#, Some(&cookie)).await;
+    let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend","feature_accounts":{"artifacts":{"mode":"account","account_id":"usage-seat"}}}"#, Some(&cookie)).await).await;
     let key_secret = created["secret"]
         .as_str()
         .expect("a created key answers its secret once")

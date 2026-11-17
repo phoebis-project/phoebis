@@ -21,7 +21,7 @@ import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patte
 import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf, readWindows } from '@/lib/quota';
 import { compareOrderKeys, compareRequests, orderKeyOf, requestOrder, type OrderKey } from '@/lib/requests';
 import { WINDOW_HOURS, WINDOW_KEY } from '@/lib/windows';
-import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, blankAccountRow, lastReadingOf, usageOf, withholdsWindows } from './accounts';
+import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, blankAccountRow, featureGrantsOf, lastReadingOf, usageOf, withholdsWindows } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf, wholeHoursOf } from './analytics';
 import { ATTENTION, byKindThenSince, pairingExpiringOf } from './attention';
 import { CATALOG } from './catalog';
@@ -867,7 +867,8 @@ export class MockApi implements Api {
       // The backstop for a create that landed between the start and the confirm.
       if (this.accounts.some((a) => a.id === pairing.accountId)) throw new ApiError(409, ACCOUNT_TAKEN, null);
       const row = this.newAccountRow({ id: pairing.accountId, kind: 'oauth', label: pairing.label, secret: null }, 'ready', 'operator+new@example.com');
-      this.accounts = [...this.accounts, { ...row, credential: { ...row.credential, ...tokens } }];
+      const credential = { ...row.credential, ...tokens };
+      this.accounts = [...this.accounts, { ...row, credential, featureGrants: featureGrantsOf({ credential, kind: row.kind }) }];
     }
     // The router's confirm clears a plan-ended flag and records the plan found again only where the confirmed profile
     // reports a plan. The mock's profile is the stored document, so a document that names a free organization keeps
@@ -1061,7 +1062,7 @@ export class MockApi implements Api {
     // The route drops the credential and leaves the identity, so the row still says whose it was; with no credential
     // the poll's standing goes too. The usage block keeps the instant of the last reading, which the answer of a row
     // needing re-auth already withholds, and the stored row holds no window, as the answer withholds them.
-    this.putAccount(revised({ ...a, credential: NO_CREDENTIAL, fableWindow: null, status: 'unpaired', usage: usageOf({ ...a, ...lastReadingOf(a), status: 'unpaired' }), windows: [] }));
+    this.putAccount(revised({ ...a, credential: NO_CREDENTIAL, fableWindow: null, featureGrants: featureGrantsOf({ credential: NO_CREDENTIAL, kind: a.kind }), status: 'unpaired', usage: usageOf({ ...a, ...lastReadingOf(a), status: 'unpaired' }), windows: [] }));
     return latency(undefined, 250);
   }
 

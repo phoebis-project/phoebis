@@ -4972,3 +4972,310 @@ async fn a_pool_save_that_keeps_its_member_list_reads_on_the_routing_log_as_one_
         "the same save from a read before the edit is stale"
     );
 }
+
+/// Creates each id as an unpaired OAuth account through the route: a feature selection reads the account's kind
+/// alone.
+async fn oauth_accounts(app: &axum::Router, cookie: &str, ids: &[&str]) {
+    for id in ids {
+        let body = format!(r#"{{"id":"{id}","kind":"oauth","label":"{id}"}}"#);
+        assert_eq!(
+            post(app, "/admin/accounts", &body, Some(cookie))
+                .await
+                .status(),
+            201,
+            "{id}"
+        );
+    }
+}
+
+/// Posts each body to the create route under `path`, each answering 201.
+async fn created(app: &axum::Router, cookie: &str, path: &str, bodies: &[&str]) {
+    for body in bodies {
+        assert_eq!(
+            post(app, path, body, Some(cookie)).await.status(),
+            201,
+            "{body}"
+        );
+    }
+}
+
+/// The row of `GET /admin/{list}` under `id`, where `list` names the route and its answer's member alike.
+async fn listed(app: &axum::Router, cookie: &str, list: &str, id: &str) -> serde_json::Value {
+    json(get(app, &format!("/admin/{list}"), Some(cookie)).await).await[list]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .cloned()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_feature_selection_names_any_oauth_account_and_refuses_an_api_key_account_and_an_unknown_id(
+) {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    oauth_accounts(&app, &cookie, &["a"]).await;
+    created(
+        &app,
+        &cookie,
+        "/admin/pools",
+        &[
+            r#"{"id":"one","label":"One","strategy":"priority","members":[{"account_id":"a","priority":0}]}"#,
+            r#"{"id":"two","label":"Two","strategy":"priority"}"#,
+        ],
+    )
+    .await;
+    created(
+        &app,
+        &cookie,
+        "/admin/keys",
+        &[r#"{"id":"k","label":"K","pool_id":"one"}"#],
+    )
+    .await;
+    let selected = serde_json::json!({"artifacts": "a", "connectors": null});
+    let answer = patch(
+        &app,
+        "/admin/pools/two",
+        r#"{"feature_accounts":{"artifacts":"a"}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            answer.status().as_u16(),
+            json(answer).await["feature_accounts"].clone()
+        ),
+        (200, selected.clone()),
+        "a member of another pool is selected"
+    );
+    let mut refusals = Vec::new();
+    for (path, body) in [
+        (
+            "/admin/pools/two",
+            r#"{"feature_accounts":{"connectors":"direct"}}"#,
+        ),
+        (
+            "/admin/pools/two",
+            r#"{"feature_accounts":{"connectors":"ghost"}}"#,
+        ),
+        (
+            "/admin/keys/k",
+            r#"{"feature_accounts":{"artifacts":{"mode":"account","account_id":"direct"}}}"#,
+        ),
+    ] {
+        let refused = patch(&app, path, body, Some(&cookie)).await;
+        refusals.push((
+            refused.status().as_u16(),
+            json(refused).await["error"].clone(),
+        ));
+    }
+    assert_eq!(
+        refusals,
+        [
+            (
+                400,
+                serde_json::json!(
+                    "feature_accounts names account direct, which is an API-key account"
+                )
+            ),
+            (
+                400,
+                serde_json::json!("feature_accounts names account ghost, which does not exist")
+            ),
+            (
+                400,
+                serde_json::json!(
+                    "feature_accounts names account direct, which is an API-key account"
+                )
+            ),
+        ]
+    );
+    assert_eq!(
+        listed(&app, &cookie, "pools", "two").await["feature_accounts"],
+        selected,
+        "the refused writes left the pool as the first write left it"
+    );
+}
+
+#[tokio::test]
+async fn a_pool_save_that_drops_the_selected_member_keeps_the_selection() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    oauth_accounts(&app, &cookie, &["a"]).await;
+    created(
+        &app,
+        &cookie,
+        "/admin/pools",
+        &[
+            r#"{"id":"one","label":"One","strategy":"priority","members":[{"account_id":"a","priority":0}],"feature_accounts":{"artifacts":"a"}}"#,
+        ],
+    )
+    .await;
+    let saved =
+        json(patch(&app, "/admin/pools/one", r#"{"members":[]}"#, Some(&cookie)).await).await;
+    assert_eq!(
+        (&saved["members"], &saved["feature_accounts"]),
+        (
+            &serde_json::json!([]),
+            &serde_json::json!({"artifacts": "a", "connectors": null})
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_key_moved_to_another_pool_keeps_its_overrides() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    oauth_accounts(&app, &cookie, &["a"]).await;
+    created(
+        &app,
+        &cookie,
+        "/admin/pools",
+        &[
+            r#"{"id":"one","label":"One","strategy":"priority"}"#,
+            r#"{"id":"two","label":"Two","strategy":"priority"}"#,
+        ],
+    )
+    .await;
+    created(
+        &app,
+        &cookie,
+        "/admin/keys",
+        &[
+            r#"{"id":"k","label":"K","pool_id":"one","feature_accounts":{"artifacts":{"mode":"account","account_id":"a"},"connectors":{"mode":"none","account_id":null}}}"#,
+        ],
+    )
+    .await;
+    let moved =
+        json(patch(&app, "/admin/keys/k", r#"{"pool_id":"two"}"#, Some(&cookie)).await).await;
+    assert_eq!(
+        (&moved["pool_id"], &moved["feature_accounts"]),
+        (
+            &serde_json::json!("two"),
+            &serde_json::json!({
+                "artifacts": {"mode": "account", "account_id": "a"},
+                "connectors": {"mode": "none", "account_id": null}
+            })
+        )
+    );
+}
+
+#[tokio::test]
+async fn deleting_an_account_names_each_cleared_selection_in_its_change_row() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    oauth_accounts(&app, &cookie, &["a", "b"]).await;
+    created(
+        &app,
+        &cookie,
+        "/admin/pools",
+        &[
+            r#"{"id":"one","label":"One","strategy":"priority"}"#,
+            r#"{"id":"two","label":"Two","strategy":"priority","feature_accounts":{"connectors":"a"}}"#,
+        ],
+    )
+    .await;
+    created(
+        &app,
+        &cookie,
+        "/admin/keys",
+        &[
+            r#"{"id":"k","label":"K","pool_id":"one","feature_accounts":{"artifacts":{"mode":"account","account_id":"a"}}}"#,
+        ],
+    )
+    .await;
+    for id in ["a", "b"] {
+        assert_eq!(
+            delete(&app, &format!("/admin/accounts/{id}"), Some(&cookie))
+                .await
+                .status(),
+            204,
+            "{id}"
+        );
+    }
+    let deletions: Vec<(String, serde_json::Value)> = store
+        .registry_changes_after(0, 1_000)
+        .unwrap()
+        .into_iter()
+        .filter(|change| change.kind == "account_deleted")
+        .map(|change| {
+            (
+                change.target,
+                serde_json::from_str(&change.diff_json).unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        deletions,
+        [
+            (
+                "a".to_string(),
+                serde_json::json!({"feature_accounts_cleared": [
+                    {"owner": "key", "owner_id": "k", "feature": "artifacts", "account_id": "a"},
+                    {"owner": "pool", "owner_id": "two", "feature": "connectors", "account_id": "a"}
+                ]})
+            ),
+            ("b".to_string(), serde_json::json!({})),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_null_for_a_keys_feature_word_is_refused() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    oauth_accounts(&app, &cookie, &["a"]).await;
+    created(
+        &app,
+        &cookie,
+        "/admin/pools",
+        &[r#"{"id":"one","label":"One","strategy":"priority"}"#],
+    )
+    .await;
+    created(
+        &app,
+        &cookie,
+        "/admin/keys",
+        &[
+            r#"{"id":"k","label":"K","pool_id":"one","feature_accounts":{"artifacts":{"mode":"account","account_id":"a"}}}"#,
+        ],
+    )
+    .await;
+    let refused = patch(
+        &app,
+        "/admin/keys/k",
+        r#"{"feature_accounts":{"artifacts":null}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            json(refused).await["error"].clone()
+        ),
+        (
+            400,
+            serde_json::json!(
+                "feature_accounts.artifacts must be an object with mode and account_id"
+            )
+        )
+    );
+    assert_eq!(
+        listed(&app, &cookie, "keys", "k").await["feature_accounts"]["artifacts"],
+        serde_json::json!({"mode": "account", "account_id": "a"}),
+        "the refused write left the key as it stood"
+    );
+    let saved = patch(
+        &app,
+        "/admin/keys/k",
+        r#"{"feature_accounts":{"artifacts":{"mode":"none","account_id":null}}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+    assert_eq!(
+        listed(&app, &cookie, "keys", "k").await["feature_accounts"]["artifacts"],
+        serde_json::json!({"mode": "none", "account_id": null})
+    );
+}

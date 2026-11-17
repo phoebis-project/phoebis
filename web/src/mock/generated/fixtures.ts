@@ -119,6 +119,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "observed_at": 1791720995000
         }
       },
+      "feature_grants": [
+        "artifacts",
+        "connectors"
+      ],
       "limit_resets": {
         "cooldown_until": null,
         "eligible": true,
@@ -555,6 +559,10 @@ export const FIXTURES: Record<string, Fixture> = {
               "observed_at": 1791720995000
             }
           },
+          "feature_grants": [
+            "artifacts",
+            "connectors"
+          ],
           "limit_resets": {
             "cooldown_until": null,
             "eligible": true,
@@ -655,6 +663,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": [],
           "slow_down": null,
           "fast_lane": null,
+          "feature_grants": null,
           "limit_resets": null,
           "extra_usage": null,
           "pool": {
@@ -716,6 +725,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": [],
           "slow_down": null,
           "fast_lane": null,
+          "feature_grants": [
+            "artifacts"
+          ],
           "limit_resets": null,
           "extra_usage": null,
           "pool": {
@@ -768,6 +780,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": [],
           "slow_down": null,
           "fast_lane": null,
+          "feature_grants": [
+            "artifacts"
+          ],
           "limit_resets": {
             "cooldown_until": 1791806400000,
             "eligible": true,
@@ -843,6 +858,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": [],
           "slow_down": null,
           "fast_lane": null,
+          "feature_grants": [
+            "artifacts"
+          ],
           "limit_resets": {
             "cooldown_until": null,
             "eligible": true,
@@ -918,6 +936,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": [],
           "slow_down": null,
           "fast_lane": null,
+          "feature_grants": [
+            "artifacts"
+          ],
           "limit_resets": {
             "cooldown_until": null,
             "eligible": true,
@@ -1007,6 +1028,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": [],
           "slow_down": null,
           "fast_lane": null,
+          "feature_grants": [
+            "artifacts"
+          ],
           "limit_resets": {
             "cooldown_until": null,
             "eligible": false,
@@ -14858,6 +14882,20 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
+      "feature_accounts": {
+        "artifacts": {
+          "mode": "account",
+          "account_id": "usage-seat"
+        },
+        "connectors": {
+          "mode": "inherit",
+          "account_id": null
+        }
+      },
+      "effective_feature_accounts": {
+        "artifacts": "usage-seat",
+        "connectors": "business"
+      },
       "prefix": "KxtrG2cq",
       "created_at": 1791721000000,
       "updated_at": 1791721000000,
@@ -14935,6 +14973,20 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
+          "feature_accounts": {
+            "artifacts": {
+              "mode": "account",
+              "account_id": "usage-seat"
+            },
+            "connectors": {
+              "mode": "inherit",
+              "account_id": null
+            }
+          },
+          "effective_feature_accounts": {
+            "artifacts": "usage-seat",
+            "connectors": "business"
+          },
           "prefix": "KxtrG2cq",
           "created_at": 1791721000000,
           "updated_at": 1791721000001,
@@ -15320,6 +15372,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_diagnostics": false,
           "thinking_diagnostics": false,
           "auto_mode_server": true,
+          "feature_accounts": {
+            "artifacts": null,
+            "connectors": "business"
+          },
           "body_capture_hours": 24,
           "created_at": 1791721000000,
           "updated_at": 1791721000001,
@@ -15729,6 +15785,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_diagnostics": false,
           "thinking_diagnostics": false,
           "auto_mode_server": true,
+          "feature_accounts": {
+            "artifacts": null,
+            "connectors": null
+          },
           "body_capture_hours": 0,
           "created_at": 1791721000000,
           "updated_at": 1791721000000,
@@ -24792,8 +24852,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "auto_mode_server": null,
               "feature_accounts": {
                 "artifacts": {
-                  "mode": "inherit",
-                  "account_id": null
+                  "mode": "account",
+                  "account_id": "usage-seat"
                 },
                 "connectors": {
                   "mode": "inherit",
@@ -24901,7 +24961,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "auto_mode_server": true,
               "feature_accounts": {
                 "artifacts": null,
-                "connectors": null
+                "connectors": "business"
               },
               "keepalive.enabled": true,
               "keepalive.max_idle_seconds": 3600,

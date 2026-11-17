@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::accounts::{delete_and_bury, Tombstones};
 use crate::credentials::store_api_key_secret;
 use crate::{
-    AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError, SubscriptionRow,
-    LOCK_POISONED,
+    AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError,
+    SubscriptionRow, LOCK_POISONED,
 };
 
 text_enum! {
@@ -296,6 +296,12 @@ impl PoolFeatureAccounts {
             Feature::Connectors => self.connectors = account,
         }
     }
+
+    fn accounts(&self) -> impl Iterator<Item = &str> {
+        Feature::ALL
+            .into_iter()
+            .filter_map(|feature| self.get(feature))
+    }
 }
 
 impl FromSql for PoolFeatureAccounts {
@@ -351,6 +357,15 @@ impl KeyFeatureAccounts {
             Feature::Artifacts => self.artifacts = value,
             Feature::Connectors => self.connectors = value,
         }
+    }
+
+    fn accounts(&self) -> impl Iterator<Item = &str> {
+        Feature::ALL
+            .into_iter()
+            .filter_map(|feature| match self.get(feature) {
+                FeatureOverride::Account(id) => Some(id.as_str()),
+                FeatureOverride::Inherit | FeatureOverride::NoAccount => None,
+            })
     }
 }
 
@@ -961,15 +976,52 @@ fn stamp_subject(tx: &Transaction<'_>, table: &str, id: &str, at: i64) -> Result
     Ok(())
 }
 
+/// Refuses a selection that names an id no account holds, which a later account under the id would take over, or an
+/// account with no claude.ai token. It reads inside the write's transaction, so a deletion cannot land between the
+/// read and the write. The account's pool is no part of it, since any OAuth account of the router may serve a
+/// feature.
+fn check_feature_accounts<'a>(
+    tx: &Transaction<'_>,
+    accounts: impl Iterator<Item = &'a str>,
+) -> Result<(), StoreError> {
+    for id in accounts {
+        let kind: Option<AccountKind> = tx
+            .query_row(
+                "SELECT kind FROM accounts WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match kind {
+            Some(AccountKind::Oauth) => {}
+            Some(AccountKind::ApiKey) => {
+                return Err(StoreError::FeatureAccountNotOauth(id.to_string()))
+            }
+            None => return Err(StoreError::FeatureAccountNotFound(id.to_string())),
+        }
+    }
+    Ok(())
+}
+
+/// A selection the deletion of its account set to none. The derived order is the fields' order, so a sort lists the
+/// change row's entries by the owner's word, then its id, then the feature.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ClearedSelection {
+    pub owner: &'static str,
+    pub owner_id: String,
+    pub feature: Feature,
+}
+
 /// Sets each pool selection and each key override that names the deleted `account_id` to none, on the deletion's
-/// transaction. A key's override becomes none and never inherit, which would act under an account the operator did
-/// not choose for the key. Each row it writes takes a stamp past its own, so a dialog read before the deletion cannot
-/// save the old selection onto an account created again under the id.
+/// transaction, and answers what it set, sorted. A key's override becomes none and never inherit, which would act
+/// under an account the operator did not choose for the key. Each row it writes takes a stamp past its own, so a
+/// dialog read before the deletion cannot save the old selection onto an account created again under the id.
 pub(crate) fn clear_feature_accounts(
     tx: &Transaction<'_>,
     account_id: &str,
     at: i64,
-) -> Result<(), StoreError> {
+) -> Result<Vec<ClearedSelection>, StoreError> {
+    let mut cleared_selections = Vec::new();
     let pools = tx
         .prepare("SELECT id, feature_accounts_json FROM pools WHERE feature_accounts_json != '{}'")?
         .query_map([], |r| {
@@ -981,6 +1033,11 @@ pub(crate) fn clear_feature_accounts(
         for feature in Feature::ALL {
             if cleared.get(feature) == Some(account_id) {
                 cleared.set(feature, None);
+                cleared_selections.push(ClearedSelection {
+                    owner: "pool",
+                    owner_id: id.clone(),
+                    feature,
+                });
             }
         }
         if cleared != stored {
@@ -1005,6 +1062,11 @@ pub(crate) fn clear_feature_accounts(
         for feature in Feature::ALL {
             if cleared.get(feature) == &deleted {
                 cleared.set(feature, FeatureOverride::NoAccount);
+                cleared_selections.push(ClearedSelection {
+                    owner: "key",
+                    owner_id: id.clone(),
+                    feature,
+                });
             }
         }
         if cleared != stored {
@@ -1015,7 +1077,8 @@ pub(crate) fn clear_feature_accounts(
             stamp_subject(tx, "api_keys", &id, at)?;
         }
     }
-    Ok(())
+    cleared_selections.sort();
+    Ok(cleared_selections)
 }
 
 /// A JSON text column decoded as its row is read: a malformed value fails the read of its row, as an unknown word does.
@@ -1233,6 +1296,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = self.now_ms();
         let incarnation = crate::accounts::next_incarnation_in(&tx, Tombstones::Pool, &row.id)?;
+        check_feature_accounts(&tx, row.feature_accounts.accounts())?;
         tx.execute(&POOL_INSERT, pool_params!(row, now, incarnation as i64))
             .map_err(|error| {
                 create_failure(&tx, "pools", &row.id, error.into(), StoreError::from)
@@ -1338,6 +1402,9 @@ impl Store {
         if updated == 0 {
             return Err(StoreError::Stale);
         }
+        // Behind the fence, so a save read before an account's deletion answers stale rather than naming the id the
+        // deletion cleared. A refusal here drops the transaction with the statement above.
+        check_feature_accounts(&tx, row.feature_accounts.accounts())?;
         // A save that changed the member list alone records that list's row and no empty pool edit beside it.
         if pairs_changed || policy_changed {
             let diff = serde_json::Value::Object(pairs).to_string();
@@ -1453,6 +1520,7 @@ impl Store {
         let now = self.now_ms();
         let now = previous.map_or(now, |p| stamp_past(now, p));
         let incarnation = crate::accounts::next_incarnation_in(&tx, Tombstones::ApiKey, &row.id)?;
+        check_feature_accounts(&tx, row.feature_accounts.accounts())?;
         tx.execute(
             "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, companion_permissions_json, body_capture_hours, secret_digest, prefix, auto_mode_server, feature_accounts_json, created_at, updated_at, rotated_at, last_used_at, retired_secret_last_used_at, incarnation) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17, NULL, NULL, NULL, ?18)",
@@ -1556,6 +1624,9 @@ impl Store {
         if updated == 0 {
             return Err(StoreError::Stale);
         }
+        // Behind the fence, so a save read before an account's deletion answers stale rather than naming the id the
+        // deletion cleared. A refusal here drops the transaction with the statement above.
+        check_feature_accounts(&tx, row.feature_accounts.accounts())?;
         // Read back rather than taken from `row`: the edit leaves the display prefix, which the pairs name too.
         let after = tx.query_row(&key_row, params![row.id], row_to_key)?;
         let mut pairs = changed(&key_fields(&before), &key_fields(&after));

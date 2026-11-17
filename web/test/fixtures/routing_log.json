@@ -5110,8 +5110,8 @@
             "auto_mode_server": null,
             "feature_accounts": {
               "artifacts": {
-                "mode": "inherit",
-                "account_id": null
+                "mode": "account",
+                "account_id": "usage-seat"
               },
               "connectors": {
                 "mode": "inherit",
@@ -5219,7 +5219,7 @@
             "auto_mode_server": true,
             "feature_accounts": {
               "artifacts": null,
-              "connectors": null
+              "connectors": "business"
             },
             "keepalive.enabled": true,
             "keepalive.max_idle_seconds": 3600,
