@@ -46,6 +46,9 @@ export function failoverPresetOf(p: Pick<Pool, 'inFlightCap' | 'retryInPlaceSeco
 /** The share of a round's burn sum that its marks leave on the account's unmarked priced pins, as the router's. */
 export const SHED_MARK_SHARE = 0.1;
 
+/** The causes a walk that marks nothing answers, in the router's order. */
+const SHED_CAUSES = ['sliver', 'last_pin', 'standing'] as const;
+
 /**
  * The round's marking rule, the mirror of the router's walk: pins in the round's order with their burns on the round's
  * window, marked until the removed burn reaches `target`, none for a zero target. A pin under a standing mark is a move
@@ -57,11 +60,24 @@ export const SHED_MARK_SHARE = 0.1;
  * stays unmarked and so counts among those pins, as the router counts a pin it passes over. An unpriced pin's burn is
  * unknown and not none, so while one stands unmarked and under no standing mark the round refuses no mark. An
  * unpriced pin and one flagged `skip` count nothing toward the target.
+ *
+ * A walk that marks nothing answers its cause in `quiet`, the first word a pin of the walk read in the order `sliver`,
+ * `last_pin`, `standing`. That is the router's order of its round's causes, `no_runway`, `sliver`, `off_window`,
+ * `fable_model`, `ended`, `no_burn`, `unpriced`, `last_pin`, `standing`, in the part a walk here answers: the preview
+ * reads `no_runway` where no sibling has runway for any pin a round could mark, and `unpriced` where no pin is priced
+ * or no walk names a cause. A pin under a standing mark reads `standing` ahead of each other test, wherever the walk
+ * stops, as the router reads it. Otherwise a pin at the walk's position under `SHED_MARK_SHARE` of the rest reads
+ * `sliver`, a pin the guard refuses there reads `last_pin`, and a pin flagged `skip` and an unpriced pin read no word.
+ * A covering pin the guard keeps from the pick reads `last_pin` at its own position, since a walk that marks nothing
+ * reaches it with the same rest. The cause is null where a mark lands and where the target reads zero or less.
  */
-export function shedMarks(ordered: { burn: number | null; cost?: number; id: string; skip?: boolean; standing?: boolean }[], target: number): string[] {
+export function shedMarks(
+  ordered: { burn: number | null; cost?: number; id: string; skip?: boolean; standing?: boolean }[],
+  target: number,
+): { marks: string[]; quiet: 'last_pin' | 'sliver' | 'standing' | null } {
   type Pin = (typeof ordered)[number];
   const marks: string[] = [];
-  if (Number.isNaN(target) || target <= 0) return marks;
+  if (Number.isNaN(target) || target <= 0) return { marks, quiet: null };
   const sum = ordered.reduce((n, pin) => n + (pin.burn ?? 0), 0);
   const unpricedStays = ordered.some((pin) => pin.burn === null && pin.standing !== true);
   // A standing mark is a move pending, so its burn counts as removed before the walk marks anything else.
@@ -72,6 +88,8 @@ export function shedMarks(ordered: { burn: number | null; cost?: number; id: str
   // An unpriced burn moves the removed sum nowhere, so marking the pin would shed a session on a guess. A pin with no
   // sibling to move to stays where it is, and its burn stays on the account.
   const open = (pin: Pin): pin is Pin & { burn: number } => pin.burn !== null && pin.skip !== true && pin.standing !== true;
+  const read = new Set<(typeof SHED_CAUSES)[number]>();
+  if (ordered.some((pin) => pin.standing === true)) read.add('standing');
   for (const [index, pin] of ordered.entries()) {
     // An indivisible pin may carry the removed burn past the target, and the round stops there.
     if (removed >= target) break;
@@ -88,13 +106,19 @@ export function shedMarks(ordered: { burn: number | null; cost?: number; id: str
       break;
     }
     // A pin under the floor relieves too little of the rest to be worth its move, so it stays.
-    if (pin.burn < SHED_MARK_SHARE * rest) continue;
+    if (pin.burn < SHED_MARK_SHARE * rest) {
+      read.add('sliver');
+      continue;
+    }
     // The guard refuses this pin alone: a later pin's smaller mark may still leave a tenth on the account.
-    if (refused(pin)) continue;
+    if (refused(pin)) {
+      read.add('last_pin');
+      continue;
+    }
     marks.push(pin.id);
     removed += pin.burn;
   }
-  return marks;
+  return { marks, quiet: marks.length > 0 ? null : (SHED_CAUSES.find((cause) => read.has(cause)) ?? null) };
 }
 
 /**
@@ -186,14 +210,18 @@ export interface ShedPreview {
   /** The pool's switch is off: no round runs, whatever the projection reads. */
   off: boolean;
   /**
-   * Why the rounds mark nothing though a pin there is priced, read over every member over the ceiling in the walk's
-   * order: the priced pins burn nothing, so the target is zero (`burnless`), each priced pin is warm under `never`
-   * (`warm`), or each pin a round could mark is its member's last (`last`). Null where the switch is off, where no
-   * member is over the ceiling, where a round marks a session, where no pin is priced and where no sibling has runway.
+   * Why the rounds mark nothing though a pin there is priced, read over every member over the ceiling: the priced pins
+   * burn nothing, so the target is zero (`burnless`), or each priced pin that burns is warm under `never` (`warm`).
+   * Past those, the first cause in the router's order that one member's walk answered by `shedMarks`: `sliver`, then
+   * `last_pin`, then `standing`. Null where the switch is off, where no member is over the ceiling, where a round
+   * marks a session, where no pin is priced, where no sibling has runway and where no walk names a cause.
    */
-  quiet: 'burnless' | 'last' | 'warm' | null;
+  quiet: 'burnless' | 'last_pin' | 'sliver' | 'standing' | 'warm' | null;
   sessions: number;
-  /** The rounds mark nothing because no pin on the members over the ceiling is priced, or none is pinned there. */
+  /**
+   * The rounds mark nothing and read the router's own fallback word: no pin on the members over the ceiling is priced,
+   * or none is pinned there, or a pin burns there and no walk names a cause, as under a target of zero.
+   */
   unpriced: boolean;
   warm: number;
 }
@@ -296,6 +324,7 @@ export function shedPreview(
   let stranded = 0;
   let priced = 0;
   let burning = 0;
+  const causes = new Set<(typeof SHED_CAUSES)[number]>();
   const conversation = sessions.flatMap((s) => {
     const display = s.pinned && !s.agentContexts.some((c) => c.agentId === s.agentId && c.model === s.model) ? [walkedPin(s, null, now)] : [];
     return [...display, ...s.agentContexts.map((c) => walkedPin(s, c, now))];
@@ -366,8 +395,12 @@ export function shedPreview(
     const pricedFirst = (a: number | null, b: number | null) => compareFigures(a, b, 'desc');
     const perRewrite = (p: Pin) => (p.order === null ? null : p.order / p.rewrite);
     const byRewrite = (a: Pin, b: Pin) => pricedFirst(perRewrite(a), perRewrite(b));
-    const cold = walked.filter((p) => !p.warm).sort((a, b) => pricedFirst(a.order, b.order));
-    const warm = walked.filter((p) => p.warm).sort(byRewrite);
+    // A pin that burns nothing on the fired window has nothing to shed, so it leaves before the order as the router's
+    // partition takes it, ahead of any standing mark: it stands in neither the guard's sum nor the counts of the pins a
+    // round could mark, and it still counts as priced.
+    const ranked = walked.filter((p) => p.burn !== 0);
+    const cold = ranked.filter((p) => !p.warm).sort((a, b) => pricedFirst(a.order, b.order));
+    const warm = ranked.filter((p) => p.warm).sort(byRewrite);
     const ordered = pool.warmSessions === 'always' ? [...cold, ...warm].sort(byRewrite) : [...cold, ...warm];
     // Under `never` the walk stops after the cold pins, so a warm pin stays in the order, where the burn guard still
     // counts its burn among the member's unmarked pins, and is never marked.
@@ -375,23 +408,26 @@ export function shedPreview(
     const total = walked.reduce((sum, p) => sum + (p.burn ?? 0), 0);
     // A cold pin's move costs nothing, since its cache is rewritten wherever it runs next. A move the cost model sizes
     // none of reads 0, as the router's pick reads it.
-    const marks = new Set(
-      shedMarks(
-        ordered.map((p) => ({ burn: p.burn, cost: pool.warmSessions === 'always' || p.warm ? (p.moveCost ?? 0) : 0, id: p.id, skip: !open(p) || !p.runway, standing: p.standing })),
-        Math.min(excess, pool.shedCap * total),
-      ),
+    const walk = shedMarks(
+      ordered.map((p) => ({ burn: p.burn, cost: pool.warmSessions === 'always' || p.warm ? (p.moveCost ?? 0) : 0, id: p.id, skip: !open(p) || !p.runway, standing: p.standing })),
+      Math.min(excess, pool.shedCap * total),
     );
+    if (walk.quiet !== null) causes.add(walk.quiet);
+    const marks = new Set(walk.marks);
     const taken = walked.filter((p) => marks.has(p.id));
     covered += Math.min(taken.reduce((sum, p) => sum + (p.burn ?? 0), 0), excess);
     marked += taken.length;
     warmMarked += taken.filter((p) => p.warm).length;
-    walkable += walked.filter(open).length;
+    walkable += ranked.filter(open).length;
     priced += walked.filter((p) => p.burn !== null).length;
     burning += total;
-    stranded += walked.filter((p) => open(p) && !p.runway).length;
+    stranded += ranked.filter((p) => open(p) && !p.runway).length;
   }
   const noRunway = marked === 0 && walkable > 0 && stranded === walkable;
   const walkedQuiet = pool.loadShedding && hot.length > 0 && marked === 0 && priced > 0 && !noRunway;
+  // The router runs a round per member, each with its own cause, and the preview draws one line for them all, so the
+  // line names the first cause in the router's order that any walk answered.
+  const quiet = !walkedQuiet ? null : burning === 0 ? 'burnless' : walkable === 0 ? 'warm' : (SHED_CAUSES.find((cause) => causes.has(cause)) ?? null);
   return {
     closest: hot.length === 0 ? closest : null,
     covered,
@@ -399,15 +435,22 @@ export function shedPreview(
     hot,
     noRunway,
     off: !pool.loadShedding,
-    quiet: !walkedQuiet ? null : burning === 0 ? 'burnless' : walkable === 0 ? 'warm' : 'last',
+    quiet,
     sessions: marked,
-    // A walk reads the pins' prices, so with the switch off or no member over the ceiling there is no price to lack.
-    unpriced: pool.loadShedding && hot.length > 0 && marked === 0 && priced === 0,
+    // A walk reads the pins' prices, so with the switch off or no member over the ceiling there is no price to lack. A
+    // round whose walks name no cause though a pin burns reads the router's own fallback word too.
+    unpriced: (pool.loadShedding && hot.length > 0 && marked === 0 && priced === 0) || (walkedQuiet && quiet === null),
     warm: warmMarked,
   };
 }
 
-const QUIET_REASON: Record<NonNullable<ShedPreview['quiet']>, string> = { burnless: 'none burns.', last: "each is its member's last.", warm: 'each is warm.' };
+const QUIET_REASON: Record<NonNullable<ShedPreview['quiet']>, string> = {
+  burnless: 'none burns.',
+  last_pin: 'each would leave its member too little burn.',
+  sliver: 'each is too small to move.',
+  standing: 'the sessions already marked cover it.',
+  warm: 'each is warm.',
+};
 
 /**
  * The shedding group's dry run in up to three sentences, plus one per held member: the switch when it is off, the
