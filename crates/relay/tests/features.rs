@@ -964,8 +964,8 @@ async fn a_call_on_each_plane_publishes_its_end() {
     up.shutdown().await;
 }
 
-/// A writer that stopped draining fills the bus queue behind its channel, and a refusal that waited there would hold its
-/// connection, the launch script's request without a key among them.
+/// A writer that stopped draining fills the bus queue behind its channel, and a refusal that waited there would hold
+/// its connection, the launch script's request without a key among them.
 #[tokio::test]
 async fn a_refused_feature_call_answers_while_the_ledger_is_behind_and_the_bus_queue_is_full() {
     let up = upstream().await;
