@@ -227,8 +227,8 @@ fn a_feature_certificate_is_issued_again_before_it_ends() {
         let at = Arc::clone(&at);
         Arc::new(move || at.load(AtomicOrdering::SeqCst))
     };
-    let leaves = FeatureLeaves::issue(Arc::new(ca), clock).unwrap();
-    let end = |leaves: &FeatureLeaves| leaves.current("api.anthropic.com").unwrap().not_after;
+    let mut leaves = FeatureLeaves::issue(Arc::new(ca), clock).unwrap();
+    let end = |leaves: &FeatureLeaves| leaves.leaves()[0].not_after;
     let first = end(&leaves);
     let renewal = first - LEAF_RENEW_AHEAD.as_millis() as i64;
 

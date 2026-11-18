@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use fake_upstream::FakeUpstream;
 use phoebis_attention::{
-    Attention, AttentionHandles, AttentionParts, FeatureCaFacts, KeepaliveCap, KeepaliveFacts,
-    KeepaliveStanding, PairFacts, TlsPairs,
+    Attention, AttentionHandles, AttentionParts, KeepaliveCap, KeepaliveFacts, KeepaliveStanding,
+    PairFacts, TlsPairs,
 };
 use phoebis_bus::{
     Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved,
@@ -93,6 +93,7 @@ impl Rig {
         phoebis_attention::spawn(AttentionParts {
             bus: self.bus.clone(),
             clock: self.clock(),
+            feature_ca: None,
             keepalive: keepalive.unwrap_or_else(|| Arc::new(Standing::idle())),
             ledger: Some(self.ledger.clone()),
             limit_reset_warning_days: 5,
@@ -121,10 +122,6 @@ impl Pairs {
 impl TlsPairs for Pairs {
     fn pairs(&self) -> Vec<PairFacts> {
         self.0.lock().unwrap().clone()
-    }
-
-    fn feature_ca(&self) -> Option<FeatureCaFacts> {
-        None
     }
 }
 

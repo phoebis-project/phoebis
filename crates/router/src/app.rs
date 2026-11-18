@@ -25,7 +25,7 @@ use phoebis_relay::{
     Accounting, CatalogService, Limits, ListenLimits, LiveAcceptor, Relay, ShutdownMark,
     REFRESH_TICK,
 };
-use phoebis_store::permissions::{check_private_file, data_dir_of};
+use phoebis_store::permissions::data_dir_of;
 use phoebis_store::{StorageKey, Store};
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::pool::Pool;
@@ -33,7 +33,7 @@ use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use tokio::task::JoinSet;
 
 use crate::config::{Config, RoutingConfig, StatsConfig, StorageConfig, UpstreamConfig};
-use crate::feature_ca::{CaFacts, FeatureCa, FeatureLeaves, FEATURE_HOSTS};
+use crate::feature_ca::{self, CaFacts, FeatureCa, FeatureLeaves, FEATURE_HOSTS};
 use crate::tls::PublicListener;
 use crate::{listen, tls};
 
@@ -377,7 +377,7 @@ pub async fn run_until(
         Duration::from_secs(u64::from(config.sessions.memory_retention_days) * 86_400),
     );
     let relay = Arc::new(match &feature_ca {
-        Some(ca) => relay.with_feature_ca(ca.facts().pem.clone().into()),
+        Some((_, ca)) => relay.with_feature_ca(ca.facts().pem.clone().into()),
         None => relay,
     });
     let memory_flush = relay
@@ -412,6 +412,10 @@ pub async fn run_until(
         phoebis_attention::spawn(phoebis_attention::AttentionParts {
             bus: bus.clone(),
             clock: clock.clone(),
+            feature_ca: feature_ca.as_ref().map(|(_, ca)| FeatureCaFacts {
+                cert_file: ca.facts().cert_file.clone(),
+                not_after_ms: ca.facts().leaf.not_after_ms,
+            }),
             keepalive: Arc::new(EngineFacts {
                 engine: keepalive.clone(),
             }),
@@ -463,7 +467,9 @@ pub async fn run_until(
         tables: tables.clone(),
         settings: Arc::new(settings_view(
             &config,
-            feature_ca.as_ref().map(FeatureCa::facts),
+            feature_ca
+                .as_ref()
+                .map(|(listen, ca)| (*listen, ca.facts())),
         )),
         // Cloned rather than moved: the local binding still serves the companion router and the shutdown
         // sequence below.
@@ -522,39 +528,38 @@ pub async fn run_until(
     let admin_live = live_pair(admin_tls, loaded_at);
     let proxy_acceptor = acceptor(&proxy_live);
     let admin_acceptor = acceptor(&admin_live);
-    tls_live.fill(
-        vec![
-            (PublicListener::Proxy, proxy_live),
-            (PublicListener::Admin, admin_live),
-        ],
-        feature_ca.as_ref().map(|ca| FeatureCaFacts {
-            cert_file: ca.facts().cert_file.clone(),
-            not_after_ms: ca.facts().leaf.not_after_ms,
-        }),
-    );
+    tls_live.fill(vec![
+        (PublicListener::Proxy, proxy_live),
+        (PublicListener::Admin, admin_live),
+    ]);
     // Issued before any bind as the pairs are read, so a certificate the start cannot issue refuses with its line and
     // no port is taken. The listener joins no reload, since it has no pair of the operator's to read again.
-    let features = match feature_ca.zip(config.features.as_ref()) {
+    let features = match feature_ca {
         None => None,
-        Some((ca, block)) => {
-            let facts = ca.facts().clone();
-            let leaves = Arc::new(FeatureLeaves::issue(Arc::new(ca), clock.clone())?);
+        Some((listen, ca)) => {
+            let ca = Arc::new(ca);
+            let leaves = FeatureLeaves::issue(Arc::clone(&ca), clock.clone())?;
             let acceptor = Arc::new(LiveAcceptor::new(tls::feature_acceptor(&leaves)?));
             tracing::info!(
                 listener = "features",
                 names = ?FEATURE_HOSTS,
-                ca_fingerprint = %facts.fingerprint,
-                ca_not_after = %facts.leaf.not_after,
+                ca_fingerprint = %ca.facts().fingerprint,
+                ca_not_after = %ca.facts().leaf.not_after,
                 "serving TLS"
             );
-            Some((block.listen, leaves, acceptor))
+            Some((listen, leaves, acceptor))
         }
     };
     let proxy_listener = bind("proxy.listen", config.proxy.listen).await?;
     let admin_listener = bind("admin.listen", config.admin.listen).await?;
     let metrics_listener = bind("stats.metrics_listen", config.stats.metrics_listen).await?;
-    let features_listener = match &features {
-        Some((listen, ..)) => Some(bind("features.listen", *listen).await?),
+    let features = match features {
+        Some((listen, leaves, acceptor)) => Some((
+            listen,
+            bind("features.listen", listen).await?,
+            leaves,
+            acceptor,
+        )),
         None => None,
     };
     tracing::info!(
@@ -564,7 +569,7 @@ pub async fn run_until(
         // An `Option` records nothing at `None`, so the line names no feature listener on a router without one.
         features = features
             .as_ref()
-            .map(|(listen, ..)| tracing::field::display(format!("https://{listen}"))),
+            .map(|(listen, ..)| tracing::field::display(tls::feature_url(*listen))),
         profile = profile.name,
         "listening"
     );
@@ -602,22 +607,25 @@ pub async fn run_until(
             }
         })
     };
-    let renewal = features.as_ref().map(|(_, leaves, acceptor)| {
-        let (leaves, acceptor) = (Arc::clone(leaves), Arc::clone(acceptor));
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(FEATURE_RENEWAL_INTERVAL);
-            loop {
-                tick.tick().await;
-                if let Err(error) = tls::renew_feature_certificates(&leaves, &acceptor) {
-                    tracing::warn!(
-                        %error,
-                        "the feature listener's certificates were not renewed, so the listener keeps the acceptor it \
-                         had and the next tick runs the whole step again"
-                    );
+    let (renewal, features) = features
+        .map(|(_, listener, mut leaves, acceptor)| {
+            let live = Arc::clone(&acceptor);
+            let renewal = tokio::spawn(async move {
+                let mut tick = tokio::time::interval(FEATURE_RENEWAL_INTERVAL);
+                loop {
+                    tick.tick().await;
+                    if let Err(error) = tls::renew_feature_certificates(&mut leaves, &live) {
+                        tracing::warn!(
+                            %error,
+                            "the feature listener's certificates were not renewed, so the listener keeps the acceptor \
+                             it had and the next tick runs the whole step again"
+                        );
+                    }
                 }
-            }
+            });
+            (renewal, (listener, acceptor))
         })
-    });
+        .unzip();
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
     let proxy_stop = stop_rx.clone();
     let limits = |max_connections| ListenLimits {
@@ -656,22 +664,19 @@ pub async fn run_until(
             admin_acceptor,
         ))
         .id();
-    let features_task =
-        features_listener
-            .zip(features.as_ref())
-            .map(|(listener, (_, _, acceptor))| {
-                servers
-                    .spawn(phoebis_relay::serve_features(
-                        listener,
-                        relay.clone(),
-                        Arc::clone(&control),
-                        &profile.features,
-                        stop_rx.clone(),
-                        limits(PROXY_MAX_CONNECTIONS),
-                        Arc::clone(acceptor),
-                    ))
-                    .id()
-            });
+    let features_task = features.map(|(listener, acceptor)| {
+        servers
+            .spawn(phoebis_relay::serve_features(
+                listener,
+                relay.clone(),
+                Arc::clone(&control),
+                &profile.features,
+                stop_rx.clone(),
+                limits(PROXY_MAX_CONNECTIONS),
+                acceptor,
+            ))
+            .id()
+    });
     servers.spawn(listen::serve(
         "metrics",
         metrics_listener,
@@ -912,23 +917,22 @@ fn log_ledger_opened(
     );
 }
 
-fn settings_view(config: &Config, feature_ca: Option<&CaFacts>) -> SettingsView {
+fn settings_view(
+    config: &Config,
+    features: Option<(std::net::SocketAddr, &CaFacts)>,
+) -> SettingsView {
     SettingsView {
         api_prices_path: config
             .stats
             .api_prices_path
             .as_ref()
             .map(|p| p.display().to_string()),
-        features: config
-            .features
-            .as_ref()
-            .zip(feature_ca)
-            .map(|(block, ca)| FeaturesView {
-                ca_expires: ca.leaf.not_after_ms,
-                ca_fingerprint: ca.fingerprint.clone(),
-                ca_pem: ca.pem.clone(),
-                listen: block.listen.to_string(),
-            }),
+        features: features.map(|(listen, ca)| FeaturesView {
+            ca_expires: ca.leaf.not_after_ms,
+            ca_fingerprint: ca.fingerprint.clone(),
+            ca_pem: ca.pem.clone(),
+            listen: listen.to_string(),
+        }),
         ledger_path: config.stats.ledger_path.display().to_string(),
         limit_reset_warning_days: config.usage.limit_reset_warning_days,
         metrics_listen: config.stats.metrics_listen.to_string(),
@@ -968,12 +972,16 @@ pub fn load_storage_key(storage: &StorageConfig) -> anyhow::Result<StorageKey> {
     })
 }
 
-/// The feature CA where the file has a `features` block, opened before any listener binds so a CA the start cannot
-/// use refuses with its line and no port is taken. Without the block nothing reads the data directory's CA files.
-fn open_feature_ca(config: &Config, now: i64) -> anyhow::Result<Option<FeatureCa>> {
-    if config.features.is_none() {
+/// The feature CA with the block's listen address where the file has a `features` block, opened before any listener
+/// binds so a CA the start cannot use refuses with its line and no port is taken. Without the block nothing reads the
+/// data directory's CA files.
+fn open_feature_ca(
+    config: &Config,
+    now: i64,
+) -> anyhow::Result<Option<(std::net::SocketAddr, FeatureCa)>> {
+    let Some(block) = &config.features else {
         return Ok(None);
-    }
+    };
     let (ca, created) = FeatureCa::open(data_dir_of(&config.storage.path), now)?;
     let facts = ca.facts();
     if created {
@@ -983,13 +991,10 @@ fn open_feature_ca(config: &Config, now: i64) -> anyhow::Result<Option<FeatureCa
             "feature CA created"
         );
     }
-    for warning in tls::feature_ca_expiry_line(facts)
-        .into_iter()
-        .chain(check_private_file(&facts.key_file, 0o600))
-    {
+    for warning in feature_ca::warnings(facts) {
         tracing::warn!("{warning}");
     }
-    Ok(Some(ca))
+    Ok(Some((block.listen, ca)))
 }
 
 /// The price table, from `stats.api_prices_path` or built in, refused under the line the start and `check-config`

@@ -15,12 +15,12 @@ use boring::ssl::{
 };
 use boring::x509::X509;
 use phoebis_admin::{Reloaded, TlsReload};
-use phoebis_attention::{FeatureCaFacts, PairFacts, TlsPairs};
+use phoebis_attention::{PairFacts, TlsPairs};
 use phoebis_relay::LiveAcceptor;
 use phoebis_transport::ALPN_HTTP1;
 
 use crate::config::ListenerTls;
-use crate::feature_ca::{CaFacts, FeatureCaError, FeatureLeaves, IssuedLeaf, FEATURE_HOSTS};
+use crate::feature_ca::{FeatureCaError, FeatureLeaves, IssuedLeaf, FEATURE_HOSTS};
 
 /// The acceptor an accept loop takes: `None` is plain HTTP.
 pub type Acceptor = Option<Arc<LiveAcceptor>>;
@@ -130,28 +130,19 @@ pub fn load_pair(
 ) -> Result<Loaded, TlsError> {
     let key = listener.key();
     let checked = read_checked(key, cert_file, key_file)?;
-    let (_, chain) = certificates(key, cert_file, &checked.cert_pem)?;
 
-    let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).map_err(stack(key))?;
+    let mut builder = http1_acceptor(key)?;
     builder.set_certificate(&checked.leaf).map_err(stack(key))?;
-    for intermediate in chain {
+    for intermediate in checked.chain {
         builder
             .add_extra_chain_cert(intermediate)
             .map_err(stack(key))?;
     }
-    // BoringSSL compares the key with the leaf's public half as the key is set and refuses there
-    // (`KEY_VALUES_MISMATCH`); `check_private_key` only confirms both halves are in place.
+    // `read_checked` matched the key with the leaf's public half already. BoringSSL compares the two again as the key
+    // is set (`KEY_VALUES_MISMATCH`), and a refusal there gets the mismatch's line.
     builder
         .set_private_key(&checked.key)
         .map_err(|_| mismatch(key, cert_file, key_file))?;
-    builder
-        .check_private_key()
-        .map_err(|_| mismatch(key, cert_file, key_file))?;
-    // Both loops serve HTTP/1 only; a client that offers h2 is steered at the handshake rather than failing after
-    // it. The server side selects, so this is the select callback and not `set_alpn_protos`.
-    builder.set_alpn_select_callback(|_, offered| {
-        select_next_proto(ALPN_HTTP1, offered).ok_or(AlpnError::NOACK)
-    });
 
     Ok(Loaded {
         listener,
@@ -170,14 +161,10 @@ const FEATURES: &str = "features";
 pub(crate) fn feature_acceptor(leaves: &FeatureLeaves) -> Result<SslAcceptor, TlsError> {
     let contexts = FEATURE_HOSTS
         .iter()
-        .map(|host| {
-            let leaf = leaves
-                .current(host)
-                .expect("the leaves hold a certificate for each feature host");
-            host_context(&leaf).map(|context| (*host, context))
-        })
+        .zip(leaves.leaves())
+        .map(|(host, leaf)| host_context(leaf).map(|context| (*host, context)))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut builder = http1_acceptor()?;
+    let mut builder = http1_acceptor(FEATURES)?;
     // The base context holds no certificate, so a handshake the callback does not hand to a host's context gets none.
     builder.set_servername_callback(move |ssl, alert| {
         let picked = ssl.servername(NameType::HOST_NAME).and_then(|name| {
@@ -201,7 +188,7 @@ pub(crate) fn feature_acceptor(leaves: &FeatureLeaves) -> Result<SslAcceptor, Tl
 /// since an issue the leaves took stays taken when the build behind it fails: a step that failed is tried whole at the
 /// next call.
 pub(crate) fn renew_feature_certificates(
-    leaves: &FeatureLeaves,
+    leaves: &mut FeatureLeaves,
     live: &LiveAcceptor,
 ) -> Result<usize, FeatureCaError> {
     let issued = leaves.renew_due()?;
@@ -214,25 +201,28 @@ pub(crate) fn renew_feature_certificates(
 fn host_context(leaf: &IssuedLeaf) -> Result<SslContext, TlsError> {
     let cert = X509::from_der(&leaf.cert_der).map_err(stack(FEATURES))?;
     let key = PKey::private_key_from_pkcs8(&leaf.key_der).map_err(stack(FEATURES))?;
-    let mut builder = http1_acceptor()?;
+    let mut builder = http1_acceptor(FEATURES)?;
     builder.set_certificate(&cert).map_err(stack(FEATURES))?;
     builder.set_private_key(&key).map_err(stack(FEATURES))?;
     Ok(builder.build().into_context())
 }
 
-/// A `mozilla_intermediate_v5` acceptor that steers each client to HTTP/1.1, as `load_pair` builds one.
-fn http1_acceptor() -> Result<SslAcceptorBuilder, TlsError> {
-    let mut builder =
-        SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).map_err(stack(FEATURES))?;
+/// A `mozilla_intermediate_v5` acceptor that steers each client to HTTP/1.1, refused under `key`.
+fn http1_acceptor(key: &'static str) -> Result<SslAcceptorBuilder, TlsError> {
+    let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).map_err(stack(key))?;
+    // Each listener serves HTTP/1 only, so a client that offers h2 is steered at the handshake rather than failing
+    // after it. The server side selects, so this is the select callback and not `set_alpn_protos`.
     builder.set_alpn_select_callback(|_, offered| {
         select_next_proto(ALPN_HTTP1, offered).ok_or(AlpnError::NOACK)
     });
     Ok(builder)
 }
 
-/// A pair `read_checked` read and found sound: both files' bytes, the parsed key and leaf, and the leaf's facts.
+/// A pair `read_checked` read and found sound: both files' bytes, the parsed key, the leaf with the intermediates
+/// behind it, and the leaf's facts.
 pub(crate) struct CheckedPair {
     pub cert_pem: Vec<u8>,
+    pub chain: Vec<X509>,
     pub key: PKey<Private>,
     pub key_pem: Vec<u8>,
     pub leaf: X509,
@@ -248,7 +238,7 @@ pub(crate) fn read_checked(
     key_file: &Path,
 ) -> Result<CheckedPair, TlsError> {
     let (cert_pem, key_pem) = read_pair(key, cert_file, key_file)?;
-    let (leaf, _) = certificates(key, cert_file, &cert_pem)?;
+    let (leaf, chain) = certificates(key, cert_file, &cert_pem)?;
     let pkey = PKey::private_key_from_pem(&key_pem).map_err(|_| TlsError::NoKey {
         key,
         path: key_file.to_path_buf(),
@@ -260,6 +250,7 @@ pub(crate) fn read_checked(
     let facts = leaf_facts(key, cert_file, &leaf)?;
     Ok(CheckedPair {
         cert_pem,
+        chain: chain.collect(),
         key: pkey,
         key_pem,
         leaf,
@@ -427,6 +418,12 @@ pub fn url(tls: &Option<ListenerTls>, addr: SocketAddr) -> String {
     format!("{}://{addr}", scheme(tls))
 }
 
+/// The feature listener's base URL for the `listening` line and `status`: `https`, since the listener has no plain
+/// mode.
+pub fn feature_url(listen: SocketAddr) -> String {
+    format!("https://{listen}")
+}
+
 /// The `check-config` line for one listener: `{listener} listens on {listen} over plain HTTP`, or `over TLS
 /// (certificate {cert_file}, expires {not_after})` for a loaded pair. `serving` is `load`'s answer for the listener.
 pub fn describe(listener: &str, listen: SocketAddr, serving: &Serving) -> String {
@@ -469,11 +466,6 @@ pub fn expiry_line(key: &str, cert_file: &Path, leaf: &LeafFacts) -> Option<Stri
                 leaf.not_after
             )
         })
-}
-
-/// `expiry_line` for the feature CA under `features.ca`, the key its refusals and its attention item name it by.
-pub fn feature_ca_expiry_line(ca: &CaFacts) -> Option<String> {
-    expiry_line("features.ca", &ca.cert_file, &ca.leaf)
 }
 
 /// `permissions::check_private_file(key_file, 0o600)`'s lines, except for the shape the service unit reads a key
@@ -599,48 +591,29 @@ impl Live {
     }
 }
 
-/// The set the start shares with the admin state before the pairs load: created empty, filled once by `fill` with the
-/// feature CA's facts beside the pairs, and read by the reload route (`TlsReload`) and by the attention reader
-/// (`TlsPairs`).
+/// The set the start shares with the admin state before the pairs load: created empty, filled once by `fill`, and
+/// read by the reload route (`TlsReload`) and by the attention reader (`TlsPairs`).
 pub struct LiveSet {
-    filled: OnceLock<Filled>,
-}
-
-struct Filled {
-    listeners: Vec<(PublicListener, Option<Live>)>,
-    /// Read once at the start, since nothing replaces the CA under a running router.
-    feature_ca: Option<FeatureCaFacts>,
+    listeners: OnceLock<Vec<(PublicListener, Option<Live>)>>,
 }
 
 impl LiveSet {
     pub fn new() -> Arc<Self> {
         Arc::new(LiveSet {
-            filled: OnceLock::new(),
+            listeners: OnceLock::new(),
         })
     }
 
     /// The public listeners in their order, `(PublicListener::Proxy, ..)` then `(PublicListener::Admin, ..)`, each
-    /// with its `Live` or `None` for plain HTTP, and the feature CA, `None` without the `features` block.
-    pub fn fill(
-        &self,
-        listeners: Vec<(PublicListener, Option<Live>)>,
-        feature_ca: Option<FeatureCaFacts>,
-    ) {
-        let filled = self
-            .filled
-            .set(Filled {
-                listeners,
-                feature_ca,
-            })
-            .is_ok();
+    /// with its `Live` or `None` for plain HTTP.
+    pub fn fill(&self, listeners: Vec<(PublicListener, Option<Live>)>) {
+        let filled = self.listeners.set(listeners).is_ok();
         debug_assert!(filled, "the start fills the listeners' pairs once");
     }
 
     /// Empty until the start fills the set, which it does before any listener binds.
     fn listeners(&self) -> &[(PublicListener, Option<Live>)] {
-        self.filled
-            .get()
-            .map_or(&[], |filled| filled.listeners.as_slice())
+        self.listeners.get().map_or(&[], Vec::as_slice)
     }
 }
 
@@ -687,10 +660,6 @@ impl TlsPairs for LiveSet {
             .iter()
             .filter_map(|(_, live)| live.as_ref().map(Live::facts))
             .collect()
-    }
-
-    fn feature_ca(&self) -> Option<FeatureCaFacts> {
-        self.filled.get()?.feature_ca.clone()
     }
 }
 
@@ -753,16 +722,16 @@ mod tests {
             let at = Arc::clone(&at);
             Arc::new(move || at.load(AtomicOrdering::SeqCst))
         };
-        let leaves = FeatureLeaves::issue(Arc::new(ca), clock).unwrap();
+        let mut leaves = FeatureLeaves::issue(Arc::new(ca), clock).unwrap();
         let live = LiveAcceptor::new(feature_acceptor(&leaves).unwrap());
         let first = served(&live).await;
-        let end = leaves.current("api.anthropic.com").unwrap().not_after;
+        let end = leaves.leaves()[0].not_after;
 
         at.store(
             end - LEAF_RENEW_AHEAD.as_millis() as i64 + 1,
             AtomicOrdering::SeqCst,
         );
-        assert_eq!(renew_feature_certificates(&leaves, &live).unwrap(), 2);
+        assert_eq!(renew_feature_certificates(&mut leaves, &live).unwrap(), 2);
         let next = served(&live).await;
         assert_eq!(
             next.not_after().compare(first.not_after()).unwrap(),
@@ -784,10 +753,10 @@ mod tests {
             let at = Arc::clone(&at);
             Arc::new(move || at.load(AtomicOrdering::SeqCst))
         };
-        let leaves = FeatureLeaves::issue(Arc::new(ca), clock).unwrap();
+        let mut leaves = FeatureLeaves::issue(Arc::new(ca), clock).unwrap();
         let live = LiveAcceptor::new(feature_acceptor(&leaves).unwrap());
         let first = served(&live).await;
-        let end = leaves.current("api.anthropic.com").unwrap().not_after;
+        let end = leaves.leaves()[0].not_after;
 
         at.store(
             end - LEAF_RENEW_AHEAD.as_millis() as i64 + 1,
@@ -796,7 +765,7 @@ mod tests {
         // What a step leaves whose build failed behind its issue: the new certificates in the leaves, and the acceptor
         // over the old ones in front of the connections.
         assert_eq!(leaves.renew_due().unwrap(), 2);
-        assert_eq!(renew_feature_certificates(&leaves, &live).unwrap(), 0);
+        assert_eq!(renew_feature_certificates(&mut leaves, &live).unwrap(), 0);
         let next = served(&live).await;
         assert_eq!(
             next.not_after().compare(first.not_after()).unwrap(),
@@ -888,13 +857,10 @@ mod tests {
         let (cert, key) =
             generate_pair_valid_until(&["localhost"], not_after).write_to(dir.path(), "admin");
         let loaded = load_pair(PublicListener::Admin, &cert, &key).unwrap();
-        set.fill(
-            vec![
-                (PublicListener::Proxy, None),
-                (PublicListener::Admin, Some(Live::new(loaded, 1_000))),
-            ],
-            None,
-        );
+        set.fill(vec![
+            (PublicListener::Proxy, None),
+            (PublicListener::Admin, Some(Live::new(loaded, 1_000))),
+        ]);
         assert_eq!(
             set.reload(2_000),
             [

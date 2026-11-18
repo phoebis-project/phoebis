@@ -5,12 +5,12 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use boring::error::ErrorStack;
 use boring::x509::{X509Ref, X509};
-use phoebis_store::permissions::create_private_file;
+use phoebis_store::permissions::{check_private_file, create_private_file};
 use phoebis_store::Clock;
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, CidrSubnet, DistinguishedName,
@@ -168,7 +168,7 @@ pub struct FeatureLeaves {
     ca: Arc<FeatureCa>,
     clock: Clock,
     /// One certificate per name of `FEATURE_HOSTS`, in its order.
-    current: Mutex<Vec<Arc<IssuedLeaf>>>,
+    current: Vec<IssuedLeaf>,
 }
 
 impl FeatureLeaves {
@@ -176,56 +176,38 @@ impl FeatureLeaves {
         let now = clock();
         let current = FEATURE_HOSTS
             .iter()
-            .map(|host| ca.issue(host, now).map(Arc::new))
+            .map(|host| ca.issue(host, now))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(FeatureLeaves {
-            ca,
-            clock,
-            current: Mutex::new(current),
-        })
+        Ok(FeatureLeaves { ca, clock, current })
     }
 
-    /// The certificate a handshake that names `host` gets now, `None` for each other name.
-    pub fn current(&self, host: &str) -> Option<Arc<IssuedLeaf>> {
-        let name = host.strip_suffix('.').unwrap_or(host);
-        let at = FEATURE_HOSTS
-            .iter()
-            .position(|feature| feature.eq_ignore_ascii_case(name))?;
-        Some(Arc::clone(&self.leaves()[at]))
+    /// The current certificates, one per name of `FEATURE_HOSTS`, in its order.
+    pub fn leaves(&self) -> &[IssuedLeaf] {
+        &self.current
     }
 
     /// The issuing step: replaces each certificate that ends within `LEAF_RENEW_AHEAD` and answers how many.
-    pub fn renew_due(&self) -> Result<usize, FeatureCaError> {
+    pub fn renew_due(&mut self) -> Result<usize, FeatureCaError> {
         let now = (self.clock)();
         let ahead = millis(LEAF_RENEW_AHEAD);
         let due: Vec<usize> = self
-            .leaves()
+            .current
             .iter()
             .enumerate()
             .filter(|(_, leaf)| leaf.not_after - ahead <= now)
             .map(|(at, _)| at)
             .collect();
-        // Issued outside the lock, so a handshake that reads the current certificate never waits on a signature.
         for &at in &due {
-            let leaf = Arc::new(self.ca.issue(FEATURE_HOSTS[at], now)?);
-            self.leaves()[at] = leaf;
+            self.current[at] = self.ca.issue(FEATURE_HOSTS[at], now)?;
         }
         Ok(due.len())
-    }
-
-    fn leaves(&self) -> MutexGuard<'_, Vec<Arc<IssuedLeaf>>> {
-        self.current.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 /// The `check-config` line: `features listener is off`, `features listens on {addr} over TLS (CA {path}, fingerprint
 /// {hex}, expires {date})`, or `features listens on {addr} over TLS, and the first start creates the CA at {path}`.
-pub fn describe(
-    features: Option<&FeaturesConfig>,
-    data_dir: &Path,
-    facts: Option<&CaFacts>,
-) -> String {
-    let Some(FeaturesConfig { listen }) = features else {
+pub fn describe(features: Option<(&FeaturesConfig, Option<&CaFacts>)>, data_dir: &Path) -> String {
+    let Some((FeaturesConfig { listen }, facts)) = features else {
         return "features listener is off".to_owned();
     };
     match facts {
@@ -240,6 +222,15 @@ pub fn describe(
             files(data_dir).0.display()
         ),
     }
+}
+
+/// The CA's `warning:` lines for the start and `check-config`, without the `warning: ` prefix: `expiry_line`'s under
+/// `features.ca`, the key its refusals and its attention item name it by, then the key file's mode.
+pub fn warnings(ca: &CaFacts) -> Vec<String> {
+    crate::tls::expiry_line(KEY, &ca.cert_file, &ca.leaf)
+        .into_iter()
+        .chain(check_private_file(&ca.key_file, 0o600))
+        .collect()
 }
 
 fn files(data_dir: &Path) -> (PathBuf, PathBuf) {
@@ -266,7 +257,7 @@ fn both_stand(cert_file: &Path, key_file: &Path) -> Result<bool, FeatureCaError>
 /// A path stands unless it is absent, so a file that cannot be read for another cause reaches the read, which names
 /// the cause.
 fn stands(path: &Path) -> bool {
-    !matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    crate::private_dirs::exists(path).unwrap_or(true)
 }
 
 /// The key first, so a write that stops between the two leaves no certificate standing without the key it names.

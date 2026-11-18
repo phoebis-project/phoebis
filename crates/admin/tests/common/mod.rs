@@ -1340,6 +1340,7 @@ async fn build_app_bounded(
     let (attention, attention_handles) = phoebis_attention::spawn(AttentionParts {
         bus: bus.clone(),
         clock: clock.clone(),
+        feature_ca: None,
         keepalive: Arc::new(EngineFacts {
             engine: keepalive.clone(),
         }),

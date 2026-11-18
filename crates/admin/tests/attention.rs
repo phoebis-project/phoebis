@@ -13,7 +13,7 @@ use axum::http::Request;
 use common::{get, json, login, post};
 use fake_upstream::Captured;
 use http_body_util::BodyExt;
-use phoebis_attention::{FeatureCaFacts, PairFacts, TlsPairs};
+use phoebis_attention::{PairFacts, TlsPairs};
 use phoebis_bus::{
     ClientFacts, Event, Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape,
     ResponseFacts,
@@ -441,10 +441,6 @@ struct PanickingPairs;
 impl TlsPairs for PanickingPairs {
     fn pairs(&self) -> Vec<PairFacts> {
         panic!("the listener pairs could not be read")
-    }
-
-    fn feature_ca(&self) -> Option<FeatureCaFacts> {
-        None
     }
 }
 

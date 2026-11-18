@@ -53,11 +53,9 @@ pub struct FeatureCaFacts {
     pub not_after_ms: i64,
 }
 
-/// The router's loaded pairs, in the listeners' order, a listener serving plain HTTP left out, and its feature CA.
+/// The router's loaded pairs, in the listeners' order, a listener serving plain HTTP left out.
 pub trait TlsPairs: Send + Sync {
     fn pairs(&self) -> Vec<PairFacts>;
-    /// The feature CA, `None` on a router without the feature listener.
-    fn feature_ca(&self) -> Option<FeatureCaFacts>;
 }
 
 /// What the keepalive engine stands at when a read runs: the gap counter and the last gap's instant, the three caps
@@ -87,6 +85,9 @@ pub trait KeepaliveFacts: Send + Sync {
 pub struct AttentionParts {
     pub bus: Bus,
     pub clock: Clock,
+    /// The feature CA, read once at the start since nothing replaces it under a running router. `None` on a router
+    /// without the feature listener, and `features.ca` then has no series.
+    pub feature_ca: Option<FeatureCaFacts>,
     pub keepalive: Arc<dyn KeepaliveFacts>,
     /// The ledger's degraded flag, its parked rows, the unpriced models its landing or a catalog listing saw, the
     /// routing conditions its fold wrote and the expiries between turns its rollups count. `None` where a harness
@@ -99,8 +100,8 @@ pub struct AttentionParts {
     pub limit_reset_warning_days: u32,
     pub router: RouterHandle,
     pub store: Arc<Store>,
-    /// The router's loaded pairs and its feature CA, `None` where a harness builds no listeners, and then neither
-    /// certificate kind has a series.
+    /// The router's loaded pairs, `None` where a harness builds no listeners, and then no pair has a series of either
+    /// certificate kind.
     pub tls: Option<Arc<dyn TlsPairs>>,
     /// Where the poll's standing and the latest snapshot per account are read. It is `None` where a harness builds no
     /// usage service, and no account then reads a backoff and no wall names a reset.
@@ -124,6 +125,7 @@ pub enum AttentionError {
 /// The one reader both the metrics listener and the admin route ask, with the request-fed state the bus arm writes.
 pub struct Attention {
     clock: Clock,
+    feature_ca: Option<FeatureCaFacts>,
     keepalive: Arc<dyn KeepaliveFacts>,
     ledger: Option<Ledger>,
     limit_reset_warning_days: u32,
@@ -182,7 +184,6 @@ impl Attention {
         // The pairs before the lock too: their lock is the router's, which a reload holds across a whole load from
         // disk.
         let pairs = self.tls.as_ref().map(|tls| tls.pairs());
-        let feature_ca = self.tls.as_ref().and_then(|tls| tls.feature_ca());
         // The engine's standing before the lock too, since it waits on the engine's own lock.
         let keepalive = self.keepalive.standing();
         let unpriced = self
@@ -204,7 +205,7 @@ impl Attention {
             ledger.as_ref(),
             &unpriced,
             pairs.as_deref(),
-            feature_ca.as_ref(),
+            self.feature_ca.as_ref(),
             self.usage.as_deref(),
             &keepalive,
             now,
@@ -286,6 +287,7 @@ pub fn spawn(parts: AttentionParts) -> (Arc<Attention>, AttentionHandles) {
         });
     let attention = Arc::new(Attention {
         clock: parts.clock,
+        feature_ca: parts.feature_ca,
         keepalive: parts.keepalive,
         ledger: parts.ledger,
         limit_reset_warning_days: parts.limit_reset_warning_days,

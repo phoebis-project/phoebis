@@ -82,10 +82,11 @@ fn main() -> anyhow::Result<()> {
             let admin_tls = tls::load(PublicListener::Admin, &config.admin.tls)?;
             let data_dir = phoebis_store::permissions::data_dir_of(&config.storage.path);
             // With the block alone, as the start reads it, so a CA an earlier configuration left refuses nothing.
-            let ca_facts = match &config.features {
-                Some(_) => FeatureCa::inspect(data_dir)?,
-                None => None,
-            };
+            let features = config
+                .features
+                .as_ref()
+                .map(|block| FeatureCa::inspect(data_dir).map(|facts| (block, facts)))
+                .transpose()?;
             println!("{} is valid", cli.config.display());
             println!(
                 "{}",
@@ -97,7 +98,12 @@ fn main() -> anyhow::Result<()> {
             );
             println!(
                 "{}",
-                feature_ca::describe(config.features.as_ref(), data_dir, ca_facts.as_ref())
+                feature_ca::describe(
+                    features
+                        .as_ref()
+                        .map(|(block, facts)| (*block, facts.as_ref())),
+                    data_dir
+                )
             );
             println!("metrics listens on {}", config.stats.metrics_listen);
             println!(
@@ -231,11 +237,12 @@ fn main() -> anyhow::Result<()> {
             .into_iter()
             .chain(tls::warnings(&proxy_tls))
             .chain(tls::warnings(&admin_tls))
-            .chain(ca_facts.iter().flat_map(|facts| {
-                tls::feature_ca_expiry_line(facts).into_iter().chain(
-                    phoebis_store::permissions::check_private_file(&facts.key_file, 0o600),
-                )
-            }))
+            .chain(
+                features
+                    .iter()
+                    .filter_map(|(_, facts)| facts.as_ref())
+                    .flat_map(feature_ca::warnings),
+            )
             .chain(phoebis_store::permissions::check_private_dir(data_dir))
             .chain(phoebis_store::permissions::check_private_file(
                 &config.storage.path,
@@ -386,7 +393,7 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
             features: config
                 .features
                 .as_ref()
-                .map(|block| format!("https://{}", block.listen)),
+                .map(|block| tls::feature_url(block.listen)),
             metrics: Some(tls::url(&None, config.stats.metrics_listen)),
             proxy: Some(tls::url(&config.proxy.tls, config.proxy.listen)),
         },

@@ -75,11 +75,10 @@ impl ControlClient {
         host: &str,
         timeout: Duration,
     ) -> Result<(ResponseHead, Bytes), TransportError> {
-        let Some(addr) = (self.resolver)(host).await else {
-            return Err(TransportError::Unreachable(format!(
-                "no address for {host}"
-            )));
-        };
+        let addr = self
+            .address(host)
+            .await
+            .map_err(TransportError::Unreachable)?;
         // Read by the timeout arm below, which cannot see how far `send_once` got on its own.
         let progress = ProgressCell::default();
         match tokio::time::timeout(timeout, self.send_once(req, host, addr, &progress)).await {
@@ -118,10 +117,7 @@ impl ControlClient {
         write_request(&mut conn, &req, Some(progress))
             .await
             .map_err(|failure| match failure.progress {
-                WriteProgress::Unsent => TransportError::Unreachable(format!(
-                    "request to {host} was not sent: {}",
-                    failure.error
-                )),
+                WriteProgress::Unsent => TransportError::Unreachable(unsent(host, &failure.error)),
                 WriteProgress::Written => TransportError::Io(failure.error),
             })?;
         let mut buf = BytesMut::new();
@@ -154,9 +150,10 @@ impl ControlClient {
         head_timeout: Duration,
     ) -> Result<ControlAnswer, StreamFailure> {
         let connecting = async {
-            let Some(addr) = (self.resolver)(host).await else {
-                return Err(StreamFailure::Unreachable(format!("no address for {host}")));
-            };
+            let addr = self
+                .address(host)
+                .await
+                .map_err(StreamFailure::Unreachable)?;
             connect_tls(&self.connector, host, addr)
                 .await
                 .map_err(|error| StreamFailure::Unreachable(error.to_string()))
@@ -174,10 +171,9 @@ impl ControlClient {
             write_request(&mut conn, &req, None)
                 .await
                 .map_err(|failure| match failure.progress {
-                    WriteProgress::Unsent => StreamFailure::Unreachable(format!(
-                        "request to {host} was not sent: {}",
-                        failure.error
-                    )),
+                    WriteProgress::Unsent => {
+                        StreamFailure::Unreachable(unsent(host, &failure.error))
+                    }
                     WriteProgress::Written => StreamFailure::Cut(failure.error.to_string()),
                 })?;
             let mut watched = EndWatch {
@@ -203,6 +199,16 @@ impl ControlClient {
             body: BodyReader::new(conn, buf, f),
         })
     }
+
+    async fn address(&self, host: &str) -> Result<SocketAddr, String> {
+        (self.resolver)(host)
+            .await
+            .ok_or_else(|| format!("no address for {host}"))
+    }
+}
+
+fn unsent(host: &str, error: &std::io::Error) -> String {
+    format!("request to {host} was not sent: {error}")
 }
 
 /// Notes whether the peer ended the connection or failed a read, since `read_head` names a close before the head's

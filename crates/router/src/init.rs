@@ -422,9 +422,6 @@ pub fn render(plan: &Plan) -> String {
 struct Fill {
     block: &'static str,
     key: &'static str,
-    /// The example carries the block commented out, its head and the key's line both comments, so the fill replaces
-    /// the two lines together and a file without the fill keeps them as the example spells them.
-    commented: bool,
     lines: Vec<String>,
 }
 
@@ -470,15 +467,11 @@ fn fills(plan: &Plan) -> Vec<Fill> {
         ));
     }
     if let Some(listen) = plan.features_listen {
-        fills.push(Fill {
-            block: "features",
-            key: "listen",
-            commented: true,
-            lines: vec![
-                "features:".to_string(),
-                format!("  listen: {}", scalar(&listen.to_string())),
-            ],
-        });
+        fills.push(value_fill(
+            "features",
+            "listen",
+            scalar(&listen.to_string()),
+        ));
     }
     fills
 }
@@ -487,7 +480,6 @@ fn value_fill(block: &'static str, key: &'static str, value: String) -> Fill {
     Fill {
         block,
         key,
-        commented: false,
         lines: vec![format!("  {key}: {value}")],
     }
 }
@@ -511,7 +503,6 @@ fn listen_fill(block: &'static str, listener: &Listener) -> Fill {
     Fill {
         block,
         key: "listen",
-        commented: false,
         lines,
     }
 }
@@ -530,30 +521,25 @@ fn fill(example: &str, fills: &[Fill]) -> Result<String, String> {
         {
             block = name;
         }
+        // A block the example carries commented out, its head and the key's line both comments, is replaced with its
+        // head written live, so a file without the fill keeps the two lines as the example spells them.
         let commented = fills.iter().position(|fill| {
-            fill.commented
-                && line
-                    .strip_prefix("# ")
-                    .and_then(|rest| rest.strip_suffix(':'))
-                    == Some(fill.block)
-                && example_lines.peek().is_some_and(|next| {
-                    next.strip_prefix("#   ")
-                        .and_then(|rest| rest.strip_prefix(fill.key))
-                        .is_some_and(|rest| rest.starts_with(':'))
-                })
+            line.strip_prefix("# ")
+                .and_then(|rest| rest.strip_suffix(':'))
+                == Some(fill.block)
+                && example_lines
+                    .peek()
+                    .is_some_and(|next| key_line(next, "#   ", fill.key))
         });
-        if commented.is_some() {
+        if let Some(at) = commented {
             example_lines.next();
+            text.push_str(fills[at].block);
+            text.push_str(":\n");
         }
         let at = commented.or_else(|| {
-            fills.iter().position(|fill| {
-                !fill.commented
-                    && fill.block == block
-                    && line
-                        .strip_prefix("  ")
-                        .and_then(|rest| rest.strip_prefix(fill.key))
-                        .is_some_and(|rest| rest.starts_with(':'))
-            })
+            fills
+                .iter()
+                .position(|fill| fill.block == block && key_line(line, "  ", fill.key))
         });
         let lines = match at {
             Some(at) => {
@@ -571,6 +557,13 @@ fn fill(example: &str, fills: &[Fill]) -> Result<String, String> {
         Some(at) => Err(format!("{}.{}", fills[at].block, fills[at].key)),
         None => Ok(text),
     }
+}
+
+/// Whether `line` is `key`'s line at `indent`: the indent, then the key and its colon.
+fn key_line(line: &str, indent: &str, key: &str) -> bool {
+    line.strip_prefix(indent)
+        .and_then(|rest| rest.strip_prefix(key))
+        .is_some_and(|rest| rest.starts_with(':'))
 }
 
 /// `value` as a YAML scalar: plain where it reads back as the same string, double-quoted otherwise, so a path holding

@@ -331,12 +331,7 @@ pub fn render(
 /// `feature CA {fingerprint}, expires {date}` for the settings answer's `features` object, `None` for its `null`.
 fn feature_ca_line(features: &Value) -> Option<String> {
     features.is_object().then(|| {
-        let expires = features["ca_expires"]
-            .as_i64()
-            .and_then(|ms| Timestamp::from_millisecond(ms).ok())
-            .map_or("-".to_owned(), |at| {
-                at.to_zoned(TimeZone::UTC).strftime("%Y-%m-%d").to_string()
-            });
+        let expires = utc_date(&features["ca_expires"], "%Y-%m-%d");
         format!(
             "feature CA {}, expires {expires}",
             text(&features["ca_fingerprint"])
@@ -524,7 +519,7 @@ fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<Stri
         // The estimate is always 00:00 UTC on the first, so its UTC date names it whole in the room an 80-column row
         // leaves the cell. A head's reset is any instant and reads as the screen's clock prints one.
         cells.push(if spend["reset_source"] == "estimated" {
-            format!("resets {} est", utc_date(&spend["resets_at"]))
+            format!("resets {} est", utc_date(&spend["resets_at"], "%m-%d"))
         } else {
             format!("resets {}", clock.time(spend["resets_at"].as_i64()))
         });
@@ -557,12 +552,12 @@ fn spend_amounts(amounts: &Value) -> String {
     }
 }
 
-/// An epoch-millisecond instant's UTC date as `MM-DD`, `-` for a value that is none.
-fn utc_date(at: &Value) -> String {
+/// An epoch-millisecond instant's UTC date in `format`, `-` for a value that is none.
+fn utc_date(at: &Value, format: &str) -> String {
     at.as_i64()
         .and_then(|ms| Timestamp::from_millisecond(ms).ok())
         .map_or("-".to_owned(), |at| {
-            at.to_zoned(TimeZone::UTC).strftime("%m-%d").to_string()
+            at.to_zoned(TimeZone::UTC).strftime(format).to_string()
         })
 }
 
