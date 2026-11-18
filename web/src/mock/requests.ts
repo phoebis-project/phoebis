@@ -1641,7 +1641,7 @@ function storySeeds(): StorySeed[] {
     { agentId: 'main', at: t(13, 47, 24), attempts: [{ accountId: 'studio', at: t(13, 47, 24), head5h: 0.822, ms: 6_900, status: 200 }], id: 'req_b1e7c4a9-a69', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[1], usage: { cacheWrite1h: 48_600, input: 2_200, output: 930 } },
     { agentId: 'main', at: t(13, 48), attempts: [{ accountId: 'studio', at: t(13, 48), head5h: 0.8267, ms: 5_200, status: 200 }], id: 'req_4f2a8d6e-b7a', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[1], usage: { cacheRead: 50_800, input: 1_200, output: 610 } },
     { agentId: 'main', at: t(13, 50, 30), attempts: [{ accountId: 'studio', at: t(13, 50, 30), head5h: 0.832, ms: 6_800, status: 200 }], id: 'req_6b3e8d1a-c73', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[0], usage: { cacheWrite1h: 36_000, input: 2_000, output: 820 } },
-    { agentId: 'main', at: t(13, 53, 10), attempts: [{ accountId: 'studio', at: t(13, 53, 10), head5h: 0.8376, ms: 5_900, status: 200 }], id: 'req_2f9a6c4e-d84', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[1], usage: { cacheWrite1h: 28_000, input: 2_000, output: 640 } },
+    { agentId: 'main', at: t(13, 53, 10), attempts: [{ accountId: 'studio', at: t(13, 53, 10), head5h: 0.8376, ms: 5_900, status: 200 }], id: 'req_2f9a6c4e-d84', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[1], usage: { cacheWrite1h: 28_000, input: 2_000, output: 640, thinking: 480 } },
     { agentId: 'main', at: t(13, 58, 40), attempts: [{ accountId: 'studio', at: t(13, 58, 40), head5h: 0.8491, ms: 7_300, status: 200 }], id: 'req_c5d8e2b7-e95', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_SESSION_ID, usage: { cacheWrite1h: 64_000, input: 2_400, output: 910 } },
     { agentId: '7b2e', at: t(13, 59, 5), attempts: [{ accountId: 'studio', at: t(13, 59, 5), head5h: 0.85, ms: 3_100, status: 200 }], canonical: HAIKU, id: 'req_7e4f1a9c-f16', keyId: 'notebook', model: 'claude-haiku-4-5', requestClass: 'subagent', session: SLOWED_SESSION_ID, usage: { cacheWrite1h: 58_600, input: 2_400, output: 380 } },
     // The first marked session's next turn reads the stretch past the threshold, which starts the safety wait.
@@ -2608,7 +2608,7 @@ const FIRST_BLOCK_MESSAGE = 2;
  * it: the vendor's four, of which the catalog serves Sonnet 5.5 alone. The router holds no such list and learns each
  * pair of accounts from an answer.
  */
-function bindsThinking(model: string): boolean {
+export function bindsThinking(model: string): boolean {
   return ['claude-fable-5-2', 'claude-haiku-5-5', 'claude-mythos-5-2', 'claude-sonnet-5-5'].includes(model);
 }
 

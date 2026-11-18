@@ -360,13 +360,14 @@ const servedBurnAt = (foldAt: string | null): string | null => (foldAt === null 
  * its burn by, the dropped thinking at the output's weight, and the Pro-week figure of each, the cost a warm move and a
  * cold one pay. The size reads null where the pin holds no prompt size and the drop where it drops nothing, each with
  * its cost, and a cost reads null for a model without a weight of its own. A prompt of 0 tokens is no size, as the
- * route answers null where nothing is priced above zero.
+ * route answers null where nothing is priced above zero, so a pin with a drop and no size pays the drop's cost alone.
  */
 const moveFiguresOf = (tokens: number | null, dropped: number | null, model: string, keyId: string): Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
   const client = CLIENTS[keyId] ?? null;
   const size = moveSizeOf(tokens, dropped, model, client);
   const drop = dropSizeOf(dropped, model, client);
-  return { moveCost: size === null ? null : proWeekRewriteOf(size, model, client), moveDropCost: drop === null ? null : proWeekRewriteOf(drop, model, client), moveDropSize: drop, moveSize: size };
+  const dropCost = drop === null ? null : proWeekRewriteOf(drop, model, client);
+  return { moveCost: size === null ? dropCost : proWeekRewriteOf(size, model, client), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
 };
 /** A row with no pin, which answers none of its move's figures. */
 const NO_MOVE: Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> = { moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null };
@@ -446,7 +447,7 @@ const pinLine = (
     ...burnReadingOf(line.accountId, keyId, burn, unit),
     burnUsd: burnUsdOf(folded.dollars === null ? null : folded.dollars * factor, unit, line.model),
     fast: fastPin(keyId, line.model),
-    ...moveFiguresOf(line.lastInputTokens, droppedThinkingOf(sessionId, line.agentId, line.model), line.model, keyId),
+    ...moveFiguresOf(line.lastInputTokens, droppedThinkingOf({ accountId: line.accountId, agentId: line.agentId, keyId, model: line.model, sessionId }, NOW), line.model, keyId),
     warm: warmAt(warmUntil),
     warmUntil,
   };
@@ -596,7 +597,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     // Read off the display pin's line once the lines are written.
     ended: null,
     fast: pinned ? fastPin(spec.keyId, spec.model) : null,
-    ...(pinned ? moveFiguresOf(lastInputRoll, droppedThinkingOf(sessionId, 'main', spec.model), spec.model, spec.keyId) : NO_MOVE),
+    ...(pinned ? moveFiguresOf(lastInputRoll, droppedThinkingOf({ accountId: spec.accountId, agentId: 'main', keyId: spec.keyId, model: spec.model, sessionId }, NOW), spec.model, spec.keyId) : NO_MOVE),
     ...NO_MARK,
     shed: pinWrite?.shed ?? null,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),

@@ -24,25 +24,22 @@ export const OPAQUE = (path) => path.endsWith('.detail');
  * per window the rows priced or sampled: a group's or a request's `costShares` (a figure per window, a window the
  * account's set lacks or a group could not price dropped) and an account hour's `windows` (a sample per window). A
  * session spend part's `billedUsdByAccount` holds one entry per account that billed the part's requests, so its keys
- * are the accounts and differ from one session to another. A burn point's three plan figure maps hold one entry per
- * plan tier of the cost model's capacity rows, so their keys are the cost model's.
+ * are the accounts and differ from one session to another.
  * An attempt's `inputTransformations` holds one entry per `<type>.<reason>` key the upstream named for the thinking
  * blocks it dropped, and a group's one count per such key, so their keys are the upstream's words.
  * Matched by path only where the fixture's own shape there is an object, so a same-named scalar
  * (`Overview.hourly[].errors`, a plain count) still takes the ordinary type check below. */
-const MAP_PATHS = ['.errors', '.refusals', '.cacheMissReasons', '.cacheMissReasonHits', '.movesPerHour', '.moves', '.corrections', '.costShares', '.windows', '.billedUsdByAccount', '.equivalentByTier', '.fableEquivalentByTier', '.fiveHourEquivalentByTier', '.inputTransformations'];
+const MAP_PATHS = ['.errors', '.refusals', '.cacheMissReasons', '.cacheMissReasonHits', '.movesPerHour', '.moves', '.corrections', '.costShares', '.windows', '.billedUsdByAccount', '.inputTransformations'];
 const MAP = (path, want) => MAP_PATHS.some((suffix) => path.endsWith(suffix)) && typeof want === 'object' && want !== null && !Array.isArray(want);
 /**
  * The entry kinds a map admits beside its first entry's own, by the path the map sits at: a request row's share map
  * (`.requests[n].costShares`, a request detail's `.request.costShares` and the dashboard's recent rows'
  * `.recent[n].costShares`) carries null for an applicable window the cost model could not price, while a group's map
- * drops such a window, so a null there is a finding. A burn point's tier maps carry null on every tier of an idle
- * bucket and a number on a priced one, so either kind stands whatever the captured first point holds.
+ * drops such a window, so a null there is a finding.
  */
 const MAP_ENTRY_KINDS = [
   [/(^\.request|\.requests\[\d+\])\.costShares$/, ['null', 'number']],
   [/^\.recent\[\d+\]\.costShares$/, ['null', 'number']],
-  [/^\.points\[\d+\]\.(equivalent|fableEquivalent|fiveHourEquivalent)ByTier$/, ['null', 'number']],
 ];
 
 const kindOf = (v) => (v === null || v === undefined ? 'null' : Array.isArray(v) ? 'list' : typeof v);

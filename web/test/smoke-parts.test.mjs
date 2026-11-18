@@ -41,6 +41,7 @@ test('the cap takes a whole number from 1 on and defaults to the cores, never pa
   assert.throws(() => jobsOf('0', VIEWS, 4), /SMOKE_JOBS=0/);
   assert.throws(() => jobsOf('two', VIEWS, 4), /SMOKE_JOBS=two/);
   assert.equal(jobsOf('1', VIEWS, 4), 1);
+  assert.equal(jobsOf('4', ['/keys'], 8), 1, 'a run of one view stays in its process under an explicit cap');
   assert.equal(jobsOf(undefined, VIEWS, 4), 4);
   assert.equal(jobsOf(undefined, ['/keys', '/pools'], 4), 2);
 });

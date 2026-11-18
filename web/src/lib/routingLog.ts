@@ -2281,7 +2281,8 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const pins = list(d.pins).map(rec);
       const rewriteUnit = str(d.rewrite_unit);
       // A round stored before the router weighed the dropped thinking carries no such key, so it keeps its columns. A
-      // null is a move the round learned no fact for, never a move that drops nothing.
+      // null is a pair the round read as kept or learned nothing of, or a pin with no destination, so it draws a dash
+      // where a count would claim a figure.
       const thinking = pins.some((p) => 'dropped_thinking_tokens' in p);
       if (pins.length > 0) {
         pairs.push({

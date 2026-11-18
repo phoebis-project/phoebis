@@ -6535,7 +6535,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   {
     // The story's pools admit overage, so no member reads the overage verdict there: the route answers it under a
     // policy that admits none, which the stub reads into all for nightly, the account in overage. A member winding down
-    // inside a pool's window is no story member's, so that badge's words are the unit case's.
+    // inside a pool's window is no story member's, so that badge's words are the unit case's, and the fit stub below
+    // reads its countdown on secondary.
     const accounts = await api.listAccounts();
     const until = accounts.find((a) => a.id === 'secondary')?.cooldowns.find((c) => c.scope === 'account')?.until ?? '';
     const reset = accounts.find((a) => a.id === 'nightly')?.overage?.reset ?? '';
@@ -6665,18 +6666,18 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
   {
     // No member of all fits a fresh session in this stub: primary and nightly read rewrite only, nightly a tier down
-    // with the longer runway, secondary winds down with the best score, and the metered overflow reads its window spent.
-    // So the router lands on nightly across the tiers, where the score and the tier walk would name secondary. In work
-    // the annex reads least bad behind studio, which fits.
+    // with the longer runway, secondary winds down with the best score, and the metered overflow reads least bad on a
+    // full bucket. So the router lands on nightly across the tiers, where the score and the tier walk would name
+    // secondary. In work studio, a plan, reads its window spent behind the annex, which fits.
     const HOUR = 3_600_000;
     const end = (await api.listAccounts()).find((a) => a.id === 'secondary')?.subscription?.endsAt ?? '';
     const fits = {
-      annex: { fit: 'least_bad', runwayMs: 0 },
+      annex: { fit: 'fits', runwayMs: null },
       nightly: { fit: 'rewrite_only', paceScore: 0.001, runwayMs: 2 * HOUR },
-      overflow: { fit: 'spent', runwayMs: null },
+      overflow: { fit: 'least_bad', runwayMs: 0 },
       primary: { fit: 'rewrite_only', paceScore: 0.0016, runwayMs: HOUR },
       secondary: { fit: 'ending', paceScore: 0.05, runwayMs: null },
-      studio: { fit: 'fits', runwayMs: null },
+      studio: { fit: 'spent', runwayMs: null },
     };
     const { listPools } = api;
     api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'all' || p.id === 'work' ? { ...p, members: p.members.map((x) => ({ ...x, eligible: 'eligible', ...fits[x.accountId] })) } : p));
@@ -6687,12 +6688,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       const tr = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((r) => r.children[1]?.querySelector('a')?.textContent?.trim() === label);
       const td = tr?.children[2];
       return {
-        badges: [...(td?.querySelectorAll('.badge') ?? [])].map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']),
+        // Slowed studio's speed chip has a case of its own, so a row reads its verdict and its fit alone.
+        badges: [...(td?.querySelectorAll('.badge') ?? [])].filter((b) => b.closest('.speed-chip') === null).map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']),
         next: tr?.classList.contains('is-next') ?? false,
         why: fitted.container.querySelector(`[id="${td?.getAttribute('aria-describedby') ?? ''}"]`)?.textContent ?? '',
       };
     };
-    const rows = { annex: rowOf('work', 'Studio annex'), nightly: rowOf('all', 'nightly'), overflow: rowOf('all', 'Overflow workspace'), primary: rowOf('all', 'primary'), secondary: rowOf('all', 'secondary') };
+    const rows = { nightly: rowOf('all', 'nightly'), overflow: rowOf('all', 'Overflow workspace'), primary: rowOf('all', 'primary'), secondary: rowOf('all', 'secondary'), studio: rowOf('work', 'studio') };
     fitted.unmount();
     const eligible = ['eligible', 'badge--good', ''];
     const fitRead = (name, row, badges, why) => results.push({ name, ok: JSON.stringify(row.badges) === JSON.stringify(badges) && !row.next && row.why === why, missing: [JSON.stringify(row)] });
@@ -6704,15 +6706,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     );
     fitRead(
       '/pools a member whose rewrite would not land draws least bad after its verdict, titled, with its hover',
-      rows.annex,
+      rows.overflow,
       [eligible, ['least bad', 'badge--warning', 'A shared window stands at or past its ceiling']],
-      'Studio annex: least bad, taken only once no account fits a fresh session',
+      'Overflow workspace: least bad, taken only once no account fits a fresh session',
     );
     fitRead(
       '/pools a member with a spent window draws window spent in the serious tone after its verdict, titled, with its hover',
-      rows.overflow,
+      rows.studio,
       [eligible, ['window spent', 'badge--serious', 'A shared window has no allowance left']],
-      'Overflow workspace: window spent, taken only once no other account has allowance left',
+      'studio: window spent, taken only once no other account has allowance left',
     );
     results.push({
       name: '/pools a member whose fit reads ending draws the wind-down countdown after its verdict, with its hover',

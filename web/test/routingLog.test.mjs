@@ -1106,8 +1106,11 @@ test("a round's Pins table draws the thinking each pin would drop, and a dash wh
     return { head, thinking: rows.map((r) => chipText(r[5])) };
   };
   const head = ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Thinking dropped', 'Rewrite', 'Destination', 'Mark'];
-  // A null is a move the round learned no fact for, which a zero would misread as a move that drops nothing.
+  // A null is a pair the round read as kept or learned nothing of, or a pin with no destination, so it draws a dash
+  // where a count would claim a figure.
   assert.deepEqual(drawn([{ ...first, dropped_thinking_tokens: 2_400 }, { ...second, dropped_thinking_tokens: null }]), { head, thinking: ['2.4K', '-'] });
+  // A bound pair with no sum reads 0, a learned figure the dash would hide.
+  assert.deepEqual(drawn([{ ...first, dropped_thinking_tokens: 0 }, { ...second, dropped_thinking_tokens: null }]), { head, thinking: ['0', '-'] });
   // The key on a pin is what draws the column, so a round whose every pin holds it at null still draws it.
   assert.deepEqual(drawn([{ ...first, dropped_thinking_tokens: null }, { ...second, dropped_thinking_tokens: null }]), { head, thinking: ['-', '-'] });
 });
@@ -1557,9 +1560,10 @@ test('a move draws the account-bound thinking its answer dropped, and no chip fo
   assert.equal(note(landing({ [PREFIX]: { blocks: 1, firstMessage: 2 } })), undefined, "the client's standing prefix entry is no block the move cost");
 });
 
-test('a renewal whose answer lists an account key draws no chip', () => {
-  const renewed = record({ outcome: { completion: completion({ completedAt: iso(NOW), inputTransformations: { 'thinking_dropped.end_user_binding_mismatch': { blocks: 1, firstMessage: 2 } }, status: 200 }), kind: 'renewed' } });
-  const note = d.verdictChips(renewed, decision({ kind: 'renewed' })).find((c) => c.label === 'account-bound thinking');
+test('a placement that created its pin draws no chip where its answer lists an account key', () => {
+  // The router places a session behind an expired pin with a new pin and no move, while its answer still lists the key.
+  const placed = record({ outcome: { completion: completion({ completedAt: iso(NOW), inputTransformations: { 'thinking_dropped.end_user_binding_mismatch': { blocks: 1, firstMessage: 2 } }, status: 200 }), kind: 'placed', pinEvents: [{ kind: 'pin_created', reason: null }] } });
+  const note = d.verdictChips(placed, decision({})).find((c) => c.label === 'account-bound thinking');
   assert.equal(note, undefined, 'the account key stands on each answer from the move to the next compaction');
 });
 

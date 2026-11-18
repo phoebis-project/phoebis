@@ -259,7 +259,7 @@ test('pace places a winding-down member last and knows no floor', () => {
       ['key', null, 1],
       ['fresh', null, 2],
     ],
-    'an API-key member ranks by its served score and is never a last resort',
+    'an API-key member ranks by its served score',
   );
 });
 
@@ -308,7 +308,7 @@ const slowDown = (factor, stretchMinutes, thresholdMinutes = 30, sinceAgo = 42 *
   factor,
   holdMs: 120_000,
   ramp: null,
-  since: sinceAgo === null ? null : new Date(NOW - sinceAgo).toISOString(),
+  since: new Date(NOW - sinceAgo).toISOString(),
   speed: factor,
   stretchMs: stretchMinutes * MINUTE,
   thresholdMs: thresholdMinutes * MINUTE,

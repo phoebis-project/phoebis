@@ -319,6 +319,9 @@ test("soonestResetAt marks every window within the router's slack of the soonest
   const account = (fableAfterMs) => ({ ...planAccount('plan', [planWindow('7d', DAY)]), fableWindow: planWindow('7d_fable', DAY + fableAfterMs) });
   assert.deepEqual(d.soonestResetAt(account(60_000), SPEND_NOW), ['7d', '7d_fable'], 'resets 60,000 ms apart');
   assert.deepEqual(d.soonestResetAt(account(60_001), SPEND_NOW), ['7d'], 'resets 60,001 ms apart');
+  // The third reset lies 50,000 ms after the second, so a slack measured from the last marked window would mark it.
+  const third = { ...account(50_000), windows: [planWindow('7d', DAY), planWindow('5h', DAY + 100_000)] };
+  assert.deepEqual(d.soonestResetAt(third, SPEND_NOW), ['7d', '7d_fable'], 'a third reset 100,000 ms after the soonest');
 });
 
 test("the timeline's input and its lanes take an account with a spend reading beside the plan accounts, under both zooms", () => {

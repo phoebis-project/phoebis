@@ -1,6 +1,7 @@
 import { equivalentIn, modelWeeks, type Usage } from '@/lib/costs';
+import { servingAttempt } from '@/lib/dimensions';
 import { SHARED_WINDOWS } from './accounts';
-import { MARKED_SESSION_IDS } from './requests';
+import { REQUESTS, bindsThinking } from './requests';
 import { TABLES, tablesFor } from './samples';
 
 // The session rows and the routing log's rounds both price a pin's move here, so a row's move cost and a round's pick
@@ -22,15 +23,35 @@ export const proWeekRewriteOf = (tokens: number, model: string, client: string |
 const proWeekOutputOf = (tokens: number, model: string, client: string | null): number | null =>
   proWeekOf({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: tokens }, model, client);
 
+/** A pin by its key and the account it stands on. */
+interface PinOn {
+  accountId: string;
+  agentId: string;
+  keyId: string;
+  model: string;
+  sessionId: string;
+}
 /**
- * The thinking the stretch round read as dropped where it planned its first marked pin's move: the blocks the pin's
- * account wrote, which the destination's binding drops. The round's record and the pin's session line read this one
- * seed, so the line answers the figures the round divided by.
+ * The thinking a pin's move to another account drops by `at`, as the router reads it: the pin's sum for its own account
+ * where the pair reads bound, 0 with no sum, and null where the pair reads kept. The sum is the thinking of the pin
+ * key's answered turns that account served since the key's last compaction, which sets it to 0. The router learns a
+ * pair from the first answer behind a move and reads a pair it holds no row for as bound once one pair of the model
+ * reads bound. The upstream binds the blocks of each model `bindsThinking` names, and the story's forced move at 11:01
+ * teaches the router that for Sonnet 5.5 before any round or session line reads the figure. A pair reads bound on
+ * those models and kept on every other. The round's record and the pin's session line both read this figure, so the
+ * line answers the figures the round divided by.
  */
-const STRETCH_DROPPED_THINKING = { agentId: 'main', model: 'claude-sonnet-5-5', sessionId: MARKED_SESSION_IDS[1], tokens: 2_400 } as const;
-/** The thinking a pin's move drops at its destination, null where the story learned no fact of the pair. */
-export const droppedThinkingOf = (sessionId: string, agentId: string, model: string): number | null =>
-  sessionId === STRETCH_DROPPED_THINKING.sessionId && agentId === STRETCH_DROPPED_THINKING.agentId && model === STRETCH_DROPPED_THINKING.model ? STRETCH_DROPPED_THINKING.tokens : null;
+export const droppedThinkingOf = (pin: PinOn, at: number): number | null => {
+  if (!bindsThinking(pin.model)) return null;
+  const turns = REQUESTS.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId && r.agentId === pin.agentId && r.canonicalModel === pin.model && Date.parse(r.at) < at);
+  let sum = 0;
+  for (const r of turns.sort((a, b) => Date.parse(a.at) - Date.parse(b.at))) {
+    if (r.contextCompacted !== null) sum = 0;
+    const serving = servingAttempt(r);
+    if (serving?.upstreamStatus === 200 && serving.accountId === pin.accountId) sum += r.usage.thinking;
+  }
+  return sum;
+};
 /**
  * The dropped thinking at the output's weight, in tokens: the count's share as output over its share as a cache write,
  * so the cost model's rows set the weight. Null where the move drops nothing and where either share is none.
