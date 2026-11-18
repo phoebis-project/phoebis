@@ -214,6 +214,57 @@ async fn both_listeners_serve_an_operators_pair_and_a_plain_request_gets_no_http
 }
 
 #[tokio::test]
+async fn a_listener_serves_the_intermediates_of_its_pair() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let ca_params = |common_name: &str| {
+        let mut params = rcgen::CertificateParams::default();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let mut name = rcgen::DistinguishedName::new();
+        name.push(rcgen::DnType::CommonName, common_name);
+        params.distinguished_name = name;
+        params
+    };
+    let root_key = rcgen::KeyPair::generate().unwrap();
+    let root = ca_params("Invented root").self_signed(&root_key).unwrap();
+    let intermediate_key = rcgen::KeyPair::generate().unwrap();
+    let intermediate = ca_params("Invented intermediate")
+        .signed_by(&intermediate_key, &root, &root_key)
+        .unwrap();
+    let leaf_key = rcgen::KeyPair::generate().unwrap();
+    let leaf = rcgen::CertificateParams::new(vec!["localhost".to_owned()])
+        .unwrap()
+        .signed_by(&leaf_key, &intermediate, &intermediate_key)
+        .unwrap();
+    let (cert, key) = (dir.path().join("proxy.pem"), dir.path().join("proxy.key"));
+    std::fs::write(&cert, format!("{}{}", leaf.pem(), intermediate.pem())).unwrap();
+    std::fs::write(&key, leaf_key.serialize_pem()).unwrap();
+    let (proxy_port, admin_port) = (free_port(), free_port());
+    let config = configured(dir.path(), &up, (proxy_port, admin_port), &cert, &key);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+
+    let socket = fake_upstream::wait_for_async(SETTLE, || async {
+        TcpStream::connect(("127.0.0.1", proxy_port)).await.ok()
+    })
+    .await;
+    // The client trusts the root alone, so it builds a chain only through the intermediate the listener sends.
+    tokio::time::timeout(
+        SETTLE,
+        tokio_boring::connect(trusting_alone(root.pem().as_bytes()), "localhost", socket),
+    )
+    .await
+    .expect("the handshake finished")
+    .unwrap_or_else(|error| panic!("the handshake under the root alone failed: {error}"));
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn the_health_subcommand_speaks_tls_to_a_proxy_listener_serving_a_pair() {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
