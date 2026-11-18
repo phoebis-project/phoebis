@@ -154,9 +154,16 @@ feature CA gets the router's `401`, since its credential is no router key. On Li
 process tree a hosts file of its own. macOS and Windows have no such file per process.
 
 A machine whose lines are missing or incomplete would send the feature calls to the upstream with the router key, as the
-"Base URL" setup does. The launch script's check stops the start before that, so start the client through the script:
-the card's lines alone run no check. The script sets no proxy variable in this setup and clears the shell's proxy names
-for the client, since a proxy of the shell would resolve the two names on its own machine.
+"Base URL" setup does. The launch script's check stops the start where one of the two names leads to another host over
+an address family the machine has a road over at that moment, so start the client through the script: the card's lines
+alone run no check. The check cannot tell one case from a sound machine: the line of one family is missing, and the
+machine has no road over that family while the script runs ([The fetch, the compare and the
+check](#the-fetch-the-compare-and-the-check)). Where the machine gains such a road inside the session, through a changed
+network or a tunnel that comes up, a new connection of the client to a feature host can leave to the upstream with the
+router key.
+
+The script sets no proxy variable in this setup and clears the shell's proxy names for the client, since a proxy of the
+shell would resolve the two names on its own machine.
 
 ## The launch script
 
@@ -375,12 +382,16 @@ credential. The script reads the last header line of that name, since a proxy's 
 of it.
 
 The check runs for both hosts. A redirect that leaves out `mcp-proxy.anthropic.com` would pass a check of
-`api.anthropic.com` alone, and each connector call would then carry the router key to the upstream. Under `SETUP=proxy`
-one probe per host goes through the proxy, which resolves the name. Under `SETUP=redirect` two probes per host go out,
-one per address family, since a name with one family's line missing can leave the machine over the other. A host passes
-there where at least one probe reaches the router and none reaches another host or fails otherwise, and a family over
-which nothing answers stops nothing while the other reaches the router. Once both hosts pass, the fetched file becomes
-`feature-ca.pem`.
+`api.anthropic.com` alone, and each connector call would then carry the router key to the upstream. Once both hosts
+pass, the fetched file becomes `feature-ca.pem`.
+
+Under `SETUP=proxy` one probe per host goes through the proxy, which resolves the name. Under `SETUP=redirect` two
+probes per host go out, one per address family, since a name with one family's line missing can leave the machine over
+the other. A host passes there where at least one probe reaches the router and none reaches another host or fails
+otherwise, and a family over which nothing answers stops nothing while the other reaches the router. The check has then
+not proved that family's line: without a road over a family, curl ends the same way for a line that holds and for a line
+that is missing. Keep both lines in the hosts file whatever families the machine reaches at the start. A resolver of the
+network that answers both names for both families serves the same end.
 
 ### The stops
 
