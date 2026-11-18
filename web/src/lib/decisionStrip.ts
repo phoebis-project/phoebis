@@ -241,10 +241,17 @@ function secondOf(s: WalkStep, now: number): string[] {
   }
 }
 
+/** The ladder's rungs below `fits`, each of which lands on a member that does not fit. */
+const PAST_FITS = new Set(['ending', 'least_bad', 'rewrite_only']);
+
 function partitionBadge(s: WalkStep | null, key: string): { badge: string; tone: VerdictTone; verdict: string | null } {
   const value = s === null ? undefined : factOf(s, key);
   if (value === undefined) return { badge: 'not recorded', tone: 'neutral', verdict: null };
-  if (typeof value === 'number') return { badge: `${value} out`, tone: value === 0 ? 'good' : 'warning', verdict: String(value) };
+  if (typeof value === 'number') {
+    // With no member that fits, the walk keeps the rung's members and counts the rest, so a 0 there still warns.
+    const pastFits = key === 'no_fit' && s !== null && PAST_FITS.has(String(factOf(s, 'ladder')));
+    return { badge: `${value} out`, tone: value === 0 && !pastFits ? 'good' : 'warning', verdict: String(value) };
+  }
   const word = String(value);
   return { badge: wordOf(PARTITION_WORD, word), tone: verdictTone(word, 'partitions'), verdict: word };
 }

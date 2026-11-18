@@ -117,8 +117,9 @@ export interface BurnLine {
    * API-key one dollars; every other grouping mixes both, so it charts dollars.
    */
   unit: BurnLineUnit;
-  /** Whether a bucket of the line holds the model's gap the card handed in: traffic no tier priced, or on the week card
-   *  traffic the route flagged as priced on no weight. False on a folded rest. */
+  /** Whether a bucket of the line holds the model's gap the card handed in: on the 5-hour and the Fable card traffic no
+   *  tier priced, on the week card traffic the route flagged as priced on no weight, whatever the tiers hold. False on
+   *  a folded rest. */
   unpriced: boolean;
   /** Whether a bucket of the line holds the tier's gap the card handed in: traffic a cost revision priced with no
    *  capacity for the chosen tier on the card's window. False on a folded rest. */
@@ -334,7 +335,7 @@ export const upstreamProbes = (g: Pick<AnalyticsGroup, 'probes'>): number => g.p
 /**
  * The five drawn probe counts by the keys of `PROBE_SERIES`. The route counts a migrated probe in `ok` and in
  * `migrated`, so the OK part is `ok` less `migrated`, floored at zero for a bucket whose mark landed apart from its
- * request row.
+ * request row. The other members, `planOk` among them, pass through as the route counts them.
  */
 export const probeParts = <T extends KeepaliveOverview['probes24h']>(c: T): T => ({ ...c, ok: Math.max(0, c.ok - c.migrated) });
 /**

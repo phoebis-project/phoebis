@@ -437,7 +437,7 @@ test("a pin whose model does not draw the fired window is out of the preview's r
 
 test('the preview counts an unpriced pin on the window for the last-pin rule still', () => {
   // On a 5-hour round both models draw the window, so the Sonnet pin served in dollars stays in the order unpriced and
-  // the guard lets the Fable pin's mark.
+  // the guard allows the Fable pin's mark.
   const sibling = oauth('cool', 0.3, 0.2, 0.3);
   const pins = [pin('hot', 'fable-a', 0.03, false, { model: 'claude-fable-5-1' }), pin('hot', 'sonnet-b', 0.02, false, { burnUnit: 'usd' })];
   const preview = d.shedPreview(pool([hot, sibling]), [hot, sibling], pins, NOW);
@@ -582,11 +582,12 @@ test("the round decays each pin's served burn from the instant it was served to 
 
 test("a pin's burn decays to nothing once its instant lies more than thirty burn averages back", () => {
   // Thirty of the pool's averages of 1,800 s are 54,000,000 ms. At exactly that span idle's 0.03 decays by e to the
-  // minus 30, to about 2.8e-15, so the sum reads 0.03 and a sliver, and the target is the cap's half of it, about
-  // 0.015, under the excess of 0.045. fresh leads the order and covers the target, but the guard refuses it, since
-  // idle's 2.8e-15 left on hot is under a tenth of the sum, 0.003. idle covers nothing and is under a tenth of the
-  // rest, 0.0015, so it stays as a sliver, the cause the line names first. One millisecond further back idle reads 0
-  // and leaves before the order, so fresh walks alone on a target of 0.015, and its mark would leave hot no burn.
+  // minus 30, to about 2.8e-15, so the sum reads 0.03 and about 2.8e-15, since only a burn of exactly 0 leaves the
+  // order, and the target is the cap's half of it, about 0.015, under the excess of 0.045. fresh leads the order and
+  // covers the target, but the guard refuses it, since idle's 2.8e-15 left on hot is under a tenth of the sum, 0.003.
+  // idle covers nothing and is under a tenth of the rest, 0.0015, so it stays as a sliver, the cause the line names
+  // first. One millisecond further back idle reads 0 and leaves before the order, so fresh walks alone on a target of
+  // 0.015: fresh, over a tenth of the rest, is no sliver, and its mark would leave hot no burn.
   const read = (idleBack) => line([hot, cool], [pin('hot', 'fresh', 0.03, false), pin('hot', 'idle', 0.03, false, { burnAt: at(NOW - idleBack) })]);
   assert.deepEqual(
     { atCutoff: read(54_000_000), past: read(54_000_001) },

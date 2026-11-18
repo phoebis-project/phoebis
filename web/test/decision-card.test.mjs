@@ -79,7 +79,7 @@ test("the candidates table's header names the window the record read", async () 
   assert.ok(row, 'the mock holds a placement');
   const placed = await mock.getDecision(row.requestId, row.seq);
   const [first] = placed.candidates;
-  const pace = { burn: 0, deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' };
+  const pace = { burn: 0, deadline: null, end: null, fableReservation: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' };
   const key = { ...first, accountId: 'overflow', kind: 'api_key', pace: { ...pace, hours: null, score: 1, window: null }, planTier: null, windows: {} };
   // A card of its own per record, so each draws from its first read.
   const header = async (candidates) => {
@@ -132,7 +132,7 @@ test("each Pace cell is described by its hover through the host the card sits un
   assert.ok(row, 'the mock holds a placement');
   const placed = await mock.getDecision(row.requestId, row.seq);
   const [first] = placed.candidates;
-  const pace = { burn: 0.001, deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168 - 0.001, window: 'seven_day' };
+  const pace = { burn: 0.001, deadline: null, end: null, fableReservation: null, hours: 168, remaining: 1, reset: null, score: 1 / 168 - 0.001, window: 'seven_day' };
   const key = { ...first, accountId: 'overflow', kind: 'api_key', pace: { ...pace, burn: null, hours: null, score: 1, window: null }, planTier: null, windows: {} };
   api.getDecision = async () => ({ ...placed, candidates: [{ ...first, accountId: 'primary', kind: 'oauth', pace }, key] });
   const container = document.createElement('div');
@@ -170,7 +170,7 @@ test("a long hover's description id is its host's base and eight hex digits, and
   assert.ok(row, 'the mock holds a placement');
   const placed = await mock.getDecision(row.requestId, row.seq);
   const [first] = placed.candidates;
-  const pace = { burn: 0.001, deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168 - 0.001, window: 'seven_day' };
+  const pace = { burn: 0.001, deadline: null, end: null, fableReservation: null, hours: 168, remaining: 1, reset: null, score: 1 / 168 - 0.001, window: 'seven_day' };
   const key = { ...first, accountId: 'overflow', kind: 'api_key', pace: { ...pace, burn: null, hours: null, score: 1, window: null }, planTier: null, windows: {} };
   api.getDecision = async () => ({ ...placed, candidates: [{ ...first, accountId: 'primary', kind: 'oauth', pace }, { ...first, accountId: 'secondary', kind: 'oauth', pace }, key] });
   const container = document.createElement('div');

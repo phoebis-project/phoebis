@@ -308,6 +308,12 @@ test("the soonest reset of a usage-based seat is its spend window's, while that 
   assert.deepEqual(d.soonestResetAt(planAccount('plan', [planWindow('5h', 3_600_000), planWindow('7d', 86_400_000)]), SPEND_NOW), ['5h'], 'a plan account reads its soonest window');
 });
 
+test('the soonest reset is read over the rows the card draws, so a model week that resets first takes no mark', () => {
+  // seven_day_opus resets in one hour, the 5-hour window in two, and the card draws no row for the model week.
+  const account = planAccount('plan', [planWindow('5h', 7_200_000), planWindow('7d', 86_400_000), planWindow('seven_day_opus', 3_600_000)]);
+  assert.deepEqual(d.soonestResetAt(account, SPEND_NOW), ['5h']);
+});
+
 test("soonestResetAt marks every window within the router's slack of the soonest reset", () => {
   // The router's `same_reset` reads two resets at most 60,000 ms apart as one, inclusive at the bound.
   const account = (fableAfterMs) => ({ ...planAccount('plan', [planWindow('7d', DAY)]), fableWindow: planWindow('7d_fable', DAY + fableAfterMs) });

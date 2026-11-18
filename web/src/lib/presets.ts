@@ -132,6 +132,8 @@ export function shedMarks(
  * decays between folds, and 0 once `burnAt` lies more than `BURN_DECAY_CUTOFF_AVERAGES` averages before `now`, the
  * router's cutoff. The route already serves 0 past the cutoff at its read, so this holds the router's rule over the
  * span from the read to `now`, and over an older instant a reader hands it. A burn with no instant reads as served.
+ * Without the fold's instant, which the route does not serve, its 0 can come later than the router's by the fold's age
+ * at the read.
  */
 function burnDecayed(burn: number, burnAt: string | null, now: number, windowMs: number): number {
   if (burnAt === null) return burn;
@@ -233,7 +235,7 @@ export interface ShedPreview {
   sessions: number;
   /**
    * The rounds mark nothing and read the router's own fallback word: no pin on the members over the ceiling is priced,
-   * or none is pinned there, or a pin burns there and no walk names a cause, as under a target of zero.
+   * or none is pinned there, or a pin burns there and no walk names a cause, as under a shed cap of zero.
    */
   unpriced: boolean;
   warm: number;
@@ -305,7 +307,7 @@ const walkedPin = (s: Session, line: AgentContext | null, now: number) => {
  */
 export function shedPreview(
   pool: Pick<Pool, 'burnAverageSeconds' | 'fableReservationShedding' | 'fiveHourCeiling' | 'loadShedding' | 'shedCap' | 'strategy' | 'warmSessions' | 'weeklyCeiling' | 'windDownMinutes'> & {
-    members: { accountId: string; eligible?: MemberEligibility; fableReservation?: number | null; priority: number }[];
+    members: { accountId: string; eligible?: MemberEligibility; fableReservation: number | null; priority: number }[];
   },
   accounts: Account[],
   sessions: Session[],

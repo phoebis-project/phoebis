@@ -331,7 +331,8 @@ export interface KeyModels {
 
 export interface QuotaSample {
   at: string;
-  utilization: number;
+  /** Null for a reading with no figure, such as one that reported the reset alone. */
+  utilization: number | null;
 }
 
 export interface QuotaHistory {
@@ -1535,8 +1536,8 @@ export interface RecordCompletion {
   hit: boolean | null;
   inputTokens: number | null;
   /**
-   * The completing attempt's dropped thinking blocks: an empty map for an answer that listed nothing, and null until the
-   * answer ends, for an answer without the member and for an attempt the router recorded before it kept it.
+   * The completing attempt's dropped thinking blocks: an empty map for an answer that listed nothing, and null until
+   * the answer ends, for an answer without the member and for an attempt the router recorded before it kept it.
    */
   inputTransformations: InputTransformations | null;
   promisedTokens: number | null;
@@ -2072,7 +2073,7 @@ export interface AgentContext extends BurnFigures, MoveFigures {
   agentId: string;
   /** The cache TTL in force at the pin's last refresh. */
   cacheTtlMs: number | null;
-  /** The effective effort of the request that placed or last renewed the pin, the word as the client sent it. */
+  /** The effective effort of the pin's last turn, the word as the client sent it. */
   effort: string | null;
   /** Whether the pin's agent ended and its next request has not arrived. A shedding round leaves such a pin out. */
   ended: boolean;
@@ -2232,8 +2233,8 @@ export interface Session extends BurnFigures, MoveFigures {
   /** The speed the account's holds realized inside a slow-down span, from 0 to 1. Null outside a span and where
    *  `factor` is. */
   speed: number | null;
-  /** The session's spend over its life under its key, null where the ledger holds no request of it the router did not
-   *  refuse. */
+  /** The spend of the session's requests that the retention keeps under its key, null where the ledger holds no
+   *  request of it the router did not refuse. */
   spend: SessionSpend | null;
   /** The user agent of the session's newest client request, as the client sent it. */
   userAgent: string | null;
@@ -2379,7 +2380,7 @@ export interface Settings {
   retention: { bodyCaptureMaxHours: number; retentionDays: number; rollupRetentionDays: number };
   /**
    * How long a session stays listed after its last activity, and how long a session no mod reports stays listed
-   * after its last use.
+   * after its last use. The lesser of the timeout and the session expiry applies.
    */
   sessions: { expireAfterSeconds: number; nonCompanionIdleSeconds: number };
   /** Each path is null when no override file is configured. */

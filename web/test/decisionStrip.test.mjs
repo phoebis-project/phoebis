@@ -174,6 +174,13 @@ test("the story's records give their stations, states, host and termini", async 
     assert.deepEqual([stationOf(withMain, 'rung:static').verdict, stationOf(withMain, 'rung:static').tone, stationOf(withMain, 'partitions:no_fit').badge], ['not_run', 'neutral', noFit], id);
     assert.deepEqual(terminiOf(withMain), THREE_TERMINI(['chosen', 'placed']), id);
   }
+  // On the least-bad rung no member fit, so its count of 0 warns, where the same count under fits is good.
+  const leastBad = await recordOf('req_a0f5c94d-8f0/1');
+  const onFits = { ...leastBad, walk: leastBad.walk.map((s) => (s.step === 'partitions' ? { ...s, facts: s.facts.map((f) => (f.key === 'ladder' ? { ...f, value: 'fits' } : f)) } : s)) };
+  assert.deepEqual(
+    [leastBad, onFits].map((r) => [stationOf(modelOf(r), 'partitions:no_fit').badge, stationOf(modelOf(r), 'partitions:no_fit').tone]),
+    [['0 out', 'warning'], ['0 out', 'good']],
+  );
 
   for (const [id, place] of [['req_69e30548-32e/1', 'cohort'], ['req_03ddc3af-4d5/1', 'strategy pick']]) {
     const hold = modelOf(await recordOf(id));

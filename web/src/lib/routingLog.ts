@@ -436,7 +436,8 @@ const registryDiff = (diff: unknown): { entries: [string, unknown][]; secret: bo
 
 /**
  * A cooldown's By words. The relay files a Fable model's 429 on its own week and an API key's retry-after under the
- * model's scope, so a 429 reads by its window whatever its scope, and a model's scope names its 404 otherwise.
+ * model's scope, so a 429 reads by its window whatever its scope. Under a model's scope a rejection names its 404 and
+ * a permission error its 403, and any other reason reads its words as under an account's scope.
  */
 function cooldownBy(e: RoutingEvent): string {
   const d = e.detail;
@@ -446,7 +447,9 @@ function cooldownBy(e: RoutingEvent): string {
   const window = str(d.window) ?? '';
   if (reason === 'rate_limit') return rateLimitWords(window) ?? (window === 'retry_after' ? '429 retry-after' : '429');
   const model = scopeModel(scope);
-  return model === null ? words(reason) : `404 on ${shortModel(model)}`;
+  if (model !== null && reason === 'model_rejected') return `404 on ${shortModel(model)}`;
+  if (model !== null && reason === 'permission') return `403 on ${shortModel(model)}`;
+  return words(reason);
 }
 
 /** The decisions of one rows array that a pin's By and a failover's answer read. */
@@ -1567,8 +1570,7 @@ function paceTitle(c: RecordCandidate, record: DecisionRecord, now: number): str
   // A pace built by hand without the key names no window, as a null one does.
   const id = p.window ?? null;
   const share = id === null ? 'its window' : `the ${paceWindowWord(id)} window`;
-  // A pace built by hand without the key holds no reservation, as a null one does, so it never reads "NaN%".
-  const reserved = p.fableReservation ?? null;
+  const reserved = p.fableReservation;
   const left = `${fmtPct(p.remaining)} of ${share} left${reserved === null ? '' : `, less ${fmtPct(reserved)} reserved for Fable,`}`;
   // Whole hours would read a deadline under half an hour away as "0 h".
   const over = p.hours === null ? '' : ` over ${p.hours < 1 ? `${Math.round(p.hours * 60)} min` : `${Math.round(p.hours)} h`}`;

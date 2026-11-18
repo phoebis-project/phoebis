@@ -229,8 +229,8 @@ function requestsRange(at: string, now: number): RequestsRange | null {
 }
 
 /** The range "View in requests" opens: the narrowest preset that covers the first request, a custom span from the
- *  first request to the last one where it is older than the widest preset, and null with no first request, where the
- *  page's default applies. */
+ *  first request to a minute past the last one where it is older than the widest preset, and null with no first
+ *  request, where the page's default applies. */
 type RequestsSpan = { preset: RequestsRange } | { from: number; to: number };
 export function requestsSpan(firstRequestAt: string | null, lastRequestAt: string | null, now: number): RequestsSpan | null {
   if (firstRequestAt === null) return null;

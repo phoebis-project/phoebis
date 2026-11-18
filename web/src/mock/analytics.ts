@@ -583,8 +583,8 @@ interface BurnSum {
 /**
  * A plan row's figures on each tier, as the route prices them. A free classifier call spends no plan window, so it adds
  * a billed row's zeros, and every other row its own units over each tier's capacity under its revision and regime. The
- * Fable week takes its share of the 7-day window off that revision, the whole window where it holds no Fable week, and a
- * row off the week adds a zero. A null base week figure sets the route's flag.
+ * Fable week takes its share of the 7-day window off that revision, the whole window where it holds no Fable week, and
+ * a row off the week adds a zero. A null base week figure sets the route's flag.
  */
 const addPlanFigures = (s: BurnSum, r: HourlyRollup, week: string | undefined) => {
   if (freedPart(r)) {
@@ -1095,7 +1095,8 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
         for (const h of history) {
           const window = WINDOW_KEY[h.windowId] ?? h.windowId;
           if (h.accountId !== a.id || hoursOfKey(window) !== 168) continue;
-          const before = h.samples.filter((x) => Date.parse(x.at) < ended);
+          // The ledger reads the newest sample with a figure, past one that reported the reset alone.
+          const before = h.samples.filter((x): x is { at: string; utilization: number } => x.utilization !== null && Date.parse(x.at) < ended);
           const last = before[before.length - 1];
           const stored = h.samples.length === 0 ? null : Date.parse(h.samples[h.samples.length - 1].at);
           const { plan, tier } = stored === null ? { plan: null, tier: null } : readingPairAt(a.id, stored);

@@ -1298,9 +1298,10 @@ function CacheBadge({ title, warm }: { title: string; warm: boolean }) {
 }
 
 /**
- * A line's last request, its recipe's or, where no recipe stands, its pin's last use. The Last request cell draws it
- * and the Agent cell's link opens a range from the agent's first request through it, so the log the link opens holds
- * the request the cell names.
+ * A line's last request, its recipe's or, where no recipe stands, its pin's last use. The Last request cell draws it.
+ * The Agent cell's link opens the preset that covers the agent's first request measured back from the click, which
+ * holds this request too, or past the widest preset a span from the first request to a minute past this one, so the
+ * log the link opens holds the request the cell names.
  */
 const lineLastRequestAt = ({ pin, recipe }: SessionLine): string | null => (recipe !== null ? recipe.lastRequestAt : (pin?.lastUsedAt ?? null));
 

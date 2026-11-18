@@ -227,7 +227,7 @@ export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
   for (const w of list(q.windows).map(rec)) {
     const id = historyWindowId(str(w.id));
     if (id === null) continue;
-    const samples = list(w.samples).map(rec).map((s) => ({ at: isoOr(s.at, epoch), utilization: num(s.utilization) }));
+    const samples = list(w.samples).map(rec).map((s) => ({ at: isoOr(s.at, epoch), utilization: numOrNull(s.utilization) }));
     const seen = byId.get(id);
     // A window the header and the poll both sampled is one series, whatever each called it.
     byId.set(id, seen ? { ...seen, samples: [...seen.samples, ...samples].sort((x, y) => x.at.localeCompare(y.at)) } : { accountId: str(q.account_id), samples, windowId: id });

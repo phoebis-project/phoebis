@@ -148,6 +148,7 @@ const EVENTS = [
   ['cooldown set, a spend cap', event('cooldown_set', { reason: 'spend_cap', scope: 'account', until: ms(16, 0), window: 'overage' }), 'spend cap', ['until 16:00']],
   ['cooldown set, the fast lane', event('cooldown_set', { reason: 'fast_rate_limit', scope: 'fast', until: ms(14, 42), window: 'fast' }), 'fast lane 429', ['until 14:42']],
   ['cooldown set, a model', event('cooldown_set', { reason: 'model_rejected', scope: 'model:claude-haiku-4-5-20251001', until: ms(15, 24), window: 'model' }), '404 on haiku-4-5', ['until 15:24']],
+  ["cooldown set, a permission error under a model's scope", event('cooldown_set', { reason: 'permission', scope: 'model:claude-sonnet-4-5', until: ms(15, 24), window: 'retry_after' }), '403 on sonnet-4-5', ['until 15:24']],
   ['cooldown cleared, its deadline', event('cooldown_cleared', { cause: 'expired', scope: 'account' }), 'deadline passed', []],
   ['cooldown cleared by hand', event('cooldown_cleared', { cause: 'admin', scope: 'account' }), 'by hand', []],
   ['cooldown cleared, recovered', event('cooldown_cleared', { cause: 'recovered', scope: 'account' }), 'recovered', []],
@@ -514,7 +515,7 @@ const candidate = (o) => ({
   kind: 'oauth',
   obstacle: null,
   overage: null,
-  pace: { deadline: null, end: null, hours: 120, remaining: 0.91, reset: null, score: 0.0076 },
+  pace: { deadline: null, end: null, fableReservation: null, hours: 120, remaining: 0.91, reset: null, score: 0.0076 },
   partition: null,
   planTier: 'default_claude_max_20x',
   prefix: NO_PREFIX,
@@ -683,7 +684,7 @@ test("a refusal's walk is two lines, the admission's reason and the rest of the 
 });
 
 test('the pick line and the Pick station name the tied accounts, the one the runway kept and whether a draw was left', () => {
-  const tied = { pace: { burn: 0, deadline: null, end: null, hours: 120, remaining: 0.91, reset: null, score: 0.0076, window: 'seven_day' }, rank: 1, score: 0.0076 };
+  const tied = { pace: { burn: 0, deadline: null, end: null, fableReservation: null, hours: 120, remaining: 0.91, reset: null, score: 0.0076, window: 'seven_day' }, rank: 1, score: 0.0076 };
   const r = record({
     candidates: [candidate({ ...tied, runwayMs: 3_600_000 }), candidate({ ...tied, accountId: 'secondary', rank: 2, runwayMs: 1_800_000 })],
     walk: [
@@ -731,7 +732,7 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.equal(chosen.pace, '0.76 %/h');
   assert.deepEqual(chosen.verdict, { badge: 'chosen', badgeTone: 'accent', chip: null, chosen: true, tone: null });
   assert.deepEqual(cell({ windows: { five_hour: window5h(1, ms(15, 42), 'poll', 120_000), seven_day: window5h(0.88, null, 'poll', 120_000) } }).windows, [['100%', '15:42', 'poll 2 min'], ['88%', 'no reset', 'poll 2 min'], ['not reported']]);
-  const key = cell({ accountId: 'overflow', kind: 'api_key', pace: { deadline: null, end: null, hours: null, remaining: 0.96, reset: null, score: 0.96 }, planTier: null, priority: 1, tier: [2, 1, 0], windows: { worst_bucket: window5h(0.04, ms(14, 28, 8)) } });
+  const key = cell({ accountId: 'overflow', kind: 'api_key', pace: { deadline: null, end: null, fableReservation: null, hours: null, remaining: 0.96, reset: null, score: 0.96 }, planTier: null, priority: 1, tier: [2, 1, 0], windows: { worst_bucket: window5h(0.04, ms(14, 28, 8)) } });
   assert.deepEqual([key.plan, key.tier, key.windows, key.pace], ['API key', 'paid P1', [['worst bucket 4%']], '96% left']);
   assert.equal(cell({ inOverage: true, tier: [1, 0, 1] }).tier, 'overage P0');
   assert.equal(cell({ pace: null }).pace, '-');
@@ -1741,12 +1742,12 @@ test('the card carries the hover hints of the hold, the promise and the placemen
 test("the Pace cell's title names the share, the hours, the deadline, the burn and the spare rate, and the header names the window", () => {
   const title = (pace, o = {}) => d.candidateCells(candidate({ pace, ...o }), record(), NOW).paceTitle;
   const reset = Date.UTC(2026, 8, 19, 8, 30);
-  const read = { burn: 0.004, deadline: iso(reset), end: null, hours: 66, remaining: 0.66, reset: iso(reset), score: 0.006, window: 'seven_day' };
+  const read = { burn: 0.004, deadline: iso(reset), end: null, fableReservation: null, hours: 66, remaining: 0.66, reset: iso(reset), score: 0.006, window: 'seven_day' };
   const tail = '. Inside its tier, the highest spare rate wins.';
   assert.equal(title(read), `66% of the 7-day window left over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
   const end = ms(16, 44);
-  assert.equal(title({ burn: 0.05, deadline: iso(end), end: iso(end), hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23 - 0.05, window: 'seven_day_fable' }), `45% of the 7-day Fable window left over 2 h to its subscription's end at 16:44, less 5.00 %/h of burn: 15.18 %/h${tail}`);
-  assert.equal(title({ burn: 0, deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' }), `100% of the 7-day window left over 168 h with no reset read, less 0.00 %/h of burn: 0.60 %/h${tail}`);
+  assert.equal(title({ burn: 0.05, deadline: iso(end), end: iso(end), fableReservation: null, hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23 - 0.05, window: 'seven_day_fable' }), `45% of the 7-day Fable window left over 2 h to its subscription's end at 16:44, less 5.00 %/h of burn: 15.18 %/h${tail}`);
+  assert.equal(title({ burn: 0, deadline: null, end: null, fableReservation: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' }), `100% of the 7-day window left over 168 h with no reset read, less 0.00 %/h of burn: 0.60 %/h${tail}`);
   assert.equal(title({ ...read, window: null }), `66% of its window left over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
   // Under an hour the span reads in minutes, and from an hour on in whole hours.
   assert.equal(title({ ...read, hours: 0.42 }), `66% of the 7-day window left over 25 min to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
@@ -1755,7 +1756,7 @@ test("the Pace cell's title names the share, the hours, the deadline, the burn a
   // A version 1 record read no burn, and its score was the share left an hour above the pace floor.
   assert.equal(title({ ...read, burn: null, score: 0.01 }), '66% of the 7-day window left over 66 h to its reset at Sep 19 08:30: 1.00 %/h. Inside its tier, the highest above the pace floor wins.');
   assert.equal(d.candidateCells(candidate({}), record(), NOW).paceTitle, '91% of its window left over 120 h with no reset read: 0.76 %/h. Inside its tier, the highest above the pace floor wins.', 'a pace written without the burn reads as a version 1 one');
-  const keyPace = { burn: null, deadline: null, end: null, hours: null, remaining: 0.45, reset: null, score: 0.45, window: null };
+  const keyPace = { burn: null, deadline: null, end: null, fableReservation: null, hours: null, remaining: 0.45, reset: null, score: 0.45, window: null };
   const key = candidate({ accountId: 'overflow', kind: 'api_key', pace: keyPace, planTier: null, tier: [2, 0, 0], windows: { worst_bucket: window5h(0.55, ms(14, 28, 8)) } });
   assert.equal(d.candidateCells(key, record(), NOW).paceTitle, '45% of its worst live bucket left. Scored by the remaining share alone, with no division by hours.');
   assert.equal(title(null), null);
@@ -1774,7 +1775,7 @@ test("a Pace hover names the Fable reservation where the candidate carries one",
   // no Fable reading and on a seat with no spend entry.
   const title = (pace) => d.candidateCells(candidate({ pace }), record(), NOW).paceTitle;
   const reset = Date.UTC(2026, 8, 19, 8, 30);
-  const read = { burn: 0.004, deadline: iso(reset), end: null, hours: 66, remaining: 0.66, reset: iso(reset), score: 0.006, window: 'seven_day' };
+  const read = { burn: 0.004, deadline: iso(reset), end: null, fableReservation: null, hours: 66, remaining: 0.66, reset: iso(reset), score: 0.006, window: 'seven_day' };
   const tail = '. Inside its tier, the highest spare rate wins.';
   // (0.66 less 0.12) over 66 h less 0.004 of burn.
   assert.equal(title({ ...read, fableReservation: 0.12, score: 0.00418 }), `66% of the 7-day window left, less 12% reserved for Fable, over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.42 %/h${tail}`);
@@ -1815,7 +1816,7 @@ test("a paid member's tier reads paid whatever its group", () => {
 
 test("a usage-based candidate's Pace cell reads its remaining allowance, and the header passes over it to a subscription candidate", () => {
   // The engine's paid-source pace: no hours, no window, no burn, and the remaining allowance as the score.
-  const paid = { burn: 0, deadline: null, end: null, hours: null, remaining: 1, reset: null, score: 1, window: null };
+  const paid = { burn: 0, deadline: null, end: null, fableReservation: null, hours: null, remaining: 1, reset: null, score: 1, window: null };
   const seat = candidate({ accountId: 'seat', pace: paid, planTier: 'default_claude_zero', priority: 1, tier: [0, 1, 0], windows: { spend: window5h(0.41, Date.UTC(2026, 9, 1), 'estimated') } });
   const cells = d.candidateCells(seat, record(), NOW);
   assert.deepEqual(
@@ -1823,14 +1824,14 @@ test("a usage-based candidate's Pace cell reads its remaining allowance, and the
     [[['spend 41%', 'Oct 1 00:00', 'estimated']], '100% left', '100% of its allowance left. Scored by the remaining share alone, with no division by hours.'],
     'the one spend cell and the paid-source pace at tier [0, 1, 0]',
   );
-  const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
+  const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, fableReservation: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
   assert.equal(d.paceHeader(record({ candidates: [seat, plan] })), 'Spare rate, 7-day per hour', 'the seat listed first names no window, so the next subscription candidate heads the column');
 });
 
 test("a Pace title reads a paid source by its pace's shape whether or not the record carries the spend window, and its cell keeps the record's unit", () => {
   // A seat whose share lapsed at its reset, or was not yet read, carries no spend entry while the engine still writes
   // the paid source's pace: no hours, no deadline and no window.
-  const paid = { burn: 0, deadline: null, end: null, hours: null, remaining: 1, reset: null, score: 1, window: null };
+  const paid = { burn: 0, deadline: null, end: null, fableReservation: null, hours: null, remaining: 1, reset: null, score: 1, window: null };
   const bare = d.candidateCells(candidate({ accountId: 'seat', pace: paid, planTier: 'default_claude_zero', priority: 1, tier: [0, 1, 0], windows: {} }), record(), NOW);
   assert.deepEqual(
     [bare.windows, bare.pace, bare.paceTitle],
@@ -1844,7 +1845,7 @@ test("a Pace title reads a paid source by its pace's shape whether or not the re
 });
 
 test('the Pace header passes over a subscription candidate whose pace names no window to the first one whose pace names one', () => {
-  const pace = { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006 };
+  const pace = { burn: 0.004, deadline: null, end: null, fableReservation: null, hours: 66, remaining: 0.66, reset: null, score: 0.006 };
   const lapsed = candidate({ accountId: 'lapsed', pace: { ...pace, window: null } });
   const plan = candidate({ accountId: 'secondary', pace: { ...pace, window: 'seven_day' } });
   assert.equal(d.paceHeader(record({ candidates: [lapsed, plan] })), 'Spare rate, 7-day per hour', "the second candidate's version 3 pace heads the column");
@@ -1852,7 +1853,7 @@ test('the Pace header passes over a subscription candidate whose pace names no w
 });
 
 test('the Pace header under the fable spelling reads the 7-day Fable word, and an unknown spelling keeps its raw text', () => {
-  const pace = { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006 };
+  const pace = { burn: 0.004, deadline: null, end: null, fableReservation: null, hours: 66, remaining: 0.66, reset: null, score: 0.006 };
   const header = (window) => d.paceHeader(record({ candidates: [candidate({ pace: { ...pace, window } })] }));
   assert.equal(header('fable'), 'Spare rate, 7-day Fable per hour', "the router's own windows spell the Fable week fable");
   assert.equal(header('monthly'), 'Spare rate, monthly per hour', 'a window the console does not know reads as sent');
@@ -1861,9 +1862,9 @@ test('the Pace header under the fable spelling reads the 7-day Fable word, and a
 test("a Pace cell reads the score in the unit the record's pick step gives it, else the unit its pace's shape names, and a seat's title reads its allowance", () => {
   // A lapsed seat carries no spend entry, so its cells read by the plan arm, while the engine scores it as a paid
   // source: a percent with a burn of 0, and a pace with no hours, no deadline and no window, which its title reads.
-  const lapsed = candidate({ accountId: 'seat', pace: { burn: 0, deadline: null, end: null, hours: null, remaining: 0.9, reset: null, score: 0.42, window: null }, planTier: 'default_claude_zero', priority: 1, tier: [0, 1, 0], windows: {} });
+  const lapsed = candidate({ accountId: 'seat', pace: { burn: 0, deadline: null, end: null, fableReservation: null, hours: null, remaining: 0.9, reset: null, score: 0.42, window: null }, planTier: 'default_claude_zero', priority: 1, tier: [0, 1, 0], windows: {} });
   const allowance = '90% of its allowance left. Scored by the remaining share alone, with no division by hours.';
-  const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
+  const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, fableReservation: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
   const picked = (c, facts, candidates = [c]) => d.candidateCells(c, record({ candidates, walk: [wstep('pick', 'chosen', facts)] }), NOW);
   const seat = picked(lapsed, [wfact('score', 0.42, 'percent', 'seat')]);
   assert.equal(seat.paceTitle, allowance, "the seat's title reads its allowance by its pace's shape");
@@ -1888,7 +1889,7 @@ test("a Pace cell reads the score in the unit the record's pick step gives it, e
   assert.deepEqual([bare.pace, bare.paceTitle], ['42%', allowance], 'a lapsed seat on a record with no pick step reads the percent its pace names');
   // A version 1 record as the decoder gives one: no burn, the pace's hours always written, and no window on a record
   // from before the engine named it.
-  const old = candidate({ pace: { burn: null, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.01, window: null } });
+  const old = candidate({ pace: { burn: null, deadline: null, end: null, fableReservation: null, hours: 66, remaining: 0.66, reset: null, score: 0.01, window: null } });
   const v1 = d.candidateCells(old, record({ candidates: [old], settings: LEGACY_SETTINGS, version: 1 }), NOW);
   assert.deepEqual([v1.pace, v1.paceTitle.includes(': 1.00 %/h.')], ['1.00 %/h', true], 'a version 1 plan member reads the plan unit');
 });

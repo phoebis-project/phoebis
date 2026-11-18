@@ -3,6 +3,7 @@ import { tierRow } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { fmtAbsolute, fmtPct, fmtRelative, instant, plural } from '@/lib/format';
 import { HOUR, MINUTE, span } from '@/lib/time';
+import { WINDOW_ORDER } from '@/lib/windows';
 
 export type MeterTone = 'good' | 'low' | 'warn';
 
@@ -298,9 +299,9 @@ const aheadOf = (at: string | null | undefined, now: number): number | null => {
  *  inclusive at the bound. */
 const RESET_SLACK_MS = MINUTE;
 
-/** The soonest future reset over every window the poll read and a seat's spend window, with every window whose reset
- *  lies within `RESET_SLACK_MS` after it, in the reading's order, so the card marks each. Empty where no reset lies
- *  ahead. */
+/** The soonest future reset over the rows the card draws, its three windows and a seat's spend window, with every row
+ *  whose reset lies within `RESET_SLACK_MS` after it, in the card's order, so the card marks each. A model week the
+ *  poll read draws no row, so it takes no mark from a drawn one. Empty where no reset lies ahead. */
 export function soonestResetAt(account: Account, now: number): WindowId[] {
   // A window the sampler reported without a reset time can never be the soonest to recover, and a usage-based seat
   // recovers at its spend window's reset, the one reset it carries.
@@ -308,7 +309,7 @@ export function soonestResetAt(account: Account, now: number): WindowId[] {
     const t = aheadOf(at, now);
     return t === null ? [] : [{ at: t, id }];
   };
-  const resets = [...readWindows(account).flatMap((w) => ahead(w.id, w.resetsAt)), ...ahead('spend', account.spend?.resetsAt)];
+  const resets = [...WINDOW_ORDER.flatMap((id) => ahead(id, windowOf(account, id)?.resetsAt)), ...ahead('spend', account.spend?.resetsAt)];
   const soonest = Math.min(...resets.map((r) => r.at));
   // Measured from the soonest reset, so a window within the slack of a marked one but past the soonest's is unmarked.
   return resets.filter((r) => r.at - soonest <= RESET_SLACK_MS).map((r) => r.id);

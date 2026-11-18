@@ -231,10 +231,11 @@ export const weekReadingOf = (costs: SubscriptionCosts | null, error: string | n
   return { failure: { text: weekUnpricedTitle(week), unpriced: true }, scale, week };
 };
 
-/** A burn point with one plan card's figure under the chosen tier, and `gap`, the cause where the bucket draws a gap:
- *  `unsized` where the tier's entry is missing beside another tier's number above 0, `unpriced` where no tier holds a
- *  number, or on the week card where the route flags the bucket, null where it draws none. An idle bucket and a row the
- *  cost model cannot weigh read null on every tier. */
+/** A burn point with one plan card's figure under the chosen tier, and `gap`, the cause where the bucket draws a gap,
+ *  null where it draws none. On the 5-hour and the Fable card it is `unsized` where the tier's entry is missing beside
+ *  another tier's number and `unpriced` where no tier holds one. The week card reads the route's flag alone: `unpriced`
+ *  where it flags the bucket, else `unsized`. An idle bucket and a row the cost model cannot weigh read null on every
+ *  tier. */
 export interface FiguredPoint extends BurnPoint { figure: number | null; gap: GapCause }
 /** One plan card over a range: its points, and the sentence it reads in place of its chart, null where it draws. */
 interface PlanCardFigures { points: FiguredPoint[]; unpriced: string | null }
@@ -258,14 +259,10 @@ const planCardOf = (points: BurnPoint[], week: WeekPosition, mapOf: (p: BurnPoin
   return { points: figured, unpriced };
 };
 
-/** The cause off the maps alone, for a card the route flags nothing on: the tier's gap beside a figure above 0 under
- *  another tier, the model's where no tier holds a number. A null beside zeros alone drew nothing from any tier's
- *  window, so it reads as idle. */
-const causeOfMap = (_p: BurnPoint, map: TierMap): GapCause => {
-  const entries = Object.values(map);
-  if (entries.some((v) => v !== null && v > 0)) return 'unsized';
-  return entries.every((v) => v === null) ? 'unpriced' : null;
-};
+/** The cause off the maps alone, for a card the route flags nothing on: the tier's gap beside a number under another
+ *  tier, the model's where no tier holds one. A 0 counts, since the route writes a null beside a 0 for a row of no
+ *  weighted units under a revision that does not size the tier. */
+const causeOfMap = (_p: BurnPoint, map: TierMap): GapCause => (Object.values(map).some((v) => v !== null) ? 'unsized' : 'unpriced');
 
 /** The week card: the route's flag names the model's gap, so a null under the tier with the flag unset is the tier's,
  *  whatever the other tiers hold. */

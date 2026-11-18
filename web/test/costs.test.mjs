@@ -90,11 +90,12 @@ test("a loaded table that sizes no window for the chosen tier reads unpriced, an
 
 test("a bucket whose revision sizes no window for the chosen tier draws the tier's gap, and a bucket no tier prices the model's", () => {
   // Under the Max week the chosen tier is Max 5x. A busy bucket with a number under Pro and none under Max 5x ran under
-  // a revision that sizes no Max 5x window, and one with no number under any tier ran on a model with no weight.
+  // a revision that sizes no Max 5x window, a 0 under Pro included, and one with no number under any tier ran on a
+  // model with no weight.
   const at = Date.UTC(2026, 8, 16, 12);
   const causes = (card) => card.points.map((p) => [p.gap === 'unsized', p.gap === 'unpriced']);
-  const fiveHour = d.fiveHourCard([busyPoint(at, { fiveHourEquivalentByTier: { [MAX_5X]: null, [PRO]: 0.4 } }), busyPoint(at, { fiveHourEquivalentByTier: { [MAX_5X]: null, [PRO]: null } })], 'max');
-  assert.deepEqual(causes(fiveHour), [[true, false], [false, true]], "the tier's gap beside another tier's number, the model's where no tier holds one");
+  const fiveHour = d.fiveHourCard([busyPoint(at, { fiveHourEquivalentByTier: { [MAX_5X]: null, [PRO]: 0.4 } }), busyPoint(at, { fiveHourEquivalentByTier: { [MAX_5X]: null, [PRO]: 0 } }), busyPoint(at, { fiveHourEquivalentByTier: { [MAX_5X]: null, [PRO]: null } })], 'max');
+  assert.deepEqual(causes(fiveHour), [[true, false], [true, false], [false, true]], "the tier's gap beside another tier's number, 0 among them, the model's where no tier holds one");
   // The route's flag names the week's model gap, so a week map of nulls with the flag unset is the tier's.
   const week = d.weekCard([busyPoint(at, { equivalentByTier: { [MAX_5X]: null, [PRO]: null } }), busyPoint(at, { equivalentByTier: { [MAX_5X]: null, [PRO]: null }, unpriced: true })], 'max');
   assert.deepEqual(causes(week), [[true, false], [false, true]], "the week card's tier gap with the flag unset and its model gap with the flag set");

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { joinTrend } from './dist/api.js';
+import { decodeQuotaHistory, joinTrend } from './dist/api.js';
 
 // Minute offsets from a 5-minute boundary, so each sample's bucket reads off its offset.
 const at = (minutes, seconds = 0) => new Date(Date.UTC(2026, 8, 16, 14, 30) + minutes * 60_000 + seconds * 1000).toISOString();
@@ -57,6 +57,26 @@ test('a missing Fable bucket carries the previous value forward', () => {
   assert.deepEqual(
     points.map((p) => p.u7),
     [40, 41, 42],
+  );
+});
+
+test('a sample the route answers with no figure draws a gap up to the next figure', () => {
+  const history = decodeQuotaHistory({
+    account_id: 'primary',
+    windows: [
+      {
+        id: 'seven_day',
+        samples: [
+          { at: Date.parse(at(0)), utilization: 0.4 },
+          { at: Date.parse(at(5)), utilization: null },
+          { at: Date.parse(at(10)), utilization: 0.42 },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(
+    joinTrend(history, false, 1).map((p) => p.u7),
+    [40, null, 42],
   );
 });
 

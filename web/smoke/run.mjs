@@ -580,7 +580,8 @@ const pageGroupBy = (page) => {
 const eachTier = (entry) => Object.fromEntries(Object.values(WEEK_TIERS).map((tier) => [tier, entry]));
 /**
  * A burn point as the route answers it, idle and priced nothing unless `over` says otherwise: an idle bucket reads null
- * on every tier, an API-key bucket with tokens a zero figure on each, and a subscription one its figures and its shares.
+ * on every tier, an API-key bucket with tokens a zero figure on each, and a subscription one its figures and its
+ * shares.
  */
 const burnPoint = (over) => ({ cachedTokens: 0, equivalentByTier: eachTier(null), fableEquivalentByTier: eachTier(null), fiveHourEquivalentByTier: eachTier(null), fiveHourShare: null, modelWeekShare: null, planUsd: 0, sevenDayShare: null, tokens: 0, uncachedTokens: 0, unit: null, unpriced: false, usd: 0, ...over });
 

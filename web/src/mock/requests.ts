@@ -3436,7 +3436,8 @@ function accountRollups(): AccountRollup[] {
     const last = new Map<number, QuotaSample>();
     for (const sm of hist.samples) {
       const hour = startOfHour(Date.parse(sm.at));
-      byHour.set(hour, Math.max(byHour.get(hour) ?? 0, sm.utilization));
+      // The ledger's highest skips a sample with no figure, which still stands as the hour's last.
+      if (sm.utilization !== null) byHour.set(hour, Math.max(byHour.get(hour) ?? 0, sm.utilization));
       last.set(hour, sm);
     }
     sampleIndex.set(`${hist.accountId}|${hist.windowId}`, byHour);
@@ -3457,7 +3458,7 @@ function accountRollups(): AccountRollup[] {
       const reset = resetsAt === null ? null : Date.parse(resetsAt);
       // The route answers no deadline without a reset, even where the account's end stands.
       const deadline = reset === null ? null : iso(Math.min(reset, end ?? reset));
-      const read: WindowSample = { deadline, lead: leadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, end), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
+      const read: WindowSample = { deadline, lead: sample.utilization === null ? null : leadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, end), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
       windows[key] = read;
     }
     return windows;
