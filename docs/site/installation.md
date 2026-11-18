@@ -836,8 +836,9 @@ start and from `check-config` and refuses nothing.
 
 The start reads the pair once, before it binds a port, and a renewal puts new files at both paths and asks the running
 router to re-read every listener's pair with `phoebis tls reload`, as [Upgrades and renewals](operations.md#upgrades)
-walks it. The dashboard raises `certificate_expiring` and `certificate_reload_failed` for a listener's pair, which
-[Conditions and gauges](statistics.md#conditions-and-gauges) describes.
+walks it. [Certificates from step-ca, renewed by acme.sh](operations.md#step-ca) is a worked example, from a CA of your
+own to the renewal. The dashboard raises `certificate_expiring` and `certificate_reload_failed` for a listener's pair,
+which [Conditions and gauges](statistics.md#conditions-and-gauges) describes.
 
 `check-config` reads the pair the way the start does, and both refuse it with one line naming the key and the path:
 

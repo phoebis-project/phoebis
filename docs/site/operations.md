@@ -431,6 +431,135 @@ upgrade therefore means restoring from the backup, not downgrading the binary in
 Every configuration block denies unknown keys, so a key the new build does not recognize refuses startup, and running
 `check-config` first catches that before the restart does.
 
+### Certificates from step-ca, renewed by acme.sh { #step-ca }
+
+This example gives the proxy and the admin listener a certificate from a CA of your own. A
+[step-ca](https://smallstep.com/docs/step-ca/installation/) with an ACME provisioner signs it, and
+[`acme.sh`](https://github.com/acmesh-official/acme.sh/wiki/How-to-install) fetches it, installs it and renews it, and
+each link leads to that tool's own install. The CA runs on `ca.example.com` and the router on `router.example.com`. The
+example ran with step-ca 0.30.2, its `step` CLI 0.31.0 and `acme.sh` 3.1.6, and both tools' defaults differ between
+versions. The feature CA has no part in it: the router makes that CA itself for the two feature hosts, and step-ca signs
+the router's own name alone.
+
+On the CA's host, the first line creates the CA, the second adds the ACME provisioner and the third starts the CA on its
+configuration:
+
+```sh
+step ca init --deployment-type standalone --name "Example CA" --dns ca.example.com --address :443 \
+  --provisioner admin --password-file /etc/step-ca/password.txt
+step ca provisioner add acme --type ACME --x509-default-dur 2160h --x509-max-dur 2160h
+step-ca "$(step path)/config/ca.json" --password-file /etc/step-ca/password.txt
+```
+
+With these flags `step ca init` asks nothing, and the password file holds the password of the CA's keys, which the start
+reads from the file since a service has no terminal. `step ca provisioner add` writes the provisioner into the CA's
+`ca.json`, so here it runs before the CA starts. Its two duration flags make the provisioner issue leaves of 90 days.
+step-ca's default is 24 hours, and under it `certificate_expiring` stands from the first install on, since the item
+holds while a leaf is within 30 days of its end. `acme.sh` would also renew such a leaf too late most of the time: it
+renews a leaf of a day or less in the leaf's last hour, and its cron entry runs every six hours, so a run falls into
+that hour about one time in six.
+
+The router's host needs the CA's root certificate, `$(step path)/certs/root_ca.crt` on the CA's host. Copy it to
+`/etc/phoebis/step-ca-root.crt` at `0644`, since it holds no secret.
+
+The remaining lines run as root on the router's host. The key and the signing request are the operator's: the two
+`install` lines create the pair's files at the modes [TLS on the listeners](installation.md#tls-on-the-listeners) gives,
+and `openssl` writes the key into the first and a request for the router's name beside it:
+
+```sh
+install -m 0640 -g phoebis /dev/null /etc/phoebis/proxy.key
+install -m 0644 /dev/null /etc/phoebis/proxy.pem
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+  -keyout /etc/phoebis/proxy.key -out /etc/phoebis/router.csr \
+  -subj /CN=router.example.com -addext subjectAltName=DNS:router.example.com
+```
+
+`openssl` and `acme.sh` both write into a file that exists and leave its mode and its owner as they are, so the two
+`install` lines hold for each later renewal. `acme.sh` then has the provisioner sign the request:
+
+```sh
+acme.sh --signcsr --csr /etc/phoebis/router.csr --standalone \
+  --server https://ca.example.com/acme/acme/directory --ca-bundle /etc/phoebis/step-ca-root.crt
+```
+
+`--server` is the provisioner's directory, `/acme/{name}/directory` on the CA, and `--ca-bundle` is the root `acme.sh`
+trusts the CA by. `--standalone` answers step-ca's challenge itself, through `socat` on port 80 of the router's host, so
+step-ca has to reach `router.example.com` there. `acme.sh` reads the name from the request, and the line takes no `-d`.
+
+The install copies the certificate and its chain to the pair's path. The first install names no reload command, since
+the router does not serve the pair yet and `acme.sh` ends an install with status 1 when its reload command fails:
+
+```sh
+acme.sh --install-cert -d router.example.com --fullchain-file /etc/phoebis/proxy.pem
+```
+
+The line names no key file either. Under a signing request `acme.sh` holds no key, and an install with `--key-file` ends
+with status 1 and leaves the file it names empty.
+
+Both listeners then name the pair in the bootstrap file. The router reads a pair once at its start and refuses to start
+without a pair it can load, so the blocks follow the first install, and a `tls` block added to a running router's file
+takes a restart, here `systemctl restart phoebis`:
+
+```yaml title="config.yaml"
+admin:
+  listen: 0.0.0.0:8081
+  tls:
+    cert_file: /etc/phoebis/proxy.pem
+    key_file: /etc/phoebis/proxy.key
+  secret_env: PHOEBIS_ADMIN_SECRET
+proxy:
+  listen: 0.0.0.0:8317
+  tls:
+    cert_file: /etc/phoebis/proxy.pem
+    key_file: /etc/phoebis/proxy.key
+```
+
+One pair serves both listeners: `proxy.tls` and `admin.tls` name the same two files, since `acme.sh` installs the
+certificate at one path and the key stays at its own. The admin listener is bound where the router's name reaches it,
+which the reload command relies on. The install then runs once more, with the reload command that `acme.sh` stores and
+runs after each renewal:
+
+```sh
+acme.sh --install-cert -d router.example.com --fullchain-file /etc/phoebis/proxy.pem --reloadcmd '
+  set -a && . /etc/phoebis/phoebis.env && set +a &&
+  phoebis tls reload --config /etc/phoebis/config.yaml \
+    --ca /etc/phoebis/step-ca-root.crt --url https://router.example.com:8081'
+```
+
+The command reads the service unit's environment file ahead of its line, as the `certbot` hook above does. Its line
+carries `--ca` and `--url` because the pair is on the admin listener too: the admin client trusts the system's roots
+unless `--ca` names a bundle, and its default address is the loopback address, which the leaf does not name. The install
+runs the command at once, and its two lines show that the router serves the pair:
+
+```text
+proxy: reloaded, certificate /etc/phoebis/proxy.pem expires 2027-02-16T01:17:18Z
+admin: reloaded, certificate /etc/phoebis/proxy.pem expires 2027-02-16T01:17:18Z
+```
+
+The renewal is `acme.sh`'s own from here on. The cron entry of its install runs `acme.sh --cron`, and a run renews each
+certificate that is due, installs it at the stored path and runs the stored reload command. For a certificate that is
+not due it prints `Skipping. Next renewal time is: {date}`, and for a leaf of 90 days that date lies 29 days after the
+issue. A renewal signs the same request again, so the key file stays as it is and the certificate file alone changes. A
+forced renewal walks the whole road at once:
+
+```sh
+acme.sh --renew -d router.example.com --force
+```
+
+It ends in the two `reloaded` lines again, with the later end of the new leaf. The cron entry sends the standard output
+of `acme.sh` to `/dev/null`, the reload's two lines with it, so a renewal on the timer is read from the router's log,
+which holds `proxy.tls: certificate pair reloaded (certificate {cert_file}, expires {date})` and the same line for
+`admin.tls`, or from `phoebis tls reload` run by hand, which prints the served leaf's end again. `certificate_expiring`
+is the sign that renewals stopped: the item stands from 30 days before the served leaf's end until a leaf with more than
+30 days left is loaded ([Conditions and gauges](statistics.md#conditions-and-gauges)), and `phoebis status` lists it
+under `attention:`.
+
+A client trusts the certificate through the same root: a copy of `step-ca-root.crt` on the client's machine, named in
+`NODE_EXTRA_CA_CERTS` beside `ANTHROPIC_BASE_URL` in the client's [environment block](client.md#the-environment-block).
+`phoebis status` and `phoebis tls reload` take the file through `--ca`, with the router's name through `--url`, as the
+reload command carries them. In a feature setup [the launch script](claude-ai-features.md#the-launch-script) takes the
+root as `BASE_CA` and writes it and the feature CA into one file, since the client's variable names one file.
+
 ## Re-pinning the client build
 
 A drift refusal is the `client_drift` answer to a request whose billing hash or `cc_version` suffix this build cannot
