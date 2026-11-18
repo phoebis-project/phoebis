@@ -860,12 +860,11 @@ removes them all, and Escape or a click outside closes the box, the save writing
 disabled with "No other guardrail is left to attach" on hover while the registry holds nothing beyond the pool's, under
 the hint "The pool's guardrails run first and cannot be dropped here. This key's own run after them." and the link
 "Manage guardrails", reading "Guardrails can be attached once the key is saved." on create), claude.ai features
-(Artifacts and Connectors, below), Sessions (the key's two
-companion permissions as toggles, Allowance tool with the hint "The model may read the pool's allowance through the
-companion." and Cache warming with "The router warms this key's sessions' caches.", both on for a new key) and Capture
-(Capture request and response bodies as Inherit from pool, an override in hours or off for this key). Server-side auto
-mode, Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture group warns what the
-bodies hold, the warning [Keys](routing.md#keys) quotes.
+(Artifacts and Connectors, below), Sessions (the key's two companion permissions as toggles, Allowance tool with the
+hint "The model may read the pool's allowance through the companion." and Cache warming with "The router warms this
+key's sessions' caches.", both on for a new key) and Capture (Capture request and response bodies as Inherit from pool,
+an override in hours or off for this key). Server-side auto mode, Pool rules and List [1m] twins show in the expert
+view. While the key captures, the Capture group warns what the bodies hold, the warning [Keys](routing.md#keys) quotes.
 
 claude.ai features holds two selects, Artifacts and Connectors, the key's side of the selection that [Whose claude.ai a
 key acts under](claude-ai-features.md#whose-claudeai-a-key-acts-under) explains. Each lists `Inherit ({label})`, a new
@@ -957,9 +956,9 @@ created", "Guardrail saved" and "Guardrail deleted". What the test evaluates and
 ![The Requests view: the table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the table with its client column](assets/requests-dark.png#only-dark)
 
-A section bar shows one of two sections at a time: Model requests, where the view opens, and Feature calls, which a
-link or a reload with `#feature-calls` lands on. The bar stays at the top as the page scrolls, and the request drawer
-docks under it. Model requests is the request list this part describes up to [Feature calls](#feature-calls).
+A section bar shows one of two sections at a time: Model requests, where the view opens, and Feature calls, which a link
+or a reload with `#feature-calls` lands on. The bar stays at the top as the page scrolls, and the request drawer docks
+under it. Model requests is the request list this part describes up to [Feature calls](#feature-calls).
 
 The filter bar holds the range, the search, Add filter, the Columns button, the Sort control, and at the right edge the
 split Refresh button and the count of rows shown ("25 shown, more available"), the right edge on a second line at 1280
@@ -1153,17 +1152,17 @@ the bar, and the split Refresh button. Both sections read the one range. The sec
 address, so a reload or a shared link keeps them, while the four filters stay with the open page, through a look at
 Model requests, and start empty on a reload. The table pages 50 calls at a time with First, Previous and Next, and a
 change of the range or of a filter returns to the first page. Under a preset each read runs up to now, past the end the
-pressed pill names, from the start the range took when the page loaded or Refresh last ran, and a custom range reads
-its own window. Refresh, titled "Reads the list again now" under a preset, takes the range again for both sections.
-Auto reload is off when the page opens and keeps its interval through a look at Model requests. The dropdown offers the
-request list's intervals: each one reads the first page again, and it waits on an older page and while a menu or
-popover under the bar is open. While Feature calls shows, the request list reads nothing on its interval.
+pressed pill names, from the start the range took when the page loaded or Refresh last ran, and a custom range reads its
+own window. Refresh, titled "Reads the list again now" under a preset, takes the range again for both sections. Auto
+reload is off when the page opens and keeps its interval through a look at Model requests. The dropdown offers the
+request list's intervals: each one reads the first page again, and it waits on an older page and while a menu or popover
+under the bar is open. While Feature calls shows, the request list reads nothing on its interval.
 
 An empty table with no filter reads "No feature calls in this range" with "A row appears once a key's pool selects an
 account for a feature and a client in a feature setup uses it." and the link "How the claude.ai features work", which
-opens the documentation's page on the features in a new tab. With a filter it reads "No feature calls match" with
-"Widen the range or clear a filter." A failed read draws "Could not load the feature calls" with the error and Try
-again, which reads the calls again.
+opens the documentation's page on the features in a new tab. With a filter it reads "No feature calls match" with "Widen
+the range or clear a filter." A failed read draws "Could not load the feature calls" with the error and Try again, which
+reads the calls again.
 
 ## Analytics
 

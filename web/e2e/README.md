@@ -515,19 +515,19 @@ admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the weekday afterno
 draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the two directories shows.
 Beside the views' shots it writes the open catalog popup's as `<theme>/accounts-catalog.png`, the pool dialog open on
 its claude.ai features group as `<theme>/pools-features.png`, the open cost reference's three tabs as
-`<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`,
-the Analytics page's Burn tab, its plan card drawing its lines, as `<theme>/analytics-burn.png`, the Quota view's reset
-dialog on its two pages as `<theme>/quota-reset-pick.png` and `<theme>/quota-reset-confirm.png`, and the written
-session's open row on the Sessions view as `<theme>/sessions-open.png` and again at 375 by 800 as
-`<theme>/sessions-phone.png`. Its views include the Analytics page's Cache warming tab as
-`<theme>/analytics-cache-warming.png`, the Quota page's Quota windows section as `<theme>/quota-windows.png` and the
-Requests view's Feature calls section as `<theme>/requests-feature-calls.png`. The
-mock pass writes each of these shots under both palettes, `<theme>/` for the default and `<theme>-github/` for the
-GitHub one, and the site's screenshots come from the default palette's directories. The router's pass writes none of
-these: one shot per view it runs, under the default palette alone, which its test counts. The dashboard's remaining
-cards and its empty state are checked against the router's seeded registry alone (`PHOEBIS_E2E_MOCK=1` skips them),
-since the mock's story has subscription accounts and no empty list on the dashboard. The subscription end editor needs
-the story's OAuth account, so against the router's seed that part stands down.
+`<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`, the Analytics
+page's Burn tab, its plan card drawing its lines, as `<theme>/analytics-burn.png`, the Quota view's reset dialog on its
+two pages as `<theme>/quota-reset-pick.png` and `<theme>/quota-reset-confirm.png`, and the written session's open row on
+the Sessions view as `<theme>/sessions-open.png` and again at 375 by 800 as `<theme>/sessions-phone.png`. Its views
+include the Analytics page's Cache warming tab as `<theme>/analytics-cache-warming.png`, the Quota page's Quota windows
+section as `<theme>/quota-windows.png` and the Requests view's Feature calls section as
+`<theme>/requests-feature-calls.png`. The mock pass writes each of these shots under both palettes, `<theme>/` for the
+default and `<theme>-github/` for the GitHub one, and the site's screenshots come from the default palette's
+directories. The router's pass writes none of these: one shot per view it runs, under the default palette alone, which
+its test counts. The dashboard's remaining cards and its empty state are checked against the router's seeded registry
+alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription accounts and no empty list on the
+dashboard. The subscription end editor needs the story's OAuth account, so against the router's seed that part stands
+down.
 
 `mock-pass.mjs` runs the pass in parts, one `views.mjs` per part, side by side against the one server: each walk
 (`light`, `dark`, `light-github` and `dark-github`) with its fixture path, and `rest`, the parts behind the walks (the

@@ -115,11 +115,11 @@ from a static server on a loopback port, and runs `mock-pass.mjs`, which drives 
 admin secret and the clock pinned at `2026-09-16T14:30:00Z`. The mock's random draws are seeded, so two runs write the
 same screenshots byte for byte, which `diff -r` over the two directories shows. Beside the views' shots it writes ten
 more per theme: the open catalog popup as `<theme>/accounts-catalog.png`, the pool dialog open on its claude.ai features
-group as `<theme>/pools-features.png`, the open cost reference's three tabs as
-`<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`, the Analytics
-page's Burn tab as `<theme>/analytics-burn.png`, the written session's open row on the Sessions view as
-`<theme>/sessions-open.png` and at 375 by 800 as `<theme>/sessions-phone.png`, and the Quota view's reset dialog on its
-two pages as `<theme>/quota-reset-pick.png` and `<theme>/quota-reset-confirm.png`.
+group as `<theme>/pools-features.png`, the open cost reference's three tabs as `<theme>/cost-reference-tiers.png`,
+`cost-reference-plan-rates.png` and `cost-reference-api-prices.png`, the Analytics page's Burn tab as
+`<theme>/analytics-burn.png`, the written session's open row on the Sessions view as `<theme>/sessions-open.png` and at
+375 by 800 as `<theme>/sessions-phone.png`, and the Quota view's reset dialog on its two pages as
+`<theme>/quota-reset-pick.png` and `<theme>/quota-reset-confirm.png`.
 
 Against a running router, from `web/`:
 
