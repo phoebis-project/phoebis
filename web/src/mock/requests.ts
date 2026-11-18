@@ -2825,7 +2825,9 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         countDropped(dropped, serving?.response.inputTransformations ?? null, serving !== null && migrationAt(r, serving) !== undefined);
       }
       const keptHere = partRows.filter((r) => kept.has(r));
-      const uncached = ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0);
+      // The ledger gives each counted request one cache class by what it read and wrote, so a request that failed
+      // before an answer reads as uncached.
+      const uncached = served.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0);
       const freed = freedPart({ classifier, funding });
       out.push({
         hour,
@@ -2876,8 +2878,8 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
           webFetch: sumOf(partRows, (r) => r.usage.webFetch),
           webSearch: sumOf(partRows, (r) => r.usage.webSearch),
         },
-        cacheHits: ok.filter((r) => r.usage.cacheRead > 0).length,
-        cacheMisses: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
+        cacheHits: served.filter((r) => r.usage.cacheRead > 0).length,
+        cacheMisses: served.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
         cacheMissReasonHits,
         cacheMissReasons,
         expiredBetweenTurns: ok.filter(expiredBetweenTurns).length,
@@ -3051,7 +3053,8 @@ function historicalRollups(): HourlyRollup[] {
       if (takesMaxEffort) maxEffortOwed = false;
       const fast = fastTurn(lane.keyId, model, 'inference') && hf.chance(0.5);
       const outcomes: HourlyRollup['requests'] = { ...ZERO_OUTCOMES, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0 };
-      const uncached = Math.max(0, ok - Math.round(ok * 0.85));
+      // A failed request read and wrote no cache, so it counts as uncached beside the answers that read and wrote none.
+      const uncached = Math.max(0, ok - Math.round(ok * 0.85)) + outcomes.rate_limited + outcomes.overloaded;
       const inference: HourlyRollup = {
         hour: iso(t),
         client: CLIENTS[lane.keyId] ?? '-',
@@ -3146,7 +3149,7 @@ function historicalRollups(): HourlyRollup[] {
           ...synthesizeDropped(hd, lane, 'probe', probes),
           cacheMissReasonHits: emptyCounts(),
           uncacheable: 0,
-          uncached: 0,
+          uncached: failed,
           costUsd: probeCost,
           cost: costSplitOf(model, probeUsage, false, t),
           ...hourShares(accountId, model, CLIENTS[lane.keyId] ?? null, [{ at: t, usage: probeUsage }]),

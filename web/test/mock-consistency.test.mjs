@@ -4181,6 +4181,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
+  test(`each request the default range counts reads one cache class, a failed one as uncached, at ${at}`, async () => {
+    const s = await story;
+    const [all] = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'all', to: iso(s.now) });
+    assert.equal(all.cacheHits + all.cacheMisses + all.uncached, all.requests, 'the hits, the misses and the uncached requests');
+  });
+
   test(`the_requests_pages_guardrail_facet_lists_the_three_blocks_under_large_auxiliary at ${at}`, async () => {
     const s = await story;
     const { requests } = await s.api.listRequests({ guardrails: ['large-auxiliary'], limit: 100_000 });
