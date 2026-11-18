@@ -56,7 +56,10 @@ pub enum PathRule {
 /// One call of a claude.ai feature as this client build sends it.
 #[derive(Clone, Copy, Debug)]
 pub struct FeatureRow {
-    /// A method and a whole path the row leaves out.
+    /// A method and a whole path the row leaves out. The path holds no percent escape, since the listener compares it
+    /// with the last decoded form of a request's path, which holds none. A path with an escape would match no request,
+    /// including one that sends it as written, and the call it names would go upstream under the feature account's
+    /// token.
     pub except: &'static [(&'static str, &'static str)],
     pub host: &'static str,
     pub methods: &'static [&'static str],
