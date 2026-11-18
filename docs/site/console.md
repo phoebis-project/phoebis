@@ -467,8 +467,8 @@ draws no trend card.
 ("left at {date}" and the badge where that reset is the term's end), the three weeks before it with their figures, and
 "Total, {n} weeks", each week's hover naming its reset's instant and where its reading came from. The block shows the
 rows of the card "Unused allowance by account", a used limit reset that cleared its window among them with a "reset
-used" badge on its row, so its four weeks count the natural resets and add each use newer than the oldest of them, a use
-after the latest reset among them, and the total's label names the uses, such as "Total, 4 weeks and 1 used reset". The
+used" badge on its row, so its four weeks count the natural resets and add each use newer than the oldest of them,
+including one after the latest, and the total's label names the uses, such as "Total, 4 weeks and 1 used reset". The
 figures read in the week the week control names under every position: the share of the account's own window times its
 tier's 7-day capacity, a model week at its capacity factor, over the chosen week's tier's, so a Fable-week reset reads
 half its 7-day figure. Each week prices at the tier the account ran under at that reset, so a week before an upgrade
