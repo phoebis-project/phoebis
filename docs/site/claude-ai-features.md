@@ -418,8 +418,9 @@ script's order:
 
 ### The variables
 
-The script exports the card's lines in the card's order. [The environment block](client.md#the-environment-block) on The
-client describes the first seven, and the other lines have their one place here:
+The table holds the lines the script exports, in the card's order. [The environment
+block](client.md#the-environment-block) on The client describes the first seven, and the other lines have their one
+place here:
 
 | Line | Value | Why |
 | --- | --- | --- |
