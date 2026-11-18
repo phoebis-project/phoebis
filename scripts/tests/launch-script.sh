@@ -75,6 +75,13 @@ fill PHOEBIS_FEATURE_CA_SHA256 "$fingerprint"
 fill SETUP proxy
 fill PROXY_URL "http://127.0.0.1:$port"
 
+# The page's script decides where curl connects, so an edit there that takes the proxy off a probe or sends the run
+# into the redirect's branch would send a request to the real feature hosts. curl reads $HOME/.curlrc ahead of each
+# call that does not open with -q, and this line sends a connection to the stub whatever host and port the URL names.
+# A call through a proxy connects to the proxy's address, which the fill above sets to the stub.
+mkdir "$tmp/home"
+printf 'connect-to = "::127.0.0.1:%s"\n' "$port" > "$tmp/home/.curlrc"
+
 mkdir "$tmp/bin"
 cat > "$tmp/bin/claude" <<'SH'
 #!/bin/sh
