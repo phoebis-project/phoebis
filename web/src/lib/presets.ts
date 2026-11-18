@@ -2,7 +2,7 @@ import type { Account, AgentContext, MemberEligibility, Pool, RateLimitWindow, S
 import { groupInto } from './counts';
 import { byteOrder, fmtDuration, instant, noun, percentText, plural } from './format';
 import { openMark, pinTtlMs } from './keepalive';
-import { endOf, minuteSpan, windowOf } from './quota';
+import { endOf, minuteSpan, shareLeft, windowOf } from './quota';
 import { speedWord, windingDown } from './selection';
 import { compareFigures } from './sort';
 import { HOUR } from './time';
@@ -465,7 +465,7 @@ export function shedPreview(
       for (const w of read) if (closest === null || ceilingOf(pool, w.id) - w.projection < ceilingOf(pool, closest.window) - closest.projection) closest = { horizon: w.horizon, label: account.label, projection: w.projection, window: w.id };
       // The reservation's test runs once no window fired, as the router's does.
       const week = windowOf(account, '7d');
-      if (!reserving || reservation === null || week === null || week.projection === null || Math.max(0, 1 - week.utilization) >= reservation) continue;
+      if (!reserving || reservation === null || week === null || week.projection === null || shareLeft(week.utilization) >= reservation) continue;
       // Only the Fable week's use is reserved, so the round moves the pins whose model draws none.
       const round = walkOn(
         account,

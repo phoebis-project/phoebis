@@ -9,7 +9,7 @@ import type { ChipText } from './filterBar';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, listed, plural, shortModel, weekShort } from './format';
 import { accountBound, transformationLabel, transformationOrder } from './inputTransformations';
 import { ALL_KINDS, DECISION_KIND_LABEL, EVENT_KIND_LABEL } from './kinds';
-import { isFastScope, MODEL_SCOPE_PREFIX, PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL, scopeLabel, scopeModel } from './quota';
+import { isFastScope, MODEL_SCOPE_PREFIX, PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL, scopeLabel, scopeModel, shareLeft } from './quota';
 import { INELIGIBLE_LABEL, speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
 import { knownWindowsFirst, storedFableKey, WINDOW_KEYS, WINDOW_LABEL, windowEntry, windowLabelOf, windowTag, windowTagOf } from './windows';
@@ -2260,9 +2260,9 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
         const demand = num(d.burn_sum);
         add('Demand', demand === null ? null : plain(`${hourlyShare(demand)}${horizon === null ? '' : ` to the reset at ${formatFact(horizon + threshold, 'time', now)}`}`));
       } else if (reserved) {
-        // The reservation's test reads the room the reading leaves, floored at 0 as the router floors it, and no
-        // projection.
-        add('Trigger', utilization === null || reservation === null ? null : plain(`${w} room ${fmtPct(Math.max(0, 1 - utilization))} under the Fable reservation ${fmtPct(reservation)}`));
+        // The reservation's test reads the room the reading leaves, floored at 0 as the router floors it and capped at
+        // the whole share, and no projection.
+        add('Trigger', utilization === null || reservation === null ? null : plain(`${w} room ${fmtPct(shareLeft(utilization))} under the Fable reservation ${fmtPct(reservation)}`));
       } else {
         // A round that tested the wall records a ceiling of 1, the window's whole share.
         add('Trigger', projection === null || ceiling === null ? null : plain(`${w} projection ${fmtPct(projection)}${when} over ${lineWords(ceiling)}`));
