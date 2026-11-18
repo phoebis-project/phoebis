@@ -532,6 +532,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([newest, rows.find((r) => r.hour === newest)?.cooldownSeconds], [iso(startOfHour(s.now)), want]);
   });
 
+  test(`secondary's 7-day sample runs its deadline to the account's end, ahead of the window's reset, at ${at}`, async () => {
+    const s = await story;
+    // Secondary is canceled with its saved end five days on, and its 7-day window resets five days, two hours and five
+    // minutes on (mock/accounts.ts), so the route answers the end as the deadline.
+    const secondary = s.accounts.find((a) => a.id === 'secondary');
+    const rows = (await s.api.listAccountRollups(iso(s.now - DAY), iso(s.now + DAY))).filter((r) => r.accountId === 'secondary' && r.windows.seven_day !== undefined);
+    const sample = rows.reduce((a, b) => (Date.parse(b.hour) > Date.parse(a.hour) ? b : a)).windows.seven_day;
+    assert.deepEqual([Date.parse(sample.deadline), Date.parse(sample.resetsAt) - Date.parse(sample.deadline)], [Date.parse(secondary.subscription.endsAt), 2 * HOUR + 5 * 60_000]);
+  });
+
   test(`no retired story name and no harness name reaches a row, at ${at}`, async () => {
     const s = await story;
     const names = [

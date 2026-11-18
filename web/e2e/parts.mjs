@@ -39,9 +39,17 @@ export function selectParts(value, walkKeys) {
  * child's in the parts' order: a child that never started, or that a signal ended, counts as failed.
  */
 export async function fanOut(parts, start) {
+  const notStarted = (part, error) => `the browser pass of ${part} did not start: ${error.message}`;
   const runs = await Promise.all(
     parts.map((part) => {
-      const child = start(part);
+      let child;
+      try {
+        child = start(part);
+      } catch (error) {
+        // A spawn the host refuses for memory throws in place of emitting `error`, and a fan-out that rejected on it
+        // would leave the children already started running with no one waiting for them.
+        return { output: [{ chunk: `${notStarted(part, error)}\n`, stream: 'stderr' }], part, status: 1 };
+      }
       const output = [];
       child.stdout?.on('data', (chunk) => output.push({ chunk, stream: 'stdout' }));
       child.stderr?.on('data', (chunk) => output.push({ chunk, stream: 'stderr' }));
@@ -54,7 +62,7 @@ export async function fanOut(parts, start) {
           if (note) output.push({ chunk: `${note}\n`, stream: 'stderr' });
           resolve({ output, part, status });
         };
-        child.on('error', (error) => end(1, `the browser pass of ${part} did not start: ${error.message}`));
+        child.on('error', (error) => end(1, notStarted(part, error)));
         child.on('close', (code, signal) => end(code ?? 1, signal ? `the browser pass of ${part} ended on ${signal}` : null));
       });
     }),

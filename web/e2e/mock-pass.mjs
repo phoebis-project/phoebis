@@ -32,7 +32,15 @@ try {
 
 const server = await serve(bundle);
 const env = { ...process.env, PHOEBIS_E2E_BASE: `http://127.0.0.1:${server.port}`, PHOEBIS_E2E_CLOCK: CLOCK, PHOEBIS_E2E_MOCK: '1', PHOEBIS_E2E_SECRET: 'admin' };
-const pass = await fanOut(parts, (part) => spawn(process.execPath, [join(here, 'views.mjs')], { env: { ...env, PHOEBIS_E2E_WALKS: part }, stdio: ['inherit', 'pipe', 'pipe'] }));
+const children = [];
+// A signal sent to the pass alone, as a job runner's cancel sends it, would leave the walks and their browsers running
+// until their own end.
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => children.forEach((child) => child.kill(signal)));
+const pass = await fanOut(parts, (part) => {
+  const child = spawn(process.execPath, [join(here, 'views.mjs')], { env: { ...env, PHOEBIS_E2E_WALKS: part }, stdio: ['inherit', 'pipe', 'pipe'] });
+  children.push(child);
+  return child;
+});
 server.close();
 // Each child's output whole, in the parts' order, so the lines of two children never mix.
 for (const run of pass.runs) for (const { chunk, stream } of run.output) process[stream].write(chunk);

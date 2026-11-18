@@ -154,13 +154,6 @@ test("a live range's window ends at the read's instant", () => {
   assert.equal(d.coveredWindow('rollup', { fromMs: end - 24 * HOUR, toMs: end }, end, null).toMs, end);
 });
 
-test('the first bucket is partial only where the covered start lies inside it', () => {
-  // The six-hour buckets of a 7-day range from 18:20 or from 19:20 both start at 18:00, and the whole hours cover
-  // them from 18:00 and from 19:00.
-  const buckets = [{ at: Date.UTC(2026, 8, 9, 18) }, { at: Date.UTC(2026, 8, 10, 0) }];
-  assert.deepEqual([d.firstBucketPartial(buckets, Date.UTC(2026, 8, 9, 18)), d.firstBucketPartial(buckets, Date.UTC(2026, 8, 9, 19))], [false, true]);
-});
-
 test("a card's note names the controls in force that it ignores, in the bar's order", () => {
   // The Accounts tab applies the Accounts filter alone. The bar holds Clients between Keys and User agents, where the
   // alphabet puts it first.
@@ -790,10 +783,6 @@ test('the probe cost counts the probes that reached the upstream, so a group who
   assert.equal(d.upstreamProbes(accountGroup({ probes: { ...base.probes, failed: 2, held: 3, ok: 5, skipped: 4 } })), 7, 'the answered and the failed probes');
 });
 
-test('probeParts counts a migrated probe once', () => {
-  assert.deepEqual(d.probeParts({ failed: 0, held: 0, migrated: 1, ok: 241, skipped: 0 }), { failed: 0, held: 0, migrated: 1, ok: 240, skipped: 0 }, "the route's ok holds the migrated probe, so the parts sum to 241");
-});
-
 test('probeParts floors the OK part at zero', () => {
   assert.equal(d.probeParts({ failed: 0, held: 0, migrated: 1, ok: 0, skipped: 0 }).ok, 0, 'a bucket whose mark landed apart from its request row');
 });
@@ -868,6 +857,17 @@ test("the window lines fold each account's utilization and lead per bucket and l
   assert.deepEqual(first.data.map((r) => r.a), [60, null], 'a sample in the first hour of a two-hour bucket draws it');
   const later = d.windowLines([rollup('a', t + HOUR, { five_hour: windowSample({ utilization: 0.7 }) }), rollup('a', t, { five_hour: windowSample({ utilization: 0.6 }) })], 'five_hour', 'usage', wide, 2 * HOUR);
   assert.deepEqual(later.data.map((r) => r.a), [70, null], 'the later hour wins whatever order the rows arrive in');
+});
+
+test('an account whose two-hour bucket ends on a reset-only sample draws no point, so the card leaves it out', () => {
+  // b's first hour holds a utilization and its second a reset alone, so the bucket reads the later hour's gap.
+  const t = Date.UTC(2026, 8, 16, 10);
+  const rows = [
+    rollup('a', t, { five_hour: windowSample({ utilization: 0.6 }) }),
+    rollup('b', t, { five_hour: windowSample({ utilization: 0.4 }) }),
+    rollup('b', t + HOUR, { five_hour: windowSample({ lead: null, resetsAt: '2026-09-16T11:00:00.000Z', utilization: null }) }),
+  ];
+  assert.deepEqual(d.windowLines(rows, 'five_hour', 'usage', { fromMs: t, toMs: t + 2 * HOUR }, 2 * HOUR).accounts, ['a']);
 });
 
 test("the Peak grid keeps a bucket's largest peak, starts at the span's first edge and leaves a missing bucket null", () => {

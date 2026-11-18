@@ -701,8 +701,8 @@ test('a session sent with no last use reads its last request as its last use', (
 });
 
 test("a session reads its pin's open mark, its stamp's instant and the instant its pin was written on its account", () => {
-  // No other check reads these wire keys: the captured rows carry no mark, `mock-sync` takes any mock value against a
-  // decoded null, and the mock's rows reach the pages without the decoder.
+  // No other check reads the mark's keys and `pinned_at`: the captured rows carry no mark, `mock-sync` takes any mock
+  // value against a decoded null, and the mock's rows reach the pages without the decoder.
   const row = fixture('sessions').sessions[0];
   assert.equal(d.decodeSession(row).mark, null, 'as the route answers it');
   const s = d.decodeSession({ ...row, mark: { at: 1_791_720_000_000, on: 'studio', window: 'five_hour' }, pinned_at: 1_791_719_100_000, shed: { at: 1_791_719_160_000, from: 'primary', reason: 'cooldown' } });
@@ -1846,8 +1846,8 @@ test('a decision record decodes its six blocks and the completion', () => {
 });
 
 test("a decision record's completion reads the attempt's cache write", () => {
-  // No other check reads this wire key: `mock-sync` takes the null a misread answers for the shape of the right read,
-  // and the mock's rows reach the card without the decoder.
+  // No other check reads this wire key: `mock-sync` accepts the null a misspelled key decodes to, and the mock's rows
+  // reach the card without the decoder.
   const body = fixture('decision');
   const r = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, completion: { ...body.outcome.completion, cache_write_tokens: 27_246 } } });
   assert.equal(r.outcome.completion.cacheWriteTokens, 27_246);
@@ -2125,7 +2125,7 @@ test('a cache-miss reason or a dropped thinking key the console does not know ke
 // fold alone.
 const droppedRow = (...attempts) => {
   const base = d.decodeRequest({ attempts: [{ index: 1 }] });
-  return { ...base, attempts: attempts.map(([inputTransformations, moved = null]) => ({ ...base.attempts[0], response: { ...base.attempts[0].response, inputTransformations }, selection: d.decodeSelection({ moved }) })) };
+  return { ...base, attempts: attempts.map(([inputTransformations, moved = null]) => ({ ...base.attempts[0], response: { ...base.attempts[0].response, inputTransformations }, selection: { moved } })) };
 };
 
 test('the fold counts a request once under each key and an empty answer apart', () => {
@@ -2374,20 +2374,21 @@ test("a session row reads main's effort and every agent line with all its member
   const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
   // Sent out of the alphabet's order, so a decoder that sorted would read the second line first.
   // The second line sits on an API-key account, whose burn reads dollars with no window, no Pro-week figure and no plan
-  // dollars beside it, and its burn was decayed to an instant before its last use, so the two instants read apart.
+  // dollars beside it, and its burn was decayed to the read's instant, behind its last use, so the two instants read
+  // apart.
   const sent = [
     agentLine('7b2e', 'claude-haiku-4-5', { effort: 'low', lifecycle: 'idle', warm: false }),
-    agentLine('4f0c', 'claude-sonnet-5', { account_id: 'direct', burn: 0.074, burn_at: 1_791_720_500_000, burn_equivalent: null, burn_unit: 'usd', burn_usd: null, burn_window: null, effort: 'high', last_input_tokens: 31_000 }),
+    agentLine('4f0c', 'claude-sonnet-5', { account_id: 'direct', burn: 0.074, burn_at: 1_791_721_200_000, burn_equivalent: null, burn_unit: 'usd', burn_usd: null, burn_window: null, effort: 'high', last_input_tokens: 31_000 }),
   ];
   const s = d.decodeSession({ ...row, agent_contexts: sent, effort: 'high' });
   assert.equal(s.effort, 'high');
   const used = new Date(1_791_721_000_000).toISOString();
-  const decayed = new Date(1_791_720_500_000).toISOString();
+  const readAt = new Date(1_791_721_200_000).toISOString();
   const pinnedAt = new Date(1_791_719_000_000).toISOString();
   const warmUntil = new Date(1_791_721_300_000).toISOString();
   assert.deepEqual(s.agentContexts, [
     { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnAt: used, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnUsd: 0.0215, burnWindow: 'five_hour', cacheTtlMs: 300_000, effort: 'low', ended: true, fast: false, lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null, pinnedAt, warm: false, warmUntil },
-    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnAt: decayed, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, effort: 'high', ended: true, fast: false, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null, pinnedAt, warm: true, warmUntil },
+    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnAt: readAt, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, effort: 'high', ended: true, fast: false, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null, pinnedAt, warm: true, warmUntil },
   ]);
 });
 

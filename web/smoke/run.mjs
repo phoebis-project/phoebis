@@ -1790,6 +1790,34 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     ok: coveredRead.requests === '30.0 per hour',
     missing: [JSON.stringify(coveredRead)],
   });
+  // The hours run to the instant the answer landed. With the next read held out, half an hour on the page's clock
+  // leaves the note at 30.0, where hours run to the clock, 25 hours and 4 minutes, read 29.4.
+  api.getOverview = async () => ({ ...day, hourly: covered, requests24h: 737 });
+  const heldPage = await mount('/', { now: CLOCK_ORIGIN + 4 * MINUTE });
+  api.getOverview = () => new Promise(() => {});
+  tick(30 * MINUTE);
+  await heldPage.settle();
+  const heldRead = { requests: tileRead(heldPage, 'Requests, 24h').note };
+  heldPage.unmount();
+  delete api.getOverview;
+  results.push({
+    name: "/ the Requests per-hour note keeps the hours up to the answer's landing while the page's clock runs on",
+    ok: heldRead.requests === '30.0 per hour',
+    missing: [JSON.stringify(heldRead)],
+  });
+  // A failed settings read leaves native without its scale, so the tile draws its dash with the read's message alone
+  // as its title.
+  const { getSettings } = api;
+  api.getSettings = () => Promise.reject(new Error('the settings read failed'));
+  const failedPage = await mount('/', { now: CLOCK_ORIGIN });
+  const failedRead = tileRead(failedPage, 'Estimated cost, 24h');
+  failedPage.unmount();
+  api.getSettings = getSettings;
+  results.push({
+    name: "/ under native with the settings read failing the Estimated cost, 24h tile reads a dash titled with the read's message",
+    ok: failedRead.value === '-' && failedRead.title === 'the settings read failed',
+    missing: [JSON.stringify(failedRead)],
+  });
 }
 m.unmount();
 });

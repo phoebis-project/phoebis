@@ -49,6 +49,7 @@ export * from '@/lib/follow';
 export * from '@/lib/format';
 export * from '@/lib/forms';
 export * from '@/lib/guardrails';
+export * from '@/lib/inputTransformations';
 export * from '@/lib/keepalive';
 // keepalive and quota both export a STATUS_TONE, which the two star exports would drop: quota's keeps the name through
 // the explicit export below, and keepalive's reads under this alias.

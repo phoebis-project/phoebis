@@ -65,8 +65,8 @@ test("rangeAllowanceSpan leaves a range past the routes' longest whole", () => {
 test("weeklyResetsKey moves at a reset and holds at a poll's fraction", () => {
   const listed = (resetsAt) => [{ fableWindow: null, windows: [{ periodHours: 168, resetsAt }] }];
   // Two polls read one reset on either side of 01:00, and the reset after it lies a week on.
-  assert.equal(d.weeklyResetsKey(listed('2026-11-02T00:59:59.900Z')), d.weeklyResetsKey(listed('2026-11-02T01:00:00.498Z')));
-  assert.notEqual(d.weeklyResetsKey(listed('2026-11-02T00:59:59.900Z')), d.weeklyResetsKey(listed('2026-11-09T00:59:59.900Z')));
+  assert.equal(d.weeklyResetsKey(listed('2026-11-02T00:59:59.400Z')), d.weeklyResetsKey(listed('2026-11-02T01:00:00.498Z')));
+  assert.notEqual(d.weeklyResetsKey(listed('2026-11-02T00:59:59.400Z')), d.weeklyResetsKey(listed('2026-11-09T00:59:59.400Z')));
 });
 
 test("the resets' key moves at a use", () => {
@@ -188,10 +188,12 @@ test("drawsFreeNote reads the drawn resets' pairs", () => {
   assert.equal(d.drawsFreeNote(free([PRO, PRO])), false, 'both weeks ran under Pro, so no figure prices at Free');
   assert.equal(d.drawsFreeNote(free([PRO, NO_PAIR])), true, "a week the router recorded no pair for prices at the account's own Free");
   assert.equal(d.drawsFreeNote(free([PRO, FREE])), true, 'a week the router recorded under Free');
+  const fable = accountOf('free', FREE, [windowOf('seven_day', [0.5, 0.25], { pairs: [PRO, PRO] }), windowOf('seven_day_fable', [0.5], { pairs: [NO_PAIR] })]);
+  assert.equal(d.drawsFreeNote(fable), true, "a Fable week the router recorded no pair for prices at the account's own Free");
 });
 
 test('a paid account draws no Free note', () => {
-  assert.equal(d.drawsFreeNote(accountOf('pro', PRO, [windowOf('seven_day', [])])), false);
+  assert.equal(d.drawsFreeNote(accountOf('pro', PRO, [windowOf('seven_day', [0.5, 0.25], { pairs: [PRO, FREE] })])), false, 'a week that ran on Free before the upgrade');
 });
 
 test("an account's windows and the card's column pairs read the 7-day window first, then each model week in the console's order", () => {
@@ -305,6 +307,15 @@ test('a used reset in a window with no natural reset draws its share in the rang
   const [row] = d.allowanceRows({ accounts: [accountOf('early', MAX_20X, [window])], from: iso(NOW - 29 * DAY), to: iso(NOW) }, COSTS, 'ultra', RANGE);
   const { inRange, last } = row.figures.seven_day;
   assert.deepEqual([inRange.text, last], ['40% Ultra week', { kind: 'none', text: '-', title: d.NO_RESET_IN_RANGE }]);
+});
+
+test('a used reset alone that ran under a pair the cost model prices no capacity for marks its account unpriced', () => {
+  // The use ran while the account was on Free, so its range figure reads the dash, and the fleet's note names the
+  // account among those it leaves out.
+  const claim = { observedAt: iso(NOW - 2 * DAY), plan: 'free', resetAt: iso(NOW + 5 * DAY), shareLeft: 0.4, source: 'claim', tier: 'default_claude_ai' };
+  const window = { resets: [claim], resetsCounted: 1, totalShareLeft: 0.4, window: 'seven_day' };
+  const [row] = d.allowanceRows({ accounts: [accountOf('early', MAX_20X, [window])], from: iso(NOW - 29 * DAY), to: iso(NOW) }, COSTS, 'ultra', RANGE);
+  assert.deepEqual([row.figures.seven_day.inRange.kind, row.unpriced], ['unpriced', true]);
 });
 
 /** Nine accounts with 17 resets of the 7-day window and three of the Fable week, the ninth on a Free plan. */

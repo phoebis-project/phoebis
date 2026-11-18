@@ -463,12 +463,15 @@ test('the rewrites read sends the account and pool filters', async () => {
   assert.deepEqual([url.searchParams.get('accounts'), url.searchParams.get('pools')], ['primary', 'all']);
 });
 
-test('the placements read sends the model and the client patterns', async () => {
+test('the placements read sends the accounts and the model, the client and the user agent patterns', async () => {
   const calls = stub(() => answer(200, { rows: [] }));
-  await new HttpApi().analyticsPlacements({ clients: ['claude-code/*', 'other'], from: '1970-01-01T00:00:00.000Z', models: ['claude-opus-5'], to: '1970-01-02T00:00:00.000Z' });
+  await new HttpApi().analyticsPlacements({ accountIds: ['primary', 'secondary'], clients: ['claude-code/*', 'other'], from: '1970-01-01T00:00:00.000Z', models: ['claude-opus-5'], to: '1970-01-02T00:00:00.000Z', userAgents: ['claude-cli/*', 'other'] });
   const url = new URL(calls[0].url, 'http://x');
   // One pattern per line, since a pattern may hold a comma.
-  assert.deepEqual([url.searchParams.get('models'), url.searchParams.get('clients')], ['claude-opus-5', 'claude-code/*\nother']);
+  assert.deepEqual(
+    [url.searchParams.get('models'), url.searchParams.get('clients'), url.searchParams.get('accounts'), url.searchParams.get('user_agents')],
+    ['claude-opus-5', 'claude-code/*\nother', 'primary,secondary', 'claude-cli/*\nother'],
+  );
 });
 
 test('getSession answers null on 401 without running the hook', async () => {
