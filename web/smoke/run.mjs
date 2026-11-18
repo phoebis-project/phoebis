@@ -21180,6 +21180,39 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
     }
     {
+      // A dollar side's funded series feeds the Cache card's cost bars and the Cost tab's chart, so its failure leaves
+      // the Cache warming tiles and Wasted probes on the tab's breakdown. The warming series counts probes, so the
+      // match fails the funded series alone.
+      const real = api.getAnalyticsSeries;
+      api.getAnalyticsSeries = (...args) => (args[0]?.funding !== undefined && args[0].includeProbes !== true ? Promise.reject(new Error('ledger locked')) : real.apply(api, args));
+      let tiles = [];
+      let wasted = '';
+      try {
+        localStorage.removeItem('phoebis.unit');
+        const page = await mount('/analytics#cache-warming');
+        await chooseUnit(page, 'usd');
+        tiles = [...page.container.querySelectorAll('#cache-warming > .tiles-row > .stat')].slice(0, 3).map((t) => ({
+          label: t.querySelector('.stat__label')?.textContent?.trim() ?? '',
+          note: t.querySelector('.stat__note')?.textContent?.trim() ?? '',
+          value: t.querySelector('.stat__value')?.textContent?.trim() ?? '',
+        }));
+        wasted = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Wasted probes')?.textContent ?? '';
+        page.unmount();
+      } finally {
+        api.getAnalyticsSeries = real;
+        localStorage.removeItem('phoebis.unit');
+      }
+      results.push({
+        name: '/analytics under Billed dollars a failed funded series leaves the Cache warming tiles and Wasted probes drawn',
+        ok:
+          JSON.stringify(tiles.map((t) => t.label)) === JSON.stringify(['Probe cost', 'Saved by probes', 'Net saving']) &&
+          tiles.every((t) => /^-?\$[\d,]+\.\d{2,4}$/.test(t.value) && t.note !== 'could not load') &&
+          wasted !== '' &&
+          !wasted.includes('Could not load wasted probes'),
+        missing: [JSON.stringify(tiles), wasted.includes('Could not load wasted probes') ? 'Wasted probes failed' : ''],
+      });
+    }
+    {
       // Under native, a fresh browser's position, and the Ultra week, the stored default, the Cost section reads one
       // answer in two units: the plan rows' figure in that week and the billed rows' dollars. The Accounts filter names
       // nightly, whose range holds priced plan rows and billed rows both, so every figure reads, and since one account

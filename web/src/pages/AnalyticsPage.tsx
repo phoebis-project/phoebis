@@ -450,7 +450,10 @@ export function AnalyticsPage() {
   // while one of them shows. The whole reads the page's own.
   const fundedTab = tab === 'cache' || tab === 'cache-warming' || tab === 'cost';
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
-  const costSeries = useGatedRead(funded && fundedTab, () => stamped(api.getAnalyticsSeries({ ...query, funding })), [query, funding, funded, fundedTab, generation], reload);
+  // The funded series feeds the Cache card's cost bars and the Cost tab's cost by group, and Cache warming draws
+  // neither.
+  const seriesTab = tab === 'cache' || tab === 'cost';
+  const costSeries = useGatedRead(funded && seriesTab, () => stamped(api.getAnalyticsSeries({ ...query, funding })), [query, funding, funded, seriesTab, generation], reload);
   // The Cache warming card's Probe cost tile and the Probes by outcome legend read this breakdown on its tab, and they
   // read the probe rows counted under every position, the whole included: a breakdown that does not count probes drops
   // a group of plan probes alone and keeps a billed probe's dollars, even in a group with no request, whether a dollar
@@ -656,11 +659,11 @@ export function AnalyticsPage() {
   // The funded reads stand or fall on their own: while one is out or stale the cost surfaces read loading, and its
   // failure draws in place of their figures, so no figure of one position stands under another's subtitle.
   const costLoading = funded
-    ? costSeries.current === null || costBreakdown.current === null
+    ? (seriesTab && costSeries.current === null) || costBreakdown.current === null
     : warming
       ? costBreakdown.current === null || (nativeWarming && billedBreakdown.current === null)
       : loading;
-  const costError = funded ? (costSeries.error ?? costBreakdown.error) : warming ? (costBreakdown.error ?? billedBreakdown.error) : null;
+  const costError = funded ? ((seriesTab ? costSeries.error : null) ?? costBreakdown.error) : warming ? (costBreakdown.error ?? billedBreakdown.error) : null;
   const costFailure = failed(costError);
   // Under native every week figure waits on the scale: a surface draws its skeleton while the cost model is out and the
   // reading's error in its place, never a Pro-week figure under another week's label.
