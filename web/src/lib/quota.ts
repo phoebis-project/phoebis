@@ -296,7 +296,7 @@ const aheadOf = (at: string | null | undefined, now: number): number | null => {
 
 /** The span inside which two resets read as one reset, the router's `RESET_SLACK_MS` (crates/routing/src/task.rs),
  *  inclusive at the bound. */
-export const RESET_SLACK_MS = MINUTE;
+const RESET_SLACK_MS = MINUTE;
 
 /** The soonest future reset over every window the poll read and a seat's spend window, with every window whose reset
  *  lies within `RESET_SLACK_MS` after it, in the reading's order, so the card marks each. Empty where no reset lies
