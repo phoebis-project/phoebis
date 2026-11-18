@@ -6,7 +6,7 @@ import { endOf } from '@/lib/quota';
 import { windingDown } from '@/lib/selection';
 import { windowKeyId } from '@/lib/windows';
 import { SHARED_WINDOWS, accountById, blankAccountRow } from './accounts';
-import { PRIOR_BURN, bindingOf, ceilingOn, windowFitOf, type Runway } from './fit';
+import { PRIOR_BURN, bindingOf, ceilingOn, runwaysOf, windowFitOf, type Runway } from './fit';
 import { paceOf } from './lead';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, endOfMonth, iso, startOfDay } from './time';
@@ -48,11 +48,10 @@ function memberFitOf(account: Account, now: number, pool: Pick<Pool, 'fiveHourCe
   const walls: Runway[] = [];
   for (const { key, read, window } of shared) {
     if (window.projection === null || window.horizon === null) continue;
-    const span = Date.parse(window.horizon) - now;
-    const short = read.runwayMs !== null && read.runwayMs < span;
-    words.push(!read.lands ? 'least_bad' : short ? 'rewrite_only' : 'fits');
-    if (read.runwayMs !== null) bounded.push({ runway: read.runwayMs, short, window: key });
-    if (read.wallRunwayMs !== null) walls.push({ runway: read.wallRunwayMs, short: read.wallRunwayMs < span, window: key });
+    const { ceiling, wall } = runwaysOf(read, Date.parse(window.horizon) - now, key);
+    words.push(!read.lands ? 'least_bad' : ceiling?.short ? 'rewrite_only' : 'fits');
+    if (ceiling !== null) bounded.push(ceiling);
+    if (wall !== null) walls.push(wall);
   }
   const fit = worstOf(words);
   return { fit, runwayMs: bindingOf(fit === 'least_bad' ? walls : bounded)?.runway ?? null };
@@ -112,9 +111,6 @@ function periodEndAfter(period: BudgetPeriod, now: number): string {
 
 /** The instant the ci key was revoked, on the story's pinned day at 14:17:30. */
 export const KEY_REVOKED_AT = clock(14, 17, 30);
-
-/** The 09:05:12 edit of all's shared prefix floor and its slow-down hold, the registry change the routing log records. */
-export const POOL_EDITED_AT: Readonly<Record<string, number>> = { all: clock(9, 5, 12) };
 
 /** An account the story deletes during the day, as it stood in its one pool from its creation up to its delete. */
 export interface DeletedAccount {

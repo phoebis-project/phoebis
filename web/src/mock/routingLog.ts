@@ -1,24 +1,26 @@
+import { encodeMembers, encodeModelRules, encodeTtlRules, isoOrNull } from '@/api/decode';
 import type {
   Account, AllowanceReset, Attempt, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordHold, RecordOutcome,
   PoolKeepalive, RecordPin, RecordRequest, RecordSettings, Refusal, RequestEvent, RequestLog, ResetOutcome, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, Subscription, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { DECISION_KIND_VALUES } from '@/api/types';
 import { lookup } from '@/lib/counts';
+import { servingAttempt } from '@/lib/dimensions';
 import { placementHit } from '@/lib/format';
 import { SHED_MARK_SHARE } from '@/lib/presets';
 import { MODEL_SCOPE_PREFIX, endOf, flagOf, isPaidSource, readWindows, windowOf } from '@/lib/quota';
 import { compareRows, movedFrom } from '@/lib/routingLog';
 import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
-import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SHARED_WINDOWS, SUNSET_WEEK_RESETS_IN, accountById, lastReadingOf, rankTier } from './accounts';
+import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, accountById, lastReadingOf, rankTier } from './accounts';
 import { promptOf } from './catalog';
-import { PRIOR_BURN, bindingOf, ceilingOn, windowFitOf, type Runway } from './fit';
+import { PRIOR_BURN, bindingOf, ceilingOn, runwaysOf, windowFitOf, type Runway } from './fit';
 import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
-import { DELETED_ACCOUNTS, KEY_REVOKED_AT, POOL_EDITED_AT, RETIRED, WORST_BUCKET, keyById, poolById, storyAccountOf, type PoolSeed } from './pools';
+import { DELETED_ACCOUNTS, KEY_REVOKED_AT, RETIRED, WORST_BUCKET, keyById, poolById, storyAccountOf, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, requestById, resentInPlace } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
-import { drawnWindows, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf, STRETCH_DROPPED_THINKING } from './rewrite';
+import { drawnWindows, droppedThinkingOf, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
 import { round } from './round';
 import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, OVERFLOW_PAUSED_AT, RESEARCH_BUDGET_AT, clock, endOfMonth, iso, startOfDay, startOfMonth } from './time';
@@ -145,8 +147,6 @@ interface RoundPin {
   agentId: string;
   burn: number | null;
   cold: boolean;
-  /** The thinking the round read as dropped at the pin's destination, in tokens, null with no learned fact. */
-  droppedThinkingTokens?: number | null;
   keyId: string;
   lastInputTokens: number;
   marked: boolean;
@@ -163,12 +163,13 @@ interface ShedRound {
 }
 
 /**
- * The settings and the keepalive policy a pool's edit at `POOL_EDITED_AT` moved, each at its value before the edit,
- * which the edit's registry change carries as each pair's old value, and the instant the settings before it took force.
- * The story's other rows read neither, so no row before the edit contradicts them, and a record carries no policy.
+ * A pool's edit, the registry change the routing log records: its instant, and the settings and the keepalive policy
+ * it moved, each at its value before the edit, which the change carries as each pair's old value, and the instant the
+ * settings before it took force. The story's other rows read neither, so no row before the edit contradicts them, and
+ * a record carries no policy.
  */
-const BEFORE_EDIT: Record<string, Partial<RecordSettings> & { keepalive: Partial<PoolKeepalive> }> = {
-  all: { keepalive: { maxIdleSeconds: 43_200 }, minSharedPrefixTokens: 10_000, poolUpdatedAt: iso(NOW - 9 * DAY), slowDownHoldSeconds: 60 },
+const BEFORE_EDIT: Record<string, { at: number; keepalive: Partial<PoolKeepalive>; settings: Partial<RecordSettings> }> = {
+  all: { at: clock(9, 5, 12), keepalive: { maxIdleSeconds: 43_200 }, settings: { minSharedPrefixTokens: 10_000, poolUpdatedAt: iso(NOW - 9 * DAY), slowDownHoldSeconds: 60 } },
 };
 
 /**
@@ -176,7 +177,7 @@ const BEFORE_EDIT: Record<string, Partial<RecordSettings> & { keepalive: Partial
  * account, else the row's own stamp. The delete of an account moves none, as its member row leaves by the cascade.
  */
 function stampAt(pool: PoolSeed, at: number): string {
-  const writes = [POOL_EDITED_AT[pool.id], ...DELETED_ACCOUNTS.filter((d) => d.poolId === pool.id).map((d) => d.createdAt)].filter((w): w is number => w !== undefined && w <= at);
+  const writes = [BEFORE_EDIT[pool.id]?.at, ...DELETED_ACCOUNTS.filter((d) => d.poolId === pool.id).map((d) => d.createdAt)].filter((w): w is number => w !== undefined && w <= at);
   return writes.length === 0 ? pool.updatedAt : iso(Math.max(...writes));
 }
 
@@ -185,12 +186,11 @@ function stampAt(pool: PoolSeed, at: number): string {
  * the pool held then: a record decided before the pool's edit carries the values the edit moved.
  */
 function settingsOf(pool: PoolSeed, at: number): RecordSettings {
-  const { keepalive: _policy, ...before } = BEFORE_EDIT[pool.id] ?? { keepalive: {} };
-  const editedAt = POOL_EDITED_AT[pool.id] ?? Date.parse(pool.updatedAt);
+  const edit = BEFORE_EDIT[pool.id];
   return {
     ...settingsNow(pool),
     poolUpdatedAt: stampAt(pool, at),
-    ...(at < editedAt ? before : {}),
+    ...(edit !== undefined && at < edit.at ? edit.settings : {}),
   };
 }
 
@@ -257,6 +257,9 @@ const leftPin = (spec: Spec) => spec.kind === 'moved' || spec.reasons !== undefi
  * probe step, so it reads no fit and walks no placement behind it.
  */
 const pinnedAnswerOf = (spec: Spec) => spec.exhaustion?.kind === 'pinned';
+
+/** Whether the decision walks the placement: a placement, a move, a hold or an exhaustion, none in place or pinned. */
+const walksPlacement = (spec: Spec) => (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlaceOf(spec) === null && !pinnedAnswerOf(spec);
 
 /**
  * The windows a decision read on a member: the attempt's own reading on the account it went to, so the card and the
@@ -454,6 +457,13 @@ const lineOf = (c: RecordCandidate, window: string, pool: Pick<PoolSeed, 'fiveHo
   horizonOf(window, c.windows[window]?.reset ?? null, endOf(accountOf(c.accountId), at), at).bound === 'wall' ? 1 : ceilingOn(pool, window);
 
 /**
+ * The line a round tests a window against: the 5-hour ceiling for the 5-hour window of a pool that slows its pins,
+ * since the stretch tests that window there at every horizon, and the line its horizon's bound sets for any other.
+ */
+const triggerLineOf = (c: RecordCandidate, w: string, pool: Pick<PoolSeed, 'fiveHourCeiling' | 'slowDown' | 'weeklyCeiling'>, at: number): number =>
+  pool.slowDown && w === 'five_hour' ? ceilingOn(pool, w) : lineOf(c, w, pool, at);
+
+/**
  * A read of an account's slow-down entry: its factor, the speed its holds realize, its stretch, when the stretch first
  * read over the threshold while it stays over, and the demand and the 5-hour reset it was read from.
  */
@@ -550,8 +560,7 @@ const SPEND_UNREAD: ReadonlySet<string> = new Set(['req_c94d1e07-b35']);
  */
 function paceFactsOf(a: Account, at: number, model: string, c: Pick<RecordCandidate, 'burn' | 'windows'>, reserve: boolean): NonNullable<RecordCandidate['pace']> {
   const p = paceOf(a, at, model, { burns: c.burn, readings: c.windows, reserve });
-  const instant = (ms: number | null) => (ms === null ? null : iso(ms));
-  return { burn: p.burn, deadline: instant(p.deadline), end: instant(p.end), fableReservation: p.fableReservation, hours: p.hours === null ? null : round(p.hours, 1), remaining: p.remaining, reset: instant(p.reset), score: p.score, window: p.window };
+  return { burn: p.burn, deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), fableReservation: p.fableReservation, hours: p.hours === null ? null : round(p.hours, 1), remaining: p.remaining, reset: isoOrNull(p.reset), score: p.score, window: p.window };
 }
 
 /**
@@ -677,6 +686,12 @@ interface FitRead {
 }
 
 const runwayOf = (c: Pick<RecordCandidate, 'runwayMs'>) => c.runwayMs ?? Number.POSITIVE_INFINITY;
+/**
+ * Whether a drawn choice's rival stands ahead of it, each by its place in the order and its runway: a better place, or
+ * the same place with a longer runway where that place narrows to the longest.
+ */
+const outranks = (rival: { index: number; runwayMs: number | null }, chosen: { index: number; runwayMs: number | null }, narrows: boolean) =>
+  rival.index < chosen.index || (rival.index === chosen.index && narrows && runwayOf(rival) > runwayOf(chosen));
 /** The candidates with the longest runway, an unbounded one longest of all, ties kept in the set's order. */
 const longestOf = <T extends Pick<RecordCandidate, 'runwayMs'>>(list: T[]): T[] => list.filter((c) => runwayOf(c) === Math.max(...list.map(runwayOf)));
 /**
@@ -735,14 +750,13 @@ function fitOf(c: RecordCandidate, at: number, pool: Pick<PoolSeed, 'fiveHourCei
     // The 5-hour window reads the demand, the burn over the account's speed, so a slowed account's holds lend it no
     // room. It reads the burn itself where no slow-down stands.
     const burn = (w === 'five_hour' && x.demand !== null ? x.demand : (c.burn[w] ?? 0)) + (pinBurn[w] ?? 0);
-    const span = Date.parse(x.horizon) - at;
     const window = windowFitOf(x, ceilingOn(pool, w), rewrite[w] ?? 0, burn);
     lands = lands && window.lands;
-    if (window.wallRunwayMs !== null) walls.push({ runway: window.wallRunwayMs, short: window.wallRunwayMs < span, window: w });
-    if (window.runwayMs === null) continue;
-    const short = window.runwayMs < span;
-    every = every && !short;
-    bounded.push({ runway: window.runwayMs, short, window: w });
+    const { ceiling, wall } = runwaysOf(window, Date.parse(x.horizon) - at, w);
+    if (wall !== null) walls.push(wall);
+    if (ceiling === null) continue;
+    every = every && !ceiling.short;
+    bounded.push(ceiling);
   }
   const binding = bindingOf(bounded);
   const verdict = unread ? 'least_bad' : every ? 'fits' : lands ? 'rewrite_only' : 'least_bad';
@@ -764,13 +778,17 @@ const holdsAllowance = (c: RecordCandidate, model: string) => c.kind === 'api_ke
 
 /** The ladder's rungs from the best: the words of a landing's `ladder` fact. */
 const LADDER = ['fits', 'rewrite_only', 'least_bad', 'ending', 'every'];
+/** Whether a rung narrows its members to the longest runway. */
+const narrowsByRunway = (rung: string) => rung === 'rewrite_only' || rung === 'least_bad';
+/** The runway a read ranks by and its window: the one to 1.0 under `least_bad`, the one to the ceiling otherwise. */
+const rankedRunwayOf = (read: FitRead): Pick<FitRead, 'binding' | 'runwayMs'> =>
+  read.verdict === 'least_bad' ? { binding: read.wallBinding, runwayMs: read.wallRunwayMs } : { binding: read.binding, runwayMs: read.runwayMs };
 
 /**
  * The rung a member's verdict stands on, a member read no fit for among the fitting ones. A `least_bad` or winding-down
  * member with no allowance left stands on the last rung alone.
  */
-const rungOf = (verdict: string | null, holds: boolean): string =>
-  verdict === null || verdict === 'fits' || verdict === 'rewrite_only' ? (verdict ?? 'fits') : (verdict === 'least_bad' || verdict === 'ending') && holds ? verdict : 'every';
+const rungOf = (verdict: string | null, holds: boolean): string => (verdict === null ? 'fits' : verdict === 'fits' || verdict === 'rewrite_only' || holds ? verdict : 'every');
 
 /** A walk of the five rules: the lines, the rule that fired, its destinations after the gate and before it. */
 interface Move {
@@ -820,8 +838,8 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
     const chosen = spec.kind === 'moved' && !spec.story ? reached.find((c) => c.accountId === spec.accountId) : undefined;
     if (chosen) {
       const order = (c: RecordCandidate) => (c.fit === 'fits' ? 0 : c.fit === 'rewrite_only' ? 1 : 2);
-      const narrows = (c: RecordCandidate) => order(c) === 1;
-      for (const c of reached) if (c !== chosen && (order(c) < order(chosen) || (order(c) === order(chosen) && narrows(c) && runwayOf(c) > runwayOf(chosen)))) c.inFlight = c.inFlightCap;
+      const mine = { index: order(chosen), runwayMs: chosen.runwayMs };
+      for (const c of reached) if (c !== chosen && outranks({ index: order(c), runwayMs: c.runwayMs }, mine, mine.index === 1)) c.inFlight = c.inFlightCap;
     }
     const open = (c: RecordCandidate) => c.inFlight < c.inFlightCap;
     // Each order keeps the set's order for the strategy to pick from. The fitting set goes on whole, the shed rule's
@@ -953,7 +971,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const held = fiveHourHeld(source, pool, at);
   if (held) facts.push(fact('age_five_hour', held.ageMs, 'ms'), fact('hold_five_hour', held.holdMs, 'ms'));
   // The router names the reservation wherever the room reads short, whether or not a window fired.
-  if (short !== null) facts.push(fact('fable_reservation', short.reservation, 'percent'));
+  if (short !== null) facts.push(fact('fable_reservation', short, 'percent'));
   // The line tests windows of both kinds, so the router writes both of the pool's ceilings here, whatever line the
   // trigger reads.
   facts.push(fact('five_hour_ceiling', pool.fiveHourCeiling, 'percent'), fact('weekly_ceiling', pool.weeklyCeiling, 'percent'));
@@ -1022,10 +1040,10 @@ export function stretchTriggerOf(source: RecordCandidate, pool: PoolSeed, at: nu
  * floored at 0, stands strictly under it. Null where the room holds the whole reservation, where none applies and on
  * any other pool.
  */
-function reservationShort(source: RecordCandidate, pool: PoolSeed, at: number): { reservation: number; room: number } | null {
+function reservationShort(source: RecordCandidate, pool: PoolSeed, at: number): number | null {
   if (pool.strategy !== 'pace' || !pool.loadShedding || !pool.fableReservationShedding) return null;
   const pace = paceOf(accountOf(source.accountId), at, null, { burns: source.burn, readings: source.windows, reserve: true });
-  return pace.fableReservation !== null && pace.remaining < pace.fableReservation ? { reservation: pace.fableReservation, room: pace.remaining } : null;
+  return pace.fableReservation !== null && pace.remaining < pace.fableReservation ? pace.fableReservation : null;
 }
 
 /** The instant a window's projected burn takes it to its wall, in whole milliseconds as the engine stores it. */
@@ -1151,20 +1169,14 @@ function fillDrawnRivals(spec: Spec, candidates: RecordCandidate[], pool: PoolSe
   const top = pool.strategy === 'pace' ? winner.pace?.score : undefined;
   const outscores = (c: RecordCandidate) => top !== undefined && c.pace !== null && c.pace.score > top;
   // A move's gate reads its own fits later in the walk, so only a placement's choice is held to the ladder here. Each
-  // member's step is its rung and the runway that rung ranks by, the one to 1.0 on the least-bad rung.
+  // member's step is its rung and the runway its read ranks by, which a rung compares only where it narrows.
   const stepOf = (c: RecordCandidate) => {
     const read = freshFitOf(spec, c, pool);
     const rung = rungOf(read.verdict, holdsAllowance(c, spec.request.canonicalModel));
-    return { index: LADDER.indexOf(rung), runway: rung === 'least_bad' ? read.wallRunwayMs : rung === 'rewrite_only' ? read.runwayMs : null };
+    return { index: LADDER.indexOf(rung), runwayMs: rankedRunwayOf(read).runwayMs };
   };
   const placed = spec.kind === 'placed' ? stepOf(winner) : null;
-  const longer = (x: number | null, y: number | null) => (x ?? Number.POSITIVE_INFINITY) > (y ?? Number.POSITIVE_INFINITY);
-  const ahead = (c: RecordCandidate) => {
-    if (placed === null) return false;
-    const rival = stepOf(c);
-    const narrows = LADDER[placed.index] === 'rewrite_only' || LADDER[placed.index] === 'least_bad';
-    return rival.index < placed.index || (rival.index === placed.index && narrows && longer(rival.runway, placed.runway));
-  };
+  const ahead = (c: RecordCandidate) => placed !== null && outranks(stepOf(c), placed, narrowsByRunway(LADDER[placed.index]));
   for (const c of candidates) {
     if (c === winner || c.obstacle !== null || c.accountId === (spec.from ?? spec.replaced?.accountId)) continue;
     const picked = !spec.rung && (tierBefore(c.tier, winner.tier) || (tierKey(c.tier) === tierKey(winner.tier) && outscores(c)));
@@ -1175,8 +1187,16 @@ function fillDrawnRivals(spec: Spec, candidates: RecordCandidate[], pool: PoolSe
 /** The burn a fresh session brings: the prior on the story's hand-written decisions, none on a drawn one. */
 const priorOf = (spec: Spec) => (spec.story ? PRIOR_BURN : {});
 
+// The fit's inputs do not move between the rivals' marks and the placement's read, so one fit serves both.
+const FRESH_FITS = new WeakMap<RecordCandidate, FitRead>();
 /** A fresh session's fit on a member, the body's rewrite with the prior's burn. */
-const freshFitOf = (spec: Spec, c: RecordCandidate, pool: PoolSeed) => fitOf(c, spec.at, pool, spec.request.canonicalModel, bodyTokensOf(spec.request), priorOf(spec), false);
+const freshFitOf = (spec: Spec, c: RecordCandidate, pool: PoolSeed): FitRead => {
+  const known = FRESH_FITS.get(c);
+  if (known) return known;
+  const read = fitOf(c, spec.at, pool, spec.request.canonicalModel, bodyTokensOf(spec.request), priorOf(spec), false);
+  FRESH_FITS.set(c, read);
+  return read;
+};
 
 /**
  * The no-fit partition's reading of a placement's members, drawn or written by hand, as the engine reads it: every
@@ -1192,15 +1212,15 @@ function readPlacementFits(spec: Spec, candidates: RecordCandidate[], pool: Pool
   for (const c of free.length > 0 ? free : left) {
     const read = freshFitOf(spec, c, pool);
     // A `least_bad` row states the runway to 1.0, the one its rung ranks by.
-    const wall = read.verdict === 'least_bad';
+    const ranked = rankedRunwayOf(read);
     c.fit = read.verdict;
-    c.runwayMs = wall ? read.wallRunwayMs : read.runwayMs;
-    c.binding = wall ? read.wallBinding : read.binding;
+    c.runwayMs = ranked.runwayMs;
+    c.binding = ranked.binding;
   }
 }
 
 /** A Fable request draws on its own week and both shared windows, so a reading at or past 1 on any of them is spent. */
-const spentForFable = (utilization: (window: string) => number | null | undefined) => [...SHARED_WINDOWS, 'seven_day_fable'].some((w) => (utilization(w) ?? 0) >= 1);
+const spentForFable = (model: string, utilization: (window: string) => number | null | undefined) => drawnWindows(model).some((w) => (utilization(w) ?? 0) >= 1);
 
 /** One reading of whether extra usage funds a spent member, so the partition and a run-out's servable set agree. */
 const fundedBy = (pool: PoolSeed, credits: RecordCandidate['credits']) => pool.overagePolicy === 'allow' && credits !== null && credits.blocked === null;
@@ -1210,7 +1230,7 @@ const fundedBy = (pool: PoolSeed, credits: RecordCandidate['credits']) => pool.o
  * Fable request keeps a spent member only where an `allow` pool reads its extra usage unblocked. A member without a
  * credits reading is not funded.
  */
-const keepsSpent = (c: RecordCandidate, pool: PoolSeed, r: RequestLog) => !r.canonicalModel.includes('fable') || !spentForFable((w) => c.windows[w]?.utilization) || fundedBy(pool, c.credits);
+const keepsSpent = (c: RecordCandidate, pool: PoolSeed, r: RequestLog) => !r.canonicalModel.includes('fable') || holdsAllowance(c, r.canonicalModel) || fundedBy(pool, c.credits);
 
 /**
  * The four partitions' facts in the engine's order, with the ladder's rung after the no-fit count on every landing that
@@ -1248,7 +1268,7 @@ function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog, moving:
     const rungs = new Map(left.map((c) => [c, rungOf(c.fit, holdsAllowance(c, r.canonicalModel))]));
     const rung = LADDER.find((x) => [...rungs.values()].includes(x)) ?? 'every';
     const onRung = left.filter((c) => rungs.get(c) === rung);
-    const kept = rung === 'every' ? [] : rung === 'rewrite_only' || rung === 'least_bad' ? longestOf(onRung) : onRung;
+    const kept = rung === 'every' ? [] : narrowsByRunway(rung) ? longestOf(onRung) : onRung;
     narrow('no_fit', (c) => kept.includes(c));
     if (reached) facts.push(fact('ladder', rung));
   }
@@ -1360,7 +1380,7 @@ const directedOf = (spec: Spec): boolean => spec.pin === 'classifier' && JUDGED_
 function judgedTurnOf(callId: string): { account: string; agent: string; direction: (typeof JUDGED_TURNS)[string]['direction']; model: string } {
   const { direction, turn } = JUDGED_TURNS[callId];
   const r = requestById.get(turn);
-  const ended = r?.attempts[r.attempts.length - 1];
+  const ended = r ? servingAttempt(r) : null;
   if (!r || !ended || r.agentId === null) throw new Error(`the classifier call ${callId} judges a turn the story lacks: ${turn}`);
   return { account: ended.accountId, agent: r.agentId, direction, model: r.canonicalModel };
 }
@@ -1453,6 +1473,9 @@ function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, p
   return { gateFits: steps.some((w) => w.step === 'fit' && w.verdict === 'fits'), movedAmong, steps };
 }
 
+/** The rung stations in the walk's order, each with the rung it places on. */
+const RUNG_STEPS: [string, Placement['rung']][] = [['rung:content', 'content'], ['rung:with_main', 'with_main'], ['rung:static', 'static']];
+
 /**
  * The placement walk: the partitions, the three rungs and the pick among the members they kept, or an exhaustion's
  * empty pick. `gateFits` is whether the move gate answered the fitting order, which tells a move's runway ties apart.
@@ -1464,7 +1487,7 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
   const steps: WalkStep[] = [];
   let pick: ReturnType<typeof pickOf> = { runnerUp: null, score: null, tierSize: 0 };
   let tierSize = 0;
-  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlaceOf(spec) === null && !pinnedAnswerOf(spec);
+  const placing = walksPlacement(spec);
   if (placing) {
     const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
     const partitions = narrowed(set, pool, r, movedAmong !== undefined);
@@ -1472,15 +1495,14 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
     // A classifier call that follows its judged turn goes ahead of the rungs and the strategy, so every station names
     // the call as its reason and the pick ranks nobody.
     if (directedOf(spec)) {
-      for (const name of ['rung:content', 'rung:with_main', 'rung:static']) steps.push(step(name, 'none', [fact('reason', 'classifier')]));
+      for (const [name] of RUNG_STEPS) steps.push(step(name, 'none', [fact('reason', 'classifier')]));
       steps.push(step('pick', 'chosen', [fact('account_id', spec.accountId, null, spec.accountId), fact('reason', 'classifier')]));
       return { pick, steps, tierSize };
     }
     const rung = spec.rung ?? null;
     const subagent = r.agentId !== 'main';
-    const rungs: [string, Placement['rung']][] = [['rung:content', 'content'], ['rung:with_main', 'with_main'], ['rung:static', 'static']];
     let matched = false;
-    for (const [name, which] of rungs) {
+    for (const [name, which] of RUNG_STEPS) {
       if (matched) {
         steps.push(step(name, 'not_run'));
         continue;
@@ -1620,7 +1642,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   const candidates = spec.kind === 'refused' ? [] : candidatesOf(spec, pool);
   const inPlace = inPlaceOf(spec);
   if (!spec.story && (spec.kind === 'placed' || spec.kind === 'moved')) fillDrawnRivals(spec, candidates, pool);
-  if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlace === null && !pinnedAnswerOf(spec)) readPlacementFits(spec, candidates, pool);
+  if (spec.kind !== 'moved' && walksPlacement(spec)) readPlacementFits(spec, candidates, pool);
   const portable = r.client !== 'other';
   const pinKey = pinKeyOf(r);
   const pinning = pool.affinityTtlSeconds > 0 && r.sessionId !== null && (typeof spec.pin === 'object' || spec.pin === 'none');
@@ -1654,7 +1676,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     walk.push(step('hold', 'held', [fact('place', spec.hold.place), fact('account_id', spec.accountId, null, spec.accountId), fact('bound_ms', pool.retryInPlaceSeconds * 1_000, 'ms')]));
   }
   const exhaustion = spec.kind === 'exhausted' ? (spec.exhaustion ?? exhaustionOf(candidates)) : null;
-  if (exhaustion && !pinnedAnswerOf(spec)) {
+  if (exhaustion && walksPlacement(spec)) {
     walk.push(step('exhausted', 'exhausted', [fact('kind', exhaustion.kind), fact('deadline', exhaustion.deadline === null ? null : Date.parse(exhaustion.deadline), 'time'), fact('window', exhaustion.window), fact('obstacles', candidates.map((c) => c.obstacle?.name ?? 'eligible'))]));
   }
   // Every walked selection ends at the reserve station: a booking where a placement or a move booked, else the
@@ -1677,8 +1699,8 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   const dispatched = isDispatched(spec);
   const attempt = dispatchedAttempt(spec);
   const answered = attempt?.upstreamStatus === 200 && spec.attempt === r.attempts.length;
-  // A placement the judged turn directed ranked no tier, as a rung's names none.
-  const tier = dispatched && !spec.rung && spec.kind !== 'renewed' && !directedOf(spec) ? (chosen?.tier ?? null) : null;
+  // A dispatch names the tier its pick ranked, none where the walk reached no pick.
+  const tier = dispatched && tierSize > 0 ? (chosen?.tier ?? null) : null;
   const pinEvents = pinEventsOf(spec, pinning);
   const pinWritten = pinWriteOf(spec, pinning, pinKey, stamps);
   const usage = r.usage;
@@ -1843,13 +1865,10 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
       if (heldWait) return { by: by('hold', heldWait.reason), fact: [summaryFact('held', heldWait.heldMs, 'ms')] };
       if (r.kind === 'probe') return { by: by('none', ''), fact: [summaryFact('epoch', record.pin?.epoch ?? 0, 'count')] };
       if (record.pin?.warmth === 'cold') return { by: by('none', ''), fact: [summaryFact('cause', record.pin.warmthCause ?? '', 'text')] };
-      // The first window, in the trigger's order, whose projection at its horizon reads over its limit names its
-      // reading. The limit is the line the horizon's bound sets, and the 5-hour ceiling for the 5-hour window of a
-      // pool that slows its pins, since the stretch tests that window there. The test is the round's own, strict, so
-      // the row names no window that no round fires on.
+      // The first window, in the trigger's order, whose projection at its horizon reads over the round's line names its
+      // reading. The test is the round's own, strict, so the row names no window that no round fires on.
       const m = record.candidates.find((c) => c.accountId === spec.accountId);
-      const limitOf = (c: RecordCandidate, w: string) => (pool.slowDown && w === 'five_hour' ? ceilingOn(pool, w) : lineOf(c, w, pool, spec.at));
-      const hottest = m === undefined ? undefined : drawnWindows(r.canonicalModel).find((w) => (m.windows[w]?.projection ?? -1) > limitOf(m, w));
+      const hottest = m === undefined ? undefined : drawnWindows(r.canonicalModel).find((w) => (m.windows[w]?.projection ?? -1) > triggerLineOf(m, w, pool, spec.at));
       if (m !== undefined && hottest !== undefined) return { by: by('none', ''), fact: [summaryFact(hottest, m.windows[hottest].utilization, 'percent')] };
       return { by: by('none', ''), fact: [summaryFact('idle', record.pin?.idleMs ?? 0, 'ms')] };
     }
@@ -1929,7 +1948,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
     // before the cap, so it takes no hold and is never passed over. The windows are the ones the answering record
     // reads.
     const fast = r.shape.requestedSpeed === 'fast';
-    const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable((w) => oauthWindows(id, answeredAt, () => OLDER_FACTOR).find((x) => WINDOW_KEY[x.id] === w)?.utilization);
+    const spent = (id: string) => r.canonicalModel.includes('fable') && spentForFable(r.canonicalModel, (w) => oauthWindows(id, answeredAt, () => OLDER_FACTOR).find((x) => WINDOW_KEY[x.id] === w)?.utilization);
     // A spent Fable member stays servable where the pool allows overage and the credits the record reads are unblocked.
     const funded = (id: string) => pool !== undefined && fundedBy(pool, fast ? creditsAt(id, answeredAt) : null);
     const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountById.get(id)!, pool, answeredAt, r.canonicalModel, fast, []) === null && (!spent(id) || funded(id)));
@@ -2059,7 +2078,7 @@ const NO_RUNWAY_PINS: RoundPin[] = [
  */
 const STRETCH_PINS: RoundPin[] = [
   { agentId: '3c9a', burn: 0.002, cold: true, keyId: 'notebook', lastInputTokens: 26_000, marked: false, model: HAIKU, note: null, sessionId: OPENING_SESSION_IDS[1], skip: 'sliver' },
-  { agentId: 'main', burn: 0.028, cold: false, droppedThinkingTokens: STRETCH_DROPPED_THINKING.tokens, keyId: 'notebook', lastInputTokens: 30_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: MARKED_SESSION_IDS[1], skip: null },
+  { agentId: 'main', burn: 0.028, cold: false, keyId: 'notebook', lastInputTokens: 30_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: MARKED_SESSION_IDS[1], skip: null },
   { agentId: 'main', burn: 0.027, cold: false, keyId: 'notebook', lastInputTokens: 40_000, marked: true, model: 'claude-sonnet-5-5', note: 'cheapest', sessionId: MARKED_SESSION_IDS[0], skip: null },
   { agentId: '7b2e', burn: 0.026, cold: false, keyId: 'notebook', lastInputTokens: 61_000, marked: false, model: HAIKU, note: null, sessionId: SLOWED_SESSION_ID, skip: null },
   { agentId: 'main', burn: 0.0206, cold: false, keyId: 'notebook', lastInputTokens: 52_000, marked: false, model: 'claude-sonnet-5-5', note: null, sessionId: OPENING_SESSION_IDS[1], skip: null },
@@ -2130,7 +2149,8 @@ function blockOf(id: string): NonNullable<Spec['refusal']> {
  */
 function storySpecs(): Spec[] {
   const t = clock;
-  const at = (id: string, seq: number, attempt: number, when: number, kind: DecisionKind, accountId: string | null, extra: Partial<Spec> = {}): Spec => ({ accountId, at: when, attempt, attempted: [], kind, pin: 'none', request: requestById.get(id)!, seq, story: true, ...extra });
+  const withReading = (windows: AttemptWindow[], id: string, utilization: number) => windows.map((w) => (w.id === id ? { ...w, utilization } : w));
+  const at =(id: string, seq: number, attempt: number, when: number, kind: DecisionKind, accountId: string | null, extra: Partial<Spec> = {}): Spec => ({ accountId, at: when, attempt, attempted: [], kind, pin: 'none', request: requestById.get(id)!, seq, story: true, ...extra });
   const live = (cause = 'continues_pin', idleMs = 60_000, warmth: 'cold' | 'refresh' | 'untouched' = 'refresh') => ({ cause, idleMs, warmth });
   const mainStatic = (when: number, writtenAt: number, refusedBy: string | null = null) => entry(staticBoundary('main', 2), { at: when, depth: 2, prefixTokens: 31_200, refusedBy, ttlMs: HOUR, writtenAt });
   const cohort = (when: number, refusedBy: string | null = null) => entry(staticBoundary('e90b', 1), { at: when, depth: 1, prefixTokens: 18_400, refusedBy, ttlMs: FIVE_MINUTES, writtenAt: t(14, 19, 52) });
@@ -2145,11 +2165,11 @@ function storySpecs(): Spec[] {
   // and a free one would take a fresh session on the ladder ahead of secondary, which falls short of the ceiling.
   const secondaryOnly = { nightly: 16, primary: 16 };
   // Nightly's last minute before its spent window resets, as the reset hold reads it.
-  const spentNightly = (when: number) => oauthWindows('nightly', when, () => OLDER_FACTOR).map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w));
+  const spentNightly = (when: number) => withReading(oauthWindows('nightly', when, () => OLDER_FACTOR), '5h', 1);
   // Studio's 5-hour reading where a hold reads it before any answer's head: the utilization the slow-down read.
-  const studioAt = (when: number, utilization: number) => ({ studio: oauthWindows('studio', when, () => OLDER_FACTOR).map((w) => (w.id === '5h' ? { ...w, utilization } : w)) });
+  const studioAt = (when: number, utilization: number) => ({ studio: withReading(oauthWindows('studio', when, () => OLDER_FACTOR), '5h', utilization) });
   // Nightly's 7-day Fable window where the morning's Fable session runs it ahead of the walk back's even climb.
-  const nightlyAt = (when: number, utilization: number) => ({ nightly: oauthWindows('nightly', when, () => OLDER_FACTOR).map((w) => (w.id === '7d_fable' ? { ...w, utilization } : w)) });
+  const nightlyAt = (when: number, utilization: number) => ({ nightly: withReading(oauthWindows('nightly', when, () => OLDER_FACTOR), '7d_fable', utilization) });
   // A pin's pace after one more gap. A gap at or over the work pool's burn average is a pause that folds nothing, and
   // any other moves the cycle toward the gap by one over the number of gaps folded with it, capped at eight, so the
   // cycle reads about the mean of the pin's last eight gaps.
@@ -2199,7 +2219,7 @@ function storySpecs(): Spec[] {
     at('req_5d1f8c3a-b27', 1, 1, t(11, 13, 40), 'renewed', 'primary', {
       burns: { primary: { five_hour: PRIMARY_EARLIER_BURN, seven_day: 0.0056, seven_day_fable: RESERVATION_FABLE_BURN } },
       pin: live('continues_pin', 310_000),
-      readings: { primary: requestById.get('req_5d1f8c3a-b27')!.attempts[0].windows.map((w) => (w.id === '7d' ? { ...w, utilization: RESERVATION_WEEK_USED } : w)) },
+      readings: { primary: withReading(requestById.get('req_5d1f8c3a-b27')!.attempts[0].windows, '7d', RESERVATION_WEEK_USED) },
       round: roundOfPins(RESERVATION_PINS),
     }),
     // The hour's sessions placed on secondary before its spent edge.
@@ -2417,6 +2437,10 @@ function storySpecs(): Spec[] {
   ];
 }
 
+/** The members a decision's selection passed over, out under an obstacle or ranked by the pick, none on a renewal. */
+const skippedOf = (record: DecisionRecord) =>
+  record.outcome.kind === 'renewed' ? [] : record.candidates.filter((c) => c.accountId !== record.outcome.accountId && (c.obstacle !== null || c.rank !== null)).map((c) => ({ accountId: c.accountId, obstacle: c.obstacle?.name ?? 'ranked' }));
+
 /** A selection trace as the attempt row keeps it, read off the decision that dispatched the attempt. */
 function traceOf(record: DecisionRecord, summary: DecisionSummary, held: CohortHold | null): RequestLog['attempts'][number]['selection'] {
   const pinEvent = record.outcome.pinEvents.find((e) => e.kind === 'pin_migrated');
@@ -2426,7 +2450,7 @@ function traceOf(record: DecisionRecord, summary: DecisionSummary, held: CohortH
     moved: record.outcome.rule ?? pinEvent?.reason ?? null,
     placement: record.outcome.rung,
     renewed: record.outcome.kind === 'renewed',
-    skipped: record.outcome.kind === 'renewed' ? [] : record.candidates.filter((c) => c.accountId !== record.outcome.accountId && (c.obstacle !== null || c.rank !== null)).map((c) => ({ accountId: c.accountId, obstacle: c.obstacle?.name ?? 'ranked' })),
+    skipped: skippedOf(record),
     strategy: summary.strategy,
     tier: record.outcome.tier,
   };
@@ -2453,14 +2477,19 @@ function buildDecisions() {
     decisions.set(`${record.requestId}/${record.seq}`, { ...record, raw: answered });
     summaries.push(summary);
   }
+  // The decision that dispatched a request's attempt, the last of the attempt's that is no hold, with its record.
+  const dispatchingOf = (id: string, attempt: number) => {
+    const summary = summaries.filter((s) => s.requestId === id && s.attempt === attempt && s.kind !== 'held').pop();
+    const record = summary && decisions.get(`${id}/${summary.seq}`);
+    return summary && record ? { record, summary } : null;
+  };
   // The story's attempt rows carry the trace of the decision that dispatched them, so the drawer and the card agree.
   for (const id of STORY_IDS) {
     const r = requestById.get(id);
     if (!r) continue;
     for (const [i, a] of r.attempts.entries()) {
-      const dispatched = summaries.filter((s) => s.requestId === id && s.attempt === i + 1 && s.kind !== 'held').pop();
-      const record = dispatched && decisions.get(`${id}/${dispatched.seq}`);
-      if (dispatched && record) a.selection = traceOf(record, dispatched, record.outcome.cohortHold);
+      const dispatching = dispatchingOf(id, i + 1);
+      if (dispatching) a.selection = traceOf(dispatching.record, dispatching.summary, dispatching.record.outcome.cohortHold);
     }
   }
   // A written row's attempt names every member its selection passed over, out under its obstacle or passed over by the
@@ -2469,11 +2498,8 @@ function buildDecisions() {
     const r = requestById.get(id);
     if (!r) continue;
     for (const [i, a] of r.attempts.entries()) {
-      const by = resentInPlace(r, i) ? i : i + 1;
-      const dispatched = summaries.filter((s) => s.requestId === id && s.attempt === by && s.kind !== 'held').pop();
-      const record = dispatched && decisions.get(`${id}/${dispatched.seq}`);
-      const trace = dispatched && record && a.selection ? traceOf(record, dispatched, a.selection.cohortHold) : null;
-      if (trace && a.selection) a.selection = { ...a.selection, skipped: trace.skipped };
+      const record = dispatchingOf(id, resentInPlace(r, i) ? i : i + 1)?.record;
+      if (record && a.selection) a.selection = { ...a.selection, skipped: skippedOf(record) };
     }
   }
   const pins = story.flatMap((s) => (s.inFlight ? [{ attempt: s.attempt, inFlight: s.inFlight, requestId: s.request.id, seq: s.seq }] : []));
@@ -2519,8 +2545,6 @@ function expiries(): EventSeed[] {
   ];
 }
 
-const ttlRulesDiff = (r: PoolSeed['cacheTtl']['plan']) => ({ main: r.main, models: r.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: r.subagent });
-
 /**
  * A pool edit's diff as the store writes it: each field the save changed under its column name, with the value
  * `before` names and the one the pool holds now.
@@ -2539,7 +2563,7 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
     body_capture_hours: p.bodyCaptureHours,
     burn_average_seconds: p.burnAverageSeconds,
     cache_diagnostics: p.cacheDiagnostics,
-    cache_ttl: { enabled: p.cacheTtl.enabled, inject_when_absent: p.cacheTtl.injectWhenAbsent, metered: ttlRulesDiff(p.cacheTtl.metered), plan: ttlRulesDiff(p.cacheTtl.plan) },
+    cache_ttl: { enabled: p.cacheTtl.enabled, inject_when_absent: p.cacheTtl.injectWhenAbsent, metered: encodeTtlRules(p.cacheTtl.metered), plan: encodeTtlRules(p.cacheTtl.plan) },
     enabled: p.status !== 'disabled',
     fable_reservation_shedding: p.fableReservationShedding,
     five_hour_ceiling: p.fiveHourCeiling,
@@ -2552,7 +2576,7 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
     load_shedding: p.loadShedding,
     migrate_when_spent: p.migrateWhenSpent,
     min_shared_prefix_tokens: p.minSharedPrefixTokens,
-    model_rules: p.modelRules.map((r) => ({ not: r.not, pattern: r.pattern })),
+    model_rules: encodeModelRules(p.modelRules),
     overage_move_grace_minutes: p.overageMoveGraceMinutes,
     overage_policy: p.overagePolicy,
     prefer_subscription: p.preferSubscription,
@@ -2596,16 +2620,16 @@ function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventS
   const pool = poolById.get(record.request.poolId)!;
   const candidate = record.candidates.find((c) => c.accountId === accountId);
   const source = candidate?.windows[window];
-  // The Fable reservation's test names no rate, so its round records the burn of the pins it walked in the excess's
-  // place.
-  const reserved = value('fired_by') === 'fable_reservation';
-  const excess = reserved ? null : Number(value('excess'));
+  const firedBy = String(value('fired_by'));
+  const reserved = firedBy === 'fable_reservation';
+  // The Fable reservation's test names no rate, so its line carries no excess and its round records the burn of the
+  // pins it walked in the excess's place.
+  const excess = value('excess') === undefined ? null : Number(value('excess'));
   const round = roundOf(roundOfPins(pins), excess, pool);
   // A round the stretch fired reads the demand to the window's horizon less the threshold, the slow-down's horizon.
-  const slowed = value('fired_by') === 'slow_down' ? slowReadAt(accountId, pool, at) : null;
-  // The stretch tests the 5-hour ceiling at every horizon, and a round with no candidate to read a line from reads the
-  // window's own ceiling.
-  const ceiling = slowed || candidate === undefined ? ceilingOn(pool, window) : lineOf(candidate, window, pool, at);
+  const slowed = firedBy === 'slow_down' ? slowReadAt(accountId, pool, at) : null;
+  // A round with no candidate to read a line from reads the window's own ceiling.
+  const ceiling = candidate === undefined ? ceilingOn(pool, window) : triggerLineOf(candidate, window, pool, at);
   const threshold = pool.slowDownStretchSeconds * 1_000;
   const moved = slowed && source?.horizon ? Date.parse(source.horizon) - threshold : null;
   const horizon = moved ?? (source?.horizon ? Date.parse(source.horizon) : null);
@@ -2617,10 +2641,9 @@ function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventS
   // A mark's destination as its own move would read it: a free eligible sibling holding allowance that the pin fits
   // to the horizon, ranked by the pool's strategy, by tier and under Pace by score, the longest runway breaking the
   // strategy's tie. Round robin's cursor names one turn, so the runway never speaks there.
-  const read = (p: RoundPin) => {
+  const read = (p: RoundPin, dropped: number | null) => {
     if (!p.marked) return { planned: null, rewrite: null, runway: null, window: null };
-    const windows = drawnWindows(p.model);
-    const siblings = record.candidates.filter((c) => c.obstacle === null && c.accountId !== accountId && c.inFlight < c.inFlightCap && (c.kind === 'api_key' || windows.every((w) => (c.windows[w]?.utilization ?? 0) < 1)));
+    const siblings = record.candidates.filter((c) => c.obstacle === null && c.accountId !== accountId && c.inFlight < c.inFlightCap && holdsAllowance(c, p.model));
     const reads = siblings.map((c) => {
       const base = planned.get(c.accountId) ?? structuredClone(c);
       return { base, fit: fitOf(base, at, pool, p.model, p.lastInputTokens, { [window]: p.burn ?? 0 }, true) };
@@ -2637,7 +2660,7 @@ function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventS
     // A pin with no prompt size reported yet is unsized, so its rewrite reads nothing, and the Pro-week figure is null
     // on a model without a weight of its own. It is the write alone, at the destination, which keeps none of the
     // thinking the move drops. The engine names the window the pick compared on beside a figure alone.
-    const figure = p.lastInputTokens === 0 ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(rewriteTokensOf(p.lastInputTokens, p.droppedThinkingTokens ?? null), p.model, CLIENTS[p.keyId] ?? null);
+    const figure = p.lastInputTokens === 0 ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(rewriteTokensOf(p.lastInputTokens, dropped), p.model, CLIENTS[p.keyId] ?? null);
     return { planned: chosen.base.accountId, rewrite: figure, runway: chosen.fit.runwayMs, window: figure === null ? null : rewriteWindowOf(p.model) };
   };
   return {
@@ -2659,12 +2682,13 @@ function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventS
       outcome: round.outcome,
       persisted: true,
       pins: pins.map((p) => {
-        const figures = read(p);
+        const dropped = droppedThinkingOf(p.sessionId, p.agentId, p.model);
+        const figures = read(p, dropped);
         // The burn per token of the move's size, the rewrite plus the dropped thinking at the output's weight. A pin
         // with no prompt size divides by one token, the cheapest rewrite.
-        const size = moveSizeOf(p.lastInputTokens, p.droppedThinkingTokens ?? null, p.model, CLIENTS[p.keyId] ?? null) ?? 1;
+        const size = moveSizeOf(p.lastInputTokens, dropped, p.model, CLIENTS[p.keyId] ?? null) ?? 1;
         return {
-          agent_id: p.agentId, burn: p.burn, cold: p.cold, ...(earlier ? {} : { dropped_thinking_tokens: p.droppedThinkingTokens ?? null }), key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note,
+          agent_id: p.agentId, burn: p.burn, cold: p.cold, ...(earlier ? {} : { dropped_thinking_tokens: dropped }), key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note,
           per_rewrite: p.burn === null ? null : Number((p.burn / size).toPrecision(7)), planned: figures.planned, rewrite: figures.rewrite,
           rewrite_window: figures.window, runway_ms: figures.runway, session_id: p.sessionId, skip: p.skip,
         };
@@ -2677,7 +2701,7 @@ function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventS
       stretch_ms: slowed?.stretchMs ?? null,
       target: round.target,
       threshold_ms: slowed ? threshold : null,
-      trigger: slowed ? 'slow_down' : reserved ? 'fable_reservation' : 'projection',
+      trigger: firedBy,
       unit: 'window_share',
       utilization: source?.utilization ?? null,
       warm_sessions: pool.warmSessions,
@@ -2775,7 +2799,7 @@ function expiredReservations(): EventSeed[] {
   return [...booked.values()].flatMap((record) => {
     const booking = record?.outcome.reservation;
     const r = record ? requestById.get(record.requestId) : undefined;
-    const last = r?.attempts[r.attempts.length - 1];
+    const last = r ? servingAttempt(r) : null;
     if (!record || !booking || !r || !last || r.outcome === 'succeeded') return [];
     const ended = attemptEnd(last);
     const detail = { age_ms: ended - Date.parse(record.request.at), attempt: record.request.attempt, cause: endCauseOf(r), shares: booking.rewrite };
@@ -2812,20 +2836,14 @@ function legacyPolls(): EventSeed[] {
 }
 
 /**
- * Reserve's polls after its last clean read: a 503 holds nothing back, so the poll asked at every slot and the
- * endpoint answered 503 each time, up to and including its last attempt, whose whole millisecond the bound passes.
+ * An account's polls after its last clean read, up to and including its last attempt, whose whole millisecond the
+ * bound passes, each answered 503. A 503 holds nothing back, so reserve's poll asked at every slot, and workshop's one
+ * poll is its last attempt.
  */
-function reservePolls(): EventSeed[] {
-  const poll = accountById.get('reserve')?.usage?.poll;
+function lastAttemptPolls(accountId: string): EventSeed[] {
+  const poll = accountById.get(accountId)?.usage?.poll;
   if (!poll?.lastCleanAt || !poll.lastAttemptAt) return [];
-  return failedPolls('reserve', poll.lastCleanAt, Date.parse(poll.lastAttemptAt) + 1);
-}
-
-/** Workshop's one poll after its last clean read, its last attempt, which the endpoint answered 503. */
-function workshopPolls(): EventSeed[] {
-  const poll = accountById.get('workshop')?.usage?.poll;
-  if (!poll?.lastCleanAt || !poll.lastAttemptAt) return [];
-  return failedPolls('workshop', poll.lastCleanAt, Date.parse(poll.lastAttemptAt) + 1);
+  return failedPolls(accountId, poll.lastCleanAt, Date.parse(poll.lastAttemptAt) + 1);
 }
 
 /**
@@ -3200,8 +3218,8 @@ function buildEvents(): RoutingEvent[] {
     // next poll reads clean.
     { accountId: 'nightly', at: iso(t(12, 26, 40)), detail: USAGE_503, kind: 'poll_failed' },
     ...legacyPolls(),
-    ...reservePolls(),
-    ...workshopPolls(),
+    ...lastAttemptPolls('reserve'),
+    ...lastAttemptPolls('workshop'),
     { accountId: 'research', at: iso(RESEARCH_BUDGET_AT), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(RESEARCH_BUDGET_AT) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'jobs', requestId: BUDGET_CROSSING_ID },
     { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', ...currentPair('primary'), reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
     ...WEEKLY_RESETS,
@@ -3217,9 +3235,9 @@ function buildEvents(): RoutingEvent[] {
     {
       accountId: null,
       actor: 'admin',
-      at: iso(POOL_EDITED_AT[pool.id]),
+      at: iso(BEFORE_EDIT.all.at),
       detail: {
-        diff: poolDiff(pool, { min_shared_prefix_tokens: BEFORE_EDIT.all.minSharedPrefixTokens, slow_down_hold_seconds: BEFORE_EDIT.all.slowDownHoldSeconds, 'keepalive.max_idle_seconds': BEFORE_EDIT.all.keepalive.maxIdleSeconds }),
+        diff: poolDiff(pool, { min_shared_prefix_tokens: BEFORE_EDIT.all.settings.minSharedPrefixTokens, slow_down_hold_seconds: BEFORE_EDIT.all.settings.slowDownHoldSeconds, 'keepalive.max_idle_seconds': BEFORE_EDIT.all.keepalive.maxIdleSeconds }),
         kind: 'pool_updated',
         target: 'all',
       },
@@ -3248,7 +3266,7 @@ function buildEvents(): RoutingEvent[] {
       actor: 'admin',
       at: iso(RETIRED.createdAt),
       detail: {
-        diff: { members: [...(poolById.get(RETIRED.poolId)?.members ?? []), RETIRED.member].map((m) => ({ account_id: m.accountId, budget_daily_usd: m.budgetDailyUsd, budget_monthly_usd: m.budgetMonthlyUsd, priority: m.priority })) },
+        diff: { members: encodeMembers([...(poolById.get(RETIRED.poolId)?.members ?? []), RETIRED.member]) },
         kind: 'pool_members_set',
         target: RETIRED.poolId,
       },

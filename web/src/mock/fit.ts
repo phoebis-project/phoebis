@@ -44,6 +44,17 @@ export function windowFitOf(reading: { reserved: number | null; utilization: num
 }
 
 /**
+ * A window's two runways off its fit, to the ceiling and to 1.0, each short where it ends before `span`, the time to
+ * the window's horizon, and none where it is unbounded.
+ */
+export function runwaysOf(read: WindowFit, span: number, window: string): { ceiling: Runway | null; wall: Runway | null } {
+  return {
+    ceiling: read.runwayMs === null ? null : { runway: read.runwayMs, short: read.runwayMs < span, window },
+    wall: read.wallRunwayMs === null ? null : { runway: read.wallRunwayMs, short: read.wallRunwayMs < span, window },
+  };
+}
+
+/**
  * The binding window among `runways`, as the router's `binding_of` picks it for the rank and the displayed pair alike:
  * the shortest runway of those short of their horizon, else the shortest of all.
  */
