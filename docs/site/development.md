@@ -74,12 +74,14 @@ PHOEBIS_SCREENSHOT_DIR=/tmp/phoebis-mock-shots npm run e2e:mock
 npm run e2e:reference
 ```
 
-`npm run smoke` builds the smoke bundle and runs `smoke/run.mjs` under jsdom with `TZ=UTC`. A whole run takes 15 to 30
-minutes. `SMOKE_ONLY`, a comma-separated list of view paths as in `SMOKE_ONLY=/keys,/sessions npm run smoke`, runs only
-the blocks that name those views, and a path that no block names fails the run and lists the names the blocks give. A
-new top-level block in the script takes its own `forView` call, since a bare block runs under every filter. The last two
-lines are the browser pass against the mock and the reference smoke, both in the next section. The screenshot directory
-has to lie outside the repository.
+`npm run smoke` builds the smoke bundle and runs `smoke/run.mjs` under jsdom with `TZ=UTC`. A run that holds several
+views starts one runner per view side by side and prints each view's lines together, then the sums over all of them. A
+whole run side by side takes about 10 minutes, against 15 to 30 minutes in one process. `SMOKE_JOBS` caps the runners,
+one per core by default, and `SMOKE_JOBS=1` keeps the run in one process. `SMOKE_ONLY`, a comma-separated list of view
+paths as in `SMOKE_ONLY=/keys,/sessions npm run smoke`, runs only the blocks that name those views, and a path that no
+block names fails the run and lists the names the blocks give. A new top-level block in the script takes its own
+`forView` call, since a bare block runs under every filter. The last two lines are the browser pass against the mock and
+the reference smoke, both in the next section. The screenshot directory has to lie outside the repository.
 
 ## The browser pass
 

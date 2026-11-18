@@ -164,13 +164,13 @@ own conversation, or of the conversation it forked from, on the serving account,
 on that account and model. A fork names its parent's answer only until it has an answer of its own on that account and
 model. Off by default.
 
-The pool's `thinking_diagnostics`, a switch in a group of its own after Cache diagnostics in the pool dialog's expert
-view, turns the thinking-binding report on for this pool's requests: where thinking is on and the client sent no
-`thinking-binding-controls-2026-08-01` token, the router adds it ([The betas](relay.md#the-betas)), never to a token
-count, and the upstream's answer then lists in `input_transformations` each thinking block it dropped or let pass. The
-token changes nothing the model receives, and the router never sets `thinking.block_binding`. A `400` naming the token
-strips it for one retry and latches it off for the account, apart from the cache diagnostics' latch. How the router
-reads the report on a move is under [What a move drops](#what-a-move-drops). Off by default.
+The pool's `thinking_diagnostics`, the Thinking diagnostics switch after Cache diagnostics in the Diagnostics group of
+the pool dialog's expert view, turns the thinking-binding report on for this pool's requests: where thinking is on and
+the client sent no `thinking-binding-controls-2026-08-01` token, the router adds it ([The betas](relay.md#the-betas)),
+never to a token count, and the upstream's answer then lists in `input_transformations` each thinking block it dropped
+or let pass. The token changes nothing the model receives, and the router never sets `thinking.block_binding`. A `400`
+naming the token strips it for one retry and latches it off for the account, apart from the cache diagnostics' latch.
+How the router reads the report on a move is under [What a move drops](#what-a-move-drops). Off by default.
 
 `auto_mode_server` is whether a Claude Code session's server-side auto mode checks travel to the upstream, on by
 default, and a key's own `auto_mode_server` overrides the pool's ([Keys](#keys)). What the router cuts under the off
