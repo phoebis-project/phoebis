@@ -6,7 +6,7 @@ import { MeterRatio } from '@/components/MeterRatio';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Button, Card, ErrorRow, SkeletonRows, toggleRow } from '@/components/ui/primitives';
+import { Button, Card, SkeletonRows, StateRow, toggleRow } from '@/components/ui/primitives';
 import { accountHref, METER_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
@@ -177,16 +177,15 @@ function GroupsCard({ accounts, error, first, groups, newest, now, onExpand, onM
                     </Fragment>
                   );
                 })}
-            {error !== null ? (
-              <ErrorRow colSpan={COLUMNS} error={error} errorTitle="Could not load the meter reconciliation" retry={onRetry} />
-            ) : (
-              groups?.length === 0 && (
-                <tr>
-                  <td colSpan={COLUMNS} className="muted">
-                    {accounts.length === 0 ? 'No completed window yet' : `No completed window yet for ${accounts.join(', ')}`}
-                  </td>
-                </tr>
-              )
+            {(error !== null || groups?.length === 0) && (
+              <StateRow
+                colSpan={COLUMNS}
+                empty={accounts.length === 0 ? 'No completed window yet' : `No completed window yet for ${accounts.join(', ')}`}
+                error={error}
+                errorTitle="Could not load the meter reconciliation"
+                loading={false}
+                retry={onRetry}
+              />
             )}
           </tbody>
         </table>

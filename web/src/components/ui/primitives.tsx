@@ -300,7 +300,7 @@ export function ErrorRow({ colSpan, error, errorTitle, retry }: { colSpan: numbe
 }
 
 export function StateRow({ colSpan, empty, error, errorTitle, loading, retry }: { colSpan: number; empty: string; error: string | null; errorTitle: string; loading: boolean; retry?: () => void }) {
-  if (error) return <ErrorRow colSpan={colSpan} error={error} errorTitle={errorTitle} retry={retry} />;
+  if (error !== null) return <ErrorRow colSpan={colSpan} error={error} errorTitle={errorTitle} retry={retry} />;
   return (
     <tr>
       <td colSpan={colSpan} className="muted">

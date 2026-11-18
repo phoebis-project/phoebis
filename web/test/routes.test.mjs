@@ -157,3 +157,30 @@ test('the Meter view draws at /meter with its two cards, its title named for the
     Object.assign(api, { getAnalyticsReconciliations, listAccounts });
   }
 });
+
+test('a Meter read that fails with an empty message draws the error row in each card', async () => {
+  // A refusal body whose error is empty reaches the page as a failure with no text.
+  const { getAnalyticsReconciliations, listAccounts } = api;
+  api.getAnalyticsReconciliations = async () => {
+    throw new Error('');
+  };
+  api.listAccounts = async () => [{ id: 'acct-a', label: 'acct-a' }];
+  try {
+    const router = createMemoryRouter([{ path: '/', element: h('div', { 'data-shell': '' }, h(Outlet)), children: [{ path: 'meter', element: h(MeterPage) }] }], { initialEntries: ['/meter'] });
+    const container = document.body.appendChild(document.createElement('div'));
+    const root = createRoot(container);
+    roots.push(root);
+    act(() => root.render(h(RouterProvider, { router })));
+    await settled();
+    assert.deepEqual(
+      [...container.querySelectorAll('[data-shell] .card--table')].map((card) => [card.querySelector('.empty--error .empty__title')?.textContent ?? null, card.querySelector('td.muted')?.textContent ?? null]),
+      [
+        ['Could not load the meter reconciliation', null],
+        ['Could not load the meter reconciliation', null],
+      ],
+      'a failure with no text still reads as a failure, so neither card draws its empty row',
+    );
+  } finally {
+    Object.assign(api, { getAnalyticsReconciliations, listAccounts });
+  }
+});
