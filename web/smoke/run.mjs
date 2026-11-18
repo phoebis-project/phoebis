@@ -8891,9 +8891,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const ttlToggle = [...(group(dlg, 'Cache TTL')?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Set the cache TTL for this pool');
   const diagnostics = () => group(dlg, 'Diagnostics')?.querySelector('button[role="switch"][aria-label="Cache diagnostics"]');
   results.push({
-    name: '/pools a pool that rewrites no breakpoint still offers the TTL block and the diagnostics switch',
+    name: '/pools a pool that rewrites no breakpoint still offers the TTL block and the cache diagnostics switch',
     ok: ttlToggle?.getAttribute('aria-checked') === 'false' && diagnostics()?.getAttribute('aria-checked') === 'false',
-    missing: [ttlToggle ? '' : 'no cache TTL toggle', String(ttlToggle?.getAttribute('aria-checked')), diagnostics() ? '' : 'no diagnostics switch', String(diagnostics()?.getAttribute('aria-checked'))],
+    missing: [ttlToggle ? '' : 'no cache TTL toggle', String(ttlToggle?.getAttribute('aria-checked')), diagnostics() ? '' : 'no cache diagnostics switch', String(diagnostics()?.getAttribute('aria-checked'))],
   });
   {
     const states = [diagnostics()?.getAttribute('aria-checked')];

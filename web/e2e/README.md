@@ -330,8 +330,8 @@ edge on the banner's bottom, the banner's paint opaque under its tint, the block
 and opaque with it on, the sticky filter bar on the block's bottom and the section bar on the filter bar's bottom, and
 at 1280 by 800 the Accounts list 20 px under the block, each edge within 1 px), the Dropped thinking blocks card on the
 Cache tab (mock pass, on a load of its own, whose story holds the account key and the prefix key at the pass's origin:
-the bar of `thinking_dropped.end_user_binding_mismatch` in a fill apart from the bar of
-`thinking_dropped.prefix_binding_mismatch`, the fault ink against the muted one, each bar's label, count and fill
+the bar of `thinking_dropped.end_user_binding_mismatch` in the fault ink and the bar of
+`thinking_dropped.prefix_binding_mismatch` in the muted ink, each ink read off a probe, each bar's label, count and fill
 recorded), the anchored pool card and key row under the reload banner (mock pass, on loads of its own under the mock's
 build switch, the Pools view at 1280 by 800 and the Keys view at 1280 by 400: the first card's or row's top edge 16
 px under the sticky block's bottom once the view moves to its hash, within 0.5 px), the fast lane, the request drawer,
@@ -450,18 +450,19 @@ theme script alone sets it on that screen, then the secret field's, the row's, i
 edges inside the card recorded, asserting nothing)). A check that opens an editor, a dialog or a row closes it again
 before the view's shot, and one that turns a column on turns it off again. The recent requests' table is fitted in the
 router pass and recorded in the mock pass, whose story's subscription rows read their figure in the Ultra week in the
-Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there. The script exits
+Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there. The tie's pick line
+also reads the tie's Pick station's popover at 700 by 800 against the bounds a station's popover keeps. The script exits
 non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.
 
 The page runs on Playwright's clock: it starts at `PHOEBIS_E2E_CLOCK` (an ISO instant), or at the instant the pass
-launches when that is unset, and stands still except where the script moves it, in fixed steps, while a view loads
-and again before its shot. A step starts once the page has had two frames with no request in flight, so a view that
-loads a module waits for the module's file however late it arrives. A request that has not landed after 30 s fails the
-pass with its address, and the later steps wait for the frames alone. Animations are off and the time zone is UTC, so
-two passes over one tree at one clock origin draw the same pixels.
+launches when that is unset, and stands still except where the script moves it, in fixed steps, while a view loads and
+again before its shot. A step starts once the page has had two frames with no request in flight, so a view that loads a
+module waits for the module's file however late it arrives. A request that has not landed after 30 s fails the pass with
+its address, and the later steps wait for the frames alone. Animations are off and the time zone is UTC, so two passes
+over one tree at one clock origin draw the same pixels.
 
 ## Run it against a running router
 

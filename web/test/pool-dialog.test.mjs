@@ -319,7 +319,6 @@ test('a new pool opens with the switch to keep prompt caches warm off, and free 
 });
 
 test('a save hands the client the Thinking diagnostics switch as the dialog shows it', async () => {
-  // The pool jobs stores both diagnostics switches off (`web/src/mock/pools.ts`).
   const pool = pools.find((p) => p.id === 'jobs');
   assert.ok(pool && !pool.cacheDiagnostics && !pool.thinkingDiagnostics, 'the mock holds the pool jobs with both diagnostics switches off');
   const sent = [];

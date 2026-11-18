@@ -2344,10 +2344,10 @@ async function closeByEscape(dialog, label, say) {
 }
 
 /**
- * The Cache TTL, Diagnostics, Body capture and Keepalive groups of a served pool in the expert view: the TTL
- * policy toggle, the marker toggle under it, the grid's two main selects, the diagnostics switch, the capture switch
- * and the subagent switch, each reached the way an operator reaches it and measured while its group shows. The
- * metered main select is measured against the plan one beside it, the marker toggle against the policy toggle and the
+ * The Cache TTL, Diagnostics, Body capture and Keepalive groups of a served pool in the expert view: the TTL policy
+ * toggle, the marker toggle under it, the grid's two main selects, the cache diagnostics switch, the capture switch and
+ * the subagent switch, each reached the way an operator reaches it and measured while its group shows. The metered main
+ * select is measured against the plan one beside it, the marker toggle against the policy toggle and the cache
  * diagnostics switch against the capture switch, since a control that reads a size smaller than its neighbors is the
  * defect this dialog would show first.
  */
@@ -2371,7 +2371,7 @@ async function poolCachingControls(theme) {
   if ((await policy.count()) !== 1) say('no cache TTL policy toggle');
   if ((await toggle('Cache diagnostics').count()) !== 1) say('no cache diagnostics switch');
   const diagnosticsSelects = await dialog.locator('section.dialog-group[aria-label="Diagnostics"] select').count();
-  if (diagnosticsSelects !== 0) say(`the Diagnostics group draws ${diagnosticsSelects} selects beside its switch`);
+  if (diagnosticsSelects !== 0) say(`the Diagnostics group draws ${diagnosticsSelects} selects beside its switches`);
   // The grid and the marker toggle are compared while the policy is on, the state an operator edits them in.
   if ((await policy.count()) === 1 && (await policy.getAttribute('aria-checked')) === 'false') await policy.click();
   await settle();
@@ -8520,34 +8520,48 @@ async function shellBanner(theme) {
 }
 
 /**
- * The Dropped thinking blocks card on the Cache tab, on a load of its own: the bar of the account key and the bar of
- * the prefix key, which the mock's story holds at the pass's origin, in two fills, since a key under an account reason
- * draws in the fault ink and every other key in the muted ink. A computed fill holds the value, never the token's name,
- * so the two bars are read against each other. Each bar's label, count and fill is recorded. The mock pass's alone, as
- * the router's seed reports no dropped block. The Analytics view loads again after, so the measures after it read the
- * view as it first drew.
+ * The Dropped thinking blocks card on the Cache tab, on a load of its own: the bar of the account key in the fault ink
+ * and the bar of the prefix key in the muted ink, both of which the mock's story holds at the pass's origin, since a
+ * key under an account reason draws in the fault ink and every other key in the muted ink. A computed fill holds the
+ * value, never the token's name, so each ink is resolved on a probe of its own. Each bar's label, count and fill is
+ * recorded. The mock pass's alone, as the router's seed reports no dropped block. The Analytics view loads again after,
+ * so the measures after it read the view as it first drew.
  */
 async function droppedThinkingInks(theme) {
   const say = (what) => failures.push(`${theme} /analytics dropped thinking blocks: ${what}`);
-  let bars;
+  let read;
   try {
     await loadAtOrigin('/analytics', '.analytics-section#traffic');
     if (!(await tabTo(theme, 'Cache'))) return;
-    bars = await page.evaluate(() => {
+    read = await page.evaluate(() => {
       const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Dropped thinking blocks');
-      return card
-        ? [...card.querySelectorAll('.hbars li')].map((li) => ({ count: li.querySelector('.num')?.firstChild?.textContent?.trim() ?? '', fill: getComputedStyle(li.querySelector('.hbars__fill')).backgroundColor, label: li.children[0]?.textContent?.trim() ?? '' }))
-        : null;
+      if (!card) return null;
+      const ink = (name) => {
+        const probe = card.appendChild(document.createElement('span'));
+        probe.style.background = `var(${name})`;
+        const color = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return color;
+      };
+      return {
+        bars: [...card.querySelectorAll('.hbars li')].map((li) => ({ count: li.querySelector('.num')?.firstChild?.textContent?.trim() ?? '', fill: getComputedStyle(li.querySelector('.hbars__fill')).backgroundColor, label: li.children[0]?.textContent?.trim() ?? '' })),
+        fault: ink('--series-8'),
+        muted: ink('--series-muted'),
+      };
     });
   } finally {
     await loadAtOrigin('/analytics', '.analytics-section#traffic');
     await atRest();
   }
+  const bars = read?.bars ?? null;
   measurements.push(`${theme} /analytics dropped thinking blocks ${JSON.stringify(bars)}`);
   const account = bars?.find((b) => b.label === 'Dropped, other end user');
   const prefix = bars?.find((b) => b.label === 'Dropped, prefix changed');
   if (account === undefined || prefix === undefined) say(`draws ${JSON.stringify(bars?.map((b) => b.label) ?? null)}, not both the account key's bar and the prefix key's`);
-  else if (account.fill === prefix.fill) say(`the account key's bar and the prefix key's bar both draw ${account.fill}, not the fault ink against the muted one`);
+  else {
+    if (account.fill !== read.fault) say(`the account key's bar draws ${account.fill}, not the fault ink ${read.fault}`);
+    if (prefix.fill !== read.muted) say(`the prefix key's bar draws ${prefix.fill}, not the muted ink ${read.muted}`);
+  }
 }
 
 /**
@@ -10936,7 +10950,9 @@ const compare = (mine, neighbour, keys, what) => {
 /**
  * The story's tie, the failover that tied primary and nightly on Pace at 08:16:21: its Pick station's rows name the
  * tied accounts, the one the runway kept and that no draw was left, each in the type of the strategy row above them
- * and from the same left edge. The measure loads the tie's request on its own range and leaves the bare log.
+ * and from the same left edge. Its reservation chips widen the popover, so the box is held to a station popover's
+ * bounds at 700 by 800, where the card runs past the window. The measure loads the tie's request on its own range and
+ * leaves the bare log.
  */
 async function routingLogPickLine(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -10990,6 +11006,7 @@ async function routingLogPickLine(theme) {
     }
     await page.keyboard.press('Escape');
     await advance(CLOCK_STEP_MS);
+    await popoverBounds(theme, "the tie's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'), { viewports: [POPOVER_VIEWPORTS[2]] });
   } finally {
     await atRest();
     await loadAtOrigin('/routing-log', '.routing-log__table');
