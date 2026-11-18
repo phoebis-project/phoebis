@@ -591,10 +591,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         }
         // The check above reads outside the insert, so a create that lost the race for the id arrives here.
         Err(StoreError::IdTaken(_)) => return failure(StatusCode::CONFLICT, DUPLICATE_ID),
-        Err(
-            error @ (StoreError::FeatureAccountNotFound(_) | StoreError::FeatureAccountNotOauth(_)),
-        ) => return feature_account_refusal(error),
-        Err(error) => return store_failure(error),
+        Err(error) => return feature_account_refusal(error),
     }
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
     let mut response = match reload_or_refuse(&state).await {
@@ -684,10 +681,7 @@ pub(crate) async fn patch(
         }
         // The store counts the pool the row names, so a `pool_id` change alone is refused here too.
         Err(error @ StoreError::KeyGuardrailBound(_)) => return attachment_refusal(error),
-        Err(
-            error @ (StoreError::FeatureAccountNotFound(_) | StoreError::FeatureAccountNotOauth(_)),
-        ) => return feature_account_refusal(error),
-        Err(error) => return store_failure(error),
+        Err(error) => return feature_account_refusal(error),
     }
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;

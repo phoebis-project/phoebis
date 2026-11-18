@@ -24,7 +24,7 @@ use crate::reader::ReaderState;
 
 pub use reader::{
     Condition, Kind, Link, Subject, SubjectKind, BACKOFF_ATTENTION_AFTER_MS,
-    CERTIFICATE_WARNING_DAYS, REFRESH_RUN_READ,
+    CERTIFICATE_WARNING_DAYS, FEATURE_CA, REFRESH_RUN_READ,
 };
 
 const STATE_POISONED: &str = "attention state mutex poisoned by a prior panic";

@@ -196,6 +196,32 @@ pub(crate) fn in_list<T: Clone + Into<rusqlite::types::Value>>(
     clauses.push(format!("{column} IN ({marks})"));
 }
 
+/// The inclusive `received_at` range, `from` bound ahead of `to`.
+fn received_range(
+    from: Option<i64>,
+    to: Option<i64>,
+    args: &mut Vec<rusqlite::types::Value>,
+    clauses: &mut Vec<String>,
+) {
+    if let Some(from) = from {
+        args.push(from.into());
+        clauses.push(format!("received_at >= ?{}", args.len()));
+    }
+    if let Some(to) = to {
+        args.push(to.into());
+        clauses.push(format!("received_at <= ?{}", args.len()));
+    }
+}
+
+/// The `WHERE` of `clauses` joined under `AND`, empty for no clause.
+fn where_of(clauses: &[String]) -> String {
+    if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    }
+}
+
 /// A model filter as the ledger's reads match it, each model folded through `canonical_id`.
 fn canonical_models(models: &[String]) -> Vec<String> {
     models.iter().map(|m| canonical_id(m)).collect()
@@ -513,14 +539,7 @@ fn filter_clauses(
     if !filter.include_probes && !filter.kinds.iter().any(|k| k == Kind::Probe.as_str()) {
         clauses.push("kind != 'probe'".into());
     }
-    if let Some(from) = filter.from {
-        args.push(from.into());
-        clauses.push(format!("received_at >= ?{}", args.len()));
-    }
-    if let Some(to) = filter.to {
-        args.push(to.into());
-        clauses.push(format!("received_at <= ?{}", args.len()));
-    }
+    received_range(filter.from, filter.to, &mut args, &mut clauses);
     (args, clauses)
 }
 
@@ -645,11 +664,7 @@ pub(crate) fn list_requests_statement(
         };
         clauses.push(clause);
     }
-    let r#where = if clauses.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", clauses.join(" AND "))
-    };
+    let r#where = where_of(&clauses);
     // `IS NULL` reads 0 for a figure and 1 for none, so the rows without the figure sort last under either direction.
     let nulls_last = if order.nullable() {
         format!("{column} IS NULL, ")
@@ -740,11 +755,7 @@ pub fn list_request_page(
     // received before it and landed after it is read once by the poll that passes the stamp back.
     let (mut args, clauses) = filter_clauses(filter, live);
     args.push(filter.landed_after.unwrap_or(0).into());
-    let r#where = if clauses.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", clauses.join(" AND "))
-    };
+    let r#where = where_of(&clauses);
     let landed_through: i64 = tx.query_row(
         &format!(
             "SELECT COALESCE(MAX(landed_at), ?{}) FROM requests{where}",
@@ -795,35 +806,13 @@ pub struct FeatureCallRow {
     pub status: Option<i64>,
 }
 
-/// `<received_at>:<id>`, the feature call list's cursor: a page's last row. The page after it starts past that row in
-/// the list's order, newest first.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FeatureCallCursor {
-    pub id: String,
-    pub received_at: i64,
-}
-
-impl FeatureCallCursor {
-    /// The id may hold a `:` of its own, so the time is read off the first.
-    pub fn parse(s: &str) -> Option<FeatureCallCursor> {
-        let (received_at, id) = s.split_once(':')?;
-        Some(FeatureCallCursor {
-            id: id.to_string(),
-            received_at: received_at.parse().ok()?,
-        })
-    }
-
-    pub fn encode(&self) -> String {
-        format!("{}:{}", self.received_at, self.id)
-    }
-}
-
-/// The feature calls under `filter`, newest first by `received_at` and then by id, from `cursor` on. The second
-/// value is the cursor past the page's last row, set only while a row lies beyond it.
+/// The feature calls under `filter`, newest first by `received_at` and then by id, from `cursor` on, a cursor in
+/// `list_requests`'s spelling under `RequestOrder::ReceivedAt`. The second value is the cursor past the page's last
+/// row, set only while a row lies beyond it.
 pub fn list_feature_calls(
     conn: &Connection,
     filter: &FeatureCallFilter,
-    cursor: Option<&FeatureCallCursor>,
+    cursor: Option<&RequestCursor>,
     limit: usize,
 ) -> Result<(Vec<FeatureCallRow>, Option<String>), LedgerError> {
     let mut args = Vec::new();
@@ -832,16 +821,9 @@ pub fn list_feature_calls(
     in_list("feature", &filter.features, &mut args, &mut clauses);
     in_list("key_id", &filter.keys, &mut args, &mut clauses);
     in_list("outcome", &filter.outcomes, &mut args, &mut clauses);
-    if let Some(from) = filter.from {
-        args.push(from.into());
-        clauses.push(format!("received_at >= ?{}", args.len()));
-    }
-    if let Some(to) = filter.to {
-        args.push(to.into());
-        clauses.push(format!("received_at <= ?{}", args.len()));
-    }
+    received_range(filter.from, filter.to, &mut args, &mut clauses);
     if let Some(cursor) = cursor {
-        args.push(cursor.received_at.into());
+        args.push(cursor.value.into());
         let n = args.len();
         args.push(cursor.id.clone().into());
         clauses.push(format!(
@@ -849,11 +831,7 @@ pub fn list_feature_calls(
             n + 1
         ));
     }
-    let r#where = if clauses.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", clauses.join(" AND "))
-    };
+    let r#where = where_of(&clauses);
     // One row past the page says whether a next page exists.
     args.push(((limit + 1) as i64).into());
     let sql = format!(
@@ -880,11 +858,7 @@ pub fn list_feature_calls(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let next = next_page(&mut rows, limit, |row| {
-        FeatureCallCursor {
-            id: row.id.clone(),
-            received_at: row.received_at,
-        }
-        .encode()
+        RequestCursor::of(&row.id, Some(row.received_at)).encode()
     });
     Ok((rows, next))
 }
@@ -1366,9 +1340,10 @@ impl LogKinds {
     }
 }
 
-/// `<value>:<id>`, the request list's and the guardrail sample's cursor: the order key's value on a page's last row
-/// and its id, an empty value for a null figure. The page after it starts past that row in the list's order and
-/// direction, so under the default order, `received_at` newest first, it reads `<received_at>:<id>`.
+/// `<value>:<id>`, the feature call list's, the guardrail sample's and the request list's cursor: the order key's
+/// value on a page's last row and its id, an empty value for a null figure. The page after it starts past that row in
+/// the list's order and direction, so under the default order, `received_at` newest first, it reads
+/// `<received_at>:<id>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestCursor {
     pub value: Option<i64>,

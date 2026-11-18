@@ -9,7 +9,7 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
-use crate::accounts::{delete_and_bury, Tombstones};
+use crate::accounts::{account_kind_in, delete_and_bury, Tombstones};
 use crate::credentials::store_api_key_secret;
 use crate::{
     AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError,
@@ -248,66 +248,59 @@ pub const DEFAULT_FIVE_HOUR_CEILING: f64 = 0.95;
 /// drawn.
 pub const DEFAULT_WEEKLY_CEILING: f64 = 1.0;
 
-/// A claude.ai feature whose calls a key sends under a selected account. The word is the one the registry, the
-/// admin API, the records and the metrics use.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Feature {
-    Artifacts,
-    Connectors,
+text_enum! {
+    plain
+    /// A claude.ai feature whose calls a key sends under a selected account. The word is the one the registry, the
+    /// admin API, the records and the metrics use.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+    pub enum Feature {
+        Artifacts => "artifacts",
+        Connectors => "connectors",
+    }
 }
 
 impl Feature {
     /// Each feature, in the alphabetical order of the words.
     pub const ALL: [Feature; 2] = [Feature::Artifacts, Feature::Connectors];
+}
 
-    /// `artifacts` or `connectors`.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Feature::Artifacts => "artifacts",
-            Feature::Connectors => "connectors",
+/// One value for each feature.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PerFeature<T> {
+    pub artifacts: T,
+    pub connectors: T,
+}
+
+impl<T> PerFeature<T> {
+    pub fn get(&self, feature: Feature) -> &T {
+        match feature {
+            Feature::Artifacts => &self.artifacts,
+            Feature::Connectors => &self.connectors,
         }
     }
 
-    pub fn parse(word: &str) -> Option<Feature> {
-        Feature::ALL
-            .into_iter()
-            .find(|feature| feature.as_str() == word)
+    pub fn set(&mut self, feature: Feature, value: T) {
+        match feature {
+            Feature::Artifacts => self.artifacts = value,
+            Feature::Connectors => self.connectors = value,
+        }
     }
 }
 
 /// A pool's selection: for each feature the account whose claude.ai the pool's keys act under, `None` for none.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PoolFeatureAccounts {
-    pub artifacts: Option<String>,
-    pub connectors: Option<String>,
-}
+pub type PoolFeatureAccounts = PerFeature<Option<String>>;
 
 impl PoolFeatureAccounts {
-    pub fn get(&self, feature: Feature) -> Option<&str> {
-        match feature {
-            Feature::Artifacts => self.artifacts.as_deref(),
-            Feature::Connectors => self.connectors.as_deref(),
-        }
-    }
-
-    pub fn set(&mut self, feature: Feature, account: Option<String>) {
-        match feature {
-            Feature::Artifacts => self.artifacts = account,
-            Feature::Connectors => self.connectors = account,
-        }
-    }
-
     fn accounts(&self) -> impl Iterator<Item = &str> {
         Feature::ALL
             .into_iter()
-            .filter_map(|feature| self.get(feature))
+            .filter_map(|feature| self.get(feature).as_deref())
     }
 }
 
 impl FromSql for PoolFeatureAccounts {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        let words: BTreeMap<String, String> =
-            serde_json::from_str(value.as_str()?).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+        let words: BTreeMap<String, String> = json_from_sql(value)?;
         let mut accounts = PoolFeatureAccounts::default();
         for (word, account) in words {
             accounts.set(stored_feature(&word)?, Some(account));
@@ -320,11 +313,9 @@ impl ToSql for PoolFeatureAccounts {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         let words: BTreeMap<&str, &str> = Feature::ALL
             .into_iter()
-            .filter_map(|feature| Some((feature.as_str(), self.get(feature)?)))
+            .filter_map(|feature| Some((feature.as_str(), self.get(feature).as_deref()?)))
             .collect();
-        serde_json::to_string(&words)
-            .map(ToSqlOutput::from)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+        json_to_sql(&words)
     }
 }
 
@@ -337,42 +328,39 @@ pub enum FeatureOverride {
     NoAccount,
 }
 
-/// A key's overrides, one per feature.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct KeyFeatureAccounts {
-    pub artifacts: FeatureOverride,
-    pub connectors: FeatureOverride,
+impl FeatureOverride {
+    /// `account`, `inherit` or `none`, the word the admin API and the change log name the value by.
+    pub fn mode(&self) -> &'static str {
+        match self {
+            FeatureOverride::Account(_) => "account",
+            FeatureOverride::Inherit => "inherit",
+            FeatureOverride::NoAccount => "none",
+        }
+    }
+
+    /// The account's id under `Account`, `None` under each other value.
+    pub fn account_id(&self) -> Option<&str> {
+        match self {
+            FeatureOverride::Account(id) => Some(id),
+            FeatureOverride::Inherit | FeatureOverride::NoAccount => None,
+        }
+    }
 }
 
+/// A key's overrides, one per feature.
+pub type KeyFeatureAccounts = PerFeature<FeatureOverride>;
+
 impl KeyFeatureAccounts {
-    pub fn get(&self, feature: Feature) -> &FeatureOverride {
-        match feature {
-            Feature::Artifacts => &self.artifacts,
-            Feature::Connectors => &self.connectors,
-        }
-    }
-
-    pub fn set(&mut self, feature: Feature, value: FeatureOverride) {
-        match feature {
-            Feature::Artifacts => self.artifacts = value,
-            Feature::Connectors => self.connectors = value,
-        }
-    }
-
     fn accounts(&self) -> impl Iterator<Item = &str> {
         Feature::ALL
             .into_iter()
-            .filter_map(|feature| match self.get(feature) {
-                FeatureOverride::Account(id) => Some(id.as_str()),
-                FeatureOverride::Inherit | FeatureOverride::NoAccount => None,
-            })
+            .filter_map(|feature| self.get(feature).account_id())
     }
 }
 
 impl FromSql for KeyFeatureAccounts {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        let words: BTreeMap<String, Option<String>> =
-            serde_json::from_str(value.as_str()?).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+        let words: BTreeMap<String, Option<String>> = json_from_sql(value)?;
         let mut overrides = KeyFeatureAccounts::default();
         for (word, account) in words {
             let value = account.map_or(FeatureOverride::NoAccount, FeatureOverride::Account);
@@ -392,16 +380,14 @@ impl ToSql for KeyFeatureAccounts {
                 FeatureOverride::NoAccount => Some((feature.as_str(), None)),
             })
             .collect();
-        serde_json::to_string(&words)
-            .map(ToSqlOutput::from)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+        json_to_sql(&words)
     }
 }
 
 /// A stored feature word this build does not spell fails the read of its row, as `unknown_word` does for a word
 /// column, rather than drop a selection the build cannot read.
 fn stored_feature(word: &str) -> Result<Feature, FromSqlError> {
-    Feature::parse(word).ok_or_else(|| FromSqlError::Other(format!("unknown word {word:?}").into()))
+    Feature::parse(word).ok_or_else(|| word_error(word))
 }
 
 #[derive(Clone, Debug)]
@@ -582,18 +568,14 @@ impl CompanionPermissions {
 
 impl FromSql for CompanionPermissions {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        let words: Vec<String> =
-            serde_json::from_str(value.as_str()?).map_err(|e| FromSqlError::Other(Box::new(e)))?;
-        CompanionPermissions::from_words(&words)
-            .map_err(|word| FromSqlError::Other(crate::unknown_word_error(&word)))
+        let words: Vec<String> = json_from_sql(value)?;
+        CompanionPermissions::from_words(&words).map_err(|word| word_error(&word))
     }
 }
 
 impl ToSql for CompanionPermissions {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        serde_json::to_string(&self.words())
-            .map(ToSqlOutput::from)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+        json_to_sql(&self.words())
     }
 }
 
@@ -671,7 +653,7 @@ pub enum AttachmentSubject {
 
 text_enum! {
     /// The kind of subject an attachment names, stored under the words `key` and `pool`.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
     pub enum SubjectKind {
         Key => "key",
         Pool => "pool",
@@ -985,14 +967,7 @@ fn check_feature_accounts<'a>(
     accounts: impl Iterator<Item = &'a str>,
 ) -> Result<(), StoreError> {
     for id in accounts {
-        let kind: Option<AccountKind> = tx
-            .query_row(
-                "SELECT kind FROM accounts WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        match kind {
+        match account_kind_in(tx, id)? {
             Some(AccountKind::Oauth) => {}
             Some(AccountKind::ApiKey) => {
                 return Err(StoreError::FeatureAccountNotOauth(id.to_string()))
@@ -1004,10 +979,10 @@ fn check_feature_accounts<'a>(
 }
 
 /// A selection the deletion of its account set to none. The derived order is the fields' order, so a sort lists the
-/// change row's entries by the owner's word, then its id, then the feature.
+/// change row's entries by the owner, keys before pools as `SubjectKind` declares them, then its id, then the feature.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ClearedSelection {
-    pub owner: &'static str,
+    pub owner: SubjectKind,
     pub owner_id: String,
     pub feature: Feature,
 }
@@ -1021,64 +996,74 @@ pub(crate) fn clear_feature_accounts(
     account_id: &str,
     at: i64,
 ) -> Result<Vec<ClearedSelection>, StoreError> {
-    let mut cleared_selections = Vec::new();
-    let pools = tx
-        .prepare("SELECT id, feature_accounts_json FROM pools WHERE feature_accounts_json != '{}'")?
-        .query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, PoolFeatureAccounts>(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (id, stored) in pools {
-        let mut cleared = stored.clone();
-        for feature in Feature::ALL {
-            if cleared.get(feature) == Some(account_id) {
-                cleared.set(feature, None);
-                cleared_selections.push(ClearedSelection {
-                    owner: "pool",
-                    owner_id: id.clone(),
-                    feature,
-                });
+    let mut cleared = Vec::new();
+    clear_in(
+        tx,
+        SubjectKind::Pool,
+        at,
+        &mut cleared,
+        |selection: &mut PoolFeatureAccounts, feature| {
+            let named = selection.get(feature).as_deref() == Some(account_id);
+            if named {
+                selection.set(feature, None);
             }
-        }
-        if cleared != stored {
-            tx.execute(
-                "UPDATE pools SET feature_accounts_json = ?2 WHERE id = ?1",
-                params![id, cleared],
-            )?;
-            stamp_subject(tx, "pools", &id, at)?;
-        }
-    }
-    let keys = tx
-        .prepare(
-            "SELECT id, feature_accounts_json FROM api_keys WHERE feature_accounts_json != '{}'",
-        )?
-        .query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, KeyFeatureAccounts>(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+            named
+        },
+    )?;
     let deleted = FeatureOverride::Account(account_id.to_string());
-    for (id, stored) in keys {
-        let mut cleared = stored.clone();
+    clear_in(
+        tx,
+        SubjectKind::Key,
+        at,
+        &mut cleared,
+        |overrides: &mut KeyFeatureAccounts, feature| {
+            let named = overrides.get(feature) == &deleted;
+            if named {
+                overrides.set(feature, FeatureOverride::NoAccount);
+            }
+            named
+        },
+    )?;
+    cleared.sort();
+    Ok(cleared)
+}
+
+/// One owner's half of `clear_feature_accounts`: `clear` sets one feature of a row to none and answers whether it did.
+/// A row changes only where it did, so a row with nothing cleared is neither written nor stamped.
+fn clear_in<T: FromSql + ToSql>(
+    tx: &Transaction<'_>,
+    owner: SubjectKind,
+    at: i64,
+    cleared: &mut Vec<ClearedSelection>,
+    clear: impl Fn(&mut T, Feature) -> bool,
+) -> Result<(), StoreError> {
+    let table = owner.table();
+    let rows = tx
+        .prepare(&format!(
+            "SELECT id, feature_accounts_json FROM {table} WHERE feature_accounts_json != '{{}}'"
+        ))?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, T>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, mut selections) in rows {
+        let before = cleared.len();
         for feature in Feature::ALL {
-            if cleared.get(feature) == &deleted {
-                cleared.set(feature, FeatureOverride::NoAccount);
-                cleared_selections.push(ClearedSelection {
-                    owner: "key",
+            if clear(&mut selections, feature) {
+                cleared.push(ClearedSelection {
+                    owner,
                     owner_id: id.clone(),
                     feature,
                 });
             }
         }
-        if cleared != stored {
+        if cleared.len() > before {
             tx.execute(
-                "UPDATE api_keys SET feature_accounts_json = ?2 WHERE id = ?1",
-                params![id, cleared],
+                &format!("UPDATE {table} SET feature_accounts_json = ?2 WHERE id = ?1"),
+                params![id, selections],
             )?;
-            stamp_subject(tx, "api_keys", &id, at)?;
+            stamp_subject(tx, table, &id, at)?;
         }
     }
-    cleared_selections.sort();
-    Ok(cleared_selections)
+    Ok(())
 }
 
 /// A JSON text column decoded as its row is read: a malformed value fails the read of its row, as an unknown word does.
@@ -1103,6 +1088,21 @@ fn json_text<T: serde::de::DeserializeOwned>(raw: &str, idx: usize) -> rusqlite:
     serde_json::from_str(raw).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e))
     })
+}
+
+fn json_from_sql<T: serde::de::DeserializeOwned>(value: ValueRef<'_>) -> FromSqlResult<T> {
+    serde_json::from_str(value.as_str()?).map_err(|e| FromSqlError::Other(Box::new(e)))
+}
+
+fn json_to_sql<T: Serialize>(value: &T) -> rusqlite::Result<ToSqlOutput<'static>> {
+    serde_json::to_string(value)
+        .map(ToSqlOutput::from)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+}
+
+/// `unknown_word`'s fault for a `FromSql` impl, which names no column since rusqlite adds it.
+fn word_error(word: &str) -> FromSqlError {
+    FromSqlError::Other(crate::unknown_word_error(word))
 }
 
 /// The pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
@@ -2587,7 +2587,10 @@ fn pool_fields(row: &PoolRow) -> serde_json::Value {
         "auto_mode_server": row.auto_mode_server,
         "feature_accounts": Feature::ALL
             .into_iter()
-            .map(|feature| (feature.as_str().to_string(), row.feature_accounts.get(feature).into()))
+            .map(|feature| {
+                let account = row.feature_accounts.get(feature).as_deref();
+                (feature.as_str().to_string(), account.into())
+            })
             .collect::<serde_json::Map<String, serde_json::Value>>(),
     });
     if let (serde_json::Value::Object(named), Some(serde_json::Value::Object(policy))) =
@@ -2621,13 +2624,11 @@ fn key_fields(row: &ApiKeyRow) -> serde_json::Value {
         "feature_accounts": Feature::ALL
             .into_iter()
             .map(|feature| {
-                let (mode, account_id) = match row.feature_accounts.get(feature) {
-                    FeatureOverride::Account(id) => ("account", Some(id.as_str())),
-                    FeatureOverride::Inherit => ("inherit", None),
-                    FeatureOverride::NoAccount => ("none", None),
-                };
-                let value = serde_json::json!({ "mode": mode, "account_id": account_id });
-                (feature.as_str().to_string(), value)
+                let value = row.feature_accounts.get(feature);
+                (
+                    feature.as_str().to_string(),
+                    serde_json::json!({ "mode": value.mode(), "account_id": value.account_id() }),
+                )
             })
             .collect::<serde_json::Map<String, serde_json::Value>>(),
     })

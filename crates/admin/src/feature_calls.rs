@@ -7,12 +7,14 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_ledger::{list_feature_calls, FeatureCallCursor, FeatureCallFilter, FeatureCallRow};
+use phoebis_ledger::{
+    list_feature_calls, FeatureCallFilter, FeatureCallRow, RequestCursor, RequestOrder,
+};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
 use crate::openapi::{ErrorBody, LedgerFailure};
-use crate::requests::{list_param, DEFAULT_LIMIT, MAX_LIMIT};
+use crate::requests::{limit_param, list_param, number_param};
 use crate::routes::failure;
 use crate::AdminState;
 
@@ -88,25 +90,22 @@ pub(crate) async fn list(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let number = |name: &'static str| match q.get(name) {
-        Some(v) => v.parse::<i64>().map(Some).map_err(|_| name),
-        None => Ok(None),
+    let from = match number_param(&q, "from") {
+        Ok(from) => from,
+        Err(response) => return response,
     };
-    let (from, to) = match (number("from"), number("to")) {
-        (Ok(f), Ok(t)) => (f, t),
-        (Err(name), _) | (_, Err(name)) => {
-            return failure(StatusCode::BAD_REQUEST, &format!("{name} is not a number"))
-        }
+    let to = match number_param(&q, "to") {
+        Ok(to) => to,
+        Err(response) => return response,
     };
-    let limit = match q.get("limit") {
-        None => DEFAULT_LIMIT,
-        Some(raw) => match raw.parse::<usize>() {
-            Ok(n) => n,
-            Err(_) => return failure(StatusCode::BAD_REQUEST, "limit is not a number"),
-        },
-    }
-    .clamp(1, MAX_LIMIT);
-    let cursor = match q.get("cursor").map(|c| FeatureCallCursor::parse(c)) {
+    let limit = match limit_param(&q) {
+        Ok(limit) => limit,
+        Err(response) => return response,
+    };
+    let cursor = match q
+        .get("cursor")
+        .map(|c| RequestCursor::parse(c, RequestOrder::ReceivedAt))
+    {
         None => None,
         Some(Some(cursor)) => Some(cursor),
         Some(None) => return failure(StatusCode::BAD_REQUEST, "cursor is <received_at>:<id>"),

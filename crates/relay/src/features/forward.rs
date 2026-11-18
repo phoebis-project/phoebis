@@ -501,9 +501,7 @@ impl Call {
         Event::FeatureCall(FeatureCall {
             duration_ms: u64::try_from(now - self.received_at).unwrap_or(0),
             end,
-            feature: self.feature,
             id: self.id,
-            key_id: self.key_id,
             method: self.method,
             path: self.path,
             received_at: self.received_at,
@@ -530,13 +528,31 @@ struct Open {
 
 enum Kind {
     DomainCheck(Place),
-    Sent { account_id: String },
+    Sent {
+        account_id: String,
+        feature: &'static str,
+        key_id: String,
+    },
 }
 
 impl Ending {
-    /// A keyed call under `account_id`'s token.
-    pub(crate) fn sent(relay: &Relay, call: Call, account_id: String) -> Ending {
-        Ending::new(relay, call, Kind::Sent { account_id })
+    /// A call of `feature` under the key `key_id` and `account_id`'s token.
+    pub(crate) fn sent(
+        relay: &Relay,
+        call: Call,
+        account_id: String,
+        feature: &'static str,
+        key_id: String,
+    ) -> Ending {
+        Ending::new(
+            relay,
+            call,
+            Kind::Sent {
+                account_id,
+                feature,
+                key_id,
+            },
+        )
     }
 
     /// The domain check, which holds `place` of the cap until its end.
@@ -624,9 +640,15 @@ impl Open {
                 drop(place);
                 FeatureEnd::DomainCheck { outcome }
             }
-            Kind::Sent { account_id } => FeatureEnd::Sent {
+            Kind::Sent {
+                account_id,
+                feature,
+                key_id,
+            } => FeatureEnd::Sent {
                 account_id,
                 error_code,
+                feature,
+                key_id,
                 outcome,
                 status,
             },

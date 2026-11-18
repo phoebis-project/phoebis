@@ -261,6 +261,21 @@ pub(crate) fn account_in(
     .map_err(StoreError::from)
 }
 
+/// Shared by the account config write and the feature account check, which read the kind alone inside their own
+/// transaction and so skip the decode of the whole row.
+pub(crate) fn account_kind_in(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<Option<AccountKind>, StoreError> {
+    conn.query_row(
+        "SELECT kind FROM accounts WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
 /// Shared by `Store::accounts` and `load_registry`, so the registry snapshot can read the account list
 /// inside its own transaction instead of through the store's connection lock.
 pub(crate) fn all_accounts(conn: &rusqlite::Connection) -> Result<Vec<AccountRow>, StoreError> {
@@ -302,14 +317,8 @@ impl Store {
     ) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let stored: Option<AccountKind> = tx
-            .query_row(
-                "SELECT kind FROM accounts WHERE id = ?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let stored = stored.ok_or_else(|| StoreError::AccountNotFound(id.to_string()))?;
+        let stored =
+            account_kind_in(&tx, id)?.ok_or_else(|| StoreError::AccountNotFound(id.to_string()))?;
         // A sealed bundle and a sealed API key are each reached through the account's kind, so flipping it
         // under a stored credential would orphan one with nothing left to open it.
         if stored != kind && holds_credentials(&tx, id)? {
@@ -517,7 +526,7 @@ impl Store {
                 "feature_accounts_cleared": cleared
                     .iter()
                     .map(|selection| serde_json::json!({
-                        "owner": selection.owner,
+                        "owner": selection.owner.as_str(),
                         "owner_id": selection.owner_id,
                         "feature": selection.feature.as_str(),
                         "account_id": id,

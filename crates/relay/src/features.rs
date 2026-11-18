@@ -144,7 +144,13 @@ async fn feature_call(
             return failure.response(&call.id);
         }
     };
-    let ending = Ending::sent(&relay, call.clone(), account.id.clone());
+    let ending = Ending::sent(
+        &relay,
+        call.clone(),
+        account.id.clone(),
+        feature.as_str(),
+        key.id.clone(),
+    );
     match forward(&relay, &holds, account, row, method, &parts, body, ending).await {
         Ok(answer) => answer,
         Err(Unanswered::Refused(failure)) => refusal(&relay, call, &failure, &key.label).await,
@@ -168,11 +174,16 @@ async fn feature_call(
 /// published ahead of the answer, so it reaches the ledger ahead of any later call of the same caller. While the ledger
 /// stands behind, the end goes out best-effort and the bus counts it where it drops it: a writer that stopped draining
 /// fills the bus queue, and a refusal that waited there would hold its connection, a caller's without a key among them.
-async fn refusal(relay: &Relay, call: Call, failure: &Failure, key: &str) -> Response {
+async fn refusal(relay: &Relay, mut call: Call, failure: &Failure, key: &str) -> Response {
     refused_line(failure, &call, key);
     let answer = failure.response(&call.id);
     if let Some(bus) = &relay.bus {
-        let event = call.ended(FeatureEnd::Refused { code: failure.code }, (relay.clock)());
+        let end = FeatureEnd::Refused {
+            code: failure.code,
+            feature: call.feature,
+            key_id: call.key_id.take(),
+        };
+        let event = call.ended(end, (relay.clock)());
         // Read without counting, since the feature listener answers no `ledger_behind`.
         if relay.ledger_behind(false) {
             bus.publish(event);

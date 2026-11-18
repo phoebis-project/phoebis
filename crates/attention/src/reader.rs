@@ -57,7 +57,7 @@ const NO_POOL: &str = "-";
 const KEEPALIVE: &str = "keepalive";
 
 /// The feature CA's subject, the key its warning line names in the router's commands too.
-const FEATURE_CA: &str = "features.ca";
+pub const FEATURE_CA: &str = "features.ca";
 
 /// The subject of a drift refusal whose version does not read as a release, so a malformed or oversized label shares
 /// one series.
@@ -410,6 +410,20 @@ fn condition_for(
     }
 }
 
+/// The `certificate_expiring` condition of the router's certificate under `key`, read from `cert_file`, which ends at
+/// `not_after_ms`.
+fn certificate_expiring(key: &str, cert_file: &str, not_after_ms: i64, now: i64) -> Condition {
+    let (expiring, since, days_left) = ahead_of(not_after_ms, CERTIFICATE_WARNING_DAYS, now);
+    condition_for(
+        Kind::CertificateExpiring,
+        Subject::router(key),
+        None,
+        expiring,
+        since,
+        json!({ "cert_file": cert_file, "days_left": days_left, "expires": not_after_ms }),
+    )
+}
+
 /// A condition about an account, which joins its pools' cards and opens the account while the registry holds it
 /// (`live`): one whose account the registry no longer holds belongs to no card and opens nothing.
 fn account_condition(
@@ -615,31 +629,20 @@ pub(crate) fn conditions(
         ));
         // Judged on this read's clock rather than at the load, so a pair loaded with time to spare raises the
         // condition when its day comes without a reload.
-        let (expiring, since, days_left) =
-            ahead_of(pair.not_after_ms, CERTIFICATE_WARNING_DAYS, now);
-        out.push(condition_for(
-            Kind::CertificateExpiring,
-            Subject::router(&pair.key),
-            None,
-            expiring,
-            since,
-            json!({ "cert_file": cert_file, "days_left": days_left, "expires": pair.not_after_ms }),
+        out.push(certificate_expiring(
+            &pair.key,
+            &cert_file,
+            pair.not_after_ms,
+            now,
         ));
     }
     // Nothing reloads the CA, so it raises the end's kind alone, judged on this read's clock as a pair's is.
     if let Some(ca) = feature_ca {
-        let (expiring, since, days_left) = ahead_of(ca.not_after_ms, CERTIFICATE_WARNING_DAYS, now);
-        out.push(condition_for(
-            Kind::CertificateExpiring,
-            Subject::router(FEATURE_CA),
-            None,
-            expiring,
-            since,
-            json!({
-                "cert_file": ca.cert_file.display().to_string(),
-                "days_left": days_left,
-                "expires": ca.not_after_ms,
-            }),
+        out.push(certificate_expiring(
+            FEATURE_CA,
+            &ca.cert_file.display().to_string(),
+            ca.not_after_ms,
+            now,
         ));
     }
     if let Some(parked) = ledger.map(|l| l.parked.as_slice()) {

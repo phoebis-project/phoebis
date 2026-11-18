@@ -2736,29 +2736,25 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // Behind the loop, whose `system.json` holds the ledger's count of written records. Each call ends as sent, the one
     // end that leaves a row, under the account the key's or the pool's selection above names, and the four carry both
     // arms of `status` and of `error_code`.
-    let call = |id: &str,
-                received_at: i64,
-                feature: &'static str,
-                method: &str,
-                path: &str,
-                end: FeatureEnd| {
+    let call = |id: &str, received_at: i64, method: &str, path: &str, end: FeatureEnd| {
         Event::FeatureCall(FeatureCall {
             duration_ms: 240,
             end,
-            feature: Some(feature),
             id: id.into(),
-            key_id: Some("desktop".into()),
             method: method.into(),
             path: path.into(),
             received_at,
         })
     };
-    let sent = |account: &str,
+    let sent = |feature: &'static str,
+                account: &str,
                 outcome: FeatureOutcome,
                 status: Option<u16>,
                 error_code: Option<&'static str>| FeatureEnd::Sent {
         account_id: account.into(),
         error_code,
+        feature,
+        key_id: "desktop".into(),
         outcome,
         status,
     };
@@ -2766,26 +2762,36 @@ async fn every_route_is_captured_and_holds_its_shape() {
         call(
             "fc-artifacts",
             now - 60_000,
-            "artifacts",
             "POST",
             "/api/frame/artifacts",
-            sent("usage-seat", FeatureOutcome::Forwarded, Some(200), None),
+            sent(
+                "artifacts",
+                "usage-seat",
+                FeatureOutcome::Forwarded,
+                Some(200),
+                None,
+            ),
         ),
         call(
             "fc-connector",
             now - 120_000,
-            "connectors",
             "POST",
             "/v1/mcp/srv_example",
-            sent("business", FeatureOutcome::Forwarded, Some(200), None),
+            sent(
+                "connectors",
+                "business",
+                FeatureOutcome::Forwarded,
+                Some(200),
+                None,
+            ),
         ),
         call(
             "fc-servers",
             now - 180_000,
-            "connectors",
             "GET",
             "/v1/mcp_servers",
             sent(
+                "connectors",
                 "business",
                 FeatureOutcome::Failed,
                 None,
@@ -2795,10 +2801,15 @@ async fn every_route_is_captured_and_holds_its_shape() {
         call(
             "fc-canceled",
             now - 240_000,
-            "connectors",
             "POST",
             "/v1/mcp/srv_example",
-            sent("business", FeatureOutcome::Canceled, Some(200), None),
+            sent(
+                "connectors",
+                "business",
+                FeatureOutcome::Canceled,
+                Some(200),
+                None,
+            ),
         ),
     ] {
         parts.bus.publish_fact(event).await;

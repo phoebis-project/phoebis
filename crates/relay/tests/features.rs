@@ -951,6 +951,8 @@ async fn a_call_on_each_plane_publishes_its_end() {
     let sent = FeatureEnd::Sent {
         account_id: "a".into(),
         error_code: None,
+        feature: "artifacts",
+        key_id: "desktop".into(),
         outcome: FeatureOutcome::Forwarded,
         status: Some(200),
     };

@@ -353,14 +353,9 @@ pub(crate) struct KeyFeatureAccountView {
 
 impl From<&FeatureOverride> for KeyFeatureAccountView {
     fn from(value: &FeatureOverride) -> KeyFeatureAccountView {
-        let (mode, account_id) = match value {
-            FeatureOverride::Account(id) => ("account", Some(id.clone())),
-            FeatureOverride::Inherit => ("inherit", None),
-            FeatureOverride::NoAccount => ("none", None),
-        };
         KeyFeatureAccountView {
-            mode: mode.to_string(),
-            account_id,
+            mode: value.mode().to_string(),
+            account_id: value.account_id().map(String::from),
         }
     }
 }

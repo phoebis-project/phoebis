@@ -708,9 +708,6 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         Ok(written) => row = written,
         // The check above reads outside the insert, so a create that lost the race for the id arrives here.
         Err(StoreError::IdTaken(_)) => return failure(StatusCode::CONFLICT, DUPLICATE_ID),
-        Err(
-            error @ (StoreError::FeatureAccountNotFound(_) | StoreError::FeatureAccountNotOauth(_)),
-        ) => return feature_account_refusal(error),
         // The row and its members are one transaction, so a refused member leaves no pool to name.
         Err(error) => return membership_failure(error),
     }
@@ -720,7 +717,8 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     response
 }
 
-/// The refusals a membership write shares: a member account that does not exist, or one another pool holds.
+/// The refusals a membership write shares: a member account that does not exist, or one another pool holds, and the
+/// two feature account refusals of the pool row the write carries.
 fn membership_failure(error: StoreError) -> Response {
     match error {
         StoreError::AccountNotFound(id) => {
@@ -733,7 +731,7 @@ fn membership_failure(error: StoreError) -> Response {
             StatusCode::CONFLICT,
             &format!("account {account_id} is a member of pool {pool_id}"),
         ),
-        error => store_failure(error),
+        error => feature_account_refusal(error),
     }
 }
 
@@ -820,9 +818,6 @@ pub(crate) async fn patch(
         Err(error @ (StoreError::PoolGuardrailBound(_) | StoreError::KeyGuardrailBound(_))) => {
             return attachment_refusal(error)
         }
-        Err(
-            error @ (StoreError::FeatureAccountNotFound(_) | StoreError::FeatureAccountNotOauth(_)),
-        ) => return feature_account_refusal(error),
         Err(error) => return membership_failure(error),
     }
     publish(&state, &row, StatusCode::OK).await

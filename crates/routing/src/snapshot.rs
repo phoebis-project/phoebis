@@ -327,7 +327,7 @@ impl RegistrySnapshot {
             FeatureOverride::Inherit => self
                 .pools
                 .get(&key.pool_id)
-                .and_then(|pool| pool.feature_accounts.get(feature)),
+                .and_then(|pool| pool.feature_accounts.get(feature).as_deref()),
             FeatureOverride::NoAccount => None,
         }
     }

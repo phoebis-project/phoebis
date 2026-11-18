@@ -1577,6 +1577,8 @@ fn insert_feature_call_in(
     let FeatureEnd::Sent {
         account_id,
         error_code,
+        feature,
+        key_id,
         outcome,
         status,
     } = &call.end
@@ -1590,9 +1592,8 @@ fn insert_feature_call_in(
     .execute(rusqlite::params![
         call.id,
         call.received_at,
-        // A sent call passed the key check and matched a row, so both are set.
-        call.key_id.as_deref().unwrap_or_default(),
-        call.feature.unwrap_or_default(),
+        key_id,
+        feature,
         account_id,
         call.method,
         call.path,

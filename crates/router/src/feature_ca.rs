@@ -33,7 +33,7 @@ pub const LEAF_RENEW_AHEAD: Duration = Duration::from_secs(86_400);
 pub const BACKDATE: Duration = Duration::from_secs(300);
 
 /// The prefix of each refusal, so the CA's lines read like a listener pair's under its own key.
-const KEY: &str = "features.ca";
+const KEY: &str = phoebis_attention::FEATURE_CA;
 
 /// The CA's subject. Each certificate names it as its issuer, so the issuer rebuilt at a later start repeats it.
 const CA_NAME: &str = "Phoebis feature CA";

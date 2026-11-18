@@ -183,31 +183,35 @@ impl Metrics {
     /// One feature endpoint request at its end: a call sent upstream, the domain check among them, or a refusal. No
     /// label holds a path, a status or an account, so the series stay bounded by the keys.
     pub fn observe_feature_call(&self, call: &FeatureCall) {
-        let key = call.key_id.clone().unwrap_or_else(|| UNATTRIBUTED.into());
-        let feature = call.feature.unwrap_or(NO_FEATURE).to_string();
-        let (family, labels) = match &call.end {
-            FeatureEnd::DomainCheck { outcome } => (
-                Family::FeatureCallsTotal,
-                vec![
-                    ("feature", DOMAIN_CHECK.into()),
+        let (feature, key, outcome) = match &call.end {
+            FeatureEnd::Refused {
+                code,
+                feature,
+                key_id,
+            } => {
+                let key = key_id.clone().unwrap_or_else(|| UNATTRIBUTED.into());
+                let labels = vec![
+                    ("code", (*code).into()),
+                    ("feature", feature.unwrap_or(NO_FEATURE).into()),
                     ("key", key),
-                    ("outcome", outcome.as_str().into()),
-                ],
-            ),
-            FeatureEnd::Refused { code } => (
-                Family::FeatureRefusalsTotal,
-                vec![("code", (*code).into()), ("feature", feature), ("key", key)],
-            ),
-            FeatureEnd::Sent { outcome, .. } => (
-                Family::FeatureCallsTotal,
-                vec![
-                    ("feature", feature),
-                    ("key", key),
-                    ("outcome", outcome.as_str().into()),
-                ],
-            ),
+                ];
+                self.add(Family::FeatureRefusalsTotal, labels, 1.0);
+                return;
+            }
+            FeatureEnd::DomainCheck { outcome } => (DOMAIN_CHECK, UNATTRIBUTED, outcome),
+            FeatureEnd::Sent {
+                feature,
+                key_id,
+                outcome,
+                ..
+            } => (*feature, key_id.as_str(), outcome),
         };
-        self.add(family, labels, 1.0);
+        let labels = vec![
+            ("feature", feature.into()),
+            ("key", key.into()),
+            ("outcome", outcome.as_str().into()),
+        ];
+        self.add(Family::FeatureCallsTotal, labels, 1.0);
     }
 
     /// Sets each sample's series and, under `poll`, removes the `phoebis_account_ratelimit_utilization` series of a

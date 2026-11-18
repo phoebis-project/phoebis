@@ -559,12 +559,21 @@ pub enum FeatureEnd {
     /// The domain check, sent upstream without an account. It leaves no row.
     DomainCheck { outcome: FeatureOutcome },
     /// Refused by the router with a 401 or a 403. It leaves no row.
-    Refused { code: &'static str },
+    Refused {
+        code: &'static str,
+        /// `artifacts` or `connectors`, `None` for a request that matched no row.
+        feature: Option<&'static str>,
+        /// `None` on a 401.
+        key_id: Option<String>,
+    },
     /// Sent upstream under an account, the one end that leaves a row. `status` is the status that went back,
     /// `None` where no upstream head arrived, and `error_code` the router's code where it answered by itself.
     Sent {
         account_id: String,
         error_code: Option<&'static str>,
+        /// `artifacts` or `connectors`.
+        feature: &'static str,
+        key_id: String,
         outcome: FeatureOutcome,
         status: Option<u16>,
     },
@@ -575,11 +584,7 @@ pub enum FeatureEnd {
 pub struct FeatureCall {
     pub duration_ms: u64,
     pub end: FeatureEnd,
-    /// `artifacts` or `connectors`, `None` for the domain check and for a request that matched no row.
-    pub feature: Option<&'static str>,
     pub id: String,
-    /// `None` on a 401 and on the domain check.
-    pub key_id: Option<String>,
     pub method: String,
     /// The path without its query.
     pub path: String,
