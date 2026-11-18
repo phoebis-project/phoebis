@@ -187,7 +187,7 @@ export interface AllowanceRow {
   /** The claim rows of the account's weekly windows in the range, each with its window, newest first. */
   claims: { reset: AllowanceReset; window: string }[];
   /** Per weekly window: the resets inside the range counted, their figures added, and the newest reset at or
-   *  before the range's end, which a reset of the lead week can be. */
+   *  before the range's end, which a reset of the lead week can be, the dash where only a use ended. */
   figures: Record<string, { counted: number; inRange: AllowanceFigure; last: AllowanceFigure }>;
   resets: number;
   termEndedAt: string | null;
@@ -214,15 +214,18 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
       const used = w.resets.filter((r) => isClaim(r) && Date.parse(r.observedAt) >= range.fromMs && Date.parse(r.observedAt) <= range.toMs);
       claims.push(...used.map((reset) => ({ reset, window: w.window })));
       const ended = w.resets.filter((r) => !isClaim(r) && Date.parse(r.resetAt) <= range.toMs);
-      if (ended.length === 0) continue;
-      const last = ended.reduce((newest, r) => (Date.parse(r.resetAt) > Date.parse(newest.resetAt) ? r : newest));
+      // The route answers a use whatever natural resets the span holds, so an account before its first recorded weekly
+      // reset can hold a use alone, which the range's figure keeps.
+      if (ended.length === 0 && used.length === 0) continue;
+      const last = ended.length === 0 ? null : ended.reduce((newest, r) => (Date.parse(r.resetAt) > Date.parse(newest.resetAt) ? r : newest));
       const inside = ended.filter((r) => Date.parse(r.resetAt) >= range.fromMs);
       const summed = [...inside, ...used];
+      const noReset: AllowanceFigure = { kind: 'none', text: '-', title: NO_RESET_IN_RANGE };
       // An empty sum would read 0%, a week used whole, so a range with no reset draws the dash.
-      const inRange: AllowanceFigure = summed.length === 0 ? { kind: 'none', text: '-', title: NO_RESET_IN_RANGE } : summedFigure(summed, w.window, account, costs, week);
-      figures[w.window] = { counted: inside.length, inRange, last: allowanceFigure(last.shareLeft, w.window, account, costs, week, last) };
-      if (termEndedAt === null && last.source === 'term_ended') termEndedAt = last.resetAt;
-      if (w.window === 'seven_day') sevenDay = [...summed, last];
+      const inRange = summed.length === 0 ? noReset : summedFigure(summed, w.window, account, costs, week);
+      figures[w.window] = { counted: inside.length, inRange, last: last === null ? noReset : allowanceFigure(last.shareLeft, w.window, account, costs, week, last) };
+      if (termEndedAt === null && last?.source === 'term_ended') termEndedAt = last.resetAt;
+      if (w.window === 'seven_day') sevenDay = last === null ? summed : [...summed, last];
     }
     // Read off each drawn 7-day reset's own pair, so the fleet's note names every account the sum leaves out.
     const pairs = sevenDay.length === 0 ? [account] : sevenDay.map((r) => pairOf(account, r));

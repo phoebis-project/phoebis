@@ -297,6 +297,16 @@ test('two uses a day apart count twice', () => {
   assert.deepEqual([row.resets, row.used], [2, 2]);
 });
 
+test('a used reset in a window with no natural reset draws its share in the range and the dash as the last', () => {
+  // An account before its first recorded weekly reset: the route answers the use's row alone, which carries the reset
+  // of the week still open, past the range's end.
+  const claim = { observedAt: iso(NOW - 2 * DAY), plan: null, resetAt: iso(NOW + 5 * DAY), shareLeft: 0.4, source: 'claim', tier: null };
+  const window = { resets: [claim], resetsCounted: 1, totalShareLeft: 0.4, window: 'seven_day' };
+  const [row] = d.allowanceRows({ accounts: [accountOf('early', MAX_20X, [window])], from: iso(NOW - 29 * DAY), to: iso(NOW) }, COSTS, 'ultra', RANGE);
+  const { inRange, last } = row.figures.seven_day;
+  assert.deepEqual([inRange.text, last], ['40% Ultra week', { kind: 'none', text: '-', title: d.NO_RESET_IN_RANGE }]);
+});
+
 /** Nine accounts with 17 resets of the 7-day window and three of the Fable week, the ninth on a Free plan. */
 const FLEET = {
   accounts: [
