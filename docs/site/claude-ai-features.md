@@ -243,7 +243,7 @@ probe() {
   : > "$head_file"
   rc=0
   codes=$(curl --silent --output /dev/null --dump-header "$head_file" --connect-timeout 10 --max-time 30 \
-    --write-out '%{http_code} %{http_connect_code}' --cacert "$new_ca" "$@" "$url") || rc=$?
+    --write-out '%{http_code} %{http_connect}' --cacert "$new_ca" "$@" "$url") || rc=$?
   code=$(tr -d '\r' < "$head_file" | grep -i '^x-phoebis-error-code:' | tail -n 1 | sed 's/^[^:]*: *//')
   rm -f "$head_file"
 }

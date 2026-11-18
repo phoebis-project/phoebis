@@ -432,6 +432,11 @@ read rather than dropping it:
 `bash scripts/tests/check-docs.sh` runs the checker's own cases against throwaway trees, and the favicon case at the end
 against the real one, so the checker fails on what it exists to catch.
 
+`bash scripts/tests/launch-script.sh` takes the launch script from its block on [claude.ai
+features](claude-ai-features.md#the-launch-script), which is the script's one copy, and runs it under `sh` with the
+host's curl. A loopback listener plays the router's CA download and a proxy whose upstream is down, and the script has
+to stop with its message for that proxy and print no other line.
+
 ## Continuous checks
 
 Two GitHub Actions workflows run on every pull request and every push to `main`. `Tests` runs the `rust` and `web` jobs
@@ -450,9 +455,9 @@ packages and the release's archives, and `smoke`, which reads packages. The `Tes
 ## Publishing the site
 
 The `Documentation` workflow builds this site on every push to `main` and every pull request:
-`scripts/tests/check-docs.sh`, `zensical build --clean --strict`, the checks under `scripts/check-docs.py`, and the
-built `site/` directory uploaded as an artifact. The deploy job runs only on a push, and only when the repository
-variable `DOCS_PAGES` is `1`, so a push to `main` stays green until Pages is enabled.
+`scripts/tests/check-docs.sh`, `scripts/tests/launch-script.sh`, `zensical build --clean --strict`, the checks under
+`scripts/check-docs.py`, and the built `site/` directory uploaded as an artifact. The deploy job runs only on a push,
+and only when the repository variable `DOCS_PAGES` is `1`, so a push to `main` stays green until Pages is enabled.
 
 To publish: in the repository's Pages settings, set the source to GitHub Actions. A private repository needs a GitHub
 plan that offers Pages there. Otherwise the repository has to be made public first. Under Settings, Secrets and
