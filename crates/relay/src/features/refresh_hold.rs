@@ -1,6 +1,8 @@
 //! The token each account's feature calls last saw rejected behind their own forced refresh. No entry leaves the map:
-//! a token of another generation ends a hold by the compare, the account's next hold replaces its entry, and the map
-//! keeps one entry at most for each account that served a feature call, so the module has no sweep and no timer.
+//! a token of another generation ends a hold by the compare, the account's next hold of a newer token replaces its
+//! entry, and the map keeps one entry at most for each account that served a feature call, so the module has no sweep
+//! and no timer. A hold moves forward alone, since a 401 under an older token can arrive behind a newer token's hold,
+//! and putting the older one back would cost the newer token one more forced refresh.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -8,8 +10,10 @@ use std::sync::{Mutex, PoisonError};
 use phoebis_store::AccountRow;
 
 /// One token of one sign-in: the account's incarnation and lifecycle generation beside the token's own generation,
-/// since a pairing behind a disconnect and an account created again under its id both start the count at 1.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// since a pairing behind a disconnect and an account created again under its id both start the count at 1. The
+/// fields' order is the order of the newer token: the sign-in first, by its incarnation and then its lifecycle
+/// generation, and the token's generation within one sign-in.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Rejected {
     incarnation: u64,
     lifecycle_generation: u64,
@@ -42,9 +46,11 @@ impl Holds {
         held.get(account_id) == Some(&token)
     }
 
-    /// Holds `token` for `account_id` in place of the one held before.
+    /// Holds `token` for `account_id` in place of the one held before, unless that one is newer.
     pub(crate) fn set(&self, account_id: &str, token: Rejected) {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        held.insert(account_id.to_owned(), token);
+        held.entry(account_id.to_owned())
+            .and_modify(|kept| *kept = (*kept).max(token))
+            .or_insert(token);
     }
 }

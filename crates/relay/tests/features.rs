@@ -1739,6 +1739,92 @@ async fn a_401_whose_account_signed_in_again_while_it_waited_goes_back_without_a
     up.shutdown().await;
 }
 
+/// The access token each refresh under `token_answer` gives, whatever the generation.
+const REFRESHED: &str = "sk-ant-oat01-PLACEHOLDER";
+
+/// The fake of the hold tests: each call answers the upstream's 401, and a call under `REFRESHED` takes the answers a
+/// test scripts for that token first.
+async fn refreshed_401s() -> FakeUpstream {
+    let up = fake(vec![
+        ("/api/frame/", expired()),
+        ("/v1/oauth/token", token_answer()),
+    ])
+    .await;
+    up.add_credential_rule(REFRESHED, "/api/frame/", expired());
+    up
+}
+
+#[tokio::test]
+async fn an_older_tokens_401_leaves_the_hold_on_a_newer_token() {
+    let up = refreshed_401s().await;
+    up.push_credential_rule(
+        REFRESHED,
+        "/api/frame/",
+        Respond::Gated(Box::new(expired())),
+    );
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    // The resend under generation 2 waits for its 401.
+    let first = listener
+        .hold(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    wait_for(Duration::from_secs(5), || {
+        (feature_requests(&up).len() == 2).then_some(())
+    })
+    .await;
+    // Generation 2 goes out, is refreshed to 3, and the resend's 401 holds generation 3.
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    up.release();
+    let (status, headers, _) = first.answer().await;
+    assert_eq!(status, 401, "{headers:?}");
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!((feature_requests(&up).len(), token_posts(&up)), (5, 2));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_earlier_sign_ins_401_leaves_the_hold_on_the_current_sign_in() {
+    let up = refreshed_401s().await;
+    up.push_credential_rule(REFRESHED, "/api/frame/", expired());
+    up.push_credential_rule(
+        REFRESHED,
+        "/api/frame/",
+        Respond::Gated(Box::new(expired())),
+    );
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    // The first sign-in's token reaches generation 2, and the call's resend under generation 3 waits for its 401.
+    h.manager.refresh_now("a", 1).await.unwrap();
+    let first = listener
+        .hold(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    wait_for(Duration::from_secs(5), || {
+        (feature_requests(&up).len() == 2).then_some(())
+    })
+    .await;
+    signed_in_again(&h, "a", "sk-ant-oat01-PLACEHOLDER-AGAIN").await;
+    // The new sign-in's generation 1 is refreshed to 2, and the resend's 401 holds generation 2 of the new sign-in.
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    up.release();
+    let (status, headers, _) = first.answer().await;
+    assert_eq!(status, 401, "{headers:?}");
+    let (status, headers, _) = listener
+        .send(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!((feature_requests(&up).len(), token_posts(&up)), (5, 3));
+    up.shutdown().await;
+}
+
 /// A request under the feature host: `request_line` without its version, the head's `Host: api.anthropic.com`, then
 /// `lines`, each ending in CRLF, and `body`.
 fn keyless(request_line: &str, lines: &str, body: &[u8]) -> Vec<u8> {
