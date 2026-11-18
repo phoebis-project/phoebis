@@ -454,6 +454,11 @@ for the client, where a value of the shell would win over the script's two lines
 proxy name, `ALL_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY` and their lowercase forms, since a proxy of the shell would resolve
 the two names on its own machine and send the router key to the upstream.
 
+The script puts its own file in `CLAUDE_ENV_FILE`, so an env file that the shell named there no longer reaches a Bash
+command of the session. It clears no credential name: an `ANTHROPIC_AUTH_TOKEN` or an API key that the shell holds, such
+as one in `ANTHROPIC_API_KEY`, stays in the client's environment, where either one switches the features off, as the row
+of `CLAUDE_CODE_OAUTH_TOKEN` has it. Start the script from a shell that holds neither.
+
 `NODE_EXTRA_CA_CERTS` takes one path. Where `BASE_CA` names a private CA, the script writes that file and the feature CA
 into `ca-bundle.pem`, with a line break between them, and names the bundle.
 
