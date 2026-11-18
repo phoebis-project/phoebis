@@ -8520,8 +8520,8 @@ async function shellBanner(theme) {
 }
 
 /**
- * The Dropped thinking blocks card on the Cache tab, on a load of its own: the bar of the account key and the bar of the
- * prefix key, which the mock's story holds at the pass's origin, in two fills, since a key under an account reason
+ * The Dropped thinking blocks card on the Cache tab, on a load of its own: the bar of the account key and the bar of
+ * the prefix key, which the mock's story holds at the pass's origin, in two fills, since a key under an account reason
  * draws in the fault ink and every other key in the muted ink. A computed fill holds the value, never the token's name,
  * so the two bars are read against each other. Each bar's label, count and fill is recorded. The mock pass's alone, as
  * the router's seed reports no dropped block. The Analytics view loads again after, so the measures after it read the

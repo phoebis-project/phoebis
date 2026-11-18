@@ -13,7 +13,9 @@ const OUTLINE_MIN_WIDTH = 4;
  * fill. A bar with no height draws nothing, since `Rectangle` draws none.
  */
 const chartBar = (handed: unknown): ReactElement => {
-  // Recharts hands a shape the Bar's props with the bucket's x, y, width and height, which its type offers as unknown.
+  // Recharts hands a shape the Bar's props with the bucket's x, y, width and height. The shape's type offers a function
+  // of `BarProps`, which holds no x and no y and a wider `name` than a rectangle's, or a function of unknown, so a
+  // parameter typed as the rectangle's props fits neither member.
   const props = handed as RectangleProps;
   const width = props.width ?? 0;
   const drawn = Math.max(width, MIN_WIDTH);

@@ -883,7 +883,10 @@ function CacheValue({ attempt, request }: { attempt: Attempt; request: RequestLo
   );
 }
 
-/** One attempt in the words the trail's hover gives it, so the hover and the drawer read alike, its upstream ids last. */
+/**
+ * One attempt in the drawer: the outcome and the cooldown line in the words the trail's hover gives them, the status as
+ * a badge where the hover writes `HTTP 429`, then the duration and the upstream ids, which the hover leaves out.
+ */
 function AttemptValue({ attempt: a }: { attempt: Attempt }) {
   const ids = upstreamIdChips(a);
   return (
@@ -903,7 +906,7 @@ function DiagnosticsValue({ source }: { source: DiagnosticsSource | null }) {
 }
 
 const DROPPED_THINKING_TITLE = "The thinking blocks the upstream dropped from this request's history, and who sent the token that asks for the report";
-const NOT_REQUESTED_TITLE = 'No thinking-binding token is on record for this request, so nothing asked the upstream for the report. A request stored before the router kept the sender reads the same';
+const NOT_REQUESTED_TITLE = 'No thinking-binding token is on record for this request, so nothing asked the upstream for the report. A request stored before the router kept the sender reads the same.';
 
 /**
  * The serving answer's dropped thinking blocks beside who sent the token that asks for them. An answer that listed

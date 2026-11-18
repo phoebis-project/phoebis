@@ -8,7 +8,7 @@ import type { WeekPosition } from '@/lib/unit';
 import { WINDOW_HOURS, inWindowOrder, windowHint } from '@/lib/windows';
 
 /** The weeks the Accounts block reads: the latest reset and the three before it. */
-export const ALLOWANCE_WEEKS = 4;
+const ALLOWANCE_WEEKS = 4;
 
 /** The span the block reads: 29 days behind now to now, 28 days and a day of slack so the fourth weekly reset is never
  *  cut by the hour of the week or by a clock-walk reading up to a poll interval old. */
@@ -68,7 +68,9 @@ export type AllowanceFigure = { kind: 'equivalent'; share: number; text: string 
  *  words differ, so the test bundle's star exports keep both. */
 export const ALLOWANCE_UNPRICED_TITLE = "Unpriced: the cost model holds no capacity for this account's plan";
 export const NO_READING_TITLE = 'no reading at this reset';
-/** The Analytics card's dash where a window reset at or before the range's end and never inside the range. */
+/** The Analytics card's dash for a window with no reset to draw: a row's range figure where the window never reset
+ *  inside the range, its last figure where only a use ended, the cell of a window the account carries no entry for,
+ *  and a fleet figure where no account counts a reset in the range. */
 export const NO_RESET_IN_RANGE = 'No reset of this window in the range';
 export const FREE_NOTE = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.';
 
@@ -245,12 +247,19 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
   );
 }
 
+/** A fleet figure's words, and the hover of a dash that says why it stands. */
+export type FleetFigure = { text: string; title: string | null };
+
 /** The two fleet figures: the priced accounts' figures in the chosen week added, with the unpriced accounts named, and
- *  where the week's `scale` is null, every figure a dash, the note naming the week the cost model does not size. */
-export function fleetFigures(rows: AllowanceRow[], week: WeekPosition, scale: number | null): { fable: string; note: string; sevenDay: string } {
-  const sum = (window: string) => {
-    const values = rows.map((r) => valueOf(r.figures[window]?.inRange)).filter((v): v is number => v !== null);
-    return values.length === 0 ? '-' : weekShort(values.reduce((a, b) => a + b, 0), week);
+ *  where the week's `scale` is null, every figure a dash, the note naming the week the cost model does not size. A
+ *  dash where no account counts a reset of the window in the range carries the rows' hover for it. */
+export function fleetFigures(rows: AllowanceRow[], week: WeekPosition, scale: number | null): { fable: FleetFigure; note: string; sevenDay: FleetFigure } {
+  const sum = (window: string): FleetFigure => {
+    const figures = rows.map((r) => r.figures[window]?.inRange);
+    const values = figures.map(valueOf).filter((v): v is number => v !== null);
+    if (values.length > 0) return { text: weekShort(values.reduce((a, b) => a + b, 0), week), title: null };
+    // A range figure reads `none` only where its row counts no reset in the range, and a row with no entry counts none.
+    return { text: '-', title: figures.every((f) => f === undefined || f.kind === 'none') ? NO_RESET_IN_RANGE : null };
   };
   // The rows' flags read each account's own pair, which would count accounts as priced over a column of dashes.
   if (scale === null) return { fable: sum('seven_day_fable'), note: `${weekUnpricedTitle(week)}.`, sevenDay: sum('seven_day') };

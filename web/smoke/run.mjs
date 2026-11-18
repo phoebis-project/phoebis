@@ -13560,7 +13560,7 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
   // beside a null map, so the two null reads write theirs. The mock serves each row by reference, the block puts every
   // write back, and it opens another row between two writes so that each write draws.
   const TITLE = "The thinking blocks the upstream dropped from this request's history, and who sent the token that asks for the report";
-  const NOT_REQUESTED_TITLE = 'No thinking-binding token is on record for this request, so nothing asked the upstream for the report. A request stored before the router kept the sender reads the same';
+  const NOT_REQUESTED_TITLE = 'No thinking-binding token is on record for this request, so nothing asked the upstream for the report. A request stored before the router kept the sender reads the same.';
   const clientRow = requests.find((r) => r.thinkingDiagnosticsSource === 'client' && r.attempts.length > 0);
   const routerRow = requests.find((r) => r.thinkingDiagnosticsSource === 'router' && r.attempts.length > 0);
   const other = requests.find((r) => r !== clientRow && r !== routerRow && r.attempts.length > 0);
@@ -23571,6 +23571,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await removeChip(m, 'session');
     results.push({ name: '/analytics removing a session chip clears the query and keeps the tab', ok: JSON.stringify(m.location()) === JSON.stringify({ hash: '#cache-warming', pathname: '/analytics', search: '' }) && mounted() === 'cache-warming' && chipOf(m, 'session') === undefined, missing: [JSON.stringify(m.location()), mounted()] });
     m.unmount();
+    {
+      // The source sentence follows the figures it names, so ahead of the request log's answer the session view's
+      // Traffic head draws no line, and a line once the log lands.
+      const held = deferNextCall('listRequests');
+      const ahead = await mount(`/analytics?session=${encodeURIComponent(laptopRow.sessionId)}&key=laptop%40${laptopRow.keyGeneration}`);
+      const metaOf = () => ahead.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? null;
+      const waiting = metaOf();
+      held.release();
+      await ahead.settle();
+      const landed = metaOf();
+      held.restore();
+      ahead.unmount();
+      results.push({ name: "/analytics a session view's Traffic head draws no line while the request log loads, and its line once the log lands", ok: held.calls.length > 0 && waiting === null && landed !== null, missing: [`${held.calls.length} held reads`, `waiting ${waiting}`, `landed ${landed}`] });
+    }
     m = await mount('/analytics');
     // A fresh mount opens on the day, and the session checks below read the three days up to its end: the Custom
     // popover opens on the day and writes nothing until Apply, and a From typed three days before the To it shows
@@ -24403,21 +24417,24 @@ await forView('/analytics', async () => {
   }
   {
     // No figure of the Accounts tab or of the Cache warming tab reads the grouping, so the bar's group-by stands
-    // disabled there with the tab's reason, and Traffic, whose tables it splits, keeps it.
-    const name = '/analytics the group-by stands disabled with its reason on the Accounts tab and on the Cache warming tab, and enabled on Traffic';
-    const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+    // disabled there with the tab's reason, and Traffic, whose tables it splits, keeps it. Under the user agent
+    // grouping the Groups button beside it follows it on the Accounts tab.
+    const name = '/analytics the group-by stands disabled with its reason on the Accounts tab and on the Cache warming tab, and enabled on Traffic, and the Groups button with it on the Accounts tab';
+    const page = await mount('/analytics?by=user_agent', { now: CLOCK_ORIGIN });
     const traffic = { disabled: groupBySelect(page)?.disabled ?? null };
     await tab(page, 'Accounts');
     const accounts = { disabled: groupBySelect(page)?.disabled ?? null, title: groupBySelect(page)?.getAttribute('title') ?? null };
+    const groups = { disabled: groupsButton(page)?.disabled ?? null, title: groupsButton(page)?.getAttribute('title') ?? null };
     await tab(page, 'Cache warming');
     const warming = { disabled: groupBySelect(page)?.disabled ?? null, title: groupBySelect(page)?.getAttribute('title') ?? null };
     page.unmount();
     const want = {
       traffic: { disabled: false },
       accounts: { disabled: true, title: 'The Accounts tab draws one line and one row per account' },
+      groups: { disabled: true, title: 'The Accounts tab draws one line and one row per account' },
       warming: { disabled: true, title: 'The Cache warming tab draws the total and one row per pool' },
     };
-    const got = { traffic, accounts, warming };
+    const got = { traffic, accounts, groups, warming };
     results.push({ name, ok: JSON.stringify(got) === JSON.stringify(want), missing: Object.entries(got).map(([key, value]) => `${key} ${JSON.stringify(value)} against ${JSON.stringify(want[key])}`) });
   }
 });
@@ -24426,8 +24443,8 @@ await forView('/analytics', async () => {
   // The route answers a group for a key or a model whose rows in range were all refused, with no request. The Traffic
   // table keeps it for its Refused column, and the other group tables and the Cost by chart's legend leave it out,
   // while a group of one failed request that priced nothing stays. With Include probes off the route also answers a
-  // group of billed probes alone, with its dollars and no request, which a dollar Cost table keeps so that it explains
-  // the spend its total shows. The stub cuts the key and the model groupings to two story groups beside its own three:
+  // group of billed probes alone, with its dollars and no request, which each Cost table keeps so that it explains the
+  // spend its total shows. The stub cuts the key and the model groupings to two story groups beside its own three:
   // the stack folds every group past the seventh into Other, where a zero total ranks last, so beside the story's seven
   // keys the legend would name no entry for it with or without the gate. Native and All in dollars read the page's own
   // breakdown and series, so the stub reads no funding.
@@ -24512,7 +24529,11 @@ await forView('/analytics', async () => {
   read.dropped = keysOf(tableOf('Dropped thinking blocks by key'));
   read.cacheByModel = keysOf(tableOf('Cache by model'));
   await tab(page, 'Cost');
-  read.nativeCost = keysOf(tableOf('Cost by key'));
+  const nativeTable = tableOf('Cost by key');
+  read.nativeCost = keysOf(nativeTable);
+  const nativeHeads = [...(nativeTable?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+  const nativeProbe = [...(nativeTable?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === 'billed-probe');
+  read.nativeProbe = nativeProbe?.children[nativeHeads.indexOf('Cost')]?.querySelector('.sub')?.textContent?.trim() ?? null;
   await chooseUnit(page, 'all');
   const dollarTable = tableOf('Cost by key');
   read.dollarCost = keysOf(dollarTable);
@@ -24526,10 +24547,11 @@ await forView('/analytics', async () => {
   delete api.getAnalyticsSeries;
   localStorage.removeItem('phoebis.unit');
   const KEYS = ['ci', 'failed-only', 'laptop'];
-  // The probe's ratios have no request and no output token to divide by.
-  const want = { traffic: ['0', '4'], latency: KEYS, misses: KEYS, dropped: KEYS, cacheByModel: ['claude-fable-5-1', 'claude-sonnet-5-5', 'failed-only'], nativeCost: KEYS, dollarCost: ['billed-probe', ...KEYS], billedProbe: ['0', '$0.25', '-', '-'], legend: ['billed-probe', ...KEYS] };
+  // The probe's ratios have no request and no output token to divide by. Under Native its Cost cell draws the billed
+  // dollars under the plan figure.
+  const want = { traffic: ['0', '4'], latency: KEYS, misses: KEYS, dropped: KEYS, cacheByModel: ['claude-fable-5-1', 'claude-sonnet-5-5', 'failed-only'], nativeCost: ['billed-probe', ...KEYS], nativeProbe: '$0.25 billed', dollarCost: ['billed-probe', ...KEYS], billedProbe: ['0', '$0.25', '-', '-'], legend: ['billed-probe', ...KEYS] };
   results.push({
-    name: '/analytics a group of refused requests alone draws in the Traffic table only, and one of billed probes alone keeps its dollar Cost row',
+    name: '/analytics a group of refused requests alone draws in the Traffic table only, and one of billed probes alone keeps its Cost row under Native and in dollars',
     ok: JSON.stringify(read) === JSON.stringify(want),
     missing: Object.entries(read).map(([list, value]) => `${list} ${JSON.stringify(value)}`),
   });

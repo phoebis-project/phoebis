@@ -324,14 +324,15 @@ test("the fleet figures add the priced accounts' figures in the chosen week and 
   assert.deepEqual(
     WEEKS.map((week) => d.fleetFigures(d.allowanceRows(FLEET, COSTS, week, RANGE), week, d.weekScale(COSTS, week))),
     [
-      { fable: '87.5% Ultra week', note: '8 accounts priced, a9 left out unpriced', sevenDay: '600% Ultra week' },
-      { fable: '219% Max week', note: '8 accounts priced, a9 left out unpriced', sevenDay: '1500% Max week' },
-      { fable: '1750% Pro week', note: '8 accounts priced, a9 left out unpriced', sevenDay: '12000% Pro week' },
+      { fable: { text: '87.5% Ultra week', title: null }, note: '8 accounts priced, a9 left out unpriced', sevenDay: { text: '600% Ultra week', title: null } },
+      { fable: { text: '219% Max week', title: null }, note: '8 accounts priced, a9 left out unpriced', sevenDay: { text: '1500% Max week', title: null } },
+      { fable: { text: '1750% Pro week', title: null }, note: '8 accounts priced, a9 left out unpriced', sevenDay: { text: '12000% Pro week', title: null } },
     ],
   );
   const priced = { ...FLEET, accounts: FLEET.accounts.slice(0, 1) };
   assert.deepEqual(d.fleetFigures(d.allowanceRows(priced, COSTS, 'pro', RANGE), 'pro', d.weekScale(COSTS, 'pro')).note, '1 account priced');
-  assert.deepEqual(d.fleetFigures([], 'ultra', d.weekScale(COSTS, 'ultra')), { fable: '-', note: '0 accounts priced', sevenDay: '-' });
+  const none = { text: '-', title: d.NO_RESET_IN_RANGE };
+  assert.deepEqual(d.fleetFigures([], 'ultra', d.weekScale(COSTS, 'ultra')), { fable: none, note: '0 accounts priced', sevenDay: none });
 });
 
 /**
@@ -359,7 +360,7 @@ test("the four weeks' figure, the rows and the fleet total add each week's figur
   assert.ok(near(row.figures.seven_day.inRange.share, 1.25) && near(row.figures.seven_day.last.share, 1), `in range ${row.figures.seven_day.inRange.share}, last ${row.figures.seven_day.last.share}`);
   assert.equal(row.unpriced, false);
   // 1.25 beside steady's 0.5, where the summed shares priced once read 2.5.
-  assert.equal(d.fleetFigures(d.allowanceRows(MIXED, QUARTER, 'ultra', RANGE), 'ultra', d.weekScale(QUARTER, 'ultra')).sevenDay, '175% Ultra week');
+  assert.equal(d.fleetFigures(d.allowanceRows(MIXED, QUARTER, 'ultra', RANGE), 'ultra', d.weekScale(QUARTER, 'ultra')).sevenDay.text, '175% Ultra week');
 
   // A week on Free prices nothing, so the four weeks it joins read the dash, and the row is marked under every week.
   const freed = accountOf('freed', MAX_20X, [windowOf('seven_day', [0.5, 0.5], { pairs: [NO_PAIR, FREE] })]);
@@ -380,5 +381,7 @@ test("a cost model without the chosen week's tier titles every dash with that we
   const title = 'Unpriced: the cost model holds no 7-day capacity for the Ultra week';
   assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_5X, ultraless, 'ultra'), { kind: 'unpriced', text: '-', title });
   const rows = d.allowanceRows({ accounts: [accountOf('nightly', MAX_5X, [windowOf('seven_day', [0.5])])], from: iso(NOW - 29 * DAY), to: iso(NOW) }, ultraless, 'ultra', RANGE);
-  assert.deepEqual(d.fleetFigures(rows, 'ultra', d.weekScale(ultraless, 'ultra')), { fable: '-', note: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week.', sevenDay: '-' });
+  // nightly carries no Fable week, so that dash says no reset fell in the range, and the 7-day dash, whose reset the
+  // week leaves unpriced, stays bare beside the note.
+  assert.deepEqual(d.fleetFigures(rows, 'ultra', d.weekScale(ultraless, 'ultra')), { fable: { text: '-', title: d.NO_RESET_IN_RANGE }, note: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week.', sevenDay: { text: '-', title: null } });
 });

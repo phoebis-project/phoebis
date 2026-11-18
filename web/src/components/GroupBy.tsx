@@ -49,13 +49,15 @@ export function GroupBy<G extends string>({ disabledTitle, onChange, options, ti
 }
 
 export interface GroupsButtonProps {
+  /** Greys the button out with this as its reason, where the Group by select beside it stands disabled. */
+  disabledTitle?: string;
   /** The newline-separated patterns the address carries. */
   onCommit: (next: string) => void;
   value: string;
 }
 
 /** A 32 px secondary button "Groups (N)", N the non-empty lines of `value`, aria-haspopup dialog, aria-expanded, whose Popover holds the textarea under the stacked label "User agent groups" with the page's placeholder, title, maxLength, boundPatterns and PATTERN_BOUND_HINT, committing on blur, on the 400 ms pause and as the popover closes. */
-export function GroupsButton({ onCommit, value }: GroupsButtonProps): JSX.Element {
+export function GroupsButton({ disabledTitle, onCommit, value }: GroupsButtonProps): JSX.Element {
   const boxId = useId();
   const labelId = useId();
   // Held in state through the ref callback, since the hooks lint refuses a ref read while rendering.
@@ -74,7 +76,7 @@ export function GroupsButton({ onCommit, value }: GroupsButtonProps): JSX.Elemen
   const count = value.split('\n').filter((line) => line.trim()).length;
   return (
     <>
-      <Button ref={setAnchor} size="sm" aria-haspopup="dialog" aria-expanded={open} onClick={() => (open ? close() : setOpen(true))}>
+      <Button ref={setAnchor} size="sm" aria-haspopup="dialog" aria-expanded={open} disabled={disabledTitle !== undefined} title={disabledTitle} onClick={() => (open ? close() : setOpen(true))}>
         Groups ({count})
       </Button>
       <Popover anchor={anchor} id={boxId} labelledBy={labelId} onClose={close} open={open}>

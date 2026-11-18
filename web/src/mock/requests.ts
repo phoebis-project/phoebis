@@ -3454,11 +3454,11 @@ function accountRollups(): AccountRollup[] {
       if (key === undefined || sample === undefined) continue;
       const sampledMs = Date.parse(sample.at);
       const { resetsAt } = walkBack(w, sampledMs, () => SERVED_FACTOR);
-      const end = endOf(account, sampledMs);
+      const accountEnd = endOf(account, sampledMs);
       const reset = resetsAt === null ? null : Date.parse(resetsAt);
       // The route answers no deadline without a reset, even where the account's end stands.
-      const deadline = reset === null ? null : iso(Math.min(reset, end ?? reset));
-      const read: WindowSample = { deadline, lead: sample.utilization === null ? null : leadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, end), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
+      const deadline = reset === null ? null : iso(Math.min(reset, accountEnd ?? reset));
+      const read: WindowSample = { deadline, lead: sample.utilization === null ? null : leadOf({ resetsAt, utilization: sample.utilization }, w.periodHours * HOUR, sampledMs, accountEnd), resetsAt, sampledAt: sample.at, utilization: sample.utilization };
       windows[key] = read;
     }
     return windows;

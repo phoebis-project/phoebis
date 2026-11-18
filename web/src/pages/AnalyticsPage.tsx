@@ -23,7 +23,7 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
-import { NO_RESET_IN_RANGE, allowanceRows, fleetFigures, rangeAllowanceSpan, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure, type AllowanceRow } from '@/lib/allowance';
+import { NO_RESET_IN_RANGE, allowanceRows, fleetFigures, rangeAllowanceSpan, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure, type AllowanceRow, type FleetFigure } from '@/lib/allowance';
 import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, coveredWindow, dollarsOf, equivalentOrDash, errorRateOf, failureHead, firstBucketPartial, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, probeParts, readBurn, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { ignoredNote, type AnalyticsControl } from '@/lib/analyticsControls';
 import { bucketSizeFor } from '@/lib/buckets';
@@ -321,6 +321,9 @@ export function AnalyticsPage() {
   };
   const commitGroups = (next: string) => commit({ groups: next });
   const changeGroupBy = (next: BurnGroup) => commit({ by: next });
+  const groupByTitles = GROUP_BY_TITLES[tab];
+  // The groups split what the grouping splits, so the button stands disabled where the select does.
+  const groupByDisabled = 'disabledTitle' in groupByTitles ? groupByTitles.disabledTitle : undefined;
 
   // The query bounds come from the address's instants, which keep the milliseconds the inputs' minutes drop.
   const custom = a.range.preset === 'custom';
@@ -611,9 +614,10 @@ export function AnalyticsPage() {
     if (sessionId !== null) return funding === undefined ? groups : stale || !fundedTab ? [] : foldGroups(kept, groupBy, { agentGroups, funding }, latest);
     return funded || warming ? (costBreakdownAnswer ?? []) : groups;
   }, [sessionId, funding, funded, warming, groups, stale, fundedTab, kept, groupBy, agentGroups, latest, costBreakdownAnswer]);
-  const costRequestGroups = useMemo(() => costGroups.filter(countsRequest), [costGroups]);
-  // With Include probes off the route answers a group of billed probes alone for its dollars beside no request, so the
-  // dollar table keeps a group whose dollars are above zero, as the total and the Cost by chart keep them.
+  // With Include probes off the route answers a group of billed probes alone for its dollars beside no request, so each
+  // Cost table keeps a group whose dollars it draws are above zero, as the total and the Cost by chart keep them: the
+  // native table's billed dollars and the dollar table's cost.
+  const nativeCostGroups = useMemo(() => costGroups.filter((g) => countsRequest(g) || g.billedUsd > 0), [costGroups]);
   const dollarCostGroups = useMemo(() => costGroups.filter((g) => countsRequest(g) || g.costUsd > 0), [costGroups]);
   const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
   const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
@@ -755,10 +759,10 @@ export function AnalyticsPage() {
           sticky
           update={update}
         >
-          <GroupByControl {...GROUP_BY_TITLES[tab]} onChange={changeGroupBy} options={GROUP_OPTIONS} value={pageBy} />
+          <GroupByControl {...groupByTitles} onChange={changeGroupBy} options={GROUP_OPTIONS} value={pageBy} />
           {/* A pick reorders the rows the page holds, so it writes the address alone and moves no window's end. */}
           <SortControl disabledTitle={tabKeys.length === 1 ? "This tab's tables keep their own order" : undefined} keys={tabKeys} onChange={rawUpdate} value={{ dir: sort === a.sort ? a.dir : '', sort }} />
-          {groupBy === 'user_agent' && <GroupsButton onCommit={commitGroups} value={clientGroups} />}
+          {groupBy === 'user_agent' && <GroupsButton disabledTitle={groupByDisabled} onCommit={commitGroups} value={clientGroups} />}
         </FilterBar>
         {log.current?.partial && (
           <p className="muted" role="status">
@@ -1088,7 +1092,7 @@ export function AnalyticsPage() {
                 groupLabel={groupLabel}
                 columns={NATIVE_COLUMNS}
                 order={tableOrder}
-                rows={scale === null ? [] : costRequestGroups.map((g) => nativeRowOf(g, week, scale, rowHint(g)))}
+                rows={scale === null ? [] : nativeCostGroups.map((g) => nativeRowOf(g, week, scale, rowHint(g)))}
               />
             )}
             {sessionId === null && unit !== 'native' && (
@@ -1566,8 +1570,8 @@ function reasonColor(ink: ReturnType<typeof useChartInk>, reason: CacheMissReaso
 type ReasonLink = Omit<RequestsLinkInput, 'count' | 'group' | 'narrow'>;
 
 /**
- * A count of the reasons panel or the refusals card: a link to the requests it counts, else the figure with why it
- * stays plain.
+ * A count that links into the Requests view: the link to the requests it counts, else the figure with why it stays
+ * plain.
  */
 function CountLink({ children, target }: { children: ReactNode; target: RequestsLinkTarget }) {
   return target.href === null ? (
@@ -1614,8 +1618,9 @@ function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks
 const DROPPED_THINKING_BLURB = 'From the thinking-binding beta: requests whose answer listed a thinking block it dropped or let pass, by type and reason. A bar counts requests, never blocks';
 
 /**
- * One bar per key of the blocks the answers dropped, largest first, a key under an account reason in the fault ink, then
- * the moved requests and the requests with nothing dropped as plain lines, since the Requests filter lists keys alone.
+ * One bar per key of the blocks the answers dropped, largest first, a key under an account reason in the fault ink,
+ * then the moved requests and the requests with nothing dropped as plain lines, since the Requests filter lists keys
+ * alone.
  */
 function DroppedThinkingBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks: boolean; totals: AnalyticsGroup }) {
   const ink = useChartInk();
@@ -2239,7 +2244,7 @@ function rangeSentenceOf(tab: SectionId, session: boolean, wholeHours: { fromMs:
     return `Reads from the first bucket's start: ${spanWords(coveredWindow('burn', { fromMs: burn.fromMs, toMs: burn.endMs }, burn.readAt, burnFirstAt))}`;
   }
   if (tab === 'accounts' || !session) return `Reads whole hours: ${spanWords(wholeHours)}`;
-  if (tab === 'traffic') return `Reads the range itself. ${MIGRATION_REWRITES_TITLE}, ${REFUSAL_CATEGORIES_TITLE} and ${GUARDRAILS_TITLE} read whole hours: ${spanWords(wholeHours)}`;
+  if (tab === 'traffic') return `Reads the range itself. ${REFUSAL_CATEGORIES_TITLE}, ${MIGRATION_REWRITES_TITLE} and ${GUARDRAILS_TITLE} read whole hours: ${spanWords(wholeHours)}`;
   return 'Reads the range itself';
 }
 type TimeAxis = { axisLine: { stroke: string }; dataKey: 'at'; height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; minTickGap: number; tickFormatter: (v: number) => string; tickLine: false };
@@ -2377,8 +2382,9 @@ type HeldRow = { at: number; heldMs: number; requests: number };
 /**
  * The slow-down's held time per bucket, which the rewrites card draws under its moves: a bar per bucket in the
  * warning tone a held request's marker wears, its hover the requests that waited and their time, and its legend line
- * the range's sum. A range that held nothing says so on the legend line and draws no chart. `note` closes the legend
- * line, since the chart carries no subtitle of its own.
+ * the range's sum. A range that held nothing says so on the legend line and draws no chart. `note` stands under the
+ * legend line in a card subtitle's type, since the chart carries no subtitle of its own and a legend entry would read
+ * as a series.
  */
 function HeldChart({ answer, axis, note }: { answer: RewritesAnswer; axis: TimeAxis; note: string | null }) {
   const ink = useChartInk();
@@ -2397,8 +2403,8 @@ function HeldChart({ answer, axis, note }: { answer: RewritesAnswer; axis: TimeA
             <span className="legend__value num">{heldSpan(held.totalMs)}</span>
           </li>
         )}
-        {note !== null && <li className="muted">{note}</li>}
       </ul>
+      {note !== null && <p className="card__subtitle">{note}</p>}
       {held.totalRequests > 0 && (
         <ResponsiveContainer width="100%" height={120}>
           <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
@@ -2809,7 +2815,7 @@ function BurnCharts({
 
 const PLACEMENT_HINT = "A placement by the conversation's own messages is a hit when the response read the prefix it was promised, and one by the static prefix when it read at all";
 
-/** Placements by rung over the range, narrowed by the Accounts, Keys, Pools, Models, Clients and User agents
+/** Placements by rung over the range, narrowed by the Accounts, Clients, Keys, Models, Pools and User agents
  *  filters. */
 function PlacementTable({ error, inForce, rows }: { error: string | null; inForce: ReadonlySet<AnalyticsControl>; rows: PlacementRow[] | null }) {
   return (
@@ -3001,7 +3007,8 @@ function AccountsSection({
   }, [pace]);
   const toggle = <Segmented value={window} options={WINDOW_OPTIONS} onChange={setWindow} ariaLabel="Window" />;
   const colorOf = (a: string) => accountColor(ink, slotOf(a));
-  // Each window card names the accounts its own answer draws, while the Peak card's tooltip keeps every account.
+  // The Peak chart draws a line for every account, so its tooltip keeps a row for each, and a window card's follows
+  // the accounts its own answer draws.
   const legendOf = (listed: string[]) => listed.map((a) => ({ color: colorOf(a), label: a, shape: 'line' as const }));
   const shareTipOf = (listed: string[]) => timeTip<Record<string, number | null> & { at: number }>((p) => listed.map((a) => ({ color: colorOf(a), label: a, value: pct(p[a]) })));
   const scoreOf = (p: Record<string, number | null>, a: string) => {
@@ -3099,6 +3106,16 @@ const allowanceCell = (key: string, figure: AllowanceFigure | undefined) => (
   </td>
 );
 
+/** A fleet figure, its dash in the muted ink of a row's where it says why. */
+const fleetValue = (figure: FleetFigure) =>
+  figure.title === null ? (
+    figure.text
+  ) : (
+    <span className="muted" title={figure.title}>
+      {figure.text}
+    </span>
+  );
+
 /** The Resets cell: the natural resets of the 7-day window, and the uses after them with a hover line per claim row. */
 const resetsCell = (r: AllowanceRow) =>
   r.used === 0 ? (
@@ -3128,11 +3145,11 @@ function AllowanceTable({ answer, costs, error, inForce, span, week }: { answer:
         <div className="req-totals">
           <div>
             <span className="stat__label">7-day, fleet total</span>
-            <span className="stat__value">{fleet === null ? <Skeleton width={80} /> : fleet.sevenDay}</span>
+            <span className="stat__value">{fleet === null ? <Skeleton width={80} /> : fleetValue(fleet.sevenDay)}</span>
           </div>
           <div>
             <span className="stat__label">Fable, fleet total</span>
-            <span className="stat__value">{fleet === null ? <Skeleton width={80} /> : fleet.fable}</span>
+            <span className="stat__value">{fleet === null ? <Skeleton width={80} /> : fleetValue(fleet.fable)}</span>
           </div>
           <div>
             <span className="stat__note">{fleet === null ? <Skeleton width={160} /> : fleet.note}</span>
