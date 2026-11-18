@@ -552,9 +552,9 @@ Optional, and off without the block.
 | `listen` | required in the block | a socket address |
 
 With the block the router binds a fourth listener at `listen`, beside the proxy, the admin and the metrics listener,
-which serves the calls of the claude.ai features and nothing else. It always terminates TLS under the router's own CA
-and takes no `tls` key ([TLS on the listeners](#tls-on-the-listeners)). These pages give it port 8443, as in
-`listen: 0.0.0.0:8443`.
+which serves the calls of the [claude.ai features](claude-ai-features.md) and nothing else. It always terminates TLS
+under the router's own CA and takes no `tls` key ([TLS on the listeners](#tls-on-the-listeners)). These pages give it
+port 8443, as in `listen: 0.0.0.0:8443`.
 
 With the block the router also holds a CA of its own for the claude.ai features: two files in the data directory, the
 directory of `storage.path`, `feature-ca.pem` for the certificate and `feature-ca-key.pem` for its private key, both
@@ -889,6 +889,17 @@ that publishes it as port 443 of the host, `- "443:8443"`, commented out under i
 Where another program holds port 443 of that address, it passes a connection through to the listener by its TLS name
 without ending the TLS. The router alone holds the certificates for the two names, and a request's head has to reach
 it in the client's spelling.
+
+### phoebis-proxy
+
+A client in the "Base URL and proxy" setup reaches the feature listener through `phoebis-proxy`, a tunnel proxy in a
+repository of its own, [phoebis-project/phoebis-proxy](https://github.com/phoebis-project/phoebis-proxy), whose README
+holds its install and its settings. Its image is `ghcr.io/phoebis-project/phoebis-proxy`. `deploy/compose.yaml` carries
+the proxy as a commented service behind the router's: the upstream `phoebis:8443`, which is the router's service name
+with the feature listener's port, an allow list for the network the clients come from, and the proxy's port 8318,
+published. The proxy reaches the feature listener inside the compose network, so the router's configuration holds the
+`features` block and the compose file publishes no port of that listener. [Base URL and
+proxy](claude-ai-features.md#base-url-and-proxy) says where else the proxy runs and what a client sets for it.
 
 ## Storage
 

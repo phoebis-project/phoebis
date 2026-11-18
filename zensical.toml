@@ -23,6 +23,7 @@ nav = [
     { "Guardrails" = "guardrails.md" },
     { "Keepalive" = "keepalive.md" },
     { "The companion mod" = "companion-mod.md" },
+    { "claude.ai features" = "claude-ai-features.md" },
     { "The relay" = "relay.md" },
     { "The console" = "console.md" },
     { "Statistics" = "statistics.md" },

@@ -4,8 +4,8 @@ Phoebis Router relays Claude Code's requests to Anthropic under the credentials 
 account from a pool: a session sticks to one account, a rate limit fails over to a sibling, prompt caches are kept
 warm, and every request lands in a ledger the web console reads. Phoebis is a genus of sulphur butterflies, migrants
 of the Americas that land on the right flower. If you are setting a router up for the first time, start with the
-[Quick start](quickstart.md). The rest of this page is the three listeners, the path a request takes through them, the
-words the other pages use, what the router does not do and where each page fits.
+[Quick start](quickstart.md). The rest of this page is the listeners, the path a request takes through them, the words
+the other pages use, what the router does not do and where each page fits.
 
 **A note on the terms.** Phoebis Router switches between Claude accounts that you personally own and pay for. Each
 account's limits stay enforced by Anthropic, and switching accounts to work past a limit is a gray area under
@@ -15,22 +15,25 @@ protective measures, and they say nothing about one person who holds several sub
 commercial service with consumer subscriptions. On its own side the router never presents an SDK client as the CLI, and
 an OAuth account refuses a request that names no user.
 
-## The three listeners
+## The listeners
 
-One `phoebis` process serves three listeners.
+One `phoebis` process serves three listeners, and a fourth where the bootstrap file holds the `features` block.
 
 | Listener | Bootstrap key | Serves |
 | --- | --- | --- |
 | Proxy | `proxy.listen` | `/v1/messages` and its companions, the key's own usage page, plus the keepalive route |
 | Admin | `admin.listen` | The console and `/admin/*` (see [API reference](api-reference.md)) |
 | Metrics | `stats.metrics_listen` | `/metrics` in Prometheus text format, no credential, plain HTTP |
+| Feature | `features.listen`, optional | The calls of Artifacts and the claude.ai connectors, which Claude Code sends to two fixed hosts (see [claude.ai features](claude-ai-features.md)) |
 
 The proxy and the admin listener terminate TLS natively or run plain HTTP by their `tls` key. The metrics listener is
-plain HTTP ([TLS on the listeners](installation.md#tls-on-the-listeners)).
+plain HTTP, and the feature listener terminates TLS under a CA of the router's own ([TLS on the
+listeners](installation.md#tls-on-the-listeners)).
 
 The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST /v1/messages`,
 `POST /v1/messages/count_tokens`, `GET /v1/usage`, `GET /v1/models`, `GET /v1/models/{*id}` and
-`POST /v0/keepalive/events` ([What the proxy accepts](client.md#what-the-proxy-accepts)).
+`POST /v0/keepalive/events`, and on a router with the `features` block `GET /v0/features/ca.pem` ([What the proxy
+accepts](client.md#what-the-proxy-accepts)).
 
 ## How a request travels
 
@@ -69,9 +72,11 @@ a loopback router works, [A second machine](second-machine.md) covers a LAN host
 every setting. [Pairing an account](pairing.md) is for the operator adding an account in the console or by `curl`. An
 operator tuning pools and keys, or reading why a request landed where it did, reads [Pools, keys and
 routing](routing.md). [Keepalive](keepalive.md) is for the operator turning cache warming on, and [The companion
-mod](companion-mod.md) for the one installing and configuring the mod on a client machine. [The relay](relay.md) says
-what the router changes on the wire and sends on its own. [The console](console.md) is for the operator reading or using
-a view. [Statistics](statistics.md) is for the operator reading a figure's meaning or alerting on a gauge.
+mod](companion-mod.md) for the one installing and configuring the mod on a client machine. [claude.ai
+features](claude-ai-features.md) is for the operator who wants Artifacts and the claude.ai connectors behind the router,
+and for the user who starts the client through the launch script. [The relay](relay.md) says what the router changes on
+the wire and sends on its own. [The console](console.md) is for the operator reading or using a view.
+[Statistics](statistics.md) is for the operator reading a figure's meaning or alerting on a gauge.
 [Operations](operations.md) is for the operator running the router for months. [Development](development.md) is for the
 contributor. The [API reference](api-reference.md) is for the operator scripting the admin API.
 

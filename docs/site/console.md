@@ -432,14 +432,16 @@ it." The actions, with the dialog each opens:
 | "Delete account" | "Delete account" | `Removes {label} from its pool and deletes it. Request history stays in the ledger.`, below the account's uses where it has any. |
 
 Delete account's dialog reads the pool and key lists as it opens and names, above its sentence, where the account is in
-use: `{label} is in use:`, then one line per use, the pool it serves model requests in (`It serves model requests in
-the pool {pool}.`), each pool that selects it for a feature (`The pool {pool} selects it for {feature}.`) and each key
-that names it for one (`The key {key} selects it for {feature}.`), the feature "Artifacts" or "Connectors". Where a pool
-or a key selects it, `Deleting it sets those selections to none, so the feature is refused there until an operator
-selects another account.` follows the lines. A key that inherits its pool's account is no use of its own, and an account
-in no use shows the sentence alone. Until both lists answered the dialog draws a placeholder in the uses' place and
-holds Delete. A failed read draws "Could not load where this account is in use" with its error and Try again, which
-reads the failed list again, and Delete stays held.
+use: `{label} is in use:`, then one line per use, the pool it serves model requests in
+(`It serves model requests in the pool {pool}.`), each pool that selects it for a [claude.ai
+feature](claude-ai-features.md#whose-claudeai-a-key-acts-under) (`The pool {pool} selects it for {feature}.`) and each
+key that names it for one (`The key {key} selects it for {feature}.`), the feature "Artifacts" or "Connectors". Where a
+pool or a key selects it,
+`Deleting it sets those selections to none, so the feature is refused there until an operator selects another account.`
+follows the lines. A key that inherits its pool's account is no use of its own, and an account in no use shows the
+sentence alone. Until both lists answered the dialog draws a placeholder in the uses' place and holds Delete. A failed
+read draws "Could not load where this account is in use" with its error and Try again, which reads the failed list
+again, and Delete stays held.
 
 "Identity" lists, for a subscription account, Type ("OAuth login"), Plan, the plan the router resolved, with its start
 (`Ultra since {date}`, and `Free` with no date on an account whose plan ended, the plan the router resolved once the
@@ -780,13 +782,14 @@ failed read draws `Could not load the return rate: {error}` above the buckets an
 on its own when there are none. The ceilings are explained under [The four fields](keepalive.md#the-four-fields) and the
 buckets under [The return rate by idle age](keepalive.md#the-return-rate-by-idle-age).
 
-claude.ai features shows in every view. It opens on "Select the account under whose claude.ai each key of this pool
-publishes artifacts or uses connectors. Any OAuth account of the router can be selected, a member of this pool or not. A
-feature call runs under the selected account whatever its windows read and while it is paused. It is refused while the
-account is signed out or past its plan's end." and holds two selects, Artifacts and Connectors. Each lists
-"None (refused)", a new pool's choice, which refuses the feature's calls, then every OAuth account of the router in the
-order of the labels, as `{label} ({pool})` or `{label} (no pool)`. An API-key account is not listed,
-and an account whose stored sign-in lacks the feature's scope is listed disabled as
+claude.ai features shows in every view and holds the selection that [Whose claude.ai a key acts
+under](claude-ai-features.md#whose-claudeai-a-key-acts-under) explains. It opens on "Select the account under whose
+claude.ai each key of this pool publishes artifacts or uses connectors. Any OAuth account of the router can be selected,
+a member of this pool or not. A feature call runs under the selected account whatever its windows read and while it is
+paused. It is refused while the account is signed out or past its plan's end." and holds two selects, Artifacts and
+Connectors. Each lists "None (refused)", a new pool's choice, which refuses the feature's calls, then every OAuth
+account of the router in the order of the labels, as `{label} ({pool})` or `{label} (no pool)`. An API-key account is
+not listed, and an account whose stored sign-in lacks the feature's scope is listed disabled as
 `{label} ({pool}), holds no sign-in with this feature's scope. A new pairing adds it.`
 [Pairing an account](pairing.md#two-kinds-of-account) names the scope each feature needs. The selects wait for the
 account list, a failed read of it draws "The account list did not load" with "Try again", and a stored choice the list
@@ -864,16 +867,17 @@ companion." and Cache warming with "The router warms this key's sessions' caches
 mode, Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture group warns what the
 bodies hold, the warning [Keys](routing.md#keys) quotes.
 
-claude.ai features holds two selects, Artifacts and Connectors. Each lists `Inherit ({label})`, a new key's choice,
-which follows the pool's selection and names its account, or `Inherit (None (refused))` where the pool selects none,
-then "None (refused)", which refuses the feature's calls for this key, then the accounts the pool dialog's group lists,
-in its order and with its disabled options. The first option follows the pool the dialog shows, so a change of Pool
-changes that text and no choice, and a key moved to another pool keeps an account it names and a "None (refused)". The
-selects wait for the account list and for the key's pool, a failed read of the account list draws "The account list did
-not load" with "Try again", a named account the list does not hold reads `{id} (not listed)`, and a pool's account the
-list does not hold reads `Inherit ({id}, not listed)`, neither with a line under it. Under a named account, and under
-Inherit for the pool's account, the line of the pool dialog's group names the account's state: why it cannot serve, or
-that its features keep working while it is paused. Each save sends both choices.
+claude.ai features holds two selects, Artifacts and Connectors, the key's side of the selection that [Whose claude.ai a
+key acts under](claude-ai-features.md#whose-claudeai-a-key-acts-under) explains. Each lists `Inherit ({label})`, a new
+key's choice, which follows the pool's selection and names its account, or `Inherit (None (refused))` where the pool
+selects none, then "None (refused)", which refuses the feature's calls for this key, then the accounts the pool dialog's
+group lists, in its order and with its disabled options. The first option follows the pool the dialog shows, so a change
+of Pool changes that text and no choice, and a key moved to another pool keeps an account it names and a "None
+(refused)". The selects wait for the account list and for the key's pool, a failed read of the account list draws "The
+account list did not load" with "Try again", a named account the list does not hold reads `{id} (not listed)`, and a
+pool's account the list does not hold reads `Inherit ({id}, not listed)`, neither with a line under it. Under a named
+account, and under Inherit for the pool's account, the line of the pool dialog's group names the account's state: why it
+cannot serve, or that its features keep working while it is paused. Each save sends both choices.
 
 A saved key's dialog shows its Effective list under the Models group: the list the key is judged by, top to bottom, with
 the level each entry comes from and, where accounts cool for a model the entry names, a cooling count whose hover names
@@ -1127,17 +1131,18 @@ request again.
 
 ### Feature calls
 
-The Feature calls section lists the calls the router sent to a claude.ai feature host under a feature account, one row
-per call, newest first. Time reads the call's arrival as the request list reads a time, with the call's id under it. Key
-reads the key's name and Account the label of the account whose sign-in the call carried, each with its id on hover,
-and the id itself where the key list or the account list holds no row for it. A row takes the name the key list holds
-now, so where a key's id is issued again, an older call reads the newer key's name. Feature reads Artifacts or
-Connectors, Method the client's method, Path the path without its query in the monospace face, cut in the middle past
-48 characters and whole on hover, and Duration the time from the call's arrival to the answer's end. Status reads the
-status for a forwarded call and `canceled` for a call whose client left before the answer's end. A failed call reads
-its code, `upstream_unreachable`, where no upstream head arrived and the router answered with a 502, and its status with
-`ended early` behind it, such as `200 ended early`, where the answer stopped after its head went back. A call the router
-refused leaves no row, and a row opens no drawer, since the table shows all the row holds.
+The Feature calls section lists the calls the router sent to a claude.ai feature host under a feature account ([The
+records](claude-ai-features.md#the-records)), one row per call, newest first. Time reads the call's arrival as the
+request list reads a time, with the call's id under it. Key reads the key's name and Account the label of the account
+whose sign-in the call carried, each with its id on hover, and the id itself where the key list or the account list
+holds no row for it. A row takes the name the key list holds now, so where a key's id is issued again, an older call
+reads the newer key's name. Feature reads Artifacts or Connectors, Method the client's method, Path the path without its
+query in the monospace face, cut in the middle past 48 characters and whole on hover, and Duration the time from the
+call's arrival to the answer's end. Status reads the status for a forwarded call and `canceled` for a call whose client
+left before the answer's end. A failed call reads its code, `upstream_unreachable`, where no upstream head arrived and
+the router answered with a 502, and its status with `ended early` behind it, such as `200 ended early`, where the answer
+stopped after its head went back. A call the router refused leaves no row, and a row opens no drawer, since the table
+shows all the row holds.
 
 ![The Requests view: the Feature calls section on its first page](assets/requests-feature-calls-light.png#only-light)
 ![The Requests view: the Feature calls section on its first page](assets/requests-feature-calls-dark.png#only-dark)
@@ -1688,14 +1693,14 @@ the proxy listener binds, so the base URL carries its scheme and port. Replace t
 reaches the listener, and the scheme and the port too where a TLS proxy or a port mapping stands between Claude Code and
 it.`
 
-The two other blocks are the setups of a client that uses Artifacts and the claude.ai connectors through the router.
-Each holds the seven lines, then `CLAUDE_CODE_OAUTH_SCOPES`, `CLAUDE_ENV_FILE`, `NODE_EXTRA_CA_CERTS` and
-`PHOEBIS_FEATURE_CA_SHA256` with the router's feature CA fingerprint, and "Base URL and proxy" adds
-`HTTPS_PROXY=http://127.0.0.1:8318` and a `NO_PROXY` of the placeholder host and the loopback names, which the
-redirect's block leaves out. The router knows no client's files, so the file lines carry marked places. A feature
-block's lines are what the launch script of the claude.ai features page sets, and no reader pastes them, so the subtitle
-there reads "The launch script sets these lines. Give the script the base URL, a key from the Keys page and the
-fingerprint below." "Copy snippet" copies the block shown. Under the listener hint a second hint reads "The launch
+The two other blocks are the setups of a client that uses Artifacts and the claude.ai connectors through the router
+([claude.ai features](claude-ai-features.md)). Each holds the seven lines, then `CLAUDE_CODE_OAUTH_SCOPES`,
+`CLAUDE_ENV_FILE`, `NODE_EXTRA_CA_CERTS` and `PHOEBIS_FEATURE_CA_SHA256` with the router's feature CA fingerprint, and
+"Base URL and proxy" adds `HTTPS_PROXY=http://127.0.0.1:8318` and a `NO_PROXY` of the placeholder host and the loopback
+names, which the redirect's block leaves out. The router knows no client's files, so the file lines carry marked places.
+A feature block's lines are what the launch script of the claude.ai features page sets, and no reader pastes them, so
+the subtitle there reads "The launch script sets these lines. Give the script the base URL, a key from the Keys page and
+the fingerprint below." "Copy snippet" copies the block shown. Under the listener hint a second hint reads "The launch
 script of the claude.ai features page sets these lines. The script fetches the CA, compares the fingerprint, checks the
 road and writes the env file before it starts the client.", its first words a link to the script, and under the
 redirect's block it adds "The machine's name resolution must lead api.anthropic.com and mcp-proxy.anthropic.com to the
@@ -1710,7 +1715,8 @@ One definition per variable follows the block, and the list follows the shown bl
 then `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, which is defined under each setup although no block holds it. Under a feature
 block the definitions of `CLAUDE_CODE_SUBSCRIPTION_TYPE=max` and `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1` add that
 the claude.ai features need the line. [The environment block](client.md#the-environment-block) on The client explains
-each of the base block's seven lines. The view writes browser preferences alone and changes no router setting.
+each of the base block's seven lines, and [The variables](claude-ai-features.md#the-variables) on claude.ai features the
+lines a feature block adds. The view writes browser preferences alone and changes no router setting.
 
 ## Routing log
 

@@ -552,7 +552,7 @@ the new figures.
 
 | Data | Kept for |
 | --- | --- |
-| Attempts, decisions, events, feature calls, kept-warm marks, requests and their per-session totals | `stats.retention_days` (365 days by default, 0 keeps them forever) |
+| Attempts, decisions, events, [feature calls](claude-ai-features.md#the-records), kept-warm marks, requests and their per-session totals | `stats.retention_days` (365 days by default, 0 keeps them forever) |
 | Quota and extra-usage samples | `stats.retention_days` (365 days by default, 0 keeps them forever) |
 | Resolved credential refresh attempts and registry changes | `stats.retention_days` (365 days by default, 0 keeps them forever) |
 | Captured bodies | The hours the capture named |
@@ -669,8 +669,9 @@ Each family means what its entry below says, the text a `# HELP` line would hold
   A subscriber that reads one kind of event counts that kind alone: the attention reader's series counts lost
   completions.
 - `phoebis_bus_subscriber_panics_total` counts the panics that stopped a subscriber of the event bus.
-- `phoebis_feature_calls_total` counts the claude.ai feature calls the router sent upstream, by feature, key and
-  outcome (`canceled`, `failed` or `forwarded`), with the domain check under the feature `domain_check` and the key `-`.
+- `phoebis_feature_calls_total` counts the [claude.ai feature](claude-ai-features.md#the-records) calls the router sent
+  upstream, by feature, key and outcome (`canceled`, `failed` or `forwarded`), with the domain check under the feature
+  `domain_check` and the key `-`.
 - `phoebis_feature_refusals_total` counts the claude.ai feature calls the router refused with a 401 or a 403, by code,
   feature and key, under the feature `none` for a call that matched no feature, each 401 among them, and a 401 under the
   key `-`.
@@ -833,10 +834,11 @@ It reads the pair the router loaded rather than the files, so a pair replaced on
 loads it. The subject is the listener key, and the item opens nothing. It dates from 30 days before the leaf's end, so a
 restart keeps the date, and the detail names the certificate file, the end and the whole days left, negative once past,
 which the dashboard's line words as `expires in 12 days` or `expired 3 days ago`, and as `expires today` and
-`expired today` in the day before the end and the day after it. The item also holds for the feature CA from 30 days
-ahead of its end, under the subject `features.ca`, with the same detail. No reload reads a CA: the operator replaces it
-by removing `feature-ca.pem` and `feature-ca-key.pem` from the data directory and starting the router again, which
-creates a new CA, and hands each user its new fingerprint from the Settings view.
+`expired today` in the day before the end and the day after it. The item also holds for [the feature
+CA](claude-ai-features.md#the-ca-over-time) from 30 days ahead of its end, under the subject `features.ca`, with the
+same detail. No reload reads a CA: the operator replaces it by removing `feature-ca.pem` and `feature-ca-key.pem` from
+the data directory and starting the router again, which creates a new CA, and hands each user its new fingerprint from
+the Settings view.
 
 **`limit_reset_ending`** holds while an account the usage poll reads holds an unused limit reset whose grant ends within
 `usage.limit_reset_warning_days` ([usage](installation.md#usage)), 5 days unless set, and for no account at 0. It reads

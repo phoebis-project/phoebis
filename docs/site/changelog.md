@@ -757,3 +757,13 @@ mod of the pre-release builds: it carries the lifecycle reports over unchanged o
 settings, checks the router at session start and names a missing setting, a refused key or a silent router in the
 transcript, and gives the model the `allowance` tool, which answers the route's body from a cache of ten seconds ([The
 companion mod](companion-mod.md)).
+
+The router serves two claude.ai features of Claude Code, Artifacts and the claude.ai connectors, whose calls the client
+sends to `api.anthropic.com` and `mcp-proxy.anthropic.com` whatever its base URL names. With the `features` block the
+router binds a feature listener, creates a CA for the two host names and forwards the calls of the two features under
+the sign-in of an account the operator selects per pool, with an override per key, so the router key reaches no upstream
+host ([features](installation.md#features)). A client reaches the listener through `phoebis-proxy`, a tunnel proxy in a
+repository of its own, or through a DNS redirect, and starts through a launch script that fetches the CA, compares its
+fingerprint and checks the road to both hosts. The console gains the selection in the pool and key dialogs, the Feature
+calls section of the Requests view and the two feature blocks of the client configuration card, and the router counts
+the calls in two metric families ([claude.ai features](claude-ai-features.md)).

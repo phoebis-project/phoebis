@@ -26,5 +26,18 @@ services:
       - phoebis-data:/var/lib/phoebis
       # A certificate pair you hold, mounted read-only and named under tls in config.yaml.
       # - ./tls:/etc/phoebis/tls:ro
+  # phoebis-proxy, the tunnel a client of the claude.ai features sets as its HTTPS_PROXY. It reaches the feature
+  # listener by the router's service name, so config.yaml holds features.listen on 0.0.0.0:8443 and the proxy needs
+  # no port of the router published. It tunnels each host for whoever reaches its own port, so the allow list names
+  # the network its clients' connections arrive from.
+  # The stack example with both services is at https://github.com/phoebis-project/phoebis-proxy
+  # phoebis-proxy:
+  #   environment:
+  #     PHOEBIS_PROXY_ALLOW: 192.0.2.0/24
+  #     PHOEBIS_PROXY_UPSTREAM: phoebis:8443
+  #   image: ghcr.io/phoebis-project/phoebis-proxy:0.1.0
+  #   ports:
+  #     - "8318:8318"
+  #   restart: unless-stopped
 volumes:
   phoebis-data:

@@ -11,7 +11,9 @@ The router's state lives in three files. `storage.path` is the registry: the acc
 the cooldowns, the keys, the pins, the pools, the pricing versions and the relay's session memory.
 `stats.ledger_path` is the ledger: the attempts, captured bodies, events, requests, rollups and samples.
 `storage.encryption_key_file` is the key that seals every credential the registry holds. `phoebis backup` takes a
-snapshot of both databases and names the key file, and it never copies the key.
+snapshot of both databases and names the key file, and it never copies the key. A router with the `features` block holds
+two more files in the data directory, `feature-ca.pem` and `feature-ca-key.pem`, the feature CA and its key, which
+`phoebis backup` leaves out too (step 5 of [Restore](#restore)).
 
 Both databases are SQLite in WAL mode. A plain file copy taken while the service runs can land mid-transaction and
 split a database file from its `-wal` file, losing the last transactions. SQLite's online backup API copies a
@@ -89,7 +91,11 @@ sealed the registry, in this order:
 4. Put the key file that sealed the registry at `storage.encryption_key_file`. The manifest's `key_file` says where it
    lived. A wrong key is refused at start and by `check-config` with `the storage key does not match the registry at
    {path}`.
-5. On a new host, put the certificate pair where the file names it: the backup carries neither the pair nor the key.
+5. On a new host, put the certificate pair where the file names it: the backup carries neither the pair nor the key. A
+   router with the `features` block needs `feature-ca.pem` and `feature-ca-key.pem` in the data directory as well, as
+   the first start wrote them, at `0600` and owned by the service user. Without them the first start creates a new CA
+   with a new fingerprint, and each user of the claude.ai features needs that fingerprint before the launch script
+   starts a client again ([The CA over time](claude-ai-features.md#the-ca-over-time)).
 6. Run `phoebis check-config`.
 7. Start the router: `sudo systemctl start phoebis`, or `docker compose up -d`.
 8. Confirm with `phoebis status`, which reads `ready`.
@@ -406,6 +412,11 @@ the two writes meets a key mismatch and is retried once both files are in place.
 `docker compose exec phoebis phoebis tls reload`. The dashboard raises `certificate_reload_failed` for a listener's pair
 until a reload lands and `certificate_expiring` from 30 days before a loaded leaf's end, as
 [Conditions and gauges](statistics.md#conditions-and-gauges) describes.
+
+The feature listener's certificates need no step and no reload. The router issues them itself under its feature CA, each
+for seven days, and serves the next one from the next connection on, about a day before the current one ends, so
+`phoebis tls reload` names the proxy and the admin listener alone. The CA is valid for ten years, and what its
+replacement means for each user is under [The CA over time](claude-ai-features.md#the-ca-over-time).
 
 Schema migrations run when the new binary opens each database, every migration above the stored version in order, each
 inside its own transaction, so a crash leaves the last version that landed. The registry's migrations may drop or

@@ -129,6 +129,18 @@ and `x-keepalive-owner-id` is the router's own ownership marker, which the compa
 client's `Expect: 100-continue` goes for the reason [Headers and transport](#headers-and-transport) gives. `connection`
 is the router's own because its upstream connection is pooled and independent of the client's, which ends at the router.
 
+A call of the claude.ai features, which arrives on the feature listener, takes fewer edits than a model request. Its
+head keeps each line in the client's place and spelling. The client's first `authorization` or `x-api-key` line carries
+the feature account's credential as `Authorization: Bearer {token}`, and a second such line is dropped. The domain
+check, which takes no key, loses each such line and gets none. The never-copied set is left out. `host` names the
+feature host the call was sent to, and `content-length` is the router's count of the body it read, with no such line for
+a call that framed no body. `connection` becomes `keep-alive` in the client's own line on the two kinds of call the
+router sends over its pooled connections, the Artifacts MCP server's and a connector session's. On each other call it
+becomes `close`, in the client's line or appended, since the router opens a connection for that call alone. The router
+merges no `anthropic-beta` lines and applies none of the betas below, generates no `x-client-request-id`, and sends the
+body unchanged in the coding the client gave it ([What the router
+forwards](claude-ai-features.md#what-the-router-forwards)).
+
 ## The betas
 
 | Token | Action | Request kinds | Setting |

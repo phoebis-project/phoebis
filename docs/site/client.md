@@ -43,13 +43,13 @@ string in the `env` block reads as unset. Between settings files, `env` values f
 managed entry over a user or project entry.
 
 The card's Setup switch shows two more blocks, "Base URL and proxy" and "Base URL and DNS redirect", for a client that
-uses Artifacts and the claude.ai connectors through the router. Each holds these seven lines, then
-`CLAUDE_CODE_OAUTH_SCOPES`, `CLAUDE_ENV_FILE`, `NODE_EXTRA_CA_CERTS` and the router's feature CA fingerprint as
-`PHOEBIS_FEATURE_CA_SHA256`, and the first adds `HTTPS_PROXY` and `NO_PROXY`. Their lines are what the launch script of
-the claude.ai features page sets, and no reader pastes them: the script writes each line by itself, and a pasted proxy
-or trust line would reach each Bash command of the session as the shell's own value. Beside those two blocks the card
-shows the fingerprint, which the script takes as an input, with a copy control, and offers the CA's certificate as the
-file `feature-ca.pem`.
+uses Artifacts and the claude.ai connectors through the router ([claude.ai features](claude-ai-features.md)). Each holds
+these seven lines, then `CLAUDE_CODE_OAUTH_SCOPES`, `CLAUDE_ENV_FILE`, `NODE_EXTRA_CA_CERTS` and the router's feature CA
+fingerprint as `PHOEBIS_FEATURE_CA_SHA256`, and the first adds `HTTPS_PROXY` and `NO_PROXY`. Their lines are what [the
+launch script](claude-ai-features.md#the-launch-script) of that page sets, and no reader pastes them: the script writes
+each line by itself, and a pasted proxy or trust line would reach each Bash command of the session as the shell's own
+value. Beside those two blocks the card shows the fingerprint, which the script takes as an input, with a copy control,
+and offers the CA's certificate as the file `feature-ca.pem`.
 
 ### ANTHROPIC_BASE_URL
 
@@ -229,8 +229,8 @@ figures from the proxy listener with the `curl` of [Your key's usage](#your-keys
 | any other method on a known path | | none | `405` |
 | any unmatched path | | none | `404` |
 
-The calls of the claude.ai features arrive on a listener of their own, the feature listener of a router with the
-`features` block ([features](installation.md#features)), where no path of this table answers.
+The calls of the [claude.ai features](claude-ai-features.md) arrive on a listener of their own, the feature listener of
+a router with the `features` block ([features](installation.md#features)), where no path of this table answers.
 
 The query string of a request to either Messages route travels as the client sent it, `?beta=true` included: the
 router routes on the path alone.
@@ -279,9 +279,11 @@ as JSON, or as one HTML page when `Accept` prefers `text/html`. The JSON carries
 Every refusal the relay answers on the proxy listener and on the feature listener is in Anthropic's error shape,
 `{"type": "error", "error": {"type", "message"}, "request_id"}`, with the header `x-phoebis-error-code` naming the code
 and `Retry-After` where the row says so. A client meets `domain_checks_at_cap`, `feature_account_unavailable`,
-`feature_account_unset` and `feature_not_allowed` on the feature listener alone, and the `401` codes of a key on both.
-The companion mod's routes answer a refused key the same way and their other refusals in their own shape, described on
-[The relay](relay.md#the-keepalive-protocol). One row per code, with every message the code is answered with.
+`feature_account_unset` and `feature_not_allowed` on the feature listener alone ([claude.ai
+features](claude-ai-features.md#what-the-router-refuses-and-what-the-client-shows)), and the `401` codes of a key on
+both. The companion mod's routes answer a refused key the same way and their other refusals in their own shape,
+described on [The relay](relay.md#the-keepalive-protocol). One row per code, with every message the code is answered
+with.
 
 <!-- refusal-codes: begin -->
 | Code | Status | Type | Messages | What to do |
@@ -476,3 +478,10 @@ An interactive start of the client also reaches past the router. It opens connec
 and none through `ANTHROPIC_BASE_URL`, runs `npm --global config get prefix` and `gh` where the host has them, and
 registers a URL handler (`claude-code-url-handler.desktop`) in the user's applications directory. On a host that reaches
 the router alone those connections fail and the client starts regardless.
+
+In a setup for the claude.ai features the client's connections to `api.anthropic.com` and `mcp-proxy.anthropic.com`
+reach the router's feature listener and no upstream. The first-start check of a config directory that no client has used
+gets its `200` there, and each other read of a start gets the router's refusal, as
+[`CLAUDE_CODE_SUBSCRIPTION_TYPE`](#claude_code_subscription_type) has it for the reads under `max` and `pro`. In the
+"Base URL and proxy" setup the connections to each other host, the three above among them, pass through `phoebis-proxy`,
+which tunnels each host to itself ([Base URL and proxy](claude-ai-features.md#base-url-and-proxy)).
