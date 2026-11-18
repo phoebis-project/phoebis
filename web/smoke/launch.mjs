@@ -6,7 +6,7 @@ import { closingLines, fanOut, jobsOf, joinReports, selectViews, wordsOf } from 
 /** Leads a view's lines, so `grep -e '^smoke of ' -e '^FAIL'` places each failing case under its view. */
 const headerOf = ({ report, seconds, view }) => {
   if (report === null) return `smoke of ${view}: no report, ${Math.round(seconds)} s`;
-  const failed = report.checks.filter(([, ok]) => !ok).length;
+  const failed = report.checks.filter(([, , ok]) => !ok).length;
   return `smoke of ${view}: ${report.checks.length} checks, ${failed} failed, ${Math.round(seconds)} s, peak ${Math.round(report.peak / 1024)} MB`;
 };
 
@@ -38,7 +38,11 @@ export async function launch(runner) {
     process.stdout.write(`${headerOf(run)}\n`);
     for (const { chunk, stream } of run.output) process[stream].write(chunk);
   }
-  const joined = joinReports(runs.map((run) => run.report).filter((report) => report !== null));
+  // A run with no report counts as one failed check, so the sum line fails beside the line of failed views. Such runs
+  // join behind the reports, since the join takes the counts of blocks and rows from the first.
+  const reports = runs.map((run) => run.report).filter((report) => report !== null);
+  const lost = runs.filter((run) => run.report === null).map(({ view }) => ({ checks: [[0, `the runner of ${view} sent no report`, false]], ran: [] }));
+  const joined = joinReports([...reports, ...lost]);
   console.log('');
   for (const line of closingLines({ ...joined, filter: words })) console.log(line);
   const failed = runs.filter((run) => run.status !== 0).map((run) => run.view);

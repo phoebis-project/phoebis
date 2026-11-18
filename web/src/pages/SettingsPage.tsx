@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { api } from '@/api';
 import { effectiveLabel } from '@/api/decode';
 import { useAppSettings, type PaletteChoice, type ThemeChoice } from '@/app/settings';
@@ -53,14 +54,16 @@ const keptFor = (days: number) => (days === 0 ? 'kept forever' : `kept for ${plu
 
 /**
  * A table's date in force, its revision count and the next date while one is pending, read at one instant by the rule
- * the cost reference's select reads. An answer that lists no revision names the date it sent alone.
+ * the cost reference's select reads. An answer that lists no revision names the date it sent alone. The next date
+ * keeps to one line, since the row it ends can wrap at a desktop width.
  */
-const revisionsNote = (revisions: { effective: string; effectiveDate: string | null }[], sent: string, now: number): string => {
+const revisionsNote = (revisions: { effective: string; effectiveDate: string | null }[], sent: string, now: number): ReactNode => {
   const inForce = revisionAt(revisions, now);
   if (inForce === null) return `effective ${effectiveLabel(sent)}`;
   const pending = revisions.find((r) => r !== inForce && r.effectiveDate !== null && Date.parse(r.effectiveDate) > now);
   const count = plural(revisions.length, 'revision');
-  return `effective ${effectiveLabel(inForce.effective)}, ${count}${pending === undefined ? '' : `, next ${effectiveLabel(pending.effective)}`}`;
+  const next = pending === undefined ? null : <>, next <span className="nowrap">{effectiveLabel(pending.effective)}</span></>;
+  return <>effective {effectiveLabel(inForce.effective)}, {count}{next}</>;
 };
 
 /** A price row's source words, in the mono face where they name the file read. With no path set the router can only
@@ -158,8 +161,8 @@ export function SettingsPage() {
                 { label: 'Profile', value: s.about.profile, mono: true },
                 { label: 'Metrics listener', value: s.listeners.metrics, mono: true, title: 'The Prometheus scrape endpoint.' },
                 { label: 'Ledger path', value: s.storage.ledgerPath, mono: true, title: bootstrapNote('stats.ledger_path') },
-                { label: 'API prices path', value: `${sourceOf(s.apiPrices.source, s.storage.apiPricesPath).text}, ${revisionsNote(s.apiPrices.revisions, s.apiPrices.effective, now)}`, mono: sourceOf(s.apiPrices.source, s.storage.apiPricesPath).mono, title: bootstrapNote('stats.api_prices_path') },
-                { label: 'Subscription costs path', value: `${sourceOf(s.subscriptionCosts.source, s.storage.subscriptionCostsPath).text}${s.subscriptionCosts.problem === null ? `, ${revisionsNote(s.subscriptionCosts.revisions, s.subscriptionCosts.effective, now)}` : `. ${s.subscriptionCosts.problem}`}`, mono: s.subscriptionCosts.problem === null && sourceOf(s.subscriptionCosts.source, s.storage.subscriptionCostsPath).mono, title: bootstrapNote('stats.subscription_costs_path') },
+                { label: 'API prices path', value: <>{sourceOf(s.apiPrices.source, s.storage.apiPricesPath).text}, {revisionsNote(s.apiPrices.revisions, s.apiPrices.effective, now)}</>, mono: sourceOf(s.apiPrices.source, s.storage.apiPricesPath).mono, title: bootstrapNote('stats.api_prices_path') },
+                { label: 'Subscription costs path', value: <>{sourceOf(s.subscriptionCosts.source, s.storage.subscriptionCostsPath).text}{s.subscriptionCosts.problem === null ? <>, {revisionsNote(s.subscriptionCosts.revisions, s.subscriptionCosts.effective, now)}</> : `. ${s.subscriptionCosts.problem}`}</>, mono: s.subscriptionCosts.problem === null && sourceOf(s.subscriptionCosts.source, s.storage.subscriptionCostsPath).mono, title: bootstrapNote('stats.subscription_costs_path') },
                 { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
                 { label: 'Requests, samples and the routing log', value: keptFor(s.retention.retentionDays), title: bootstrapNote('stats.retention_days') },
                 { label: 'Rollups', value: keptFor(s.retention.rollupRetentionDays), title: bootstrapNote('stats.rollup_retention_days') },

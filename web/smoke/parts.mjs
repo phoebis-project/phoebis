@@ -42,14 +42,8 @@ export function jobsOf(value, views, cores) {
  */
 function runOne(view, start) {
   const began = performance.now();
-  const child = start(view);
   const output = [];
   let report = null;
-  child.stdout?.on('data', (chunk) => output.push({ chunk, stream: 'stdout' }));
-  child.stderr?.on('data', (chunk) => output.push({ chunk, stream: 'stderr' }));
-  child.on('message', (message) => {
-    report = message;
-  });
   return new Promise((resolve) => {
     let closed = null;
     let disconnected = false;
@@ -60,6 +54,20 @@ function runOne(view, start) {
       if (note) output.push({ chunk: `${note}\n`, stream: 'stderr' });
       resolve({ output, report, seconds: (performance.now() - began) / 1000, status, view });
     };
+    let child;
+    try {
+      child = start(view);
+    } catch (error) {
+      // `spawn` throws for some failures where it emits `error` for others. A throw left to reject this run would end
+      // the fan-out at once and leave the runners of the other slots running behind the launcher's end.
+      end(1, `the runner of ${view} did not start: ${error.message}`);
+      return;
+    }
+    child.stdout?.on('data', (chunk) => output.push({ chunk, stream: 'stdout' }));
+    child.stderr?.on('data', (chunk) => output.push({ chunk, stream: 'stderr' }));
+    child.on('message', (message) => {
+      report = message;
+    });
     const settle = () => {
       if (closed === null || !disconnected) return;
       if (closed.signal) end(1, `the runner of ${view} ended on ${closed.signal}`);
@@ -103,33 +111,29 @@ export async function fanOut(views, limit, start) {
 }
 
 /**
- * The counts of a fan-out as one runner over the same views prints them. A block that several runners ran counts once,
- * and a check of it passed where it passed in each of them. A result outside a block counts once per runner. `skipped`
- * counts the blocks no runner ran, and `rows` is the first report's.
+ * The counts of a fan-out as one runner over the same views prints them. Each report's `checks` holds one
+ * `[block, name, ok]` per result, with block 0 for a result outside a block. A check that several runners pushed counts
+ * once, and it passed where it passed in each of them. `skipped` counts the blocks no runner ran, and `rows` is the
+ * first report's.
  */
 export function joinReports(reports) {
   const blocks = reports[0]?.blocks ?? 0;
   const ran = new Set(reports.flatMap((report) => report.ran));
-  // A check of a block is its place among the block's results, the same in each runner that ran the block.
-  const inBlocks = new Map();
-  let outside = 0;
-  let outsidePassed = 0;
+  // A check keys by its block, its name and its occurrence among the block's results of that name. A block can push a
+  // different count of results in each runner, so a check's place among them can differ from one runner to the next.
+  const checks = new Map();
   for (const report of reports) {
     const seen = new Map();
-    for (const [block, ok] of report.checks) {
-      if (block === 0) {
-        outside += 1;
-        if (ok) outsidePassed += 1;
-        continue;
-      }
-      const place = seen.get(block) ?? 0;
-      seen.set(block, place + 1);
-      const key = `${block}:${place}`;
-      inBlocks.set(key, (inBlocks.get(key) ?? true) && ok);
+    for (const [block, name, ok] of report.checks) {
+      const named = `${block}:${name}`;
+      const occurrence = seen.get(named) ?? 0;
+      seen.set(named, occurrence + 1);
+      const key = `${occurrence}:${named}`;
+      checks.set(key, (checks.get(key) ?? true) && ok);
     }
   }
-  const passed = [...inBlocks.values()].filter(Boolean).length + outsidePassed;
-  return { blocks, passed, rows: reports[0]?.rows ?? 0, skipped: blocks - ran.size, total: inBlocks.size + outside };
+  const passed = [...checks.values()].filter(Boolean).length;
+  return { blocks, passed, rows: reports[0]?.rows ?? 0, skipped: blocks - ran.size, total: checks.size };
 }
 
 /** A run's closing lines: its checks, under a filter the blocks it skipped, and the mock's request rows. */

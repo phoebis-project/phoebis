@@ -1963,10 +1963,10 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
 {
   // Each pace order reads that window's lead off the account answer, the account furthest ahead first, and an account
   // whose window is absent, expired or without a lead after every one with a lead, ties by label. The story's 7-day
-  // leads lie on both sides of zero, so that order is read across it, and its 5-hour leads all sit above zero, so that
-  // order is read on one side. Each order moves cards past one another, so none reads as the list's own order and a
-  // sort left out fails. The page mounts on its own frozen instant, so the shared mount's later checks keep the default
-  // order.
+  // leads lie on both sides of zero, so that order is read across it, and its 5-hour leads all sit at or above zero, so
+  // that order is read on one side. Each order moves cards past one another, so none reads as the list's own order and
+  // a sort left out fails. The page mounts on its own frozen instant, so the shared mount's later checks keep the
+  // default order.
   const at = Date.now();
   const q = await mount('/quota', { now: at });
   const accounts = (await api.listAccounts()).filter(quotaListed);
@@ -2585,7 +2585,7 @@ const resetButtonOf = (label) => resetCardOf(label)?.querySelector('.qcard__use'
   results.push({
     name: '/quota Use reset stays in the tab order while its resets are read, and a second click reads nothing',
     ok: during.aria === 'true' && during.disabled === false && reads === 1 && opened === 1 && resetDialogs().length === 0,
-    missing: [JSON.stringify({ during, opened, reads })],
+    missing: [JSON.stringify({ afterEscape: resetDialogs().length, during, opened, reads })],
   });
 }
 {
@@ -2813,14 +2813,22 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   // A lane chip without a share carries no tone where the card chip of that window reads absent. A window that has not
   // opened draws its lane chip on the grey surface, while its card chip reads the full share in its tone.
   const laneChipTones = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip')].map((c, i) => ({ label: l.querySelector('.lane__name')?.textContent?.trim() ?? '', pct: c.querySelector('.tl-chip__pct')?.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? 'absent', window: ['5h', '7d', 'fable'][i % 3] })));
-  const chipOff = laneChipTones.filter((c) => c.tone !== (c.pct === 'not open' ? 'absent' : cardTone(c.label, c.window))).map((c) => `${c.label} ${c.window}: ${c.tone} where the card chip reads ${cardTone(c.label, c.window)}`);
+  // A window that has not opened is read off the account answer as `barPhrases` reads it, no reset at a utilization of
+  // 0, so a chip that prints `not open` for an open window still meets both checks.
+  const accountOf = new Map((await api.listAccounts()).map((a) => [a.label, a]));
+  const notOpen = (label, window) => {
+    const a = accountOf.get(label);
+    const w = (window === 'fable' ? a?.fableWindow : a?.windows.find((x) => x.id === window)) ?? null;
+    return w !== null && w.resetsAt === null && w.utilization === 0;
+  };
+  const chipOff = laneChipTones.filter((c) => c.tone !== (notOpen(c.label, c.window) ? 'absent' : cardTone(c.label, c.window))).map((c) => `${c.label} ${c.window}: ${c.tone} where the card chip reads ${cardTone(c.label, c.window)}`);
   results.push({ name: "/quota each timeline chip carries the tone of the same account's card chip for its window, and none where that chip has no share or its window has not opened", ok: laneChipTones.length > 0 && chipOff.length === 0, missing: chipOff });
   const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
   results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
-  const shares = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip__pct')]).map((e) => e.textContent?.trim() ?? '');
+  const shares = laneChipTones.filter((c) => !notOpen(c.label, c.window)).map((c) => c.pct);
   const liveShares = live.filter((l) => l.includes('%'));
-  const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset' && t !== 'not open'), ...liveShares].filter((t) => !/\d+% left/.test(t));
+  const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset'), ...liveShares].filter((t) => !/\d+% left/.test(t));
   results.push({ name: '/quota every window share on the timeline reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && liveShares.length > 0 && off.length === 0, missing: [...new Set(off)] });
   const axis = m.container.querySelector('.timeline__axis-label')?.textContent?.trim() ?? 'no axis label';
   results.push({ name: "/quota the timeline's axis reads Account", ok: axis === 'Account', missing: [axis] });
@@ -5729,6 +5737,23 @@ await forView('/accounts', async () => {
     missing: [sunset.subscription.plan, JSON.stringify(term?.columns ?? null), JSON.stringify(termWant), term?.note ?? 'no note'],
   });
   ended.unmount();
+
+  // The same answer with no pair on its newest reset, the term's end, prices that week at sunset's own plan, free, so
+  // the block draws the Free note.
+  const { getAnalyticsUnusedAllowance } = api;
+  api.getAnalyticsUnusedAllowance = async (...args) => {
+    const answer = await getAnalyticsUnusedAllowance.apply(api, args);
+    return { ...answer, accounts: answer.accounts.map((a) => (a.accountId === 'sunset' ? { ...a, windows: a.windows.map((w) => ({ ...w, resets: w.resets.map((r, i) => (i === 0 ? { ...r, plan: null, tier: null } : r)) })) } : a)) };
+  };
+  const unpaired = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
+  const freeNote = blockOf(unpaired)?.note ?? null;
+  unpaired.unmount();
+  api.getAnalyticsUnusedAllowance = getAnalyticsUnusedAllowance;
+  results.push({
+    name: '/accounts/sunset a newest reset with no pair prices at its own plan, free, and the block draws the Free note',
+    ok: freeNote === 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.',
+    missing: [freeNote ?? 'no note'],
+  });
 
   {
     // Studio's seed (`claude_max` on `default_claude_max_5x` in mock/accounts.ts) started its subscription 16 days
@@ -20130,16 +20155,20 @@ await forView('/analytics', async () => {
     results.push({ name: '/analytics the Burn tab grouped by key under one key of the Keys filter draws that key alone', ok: JSON.stringify(legend) === JSON.stringify(['desktop']), missing: legend });
   }
   {
-    // Primary's moves of the day are the move off the deleted retired workspace at 09:47, its rollup's move in at
-    // 10:00, whose turn files it as winding down, and the move its funding requirement forced off overflow at 11:31.
-    // The whole day holds 18 moves under eight reasons.
-    const page = await mount('/analytics?accounts=primary', { now: CLOCK_ORIGIN });
-    const moves = [...(cardOf(page, 'Migration rewrites')?.querySelectorAll('.hbars--moves li') ?? [])].map((li) => [li.querySelector('.hbars__label')?.textContent?.trim() ?? '', li.querySelector('.hbars__value')?.textContent?.trim() ?? '']);
+    // Nightly's moves of the day are its rollups' moves in, each filed by its hour's turn: shed at 16:00 and 19:00 the
+    // day before, failed over at 08:00, winding down at 10:00 and fast lane cooling at 12:00. The day's two moves an
+    // account's state forced, off the deleted retired workspace at 09:47 and off overflow for its funding at 11:31,
+    // land on primary, so a forced move the filter let through would add its reason here. Studio alone waited on the
+    // slow-down, so nightly holds no held time.
+    const page = await mount('/analytics?accounts=nightly', { now: CLOCK_ORIGIN });
+    const card = cardOf(page, 'Migration rewrites');
+    const moves = [...(card?.querySelectorAll('.hbars--moves li') ?? [])].map((li) => [li.querySelector('.hbars__label')?.textContent?.trim() ?? '', li.querySelector('.hbars__value')?.textContent?.trim() ?? '']);
+    const held = [...(card?.querySelectorAll('.held-chart .legend li') ?? [])].map((li) => li.textContent?.trim() ?? '');
     page.unmount();
     results.push({
-      name: "/analytics Migration rewrites under one account of the Accounts filter lists that account's moves alone",
-      ok: JSON.stringify(moves) === JSON.stringify([['Account deleted', '1'], ['Winding down', '1'], ['Funding required', '1']]),
-      missing: moves.map((m) => m.join(' ')),
+      name: "/analytics Migration rewrites under one account of the Accounts filter lists that account's moves and held time alone",
+      ok: JSON.stringify(moves) === JSON.stringify([['Failed over', '1'], ['Winding down', '1'], ['Fast lane cooling', '1'], ['Shed', '2']]) && JSON.stringify(held) === JSON.stringify(['Held by the slow-down', 'none in range']),
+      missing: [...moves.map((m) => m.join(' ')), `held ${JSON.stringify(held)}`],
     });
   }
   {
@@ -21848,9 +21877,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
     }
     {
-      // Grouped by kind with Include probes off, the probe kind holds the day's billed probes, so a read that does not
-      // count probes keeps it for their dollars and counts no request of it, and the tile reads the probe kind's
-      // figures off the Cache warming reads, which count probes.
+      // Grouped by kind with Include probes off, the page's own read by kind leaves probes out, while the tile
+      // reads the probe kind's plan figure and billed dollars off the Cache warming reads, which count probes.
       localStorage.removeItem('phoebis.unit');
       const asked = countCalls('getAnalyticsBreakdown');
       const kinds = await mount('/analytics?by=kind#cache-warming', { now: CLOCK_ORIGIN });
@@ -21860,7 +21888,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const counted = await answer({ includeProbes: true });
       const plan = counted.find((g) => g.key === 'probe');
       const billed = (await answer({ funding: 'billed', includeProbes: true })).find((g) => g.key === 'probe');
-      const t =[...kinds.container.querySelectorAll('#cache-warming > .tiles-row .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
+      const t = [...kinds.container.querySelectorAll('#cache-warming > .tiles-row .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
       const lines = [...(t?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => {
         const figure = l.cloneNode(true);
         figure.querySelector('.stat__pair-word')?.remove();
@@ -21898,6 +21926,29 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         name: '/analytics Probes by outcome counts probes with the toggle off',
         ok: JSON.stringify(legend) === JSON.stringify([['OK', '17'], ['Migrated', '12'], ['Held', '1'], ['Skipped', '36'], ['Failed', '5']]) && bars === 38,
         missing: [JSON.stringify(legend), `${bars} bars`],
+      });
+    }
+    {
+      // A dollar side's reads keep that side's rows, so under Billed dollars the chart reads the whole once more,
+      // counting probes, and draws the figures of the case above, the story's probe rows of both sides.
+      const measure = window.HTMLElement.prototype.getBoundingClientRect;
+      window.HTMLElement.prototype.getBoundingClientRect = function () {
+        return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+      };
+      localStorage.removeItem('phoebis.unit');
+      const kinds = await mount('/analytics?by=kind&unit=usd#cache-warming', { now: CLOCK_ORIGIN });
+      await kinds.settle();
+      const unit = shellUnit(kinds)?.value ?? null;
+      const chart = [...kinds.container.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Probes by outcome');
+      const legend = [...(chart?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']);
+      const bars = chart?.querySelectorAll('path.recharts-rectangle').length ?? 0;
+      window.HTMLElement.prototype.getBoundingClientRect = measure;
+      kinds.unmount();
+      localStorage.removeItem('phoebis.unit');
+      results.push({
+        name: '/analytics under Billed dollars Probes by outcome counts the probes of both sides with the toggle off',
+        ok: unit === 'usd' && JSON.stringify(legend) === JSON.stringify([['OK', '17'], ['Migrated', '12'], ['Held', '1'], ['Skipped', '36'], ['Failed', '5']]) && bars === 38,
+        missing: [`unit ${unit}`, JSON.stringify(legend), `${bars} bars`],
       });
     }
     {
@@ -25342,15 +25393,21 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
     // bucket holds its traffic from 02:30 and its 09:00 bucket up to 09:30, both partial, while the route's two cover
     // 02:00 to 03:00 and 09:00 to 10:00 and are whole. A session counts among the filters the rewrites route passes by,
     // so that card names the Session filter.
-    const name = "/analytics a past session span starting and ending inside an hour notes the folded outcome chart's cut first and last buckets, and Migration rewrites, whole on its route, carries no note";
+    const name = "/analytics a past session span starting and ending inside an hour notes the folded outcome and speed charts' cut first and last buckets, and Migration rewrites, whole on its route, carries no note";
     const session = requests.find((r) => r.agentId === 'c21e')?.sessionId ?? '';
     const page = await mount(`/analytics?session=${encodeURIComponent(session)}&from=2026-09-16T02:30:00.000Z&to=2026-09-16T09:30:00.000Z`, { now: CLOCK_ORIGIN });
     const subtitleOf = (title) => [...page.container.querySelectorAll('#traffic .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('.card__subtitle')?.textContent?.trim() ?? null;
-    const read = { outcome: subtitleOf('Requests by outcome'), rewrites: subtitleOf('Migration rewrites') };
+    const read = { outcome: subtitleOf('Requests by outcome'), rewrites: subtitleOf('Migration rewrites'), speed: subtitleOf('Requests by speed') };
     page.unmount();
     results.push({
       name,
-      ok: JSON.stringify(read) === JSON.stringify({ outcome: "Per bucket, stacked. The first bucket is partial: it holds the traffic from the window's start. The last bucket is partial: it holds the traffic up to the range's end", rewrites: 'Cache-write tokens the first request after a move wrote, per bucket. The Session filter above does not apply here' }),
+      ok:
+        JSON.stringify(read) ===
+        JSON.stringify({
+          outcome: "Per bucket, stacked. The first bucket is partial: it holds the traffic from the window's start. The last bucket is partial: it holds the traffic up to the range's end",
+          rewrites: 'Cache-write tokens the first request after a move wrote, per bucket. The Session filter above does not apply here',
+          speed: "Standard and fast per bucket, stacked. The first bucket is partial: it holds the traffic from the window's start. The last bucket is partial: it holds the traffic up to the range's end",
+        }),
       missing: [JSON.stringify(read)],
     });
   }
@@ -27981,7 +28038,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
   {
-    // The 24 rows the default filters keep at the story's instant, twelve of them warmed by no recipe: eight pinned
+    // The 24 rows the default filters keep at the story's instant, eleven of them warmed by no recipe: eight pinned
     // rows read `no recipe` under their Cache badge, the written fleet session no mod reports, the workshop session,
     // whose pool keeps no cache warm, and the silent row past its idle limit among them, and three with no pin read `no
     // pin`, the registration-only row among them. The written auxiliary-only session, whose main holds none, reads its
@@ -30231,17 +30288,23 @@ await forView('/settings', async () => {
 await forView('/settings', async () => {
   // A pending entry: the row names the date in force, the count with the pending entry among it, and the next date, the
   // earliest held entry's, so the story's own entry of 2026-10-09 ahead of the added one of 2099. That entry carries an
-  // instant, whose time reads in the viewer's zone, UTC under the smoke. The table reads from its file, so the row
-  // opens with the path.
+  // instant, whose time reads in the viewer's zone, UTC under the smoke. The price table is the one the router ships
+  // and the cost model one it read from its file, so each row opens with its own table's source.
   const { getSettings } = api;
   const wired = decodeSettings(SETTINGS_WIRE);
   const pending = { effective: '2099-01-01', effectiveDate: new Date(Date.parse('2099-01-01')).toISOString(), models: [] };
-  api.getSettings = () => Promise.resolve({ ...wired, apiPrices: { ...wired.apiPrices, revisions: [...wired.apiPrices.revisions, pending], source: 'file' } });
+  api.getSettings = () => Promise.resolve({ ...wired, apiPrices: { ...wired.apiPrices, revisions: [...wired.apiPrices.revisions, pending], source: 'shipped' }, subscriptionCosts: { ...wired.subscriptionCosts, source: 'file' } });
   const page = await mount('/settings', { now: CLOCK_ORIGIN });
   const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
-  const row = [...(about?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'API prices path')?.querySelector('dd')?.textContent?.trim() ?? '';
-  const want = `${SETTINGS_WIRE.storage.api_prices_path}, effective ${effectiveLabel(revisionAt(wired.apiPrices.revisions, CLOCK_ORIGIN).effective)}, ${wired.apiPrices.revisions.length + 1} revisions, next Oct 09, 2026, 18:30`;
-  results.push({ name: '/settings a pending price entry reads on its About row after the date in force and the revision count as the next date', ok: row === want, missing: [row || 'no API prices path row', want] });
+  const rowOf = (label) => [...(about?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd')?.textContent?.trim() ?? '';
+  const row = rowOf('API prices path');
+  const costRow = rowOf('Subscription costs path');
+  const want = `shipped table (no file at ${SETTINGS_WIRE.storage.api_prices_path}), effective ${effectiveLabel(revisionAt(wired.apiPrices.revisions, CLOCK_ORIGIN).effective)}, ${wired.apiPrices.revisions.length + 1} revisions, next Oct 09, 2026, 18:30`;
+  results.push({
+    name: "/settings a pending price entry reads on its About row after the date in force and the revision count as the next date, and each table's row opens with its own source",
+    ok: row === want && costRow.startsWith(`${SETTINGS_WIRE.storage.subscription_costs_path}, `),
+    missing: [row || 'no API prices path row', want, costRow || 'no Subscription costs path row'],
+  });
   api.getSettings = getSettings;
   page.unmount();
 });
@@ -31867,7 +31930,7 @@ if (process.send === undefined) process.exit(status);
 else {
   const blockOf = results.map(() => 0);
   for (const { block, count, first } of ran) blockOf.fill(block, first, first + count);
-  const report = { blocks: blockCount, checks: results.map((r, i) => [blockOf[i], r.ok]), peak: process.resourceUsage().maxRSS, ran: ran.map(({ block }) => block), rows: requests.length };
+  const report = { blocks: blockCount, checks: results.map((r, i) => [blockOf[i], r.name, r.ok]), peak: process.resourceUsage().maxRSS, ran: ran.map(({ block }) => block), rows: requests.length };
   // The exit waits for the send, so the report leaves ahead of the channel's close.
   process.send(report, () => process.exit(status));
 }
