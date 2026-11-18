@@ -436,8 +436,9 @@ against the real one, so the checker fails on what it exists to catch.
 
 `bash scripts/tests/launch-script.sh` takes the launch script from its block on [claude.ai
 features](claude-ai-features.md#the-launch-script), which is the script's one copy, and runs it under `sh` with the
-host's curl. A loopback listener plays the router's CA download and a proxy whose upstream is down, and the script has
-to stop with its message for that proxy and print no other line.
+host's curl. Loopback stubs play the router's CA download and three states of the proxy's address: a port where nothing
+listens, a proxy that answers the `CONNECT` with `403`, and a proxy whose upstream is down. In each state the script has
+to stop with the message of that state and print no other line.
 
 ## Continuous checks
 

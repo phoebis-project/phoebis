@@ -260,10 +260,12 @@ probe() {
 for host in api.anthropic.com mcp-proxy.anthropic.com; do
   if [ "$SETUP" = proxy ]; then
     probe "$host" --proxy "$PROXY_URL" --noproxy ''
+    # The proxy's status for the CONNECT picks the stop, since the exit of curl cannot: where a proxy refuses the
+    # CONNECT, curl 8.14.1 exits 56 and curl 8.18.0 exits 7, which is the exit of both where no proxy listens.
     case "$rc:$codes:$code" in
       0:401\ *:auth_missing) ;;
-      7:*) stop "no proxy runs at $PROXY_URL" ;;
-      56:*\ 502:*) stop "the proxy at $PROXY_URL does not reach the router's feature listener" ;;
+      7:*\ 000:*) stop "no proxy runs at $PROXY_URL" ;;
+      *:*\ 502:*) stop "the proxy at $PROXY_URL does not reach the router's feature listener" ;;
       0:*|35:*|51:*|60:*) stop "$host leads to another host than the router's feature listener" ;;
       *) stop "the check of the road to $host failed (curl exit $rc, answer $codes)" ;;
     esac
@@ -340,9 +342,15 @@ exec claude ${1+"$@"}
 ```
 
 The script is checked on Linux under `dash` 0.5.12 as `sh`, on a host whose curl is 8.14.1 with OpenSSL 3.5.7. It ran
-whole there in both setups, through to the client's start, and curl's exit for a `CONNECT` that a proxy answers with
-`502` is 56 there. No run on macOS stands behind this page yet, and two points are unread there: Apple's curl with the
-feature CA's name constraint under `--cacert`, and curl's exit for a `CONNECT` that a proxy answers with `502`.
+whole there in both setups, through to the client's start. Where a proxy refuses the `CONNECT`, curl's exit depends on
+curl's version: measured with the statuses `403`, `407`, `502` and `503`, it is 56 under curl 8.5.0 and 8.14.1 and 7
+under curl 8.18.0, and 7 is also the exit of the three versions where nothing listens at the proxy's address. Each of
+them reports the proxy's status beside its exit, and `000` where nothing listens, so the script reads that status to
+tell a proxy that does not run from one that does not reach the router's feature listener. The figures for curl 8.5.0
+and 8.18.0 come from the probe's curl call against loopback stubs, and the script did not run whole under either. No run
+on macOS stands behind this page yet, and two points are unread there: Apple's curl with the feature CA's name
+constraint under `--cacert`, and what Apple's curl reports at the proxy's address, the exit where nothing listens and
+the status of a refused `CONNECT`.
 
 ### The inputs
 
