@@ -3,7 +3,8 @@ import { JSDOM } from 'jsdom';
 import { launch } from './launch.mjs';
 import { closingLines, VIEWS } from './parts.mjs';
 
-// Where the run holds several views, this starts one runner of this file per view side by side and ends the process.
+// Where the run holds several views and `SMOKE_JOBS` is not 1, this starts one runner of this file per view side by
+// side and ends the process.
 await launch(import.meta.url);
 
 const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { url: 'http://127.0.0.1/', pretendToBeVisual: true });
@@ -126,7 +127,7 @@ function expect(name, text, needles) {
   results.push({ name, ok: missing.length === 0, missing, length: text.length });
 }
 /**
- * A whole run in one runner takes 15 to 30 minutes. A run that holds several views starts one runner per view side by
+ * A whole run in one process takes 15 to 30 minutes. A run that holds several views starts one runner per view side by
  * side through `launch.mjs`, each under `SMOKE_ONLY` with its one view. `SMOKE_JOBS` caps the runners side by side, and
  * 1 keeps the run in one process. `SMOKE_ONLY`, a comma-separated list of view paths such as `/keys,/sessions`,
  * runs the blocks of those views and skips the others. A block names every view its checks name or its walk mounts,
@@ -334,7 +335,7 @@ const ageText = (ms) => (ms < 60_000 ? `${Math.round(ms / 1000)} s` : ms % 60_00
  */
 const studioSpeed = async () => {
   const slowDown = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown ?? null;
-  const since = slowDown?.since ? new Date(slowDown.since).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' }) : 'no since';
+  const since = new Date(slowDown?.since).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' });
   return {
     speed: slowDown?.speed ?? null,
     hover: `slowed since ${since}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold. The pool computed 0.5x. Ramped to 0.5x. The holds realized 0.5x`,
@@ -1697,8 +1698,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       value: tile?.querySelector('.stat__value')?.textContent ?? '',
     };
   };
-  // The pages mount on a frozen clock, so the hours the notes divide by read by hand: at the story's 14:30 they run 24.5
-  // from the day's first point at 14:00 a day back.
+  // The pages mount on a frozen clock, so the hours the notes divide by read by hand: at the story's 14:30 they run
+  // 24.5 from the day's first point at 14:00 a day back.
   const unpricedHint = "No subscription request priced: its model has no weight in the cost model. The sparkline's last point is the current hour so far.";
   const sparkHint = "The sparkline's last point is the current hour so far.";
   const storyDay = await mount('/', { now: CLOCK_ORIGIN });
@@ -4922,18 +4923,32 @@ m.unmount();
 });
 await forView('/accounts', async () => {
   // The route withholds every window of a row that is not paired, so a disconnect of a paired row leaves its list line
-  // and its Usage card the state's words, where an unread paired row reads "Not read yet". One mock instance backs
-  // every mount, so reserve goes back as the story holds it.
+  // and its Usage card the state's words, where an unread paired row reads "Not read yet". The route answers a row's
+  // samples whatever its state, and reserve's seed holds a week of them, so a stand-in answers none, as for a row
+  // disconnected a week back, and the trend card's empty state then names the state as the Usage card does. One mock
+  // instance backs every mount, so reserve and the history read go back as the story holds them.
   const reserve = (await api.listAccounts()).find((a) => a.id === 'reserve');
+  const historyRead = api.getQuotaHistory;
+  api.getQuotaHistory = async () => [];
   await api.disconnectAccount('reserve');
-  const page = await mount('/accounts/reserve', { now: CLOCK_ORIGIN });
-  const usage = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
-  const drawn = { row: page.container.querySelector('a.account-row[href="/accounts/reserve"] .wbar__none')?.textContent ?? null, usage: usage?.querySelector('p.muted')?.textContent ?? null };
-  page.unmount();
-  api.putAccount(reserve);
+  let drawn;
+  try {
+    const page = await mount('/accounts/reserve', { now: CLOCK_ORIGIN });
+    const cardOf = (title) => [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+    drawn = {
+      row: page.container.querySelector('a.account-row[href="/accounts/reserve"] .wbar__none')?.textContent ?? null,
+      trend: cardOf('7-day trend')?.querySelector('.empty__body')?.textContent ?? null,
+      usage: cardOf('Usage')?.querySelector('p.muted')?.textContent ?? null,
+    };
+    page.unmount();
+  } finally {
+    api.getQuotaHistory = historyRead;
+    api.putAccount(reserve);
+  }
+  const usage = 'Not paired, so no quota window is read.';
   results.push({
-    name: '/accounts a disconnected account reads its state where it read no window',
-    ok: JSON.stringify(drawn) === JSON.stringify({ row: 'Not paired, no window', usage: 'Not paired, so no quota window is read.' }),
+    name: '/accounts a disconnected account reads its state where it read no window, its trend card with no sample among them',
+    ok: JSON.stringify(drawn) === JSON.stringify({ row: 'Not paired, no window', trend: usage, usage }),
     missing: [JSON.stringify(drawn)],
   });
 });
@@ -23223,7 +23238,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [`every ${every.join(',')}`, `narrowed ${narrowed.join(',')}`, plain, noted],
     });
     // A session view reads the request log for every other section, while this one keeps the range's rollups,
-    // which carry no session and no probe count, so a session alone or the probes toggle alone draws the clause.
+    // which carry no session and no probe count, so a session alone or the probes toggle alone draws its own note.
     await applyText(m, 'Session', requests.find((r) => r.sessionId !== null).sessionId);
     await m.settle(200);
     const bySession = subtitle();
@@ -23614,7 +23629,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await tab(m, 'Latency');
     results.push({ name: '/analytics a tab change keeps the session query', ok: m.location().hash === '#latency' && m.location().search.includes('session=') && m.location().search.includes('key=laptop'), missing: [JSON.stringify(m.location())] });
     {
-      // A session view's percentiles come from its request log, which the Latency head names in place of the histograms.
+      // A session view's percentiles come from its request log, which the Latency head names in place of the
+      // histograms.
       const meta = m.container.querySelector('#latency .analytics-section__meta')?.textContent ?? '';
       results.push({ name: "/analytics a session view's Latency head names the request log and the slow-down's hold left out", ok: meta === "From the request log, since rollups carry no session. The slow-down's hold is left out", missing: [`${laptopRow.sessionId}: ${meta}`] });
     }
@@ -23665,8 +23681,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       else await removeChip(m, 'session');
       await m.settle(200);
     };
-    // Each head of a session view names the request log as its source, so the Cache warming meta tells the two views
-    // apart.
+    // In a session view the Cache warming head names the request log with no figure to wait for, and with no session
+    // no head names it, so its meta tells the two views apart.
     await tab(m, 'Cache warming');
     await commit(requests.find((r) => r.sessionId !== null).sessionId);
     const entered = m.text().includes('From the request log');
@@ -24516,6 +24532,7 @@ await forView('/analytics', async () => {
     cacheHits: 0,
     cacheMisses: 0,
     cacheMissReasons: zeroed(template.cacheMissReasons),
+    clientCanceled: 0,
     cost: NO_SPLIT,
     costEquivalent: 0,
     costShares: null,
@@ -24646,7 +24663,8 @@ await forView('/analytics', async () => {
   // every breakdown read with two groups that a story group lends its shape: summed, the account key reads fewest and
   // a key the console has no label for stands between the two known ones, so the bars read largest first and the
   // unknown key keeps its name. An empty map beside a count of requests with nothing dropped still draws the lines, so
-  // the card's empty text waits for both counts as well as the map.
+  // the card's empty text waits for both counts as well as the map. The first group's keys arrive in another order
+  // than the console lists them, so the table's columns read the list's order.
   const breakdownRead = api.getAnalyticsBreakdown;
   const END_USER = 'thinking_dropped.end_user_binding_mismatch';
   const PREFIX = 'thinking_dropped.prefix_binding_mismatch';
@@ -24676,7 +24694,7 @@ await forView('/analytics', async () => {
     return read;
   };
   const drawn = await cardWith([
-    { inputTransformations: { [END_USER]: 2, [PREFIX]: 6 }, inputTransformationsMoved: 1, inputTransformationsNone: 20, requests: 40 },
+    { inputTransformations: { [PREFIX]: 6, [END_USER]: 2 }, inputTransformationsMoved: 1, inputTransformationsNone: 20, requests: 40 },
     { inputTransformations: { [FUTURE]: 3, [PREFIX]: 1 }, inputTransformationsMoved: 0, inputTransformationsNone: 5, requests: 10 },
   ]);
   const empty = await cardWith([
@@ -25393,7 +25411,7 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
     // bucket holds its traffic from 02:30 and its 09:00 bucket up to 09:30, both partial, while the route's two cover
     // 02:00 to 03:00 and 09:00 to 10:00 and are whole. A session counts among the filters the rewrites route passes by,
     // so that card names the Session filter.
-    const name = "/analytics a past session span starting and ending inside an hour notes the folded outcome and speed charts' cut first and last buckets, and Migration rewrites, whole on its route, carries no note";
+    const name = "/analytics a past session span starting and ending inside an hour notes the folded outcome and speed charts' cut first and last buckets, and Migration rewrites, whole on its route, carries no partial-bucket note";
     const session = requests.find((r) => r.agentId === 'c21e')?.sessionId ?? '';
     const page = await mount(`/analytics?session=${encodeURIComponent(session)}&from=2026-09-16T02:30:00.000Z&to=2026-09-16T09:30:00.000Z`, { now: CLOCK_ORIGIN });
     const subtitleOf = (title) => [...page.container.querySelectorAll('#traffic .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('.card__subtitle')?.textContent?.trim() ?? null;
@@ -26927,38 +26945,40 @@ await forView('/sessions', async () => {
   }
   {
     // An agent whose first request came after its session's lists in a narrower range than the session's, so a line's
-    // link reads its agent's own first request and the row's link the session's. The page mounts 30 minutes after the
-    // agent's first request of the listed pair with the widest gap between 30 minutes and 5 hours, so the agent's first
-    // request lies inside the hour less the link's minute of headroom and the session's past it, inside six hours. On
-    // the story the pair is the main agent of the session the mod ended (`9b4e2f71`, `sessionSpec[17]`), its first
-    // request 39 minutes after its session's, which the Finished sessions filter draws.
+    // link reads its agent's own first request and the row's link the session's. The line's agent holds two requests in
+    // the range its link opens, so a link that read its last request as its first would open a narrower one. On the
+    // story's instant the case picks the listed line whose first request lies past the hour and inside six hours, each
+    // less the link's minute of headroom, whose last request lies inside the hour and whose session's first request lies
+    // past six hours. On the story that is main of the fork 229bf72c, its first request at 12:33 and its last at 14:01,
+    // and its session's first at 18:16 the day before. The row's link then opens 24 hours, the request log's default,
+    // which its address leaves out.
     const MINUTE = 60_000;
     const HOUR = 60 * MINUTE;
     const drawnIds = (s) => new Set([...s.agentContexts.map((c) => c.agentId), ...recipes.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId && r.agentState !== 'released').map((r) => r.agentId)]);
-    const firstOf = (s, agentId) => s.agentRequests.find((e) => e.agentId === agentId)?.firstRequestAt ?? null;
-    const pairs = listed.flatMap((s) =>
-      s.historical || s.firstRequestAt === null
-        ? []
-        : [...drawnIds(s)].flatMap((agentId) => {
-            const first = firstOf(s, agentId);
-            return first === null ? [] : [{ gap: Date.parse(first) - Date.parse(s.firstRequestAt), line: { agentId, firstRequestAt: first }, session: s }];
-          }),
-    ).filter((p) => p.gap >= 30 * MINUTE && p.gap <= 5 * HOUR);
-    const widest = pairs.sort((a, b) => b.gap - a.gap)[0];
-    const at = widest === undefined ? CLOCK_ORIGIN : Date.parse(widest.line.firstRequestAt) + 30 * MINUTE;
-    const page = await mount('/sessions?finished=1', { now: at });
-    const tr = await open(page, widest?.session);
-    const line = linesOf(page, tr).lines.find((l) => l.agent === widest?.line.agentId);
+    const within = (at, ms) => at !== null && CLOCK_ORIGIN - Date.parse(at) <= ms - MINUTE;
+    const picked = listed
+      .flatMap((s) =>
+        s.historical || s.firstRequestAt === null
+          ? []
+          : [...drawnIds(s)].flatMap((agentId) => {
+              const entry = s.agentRequests.find((e) => e.agentId === agentId);
+              return entry === undefined ? [] : [{ entry, session: s }];
+            }),
+      )
+      .find(({ entry, session }) => !within(entry.firstRequestAt, HOUR) && within(entry.firstRequestAt, 6 * HOUR) && within(entry.lastRequestAt, HOUR) && !within(session.firstRequestAt, 6 * HOUR));
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const tr = await open(page, picked?.session);
+    const line = linesOf(page, tr).lines.find((l) => l.agent === picked?.entry.agentId);
     tr?.querySelector('.menu__trigger')?.click();
     await page.settle(120);
     [...(tr?.querySelectorAll('.menu__list button') ?? [])].find((b) => b.textContent?.trim() === 'View in requests')?.click();
     await page.settle(300);
-    const read = { line: new URL(line?.agentHref ?? '', 'http://console.test').searchParams.get('range'), row: new URLSearchParams(page.location().search).get('range') };
+    const read = { line: new URL(line?.agentHref ?? '', 'http://console.test').searchParams.get('range'), row: { path: page.location().pathname, range: new URLSearchParams(page.location().search).get('range') } };
     page.unmount();
     results.push({
       name: "/sessions an agent line's link opens the range that covers its agent's own first request and the row's link the session's",
-      ok: widest !== undefined && JSON.stringify(read) === JSON.stringify({ line: '1h', row: '6h' }),
-      missing: [`line ${widest?.line.agentId} of session ${widest?.session.sessionId}, first request ${widest?.line.firstRequestAt}, the session's ${widest?.session.firstRequestAt}`, JSON.stringify(read)],
+      ok: picked !== undefined && JSON.stringify(read) === JSON.stringify({ line: '6h', row: { path: '/requests', range: null } }),
+      missing: [`line ${picked?.entry.agentId} of session ${picked?.session.sessionId}, first request ${picked?.entry.firstRequestAt}, last ${picked?.entry.lastRequestAt}, the session's ${picked?.session.firstRequestAt}`, JSON.stringify(read)],
     });
   }
   {
@@ -27790,6 +27810,33 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         JSON.stringify(read) === JSON.stringify({ busy: want.busy, main: want.main }) &&
         JSON.stringify(elsewhereRead) === JSON.stringify({ badges: ['+$', '+2'], figure: '$0.20', sub: 'equivalent' }),
       missing: [JSON.stringify(heads), JSON.stringify(read), `want ${JSON.stringify(want)}`, `e4b7 ${JSON.stringify(elsewhereRead)}`],
+    });
+  }
+  {
+    // The seed's agents spend on no account that tells their line's from their session's, so a stand-in hands e4b7,
+    // whose line sits on nightly in the story's first session on primary, two plan requests with no dollars billed and
+    // shares on nightly and secondary. Against its line the cell counts secondary alone, +1, and against the session it
+    // would count nightly and secondary, +2.
+    const NOTHING = { billedUsd: {}, billedUsdByAccount: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 };
+    const spend = { ...NOTHING, equivalent: 0.002, probes: NOTHING, requests: 2, shares: { nightly: { five_hour: 0.001, seven_day: 0.0005 }, secondary: { five_hour: 0.001, seven_day: 0.0005 } }, usd: 0.4 };
+    const handed = (s) => ({ ...s, agentRequests: s.agentRequests.map((e) => (e.agentId === 'e4b7' ? { ...e, spend } : e)) });
+    const { listSessions } = api;
+    api.listSessions = async () => (await listSessions.call(api)).map((s) => (at(story)(s) ? handed(s) : s));
+    let read;
+    try {
+      const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+      const { heads, rows } = agentsOf(await openRow(page, story));
+      const line = rows.find((r) => r.agent === 'e4b7');
+      const cost = line?.tr.children[heads.indexOf('Cost')] ?? null;
+      read = { account: line?.account ?? null, badges: [...(cost?.querySelectorAll('.badge') ?? [])].map(textOf) };
+      page.unmount();
+    } finally {
+      api.listSessions = listSessions;
+    }
+    results.push({
+      name: "/sessions an agent's +N counts the accounts its requests spent on other than its line's, where its line sits off its session's account and spent on it",
+      ok: story !== undefined && JSON.stringify(read) === JSON.stringify({ account: 'nightly', badges: ['+1'] }),
+      missing: [JSON.stringify(read)],
     });
   }
   {

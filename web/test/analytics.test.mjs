@@ -682,6 +682,12 @@ test('the address carries a unit as text and a bare address none', () => {
   assert.equal(d.ANALYTICS_CODEC.toParams({ ...bare, unit: 'share' }).toString(), 'unit=share');
 });
 
+test('Dollar equivalent and Billed dollars each name their cost label, and Native and All in dollars name none', () => {
+  // The Keys and Pools cost tiles and a pool card's cost row read it, so a position it drops draws the Native label
+  // over a dollar figure.
+  assert.deepEqual(['equivalent', 'usd', 'native', 'all'].map((unit) => d.namedCostLabel(unit)), [d.UNIT_TILE_LABEL.equivalent, d.UNIT_TILE_LABEL.usd, null, null]);
+});
+
 test("one named account's shares sum over the groups the route answered them on, under any grouping", () => {
   const g = (costShares, planRequests = 2) => accountGroup({ costShares, planRequests });
   const plan = (x) => x.planRequests === null || x.planRequests > 0;
@@ -703,7 +709,7 @@ test("one named account's whole is unavailable where a group with plan usage ans
   assert.equal(d.oneAccountGroupOf(priced, [priced, unmapped]).costShares, null, 'and the whole the page reads is unavailable');
 });
 
-test('the idle slots of the plan card zero-fill against the flag, and an unpriced slot stays a gap', () => {
+test('the idle slots of the plan card zero-fill against the flag, and an unpriced slot stays a gap, one that sums a priced class among them', () => {
   const p = (at, over) => point(at * HOUR, 'desktop', { figure: 0.004, tokens: 100, uncachedTokens: 100, ...over });
   // The card answers a null figure with no cause for an idle bucket, and with the model's cause for one holding a row
   // the cost model could not price.
@@ -711,9 +717,12 @@ test('the idle slots of the plan card zero-fill against the flag, and an unprice
   assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.004, 0, null], 'the idle slot reads zero and the unpriced one stays a gap');
   assert.ok(Math.abs(lines[0].perHour - 0.002) < 1e-12, 'the mean counts the idle slot and leaves the gap out');
   assert.equal(lines[0].unpriced, true, 'the legend reads the flag');
+  // Main and subagent fold into the one conversation slot, whose sum would read the priced class alone as the whole.
+  const classes = d.foldBurn([point(0, 'main', { figure: 0.004, uncachedTokens: 100 }), point(0, 'subagent', { gap: 'unpriced', uncachedTokens: 100 })], 'request_class', 3_600, NONE);
+  assert.equal(classes.rows[0].equivalent[0], null, 'a priced class beside one with the model\'s gap leaves the slot a gap');
 });
 
-test("a range whose later revision drops the chosen tier's capacity draws its earlier buckets and leaves its later ones as the tier's gaps", () => {
+test("a range whose later revision drops the chosen tier's capacity draws its earlier buckets and leaves its later ones as the tier's gaps, a slot that sums a priced class among them", () => {
   // The card hands the first hour its figure under the chosen tier, the second the tier's gap its revision left, and
   // the third the zero its billed rows add, which drew nothing from the plan.
   const points = [point(0, 'a', { figure: 0.1, uncachedTokens: 100 }), point(HOUR, 'a', { gap: 'unsized', uncachedTokens: 100 }), point(2 * HOUR, 'a', { figure: 0, uncachedTokens: 100 })];
@@ -721,6 +730,9 @@ test("a range whose later revision drops the chosen tier's capacity draws its ea
   assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.1, null, 0], 'the gap stays null on a line that priced another bucket');
   assert.deepEqual([lines[0].unsized, lines[0].unpriced], [true, false], "the line carries the tier's gap alone");
   assert.deepEqual(rows.map((r) => r.unsized[0]), [false, true, false], 'each slot reads its own cause');
+  // Main and subagent fold into the one conversation slot, whose sum would read the priced class alone as the whole.
+  const classes = d.foldBurn([point(0, 'main', { figure: 0.1, uncachedTokens: 100 }), point(0, 'subagent', { gap: 'unsized', uncachedTokens: 100 })], 'request_class', 3_600, NONE);
+  assert.equal(classes.rows[0].equivalent[0], null, "a priced class beside one with the tier's gap leaves the slot a gap");
 });
 
 test("the plan cards' colors read one order, every fold's named lines, so a group one card draws and another folds into its rest keeps a color", () => {

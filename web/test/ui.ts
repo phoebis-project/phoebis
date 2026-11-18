@@ -22,6 +22,7 @@ export { RangeControl } from '@/components/RangeControl';
 export { RefreshControl } from '@/components/RefreshControl';
 export { SortControl } from '@/components/SortControl';
 export { ChartTooltip } from '@/components/charts/Tooltip';
+export { TIME_BAR } from '@/components/charts/bars';
 export { PlanRates } from '@/components/costs/PlanRates';
 export { PAGE_TITLES } from '@/components/shell/Shell';
 export { OptionList } from '@/components/ui/OptionList';
