@@ -1028,15 +1028,25 @@ impl Drop for CompletionGuard {
 }
 
 /// Publishes `event` from a `Drop`, which cannot await. A stream's last poll that awaited the publish would lose the
-/// event with a caller that leaves during the wait, so the durable publish runs on the current runtime under `bodies`,
-/// the body tracker the shutdown drains. A `best_effort` fact goes out through the bus's counted drop, and so does any
-/// fact with no runtime current, as for an owner dropped outside one.
+/// event with a caller that leaves during the wait, so with a runtime current a task on it publishes under `bodies`,
+/// the body tracker the shutdown drains. The task takes the bus's counted drop for a `best_effort` fact and waits for
+/// the bus's capacity for any other. With no runtime current the fact takes the counted drop, as for an owner dropped
+/// outside one.
 pub(crate) fn publish_from_drop(bodies: &TaskTracker, bus: Bus, event: Event, best_effort: bool) {
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) if !best_effort => {
-            bodies.spawn_on(async move { bus.publish_fact(event).await }, &handle);
+        Ok(handle) => {
+            bodies.spawn_on(
+                async move {
+                    if best_effort {
+                        bus.publish(event);
+                    } else {
+                        bus.publish_fact(event).await;
+                    }
+                },
+                &handle,
+            );
         }
-        _ => bus.publish(event),
+        Err(_) => bus.publish(event),
     }
 }
 
