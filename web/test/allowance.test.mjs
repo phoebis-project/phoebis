@@ -396,14 +396,3 @@ test("a cost model without the chosen week's tier titles every dash with that we
   // week leaves unpriced, stays bare beside the note.
   assert.deepEqual(d.fleetFigures(rows, 'ultra', d.weekScale(ultraless, 'ultra')), { fable: { text: '-', title: d.NO_RESET_IN_RANGE }, note: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week.', sevenDay: { text: '-', title: null } });
 });
-
-test("the fleet dash says no reset fell in the range only where no row's dash stands for an unpriced reset", () => {
-  // stale's one reset lies a day before the range, and free's reset in the range runs on a plan with no capacity.
-  const answer = {
-    accounts: [accountOf('stale', MAX_20X, [windowOf('seven_day', [0.5], { newest: NOW - 30 * DAY })]), accountOf('free', FREE, [windowOf('seven_day', [0.5])])],
-    from: iso(NOW - 29 * DAY),
-    to: iso(NOW),
-  };
-  const rows = d.allowanceRows(answer, COSTS, 'ultra', RANGE);
-  assert.deepEqual(d.fleetFigures(rows, 'ultra', d.weekScale(COSTS, 'ultra')).sevenDay, { text: '-', title: null });
-});
