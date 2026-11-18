@@ -14,6 +14,7 @@ import { useAppSettings } from '@/app/settings';
 import { useAddressEdit } from '@/app/useAddressEdit';
 import { useHashLanding } from '@/app/useHashLanding';
 import { AttentionRows } from '@/components/AttentionRows';
+import { TIME_BAR } from '@/components/charts/bars';
 import { COUNT_AXIS } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { Legend, timeTip } from '@/components/charts/Tooltip';
@@ -853,7 +854,7 @@ const PoolTraffic = memo(function PoolTraffic({ requests24h, traffic }: { reques
                 { label: 'tokens', value: fmtCompact(p.tokens) },
               ])}
             />
-            <Bar dataKey="requests" fill={ink.series[0]} radius={[3, 3, 0, 0]} maxBarSize={14} isAnimationActive={false} />
+            <Bar dataKey="requests" fill={ink.series[0]} maxBarSize={14} {...TIME_BAR} />
             <Line type="monotone" dataKey="average" stroke={ink.ink2} strokeWidth={2} dot={false} isAnimationActive={false} />
           </ComposedChart>
         </ResponsiveContainer>

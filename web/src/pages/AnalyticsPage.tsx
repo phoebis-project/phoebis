@@ -922,7 +922,7 @@ export function AnalyticsPage() {
                 <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
-                  <YAxis {...COUNT_AXIS} allowDecimals />
+                  <YAxis {...COUNT_AXIS} />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(p.tokens[s.key]) })))} />
                   {stackedBars(TOKEN_SERIES, (s) => `tokens.${s.key}`, ink)}
                 </BarChart>
@@ -1166,7 +1166,7 @@ export function AnalyticsPage() {
                 <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
-                  <YAxis {...COUNT_AXIS} allowDecimals />
+                  <YAxis {...COUNT_AXIS} />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[2], label: 'kept-warm tokens', value: keptWarm === null || p.keptWarm === null ? '-' : fmtCompact(keptWarmTokens(p.keptWarm)) }])} />
                   {keptWarm !== null && <Bar dataKey={(p: Bucket) => (p.keptWarm === null ? null : keptWarmTokens(p.keptWarm))} fill={ink.series[2]} maxBarSize={22} {...TIME_BAR} />}
                 </BarChart>
@@ -2357,7 +2357,7 @@ function RewritesCard({ answer, axis, error, inForce, partial }: { answer: Rewri
       <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
         <XAxis {...axis} />
-        <YAxis {...COUNT_AXIS} allowDecimals />
+        <YAxis {...COUNT_AXIS} />
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<{ at: number; rewriteTokens: number }>((p) => [{ color: ink.series[1], label: 'rewrite tokens', value: fmtCompact(p.rewriteTokens) }])} />
         <Bar dataKey="rewriteTokens" fill={ink.series[1]} maxBarSize={22} {...TIME_BAR} />
       </BarChart>
