@@ -3,10 +3,10 @@ import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS } from '@/api';
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type CreatePoolInput, type OverviewRange, type PoolEngineFields } from '@/api/client';
-import { oneOf } from '@/api/decode';
+import { oneOf, perFeature } from '@/api/decode';
 import { isStaleEdit, slug } from '@/api/http';
 import type {
-  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, FeatureAccountIds, FeatureWord, KeepaliveOverview, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, ReturnToPlan,
+  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, FeatureAccountIds, KeepaliveOverview, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, ReturnToPlan,
   SessionPlacement, SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
 import { FEATURE_WORD_VALUES } from '@/api/types';
@@ -1128,9 +1128,6 @@ const BUDGET_FIELDS = [
 
 const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === seconds);
 
-/** Each feature word with the account `of` names for it, the shape the form and the input hold. */
-const byFeature = (of: (feature: FeatureWord) => string | null): FeatureAccountIds => Object.fromEntries(FEATURE_WORD_VALUES.map((f) => [f, of(f)])) as FeatureAccountIds;
-
 const blankForm = (): PoolForm => ({
   affinity: 3_600,
   affinityMode: POOL_AFFINITY_DEFAULTS.affinityMode,
@@ -1143,7 +1140,7 @@ const blankForm = (): PoolForm => ({
   customAffinity: false,
   engine: { ...POOL_ENGINE_DEFAULTS },
   failoverCustom: false,
-  featureAccounts: byFeature(() => null),
+  featureAccounts: perFeature(() => null),
   guardrails: [],
   horizonOn: KEEPALIVE_DEFAULTS.scheduledHorizonSeconds !== null,
   horizonSeconds: KEEPALIVE_DEFAULTS.scheduledHorizonSeconds ?? 3_600,
@@ -1200,7 +1197,7 @@ const formFrom = (pool: Pool): PoolForm => ({
     windDownMinutes: pool.windDownMinutes,
   },
   failoverCustom: failoverPresetOf(pool) === 'custom',
-  featureAccounts: byFeature((f) => pool.featureAccounts[f]),
+  featureAccounts: pool.featureAccounts,
   guardrails: guardrailIdsOf(pool.guardrails),
   horizonOn: pool.keepalive.scheduledHorizonSeconds !== null,
   horizonSeconds: pool.keepalive.scheduledHorizonSeconds ?? 3_600,
@@ -1397,7 +1394,7 @@ export function PoolDialog({
     bodyCaptureHours: form.capture ? held(form.captureHours) : 0,
     cacheDiagnostics: form.cacheDiagnostics,
     cacheTtl: form.cacheTtl,
-    featureAccounts: byFeature((f) => form.featureAccounts[f]),
+    featureAccounts: form.featureAccounts,
     // With warming off the block is disabled, so what it holds goes back as stored: an edit left in it can
     // neither reach the policy nor hold up the save.
     keepalive: warming

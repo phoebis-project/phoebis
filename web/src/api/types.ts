@@ -220,9 +220,9 @@ export interface Account {
   /** The fast lane's input and output buckets as the router last read them, and `null` until an answer to a fast
    * request carried them. */
   fastLane: { input: FastLaneReading | null; output: FastLaneReading | null } | null;
-  /** The features the stored credential's scopes cover, in alphabetical order: empty for an OAuth account with no
-   * stored credential, and null for an api_key account. */
-  featureGrants: FeatureWord[] | null;
+  /** The features the stored credential's scopes cover, in alphabetical order: empty for an API-key account, for a
+   * credential that holds neither scope and for an OAuth account with no stored credential. */
+  featureGrants: FeatureWord[];
   id: string;
   kind: AccountKind;
   label: string;
@@ -695,9 +695,6 @@ export interface ApiKey {
   /** The companion routes the key permits, in the order `allowance`, `keepalive`: both for a new key. */
   companionPermissions: CompanionPermission[];
   createdAt: string;
-  /** The account each feature of the key acts under, null for none: the key's own where it names an account or none,
-   * else the pool's. */
-  effectiveFeatureAccounts: FeatureAccountIds;
   /** The stored switch, which `status` folds expiry and revocation over; an edit sends it back as it stands. */
   enabled: boolean;
   expiresAt: string | null;
@@ -1209,7 +1206,6 @@ export interface FeatureCallQuery {
   /** Unix milliseconds. */
   from?: number;
   keys?: string[];
-  limit?: number;
   outcomes?: FeatureOutcome[];
   /** Unix milliseconds. */
   to?: number;
@@ -2424,15 +2420,12 @@ export interface CostRevision {
   effectiveDate: string | null;
 }
 
-/** The feature listener's address and its CA. */
+/** The feature listener's CA. */
 export interface FeatureSettings {
-  /** The CA's end, as an ISO instant. */
-  caExpires: string;
   /** The SHA-256 of the bytes the CA download serves, as 64 lowercase hex characters, which each launcher compares. */
   caFingerprint: string;
   /** The CA's certificate as PEM text. */
   caPem: string;
-  listen: string;
 }
 
 export interface Settings {

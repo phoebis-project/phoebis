@@ -1144,10 +1144,10 @@
 .accounts__list,
 .drawer {
   position: sticky;
-  top: calc(var(--main-top) + 20px);
+  top: calc(var(--main-top) + var(--drawer-dock, 0px) + 20px);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - var(--main-top) - 44px);
+  max-height: calc(100vh - var(--main-top) - var(--drawer-dock, 0px) - 44px);
   overflow: auto;
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -1755,8 +1755,7 @@
    1 px hairline), rounded up, ahead of the drawer's own 20 px, and its greatest height gives up the same 54 px. */
 @media (min-width: 1100.02px) {
   .requests > .drawer {
-    top: calc(var(--main-top) + 54px + 20px);
-    max-height: calc(100vh - var(--main-top) - 54px - 44px);
+    --drawer-dock: 54px;
   }
 }
 
@@ -2383,25 +2382,8 @@
   margin-bottom: 12px;
 }
 
-/* The card's two subtitles in one cell, so the taller sets the head's height whichever shows. */
-.client-config__subtitles {
-  display: grid;
-}
-
-.client-config__subtitle {
-  grid-area: 1 / 1;
-}
-
-/* Keeps its room in the head and takes no pointer, no focus and no place in the accessibility tree. */
-.client-config__unshown {
-  visibility: hidden;
-}
-
 .feature-ca {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  align-items: center;
+  row-gap: 4px;
   margin-bottom: 10px;
   font-size: 12.5px;
 }

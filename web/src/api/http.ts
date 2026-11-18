@@ -285,7 +285,7 @@ export class HttpApi implements Api {
   };
   listCatalogOf = async (accountIds: string[]): Promise<CatalogModel[]> => catalogUnion(await Promise.all(accountIds.map((id) => this.getAccountCatalog(id).catch(() => null))));
   listFeatureCalls = async (q: FeatureCallQuery = {}) =>
-    d.decodeFeatureCallPage(await call('GET', `/admin/feature-calls${qs({ accounts: q.accounts, cursor: q.cursor, features: q.features, from: q.from, keys: q.keys, limit: q.limit, outcomes: q.outcomes, to: q.to })}`));
+    d.decodeFeatureCallPage(await call('GET', `/admin/feature-calls${qs({ accounts: q.accounts, cursor: q.cursor, features: q.features, from: q.from, keys: q.keys, outcomes: q.outcomes, to: q.to })}`));
   listGuardrailPresets = async () => (await call<{ presets: unknown[] }>('GET', '/admin/guardrails/presets')).presets.map(d.decodeGuardrailPreset);
   listGuardrails = async () => (await call<{ guardrails: unknown[] }>('GET', '/admin/guardrails')).guardrails.map(d.decodeGuardrail);
   listKeepaliveRecipes = async () => (await call<{ recipes: unknown[] }>('GET', '/admin/keepalive/recipes')).recipes.map(d.decodeRecipe);

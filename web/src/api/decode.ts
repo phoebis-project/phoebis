@@ -1,6 +1,6 @@
 import type {
   Account, AccountCatalog, AccountKind, AccountRollup, AgentRequests, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FeatureAccountIds, FeatureCall, FeatureCallPage, FeatureSettings, FundedSum, GuardVerdict, InputTransformations, KeepaliveOverview, KeepaliveRecipe, KeyFeatureAccount, KeyFigures, KeyModels, Lifecycle, LimitResets, LimitResetsRead, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FeatureAccountIds, FeatureCall, FeatureCallPage, FeatureSettings, FeatureWord, FundedSum, GuardVerdict, InputTransformations, KeepaliveOverview, KeepaliveRecipe, KeyFeatureAccount, KeyFigures, KeyModels, Lifecycle, LimitResets, LimitResetsRead, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, ResetUse, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionDay, SessionInfo, SessionSpend, SessionSpendPart, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
@@ -30,12 +30,13 @@ const bool = (v: unknown, fallback = false): boolean => (typeof v === 'boolean' 
 const boolOrNull = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
 export const strings = (v: unknown): string[] => list(v).filter((x): x is string => typeof x === 'string');
 export const oneOf = <T extends string>(values: readonly T[], v: unknown): T | null => values.find((x) => x === v) ?? null;
+export const perFeature = <T>(of: (feature: FeatureWord) => T): Record<FeatureWord, T> => Object.fromEntries(FEATURE_WORD_VALUES.map((f) => [f, of(f)])) as Record<FeatureWord, T>;
 const accountKind = (v: unknown): AccountKind => oneOf(ACCOUNT_KIND_VALUES, v) ?? 'oauth';
 const budgetPeriod = (v: unknown): BudgetPeriod => oneOf(BUDGET_PERIOD_VALUES, v) ?? 'month';
 const rulesMode = (v: unknown): ModelRulesMode => oneOf(MODEL_RULES_MODE_VALUES, v) ?? 'extend';
 const featureAccountIds = (v: unknown): FeatureAccountIds => {
   const r = rec(v);
-  return { artifacts: strOrNull(r.artifacts), connectors: strOrNull(r.connectors) };
+  return perFeature((f) => strOrNull(r[f]));
 };
 /** A mode this build does not know reads as the store's default for a key, the pool's account. */
 const keyFeatureAccount = (v: unknown): KeyFeatureAccount => {
@@ -174,7 +175,7 @@ export function decodeAccount(v: unknown): Account {
     extraUsage: orNull(a.extra_usage, (x) => ({ disabledReason: strOrNull(x.disabled_reason), enabled: bool(x.is_enabled), inUse: bool(x.in_use), monthlyLimitCredits: numOrNull(x.monthly_limit), usedCredits: numOrNull(x.used_credits) })),
     fableWindow: windows.find((w) => w.id === '7d_fable') ?? null,
     fastLane: orNull(a.fast_lane, (f) => ({ input: fastLaneReading(f.input), output: fastLaneReading(f.output) })),
-    featureGrants: Array.isArray(a.feature_grants) ? FEATURE_WORD_VALUES.filter((w) => list(a.feature_grants).includes(w)) : null,
+    featureGrants: FEATURE_WORD_VALUES.filter((w) => list(a.feature_grants).includes(w)),
     id: str(a.id),
     kind: accountKind(a.kind),
     label: str(a.label),
@@ -306,15 +307,15 @@ export function decodeKey(v: unknown): ApiKey {
   const revoked = isoOrNull(k.revoked_at);
   // A row from a route that reports no `enabled` is taken as on rather than off.
   const enabled = bool(k.enabled, true);
+  const features = rec(k.feature_accounts);
   return {
     autoModeServer: boolOrNull(k.auto_mode_server),
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     companionPermissions: COMPANION_PERMISSION_VALUES.filter((p) => list(k.companion_permissions).includes(p)),
     createdAt: isoOr(k.created_at, epoch),
-    effectiveFeatureAccounts: featureAccountIds(k.effective_feature_accounts),
     enabled,
     expiresAt: expires,
-    featureAccounts: { artifacts: keyFeatureAccount(rec(k.feature_accounts).artifacts), connectors: keyFeatureAccount(rec(k.feature_accounts).connectors) },
+    featureAccounts: perFeature((f) => keyFeatureAccount(features[f])),
     guardrails: guardrailRefs(k.guardrails),
     id: str(k.id),
     lastUsedAt: isoOrNull(k.last_used_at),
@@ -1135,7 +1136,7 @@ export const decodeSessionInfo = (v: unknown): SessionInfo => {
 
 const featureSettingsOf = (v: unknown): FeatureSettings | null => {
   if (!isMap(v)) return null;
-  return { caExpires: isoOr(v.ca_expires, epoch), caFingerprint: str(v.ca_fingerprint), caPem: str(v.ca_pem), listen: str(v.listen) };
+  return { caFingerprint: str(v.ca_fingerprint), caPem: str(v.ca_pem) };
 };
 
 export function decodeSettings(v: unknown): Settings {
@@ -1169,7 +1170,7 @@ export const encodeKey = (i: KeyInput) => ({
   companion_permissions: i.companionPermissions,
   enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),
-  feature_accounts: { artifacts: encodeKeyFeature(i.featureAccounts.artifacts), connectors: encodeKeyFeature(i.featureAccounts.connectors) },
+  feature_accounts: perFeature((f) => encodeKeyFeature(i.featureAccounts[f])),
   label: i.name, long_context_twins: i.longContextTwins,
   model_rules: encodeModelRules(i.modelRules), model_rules_mode: i.modelRulesMode, notes: i.notes, pool_id: i.poolId,
   ...(i.guardrails === undefined ? {} : { guardrails: i.guardrails }),
@@ -1178,7 +1179,7 @@ export const encodePool = (i: PoolInput) => ({
   affinity_mode: i.affinityMode, affinity_ttl_seconds: i.affinityTtlSeconds, auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours,
   cache_diagnostics: i.cacheDiagnostics,
   cache_ttl: { enabled: i.cacheTtl.enabled, inject_when_absent: i.cacheTtl.injectWhenAbsent, metered: encodeTtlRules(i.cacheTtl.metered), plan: encodeTtlRules(i.cacheTtl.plan) },
-  enabled: i.status === 'active', feature_accounts: { artifacts: i.featureAccounts.artifacts, connectors: i.featureAccounts.connectors }, model_rules: encodeModelRules(i.modelRules),
+  enabled: i.status === 'active', feature_accounts: perFeature((f) => i.featureAccounts[f]), model_rules: encodeModelRules(i.modelRules),
   keepalive: { enabled: i.keepalive.enabled, max_idle_seconds: i.keepalive.maxIdleSeconds, max_parked_seconds: i.keepalive.maxParkedSeconds, scheduled_horizon_seconds: i.keepalive.scheduledHorizonSeconds },
   label: i.name, members: encodeMembers(i.members),
   min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription,

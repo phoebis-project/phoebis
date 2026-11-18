@@ -108,7 +108,7 @@ function FeatureCaLine({ features }: { features: FeatureSettings }) {
     return () => URL.revokeObjectURL(url);
   }, [features.caPem]);
   return (
-    <div className="feature-ca">
+    <div className="row feature-ca">
       <b>Feature CA fingerprint</b>
       <code>{features.caFingerprint}</code>
       <CopyButton text={features.caFingerprint} label="Copy fingerprint" />

@@ -1,11 +1,11 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
-import { iso } from '@/api/decode';
+import { iso, perFeature } from '@/api/decode';
 import { slug } from '@/api/http';
 import type { Account, ApiKey, FeatureWord, GuardrailRef, KeyFeatureAccount, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
-import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, FEATURE_WORD_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
+import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { byteOrder, fmtInt, toLocalInput, viewingZone } from './format';
 import { checkPattern } from './patterns';
-import { canceledEndOf } from './quota';
+import { canceledEndOf, isSubscription } from './quota';
 import { DAY } from './time';
 
 export type NumericKeepaliveKey = { [K in keyof PoolKeepalive]-?: PoolKeepalive[K] extends number | null ? K : never }[keyof PoolKeepalive];
@@ -327,11 +327,11 @@ export interface FeatureAccountOption {
  * behind the label, disabled where its grants lack the feature. An API-key account is left out. */
 export function featureAccountOptions(accounts: readonly Account[], feature: FeatureWord, poolNameOf: (accountId: string) => string | null): FeatureAccountOption[] {
   return accounts
-    .filter((a) => a.kind === 'oauth')
+    .filter(isSubscription)
     .sort((a, b) => a.label.localeCompare(b.label))
     .map((a) => {
       const named = `${a.label} (${poolNameOf(a.id) ?? 'no pool'})`;
-      const granted = a.featureGrants?.includes(feature) ?? false;
+      const granted = a.featureGrants.includes(feature);
       return { accountId: a.id, disabled: !granted, label: granted ? named : `${named}, holds no sign-in with this feature's scope. A new pairing adds it.` };
     });
 }
@@ -355,35 +355,19 @@ export function featureAccountOf(value: string): string | null {
   return value.startsWith(ACCOUNT_VALUE) ? value.slice(ACCOUNT_VALUE.length) : null;
 }
 
-type FeatureStanding = 'ended' | 'paused' | 'serving' | 'signed_out' | 'unfunded';
-
-// In the order the router admits a feature call: it refuses an account that is not ready, then one past its end, and
-// the pause stops model requests alone.
-function featureStanding(account: Account, now: number): FeatureStanding {
-  if (account.status === 'reauth_required' || account.status === 'unpaired') return 'signed_out';
-  if (account.status === 'funding_required') return 'unfunded';
-  // As the routing crate's `term::ended` reads it, an end at the instant of now has passed.
-  const passed = (at: string | null) => at !== null && Date.parse(at) <= now;
-  if (passed(canceledEndOf(account)) || passed(account.planEndedAt)) return 'ended';
-  return account.routingEnabled ? 'serving' : 'paused';
-}
-
 /** The line under a choice at `now` (Unix milliseconds), null for an account that serves. A state that refuses
  * reads ahead of a pause. */
 export function featureStandingLine(account: Account, now: number): string | null {
-  const { label } = account;
-  switch (featureStanding(account, now)) {
-    case 'ended':
-      return `${label} is past its plan's end. Feature calls are refused.`;
-    case 'paused':
-      return `${label} is paused. The pause stops its model requests, and its claude.ai features keep working.`;
-    case 'serving':
-      return null;
-    case 'signed_out':
-      return account.status === 'unpaired' ? `${label} is not paired. Feature calls are refused until it is paired.` : `${label} needs re-auth. Feature calls are refused until it is paired again.`;
-    case 'unfunded':
-      return `${label}'s organization needs funding. Feature calls are refused until then.`;
-  }
+  const { label, status } = account;
+  // In the order the router admits a feature call: it refuses an account that is not ready, then one past its end, and
+  // the pause stops model requests alone.
+  if (status === 'unpaired') return `${label} is not paired. Feature calls are refused until it is paired.`;
+  if (status === 'reauth_required') return `${label} needs re-auth. Feature calls are refused until it is paired again.`;
+  if (status === 'funding_required') return `${label}'s organization needs funding. Feature calls are refused until then.`;
+  // As the routing crate's `term::ended` reads it, an end at the instant of now has passed.
+  const passed = (at: string | null) => at !== null && Date.parse(at) <= now;
+  if (passed(canceledEndOf(account)) || passed(account.planEndedAt)) return `${label} is past its plan's end. Feature calls are refused.`;
+  return account.routingEnabled ? null : `${label} is paused. The pause stops its model requests, and its claude.ai features keep working.`;
 }
 
 export type AutoModeOverride = 'inherit' | 'off' | 'on';
@@ -434,8 +418,6 @@ export const sameMembers = (a: readonly string[], b: readonly string[]): boolean
 
 const INHERITED_FEATURE: KeyFeatureAccount = { accountId: null, mode: 'inherit' };
 
-const perFeature = <T>(of: (feature: FeatureWord) => T): Record<FeatureWord, T> => Object.fromEntries(FEATURE_WORD_VALUES.map((f) => [f, of(f)])) as Record<FeatureWord, T>;
-
 /** The dialog's starting fields: the stored key's, or a new key's in `poolId`. */
 export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
   return {
@@ -447,7 +429,7 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
     // say nothing about it.
     enabled: existing?.enabled ?? true,
     expiry: existing ? 'keep' : 'never',
-    featureAccounts: perFeature((f) => existing?.featureAccounts[f] ?? INHERITED_FEATURE),
+    featureAccounts: existing?.featureAccounts ?? perFeature(() => INHERITED_FEATURE),
     guardrails: guardrailIdsOf(existing?.guardrails ?? []),
     keepalive: existing?.companionPermissions.includes('keepalive') ?? true,
     longContextTwins: existing?.longContextTwins ?? true,
@@ -467,7 +449,7 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput & { guardrails?
     companionPermissions: COMPANION_PERMISSION_VALUES.filter((p) => form[p]),
     enabled: form.enabled,
     expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : iso(now + Number(form.expiry) * DAY),
-    featureAccounts: perFeature((f) => form.featureAccounts[f]),
+    featureAccounts: form.featureAccounts,
     longContextTwins: form.longContextTwins,
     modelRules: form.modelRules,
     modelRulesMode: form.modelRulesMode,

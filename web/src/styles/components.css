@@ -1002,15 +1002,21 @@ textarea.input {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
+/* The client card's two subtitles in one cell, so the taller sets the head's height whichever shows. */
+.client-config__subtitles,
 .refresh-control__word {
   display: grid;
 }
 
+.client-config__subtitle,
 .filter-bar__count-slot > *,
 .refresh-control__word > span {
   grid-area: 1 / 1;
 }
 
+/* The client card's unshown part keeps its room in the head and takes no pointer, no focus and no place in the
+   accessibility tree. */
+.client-config__unshown,
 .filter-bar__count-sizer,
 .refresh-control__sizer {
   visibility: hidden;

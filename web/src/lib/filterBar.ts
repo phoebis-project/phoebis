@@ -179,6 +179,7 @@ const KEY: Dimension = { field: 'keys', group: 'Routing', kind: 'list', label: '
 const MODEL: Dimension = { field: 'models', group: 'Routing', kind: 'list', label: 'Model', mono: true, word: 'model' };
 /** The whole catalog, which Requests and the Routing log offer, so the list opens on its search field. */
 const CATALOG_MODEL: Dimension = { ...MODEL, searchable: true };
+const OUTCOME: Dimension = { field: 'outcomes', group: 'Outcome', kind: 'list', label: 'Outcome', word: 'outcome' };
 const POOL: Dimension = { field: 'pools', group: 'Routing', kind: 'list', label: 'Pool', mono: true, word: 'pool' };
 const USER_AGENT: Dimension = { field: 'agent', group: 'Request', kind: 'pattern', label: 'User agent', mono: true, word: 'user agent' };
 /**
@@ -228,7 +229,7 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
   { anyLabel: 'Either', field: 'fallback', group: 'Outcome', kind: 'choice', label: 'Fallback', text: (v) => worded('fallback', v === 'true' ? 'yes' : 'no'), word: 'fallback' },
   { field: 'guardrails', group: 'Outcome', kind: 'list', label: 'Guardrail', word: 'guardrail' },
   { field: 'held', group: 'Outcome', kind: 'flag', label: 'Held only', word: 'held only' },
-  { field: 'outcomes', group: 'Outcome', kind: 'list', label: 'Outcome', word: 'outcome' },
+  OUTCOME,
   { field: 'refusalCategories', group: 'Outcome', kind: 'list', label: 'Refusal category', mono: true, word: 'refusal category' },
   {
     field: 'statuses',
@@ -272,7 +273,7 @@ export const FEATURE_CALLS_DIMENSIONS: Dimension[] = [
   { ...KEY, group: 'Feature calls' },
   { field: 'features', group: 'Feature calls', kind: 'list', label: 'Feature', word: 'feature' },
   { ...ACCOUNT, group: 'Feature calls' },
-  { field: 'outcomes', group: 'Feature calls', kind: 'list', label: 'Outcome', word: 'outcome' },
+  { ...OUTCOME, group: 'Feature calls' },
 ];
 
 /** Kinds, Routing, Subject: the kinds lead, since their presets are the way to narrow this view. */

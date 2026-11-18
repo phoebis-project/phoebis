@@ -688,19 +688,11 @@ export class MockApi implements Api {
 
   /**
    * The key as the route answers it, its own guardrails and its pool's read from the attachments at the time of the
-   * read, and its feature accounts resolved from its pool's selection at that time, since a pool write and a move of
-   * the key change them.
+   * read.
    */
   private keyView(k: KeyRow): ApiKey {
-    const pool = this.pools.find((p) => p.id === k.poolId);
-    // The router's rule: the key's own account or none, else its pool's selection, and none for a pool it lacks.
-    const effective = (feature: FeatureWord): string | null => {
-      const own = k.featureAccounts[feature];
-      return own.mode === 'inherit' ? (pool?.featureAccounts[feature] ?? null) : own.accountId;
-    };
     return {
       ...k,
-      effectiveFeatureAccounts: { artifacts: effective('artifacts'), connectors: effective('connectors') },
       guardrails: this.guardrailRefs('keys', k.id),
       poolGuardrails: this.guardrailRefs('pools', k.poolId),
     };
@@ -1418,7 +1410,7 @@ export class MockApi implements Api {
       .featureCalls.filter((c) => matchesFeatureCall(c, query))
       .sort((a, b) => compare(featureCallKey(a), featureCallKey(b)));
     const after = cursor === undefined ? matched : matched.filter((c) => compare(featureCallKey(c), cursor) > 0);
-    const limit = query.limit ?? 50;
+    const limit = 50;
     const page = after.slice(0, limit);
     const last = page[page.length - 1];
     return latency({ featureCalls: page, nextCursor: after.length > limit && last ? `${Date.parse(last.receivedAt)}:${last.id}` : null });

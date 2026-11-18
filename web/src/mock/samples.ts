@@ -12,10 +12,9 @@ export const ACCOUNT_ROLLUP_SAMPLE = decodeAccountRollups(body('analytics_accoun
 export const ANALYTICS_GROUP_SAMPLE = decodeAnalyticsGroup(first('analytics_breakdown', 'rows'));
 export const ATTENTION_ITEM_SAMPLE = decodeAttention(first('attention', 'items'));
 export const KEEPALIVE_OVERVIEW_SAMPLE = decodeKeepaliveOverview(body('keepalive_overview'));
-/** With no feature account of its own or its pool's, since the captured selections name accounts the mock lacks. */
+/** With no feature account of its own, since the captured selections name accounts the mock lacks. */
 export const KEY_SAMPLE: ApiKey = {
   ...decodeKey(first('keys', 'keys')),
-  effectiveFeatureAccounts: { artifacts: null, connectors: null },
   featureAccounts: { artifacts: { accountId: null, mode: 'inherit' }, connectors: { accountId: null, mode: 'inherit' } },
 };
 export const OVERVIEW_SAMPLE = decodeDashboard(body('dashboard'));
