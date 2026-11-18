@@ -146,9 +146,9 @@ resolver. A resolver of the network that answers both names for both families do
 two lines do for one.
 
 Where the router has no IPv6 address, write the second line with the IPv4-mapped form of its IPv4 address,
-`::ffff:192.0.2.10` for the address above. On Linux with glibc and curl 8.14.1 each name then resolves to both
-addresses, a connection over IPv6 reaches the IPv4 listener through the mapped address, and the launch script's check
-passes.
+`::ffff:192.0.2.10` for the address above. The measured case is the router's listener on the client's own machine, with
+the lines `127.0.0.1` and `::ffff:127.0.0.1`, on Linux with glibc and curl 8.14.1: each name resolved to both addresses,
+a connection over IPv6 reached the IPv4 listener through the mapped address, and the launch script's check passed.
 
 The client connects to a feature host on port 443 and to no other port, so the feature listener answers on port 443 of
 that address. [Port 443 for a DNS redirect](installation.md#port-443-for-a-dns-redirect) on the installation page holds
@@ -466,12 +466,13 @@ The script puts its own file in `CLAUDE_ENV_FILE`, so an env file that the shell
 command of the session. It clears no credential name: an `ANTHROPIC_AUTH_TOKEN` or an API key that the shell holds, such
 as one in `ANTHROPIC_API_KEY`, stays in the client's environment. Start the script from a shell that holds neither.
 
-With an `ANTHROPIC_API_KEY` in its environment the client asks whether to use it ("Do you want to use this API key?").
-Where the user declines, which is the answer the client recommends, both features stay on: the session holds the
-Artifact tool and a connector's tools. Where the user approves, the client prints "claude.ai connectors are disabled
-because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login", and its MCP
-view loads no connector. The Artifact tool under an approved key and a session under `ANTHROPIC_AUTH_TOKEN` are
-unmeasured. The client's code switches the features off in both, as the row of `CLAUDE_CODE_OAUTH_TOKEN` has it.
+In an interactive session with an `ANTHROPIC_API_KEY` in its environment, the client asks whether to use it ("Do you
+want to use this API key?"). Where the user declines, which is the answer the client recommends, both features stay on:
+the session holds the Artifact tool and a connector's tools. Where the user approves, the client prints "claude.ai
+connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai
+login", and its MCP view loads no connector. Whether a headless run asks the question is unmeasured. The Artifact tool
+under an approved key and a session under `ANTHROPIC_AUTH_TOKEN` are unmeasured too, and the client's code switches the
+features off in both, as the row of `CLAUDE_CODE_OAUTH_TOKEN` has it.
 
 `NODE_EXTRA_CA_CERTS` takes one path. Where `BASE_CA` names a private CA, the script writes that file and the feature CA
 into `ca-bundle.pem`, with a line break between them, and names the bundle.
@@ -516,11 +517,11 @@ in, and the client inherits it.
 | A session under `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` | the script's variables, since that mode skips the env file | as the row of a hook has it, for Bash commands too | as the row of a hook has it, for Bash commands too |
 | The PowerShell tool | the assignment lines of the env file | A name that held nothing reads as empty, and whether a child takes an empty proxy variable as none is unverified. | the same |
 
-The row of a hook is measured for two of its children. A `SessionStart` hook and a stdio MCP server of the project both
-held `HTTPS_PROXY`, `NO_PROXY` and `NODE_EXTRA_CA_CERTS` with the script's values, and a Bash command of the same
-session got the shell's values back through the env file. The hook's `CLAUDE_ENV_FILE` named a file of the client's own
-for that hook, and the server's named the script's file. For a helper command and the status line the row is read from
-the client's code.
+The environment that the row of a hook gives is measured for two of its children. A `SessionStart` hook and a stdio MCP
+server of the project both held `HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS` and `NO_PROXY` with the script's values, and a Bash
+command of the same session got the shell's values back through the env file. The hook's `CLAUDE_ENV_FILE` named a file
+of the client's own for that hook, and the server's named the script's file. The row's columns for the two setups, and
+its environment for a helper command and the status line, are read from the client's code.
 
 A child that must reach a feature host by itself needs an environment of its own. A stdio MCP server that calls the
 Messages API with a key of its own would send that key to the router and get a `401`. Under `SETUP=proxy` the cure is
@@ -648,8 +649,8 @@ read from its code at Claude Code 2.1.325.
 **At a start** the client sends several reads that get the `403`, its bootstrap read and its profile read among them,
 and under `max` and `pro` the reads [`CLAUDE_CODE_SUBSCRIPTION_TYPE`](client.md#claude_code_subscription_type) names. A
 `403` is the one status the client stays quiet on at each of them. One read goes out without a bearer,
-`GET /api/directory/server-urls`, and gets the `401` `auth_missing`, which costs the client one error line in its log.
-The session shows no error line for any of these reads.
+`GET /api/directory/server-urls`, and gets the `401` `auth_missing`, which by the client's code costs it one error line
+in its log. The session shows no error line for any of these reads.
 
 **Live updates of an artifact** do not work behind the router. After a publish the client opens a WebSocket for the
 page's live updates, the watch that tells a session of a new version or a comment. The upgrade request reaches the
@@ -670,9 +671,10 @@ answers behind it showed none. A key's own figures are on [Your key's usage](cli
 By the client's code the tool fails a call with "Unable to verify if domain {host} is safe to fetch" where the check
 gets no `200`, and the client's setting `skipWebFetchPreflight` skips the check.
 
-One more observation comes from a headless run. The client's `claude-artifacts` MCP server reports a failed connection,
-since the upstream answers its call, `POST /api/artifacts/mcp`, with `404`. The Artifact tool publishes, lists and reads
-through `/api/frame/`, so it works beside that report.
+The upstream answers the call of the client's `claude-artifacts` MCP server, `POST /api/artifacts/mcp`, with `404`. The
+interactive sessions got that answer twice at each start, each call a row of the feature call list with the outcome
+`forwarded`, and their MCP view listed no `claude-artifacts` entry. A headless run got it too and reports a failed
+connection of that server. The Artifact tool publishes, lists and reads through `/api/frame/`, so it works in both.
 
 ## The records
 
