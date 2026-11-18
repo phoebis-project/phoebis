@@ -21185,8 +21185,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // match fails the funded series alone.
       const real = api.getAnalyticsSeries;
       api.getAnalyticsSeries = (...args) => (args[0]?.funding !== undefined && args[0].includeProbes !== true ? Promise.reject(new Error('ledger locked')) : real.apply(api, args));
-      let tiles = [];
-      let wasted = '';
+      let tiles;
+      let wasted;
       try {
         localStorage.removeItem('phoebis.unit');
         const page = await mount('/analytics#cache-warming');
