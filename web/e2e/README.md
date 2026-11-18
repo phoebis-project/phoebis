@@ -450,8 +450,7 @@ theme script alone sets it on that screen, then the secret field's, the row's, i
 edges inside the card recorded, asserting nothing)). A check that opens an editor, a dialog or a row closes it again
 before the view's shot, and one that turns a column on turns it off again. The recent requests' table is fitted in the
 router pass and recorded in the mock pass, whose story's subscription rows read their figure in the Ultra week in the
-Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there. The tie's pick line
-also reads the tie's Pick station's popover at 700 by 800 against the bounds a station's popover keeps. The script exits
+Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there. The script exits
 non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git

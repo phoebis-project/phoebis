@@ -79,13 +79,12 @@ export { breakdownOf, burnOf, placementsOf, refusalCategoriesOf, rewritesOf } fr
 export { PRIOR_BURN } from '@/mock/fit';
 export { leadOf } from '@/mock/lead';
 export { insideSessionExpiry, refusalOnlyRows, sessionsListedAt, withinNonCompanionTimeout } from '@/mock/operations';
-export { ROUTING_EVENTS } from '@/mock/routingLog';
 export { poolById } from '@/mock/pools';
 export { ALL_ROLLUPS, requestById, rollups } from '@/mock/requests';
 export { GUARDRAIL_STORY_IDS, NIGHTLY_CAP_RAISED, SESSION_IDS, STORY_IDS, UNSEEDED_IDS } from '@/mock/requests';
 export { partitionsOf, placementFactOf, stretchTriggerOf } from '@/mock/routingLog';
 export { rewriteOf, runwayTiesOf } from '@/mock/routingLog';
 export { budgetsAt, obstacleOf } from '@/mock/routingLog';
-export { STORY_PINS } from '@/mock/routingLog';
+export { ROUTING_EVENTS, STORY_PINS } from '@/mock/routingLog';
 export { tablesFor } from '@/mock/samples';
 export { fakeClock } from '../smoke/clock';

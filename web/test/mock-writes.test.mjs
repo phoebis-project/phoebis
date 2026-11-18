@@ -368,7 +368,10 @@ test("a deleted key's session rows read historical and keep their placements, as
   const after = await laptop();
   assert.deepEqual([...new Set(before.map((s) => s.historical))], [false], "the story's laptop rows read live");
   assert.deepEqual([...new Set(after.map((s) => s.historical))], [true], 'each of them reads historical once the key is gone');
-  assert.deepEqual(after.map((s) => s.placements), before.map((s) => s.placements), 'the delete moves no placement');
+  // A historical row reports no companion, so laptop's silent row, idle 95 minutes (mock/operations.ts), leaves the
+  // list past the 3,600 s non-companion timeout, as the route drops it.
+  const placements = (rows) => rows.map((s) => [s.sessionId, s.placements]);
+  assert.deepEqual(placements(after), placements(before.filter((s) => s.companion !== 'silent')), 'the delete moves no placement');
 });
 
 test("a pool deleted and created again under its id counts the pins of the keys it holds now, so it reads no former member's pin", async () => {

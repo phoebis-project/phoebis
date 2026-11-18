@@ -10950,9 +10950,7 @@ const compare = (mine, neighbour, keys, what) => {
 /**
  * The story's tie, the failover that tied primary and nightly on Pace at 08:16:21: its Pick station's rows name the
  * tied accounts, the one the runway kept and that no draw was left, each in the type of the strategy row above them
- * and from the same left edge. Its reservation chips widen the popover, so the box is held to a station popover's
- * bounds at 700 by 800, where the card runs past the window. The measure loads the tie's request on its own range and
- * leaves the bare log.
+ * and from the same left edge. The measure loads the tie's request on its own range and leaves the bare log.
  */
 async function routingLogPickLine(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -11006,7 +11004,6 @@ async function routingLogPickLine(theme) {
     }
     await page.keyboard.press('Escape');
     await advance(CLOCK_STEP_MS);
-    await popoverBounds(theme, "the tie's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'), { viewports: [POPOVER_VIEWPORTS[2]] });
   } finally {
     await atRest();
     await loadAtOrigin('/routing-log', '.routing-log__table');

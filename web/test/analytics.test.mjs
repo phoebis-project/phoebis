@@ -631,6 +631,13 @@ test("the session fold counts a client's cancel apart from the failures and the 
   assert.deepEqual([folded.clientCanceled, folded.failed, { ...folded.errors }], [1, 2, { client_gone: 1, router_shutdown: 1 }]);
 });
 
+test("the session fold counts a client's cancel whose head answered 429 under client canceled and none under rate limited", () => {
+  // The router stores a client that left mid-body with the status of the head it had already relayed.
+  const [row] = d.decodeRequestPage(fixture('requests')).requests;
+  const [folded] = d.foldGroups([{ ...row, errorCode: 'client_gone', id: 'r-left', kind: 'inference', outcome: 'canceled', status: 429 }], 'all');
+  assert.deepEqual([folded.clientCanceled, folded.rateLimited], [1, 0]);
+});
+
 test('the cooldown move reason reads failed over', () => {
   assert.equal(d.moveLabel('cooldown'), 'failed over', 'every reader of the map takes the word through moveLabel');
 });

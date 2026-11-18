@@ -713,7 +713,6 @@ function buildRequests(): RequestLog[] {
     // The marker reads the session, so the reasons the member decides follow its draw. They draw from a stream of their
     // own, so their place moves no draw of the main stream.
     const ownMarker = ownMarkerOf({ classifier: REQUEST_SAMPLE.classifier, kind, poolId: lane.poolId, sessionId });
-    const cacheMarker = markerOf({ kind, poolId: lane.poolId, requestClass: REQUEST_SAMPLE.requestClass }, ownMarker);
     const source = sourceOf(lane.keyId, lane.poolId, kind, tried.length > 0, ownMarker);
     const diagnosis = diagnosed(tried, kind);
     const attempts =
@@ -727,7 +726,6 @@ function buildRequests(): RequestLog[] {
       id,
       at: iso(atMs),
       autoMode,
-      cacheMarker,
       keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),
       keyId: lane.keyId,
       poolId: lane.poolId,
@@ -788,14 +786,12 @@ function buildRequests(): RequestLog[] {
       // The pool's one member takes the request once: the answering attempt is the request's only one.
       const answered = moved.attempts[moved.attempts.length - 1];
       const notebookOwnMarker = ownMarkerOf({ ...moved, poolId: 'work' });
-      const notebookMarker = markerOf({ ...moved, poolId: 'work' }, notebookOwnMarker);
       const notebookSource = sourceOf('notebook', 'work', kind, true, notebookOwnMarker);
       Object.assign(moved, {
         accountId: 'studio',
         attempts: [{ ...onAccount(answered, 'studio', Date.parse(answered.startedAt)), cacheMissReason: answered.cacheMissReason, index: 0 }],
         // The answering attempt keeps its start, so the request runs from its arrival to that attempt's end.
         durationMs: attemptEnd(answered) - atMs,
-        cacheMarker: notebookMarker,
         canonicalModel: drawn,
         capturedBodies: false,
         costUsd: round(costOf(drawn, moved.usage, false, atMs), 4),
@@ -2262,6 +2258,8 @@ function traceRequests() {
     const members = LANES.find((l) => l.keyId === r.keyId)?.accountIds ?? [];
     const drawnClass = r.compaction ? 'compaction' : r.agentId !== 'main' && r.kind !== 'probe' ? 'subagent' : h.weighted([{ value: 'auxiliary', weight: 3 }, { value: 'main', weight: 16 }, { value: 'workflow', weight: 1 }]);
     r.requestClass = drawnClass;
+    // The pool's policy adds no marker to an auxiliary class, so the marker waits for the class drawn here.
+    r.cacheMarker = markerOf(r, ownMarkerOf(r));
     r.attempts = r.attempts.map((a, i, all): Attempt => {
       const moved = migrationAt(r, a)?.detail?.reason;
       // The ledger folds the cache read into the trace of the attempt that answered, and only once it did.
@@ -3511,18 +3509,24 @@ function accountRollups(): AccountRollup[] {
       if (t >= from && t <= until) out.push(row);
     }
     // The current hour holds no attempt, so the route lists it with zero counts and its samples' peaks. Its cooldown
-    // counts each row the account holds, its own and each one a story attempt's answer set, one row per scope and
-    // end as the routing log merges them, from the later of its start and the hour's start to the earlier of its end
-    // and the read, as the route cuts the part it booked past the clock. It draws nothing, so the stream of the hours
-    // before it stays.
+    // counts each row the account holds, its own and each one a story attempt's answer set, in the order they were
+    // set, from the latest of its start, the end its scope already counted and the hour's start to the earlier of its
+    // end and the read. The ledger books a scope's later row only past the end that scope counted, and the route cuts
+    // the part it booked past the clock. It draws nothing, so the stream of the hours before it stays.
     if (end >= from && end <= until) {
       const hourPeak = (id: WindowId): number | null => {
         const peak = sampleIndex.get(`${account.id}|${id}`)?.get(end);
         return peak === undefined ? null : round(peak, 3);
       };
       const own = account.cooldowns.map((c) => ({ scope: c.scope, setAt: Date.parse(c.setAt), until: Date.parse(c.until) }));
-      const rows = [...new Map([...own, ...ATTEMPT_COOLDOWNS.filter((c) => c.accountId === account.id)].map((c) => [`${c.scope}|${c.until}`, c])).values()];
-      const cooledMs = rows.reduce((n, c) => n + Math.max(0, Math.min(c.until, NOW) - Math.max(c.setAt, end)), 0);
+      const counted = new Map<string, number>();
+      const cooledMs = [...own, ...ATTEMPT_COOLDOWNS.filter((c) => c.accountId === account.id)]
+        .sort((a, b) => a.setAt - b.setAt)
+        .reduce((n, c) => {
+          const from = Math.max(c.setAt, counted.get(c.scope) ?? c.setAt, end);
+          counted.set(c.scope, Math.max(counted.get(c.scope) ?? c.until, c.until));
+          return n + Math.max(0, Math.min(c.until, NOW) - from);
+        }, 0);
       out.push({
         ...ACCOUNT_ROLLUP_SAMPLE,
         accountId: account.id,

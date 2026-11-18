@@ -4293,8 +4293,8 @@ test("the hour a full day back counts toward the accounts' and pools' day totals
   }
 });
 
-// An evening instant, whose drawn day holds a laptop turn that found its pin live on nightly in overage. It loads behind
-// the first hour's load, since two loads at once would each restore the other's pinned clock.
+// An evening instant, whose drawn day holds a laptop turn that found its pin live on nightly in overage. It loads
+// behind the first hour's load, since two loads at once would each restore the other's pinned clock.
 const evening = (loading = firstHour.then(() => storyAt('2026-09-16T18:10:00Z')));
 
 test("a drawn turn whose live pin the overage rule moves stays on its own plan rather than renewing the pin", async () => {

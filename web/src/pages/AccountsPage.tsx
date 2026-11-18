@@ -928,7 +928,7 @@ const TrendChart = memo(function TrendChart({ emptyBody, emptyTitle, history, lo
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(v: number) => fmtDayShort(v)} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={60} />
           <YAxis {...PCT_AXIS} />
-          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<(typeof data)[number]>((p) => series.map((s) => ({ color: s.color, label: `${s.name} used`, value: p[s.key] === null ? 'no sample' : pct(p[s.key]) })))} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<(typeof data)[number]>((p) => series.map((s) => ({ color: s.color, label: `${s.name} used`, value: p[s.key] === null ? 'no figure' : pct(p[s.key]) })))} />
           {series.map((s) => (
             <Line key={s.key} type={s.type} dataKey={s.key} stroke={s.color} strokeWidth={s.width} strokeDasharray={s.dashed ? '5 4' : undefined} dot={false} isAnimationActive={false} />
           ))}

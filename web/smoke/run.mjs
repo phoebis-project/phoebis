@@ -2843,7 +2843,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   // opened draws its lane chip on the grey surface, while its card chip reads the full share in its tone.
   const laneChipTones = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip')].map((c, i) => ({ label: l.querySelector('.lane__name')?.textContent?.trim() ?? '', pct: c.querySelector('.tl-chip__pct')?.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? 'absent', window: ['5h', '7d', 'fable'][i % 3] })));
   // A window that has not opened is read off the account answer as `barPhrases` reads it, no reset at a utilization of
-  // 0, so a chip that prints `not open` for an open window still meets both checks.
+  // 0, so a chip that prints `not open` for an open window fails both checks.
   const accountOf = new Map((await api.listAccounts()).map((a) => [a.label, a]));
   const notOpen = (label, window) => {
     const a = accountOf.get(label);
@@ -4957,10 +4957,10 @@ await forView('/accounts', async () => {
   // instance backs every mount, so reserve and the history read go back as the story holds them.
   const reserve = (await api.listAccounts()).find((a) => a.id === 'reserve');
   const historyRead = api.getQuotaHistory;
-  api.getQuotaHistory = async () => [];
-  await api.disconnectAccount('reserve');
   let drawn;
   try {
+    api.getQuotaHistory = async () => [];
+    await api.disconnectAccount('reserve');
     const page = await mount('/accounts/reserve', { now: CLOCK_ORIGIN });
     const cardOf = (title) => [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
     drawn = {
@@ -26978,10 +26978,10 @@ await forView('/sessions', async () => {
     // link reads its agent's own first request and the row's link the session's. The line's agent holds two requests in
     // the range its link opens, so a link that read its last request as its first would open a narrower one. On the
     // story's instant the case picks the listed line whose first request lies past the hour and inside six hours, each
-    // less the link's minute of headroom, whose last request lies inside the hour and whose session's first request lies
-    // past six hours. On the story that is main of the fork 229bf72c, its first request at 12:33 and its last at 14:01,
-    // and its session's first at 18:16 the day before. The row's link then opens 24 hours, the request log's default,
-    // which its address leaves out.
+    // less the link's minute of headroom, whose last request lies inside the hour and whose session's first request
+    // lies past six hours. On the story that is main of the fork 229bf72c, its first request at 12:33 and its last at
+    // 14:01, and its session's first at 18:16 the day before. The row's link then opens 24 hours, the request log's
+    // default, which its address leaves out.
     const MINUTE = 60_000;
     const HOUR = 60 * MINUTE;
     const drawnIds = (s) => new Set([...s.agentContexts.map((c) => c.agentId), ...recipes.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId && r.agentState !== 'released').map((r) => r.agentId)]);
@@ -31317,6 +31317,8 @@ await forView(['/', '/keys'], async () => {
 
   let outage = failCalls({ getOverview: '/admin/dashboard', listSessions: '/admin/sessions' }, 'ledger locked');
   let page = await mount('/', { now: CLOCK_ORIGIN });
+  // The mount's settle counts neither the toast nor the failed calls, so the first toast can draw after it returns.
+  await until(page, () => toasts(page).length > 0);
   const first = toasts(page);
   tick(6_000);
   await page.settle();

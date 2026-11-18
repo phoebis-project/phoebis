@@ -1039,8 +1039,11 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (key) this.buriedKeys.set(id, Math.floor(key.revision / INCARNATION_STAMP));
     this.keys = this.keys.filter((k) => k.id !== id);
-    // The route reads a session row whose key no live key holds as historical, so the key's rows turn read-only.
-    this.sessions = this.sessions.map((s) => (s.keyId === id ? { ...s, historical: true } : s));
+    // The route reads a session row whose key no live key holds as historical, so the key's rows turn read-only. The
+    // engine keys its sessions and recipes under the live generation alone, so such a row reads none of them.
+    this.sessions = this.sessions.map((s): Session =>
+      s.keyId === id ? { ...s, companion: 'none', companionSince: null, historical: true, keepalive: { cause: null, nextProbeAt: null }, lifecycle: null, presenceAgeSeconds: null } : s,
+    );
     // The key's attachments go in the delete's own transaction, since one subject column cannot cascade from two
     // tables.
     this.setSubjectGuardrails('keys', id, [], false);
