@@ -20973,6 +20973,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     localStorage.removeItem('phoebis.week');
     // The two funded reads: none while Traffic shows, one series and one breakdown call per dollar position on Cost.
     // Cache warming draws no chart of the funded series, so its one funded series call is its own chart's.
+    // The step to Cache warming starts on Traffic, since from Cost a series gate that also took Cache warming in would
+    // stay on and send no read to count.
     const fundingOf = (spy) => spy.calls.map((c) => c[0]?.funding).filter((f) => f !== undefined);
     const spied = async (act) => {
       const series = countCalls('getAnalyticsSeries');
@@ -20985,6 +20987,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const onCost = await spied(() => chooseUnit(m, 'usd'));
     const onTraffic = await spied(() => tab(m, 'Traffic'));
     const backOnCost = await spied(() => tab(m, 'Cost'));
+    await tab(m, 'Traffic');
     const [onWarming] = await spied(() => tab(m, 'Cache warming'));
     await tab(m, 'Cost');
     const equivalent = await spied(() => chooseUnit(m, 'equivalent'));
