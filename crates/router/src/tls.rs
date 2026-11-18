@@ -691,7 +691,7 @@ mod tests {
 
     use boring::ssl::{SslConnector, SslVerifyMode};
 
-    use crate::feature_ca::{FeatureCa, LEAF_RENEW_AHEAD};
+    use crate::feature_ca::FeatureCa;
 
     /// The certificate a handshake that names `api.anthropic.com` gets from the acceptor `live` holds now, over a pair
     /// of streams in memory. The client checks nothing: a certificate the moved clock issued starts after the wall
@@ -726,10 +726,7 @@ mod tests {
         let first = served(&live).await;
         let end = leaves.leaves()[0].not_after;
 
-        at.store(
-            end - LEAF_RENEW_AHEAD.as_millis() as i64 + 1,
-            AtomicOrdering::SeqCst,
-        );
+        at.store(end - 1, AtomicOrdering::SeqCst);
         renew_feature_certificates(&mut leaves, &live).unwrap();
         let next = served(&live).await;
         assert_eq!(
@@ -757,10 +754,7 @@ mod tests {
         let first = served(&live).await;
         let end = leaves.leaves()[0].not_after;
 
-        at.store(
-            end - LEAF_RENEW_AHEAD.as_millis() as i64 + 1,
-            AtomicOrdering::SeqCst,
-        );
+        at.store(end - 1, AtomicOrdering::SeqCst);
         // What a step leaves whose build failed behind its issue: the new certificates in the leaves, and the acceptor
         // over the old ones in front of the connections.
         leaves.renew_due().unwrap();

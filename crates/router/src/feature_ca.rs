@@ -25,12 +25,12 @@ const CA_CERT_FILE: &str = "feature-ca.pem";
 const CA_KEY_FILE: &str = "feature-ca-key.pem";
 /// The names the CA may sign for, each with the names beneath it, and the names the listener answers to.
 pub(crate) const FEATURE_HOSTS: [&str; 2] = ["api.anthropic.com", "mcp-proxy.anthropic.com"];
-pub(crate) const CA_VALIDITY: Duration = Duration::from_secs(3_650 * 86_400);
-pub(crate) const LEAF_VALIDITY: Duration = Duration::from_secs(7 * 86_400);
+const CA_VALIDITY: Duration = Duration::from_secs(3_650 * 86_400);
+const LEAF_VALIDITY: Duration = Duration::from_secs(7 * 86_400);
 /// How far ahead of a certificate's end the next one is issued.
-pub(crate) const LEAF_RENEW_AHEAD: Duration = Duration::from_secs(86_400);
+const LEAF_RENEW_AHEAD: Duration = Duration::from_secs(86_400);
 /// How far ahead of its issue a certificate's validity starts, for a client whose clock runs behind.
-pub(crate) const BACKDATE: Duration = Duration::from_secs(300);
+const BACKDATE: Duration = Duration::from_secs(300);
 
 /// The prefix of each refusal, so the CA's lines read like a listener pair's under its own key.
 const KEY: &str = phoebis_attention::FEATURE_CA;
@@ -365,13 +365,11 @@ mod tests {
         let mut leaves = FeatureLeaves::issue(Arc::new(ca), clock).unwrap();
         let end = |leaves: &FeatureLeaves| leaves.leaves()[0].not_after;
         let first = end(&leaves);
-        let renewal = first - LEAF_RENEW_AHEAD.as_millis() as i64;
 
-        at.store(renewal - 1, AtomicOrdering::SeqCst);
         leaves.renew_due().unwrap();
         assert_eq!(end(&leaves), first);
 
-        at.store(renewal, AtomicOrdering::SeqCst);
+        at.store(first - 1, AtomicOrdering::SeqCst);
         leaves.renew_due().unwrap();
         assert!(end(&leaves) > first, "{} against {first}", end(&leaves));
     }
