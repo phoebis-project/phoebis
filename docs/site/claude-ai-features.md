@@ -462,8 +462,10 @@ that held a value gets one line, `export NAME='<the earlier value>'`. A name tha
 `export NAME=` and then `unset NAME`: the client's PowerShell tool reads the assignment lines alone, and Bash ends with
 the name unset.
 
-The script writes the file anew at each start, at mode `0600`. The file holds no secret of the router, and an earlier
-proxy value can carry a company proxy's password, which is the reason for the mode.
+A user has one such file, and each session of that user shares it. Each start writes it anew at mode `0600`, a start
+under the other `SETUP` or from a shell with other values among them, so the file holds what the latest start recorded.
+It holds no secret of the router, and an earlier proxy value can carry a company proxy's password, which is the reason
+for the mode.
 
 Under `SETUP=proxy` a Bash command then runs without the proxy and reaches each host as a shell outside the session
 does. Without the file a command that calls `api.anthropic.com` by itself, such as a project's test run with an API key
