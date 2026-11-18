@@ -108,7 +108,9 @@ export function FeatureCallsTable({
   // The rows under the reader would move on an older page, so its cursor holds the reload until the first page returns.
   const calls = useAsync(() => api.listFeatureCalls(query), [query], { paused: holdCause !== null || cursor !== undefined, refreshMs: effectiveInterval(intervalMs, refresh.disabled !== undefined) });
   const rows = calls.data?.featureCalls ?? [];
-  const nextCursor = calls.data?.nextCursor ?? null;
+  // The drawn page can be the last query's while the current one loads, and its cursor would walk the current filters
+  // on from the last query's place, so Next offers a cursor only once the current query returned its page.
+  const nextCursor = calls.current?.nextCursor ?? null;
   const keyNames = useMemo(() => new Map(keys.map((k) => [k.id, k.name])), [keys]);
   const accountLabels = useMemo(() => new Map(accounts.map((a) => [a.id, a.label])), [accounts]);
   const options = useMemo<Record<string, Option[]>>(
