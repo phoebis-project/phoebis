@@ -29,3 +29,11 @@ export function groupInto<K, T>(items: Iterable<T>, keyOf: (item: T) => K | null
 }
 
 export const countOf = (counts: Record<string, number>, name: string): number => lookup(counts, name) ?? 0;
+
+export const addCount = (counts: Record<string, number>, name: string, n = 1): void => {
+  counts[name] = countOf(counts, name) + n;
+};
+
+export const addCounts = (into: Record<string, number>, from: Readonly<Record<string, number>>): void => {
+  for (const [name, n] of Object.entries(from)) addCount(into, name, n);
+};

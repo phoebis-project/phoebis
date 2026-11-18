@@ -1,6 +1,6 @@
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
-import { countOf, emptyCounts } from '@/lib/counts';
+import { addCount, addCounts, emptyCounts } from '@/lib/counts';
 import { expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, hitUnderReason, latencySamples, servedMissReason, servingAttempt } from '@/lib/dimensions';
 import { earlierHolderLabel, keyLifetime, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, quartet } from '@/lib/histogram';
@@ -270,7 +270,7 @@ export function keptRows(rows: RequestLog[], options: PatternOptions): RequestLo
 export function countDropped(into: Pick<AnalyticsGroup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone'>, dropped: InputTransformations | null, moved: boolean): void {
   if (dropped === null) return;
   const keys = Object.keys(dropped);
-  for (const key of keys) into.inputTransformations[key] = countOf(into.inputTransformations, key) + 1;
+  for (const key of keys) addCount(into.inputTransformations, key);
   if (keys.length === 0) into.inputTransformationsNone += 1;
   if (moved && keys.some(accountBound)) into.inputTransformationsMoved += 1;
 }
@@ -298,7 +298,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     // The ledger's rule once more: a refused request counts under the map and `refused` and under nothing else.
     if (r.refused) {
       g.refused += 1;
-      if (r.errorCode) g.refusals[r.errorCode] = countOf(g.refusals, r.errorCode) + 1;
+      if (r.errorCode) addCount(g.refusals, r.errorCode);
       continue;
     }
     entry.rows.push(r);
@@ -313,7 +313,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     else if (left) g.clientCanceled += 1;
     else if (r.status === 429) g.rateLimited += 1;
     else g.failed += 1;
-    if (r.errorCode && !left) g.errors[r.errorCode] = countOf(g.errors, r.errorCode) + 1;
+    if (r.errorCode && !left) addCount(g.errors, r.errorCode);
     g.attempts += r.attempts.length;
     // A failover is an account change between adjacent attempts, as the ledger's delta_of counts it; a retry
     // on the same account is none.
@@ -347,8 +347,8 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     }
     const reason = servedMissReason(r);
     if (reason) {
-      g.cacheMissReasons[reason] = countOf(g.cacheMissReasons, reason) + 1;
-      if (hitUnderReason(r)) g.cacheMissReasonHits[reason] = countOf(g.cacheMissReasonHits, reason) + 1;
+      addCount(g.cacheMissReasons, reason);
+      if (hitUnderReason(r)) addCount(g.cacheMissReasonHits, reason);
     }
     if (expiredBetweenTurns(r)) g.expiredBetweenTurns += 1;
     const served = servingAttempt(r);
@@ -440,7 +440,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     out.planRequests = plusKnown(out.planRequests, g.planRequests);
     out.planOutputTokens = plusKnown(out.planOutputTokens, g.planOutputTokens);
     for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'thinking', 'uncachedInput', 'webFetch', 'webSearch'] as const) out.tokens[k] += g.tokens[k];
-    for (const k of ['cacheMissReasonHits', 'cacheMissReasons', 'errors', 'inputTransformations', 'refusals'] as const) for (const [name, n] of Object.entries(g[k])) out[k][name] = countOf(out[k], name) + n;
+    for (const k of ['cacheMissReasonHits', 'cacheMissReasons', 'errors', 'inputTransformations', 'refusals'] as const) addCounts(out[k], g[k]);
     if (g.fromRequests) out.fromRequests = true;
     out.keptWarm = plusBoth(out.keptWarm, g.keptWarm);
     for (const k of ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'] as const) out.probes[k] += g.probes[k];

@@ -7,7 +7,7 @@ import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { anchorTier, equivalentIn, modelWeeks, pricedWindow, shareIn, tableAt, tierCapacity, type CostWindow, type Usage } from '@/lib/costs';
-import { countOf, emptyCounts, groupInto } from '@/lib/counts';
+import { addCounts, emptyCounts, groupInto } from '@/lib/counts';
 import { servingResponse } from '@/lib/dimensions';
 import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
 import { mergeHistograms, quartet } from '@/lib/histogram';
@@ -332,13 +332,13 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
 
   const cacheMissReasons = emptyCacheMissReasons();
   // Every name a row carries, as the ledger rolls up whatever the beta sent, not only the ones the console knows.
-  for (const r of counted) for (const [reason, n] of Object.entries(r.cacheMissReasons)) cacheMissReasons[reason] = countOf(cacheMissReasons, reason) + n;
+  for (const r of counted) addCounts(cacheMissReasons, r.cacheMissReasons);
   const cacheMissReasonHits = emptyCounts();
-  for (const r of counted) for (const [reason, n] of Object.entries(r.cacheMissReasonHits)) cacheMissReasonHits[reason] = countOf(cacheMissReasonHits, reason) + n;
+  for (const r of counted) addCounts(cacheMissReasonHits, r.cacheMissReasonHits);
   const inputTransformations = emptyCounts();
-  for (const r of counted) for (const [key, n] of Object.entries(r.inputTransformations)) inputTransformations[key] = countOf(inputTransformations, key) + n;
+  for (const r of counted) addCounts(inputTransformations, r.inputTransformations);
   const refusals = emptyCounts();
-  for (const r of counted) for (const [code, n] of Object.entries(r.refusals)) refusals[code] = countOf(refusals, code) + n;
+  for (const r of counted) addCounts(refusals, r.refusals);
   const wastedProbeReasons = emptyWastedProbeReasons();
   for (const r of probeRows) for (const reason of WASTED_PROBE_REASONS) wastedProbeReasons[reason] += r.wastedProbeReasons[reason];
 
@@ -352,7 +352,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const requests = sumOf(counted, requestsIn);
   const failovers = sumOf(counted, (r) => r.failovers);
   const errors = emptyCounts();
-  for (const r of counted) for (const [code, n] of Object.entries(r.errors)) errors[code] = countOf(errors, code) + n;
+  for (const r of counted) addCounts(errors, r.errors);
 
   const kept = sumEach(counted.map((r) => r.keptWarm), ZERO_KEPT);
   const planKept = sumEach(countedPlan.map((r) => r.keptWarm), ZERO_KEPT);

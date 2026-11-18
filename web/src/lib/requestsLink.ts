@@ -4,7 +4,7 @@ import { REQUESTS_CODEC, requestsHref, type RequestsAddress } from './address';
 import { OTHER_DIMENSION, foldRequestClass } from './dimensions';
 import { matchesPattern } from './pattern';
 import { aroundRequest, aroundSubject, clockMinute, rangeOfWindow } from './routingLog';
-import { HOUR } from './time';
+import { hourCeil, hourFloor } from './time';
 
 export interface RequestsLinkInput {
   /**
@@ -45,7 +45,7 @@ export interface RequestsLinkTarget {
  * of the end, so an end exactly on the hour leaves that hour out. The end is capped at now, since the route's `to` is
  * inclusive and nothing arrived after now. */
 const hourWindow = ({ fromMs, toMs, nowMs, exact }: RequestsLinkInput['window']) =>
-  exact ? { from: fromMs, to: toMs } : { from: Math.floor(fromMs / HOUR) * HOUR, to: Math.min(Math.ceil(toMs / HOUR) * HOUR - 1, nowMs) };
+  exact ? { from: fromMs, to: toMs } : { from: hourFloor(fromMs), to: Math.min(hourCeil(toMs) - 1, nowMs) };
 
 /** The rollups fold a client class past 64 bytes or outside the identifier characters into `other`, as they fold a
  * request class, beside the clients the relay labels `other` itself, while the request log matches the raw class. */

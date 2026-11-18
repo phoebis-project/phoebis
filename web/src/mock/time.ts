@@ -1,6 +1,6 @@
-import { DAY, HOUR, MINUTE, hourCeil } from '@/lib/time';
+import { DAY, HOUR, MINUTE, hourCeil, hourFloor } from '@/lib/time';
 
-export { DAY, HOUR, MINUTE, hourCeil };
+export { DAY, HOUR, MINUTE, hourCeil, hourFloor };
 
 // Anchored once at load so every relative label counts down from the same instant.
 export const NOW = Date.now();
@@ -10,7 +10,7 @@ export const ago = (ms: number) => iso(NOW - ms);
 export const ahead = (ms: number) => iso(NOW + ms);
 export const hoursAgo = (h: number) => ago(h * HOUR);
 export const daysAgo = (d: number) => ago(d * DAY);
-export const startOfHour = (ms: number) => Math.floor(ms / HOUR) * HOUR;
+export const startOfHour = hourFloor;
 /** The UTC calendar edges a budget's spend period runs between, as the ledger reads them. */
 export const startOfDay = (at: number) => Math.floor(at / DAY) * DAY;
 export const startOfMonth = (at: number) => { const d = new Date(at); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1); };

@@ -5,7 +5,7 @@ import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow, type FiguredPoint } fr
 import { has, lookup } from '@/lib/counts';
 import { earlierHolderLabel, fmtCompact, fmtInt, fmtPct, fmtShare, fmtUsd, fmtWeek, joinPresent, parseKeyLifetime, plural, weekShort } from '@/lib/format';
 import { planLabel, pricedTier } from '@/lib/quota';
-import { ageWord, HOUR, hourCeil } from '@/lib/time';
+import { ageWord, HOUR, hourCeil, hourFloor } from '@/lib/time';
 import { UNIT_LABEL, type UnitPosition, type WeekPosition } from '@/lib/unit';
 import { windowHint } from '@/lib/windows';
 
@@ -774,7 +774,7 @@ export type ReadSource = 'burn' | 'rollup' | 'session';
  *  the first bucket's start for the burn read, and the range's own start in a session view. A burn answer with no
  *  bucket reaches back to nothing, so it starts at the range's own start. */
 export function coveredWindow(source: ReadSource, range: { fromMs: number; toMs: number }, readAt: number, firstBucketAt: number | null): { fromMs: number; toMs: number } {
-  const fromMs = source === 'rollup' ? Math.floor(range.fromMs / HOUR) * HOUR : source === 'burn' && firstBucketAt !== null ? firstBucketAt : range.fromMs;
+  const fromMs = source === 'rollup' ? hourFloor(range.fromMs) : source === 'burn' && firstBucketAt !== null ? firstBucketAt : range.fromMs;
   return { fromMs, toMs: coveredEnd(range.toMs, readAt, source !== 'session') };
 }
 /** Whether the first bucket holds only part of its span: the covered start lies after the bucket's own start. */

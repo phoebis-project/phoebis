@@ -8,7 +8,7 @@ import { keptWarmTokens } from '@/lib/analytics';
 import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { equivalentIn, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
-import { countOf, emptyCounts } from '@/lib/counts';
+import { addCount, emptyCounts } from '@/lib/counts';
 import { NO_CLASS, NO_EFFORT, expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, hitUnderReason, latencySamples, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
 import { fnv1a } from '@/lib/hash';
@@ -2758,7 +2758,7 @@ const failoversOf = (r: RequestLog): number => r.attempts.filter((_, i) => i > 0
 const tally = <T>(items: readonly T[], keyOf: (item: T) => string | null, into: Record<string, number> = emptyCounts()): Record<string, number> => {
   for (const item of items) {
     const key = keyOf(item);
-    if (key !== null) into[key] = countOf(into, key) + 1;
+    if (key !== null) addCount(into, key);
   }
   return into;
 };

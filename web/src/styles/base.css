@@ -59,6 +59,7 @@ button {
   cursor: pointer;
 }
 
+button.btn[aria-disabled='true'],
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
