@@ -10,7 +10,7 @@ import { IconInfo, IconPlus } from '@/components/ui/icons';
 import { Badge, Button, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, Input, NumberInput, PageLink, Refusal, RowActions, Segmented, Select, Skeleton, StaleRefusal, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { messageOf, plural } from '@/lib/format';
-import { FEATURE_LABEL, FEATURE_NONE, featureAccountOptions, featureAccountValue, featureStandingLine, guardrailsChange, KEY_GROUPS, keyFeatureChoice, keyFeatureValue, keyFormOf, keyInputOf, keyRefusals, refusalsView, sameValues, saveStatus, unlistedFeatureOption, type AutoModeOverride, type KeyForm, type KeyGroup } from '@/lib/forms';
+import { FEATURE_LABEL, FEATURE_NONE, featureAccountOptions, featureAccountValue, featureStandingLine, guardrailsChange, KEY_GROUPS, keyFeatureChoice, keyFeatureValue, keyFormOf, keyInputOf, keyRefusals, refusalsView, sameValues, saveStatus, type AutoModeOverride, type KeyForm, type KeyGroup } from '@/lib/forms';
 import { MODE_TONE } from '@/lib/guardrails';
 import { failedFirst, useAsync, useNow, type Loaded } from '@/lib/hooks';
 
@@ -243,8 +243,8 @@ export function KeyDialog({ accounts: accountsRead, open, onClose, onCreated, on
   };
 
   // The dialog holds no member list, so an option names the pool the account is stored in.
-  const poolNameOf = (accountId: string) => {
-    const poolOf = accounts.find((a) => a.id === accountId)?.pool?.poolId;
+  const poolNameOf = (account: Account) => {
+    const poolOf = account.pool?.poolId;
     return poolOf === undefined ? null : (pools.find((p) => p.id === poolOf)?.name ?? poolOf);
   };
 
@@ -377,10 +377,7 @@ export function KeyDialog({ accounts: accountsRead, open, onClose, onCreated, on
         {FEATURE_WORD_VALUES.map((feature) => {
           const choice = featureAccounts[feature];
           const named = choice.mode === 'account' ? choice.accountId : null;
-          const listed = featureAccountOptions(accounts, feature, poolNameOf);
-          // A select whose value matches no option draws its first, which would read Inherit for a key whose calls run
-          // under the named account.
-          const options = named === null || listed.some((o) => o.accountId === named) ? listed : [...listed, unlistedFeatureOption(named)];
+          const options = featureAccountOptions(accounts, feature, poolNameOf, named);
           // The selection of the pool the form names, so a key moved in this dialog reads the pool it lands in.
           const inherited = pool?.featureAccounts[feature] ?? null;
           const inheritedAccount = inherited === null ? undefined : accounts.find((a) => a.id === inherited);

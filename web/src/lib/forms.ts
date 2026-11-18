@@ -325,20 +325,23 @@ export interface FeatureAccountOption {
 
 /** The accounts a feature's selection can name: each OAuth account in the order of the labels, with its pool
  * behind the label, disabled where its grants lack the feature. An API-key account is left out. */
-export function featureAccountOptions(accounts: readonly Account[], feature: FeatureWord, poolNameOf: (accountId: string) => string | null): FeatureAccountOption[] {
-  return accounts
+export function featureAccountOptions(accounts: readonly Account[], feature: FeatureWord, poolNameOf: (account: Account) => string | null, selected: string | null = null): FeatureAccountOption[] {
+  const options = accounts
     .filter(isSubscription)
     .sort((a, b) => a.label.localeCompare(b.label))
     .map((a) => {
-      const named = `${a.label} (${poolNameOf(a.id) ?? 'no pool'})`;
+      const named = `${a.label} (${poolNameOf(a) ?? 'no pool'})`;
       const granted = a.featureGrants.includes(feature);
       return { accountId: a.id, disabled: !granted, label: granted ? named : `${named}, holds no sign-in with this feature's scope. A new pairing adds it.` };
     });
+  // A select whose value matches no option draws its first, so a stored choice the list lacks keeps an option of
+  // its own.
+  return selected === null || options.some((o) => o.accountId === selected) ? options : [...options, unlistedFeatureOption(selected)];
 }
 
 /** The option for a selected account the options lack, the list not there yet or without the id, so the stored
  * choice still shows. */
-export function unlistedFeatureOption(accountId: string): FeatureAccountOption {
+function unlistedFeatureOption(accountId: string): FeatureAccountOption {
   return { accountId, disabled: false, label: `${accountId} (not listed)` };
 }
 
@@ -416,7 +419,7 @@ export const guardrailsChange = (list: readonly string[], opened: readonly strin
  */
 export const sameMembers = (a: readonly string[], b: readonly string[]): boolean => new Set(a).size === b.length && a.every((x) => b.includes(x));
 
-const INHERITED_FEATURE: KeyFeatureAccount = { accountId: null, mode: 'inherit' };
+export const INHERITED_FEATURE: KeyFeatureAccount = { accountId: null, mode: 'inherit' };
 
 /** The dialog's starting fields: the stored key's, or a new key's in `poolId`. */
 export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {

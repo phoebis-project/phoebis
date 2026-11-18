@@ -13,84 +13,70 @@ import { useAsync, useNow } from '@/lib/hooks';
 import { SETUP_LABEL, SETUPS, snippetFor, type Setup } from '@/lib/snippet';
 import { positionOf, UNIT_LABEL, UNIT_POSITIONS } from '@/lib/unit';
 
-const FEATURE_SETUPS: readonly Setup[] = ['proxy', 'redirect'];
-
 /**
- * The list under the shown block reads its setup's terms in this order, which is the blocks' own, with the prompt
- * cache's entry last since no block holds that line. `feature` is the sentence a term gains under a feature setup.
+ * The list under the shown block names the terms of the block's lines, in this order, which is the blocks' own. The
+ * prompt cache's entry comes last and is listed under every setup, since no block holds its line. `feature` is the
+ * sentence a term gains under a feature setup.
  */
-const ENV_TERMS: { body: string; feature?: string; setups: readonly Setup[]; term: string }[] = [
+const ENV_TERMS: { always?: boolean; body: string; feature?: string; term: string }[] = [
   {
     term: 'ANTHROPIC_BASE_URL',
     body: "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the companion mod's reports go here.",
-    setups: SETUPS,
   },
   {
     term: 'CLAUDE_CODE_OAUTH_TOKEN',
     body: 'Holds the router key. Claude Code treats it as a subscription credential, which keeps the one-hour cache TTL, the unified rate-limit headers, and the automatic continue after a usage window resets. An ANTHROPIC_API_KEY would switch those off.',
-    setups: SETUPS,
   },
   {
     term: 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max',
     body: "Marks the session a consumer subscription, which no organization policy governs, so the client skips the policy check that under the first-party variable goes to api.anthropic.com with the router key, fails, and refuses the companion mod's reports. The client documents it nowhere, and a future build may drop it.",
     feature: 'The claude.ai features need this line, as max or pro.',
-    setups: SETUPS,
   },
   {
     term: '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
     body: 'Makes Claude Code send its first-party request shape to the router: the billing hash, the cache diagnostics beta, and the first-party betas. Without it the client sends its reduced shape and the router restores the fields before relaying it. It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
     feature: 'The claude.ai features need this line.',
-    setups: SETUPS,
   },
   {
     term: 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
     body: 'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read. Under the first-party flag above they arrive anyway.',
-    setups: SETUPS,
   },
   {
     term: 'DISABLE_TELEMETRY=1',
     body: "Stops the client's telemetry batches, which it posts to api.anthropic.com with the credential it holds, behind the router the key's secret.",
-    setups: SETUPS,
   },
   {
     term: 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1',
     body: 'Lets fast mode work behind the router: without it the client asks api.anthropic.com whether the organization has fast mode, the check fails with a router key, and fast mode stays off.',
-    setups: SETUPS,
   },
   {
     term: 'CLAUDE_CODE_OAUTH_SCOPES',
     body: 'The scopes the client believes its token holds. The connectors open under user:mcp_servers.',
-    setups: FEATURE_SETUPS,
   },
   {
     term: 'CLAUDE_ENV_FILE',
     body: 'Names the file the launch script writes, which gives each Bash command back the proxy and trust settings the shell had.',
-    setups: FEATURE_SETUPS,
   },
   {
     term: 'HTTPS_PROXY',
     body: "Sends the client's other HTTPS calls through phoebis-proxy, which hands the two feature hosts to the router. Replace the address where the proxy runs elsewhere.",
-    setups: ['proxy'],
   },
   {
     term: 'NODE_EXTRA_CA_CERTS',
     body: "Names the feature CA's certificate, which the launch script fetches from the router and checks against the fingerprint.",
-    setups: FEATURE_SETUPS,
   },
   {
     term: 'NO_PROXY',
     body: 'Keeps the model requests and the CA fetch on their direct road to the router. Replace the placeholder host as in the base URL, and add no other host: an entry that matches a feature host sends the router key to the upstream.',
-    setups: ['proxy'],
   },
   {
     term: 'PHOEBIS_FEATURE_CA_SHA256',
     body: "The launch script's input for its fingerprint compare. The client reads no such variable.",
-    setups: FEATURE_SETUPS,
   },
   {
     term: 'CLAUDE_CODE_PROMPT_CACHE_TTL=5m',
     body: 'Worth setting for Fable 5.2 and Fable 5.1 sessions in a pool with cache warming on: at a 0.025x read price a five-minute entry kept warm by probes stays cheaper than a one-hour entry. Leave it unset without warming.',
-    setups: SETUPS,
+    always: true,
   },
 ];
 
@@ -158,7 +144,9 @@ export function SettingsPage() {
   const setupId = useId();
   const s = settings.data;
   const snippet = snippetFor(setup, s?.listeners ?? null, s?.features ?? null);
+  const named = new Set(snippet?.split('\n').map((line) => line.split('=')[0]));
   const featureSetup = setup !== 'base';
+  const settingsPending = settings.error ? <ErrorState title="Could not load the settings" body={settings.error} retry={settings.reload} /> : <Skeleton height={60} />;
 
   return (
     <div className="settings">
@@ -255,11 +243,7 @@ export function SettingsPage() {
               The values the configuration file sets are on the installation page, and <code>phoebis check-config</code> prints this router&apos;s.
             </p>
           </>
-        ) : settings.error ? (
-          <ErrorState title="Could not load the settings" body={settings.error} retry={settings.reload} />
-        ) : (
-          <Skeleton height={60} />
-        )}
+        ) : settingsPending}
       </Card>
 
       {/* Both subtitles share one cell and the copy control keeps its room while unshown, so the head holds one height
@@ -269,7 +253,7 @@ export function SettingsPage() {
         title="Downstream client configuration"
         subtitle={
           <span className="client-config__subtitles">
-            <span className={snippet === null || featureSetup ? 'client-config__subtitle client-config__unshown' : 'client-config__subtitle'}>
+            <span className={featureSetup ? 'client-config__subtitle client-config__unshown' : 'client-config__subtitle'}>
               Put it in the env block of the client&apos;s settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.
             </span>
             <span className={snippet === null || !featureSetup ? 'client-config__subtitle client-config__unshown' : 'client-config__subtitle'}>
@@ -293,11 +277,7 @@ export function SettingsPage() {
                   Installation
                 </a>
               </p>
-            ) : settings.error ? (
-              <ErrorState title="Could not load the settings" body={settings.error} retry={settings.reload} />
-            ) : (
-              <Skeleton height={60} />
-            )
+            ) : settingsPending
           ) : (
             <>
               <pre className="snippet">{snippet}</pre>
@@ -320,7 +300,7 @@ export function SettingsPage() {
               )}
               {featureSetup && s?.features && <FeatureCaLine features={s.features} />}
               <dl className="envdl">
-                {ENV_TERMS.filter((t) => t.setups.includes(setup)).map((t) => (
+                {ENV_TERMS.filter((t) => t.always || named.has(t.term.split('=')[0])).map((t) => (
                   <div className="envdl__row" key={t.term}>
                     <dt>
                       <code>{t.term}</code>

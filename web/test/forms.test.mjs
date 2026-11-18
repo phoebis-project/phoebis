@@ -549,7 +549,7 @@ test('the options reach beyond the pool and leave out what cannot be selected', 
     featureAccount({ featureGrants: ['artifacts'], id: 'bravo', label: 'Bravo' }),
   ];
   const poolOf = { alpha: 'Main', bravo: 'Spare', delta: 'Main' };
-  const options = d.featureAccountOptions(listed, 'connectors', (id) => poolOf[id] ?? null);
+  const options = d.featureAccountOptions(listed, 'connectors', (a) => poolOf[a.id] ?? null);
   assert.deepEqual(options.map((o) => [o.accountId, o.disabled]), [['bravo', true], ['charlie', false], ['alpha', false]]);
 });
 

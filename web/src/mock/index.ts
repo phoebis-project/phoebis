@@ -1,6 +1,6 @@
 import type { AccountPatch, Api, CreateGuardrailInput, CreateKeyInput, CreatePoolInput, KeyInput, PoolInput } from '@/api/client';
 import type { GuardrailInput, GuardrailPatch, GuardrailRange, GuardrailTestInput, OverviewRange } from '@/api/client';
-import { decodeLimitResets, decodeResetUse, decodeSettings, keyStatusOf } from '@/api/decode';
+import { decodeLimitResets, decodeResetUse, decodeSettings, keyStatusOf, perFeature } from '@/api/decode';
 import { decodeStreamCut } from '@/api/decode';
 import { clientLeft } from '@/api/fold';
 import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
@@ -11,6 +11,7 @@ import type {
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
 import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, FEATURE_WORD_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
+import { keyFeaturesNaming, poolFeaturesNaming } from '@/lib/accountUses';
 import { type Clock, wallClock } from '@/lib/clock';
 import { has, lookup } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
@@ -35,7 +36,7 @@ import { createRng } from './rng';
 import { round } from './round';
 import { ROUTING_LOG_KINDS, WINDOW_DROP_MARGIN, claimDetail, cursorInteger, dropDetail, getDecision, listRoutingLog, routingCursorOf, subscriptionPair, wholePoints } from './routingLog';
 import { ROUTING_EVENTS, SUMMARIES } from './routingLog';
-import { KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
+import { INHERITED_FEATURE_ACCOUNTS, KEY_SAMPLE, NO_FEATURE_ACCOUNTS, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, hourCeil, iso, startOfHour } from './time';
 
 // Fixed, so a pass over the mock reads the same secrets every run.
@@ -183,9 +184,6 @@ const subjectsTwice = (input: Pick<Partial<GuardrailInput>, 'keys' | 'pools'>): 
   return key === null ? null : `keys lists ${key} twice`;
 };
 
-const NO_FEATURE_ACCOUNTS: FeatureAccountIds = { artifacts: null, connectors: null };
-const INHERITED_FEATURE_ACCOUNTS: Record<FeatureWord, KeyFeatureAccount> = { artifacts: { accountId: null, mode: 'inherit' }, connectors: { accountId: null, mode: 'inherit' } };
-
 /**
  * The key routes' refusal of a word whose id does not go with its mode, which they read with the body, ahead of the
  * stamp. A word the body leaves out is not read.
@@ -199,10 +197,7 @@ const keyFeatureRefusal = (words: Partial<Record<FeatureWord, KeyFeatureAccount>
 };
 
 /** The accounts a key's choices name, in the shape the routes' check of a selection reads. */
-const namedFeatureAccounts = (words: Record<FeatureWord, KeyFeatureAccount>): FeatureAccountIds => ({
-  artifacts: words.artifacts.mode === 'account' ? words.artifacts.accountId : null,
-  connectors: words.connectors.mode === 'account' ? words.connectors.accountId : null,
-});
+const namedFeatureAccounts = (words: Record<FeatureWord, KeyFeatureAccount>): FeatureAccountIds => perFeature((f) => (words[f].mode === 'account' ? words[f].accountId : null));
 
 /** The route's 409 for a member another pool holds, since an account belongs to one pool. */
 const heldElsewhere = (members: PoolInput['members'], pools: { id: string; members: { accountId: string }[] }[], poolId: string): string | null => {
@@ -521,7 +516,16 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
 }
 
 /** The route's cursor under a key: `<figure>:<id>`, the figure empty where the row carries none. */
-const cursorOf = (r: RequestLog, order: RequestOrder): string => `${orderKeyOf(r, order).figure ?? ''}:${r.id}`;
+const cursorText = (k: OrderKey): string => `${k.figure ?? ''}:${k.id}`;
+const keyedPage = <R>(sorted: R[], cursor: OrderKey | undefined, limit: number, key: (r: R) => OrderKey, compare: (a: OrderKey, b: OrderKey) => number): { nextCursor: string | null; page: R[] } => {
+  // The route resumes strictly past the cursor's row in the list's order, so rows sharing a figure are neither
+  // repeated nor skipped.
+  const after = cursor === undefined ? sorted : sorted.filter((r) => compare(key(r), cursor) > 0);
+  const page = after.slice(0, limit);
+  const last = page[page.length - 1];
+  // A cursor only rides along while rows are left, which is how the route signals the end of the list.
+  return { nextCursor: after.length > limit && last ? cursorText(key(last)) : null, page };
+};
 /**
  * The keys a cursor names, or null for a cursor the route refuses: no separator, a figure its integer parse does not
  * read, or an empty figure under `received_at` or `attempts`, whose rows all carry one.
@@ -1088,16 +1092,16 @@ export class MockApi implements Api {
     const cleared = { keys: new Set<string>(), pools: new Set<string>() };
     this.pools = this.pools.map((p) => {
       const members = p.members.filter((m) => m.accountId !== accountId);
-      const named = FEATURE_WORD_VALUES.filter((f) => p.featureAccounts[f] === accountId);
+      const named = poolFeaturesNaming(p, accountId);
       if (named.length > 0) cleared.pools.add(p.id);
-      const featureAccounts = named.length === 0 ? p.featureAccounts : { ...p.featureAccounts, ...Object.fromEntries(named.map((f) => [f, null])) };
+      const featureAccounts = named.length === 0 ? p.featureAccounts : perFeature((f) => (named.includes(f) ? null : p.featureAccounts[f]));
       return { ...p, featureAccounts, keepaliveResolved: members.length === 0 ? null : p.keepaliveResolved, members };
     });
     this.keys = this.keys.map((k) => {
-      const named = FEATURE_WORD_VALUES.filter((f) => k.featureAccounts[f].mode === 'account' && k.featureAccounts[f].accountId === accountId);
+      const named = keyFeaturesNaming(k, accountId);
       if (named.length === 0) return k;
       cleared.keys.add(k.id);
-      return { ...k, featureAccounts: { ...k.featureAccounts, ...Object.fromEntries(named.map((f) => [f, { accountId: null, mode: 'none' as const }])) } };
+      return { ...k, featureAccounts: perFeature((f) => (named.includes(f) ? { accountId: null, mode: 'none' as const } : k.featureAccounts[f])) };
     });
     this.restampSubjects(cleared.pools, cleared.keys);
     return latency(undefined, 250);
@@ -1409,11 +1413,8 @@ export class MockApi implements Api {
     const matched = ledger()
       .featureCalls.filter((c) => matchesFeatureCall(c, query))
       .sort((a, b) => compare(featureCallKey(a), featureCallKey(b)));
-    const after = cursor === undefined ? matched : matched.filter((c) => compare(featureCallKey(c), cursor) > 0);
-    const limit = 50;
-    const page = after.slice(0, limit);
-    const last = page[page.length - 1];
-    return latency({ featureCalls: page, nextCursor: after.length > limit && last ? `${Date.parse(last.receivedAt)}:${last.id}` : null });
+    const { nextCursor, page } = keyedPage(matched, cursor, 50, featureCallKey, compare);
+    return latency({ featureCalls: page, nextCursor });
   }
 
   /** The presets are the binary's, so a fresh installation lists them too. */
@@ -1453,15 +1454,8 @@ export class MockApi implements Api {
     const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort(requestOrder(order, dir));
     const newest = matched.reduce((stamp, r) => Math.max(stamp, landedAt(r)), since ?? 0);
     const landedThrough = query.to && !query.fixedEnd ? Math.min(newest, Date.parse(query.to)) : newest;
-    // The route resumes strictly past the cursor's row in the list's order, so rows sharing a figure are neither
-    // repeated nor skipped.
-    const compare = compareOrderKeys(dir);
-    const after = cursor === undefined ? matched : matched.filter((r) => compare(orderKeyOf(r, order), cursor) > 0);
-    const limit = query.limit ?? 50;
-    const page = after.slice(0, limit);
-    const last = page[page.length - 1];
-    // A cursor only rides along while rows are left, which is how the route signals the end of the list.
-    return latency({ landedThrough, nextCursor: after.length > limit && last ? cursorOf(last, order) : null, requests: page });
+    const { nextCursor, page } = keyedPage(matched, cursor, query.limit ?? 50, (r) => orderKeyOf(r, order), compareOrderKeys(dir));
+    return latency({ landedThrough, nextCursor, requests: page });
   }
 
   listRoutingLog(query: RoutingLogQuery = {}): Promise<RoutingLogPage> {

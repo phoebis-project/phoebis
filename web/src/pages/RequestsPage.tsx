@@ -584,8 +584,9 @@ export function RequestsPage() {
           <section className="stack" id="feature-calls" role="tabpanel" aria-labelledby="tab-feature-calls">
             <FeatureCallsTable
               accounts={accounts.data ?? []}
-              disabled={{ ...notLoadedReason('keys', 'key', keys), ...notLoadedReason('accounts', 'account', accounts) }}
+              disabled={disabled}
               filters={featureFilters}
+              holdCause={holdCause}
               intervalMs={featureIntervalMs}
               keys={keys.data ?? []}
               onFiltersChange={setFeatureFilters}

@@ -7,8 +7,8 @@ import { usePaging } from '@/app/useFollow';
 import { FilterBar } from '@/components/FilterBar';
 import { StatusBadge } from '@/components/ui/AttemptTrail';
 import type { Option } from '@/components/ui/OptionList';
+import type { HoldCause } from '@/components/ui/overlay';
 import { PagerNav } from '@/components/ui/PagerNav';
-import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Card, EmptyState, ErrorState, SkeletonRows } from '@/components/ui/primitives';
 import type { RangeValue } from '@/lib/address';
 import { clock } from '@/lib/clock';
@@ -66,6 +66,7 @@ export function FeatureCallsTable({
   accounts,
   disabled,
   filters,
+  holdCause,
   intervalMs,
   keys,
   onFiltersChange,
@@ -79,6 +80,7 @@ export function FeatureCallsTable({
   /** The reason Add filter gives a dimension whose option list did not load. */
   disabled: Record<string, string>;
   filters: FeatureCallFilters;
+  holdCause: HoldCause | null;
   /** The auto reload interval in milliseconds, 0 for off. */
   intervalMs: number;
   keys: readonly ApiKey[];
@@ -92,7 +94,6 @@ export function FeatureCallsTable({
   span: { from: number; to: number };
 }): JSX.Element {
   const { timeFormat } = useAppSettings();
-  const { cause: holdCause, host } = useHoldHost();
   // A cursor belongs to the range and the filters it was read under, so a change of either starts the walk again.
   const address = JSON.stringify([range, span.from, span.to, filters]);
   const { cursor, reset, setPaging, stack } = usePaging(address);
@@ -130,7 +131,7 @@ export function FeatureCallsTable({
   };
 
   return (
-    <PopoverHost.Provider value={host}>
+    <>
       <FilterBar
         address={address}
         dimensions={FEATURE_CALLS_DIMENSIONS}
@@ -210,6 +211,6 @@ export function FeatureCallsTable({
           <PagerNav atFirst={stack.length === 0} atLast={nextCursor === null} onFirst={reset} onNext={goNext} onPrevious={goPrevious} />
         </footer>
       </Card>
-    </PopoverHost.Provider>
+    </>
   );
 }

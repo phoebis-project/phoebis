@@ -35,7 +35,7 @@ import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS
 import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, namedCostLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, FEATURE_LABEL, FEATURE_NONE, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, featureAccountOf, featureAccountOptions, featureAccountValue, featureStandingLine, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, SHARE_FIELD_LABELS, unlistedFeatureOption, type PoolGroup, type WholeEngineKey } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, FEATURE_LABEL, FEATURE_NONE, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, featureAccountOf, featureAccountOptions, featureAccountValue, featureStandingLine, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, SHARE_FIELD_LABELS, type PoolGroup, type WholeEngineKey } from '@/lib/forms';
 import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow, useQueryFilters, useWeekReading, type Loaded } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -1562,7 +1562,7 @@ export function PoolDialog({
     const ceilingHandle = (key: CeilingKey) => ({ onChange: (v: number) => setEngine(key, v / 100), value: percentOf(form.engine[key] || 0) });
     // The open dialog's members stand in for this pool's stored ones, so an account taken out reads its pool at once.
     const ownName = pool?.name ?? draftName;
-    const poolNameOf = (accountId: string) => (accountId in form.members ? ownName : (otherPools.find((p) => p.members.some((m) => m.accountId === accountId))?.name ?? null));
+    const poolNameOf = (account: Account) => (account.id in form.members ? ownName : (otherPools.find((p) => p.members.some((m) => m.accountId === account.id))?.name ?? null));
     return {
       identity: (
         <div className="cells">
@@ -1840,10 +1840,7 @@ export function PoolDialog({
           {accountsFailed !== null && <ErrorState title="The account list did not load" body={accountsFailed} retry={onRetryAccounts} />}
           {FEATURE_WORD_VALUES.map((feature) => {
             const chosen = form.featureAccounts[feature];
-            const listedOptions = featureAccountOptions(accounts, feature, poolNameOf);
-            // A select whose value matches no option draws its first, which would read None (refused) for a stored
-            // choice the list does not hold yet or at all.
-            const options = chosen === null || listedOptions.some((o) => o.accountId === chosen) ? listedOptions : [...listedOptions, unlistedFeatureOption(chosen)];
+            const options = featureAccountOptions(accounts, feature, poolNameOf, chosen);
             const account = chosen === null ? undefined : accounts.find((a) => a.id === chosen);
             return (
               <Field key={feature} label={FEATURE_LABEL[feature]} hint={account && featureStandingLine(account, now)}>
