@@ -185,8 +185,7 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 /// the default's 5 s, so a wait for the mirror's copy of a registry write costs a tick of that length. The same
 /// interval paces the writer's revision poll, which lands pending budget rows, and the retry of a failed spend read on
 /// the ledger's clock, so a budget row a seed provokes lands on that cadence as well. Its router prices a pin's rewrite
-/// through the shipped cost model, as `admin_parts_full_on_equivalent` wires it. The settings answer carries the
-/// feature listener over the committed certificate, which the capture's fixture alone reads.
+/// through the shipped cost model, as `admin_parts_full_on_equivalent` wires it.
 pub async fn admin_parts_full_on_polled(store: Arc<Store>, event_poll: Duration) -> Full {
     admin_parts_full_on_equivalent(
         store,
@@ -202,7 +201,8 @@ pub async fn admin_parts_full_on_polled(store: Arc<Store>, event_poll: Duration)
 /// The full harness over a store the caller holds, reading the cost model `costs` and its ledger on `ledger_config`,
 /// with its router pricing a pin's rewrite as the Pro share of a window through `costs`, as the router's start wires
 /// `SharePricer::with_equivalent`, where the default pricer prices nothing: a case reads a move's cost worked from its
-/// own cost model.
+/// own cost model. The settings answer carries the feature listener over the committed certificate, which the
+/// capture's fixture alone reads.
 pub async fn admin_parts_full_on_equivalent(
     store: Arc<Store>,
     costs: PlanTables,
