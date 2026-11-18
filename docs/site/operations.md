@@ -451,13 +451,13 @@ step ca provisioner add acme --type ACME --x509-default-dur 2160h --x509-max-dur
 step-ca "$(step path)/config/ca.json" --password-file /etc/step-ca/password.txt
 ```
 
-With these flags `step ca init` asks nothing, and the password file holds the password of the CA's keys, which the start
-reads from the file since a service has no terminal. `step ca provisioner add` writes the provisioner into the CA's
-`ca.json`, so here it runs before the CA starts. Its two duration flags make the provisioner issue leaves of 90 days.
-step-ca's default is 24 hours, and under it `certificate_expiring` stands from the first install on, since the item
-holds while a leaf is within 30 days of its end. `acme.sh` would also renew such a leaf too late most of the time: it
-renews a leaf of a day or less in the leaf's last hour, and its cron entry runs every six hours, so a run falls into
-that hour about one time in six.
+With these flags `step ca init` asks nothing. It reads the password of the CA's keys from the password file, so write
+the file before the first line runs, with a password of your own in it and at `0600`. The start reads the same file,
+since a service has no terminal. `step ca provisioner add` writes the provisioner into the CA's `ca.json`, so here it
+runs before the CA starts. Its two duration flags make the provisioner issue leaves of 90 days. step-ca's default is 24
+hours, and under it `certificate_expiring` stands from the first install on, since the item holds while a leaf is within
+30 days of its end. `acme.sh` would also renew such a leaf too late most of the time: it renews a leaf of a day or less
+in the leaf's last hour, and its cron entry runs every six hours, so a run falls into that hour about one time in six.
 
 The router's host needs the CA's root certificate, `$(step path)/certs/root_ca.crt` on the CA's host. Copy it to
 `/etc/phoebis/step-ca-root.crt` at `0644`, since it holds no secret.
