@@ -2702,7 +2702,8 @@ async function poolRoutingCards(theme) {
  * The pool dialog's two ceiling handles in the plain view: each stands on its own track of used shares at the ceiling
  * its field holds, centered on the track's height and taller than the track, the first track's lowest mark stands
  * above the second track's highest with a focused handle's ring counted on both, an arrow key on the weekly handle
- * moves the weekly field and leaves the 5-hour one, and the bar's legend names the two readings alone.
+ * moves the weekly field a point, up under the handle's maximum and down at it, and leaves the 5-hour one, and the bar's
+ * legend names the two readings alone.
  */
 async function utilizationCeiling(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -2736,14 +2737,17 @@ async function utilizationCeiling(theme) {
     const marks = (track) => [...(track?.querySelectorAll('.ubar__tick, [role="slider"]') ?? [])].map((n) => ({ bottom: box(n).bottom, slider: n.getAttribute('role') === 'slider', top: box(n).top }));
     return { legend, marks: tracks.map(marks), ...Object.fromEntries(kinds.map((k, i) => [k.key, handleOn(tracks[i], k)])), tracks: tracks.length };
   }, KINDS);
-  // An arrow key on the weekly handle, which also gives it keyboard focus, so its ring is read as drawn.
+  // An arrow key on the weekly handle, which also gives it keyboard focus, so its ring is read as drawn. The handle
+  // stops at its maximum, where a new router's pool holds the weekly ceiling, so there the key steps it down.
   const before = await fields();
   const weeklyHandle = dialog.locator('[role="slider"][aria-label="Weekly ceiling"]');
-  await weeklyHandle.press('ArrowUp');
+  const step = before[1] + 1 <= Number(await weeklyHandle.getAttribute('aria-valuemax')) ? 1 : -1;
+  const [toward, back] = step === 1 ? ['ArrowUp', 'ArrowDown'] : ['ArrowDown', 'ArrowUp'];
+  await weeklyHandle.press(toward);
   await settle();
   const after = await fields();
   const ring = await weeklyHandle.evaluate((el) => Number(/(-?[\d.]+)px\s*$/.exec(getComputedStyle(el).boxShadow)?.[1] ?? Number.NaN));
-  await weeklyHandle.press('ArrowDown');
+  await weeklyHandle.press(back);
   await settle();
   const reach = (list, edge) => list.map((m) => (edge === 'bottom' ? m.bottom + (m.slider ? ring : 0) : m.top - (m.slider ? ring : 0)));
   const gap = read.marks.length === 2 ? { first: Math.max(...reach(read.marks[0], 'bottom')), ring, second: Math.min(...reach(read.marks[1], 'top')) } : null;
@@ -2760,7 +2764,7 @@ async function utilizationCeiling(theme) {
     }
   }
   if (gap === null || !Number.isFinite(gap.ring) || gap.first > gap.second) say(`the first track's marks reach ${gap?.first}px, past the second track's at ${gap?.second}px with a ${gap?.ring}px ring`);
-  if (after[1] !== before[1] + 1 || after[0] !== before[0]) say(`an arrow key on the weekly handle moves the fields from ${JSON.stringify(before)} to ${JSON.stringify(after)}`);
+  if (after[1] !== before[1] + step || after[0] !== before[0]) say(`${toward} on the weekly handle moves the fields from ${JSON.stringify(before)} to ${JSON.stringify(after)}`);
   if (JSON.stringify(read.legend) !== '["5-hour reading","7-day reading"]') say(`the bar's legend reads ${JSON.stringify(read.legend)}`);
   await closeByEscape(dialog, `${theme} /pools ceiling handles dialog`, say);
   await atRest();
