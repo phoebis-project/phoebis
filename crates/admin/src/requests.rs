@@ -1,7 +1,7 @@
 //! The request log: one row per client request with its attempt trail, the detail with its events, and the
 //! captured bodies.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -852,32 +852,10 @@ pub(crate) fn list_param(value: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The number parameter `name`, `None` where it is absent, or the 400 that names it.
-#[allow(clippy::result_large_err)]
-pub(crate) fn number_param(
-    q: &HashMap<String, String>,
-    name: &'static str,
-) -> Result<Option<i64>, Response> {
-    match q.get(name) {
-        Some(v) => v
-            .parse::<i64>()
-            .map(Some)
-            .map_err(|_| failure(StatusCode::BAD_REQUEST, &format!("{name} is not a number"))),
-        None => Ok(None),
-    }
-}
-
-/// The page size: `DEFAULT_LIMIT` where it is absent, clamped to 1 through `MAX_LIMIT`, or the 400 for a value that
-/// reads as no number.
-#[allow(clippy::result_large_err)]
-pub(crate) fn limit_param(q: &HashMap<String, String>) -> Result<usize, Response> {
-    let limit = match q.get("limit") {
-        None => DEFAULT_LIMIT,
-        Some(raw) => raw
-            .parse::<usize>()
-            .map_err(|_| failure(StatusCode::BAD_REQUEST, "limit is not a number"))?,
-    };
-    Ok(limit.clamp(1, MAX_LIMIT))
+pub(crate) fn page_size(limit: Option<u32>) -> usize {
+    limit
+        .map_or(DEFAULT_LIMIT, |n| n as usize)
+        .clamp(1, MAX_LIMIT)
 }
 
 /// An emptied field in the view's bar narrows nothing, as an absent one.
@@ -1071,10 +1049,7 @@ pub(crate) async fn list(
         fallback: q.fallback,
         fixed_end: q.fixed_end.unwrap_or(false),
     };
-    let limit = q
-        .limit
-        .map_or(DEFAULT_LIMIT, |n| n as usize)
-        .clamp(1, MAX_LIMIT);
+    let limit = page_size(q.limit);
     let order = match word_param(
         q.order.as_deref(),
         "order",

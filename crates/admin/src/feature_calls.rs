@@ -1,9 +1,8 @@
 //! The feature calls: one row per call the router sent to a feature host under an account.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -14,8 +13,8 @@ use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
 use crate::openapi::{ErrorBody, LedgerFailure};
-use crate::requests::{limit_param, list_param, number_param};
-use crate::routes::failure;
+use crate::requests::{list_param, page_size};
+use crate::routes::{failure, AdminQuery};
 use crate::AdminState;
 
 /// One page of the feature calls.
@@ -50,8 +49,6 @@ pub(crate) struct FeatureCallEntry {
 }
 
 /// `GET /admin/feature-calls`'s query.
-// Declared for the document alone, since the handler reads the request by hand.
-#[allow(dead_code)]
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct FeatureCallsQuery {
@@ -82,28 +79,18 @@ pub(crate) struct FeatureCallsQuery {
     params(FeatureCallsQuery),
     responses(
         (status = 200, description = "The page, newest first by `received_at` and, inside one `received_at`, by `id` descending.", body = FeatureCallList),
-        (status = 400, description = "- `{name} is not a number`, for `from` or `to`\n- `limit is not a number`\n- `cursor is <received_at>:<id>`", body = ErrorBody, example = json!({"error": "{name} is not a number"})),
+        (status = 400, description = "- `cursor is <received_at>:<id>`", body = ErrorBody, example = json!({"error": "limit: invalid digit found in string"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
 pub(crate) async fn list(
     State(state): State<Arc<AdminState>>,
-    Query(q): Query<HashMap<String, String>>,
+    AdminQuery(q): AdminQuery<FeatureCallsQuery>,
 ) -> Response {
-    let from = match number_param(&q, "from") {
-        Ok(from) => from,
-        Err(response) => return response,
-    };
-    let to = match number_param(&q, "to") {
-        Ok(to) => to,
-        Err(response) => return response,
-    };
-    let limit = match limit_param(&q) {
-        Ok(limit) => limit,
-        Err(response) => return response,
-    };
+    let limit = page_size(q.limit);
     let cursor = match q
-        .get("cursor")
+        .cursor
+        .as_deref()
         .map(|c| RequestCursor::parse(c, RequestOrder::ReceivedAt))
     {
         None => None,
@@ -111,12 +98,12 @@ pub(crate) async fn list(
         Some(None) => return failure(StatusCode::BAD_REQUEST, "cursor is <received_at>:<id>"),
     };
     let filter = FeatureCallFilter {
-        accounts: list_param(q.get("accounts").map(String::as_str)),
-        features: list_param(q.get("features").map(String::as_str)),
-        from,
-        keys: list_param(q.get("keys").map(String::as_str)),
-        outcomes: list_param(q.get("outcomes").map(String::as_str)),
-        to,
+        accounts: list_param(q.accounts.as_deref()),
+        features: list_param(q.features.as_deref()),
+        from: q.from,
+        keys: list_param(q.keys.as_deref()),
+        outcomes: list_param(q.outcomes.as_deref()),
+        to: q.to,
     };
     match state
         .ledger
