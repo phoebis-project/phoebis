@@ -138,12 +138,11 @@ const LOGIN_SCOPES: readonly string[] = ['org:create_api_key', 'user:profile', '
 
 /**
  * The features an account's stored scopes cover, by the route's rule: none for an OAuth account that stores no
- * credential, whose access expiry the route then answers null, and none for an API-key account, whose null the
- * decoder reads as empty. A stored credential holds the login's scopes, which a new account's pairing stores, unless
- * its seed names an older sign-in's.
+ * credential, whose access expiry the route then answers null, and null for an API-key account. A stored credential
+ * holds the login's scopes, which a new account's pairing stores, unless its seed names an older sign-in's.
  */
 export const featureGrantsOf = (a: Pick<Account, 'credential' | 'kind'> & Pick<Seed, 'scopes'>): Account['featureGrants'] =>
-  a.kind === 'api_key' || a.credential.accessTokenExpiresAt === null ? [] : FEATURE_WORD_VALUES.filter((f) => (a.scopes ?? LOGIN_SCOPES).includes(FEATURE_SCOPE[f]));
+  a.kind === 'api_key' ? null : a.credential.accessTokenExpiresAt === null ? [] : FEATURE_WORD_VALUES.filter((f) => (a.scopes ?? LOGIN_SCOPES).includes(FEATURE_SCOPE[f]));
 
 /** A row the router holds nothing for yet: no token, no plan, no window, no pool and no request. */
 export const blankAccountRow = (input: Pick<Account, 'id' | 'kind' | 'label'>, status: Account['status'], email: string | null): Account => ({

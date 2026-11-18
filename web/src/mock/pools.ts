@@ -477,9 +477,9 @@ export const POOLS: PoolSeed[] = POOL_ROWS.map(({ guardrails: _g, warnings: _w, 
 
 export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 
-/** A key as the story seeds it and the mock stores it. Its guardrails and its pool's are the attachments', which the
- *  key view reads. */
-export type KeyRow = Omit<ApiKey, 'guardrails' | 'poolGuardrails'>;
+/** A key as the story seeds it and the mock stores it. Its guardrails and its pool's are the attachments', and its
+ *  resolved feature accounts follow its pool's selection, all of which the key view reads. */
+export type KeyRow = Omit<ApiKey, 'effectiveFeatureAccounts' | 'guardrails' | 'poolGuardrails'>;
 
 // Each key's 7-day usage derives from the rollups in `requests.ts`. A lifetime is the story's own where the key is
 // older than the month the rollups hold, raised there to their sum; a key created inside that month carries none,

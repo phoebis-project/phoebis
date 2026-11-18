@@ -331,7 +331,7 @@ export function featureAccountOptions(accounts: readonly Account[], feature: Fea
     .sort((a, b) => a.label.localeCompare(b.label))
     .map((a) => {
       const named = `${a.label} (${poolNameOf(a) ?? 'no pool'})`;
-      const granted = a.featureGrants.includes(feature);
+      const granted = a.featureGrants?.includes(feature) ?? false;
       return { accountId: a.id, disabled: !granted, label: granted ? named : `${named}, holds no sign-in with this feature's scope. A new pairing adds it.` };
     });
   // A select whose value matches no option draws its first, so a stored choice the list lacks keeps an option of

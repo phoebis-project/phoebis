@@ -692,11 +692,18 @@ export class MockApi implements Api {
 
   /**
    * The key as the route answers it, its own guardrails and its pool's read from the attachments at the time of the
-   * read.
+   * read, and its feature accounts resolved from its pool's selection at that time, since a pool write and a move of
+   * the key change them.
    */
   private keyView(k: KeyRow): ApiKey {
+    const pool = this.pools.find((p) => p.id === k.poolId);
     return {
       ...k,
+      // The router's rule: the key's own account or none, else its pool's selection, and none for a pool it lacks.
+      effectiveFeatureAccounts: perFeature((f) => {
+        const own = k.featureAccounts[f];
+        return own.mode === 'inherit' ? (pool?.featureAccounts[f] ?? null) : own.accountId;
+      }),
       guardrails: this.guardrailRefs('keys', k.id),
       poolGuardrails: this.guardrailRefs('pools', k.poolId),
     };

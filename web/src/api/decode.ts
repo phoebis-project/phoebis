@@ -175,7 +175,7 @@ export function decodeAccount(v: unknown): Account {
     extraUsage: orNull(a.extra_usage, (x) => ({ disabledReason: strOrNull(x.disabled_reason), enabled: bool(x.is_enabled), inUse: bool(x.in_use), monthlyLimitCredits: numOrNull(x.monthly_limit), usedCredits: numOrNull(x.used_credits) })),
     fableWindow: windows.find((w) => w.id === '7d_fable') ?? null,
     fastLane: orNull(a.fast_lane, (f) => ({ input: fastLaneReading(f.input), output: fastLaneReading(f.output) })),
-    featureGrants: FEATURE_WORD_VALUES.filter((w) => list(a.feature_grants).includes(w)),
+    featureGrants: Array.isArray(a.feature_grants) ? FEATURE_WORD_VALUES.filter((w) => list(a.feature_grants).includes(w)) : null,
     id: str(a.id),
     kind: accountKind(a.kind),
     label: str(a.label),
@@ -313,6 +313,7 @@ export function decodeKey(v: unknown): ApiKey {
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     companionPermissions: COMPANION_PERMISSION_VALUES.filter((p) => list(k.companion_permissions).includes(p)),
     createdAt: isoOr(k.created_at, epoch),
+    effectiveFeatureAccounts: featureAccountIds(k.effective_feature_accounts),
     enabled,
     expiresAt: expires,
     featureAccounts: perFeature((f) => keyFeatureAccount(features[f])),
@@ -1136,7 +1137,7 @@ export const decodeSessionInfo = (v: unknown): SessionInfo => {
 
 const featureSettingsOf = (v: unknown): FeatureSettings | null => {
   if (!isMap(v)) return null;
-  return { caFingerprint: str(v.ca_fingerprint), caPem: str(v.ca_pem) };
+  return { caExpires: isoOr(v.ca_expires, epoch), caFingerprint: str(v.ca_fingerprint), caPem: str(v.ca_pem), listen: str(v.listen) };
 };
 
 export function decodeSettings(v: unknown): Settings {

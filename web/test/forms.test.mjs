@@ -544,7 +544,7 @@ test('the options reach beyond the pool and leave out what cannot be selected', 
   // Out of order, and alpha's label sorts apart from its id, so the order read is the labels'.
   const listed = [
     featureAccount({ id: 'charlie', label: 'Charlie' }),
-    featureAccount({ featureGrants: [], id: 'delta', kind: 'api_key', label: 'Delta' }),
+    featureAccount({ featureGrants: null, id: 'delta', kind: 'api_key', label: 'Delta' }),
     featureAccount({ id: 'alpha', label: 'Zulu' }),
     featureAccount({ featureGrants: ['artifacts'], id: 'bravo', label: 'Bravo' }),
   ];
