@@ -26885,6 +26885,35 @@ await forView('/sessions', async () => {
     });
   }
   {
+    // `requestsSpan` reads a last request only past the widest preset, so the case moves the first request of each
+    // session with traffic and an agent the ledger holds probes of alone back 31 days. Such an agent has no last
+    // request, and its row's link then ends a minute after its session's last request, which the clock does not move.
+    const DAY = 24 * 60 * 60_000;
+    const moved = isoAt(CLOCK_ORIGIN - 31 * DAY);
+    const quiet = (s) => s.agentRequests.find((e) => e.lastRequestAt === null);
+    const same = (a, b) => a.keyId === b.keyId && a.keyGeneration === b.keyGeneration && a.sessionId === b.sessionId;
+    const candidates = listed.filter((s) => !s.historical && s.firstRequestAt !== null && s.lastRequestAt !== null && Date.parse(s.lastRequestAt) < CLOCK_ORIGIN && quiet(s) !== undefined);
+    const real = api.listSessions;
+    api.listSessions = async (...args) => (await real.apply(api, args)).map((s) => (candidates.some((c) => same(c, s)) ? { ...s, firstRequestAt: moved } : s));
+    let target;
+    let read;
+    try {
+      const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+      target = candidates.find((s) => page.container.querySelector(`[id="${idOfRow(s)}"]`) !== null);
+      const line = target === undefined ? undefined : linesOf(page, await open(page, target)).lines.find((l) => l.agent === quiet(target).agentId);
+      const url = new URL(line?.agentHref ?? '', 'http://console.test');
+      read = { from: url.searchParams.get('from'), to: url.searchParams.get('to') };
+      page.unmount();
+    } finally {
+      api.listSessions = real;
+    }
+    results.push({
+      name: "/sessions an agent with no last request links over its session's span, to a minute after the session's last request",
+      ok: target !== undefined && JSON.stringify(read) === JSON.stringify({ from: moved, to: isoAt(Date.parse(target.lastRequestAt) + 60_000) }),
+      missing: [`session ${target?.sessionId}, agent ${target === undefined ? '' : quiet(target).agentId}, last request ${target?.lastRequestAt}`, JSON.stringify(read)],
+    });
+  }
+  {
     // The subagent whose compaction completed reads its cause beside the ended state, both titled with the sentence,
     // and no probe is scheduled for it.
     const compacted = recipes.filter((r) => r.cause === 'compacted');

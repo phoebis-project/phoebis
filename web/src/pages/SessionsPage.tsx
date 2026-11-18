@@ -156,12 +156,12 @@ type LinkAgent = { agentId: string; firstRequestAt: string | null; lastRequestAt
  * the same session id, over the range `requestsSpan` reads off the first and the last request of the session or of the
  * agent the link is for, read on the clock when the link is made (the menu's click, a line's draw): the page's `now` is
  * a sample up to five seconds old, and the request log measures its window from its own load. An agent without a first
- * request of its own reads the session's. The session lands as the log's session chip, which matches the id exactly,
- * and an agent line's link adds its agent's.
+ * or a last request of its own reads the session's. The session lands as the log's session chip, which matches the id
+ * exactly, and an agent line's link adds its agent's.
  */
 const requestsHref = (session: Pick<Session, 'firstRequestAt' | 'keyGeneration' | 'keyId' | 'lastRequestAt' | 'sessionId'>, agent?: LinkAgent) => {
   const defaults = REQUESTS_CODEC.defaults;
-  const span = requestsSpan(agent?.firstRequestAt ?? session.firstRequestAt, agent === undefined ? session.lastRequestAt : agent.lastRequestAt, clock.now());
+  const span = requestsSpan(agent?.firstRequestAt ?? session.firstRequestAt, agent?.lastRequestAt ?? session.lastRequestAt, clock.now());
   const range = span === null ? defaults.range : rangeOfWindow('preset' in span ? { range: span.preset } : span);
   return requestsAddressHref({ ...defaults, agentId: agent?.agentId ?? defaults.agentId, keys: [keyLifetime(session.keyId, session.keyGeneration)], range, session: session.sessionId });
 };
@@ -1177,7 +1177,7 @@ function SessionRows({
                         <span>State</span>
                       </div>
                       {shownLines.map((line) => (
-                        <AgentLine key={`${line.agentId}|${line.model}`} line={line} now={now} requestsTo={hasTraffic ? requestsHref(session, { agentId: line.agentId, firstRequestAt: line.firstRequestAt, lastRequestAt: lineLastRequestAt(line) ?? session.lastRequestAt }) : null} />
+                        <AgentLine key={`${line.agentId}|${line.model}`} line={line} now={now} requestsTo={hasTraffic ? requestsHref(session, { agentId: line.agentId, firstRequestAt: line.firstRequestAt, lastRequestAt: lineLastRequestAt(line) }) : null} />
                       ))}
                     </div>
                   )}
