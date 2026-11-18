@@ -329,9 +329,10 @@ test('a save hands the client the Thinking diagnostics switch as the dialog show
   };
   const switchIn = (container, label) => container.querySelector(`dialog[open] button[role="switch"][aria-label="${label}"]`);
   const save = (container) => act(() => [...container.querySelectorAll('dialog[open] .dialog__actions button')].find((b) => b.textContent?.trim() === 'Save pool')?.click());
-  // Each field of the group is expert, so opening on it turns the expert view on.
+  // Each field of the group is expert, so opening on it turns the expert view on. The untouched dialog opens with Cache
+  // diagnostics on, so a Thinking switch that read its neighbor would send on.
   const untouched = mount();
-  await untouched.draw(poolDialog({ accounts: accountsRead(accounts), initialGroup: 'cacheDiagnostics', pool }));
+  await untouched.draw(poolDialog({ accounts: accountsRead(accounts), initialGroup: 'cacheDiagnostics', pool: { ...pool, cacheDiagnostics: true } }));
   save(untouched.container);
   await settled();
   const ticked = mount();

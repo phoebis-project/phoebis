@@ -351,26 +351,35 @@ test('a round that would mark no priced pin because none burns, a zero target, s
 });
 
 test('a round whose standing marks cover the target says so', () => {
-  // s's 3 points an hour stand under a mark on hot, a move pending, and cover the target of 1.5, the cap's half of the
-  // 3, so the walk stops at its first position and marks nothing.
-  const s = pin('hot', 's', 0.03, false, { mark: { at: at(NOW - 5 * MINUTE), on: 'hot', window: 'five_hour' } });
-  assert.equal(line([hot, cool], [s]), quiet('the sessions already marked cover it.'));
+  // Under never, s's 3 points an hour stand warm under a mark on hot, a move pending, beside c's cold 1. The 3 cover
+  // the target of 2, the cap's half of the 4, so the walk stops at c's position and marks nothing. Never also keeps the
+  // warm s from the walk, and its mark still names the cause.
+  const c = pin('hot', 'c', 0.01, false);
+  const s = pin('hot', 's', 0.03, true, { mark: { at: at(NOW - 5 * MINUTE), on: 'hot', window: 'five_hour' } });
+  assert.equal(line([hot, cool], [c, s], { warmSessions: 'never' }), quiet('the sessions already marked cover it.'));
 });
 
 test('a round whose pins are each too small to move says so, ahead of the guard', () => {
   // heavy's 5 points an hour cover the target of 2.6, the cap's half of the 5.2 the two pins burn, but its mark would
   // leave light's 0.2 on hot, under the guard's tenth of 0.52. light's 0.2 is under a tenth of the rest of 2.6.
   const pins = [pin('hot', 'heavy', 0.05, false), pin('hot', 'light', 0.002, false)];
-  // alder's one pin of 3 points an hour covers its target of 1.5, and its mark would leave alder no burn, so its own
-  // walk reads the guard. The preview walks alder ahead of hot, by their labels at one priority.
+  // alder's and ivy's one pin of 3 points an hour each covers its target of 1.5, and its mark would leave its member
+  // no burn, so both walks read the guard. The preview walks alder, hot and ivy by their labels at one priority, and
+  // the line names hot's sliver, the first cause in the router's order, from the middle walk.
   const alder = oauth('alder', 0.99, 0.4);
-  assert.deepEqual(
-    { alone: line([hot, cool], pins), beside: line([alder, hot, cool], [pin('alder', 'only', 0.03, false), ...pins]) },
-    {
-      alone: quiet('each is too small to move.'),
-      beside: '2 members project over the ceiling: alder, hot. A round there would mark no session: each is too small to move.',
-    },
+  const ivy = oauth('ivy', 0.99, 0.4);
+  assert.equal(
+    line([alder, hot, ivy, cool], [pin('alder', 'only', 0.03, false), ...pins, pin('ivy', 'only', 0.03, false)]),
+    '3 members project over the ceiling: alder, hot, ivy. A round there would mark no session: each is too small to move.',
   );
+});
+
+test('a round with a pin no sibling has runway for, which burns nothing, reads the cause of the pins it walks', () => {
+  // z's Fable model draws the 7-day Fable window, of which cool holds no reading, so no sibling has runway for it, but
+  // z burns nothing and leaves the round before its order. a alone covers the target of 1.5, the cap's half of its 3,
+  // and its mark would leave hot no burn.
+  const pins = [pin('hot', 'a', 0.03, false), pin('hot', 'z', 0, false, { model: 'claude-fable-5-1' })];
+  assert.equal(line([hot, cool], pins), quiet('each would leave its member too little burn.'));
 });
 
 test('a pin that burns nothing leaves the round before its order', () => {
@@ -715,6 +724,8 @@ test('the cold group walks the pins that drop nothing first', () => {
   // Of two that drop thinking, light's 1 point over 1,000 weighted tokens walks ahead of heavy's 2 over 10,000, though
   // its burn is the smaller.
   assert.equal(read([pin('hot', 'light', 0.01, false, { moveDropCost: 0.0001, moveDropSize: 1_000 }), pin('hot', 'heavy', 0.02, false, { moveDropCost: 0.001, moveDropSize: 10_000 })]), 0.01);
+  // The move that drops nothing still walks first where the other's 2 points over one weighted token top its 1.
+  assert.equal(read([pin('hot', 'none', 0.01, false), pin('hot', 'dense', 0.02, false, { moveDropCost: 0.000001, moveDropSize: 1 })]), 0.01);
 });
 
 /** `res`, an account whose 7-day window reads `utilization` under a projection of `projection` five hours out. */
@@ -733,10 +744,21 @@ test('the preview mirrors a Fable reservation round on the non-Fable pins of a m
   // the cap halves to 2.5, which s1's 3 covers, leaving s2's 2 over a tenth of the 5. A walk of f's 3 beside them would
   // halve 8 to 4, which no pin covers, and mark f and then s1.
   const none = { labels: [], sessions: 0, warm: 0 };
+  // hot's 5-hour round beside res's reservation round, each marking its own pins: two of hot's three, one of them warm,
+  // and s1 on res.
+  const res = reserving(0.8);
+  const beside = d.shedPreview(
+    pool([hot, res, runway], { fableReservationShedding: true, members: [member('cool'), member('hot'), { accountId: 'res', fableReservation: 0.25, priority: 0 }], strategy: 'pace' }),
+    [hot, res, runway],
+    [...three, ...reservingPins],
+    NOW,
+  );
   assert.deepEqual(
     {
+      beside: d.shedPreviewLine(beside, NOW),
       equalRoom: reservationPreview(reserving(0.75), 0.25).reservation,
       floor: reservationPreview(reserving(1.05), 0).reservation,
+      noProjection: reservationPreview(reserving(0.8, 0.3, null), 0.25).reservation,
       on: d.shedPreviewLine(reservationPreview(reserving(0.8), 0.25), NOW),
       optionOff: reservationPreview(reserving(0.8), 0.25, { fableReservationShedding: false }).reservation,
       priority: reservationPreview(reserving(0.8), 0.25, { strategy: 'priority' }).reservation,
@@ -744,10 +766,14 @@ test('the preview mirrors a Fable reservation round on the non-Fable pins of a m
       windowFires: reservationPreview(reserving(0.8, 0.95), 0.25).reservation,
     },
     {
+      beside:
+        '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 4.5 %/h of the excess, to move to a sibling with runway. 1 member holds less 7-day room than its Fable reservation: res. A round there would mark 1 non-Fable session (0 warm), to move to a sibling with runway.',
       // 0.75 used leaves a room of 0.25, the whole reservation.
       equalRoom: none,
       // 1.05 used leaves no room, which is no room under a reservation of 0.
       floor: none,
+      // A 7-day window with no projection fires no reservation round, whatever its room.
+      noProjection: none,
       on: 'No member projects over the ceiling on any window: the closest is res, 7d 85 % in 5h. 1 member holds less 7-day room than its Fable reservation: res. A round there would mark 1 non-Fable session (0 warm), to move to a sibling with runway.',
       optionOff: none,
       priority: none,

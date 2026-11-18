@@ -348,7 +348,7 @@ test("the burn answer keeps an unregistered account's plan row in its share and 
   const hour = '2026-09-16T10:00:00.000Z';
   const tokens = (uncachedInput) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput });
   const row = (accountId, over) => ({ accountId, client: '-', costUsd: 0, equivalent: 0.01, funding: 'plan', hour, model: 'claude-opus-5-5', tokens: tokens(0), ...over });
-  // Three accounts the registry no longer holds, one group each under the account grouping.
+  // Four accounts the registry no longer holds, one group each under the account grouping.
   const rows = [
     row('gone-plan', { costUsd: 0.25, tokens: tokens(1_000) }),
     // A request the upstream rate limited, which books the account a row with no token, its figure 0 as the rollups
@@ -356,13 +356,17 @@ test("the burn answer keeps an unregistered account's plan row in its share and 
     row('gone-failed', { equivalent: 0 }),
     // A model the cost model has no weight for, so the row's tokens carry no figure.
     row('gone-unpriced', { equivalent: null, model: 'claude-unknown-1', tokens: tokens(1_000) }),
+    // Overage dollars beside a rate limited plan request, whose row holds no token.
+    row('gone-billed', { costUsd: 0.4, funding: 'overage', tokens: tokens(1_000) }),
+    row('gone-billed', { equivalent: 0 }),
   ];
-  const { points } = d.burnOf(rows, { from: hour, to: '2026-09-16T11:00:00.000Z' }, 'account', { accountIds: ['gone-plan', 'gone-failed', 'gone-unpriced'] });
+  const { points } = d.burnOf(rows, { from: hour, to: '2026-09-16T11:00:00.000Z' }, 'account', { accountIds: ['gone-plan', 'gone-failed', 'gone-unpriced', 'gone-billed'] });
   const units = Object.fromEntries(points.map((p) => [p.group, p.unit]));
   const plan = points.find((p) => p.group === 'gone-plan');
   assert.deepEqual([units['gone-plan'], plan?.planUsd, plan?.usd], ['window_share', 0.25, 0], 'its plan row reads a window share with its dollars on the plan side');
   assert.equal(units['gone-failed'], undefined, 'a group whose rows hold no token is left out');
   assert.equal(units['gone-unpriced'], 'window_share', 'a token the cost model cannot weigh keeps its group');
+  assert.equal(units['gone-billed'], 'usd', 'a plan row with no token leaves the unit of the billed rows');
 });
 
 // One load at a time, since each pins the clock its bundle reads while it loads.
@@ -687,6 +691,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       // A source with no plan capacity books nothing, so its placement reaches the reserve station with no booking.
       assert.deepEqual([r.outcome.reservation, r.walk.find((w) => w.step === 'reserve')?.verdict], [null, 'none'], `${r.requestId}/${r.seq}'s reservation`);
     }
+  });
+
+  test(`the fresh placement's pick holds a Fable reservation for the one member its first tier ranks and for no other, at ${at}`, async () => {
+    const s = await story;
+    const record = (await decisionsOf(s)).find((r) => r.requestId === 'req_ef099b34-453' && r.seq === 1);
+    // Secondary and overflow are out and the no-fit partition drops nightly, so the pick ranks primary alone. Its seed
+    // burns none of its Fable week, which reserves 0, and the members the pick does not rank hold none.
+    assert.deepEqual(record?.candidates.map((c) => [c.accountId, c.pace?.fableReservation]), [['primary', 0], ['secondary', null], ['nightly', null], ['overflow', null]]);
   });
 
   test(`every paid pace carries the whole shape the Pace hover reads, with or without the spend window, at ${at}`, async () => {
@@ -2359,8 +2371,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(records.some((r) => r.requestId === 'req_51d0e2b8-7a0' && r.walk.some((w) => w.step === 'partitions')), 'the empty-eligible exhaustion walks the partitions');
   });
 
-  test(`every partitions step reads its four facts bare and within the record's own set, a landing's ladder after its no-fit count, at ${at}`, async () => {
-    const s = await story;
+  /** The partitions read of one story, a function of it so that the noon story below takes the same read. */
+  const readPartitions = async (s) => {
     const d = s.lib;
     const records = await decisionsOf(s);
     let seen = 0;
@@ -2428,6 +2440,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         ['match', [['no_fit', 1], ['ladder', 'rewrite_only']]],
       ],
     );
+    // On the two least-bad landings nightly's row states the runway to 1.0 that its rung ranks by, at its burn of 0.019
+    // an hour and the prior's 0.01: (1 - 0.91 - 0.00015) / 0.029 is 3.09828 h, and (1 - 0.94 - 0.0038) / 0.029 is
+    // 1.93793 h.
+    const nightlyOn = (id) => records.find((r) => `${r.requestId}/${r.seq}` === id)?.candidates.find((c) => c.accountId === 'nightly');
+    assert.deepEqual(['req_2e7c90a1-6d4/2', 'req_4b0e9d17-c31/2'].map((id) => [nightlyOn(id)?.runwayMs, nightlyOn(id)?.binding]), [[11_153_793, 'five_hour'], [6_976_552, 'five_hour']]);
 
     const pairs = (facts) => facts.map((f) => [f.key, f.value]);
     const member = (accountId, o = {}) => ({ accountId, credits: null, fit: null, inFlight: 0, inFlightCap: 4, kind: 'oauth', pace: { remaining: 0.5 }, term: { windingDown: false }, windows: {}, ...o });
@@ -2436,8 +2453,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The cap drops the member at it, the one left with no fit read stands on the fitting rung, and the wind-down then
     // falls through rather than empty the set.
     assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { term: { windingDown: true } })], d.poolById.get('jobs'), haiku)), [['spent', 'off'], ['at_cap', 1], ['no_fit', 0], ['ladder', 'fits'], ['winding_down', 'fell_through']]);
-    // A Fable request draws on the shared windows too, and a spent member drops outright, even when none is left. A walk
-    // over no member names no rung.
+    // A Fable request draws on the shared windows too, and a spent member drops outright, even when none is left. A
+    // walk over no member names no rung.
     const spentOn = (name) => ({ windows: { [name]: { utilization: 1 } } });
     assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('five_hour')), member('b')], d.poolById.get('all'), fable)), [['spent', 1], ['at_cap', 0], ['no_fit', 0], ['ladder', 'fits'], ['winding_down', 0]]);
     assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('seven_day')), member('b', spentOn('seven_day_fable'))], d.poolById.get('all'), fable)), [['spent', 2], ['at_cap', 0], ['no_fit', 0], ['winding_down', 0]]);
@@ -2465,7 +2482,23 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // With every member at its cap, a Fable request's spent member drops before the cap holds the rest, so it is never
     // the account the request waits on or passes over.
     assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4, ...spentOn('five_hour') }), member('b', { inFlight: 4 })], all, fable)), [['spent', 1], ['at_cap', 'held'], ['no_fit', 0], ['ladder', 'fits'], ['winding_down', 0]]);
-  });
+    return records;
+  };
+  test(`every partitions step reads its four facts bare and within the record's own set, a landing's ladder after its no-fit count, at ${at}`, async () => readPartitions(await story));
+
+  // Noon's story, loaded once beside the first instant. Its draws place req_ba0f39bd-fc9/1 on nightly on the least-bad
+  // rung beside secondary, which outlasts it, and neither suite instant draws such a record.
+  if (at === '2026-09-16T14:30:00Z') {
+    const noon = (loading = loading.then(() => storyAt('2026-09-16T12:00:00Z')));
+    test('every partitions step reads its four facts bare and within its own set, and a drawn least-bad landing keeps its account, at 2026-09-16T12:00:00Z', async () => {
+      const records = await readPartitions(await noon);
+      const facts = records.find((r) => r.requestId === 'req_ba0f39bd-fc9' && r.seq === 1)?.walk.find((w) => w.step === 'partitions')?.facts ?? [];
+      // The rewrite of 0.01151 takes nightly's 5-hour window from 0.99 past 1, a wall of 0, and leaves secondary's 0.8
+      // under 1 with no burn, so no wall, the longest. The ladder's marks hold secondary at its cap beside primary,
+      // which outscores nightly, and overflow, which fits, so nightly stands alone on the rung.
+      assert.deepEqual(facts.filter((f) => ['at_cap', 'no_fit', 'ladder'].includes(f.key)).map((f) => [f.key, f.value]), [['at_cap', 3], ['no_fit', 0], ['ladder', 'least_bad']]);
+    });
+  }
 
   test(`the member a placement, a move or a hold names is one the partitions kept, at ${at}`, async () => {
     const s = await story;
