@@ -15,6 +15,7 @@ use bytes::Bytes;
 use common::*;
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule, SseEvent};
 use phoebis_bus::{Bus, Delivery, Event, FeatureEnd, FeatureOutcome, ResponseChunk, QUEUE_DEPTH};
+use phoebis_profile::claude_code_2_1_310_linux_x64;
 use phoebis_relay::{Accounting, AccountingSource, Limits, Relay};
 use phoebis_store::{
     AccountState, Cancellation, FeatureOverride, KeyFeatureAccounts, NewBundle,
@@ -769,7 +770,11 @@ async fn a_body_past_the_keys_read_slots_is_refused() {
         },
     )
     .await;
-    let app = phoebis_relay::features::router(h.relay.clone());
+    let app = phoebis_relay::features::router(
+        h.relay.clone(),
+        h.control.clone(),
+        &claude_code_2_1_310_linux_x64().features,
+    );
     let (held, tx) = held_body_request(16);
     let first = tokio::spawn({
         let app = app.clone();
@@ -816,7 +821,12 @@ async fn a_body_that_stalls_is_ended_at_the_reads_deadline() {
     let (request, _tx) = held_body_request(16);
     let answer = tokio::time::timeout(
         Duration::from_secs(5),
-        phoebis_relay::features::router(h.relay.clone()).oneshot(request),
+        phoebis_relay::features::router(
+            h.relay.clone(),
+            h.control.clone(),
+            &claude_code_2_1_310_linux_x64().features,
+        )
+        .oneshot(request),
     )
     .await
     .expect("answered within a few seconds")
@@ -998,7 +1008,12 @@ async fn a_refused_feature_call_answers_while_the_ledger_is_behind_and_the_bus_q
         .unwrap();
     let answer = tokio::time::timeout(
         Duration::from_secs(1),
-        phoebis_relay::features::router(h.relay.clone()).oneshot(request),
+        phoebis_relay::features::router(
+            h.relay.clone(),
+            h.control.clone(),
+            &claude_code_2_1_310_linux_x64().features,
+        )
+        .oneshot(request),
     )
     .await
     .expect("the refusal waited on the full queue")

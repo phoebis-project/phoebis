@@ -33,7 +33,7 @@ pub use record::{
 };
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
-    cohort_hold, decide, effective_warm, elapsed_share_at, exhaustion_status, feature_obstacle,
+    cohort_hold, decide, effective_warm, elapsed_share_at, exhaustion_status, feature_ready,
     lane_key, release_reasons, seconds_ms, select, warmth_of, window_deadline, Banded, ClientClass,
     CohortHold, CreditAccount, Decided, Exhaustion, FailedOver, HoldFacts, HoldReason, HoldWait,
     Judged, JudgedCharge, MigrateReason, MoveRead, Obstacle, PinHold, PinnedObstacle, Placement,

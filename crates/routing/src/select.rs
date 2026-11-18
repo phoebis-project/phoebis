@@ -856,7 +856,7 @@ pub enum Obstacle {
         window: String,
     },
     /// The account's state is not `ready`. The selection reads it through `unready`, which admits a
-    /// `funding_required` account whose retry is due, and a feature call through `feature_obstacle`, which admits a
+    /// `funding_required` account whose retry is due, and a feature call through `feature_ready`, which admits a
     /// `ready` account alone.
     Unready,
 }
@@ -6825,21 +6825,24 @@ pub(crate) fn obstacle_on(
     )
 }
 
-/// What keeps a feature call from going out under `account_id`: `Deleted` for an id the registry lacks, `Unready`
-/// for a stored state other than `ready`, `Ended` past the subscription's end, tested in that order. A pause, a
-/// cooldown and a spent window stop model requests alone, so they answer `None` here.
-pub fn feature_obstacle(
-    snapshot: &RegistrySnapshot,
+/// What keeps a feature call from going out under `account_id`, or the account's row where nothing does: `Deleted` for
+/// an id the registry lacks, `Unready` for a stored state other than `ready`, `Ended` past the subscription's end,
+/// tested in that order. A pause, a cooldown and a spent window stop model requests alone, so they answer the row here.
+pub fn feature_ready<'a>(
+    snapshot: &'a RegistrySnapshot,
     account_id: &str,
     now: i64,
-) -> Option<Obstacle> {
+) -> Result<&'a AccountRow, Obstacle> {
     let Some(account) = snapshot.account(account_id) else {
-        return Some(Obstacle::Deleted);
+        return Err(Obstacle::Deleted);
     };
     if not_ready(account).is_some() {
-        return Some(Obstacle::Unready);
+        return Err(Obstacle::Unready);
     }
-    subscription_ended(snapshot, account_id, now).then_some(Obstacle::Ended)
+    if subscription_ended(snapshot, account_id, now) {
+        return Err(Obstacle::Ended);
+    }
+    Ok(account)
 }
 
 /// The account's live fast-credits row, which refuses a fast request whatever later row stands beside it.

@@ -10,12 +10,15 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
+use axum::extract::ConnectInfo;
 use axum::http::Request;
 use axum::Router;
 use boring::ssl::SslAcceptor;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::{GracefulShutdown, Watcher};
 use hyper_util::service::TowerToHyperService;
+use phoebis_profile::FeatureTable;
+use phoebis_transport::control::ControlClient;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Semaphore};
 use tokio::task::JoinSet;
@@ -106,26 +109,75 @@ pub async fn serve(
     acceptor: Option<Arc<LiveAcceptor>>,
 ) -> std::io::Result<()> {
     let shutdown_mark = relay.shutdown_mark();
-    let app = router(relay).merge(extra);
+    serve_recorded(
+        "proxy",
+        listener,
+        router(relay).merge(extra),
+        stop,
+        limits,
+        shutdown_mark,
+        acceptor,
+    )
+    .await
+}
+
+/// Serves the feature module's routes until `stop` flips, each connection wrapped as a proxy listener's is, so a
+/// head reaches the forward in the caller's spelling and order. The calls of the control plane leave through
+/// `control`, and `table` is the feature table of the router's profile.
+pub async fn serve_features(
+    listener: TcpListener,
+    relay: Arc<Relay>,
+    control: Arc<ControlClient>,
+    table: &'static FeatureTable,
+    stop: watch::Receiver<bool>,
+    limits: Limits,
+    acceptor: Arc<LiveAcceptor>,
+) -> std::io::Result<()> {
+    let shutdown_mark = relay.shutdown_mark();
+    serve_recorded(
+        "features",
+        listener,
+        crate::features::router(relay, control, table),
+        stop,
+        limits,
+        shutdown_mark,
+        Some(acceptor),
+    )
+    .await
+}
+
+/// Serves `app` on `listener` until `stop` flips, each request with the head the connection's recorder took and the
+/// connection's peer.
+async fn serve_recorded(
+    name: &'static str,
+    listener: TcpListener,
+    app: Router,
+    stop: watch::Receiver<bool>,
+    limits: Limits,
+    shutdown_mark: Option<ShutdownMark>,
+    acceptor: Option<Arc<LiveAcceptor>>,
+) -> std::io::Result<()> {
     // HTTP/1 only. An h2c caller's head reaches the relay through hyper's own map, in hyper's own spelling,
-    // which is the silently different outbound shape the pass-through exists to prevent; refusing the
+    // which is the silently different outbound shape the pass-through exists to prevent, so refusing the
     // connection is the honest answer.
     //
     // Left at hyper's default parser configuration on purpose: the recorder ends a head where this builder's
     // `httparse` pass ends it, and a leniency option set here would have to be given to the recorder too.
     let builder = http1_builder(limits.header_read_timeout);
     accept_loop(
-        "proxy",
+        name,
         listener,
         stop,
         limits,
         shutdown_mark,
         acceptor,
         move |stream, watcher| {
+            let peer = peer_of(&stream);
             let queue = head_queue();
             let io = TokioIo::new(HeadRecorder::new(stream, queue.clone()));
             let service = WithOriginalHead {
                 inner: TowerToHyperService::new(app.clone()),
+                peer,
                 queue,
             };
             // No upgrades: no route on the relayed surface switches protocols.
@@ -135,56 +187,15 @@ pub async fn serve(
     .await
 }
 
-/// The address a feature endpoint request's connection came from, in the request's extensions.
-#[derive(Clone, Copy, Debug)]
-pub struct PeerAddr(pub SocketAddr);
-
-/// Serves the feature module's routes until `stop` flips, each connection wrapped as a proxy listener's is, so a
-/// head reaches the forward in the caller's spelling and order.
-pub async fn serve_features(
-    listener: TcpListener,
-    relay: Arc<Relay>,
-    stop: watch::Receiver<bool>,
-    limits: Limits,
-    acceptor: Arc<LiveAcceptor>,
-) -> std::io::Result<()> {
-    let shutdown_mark = relay.shutdown_mark();
-    let app = crate::features::router(relay);
-    // Left at hyper's default parser configuration for the recorder's sake, as `serve` leaves it.
-    let builder = http1_builder(limits.header_read_timeout);
-    accept_loop(
-        "features",
-        listener,
-        stop,
-        limits,
-        shutdown_mark,
-        Some(acceptor),
-        move |stream, watcher| {
-            let peer = peer_of(&stream);
-            let queue = head_queue();
-            let io = TokioIo::new(HeadRecorder::new(stream, queue.clone()));
-            let service = WithOriginalHead {
-                inner: WithPeer {
-                    inner: TowerToHyperService::new(app.clone()),
-                    peer,
-                },
-                queue,
-            };
-            watcher.watch(builder.serve_connection(io, service))
-        },
-    )
-    .await
-}
-
 /// The peer of an accepted connection. A socket the system can no longer name a peer for, as one already reset, has
-/// none, and its requests carry no `PeerAddr`.
-fn peer_of(stream: &Accepted) -> Option<PeerAddr> {
+/// none, and its requests carry no `ConnectInfo`.
+fn peer_of(stream: &Accepted) -> Option<ConnectInfo<SocketAddr>> {
     match stream {
         Either::Left(plain) => plain.peer_addr(),
         Either::Right(tls) => tls.get_ref().peer_addr(),
     }
     .ok()
-    .map(PeerAddr)
+    .map(ConnectInfo)
 }
 
 /// The HTTP/1 connection builder each listener serves on, with `header_read_timeout` as the bound on the wait for a
@@ -312,6 +323,8 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
 /// casing rather than putting one request's headers on another's wire.
 struct WithOriginalHead<S> {
     inner: S,
+    /// The connection's peer, which the request's own head never names.
+    peer: Option<ConnectInfo<SocketAddr>>,
     queue: HeadQueue,
 }
 
@@ -337,25 +350,6 @@ where
             queue.clear();
         }
         drop(queue);
-        self.inner.call(request)
-    }
-}
-
-/// Hands each request of a connection the connection's peer, which the request's own head never names.
-struct WithPeer<S> {
-    inner: S,
-    peer: Option<PeerAddr>,
-}
-
-impl<S, B> hyper::service::Service<Request<B>> for WithPeer<S>
-where
-    S: hyper::service::Service<Request<B>>,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = S::Future;
-
-    fn call(&self, mut request: Request<B>) -> Self::Future {
         if let Some(peer) = self.peer {
             request.extensions_mut().insert(peer);
         }

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Request, State};
+use axum::http::request::Parts;
 use axum::http::response::Builder;
 use axum::http::{
     header, header::CONTENT_ENCODING, HeaderMap, HeaderName, HeaderValue, StatusCode,
@@ -38,7 +39,7 @@ use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope, MemoryStore,
     Secret, StateCause, Store,
 };
-use phoebis_transport::control::{ControlClient, Resolver};
+use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, request_encoding, Decoder, Encoding};
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::request::RawRequest;
@@ -52,7 +53,7 @@ use tokio_util::task::TaskTracker;
 use crate::auth::resolve_key;
 use crate::billing::Restore;
 use crate::body::{marker_ttls, AccountUuidEdit, RepeatedMember, VersionCheck};
-use crate::budget::{BodyBudget, BodyReads};
+use crate::budget::{BodyBudget, BodyReads, Reservation};
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
 use crate::chains::Chains;
@@ -120,7 +121,7 @@ enum Waited {
 /// Upstream response headers the relay keeps to itself: the connection and framing ones describe the upstream
 /// hop, and the framing no longer matches the body the caller is sent; the upstream's own identity and cookies
 /// name the account behind the key, never the key holder.
-pub(crate) const NOT_FORWARDED: &[&str] = &[
+const NOT_FORWARDED: &[&str] = &[
     "anthropic-organization-id",
     "connection",
     "content-length",
@@ -305,14 +306,11 @@ pub struct Relay {
     /// Every body task `relay_body` spawns runs under this, so a shutdown can wait for the completion a body
     /// task publishes after its connection was cut. A feature call's end publishes under it too.
     pub(crate) bodies: TaskTracker,
-    pub(crate) body_budget: Arc<BodyBudget>,
+    body_budget: Arc<BodyBudget>,
     pub(crate) body_reads: BodyReads,
     pub(crate) bus: Option<Bus>,
     catalog: Arc<CatalogService>,
     pub(crate) clock: Clock,
-    /// The client the feature calls of the control plane leave through. Without one each of them answers that the
-    /// upstream did not answer.
-    pub(crate) control: Option<Arc<ControlClient>>,
     /// The connections the pool opened for this relay's checkouts, as against the idle ones it reused.
     #[cfg(feature = "debug-hooks")]
     connections_opened: std::sync::atomic::AtomicUsize,
@@ -410,7 +408,6 @@ impl Relay {
             bus: None,
             catalog,
             clock,
-            control: None,
             #[cfg(feature = "debug-hooks")]
             connections_opened: std::sync::atomic::AtomicUsize::new(0),
             credits: Arc::new(CreditStore::new()),
@@ -476,14 +473,6 @@ impl Relay {
     pub fn with_bus(self, bus: Bus) -> Relay {
         Relay {
             bus: Some(bus),
-            ..self
-        }
-    }
-
-    /// The control client the feature forward sends its control-plane rows through.
-    pub fn with_control(self, control: Arc<ControlClient>) -> Relay {
-        Relay {
-            control: Some(control),
             ..self
         }
     }
@@ -993,6 +982,9 @@ impl Drop for CompletionGuard {
         if !self.armed {
             return;
         }
+        let Some(bus) = self.trace.bus.clone() else {
+            return;
+        };
         let (attempt, account_id, judged) = std::mem::take(&mut self.leg);
         let event = Event::RequestComplete(RequestComplete {
             request_id: self.trace.request_id.clone(),
@@ -1026,18 +1018,25 @@ impl Drop for CompletionGuard {
             classifier: client_off(judged),
             finished_at: (self.trace.clock)(),
         });
-        // `Drop` cannot await, so the durable publish runs on the runtime that is dropping the handler, under the body
-        // tracker the shutdown drains. With no handle current (a trace dropped outside a runtime) the bus's counted
-        // drop is the fallback.
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                let trace = self.trace.clone();
-                self.trace
-                    .bodies
-                    .spawn_on(async move { trace.publish_fact(event).await }, &handle);
-            }
-            Err(_) => self.trace.publish(event),
+        publish_from_drop(
+            &self.trace.bodies,
+            bus,
+            event,
+            self.trace.facts_best_effort.load(Ordering::Relaxed),
+        );
+    }
+}
+
+/// Publishes `event` from a `Drop`, which cannot await. A stream's last poll that awaited the publish would lose the
+/// event with a caller that leaves during the wait, so the durable publish runs on the current runtime under `bodies`,
+/// the body tracker the shutdown drains. A `best_effort` fact goes out through the bus's counted drop, and so does any
+/// fact with no runtime current, as for an owner dropped outside one.
+pub(crate) fn publish_from_drop(bodies: &TaskTracker, bus: Bus, event: Event, best_effort: bool) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if !best_effort => {
+            bodies.spawn_on(async move { bus.publish_fact(event).await }, &handle);
         }
+        _ => bus.publish(event),
     }
 }
 
@@ -1111,7 +1110,7 @@ impl HeaderLookup for HeaderMapLookup<'_> {
 }
 
 /// The declared body length, when the caller sent one the relay can read; a chunked body has none.
-pub(crate) fn content_length(headers: &HeaderMap) -> Option<usize> {
+fn content_length(headers: &HeaderMap) -> Option<usize> {
     headers
         .get(header::CONTENT_LENGTH)?
         .to_str()
@@ -1119,6 +1118,55 @@ pub(crate) fn content_length(headers: &HeaderMap) -> Option<usize> {
         .trim()
         .parse()
         .ok()
+}
+
+/// The request target as the caller sent it, its query among it.
+pub(crate) fn target_of(parts: &Parts) -> String {
+    parts
+        .uri
+        .path_and_query()
+        .map_or("/", |target| target.as_str())
+        .to_owned()
+}
+
+impl Relay {
+    /// The byte budget's reservation for a body still to read. A declared length past the per-body bound is refused
+    /// ahead of it.
+    pub(crate) fn reserve_body(&self, headers: &HeaderMap) -> Result<Reservation, Failure> {
+        let bound = self.limits.max_request_bytes;
+        let declared = content_length(headers);
+        if declared.is_some_and(|length| length > bound) {
+            return Err(relay_failure(&RelayError::BodyTooLarge));
+        }
+        // A chunked body may run to the per-body bound, so it holds that much until it has been read.
+        self.body_budget
+            .try_reserve(declared.unwrap_or(bound) as u64)
+            .ok_or_else(body_budget_exhausted)
+    }
+}
+
+/// A body read's bytes, or the error its failure is answered with: its deadline, the per-body bound, or a body that
+/// ended early.
+pub(crate) fn read_outcome(
+    read: Result<Result<Bytes, axum::Error>, tokio::time::error::Elapsed>,
+) -> Result<Bytes, RelayError> {
+    match read {
+        Ok(Ok(raw)) => Ok(raw),
+        Err(_) => Err(RelayError::BodyTimeout),
+        Ok(Err(error)) => {
+            // axum wraps the limit and the body's own failure in one type. Only the limit is the caller's request
+            // being too large, and the rest is the caller leaving before its body was complete.
+            let too_large = error
+                .into_inner()
+                .downcast::<http_body_util::LengthLimitError>()
+                .is_ok();
+            Err(if too_large {
+                RelayError::BodyTooLarge
+            } else {
+                RelayError::BodyIncomplete
+            })
+        }
+    }
 }
 
 /// The coding of the caller's body, `None` for one the relay refuses: a token other than `gzip` or `identity`, a
@@ -1485,18 +1533,10 @@ impl Relay {
                         break 'read Err(key_body_reads());
                     };
                     read_permit = Some(permit);
-                    let declared = content_length(&parts.headers);
-                    if declared.is_some_and(|n| n > self.limits.max_request_bytes) {
-                        break 'read Err(relay_failure(&RelayError::BodyTooLarge));
+                    match self.reserve_body(&parts.headers) {
+                        Ok(reserved) => reservation = Some(reserved),
+                        Err(failure) => break 'read Err(failure),
                     }
-                    // A chunked body may run to the per-body bound, so it holds that much until it has been read.
-                    let Some(reserved) = self
-                        .body_budget
-                        .try_reserve(declared.unwrap_or(self.limits.max_request_bytes) as u64)
-                    else {
-                        break 'read Err(body_budget_exhausted());
-                    };
-                    reservation = Some(reserved);
                 }
             }
             // A caller that stops sending holds a task and a buffer for nothing, so the read has its own deadline,
@@ -1509,24 +1549,7 @@ impl Relay {
                 }
             };
             drop(read_permit.take());
-            let body_read = match read {
-                Ok(Ok(raw)) => Ok(raw),
-                Err(_) => Err(RelayError::BodyTimeout),
-                Ok(Err(error)) => {
-                    // axum wraps the limit and the body's own failure in one type. Only the limit is the caller's
-                    // request being too large, and the rest is the caller leaving before its body was complete.
-                    let too_large = error
-                        .into_inner()
-                        .downcast::<http_body_util::LengthLimitError>()
-                        .is_ok();
-                    Err(if too_large {
-                        RelayError::BodyTooLarge
-                    } else {
-                        RelayError::BodyIncomplete
-                    })
-                }
-            };
-            let raw = match body_read {
+            let raw = match read_outcome(read) {
                 Ok(raw) => raw,
                 Err(error) => break 'read Err(relay_failure(&error)),
             };
@@ -2026,12 +2049,7 @@ impl Relay {
                 .as_deref()
                 .is_some_and(|kind| kind != "disabled");
         let portable = facts.portable;
-        let target = parts
-            .uri
-            .path_and_query()
-            .map(|target| target.as_str())
-            .unwrap_or_else(|| parts.uri.path())
-            .to_string();
+        let target = target_of(&parts);
         let fallback_ms = self.limits.cooldown_fallback.as_millis() as i64;
         tracing::debug!(
             agent = %identity.agent_id,
@@ -3810,10 +3828,7 @@ impl Relay {
                 Ok(token) => Credential::from(token),
                 Err(error) => {
                     tracing::warn!(account = %account.id, %error, "no credential for the selected account");
-                    // The manager's store write starts no reload, so a mark this acquisition's refresh landed
-                    // reaches routing through the report the ladder sends for its own.
-                    if let Some(mark) = error.landed_mark() {
-                        self.router.report(Report::from(mark)).await;
+                    if report_landed(&self.router, &error).await {
                         return Err(NoCredential::Marked);
                     }
                     return Err(NoCredential::Unavailable);
@@ -4582,6 +4597,16 @@ impl Relay {
     }
 }
 
+/// Reports the mark a failed acquisition's refresh landed on the account, and answers whether one had landed. The
+/// manager's store write starts no reload, so the mark reaches the routing through this report.
+pub(crate) async fn report_landed(router: &RouterHandle, error: &AcquireError) -> bool {
+    let Some(mark) = error.landed_mark() else {
+        return false;
+    };
+    router.report(Report::from(mark)).await;
+    true
+}
+
 /// The outcome of a request the relay answered with its own 502 after an upstream head it could not use: `code`
 /// names how the response failed, not the head that never reached the caller.
 fn unreachable_outcome(mut outcome: RelayOutcome, code: &str) -> RelayOutcome {
@@ -5289,23 +5314,26 @@ fn forward_head(
     rate_limit_event: bool,
 ) -> Result<(Builder, Encoding), TransportError> {
     let upstream = encoding(head)?;
-    let mut builder = Response::builder()
-        .status(StatusCode::from_u16(head.status).unwrap_or(StatusCode::BAD_GATEWAY));
     // The relay's own read of the families (`ratelimit.rs`) already ran on the upstream head; hiding them
     // from the caller changes nothing it saw.
     let hide_rate_limits = head.status != 429 && !rate_limit_event;
+    let builder = copied_head(head, |name| {
+        name.eq_ignore_ascii_case("content-encoding")
+            || (hide_rate_limits
+                && RATE_LIMIT_FAMILY_PREFIXES
+                    .iter()
+                    .any(|p| starts_with_ignoring_case(name, p)))
+    });
+    Ok((builder, upstream))
+}
+
+/// The head a caller gets: the upstream's status and each of its lines whose name neither `NOT_FORWARDED` nor `skip`
+/// holds. A line that does not parse is left out, and the head adds no line.
+pub(crate) fn copied_head(head: &ResponseHead, skip: impl Fn(&str) -> bool) -> Builder {
+    let mut builder = Response::builder()
+        .status(StatusCode::from_u16(head.status).unwrap_or(StatusCode::BAD_GATEWAY));
     for (name, value) in &head.headers {
-        if NOT_FORWARDED.iter().any(|n| name.eq_ignore_ascii_case(n)) {
-            continue;
-        }
-        if hide_rate_limits
-            && RATE_LIMIT_FAMILY_PREFIXES
-                .iter()
-                .any(|p| starts_with_ignoring_case(name, p))
-        {
-            continue;
-        }
-        if name.eq_ignore_ascii_case("content-encoding") {
+        if NOT_FORWARDED.iter().any(|n| name.eq_ignore_ascii_case(n)) || skip(name) {
             continue;
         }
         let (Ok(name), Ok(value)) = (
@@ -5316,10 +5344,10 @@ fn forward_head(
         };
         builder = builder.header(name, value);
     }
-    Ok((builder, upstream))
+    builder
 }
 
-fn built(builder: Builder, body: Body) -> Response {
+pub(crate) fn built(builder: Builder, body: Body) -> Response {
     builder
         .body(body)
         // The status is a validated `StatusCode` and every header was parsed before it was added.

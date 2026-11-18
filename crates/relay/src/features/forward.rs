@@ -8,14 +8,13 @@ use std::io;
 
 use axum::body::Body;
 use axum::http::request::Parts;
-use axum::http::response::Builder;
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap};
 use axum::response::Response;
 use bytes::Bytes;
 use phoebis_bus::{Bus, Event, FeatureCall, FeatureEnd, FeatureOutcome};
 use phoebis_oauth::{AcquireError, Clock};
 use phoebis_profile::{FeatureRow, Plane};
-use phoebis_routing::{Obstacle, Report, UNATTRIBUTED_POOL};
+use phoebis_routing::{Obstacle, UNATTRIBUTED_POOL};
 use phoebis_store::{AccountRow, ApiKeyRow, Secret};
 use phoebis_transport::control::{ControlAnswer, ControlClient, StreamFailure};
 use phoebis_transport::pool::{Conn, PoolKey};
@@ -27,18 +26,19 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use super::cap::Place;
-use super::refresh_hold::{Holds, Rejected};
+use super::refresh_hold::Rejected;
+use super::Listener;
 use crate::budget::Reservation;
 use crate::casing::OriginalHead;
 use crate::dispatch::{attempt, AttemptFailure, Sent};
 use crate::errors::{
-    body_budget_exhausted, feature_account_unavailable, key_body_reads, relay_failure, Failure,
-    UPSTREAM_UNREACHABLE,
+    feature_account_unavailable, key_body_reads, relay_failure, Failure, UPSTREAM_UNREACHABLE,
 };
 use crate::headers::feature_headers;
-use crate::messages::{content_length, Relay, NOT_FORWARDED};
+use crate::messages::{
+    built, copied_head, publish_from_drop, read_outcome, report_landed, target_of, Relay,
+};
 use crate::stream::Checkin;
-use crate::RelayError;
 
 /// Why a forward handed back no answer of the upstream's.
 pub(crate) enum Unanswered {
@@ -71,40 +71,14 @@ pub(crate) async fn read_body(
     else {
         return Err(key_body_reads());
     };
-    let bound = relay.limits.max_request_bytes;
-    let declared = content_length(headers);
-    if declared.is_some_and(|length| length > bound) {
-        return Err(relay_failure(&RelayError::BodyTooLarge));
-    }
-    // A chunked body may run to the bound, so it holds that much until it has been read.
-    let Some(mut reservation) = relay
-        .body_budget
-        .try_reserve(declared.unwrap_or(bound) as u64)
-    else {
-        return Err(body_budget_exhausted());
-    };
+    let mut reservation = relay.reserve_body(headers)?;
     let read = tokio::time::timeout(
         relay.limits.body_read_timeout,
-        axum::body::to_bytes(body, bound),
+        axum::body::to_bytes(body, relay.limits.max_request_bytes),
     )
     .await;
     drop(permit);
-    let raw = match read {
-        Ok(Ok(raw)) => raw,
-        Err(_) => return Err(relay_failure(&RelayError::BodyTimeout)),
-        Ok(Err(error)) => {
-            // axum wraps the bound and the body's own failure in one type, and the bound alone is a body too large.
-            let too_large = error
-                .into_inner()
-                .downcast::<http_body_util::LengthLimitError>()
-                .is_ok();
-            return Err(relay_failure(if too_large {
-                &RelayError::BodyTooLarge
-            } else {
-                &RelayError::BodyIncomplete
-            }));
-        }
-    };
+    let raw = read_outcome(read).map_err(|error| relay_failure(&error))?;
     // The declared length frames the body and the bound caps a chunked one, so this only shrinks.
     let shrunk = reservation.resize(raw.len() as u64);
     debug_assert!(shrunk.is_ok(), "the read outgrew its reservation");
@@ -117,13 +91,11 @@ pub(crate) async fn read_body(
 /// with no length line, and a framed body, an empty one among them, keeps its line. A 401 that `wants_refresh` names
 /// gets the account's one forced refresh and the call once more under the new token, and that answer goes back
 /// whatever it is, while a refresh that gives no newer token sends the first 401 back as it came. A 401 under the
-/// token `holds` keeps for the account goes back as it came too, and a resend's own such 401 holds the new token there.
-/// `ending` arms at the first send and ends with the answer that goes back, or as unanswered where the forward fails
-/// ahead of a head.
-#[allow(clippy::too_many_arguments)]
+/// token the listener's holds keep for the account goes back as it came too, and a resend's own such 401 holds the new
+/// token there. `ending` arms at the first send and ends with the answer that goes back, or as unanswered where the
+/// forward fails ahead of a head.
 pub(crate) async fn forward(
-    relay: &Relay,
-    holds: &Holds,
+    listener: &Listener,
     account: &AccountRow,
     row: &FeatureRow,
     method: &'static str,
@@ -131,7 +103,7 @@ pub(crate) async fn forward(
     body: Option<Bytes>,
     mut ending: Ending,
 ) -> Result<Response, Unanswered> {
-    match answer_of(relay, holds, account, row, method, parts, body, &mut ending).await {
+    match answer_of(listener, account, row, method, parts, body, &mut ending).await {
         Ok(held) => Ok(held.streamed(ending)),
         Err(unanswered) => {
             if let Unanswered::Failed(..) = unanswered {
@@ -143,10 +115,8 @@ pub(crate) async fn forward(
 }
 
 /// The answer that goes back to the caller, its body still on its connection.
-#[allow(clippy::too_many_arguments)]
 async fn answer_of(
-    relay: &Relay,
-    holds: &Holds,
+    listener: &Listener,
     account: &AccountRow,
     row: &FeatureRow,
     method: &'static str,
@@ -154,26 +124,22 @@ async fn answer_of(
     body: Option<Bytes>,
     ending: &mut Ending,
 ) -> Result<Held, Unanswered> {
-    let control = match row.plane {
-        Plane::Control => match relay.control.as_deref() {
-            Some(control) => Some(control),
-            None => return Err(Unanswered::Failed("unreachable", None)),
-        },
-        Plane::Inference => None,
-    };
+    let Listener {
+        control,
+        holds,
+        relay,
+        ..
+    } = listener;
     let token = match relay.manager.acquire_for(account, None).await {
         Ok(token) => token,
         Err(error) => {
-            // The manager's store write starts no reload, so the mark reaches the routing through this report.
-            if let Some(mark) = error.landed_mark() {
-                relay.router().report(Report::from(mark)).await;
-            }
+            report_landed(relay.router(), &error).await;
             return Err(match error {
                 AcquireError::Disconnected
                 | AcquireError::Quarantined
                 | AcquireError::ReauthRequired(_)
                 | AcquireError::Unpaired => {
-                    Unanswered::Refused(feature_account_unavailable(Obstacle::Unready.name()))
+                    Unanswered::Refused(feature_account_unavailable(&Obstacle::Unready))
                 }
                 AcquireError::NotRefreshed
                 | AcquireError::ShuttingDown
@@ -199,7 +165,15 @@ async fn answer_of(
         body: body.clone(),
     };
     ending.arm();
-    let first = send(relay, control, account, row.host, request(&token.secret)).await?;
+    let first = send(
+        relay,
+        control,
+        row.plane,
+        account,
+        row.host,
+        request(&token.secret),
+    )
+    .await?;
     // A token the upstream rejected behind its own refresh gets no second one. The call went out once, since the
     // upstream can accept the token on another path, and its 401 goes back as it came.
     if !wants_refresh(first.head())
@@ -217,7 +191,15 @@ async fn answer_of(
             // Dropped ahead of the resend, its connection with it, since a connection whose body went unread serves no
             // later call.
             drop(first);
-            let second = send(relay, control, account, row.host, request(&fresh.secret)).await?;
+            let second = send(
+                relay,
+                control,
+                row.plane,
+                account,
+                row.host,
+                request(&fresh.secret),
+            )
+            .await?;
             // A resend's 401 alone holds its token: a first 401 whose refresh gave no token and a resend the upstream
             // accepted each leave the next 401 its refresh.
             if wants_refresh(second.head()) {
@@ -226,10 +208,7 @@ async fn answer_of(
             Ok(second)
         }
         Err(error) => {
-            // The manager's store write starts no reload, so the mark reaches the routing through this report.
-            if let Some(mark) = error.landed_mark() {
-                relay.router().report(Report::from(mark)).await;
-            }
+            report_landed(relay.router(), &error).await;
             Ok(first)
         }
     }
@@ -241,17 +220,14 @@ async fn answer_of(
 /// `ending` arms at the send and ends as `answered` says, or as unanswered where no head came. The error is the word
 /// of the case in which no head came.
 pub(crate) async fn keyless(
-    relay: &Relay,
+    listener: &Listener,
     host: &'static str,
     method: &'static str,
     parts: &Parts,
     deadline: Instant,
     mut ending: Ending,
 ) -> Result<Response, &'static str> {
-    let Some(control) = relay.control.as_deref() else {
-        ending.unanswered();
-        return Err("unreachable");
-    };
+    let Listener { control, relay, .. } = listener;
     // The shape admits an empty body alone, and a head that framed it by its length keeps that line, as a keyed
     // forward writes it.
     let length = parts
@@ -290,15 +266,6 @@ pub(crate) async fn keyless(
     };
     ending.unanswered();
     Err(case)
-}
-
-/// The request target as the caller sent it, its query among it.
-fn target_of(parts: &Parts) -> String {
-    parts
-        .uri
-        .path_and_query()
-        .map_or("/", |target| target.as_str())
-        .to_owned()
 }
 
 /// Whether an answer asks for the account's credential once more: a 401 without `X-Mcp-Error-Code`. A connector that
@@ -344,28 +311,29 @@ impl Held {
     }
 }
 
-/// One send of the call: through `control` where the row's plane is the control plane, else over the account's pooled
+/// One send of the call on `plane`: through `control` on the control plane, else over the account's pooled
 /// connections.
 async fn send(
     relay: &Relay,
-    control: Option<&ControlClient>,
+    control: &ControlClient,
+    plane: Plane,
     account: &AccountRow,
     host: &'static str,
     request: RawRequest,
 ) -> Result<Held, Unanswered> {
-    let Some(control) = control else {
-        return pooled(relay, account, host, &request).await;
-    };
-    control
-        .send_streaming(
-            request,
-            host,
-            relay.limits.connect_timeout,
-            relay.limits.head_timeout,
-        )
-        .await
-        .map(Held::Control)
-        .map_err(|failure| Unanswered::Failed(case_of(&failure), None))
+    match plane {
+        Plane::Inference => pooled(relay, account, host, &request).await,
+        Plane::Control => control
+            .send_streaming(
+                request,
+                host,
+                relay.limits.connect_timeout,
+                relay.limits.head_timeout,
+            )
+            .await
+            .map(Held::Control)
+            .map_err(|failure| Unanswered::Failed(case_of(&failure), None)),
+    }
 }
 
 /// Sends the call over `account`'s pooled connections toward `host`, as the model path sends a request, under the
@@ -411,29 +379,6 @@ async fn pooled(
     }
 }
 
-/// The head a caller gets: the upstream's status and each of its lines whose name `NOT_FORWARDED` does not hold.
-/// It adds no line.
-pub(crate) fn answer_head(head: &ResponseHead) -> Builder {
-    let status = StatusCode::from_u16(head.status).unwrap_or(StatusCode::BAD_GATEWAY);
-    let mut builder = Response::builder().status(status);
-    for (name, value) in &head.headers {
-        if NOT_FORWARDED
-            .iter()
-            .any(|kept| name.eq_ignore_ascii_case(kept))
-        {
-            continue;
-        }
-        let (Ok(name), Ok(value)) = (
-            HeaderName::from_bytes(name.as_bytes()),
-            HeaderValue::from_str(value),
-        ) else {
-            continue;
-        };
-        builder = builder.header(name, value);
-    }
-    builder
-}
-
 /// The answer with each piece of its body passed on as it arrives and no bound between two, since a session's event
 /// stream idles between its events. A read that fails behind the head ends the stream with an error, which ends the
 /// caller's connection, and so does a read still waiting at `deadline` where the call has one. `kept` takes the pooled
@@ -476,10 +421,7 @@ fn answered(
             }
         }
     });
-    answer_head(&head)
-        .body(Body::from_stream(pieces))
-        // The status is a validated `StatusCode` and each line was parsed before it was added.
-        .expect("a forwarded answer's head is always well formed")
+    built(copied_head(&head, |_| false), Body::from_stream(pieces))
 }
 
 /// A feature endpoint request as its event names it, taken at its arrival. The key and the feature are set as the
@@ -657,15 +599,7 @@ impl Open {
             return;
         };
         let event = call.ended(end, clock());
-        // `Drop` cannot await, and a stream's last poll would lose the event with a caller that leaves during the
-        // wait, so the durable publish runs under the body tracker the shutdown drains. With no runtime current the
-        // bus's counted drop is the fallback.
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                bodies.spawn_on(async move { bus.publish_fact(event).await }, &handle);
-            }
-            Err(_) => bus.publish(event),
-        }
+        publish_from_drop(&bodies, bus, event, false);
     }
 }
 

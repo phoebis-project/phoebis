@@ -39,6 +39,8 @@ pub struct Harness {
     pub app: axum::Router,
     pub bus: Bus,
     pub clock: Arc<AtomicI64>,
+    /// The client the feature listener's control-plane calls leave through.
+    pub control: Arc<phoebis_transport::control::ControlClient>,
     pub db: Arc<LedgerDb>,
     pub ledger: Ledger,
     pub metrics: Arc<Metrics>,
@@ -378,7 +380,6 @@ pub async fn harness_on_tables(
             catalog,
         )
         .with_bus(bus.clone())
-        .with_control(control)
         .with_accounting({
             let ledger = ledger.clone();
             Arc::new(move |counts: bool| Accounting {
@@ -394,6 +395,7 @@ pub async fn harness_on_tables(
         app: router(relay.clone()),
         bus,
         clock: clock_cell,
+        control,
         db,
         ledger,
         metrics,

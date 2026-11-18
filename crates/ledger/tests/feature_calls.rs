@@ -62,10 +62,14 @@ fn keyed(method: &str, target: &str) -> Request<Body> {
 
 /// The feature listener's answer to `request`, its body unread.
 async fn call(h: &Harness, request: Request<Body>) -> Response {
-    phoebis_relay::features::router(h.relay.clone())
-        .oneshot(request)
-        .await
-        .unwrap()
+    phoebis_relay::features::router(
+        h.relay.clone(),
+        h.control.clone(),
+        &phoebis_profile::claude_code_2_1_310_linux_x64().features,
+    )
+    .oneshot(request)
+    .await
+    .unwrap()
 }
 
 async fn rows(h: &Harness) -> Vec<FeatureCallRow> {

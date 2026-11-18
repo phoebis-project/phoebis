@@ -351,7 +351,6 @@ pub async fn run_until(
         catalog.clone(),
     )
     .with_bus(bus.clone())
-    .with_control(control.clone())
     .with_readiness({
         let readiness = readiness.clone();
         Arc::new(move || readiness.dead())
@@ -442,7 +441,7 @@ pub async fn run_until(
         manager,
         usage,
         pairing: pairing.clone(),
-        control,
+        control: control.clone(),
         profile,
         sessions: sessions.clone(),
         clock: clock.clone(),
@@ -665,6 +664,8 @@ pub async fn run_until(
                     .spawn(phoebis_relay::serve_features(
                         listener,
                         relay.clone(),
+                        Arc::clone(&control),
+                        &profile.features,
                         stop_rx.clone(),
                         limits(PROXY_MAX_CONNECTIONS),
                         Arc::clone(acceptor),

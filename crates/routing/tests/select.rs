@@ -1,5 +1,5 @@
 use phoebis_routing::{
-    all_plan_windows, burn_average_ms, cohort_hold, decide, effective_warm, feature_obstacle,
+    all_plan_windows, burn_average_ms, cohort_hold, decide, effective_warm, feature_ready,
     lane_key, release_reasons, resolve, select, shed_dwell_ms, warm, warmth_of, AccountTicket,
     AffinityChain, AffinityMap, AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit,
     CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditAccount, CreditsState, Decided,
@@ -2881,12 +2881,12 @@ fn the_release_reasons_name_a_funding_mark_only_while_the_selection_would_not_tr
 fn a_feature_account_the_registry_lacks_answers_deleted() {
     let s = snapshot(Pool::default());
     assert_eq!(
-        feature_obstacle(&s, "gone", 1_000),
+        feature_ready(&s, "gone", 1_000).err(),
         Some(Obstacle::Deleted),
         "no account holds the id"
     );
     assert_eq!(
-        feature_obstacle(&s, "a", 1_000),
+        feature_ready(&s, "a", 1_000).err(),
         None,
         "a ready account serves"
     );
@@ -2902,12 +2902,12 @@ fn a_feature_account_that_is_signed_out_answers_unready() {
         ],
     );
     assert_eq!(
-        feature_obstacle(&s, "b", 1_000),
+        feature_ready(&s, "b", 1_000).err(),
         Some(Obstacle::Unready),
         "the account needs a new sign-in"
     );
     assert_eq!(
-        feature_obstacle(&s, "c", 1_000),
+        feature_ready(&s, "c", 1_000).err(),
         None,
         "a pause stops model requests alone"
     );
@@ -2931,12 +2931,12 @@ fn a_feature_account_past_its_subscription_end_answers_ended() {
         }],
     );
     assert_eq!(
-        feature_obstacle(&s, "b", 1_000),
+        feature_ready(&s, "b", 1_000).err(),
         Some(Obstacle::Ended),
         "the saved end has come"
     );
     assert_eq!(
-        feature_obstacle(&s, "b", 999),
+        feature_ready(&s, "b", 999).err(),
         None,
         "a millisecond before the saved end"
     );

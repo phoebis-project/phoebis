@@ -246,6 +246,8 @@ pub struct Harness {
     /// with no address, so a shared pool would hand either fake the other's connection.
     pub catalog_up: FakeUpstream,
     pub clock: Arc<AtomicI64>,
+    /// The client the feature listener's control-plane calls leave through.
+    pub control: Arc<phoebis_transport::control::ControlClient>,
     /// The manager the relay was built with, so a test reads `backoff_until` before it steps the clock.
     pub manager: Arc<phoebis_oauth::CredentialManager>,
     /// The relay behind `app`, for the suites that serve it on a real socket instead of calling it in process.
@@ -1038,9 +1040,7 @@ async fn build(
     // A tick fast enough for a test to step the clock and wait on it in real time, rather than the production
     // default's six-hour interval.
     let refresh = catalog.spawn_refresh(Duration::from_secs(21_600), Duration::from_millis(20));
-    let relay = relay
-        .with_control(control)
-        .with_signed_placeholder(sign_placeholder);
+    let relay = relay.with_signed_placeholder(sign_placeholder);
     // Before the store is attached, which rebuilds the memory around whatever cap it finds.
     let relay = match memory_cap {
         // The idle bound the relay's own default carries, so the cap is the only thing that differs.
@@ -1066,6 +1066,7 @@ async fn build(
         catalog: catalog.clone(),
         catalog_up,
         clock: clock_cell,
+        control,
         manager,
         relay,
         router: router_handle,
@@ -1151,6 +1152,8 @@ pub async fn feature_listener(h: &Harness) -> FeatureListener {
     tokio::spawn(phoebis_relay::serve_features(
         listener,
         h.relay.clone(),
+        h.control.clone(),
+        &claude_code_2_1_310_linux_x64().features,
         stop_rx,
         phoebis_relay::ListenLimits {
             drain_timeout: Duration::from_secs(30),
