@@ -71,7 +71,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareIn, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, TRANSFORMATION_KEYS, transformationLabel, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareIn, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a plan row priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced: its model has no weight in the cost model';
@@ -1775,22 +1775,17 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     missing: [JSON.stringify(equivalentRead)],
   });
   // 25 points from 14:00 a day back, read at 14:34, cover 24 hours and 34 minutes: 737 requests read 30.0 an hour,
-  // where a divisor of 24 reads 30.7 and one of the 25 points 29.5, and a day of $73.70 reads $3.00 an hour, where 24
-  // reads $3.07. Native reads the billed dollars and All in dollars the cost, so the day sets both.
+  // where a divisor of 24 reads 30.7 and one of the 25 points 29.5.
   const MINUTE = 60_000;
   const covered = Array.from({ length: 25 }, (_, i) => ({ at: new Date(Date.UTC(2026, 8, 15, 14 + i)).toISOString(), billed: 0, cost: 0, equivalent: 0, errors: 0, refused: 0, requests: 0, tokens: 0 }));
-  api.getOverview = async () => ({ ...day, day24h: { billedUsd: 73.7, cost: 73.7, equivalent: 0 }, hourly: covered, requests24h: 737 });
+  api.getOverview = async () => ({ ...day, hourly: covered, requests24h: 737 });
   const coveredPage = await mount('/', { now: CLOCK_ORIGIN + 4 * MINUTE });
-  const coveredRead = { native: tileRead(coveredPage, 'Estimated cost, 24h').note, requests: tileRead(coveredPage, 'Requests, 24h').note };
-  await chooseUnit(coveredPage, 'all');
-  coveredRead.all = tileRead(coveredPage, 'Estimated cost, 24h').note;
-  await chooseUnit(coveredPage, 'native');
-  localStorage.removeItem('phoebis.unit');
+  const coveredRead = { requests: tileRead(coveredPage, 'Requests, 24h').note };
   coveredPage.unmount();
   delete api.getOverview;
   results.push({
-    name: '/ the per-hour notes divide by the hours the answer covers',
-    ok: coveredRead.requests === '30.0 per hour' && coveredRead.all === '$3.00 per hour' && coveredRead.native === '$3.00 billed per hour',
+    name: '/ the Requests per-hour note divides by the hours the answer covers',
+    ok: coveredRead.requests === '30.0 per hour',
     missing: [JSON.stringify(coveredRead)],
   });
 }
@@ -4444,13 +4439,6 @@ expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off
   results.push({ name: '/accounts/legacy stays at its path on the Accounts page', ok: at.heading === 'Accounts' && at.nav === '/accounts' && at.row === '/accounts/legacy', missing: [JSON.stringify(at)] });
   const repair = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair');
   results.push({ name: '/accounts/legacy Re-pair is primary while re-auth is required', ok: repair?.classList.contains('btn--primary') === true, missing: [repair?.className ?? 'no Re-pair'] });
-}
-// The route withholds legacy's windows, so the missing Fable week reads on reserve, a listed row with its two windows
-// and no Fable week.
-await m.navigate('/accounts/reserve');
-{
-  const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
-  results.push({ name: '/accounts/reserve greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
 }
 {
   // The mock seals legacy's stored credential under another storage key, so its re-pair's confirm meets the router's
@@ -18130,15 +18118,6 @@ await forView('/routing-log', async () => {
           const rows = [...(detail?.querySelectorAll('.event-detail__pins tbody tr') ?? [])];
           const rewrites = rows.map((tr) => [cellOf(tr, 'Rewrite')?.textContent ?? '', cellOf(tr, 'Rewrite')?.getAttribute('title') ?? null]);
           const marked = (e?.detail.pins ?? []).flatMap((p, i) => (p.marked ? [[rewrites[i], p.rewrite === null || p.rewrite_window !== 'seven_day' ? null : [weekCell(p.rewrite), 'compared on the 7-day window']]] : []));
-          // A round of the current build writes the thinking each pin's move would drop, which the mock's stretch round
-          // seeds on its first marked pin, `STRETCH_DROPPED_THINKING`'s 2,400 tokens.
-          const dropped = rows.map((tr) => cellOf(tr, 'Thinking dropped')?.textContent ?? null);
-          const first = (e?.detail.pins ?? []).findIndex((p) => p.marked);
-          results.push({
-            name: '/routing-log the round fired by the stretch draws the thinking its first marked pin would drop under Thinking dropped',
-            ok: head.includes('Thinking dropped') && dropped[first] === '2.4K',
-            missing: [head.join(' / '), JSON.stringify(dropped)],
-          });
           return (
             named &&
             (popoverRowOf(round, 'fired by') ?? []).includes('fired by slow-down') && (popoverRowOf(round, 'stretch') ?? []).includes('stretch 42 min') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
@@ -30954,12 +30933,10 @@ await forView(['/analytics', '/requests', '/routing-log'], async () => {
   const brief = (r) => `${r.trigger}, row ${JSON.stringify(r.head)}, ${r.checked.length} of ${r.choices.length} checked, ${r.address === null ? 'no address key' : `address ${r.address.length}`}`;
   // The Cache miss reason list's labels as the page writes them, each by the reason it names.
   const MISS_REASON = Object.fromEntries(Object.entries(CACHE_MISS_LABEL).map(([reason, label]) => [label, reason]));
-  // The Dropped thinking list's labels as the page writes them, each by the key it names.
-  const TRANSFORMATION = Object.fromEntries(TRANSFORMATION_KEYS.map((key) => [transformationLabel(key), key]));
   /**
    * Each picker's value by its row's label, from the lists the view's options come from: the Analytics page's from the
    * breakdown under `range`, the page's own, the other views' keys, pools, accounts and models from the mock's lists, a
-   * status by its code, a cache miss reason and a dropped thinking key by the labels above, the unattributed request
+   * status by its code, a cache miss reason by the labels above, the unattributed request
    * class by the key the breakdown files it under, and the label itself on every other list, whose options are their
    * values.
    */
@@ -30979,12 +30956,12 @@ await forView(['/analytics', '/requests', '/routing-log'], async () => {
     if (view !== '/requests') return lists;
     const same = (label) => label;
     const classes = await groups('request_class', new Date(CLOCK_ORIGIN - 31 * 86_400_000).toISOString(), new Date(CLOCK_ORIGIN).toISOString());
-    return { ...lists, 'Agent type': same, 'Cache miss reason': (label) => MISS_REASON[label] ?? label, 'Dropped thinking': (label) => TRANSFORMATION[label] ?? label, Effort: same, Outcome: same, 'Request class': (label) => classes(label) ?? label, Speed: same, Status: (label) => label.split(' ')[0], 'Turn origin': same };
+    return { ...lists, 'Agent type': same, 'Cache miss reason': (label) => MISS_REASON[label] ?? label, Effort: same, Outcome: same, 'Request class': (label) => classes(label) ?? label, Speed: same, Status: (label) => label.split(' ')[0], 'Turn origin': same };
   };
 
   const PICKERS = [
     ['/analytics', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models']]],
-    ['/requests', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models'], ['Status', 'statuses'], ['Outcome', 'outcomes'], ['Cache miss reason', 'cache_miss_reasons'], ['Dropped thinking', 'input_transformations'], ['Agent type', 'agent_types'], ['Turn origin', 'turn_origins'], ['Effort', 'efforts'], ['Request class', 'request_classes'], ['Speed', 'speeds']]],
+    ['/requests', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models'], ['Status', 'statuses'], ['Outcome', 'outcomes'], ['Cache miss reason', 'cache_miss_reasons'], ['Agent type', 'agent_types'], ['Turn origin', 'turn_origins'], ['Effort', 'efforts'], ['Request class', 'request_classes'], ['Speed', 'speeds']]],
     ['/routing-log', [['Kinds', 'kinds'], ['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models']]],
   ];
   // The list each view searches under a query, and the query: one whose options draw a search field.

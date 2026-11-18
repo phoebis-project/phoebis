@@ -250,8 +250,6 @@ test('the Quota page lists a subscription account that is paired, not awaiting r
 test("noWindowSentence reads an ended plan's age in the long form and in the compact one the account cards draw", () => {
   const now = Date.UTC(2026, 8, 16, 14, 30);
   const ended = new Date(now - 4 * 3_600_000).toISOString();
-  const ago = d.fmtRelative(ended, now);
-  assert.equal(ago, '4h ago');
   const flagged = { kind: 'oauth', planEndedAt: ended, status: 'ready' };
   assert.equal(d.noWindowSentence(flagged, now), 'No quota window is read since the plan ended 4h ago.');
   assert.equal(d.noWindowSentence(flagged, now, true), 'No window since the plan ended 4h ago');

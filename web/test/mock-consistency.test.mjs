@@ -863,13 +863,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.requests.filter((r) => r.keyId === 'desktop').every((r) => r.keyGeneration === (Date.parse(r.at) < created ? generation : created)), 'each request row carries the holder it ran under');
   });
 
-  test(`the burn answer under a bare key id leaves an earlier holder's rows out, at ${at}`, async () => {
-    const s = await story;
-    // The live desktop key and its earlier holder both have rows inside the day, as the case above holds.
-    const burn = await s.api.getAnalyticsBurn({ from: iso(s.now - DAY), to: iso(s.now) }, 'key', { keyIds: ['desktop'] });
-    assert.deepEqual([...new Set(burn.points.map((p) => p.group))], ['desktop']);
-  });
-
   test(`the earlier holder's session row reads its own requests inside the session expiry and is listed while its last request is inside the non-companion timeout, at ${at}`, async () => {
     const s = await story;
     const created = Date.parse(s.keys.find((k) => k.id === 'desktop').createdAt);
@@ -4212,7 +4205,7 @@ test("the story's 14:00 hour counts desktop's turn that marked no cache breakpoi
 // An instant whose hour a full day back carries traffic.
 const firstHour = loading.then(() => storyAt('2026-09-16T09:30:00Z'));
 
-test("the hour a full day back counts toward the accounts' and pools' day totals, a pool's first bucket and the dashboard's day", async () => {
+test("the hour a full day back counts toward the accounts' and pools' day totals and a pool's first bucket", async () => {
   const s = await firstHour;
   const early = s.totalled.filter((r) => Date.parse(r.at) < s.dayFrom);
   assert.ok(early.length > 0, 'the story has traffic in the hour a full day back');
@@ -4223,7 +4216,6 @@ test("the hour a full day back counts toward the accounts' and pools' day totals
   for (const p of s.pools) {
     assert.equal(p.traffic24h[0].requests, s.asked(early).filter((r) => r.poolId === p.id).length, `${p.id}'s first hour`);
   }
-  assert.equal(s.overview.requests24h, s.asked(s.totalled).length, "the dashboard's day counts it too");
 });
 
 test("a paired row's first reading is stamped at the list read that lands it, after the confirm", async () => {

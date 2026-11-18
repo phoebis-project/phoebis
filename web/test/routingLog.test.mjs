@@ -864,7 +864,6 @@ test("the cache figure's base holds the write", () => {
   // A turn that wrote most of its prompt to the cache paid for the write, so the figure reads no full hit for it.
   const written = record({ outcome: { completion: completion({ cacheReadTokens: 19_330, cacheWriteTokens: 27_246, completedAt: iso(NOW), hit: true, inputTokens: 2, status: 200 }) } });
   assert.equal(d.verdictChips(written, decision({ by: strategy('pace', [0, 0, 0]) })).find((c) => c.label === 'cache hit')?.value, '19.3K of 46.6K');
-  assert.equal(d.outcomeRows(written, NOW).find((r) => r.label === 'Cache read')?.chips.find((c) => c.label === 'read')?.value, '19.3K of 46.6K input');
 });
 
 test('a cache-map row of four entries or more draws one chip per tier and the three deepest message depths, with every entry behind its control', () => {

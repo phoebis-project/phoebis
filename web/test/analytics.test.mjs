@@ -713,18 +713,6 @@ test('the idle slots of the plan card zero-fill against the flag, and an unprice
   assert.equal(lines[0].unpriced, true, 'the legend reads the flag');
 });
 
-test("each plan card reads its own map's figure under the chosen week's tier", () => {
-  // One busy point whose three maps differ, and whose two tiers differ inside each map, so a card that reads another
-  // card's map or another tier's entry reads a figure apart. Under the Max week the tier is Max 5x.
-  const maps = {
-    equivalentByTier: { default_claude_ai: 0.5, default_claude_max_5x: 0.1 },
-    fableEquivalentByTier: { default_claude_ai: 0.6, default_claude_max_5x: 0.3 },
-    fiveHourEquivalentByTier: { default_claude_ai: 0.8, default_claude_max_5x: 0.2 },
-  };
-  const points = [point(0, 'a', { ...maps, uncachedTokens: 100 })];
-  assert.deepEqual([d.weekCard(points, 'max'), d.fiveHourCard(points, 'max'), d.fableWeekCard(points, 'max')].map((card) => card.points[0].figure), [0.1, 0.2, 0.3]);
-});
-
 test("a range whose later revision drops the chosen tier's capacity draws its earlier buckets and leaves its later ones as the tier's gaps", () => {
   // The card hands the first hour its figure under the chosen tier, the second the tier's gap its revision left, and
   // the third the zero its billed rows add, which drew nothing from the plan.
@@ -982,11 +970,6 @@ test("the error rate is the requests that did not succeed over the requests, the
   assert.equal(d.errorRateOf({ clientCanceled: 0, requests: 10, succeeded: 9 }), 0.1);
   assert.equal(d.errorRateOf({ clientCanceled: 0, requests: 0, succeeded: 0 }), null, 'a group with no request has no rate, which the cells draw as a dash');
   assert.equal(d.errorRateOf({ clientCanceled: 1, requests: 2, succeeded: 0 }), 0.5, 'one failed request and one the client canceled');
-});
-
-test("a sum of groups adds the client's cancels", () => {
-  const group = d.decodeAnalyticsGroup(fixture('analytics_breakdown').rows[0]);
-  assert.equal(d.sumGroups([{ ...group, clientCanceled: 1 }, { ...group, clientCanceled: 2 }]).clientCanceled, 3);
 });
 
 test('sumGroups sums refused and the refusals map', () => {

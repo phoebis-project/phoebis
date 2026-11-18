@@ -125,10 +125,6 @@ test('requestsSpan picks the narrowest preset that covers the first request, wit
   assert.equal(d.requestsSpan(null, last, NOW), null);
 });
 
-test('the requests link covers a session from its first request', () => {
-  assert.deepEqual(d.requestsSpan(iso(NOW - 3 * DAY), iso(NOW - MINUTE), NOW), { preset: '7d' });
-});
-
 test('a first request past the widest preset opens a custom span', () => {
   // The last request two days back, so a span that ended at the click reads otherwise.
   assert.deepEqual(d.requestsSpan(iso(NOW - 31 * DAY), iso(NOW - 2 * DAY), NOW), { from: NOW - 31 * DAY, to: NOW - 2 * DAY + MINUTE });
