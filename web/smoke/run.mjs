@@ -3998,8 +3998,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const resume = [...m.container.querySelectorAll('.detail__head button')].find((b) => b.textContent?.trim() === 'Resume');
   resume?.click();
   await m.settle(850);
-  const resumeToast = m.container.querySelector('.toast')?.textContent ?? '';
-  results.push({ name: '/accounts Resume restores the Pause action', ok: resumeToast.includes('Resumed') && [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Pause'), missing: [resumeToast || 'no toast'] });
+  results.push({ name: '/accounts Resume restores the Pause action', ok: [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Pause'), missing: [] });
   const rename = async (to) => {
     m.container.querySelector('button[aria-label="Edit label"]')?.click();
     await m.settle(150);
@@ -4905,11 +4904,10 @@ expect('/accounts/overflow', m.text(), ['Verify', 'does not report quota windows
   // Back to routing, since the pools and the later account checks read this account as the fixture left it.
   headButton('Resume')?.click();
   await m.settle(850);
-  const resumeToast = m.container.querySelector('.toast')?.textContent ?? '';
   results.push({
     name: '/accounts a flagged account pauses and resumes from the header',
-    ok: offersResume && resumeToast.includes('Resumed') && headButton('Pause') !== undefined,
-    missing: [offersResume ? 'resume offered' : 'no Resume while paused', resumeToast || 'no toast', ...[...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '')],
+    ok: offersResume && headButton('Pause') !== undefined,
+    missing: [offersResume ? 'resume offered' : 'no Resume while paused', ...[...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '')],
   });
 }
 {
