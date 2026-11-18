@@ -139,7 +139,7 @@ const failures = [];
 const measurements = [];
 /** Per page, the login screens the pass loads on purpose, each of which asks /admin/session without a cookie first. */
 const loginLoads = new WeakMap();
-/** Per page, the requests it sent that have neither finished nor failed, and the count of those it has sent. */
+/** Per page, the requests it sent that have neither finished, failed nor lost their document, and the count it sent. */
 const traffic = new WeakMap();
 /** Room in real time for a page's requests to land, the span Playwright gives each of its own waits. */
 const SETTLE_DEADLINE_MS = 30_000;
@@ -191,12 +191,29 @@ async function openPage(on) {
   opened.on('pageerror', (e) => failures.push(`page error on ${opened.url()}: ${e.message}`));
   const sent = { open: new Set(), started: 0 };
   traffic.set(opened, sent);
+  // Playwright reports neither the end nor the failure of a request that a navigation cancels, so the wait would hold
+  // it to the deadline. The main frame's commit of a new document drops each request still open that started before
+  // the document's own request, since no answer can reach a document the page has left.
+  const order = new WeakMap();
+  let navigation = null;
   opened.on('request', (request) => {
+    order.set(request, sent.started);
+    if (request.isNavigationRequest() && request.frame() === opened.mainFrame()) navigation = sent.started;
     sent.open.add(request);
     sent.started += 1;
   });
+  // A same-document navigation commits no new document, and no navigation request comes before it.
+  opened.on('framenavigated', (frame) => {
+    if (frame !== opened.mainFrame() || navigation === null) return;
+    for (const request of sent.open) if (order.get(request) < navigation) sent.open.delete(request);
+    navigation = null;
+  });
   opened.on('requestfinished', (request) => sent.open.delete(request));
-  opened.on('requestfailed', (request) => sent.open.delete(request));
+  opened.on('requestfailed', (request) => {
+    sent.open.delete(request);
+    // A navigation that fails commits no document.
+    if (order.get(request) === navigation) navigation = null;
+  });
   return opened;
 }
 let page = await openPage(browser);
