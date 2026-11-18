@@ -5,8 +5,8 @@ import type { ApiKey, CreatedApiKey, Guardrail, GuardrailRef, KeyModels, KeyStat
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { OptionList } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
-import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, CopyButton, Dialog, Expert, Field, GroupedDialog, Input, NumberInput, PageLink, Refusal, RowActions, Segmented, Select, Skeleton, StaleRefusal, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { IconInfo, IconPlus } from '@/components/ui/icons';
+import { Badge, Button, CopyButton, Dialog, Expert, Field, GroupedDialog, Input, NumberInput, PageLink, Refusal, RowActions, Segmented, Select, Skeleton, StaleRefusal, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { messageOf, plural } from '@/lib/format';
 import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, refusalsView, sameValues, saveStatus, type AutoModeOverride, type KeyForm, type KeyGroup } from '@/lib/forms';
@@ -374,10 +374,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     capture: (
       <>
         {effectiveHours > 0 && (
-          <div className="callout callout--warning">
-            <IconWarning size={16} />
-            <div>Bodies contain the prompts, file contents, and tool results of every session using this key, and a session in auto mode sends the machine&apos;s permission rules with their literal text, its working and home directories and its git remotes with every request. Only the admin secret can read them.</div>
-          </div>
+          <Warning>Bodies contain the prompts, file contents, and tool results of every session using this key, and a session in auto mode sends the machine&apos;s permission rules with their literal text, its working and home directories and its git remotes with every request. Only the admin secret can read them.</Warning>
         )}
         <div className="cells">
           {/* Field's frame without its label element, since each choice is a label of its own. */}
