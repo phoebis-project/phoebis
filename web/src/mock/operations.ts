@@ -24,6 +24,7 @@ interface WrittenFigures {
    * the last probe where the row writes it.
    */
   agents: { agentId: string; lastProbeMinutes?: number; lastRequestMinutes: number; nextProbeSeconds: number | null }[];
+  /** The pin's burn per hour as its last fold, `burnAtMinutes` back, left it, which the row serves decayed to now. */
   burn: number;
   burnAtMinutes: number;
   /** The pin's dollar burn per hour, which a plan pin answers beside its share and a billed pin as its burn. */
@@ -103,7 +104,8 @@ const sessionSpec: ({
   noEffort?: true;
   /**
    * The story request whose move wrote the row's pin on its account. The row and main's line date their pin by the
-   * move, and `stamped` gives the row the no-return stamp the move left.
+   * move, and `stamped` gives the row the no-return stamp the move left. The row pairs it with `lastUseFromRows`, which
+   * carries the rule that the later of the move and the row's last request is its last use.
    */
   pinnedBy?: { requestId: string; stamped?: true };
   /**
@@ -337,8 +339,22 @@ const burnReadingOf = (accountId: string, keyId: string, burn: number | null, un
  * weight is read, so a pin on a model the cost model does not weigh answers its dollars beside a null share.
  */
 const burnUsdOf = (dollars: number | null, unit: BurnUnit | null, model: string): number | null => (unit !== 'window_share' || dollars === null || priceFor(model, NOW) === null ? null : dollars);
-/** A built row's dollar burn per hour, which its lines scale: a billed pin's `burn`, a plan pin's `burnUsd`. */
-const dollarBurnOf = (pin: BurnFigures): number | null => (pin.burnUnit === 'usd' ? pin.burn : pin.burnUsd);
+/** The burn averages after which the router reads a decayed burn as zero. */
+const BURN_DECAY_CUTOFF_AVERAGES = 30;
+/**
+ * The factor a pin's burn decays by from its last fold at `foldAt` to the story's clock, as the sessions route decays
+ * each pin to its read: the burn average of the pool the pin's key routes through is the time constant, and the burn
+ * reads 0 once the fold lies more than 30 averages back. A fold past the clock decays nothing, and a burn never folded
+ * reads as stored.
+ */
+const decayToNow = (foldAt: string | null, keyId: string): number => {
+  if (foldAt === null) return 1;
+  const averageMs = Math.max((poolById.get(keyById.get(keyId)?.poolId ?? '')?.burnAverageSeconds ?? 0) * 1_000, 1);
+  const age = NOW - Date.parse(foldAt);
+  return age > BURN_DECAY_CUTOFF_AVERAGES * averageMs ? 0 : Math.exp(-Math.max(age, 0) / averageMs);
+};
+/** The instant the route answers beside a decayed burn: its read, or a fold that lies past it. */
+const servedBurnAt = (foldAt: string | null): string | null => (foldAt === null ? null : iso(Math.max(NOW, Date.parse(foldAt))));
 /**
  * A pin's move as the mock's rounds read it, under the regime its key's client label names: the size the round divides
  * its burn by, the dropped thinking at the output's weight, and the Pro-week figure of each, the cost a warm move and a
@@ -406,27 +422,29 @@ const warmAt = (warmUntil: string | null): boolean => pinTtlMs({ warmUntil }, NO
 type UndatedLine = Omit<AgentContext, 'pinnedAt'> & Partial<Pick<AgentContext, 'pinnedAt'>>;
 /**
  * A pin's line as the route answers it: warm until its last refresh plus its cache TTL, the refresh its caller names,
- * its served burn and dollars priced on the pin's own account and model, in that account's unit and window, as the
- * row's are for the display pin, and its lane and its move's figures as the row's are. Its burn reads at its last use
- * unless its caller names the instant, as the display pin's line takes its row's, since the route answers one instant
- * per pin.
+ * its burn and dollars as folded priced on the pin's own account and model, in that account's unit and window, as the
+ * row's are for the display pin, and its lane and its move's figures as the row's are. Its burn folded at its last use
+ * unless its caller names the instant, as the display pin's line takes its row's, since the route keeps one fold per
+ * pin, and the line serves it decayed to the story's clock with that instant beside it.
  */
 const pinLine = (
   line: Omit<UndatedLine, keyof BurnFigures | 'fast' | keyof MoveFigures | 'warm' | 'warmUntil'> & Partial<Pick<AgentContext, 'burnAt'>>,
   keyId: string,
   sessionId: string,
-  served: { burn: number | null; dollars: number | null },
+  folded: { burn: number | null; dollars: number | null },
   lastRefreshAt: string | null,
 ): UndatedLine => {
   const unit = burnUnitOf(line.accountId);
-  const burn = unit === null ? null : served.burn;
+  const foldAt = line.burnAt === undefined ? line.lastUsedAt : line.burnAt;
+  const factor = decayToNow(foldAt, keyId);
+  const burn = unit === null || folded.burn === null ? null : folded.burn * factor;
   const warmUntil = warmUntilOf(lastRefreshAt, line.cacheTtlMs);
   return {
     ...line,
     burn,
-    burnAt: line.burnAt === undefined ? line.lastUsedAt : line.burnAt,
+    burnAt: servedBurnAt(foldAt),
     ...burnReadingOf(line.accountId, keyId, burn, unit),
-    burnUsd: burnUsdOf(served.dollars, unit, line.model),
+    burnUsd: burnUsdOf(folded.dollars === null ? null : folded.dollars * factor, unit, line.model),
     fast: fastPin(keyId, line.model),
     ...moveFiguresOf(line.lastInputTokens, droppedThinkingOf(sessionId, line.agentId, line.model), line.model, keyId),
     warm: warmAt(warmUntil),
@@ -471,15 +489,15 @@ const NO_MARK: Pick<Session, 'mark'> = { mark: null };
  */
 const NO_STAMP: Pick<Session, 'shed'> = { shed: null };
 /**
- * The instant the story's move for `requestId` wrote a pin on `accountId`, and the no-return stamp it leaves where the
- * row keeps one, from the account the pin left under the move's reason. A story that writes no such move fails the
- * mock as it loads rather than reading a default.
+ * The instant the story's move for `requestId` wrote the pin of `sessionId` on `accountId`, and the no-return stamp it
+ * leaves where the row keeps one, from the account the pin left under the move's reason. A story that writes no such
+ * move fails the mock as it loads rather than reading a default.
  */
-function storyPinWrite(requestId: string, accountId: string, stamped: boolean): { at: string } & Pick<Session, 'shed'> {
-  const move = REQUEST_EVENTS.get(requestId)?.find((e) => e.kind === 'pin_migrated' && e.accountId === accountId);
+function storyPinWrite(requestId: string, accountId: string, sessionId: string, stamped: boolean): { at: string } & Pick<Session, 'shed'> {
+  const move = REQUEST_EVENTS.get(requestId)?.find((e) => e.kind === 'pin_migrated' && e.accountId === accountId && e.sessionId === sessionId);
   const from = move?.detail?.from_account;
   const reason = move?.detail?.reason;
-  if (move === undefined || typeof from !== 'string' || typeof reason !== 'string') throw new Error(`the story moves no pin of ${requestId} onto ${accountId}`);
+  if (move === undefined || typeof from !== 'string' || typeof reason !== 'string') throw new Error(`the story moves no pin of ${sessionId} onto ${accountId} at ${requestId}`);
   return { at: move.at, shed: stamped ? { at: move.at, from, reason } : null };
 }
 
@@ -501,6 +519,11 @@ function storyPinPlaced(placedBy: { renewedBy: string; requestId: string }): { a
  * pin leaves, so an unpinned row holds none.
  */
 const firstSighting = new Map<Session, string | null>();
+/**
+ * Each drawn row's display pin as its last fold left it, its burn, its dollar burn and the fold's instant, which its
+ * lines scale and decay on their own, since the row serves the figures decayed to the story's clock.
+ */
+const lastFold = new Map<Session, { at: string | null; burn: number | null; dollars: number | null }>();
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
@@ -510,7 +533,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const keyGeneration = Date.parse(keyById.get(spec.keyId)!.createdAt);
   const sessionId = spec.sessionId ?? drawnId;
   const seen = ledgered.get(activityOf(spec.keyId, keyGeneration, sessionId)) ?? null;
-  const pinWrite = spec.pinnedBy === undefined ? null : storyPinWrite(spec.pinnedBy.requestId, spec.accountId, spec.pinnedBy.stamped === true);
+  const pinWrite = spec.pinnedBy === undefined ? null : storyPinWrite(spec.pinnedBy.requestId, spec.accountId, sessionId, spec.pinnedBy.stamped === true);
   const pinPlaced = spec.placedBy === undefined ? null : storyPinPlaced(spec.placedBy);
   const pinUsedAt = pinWrite?.at ?? pinPlaced?.usedAt ?? null;
   // Both rolls are drawn whatever the spec says, except on a fixed row, so pinning one session's idle
@@ -535,7 +558,10 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const lastRefreshRoll = ago((written ? written.lastRefreshMinutes : rng.int(2, 40)) * MINUTE);
   // A pin on a model without a weight of its own has no burn to rank by, as the route answers it.
   const weighted = pinned && unit === 'window_share' && weightOf(TABLES, spec.model, 'seven_day') !== null;
-  const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : weighted ? burnRoll : null;
+  const folded = !pinned ? null : unit === 'usd' ? burnUsdRoll : weighted ? burnRoll : null;
+  // The route serves the pin's burn decayed from its last fold to the read, its dollars by the same factor.
+  const factor = pinned ? decayToNow(burnAtRoll, spec.keyId) : 1;
+  const burn = folded === null ? null : folded * factor;
   // The ledger names a session's fork from its requests, so a session it never saw records none.
   const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
   // A drawn row's pin was written at its first sighting, unless a move or a placement of the story wrote it later.
@@ -560,9 +586,9 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     lifecycle: null,
     pinned,
     burn,
-    burnAt: pinned ? burnAtRoll : null,
+    burnAt: pinned ? servedBurnAt(burnAtRoll) : null,
     ...burnReadingOf(spec.accountId, spec.keyId, burn, unit),
-    burnUsd: burnUsdOf(burnUsdRoll, unit, spec.model),
+    burnUsd: burnUsdOf(burnUsdRoll * factor, unit, spec.model),
     cacheTtlMs: pinned ? 5 * MINUTE : null,
     effort: pinned && !spec.noEffort ? effortAt(i) : null,
     lastInputTokens: pinned ? lastInputRoll : null,
@@ -599,6 +625,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     warm: null,
   };
   firstSighting.set(row, firstSeen);
+  lastFold.set(row, { at: pinned ? burnAtRoll : null, burn: folded, dollars: unit === 'usd' ? folded : burnUsdOf(burnUsdRoll, unit, spec.model) });
   return row;
 });
 
@@ -656,10 +683,11 @@ const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
   unsupported_shape: 'not_retained',
 };
 
-// The causes the story holds on the engine's retry ladder, each line `held`. A held line waits at least its answer's
-// retry-after, capped at the ladder's 300 s, and each such line of the story waits past the cap, so its next probe
-// stands the cap after its own last one, ahead of the clock and inside the entry's TTL. The rung is read rather than
-// drawn, so the rows after the line keep their rolls.
+// The causes the story holds on the engine's retry ladder, each line `held`. A line held for its probe's 429 waits at
+// least the answer's retry-after, and each cooldown of the story runs past the 300 s cap. A line held for its pool's
+// untimed answer waits the doubled step, which reaches the cap from its fifth failure in a row. So each such line's
+// next probe stands the cap after its own last one, ahead of the clock and inside the entry's TTL. The rung is read
+// rather than drawn, so the rows after the line keep their rolls.
 const LADDER_CAUSES: ReadonlySet<RecipeCause> = new Set<RecipeCause>(['probe_pool_exhausted', 'probe_quota_exhausted']);
 const LADDER_CAP_MS = 300_000;
 
@@ -735,7 +763,8 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const lastProbeAt = writtenProbe !== undefined ? ago(writtenProbe * MINUTE) : cause === 'awaiting_cache_evidence' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
     // A line held for its probe's 429 was scheduled before that probe, so its draw is taken and set aside, and the rows
-    // after it keep their rolls. A line held for its pool's own answer never drew one.
+    // after it keep their rolls. A line held for its pool's answer takes none, since the stream takes no draw at its
+    // place.
     const scheduledAt = !fixedAgents && (cause === 'scheduled' || cause === 'probe_quota_exhausted') ? ahead(rng.int(20, 280) * 1000) : null;
     // The written session's rows past its drawn pair are written, so a reader meets every lifecycle word. A session the
     // mod released whole keeps its draws, so the rows after it keep theirs.
@@ -813,7 +842,8 @@ const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) *
 // their last use and their last refresh. The row and main's line read warm off the row's last refresh, as the route
 // reads both off one pin, before the row's last use moves to the newest across its pins.
 SESSIONS.forEach((pin, i) => {
-  const display = { burn: pin.burn, dollars: dollarBurnOf(pin), lastInputTokens: pin.lastInputTokens };
+  const fold = lastFold.get(pin);
+  const display = { burn: fold?.burn ?? null, dollars: fold?.dollars ?? null, lastInputTokens: pin.lastInputTokens };
   const firstSeen = firstSighting.get(pin) ?? null;
   pin.agentContexts = datedLines(
     firstSeen,
@@ -822,7 +852,7 @@ SESSIONS.forEach((pin, i) => {
       if ((r.agentState === 'released' && pin.companion !== 'none') || r.accountId === null) return [];
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
-        const line = { ...own, burnAt: pin.burnAt, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: pin.pinnedAt };
+        const line = { ...own, burnAt: fold?.at ?? null, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: pin.pinnedAt };
         return [pinLine(line, pin.keyId, pin.sessionId, display, pin.lastRefreshAt)];
       }
       const ended = i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT;
@@ -840,12 +870,12 @@ SESSIONS.forEach((pin, i) => {
 
 /**
  * A written row that names no fork, no cycle, no runway, no mark and no shed stamp: its lines priced as the route
- * prices a display pin's, the line its caller lists first at the row's burn and its dollar burn per hour, the burn
- * itself on a dollar-billed account and `dollars` on a plan, and the others beside it, and dated from its first
- * sighting, its figures, its burn reading and its pin's instant off that first line, warm off it and last used at the
- * newest of its lines, each line refreshed at its last use, its summary off its session's recipes, and its last request
- * off the activity fold. The engine holds no record of its main, so it reads no lifecycle word. A row passes a
- * companion or a presence only where a mod reports.
+ * prices a display pin's, the line its caller lists first at the row's burn and its dollar burn per hour as folded at
+ * its last use, the burn itself on a dollar-billed account and `dollars` on a plan, and the others beside it, and dated
+ * from its first sighting, its figures, its served burn and reading and its pin's instant off that first line, warm
+ * off it and last used at the newest of its lines, each line refreshed at its last use, its summary off its session's
+ * recipes, and its last request off the activity fold. The engine holds no record of its main, so it reads no
+ * lifecycle word. A row passes a companion or a presence only where a mod reports.
  */
 const writtenRow = (
   { dollars, firstSeen, ...row }: Pick<Session, 'agentId' | 'burn' | 'keyId' | 'sessionId'> & Partial<Pick<Session, 'companion' | 'presenceAgeSeconds'>> & { accountId: string; dollars?: number; firstSeen: string },
@@ -862,7 +892,8 @@ const writtenRow = (
     ...SESSION_SAMPLE,
     ...row,
     agentContexts,
-    burnAt: line.lastUsedAt,
+    burn: line.burn,
+    burnAt: line.burnAt,
     burnEquivalent: line.burnEquivalent,
     burnUnit: line.burnUnit,
     burnUsd: line.burnUsd,
@@ -1283,7 +1314,9 @@ type PinEvent = Pick<RoutingEvent, 'agentId' | 'at' | 'keyId' | 'kind' | 'sessio
  */
 const placementsOf = (s: Session, events: readonly PinEvent[]): number => {
   const live = keyById.get(s.keyId);
-  const until = s.historical && live !== undefined ? Date.parse(live.createdAt) : Number.POSITIVE_INFINITY;
+  // The story's key map keeps a key the operator deleted, whose own rows no live key bounds, so only a later
+  // generation's creation ends a historical row's count.
+  const until = s.historical && live !== undefined && Date.parse(live.createdAt) > s.keyGeneration ? Date.parse(live.createdAt) : Number.POSITIVE_INFINITY;
   const own = events.filter((e) => Date.parse(e.at) >= s.keyGeneration && Date.parse(e.at) < until);
   return own.length + (s.pinned && !own.some((e) => e.kind === 'pin_created') ? 1 : 0);
 };
@@ -1296,7 +1329,7 @@ const placementsOf = (s: Session, events: readonly PinEvent[]): number => {
  * test reads the list at any instant without moving `Date.now`, the mock's route hands the rows its ledger has written
  * by then, and the mock's routing log reads this module's sessions.
  */
-export const sessionsListedAt = (now: number, sessions: readonly Session[] = SESSIONS, seconds = NON_COMPANION_IDLE_SECONDS, rows: readonly RequestLog[] = REQUESTS, events: readonly PinEvent[] = []): Session[] => {
+export const sessionsListedAt = (now: number, sessions: readonly Session[] = SESSIONS, seconds = NON_COMPANION_IDLE_SECONDS, rows: readonly RequestLog[] = REQUESTS, events: readonly PinEvent[]): Session[] => {
   const bySession = groupInto(rows, (r) => (r.sessionId === null ? null : activityOf(r.keyId, r.keyGeneration, r.sessionId)));
   const mainPins = groupInto(events, (e) => (e.agentId === 'main' && (e.kind === 'pin_created' || e.kind === 'pin_migrated') ? `${e.keyId}|${e.sessionId}` : null));
   return sessions

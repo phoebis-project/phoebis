@@ -162,8 +162,8 @@ test("a routing log candidate's term decodes its canceled flag", () => {
 });
 
 test("a routing log candidate's pace decodes its Fable reservation, and null where none applies", () => {
-  // The capture holds null on each candidate, so only a number here tells a misspelled key or a reader that turns null
-  // into 0 from the member.
+  // The capture holds null on each candidate, so a number tells a misspelled key from the member, and a null tells a
+  // reader that turns null into 0.
   const body = fixture('decision');
   const [wire] = body.candidates;
   const pace = (fable_reservation) => d.decodeDecisionRecord({ ...body, candidates: [{ ...wire, pace: { ...wire.pace, fable_reservation } }] }).candidates[0].pace.fableReservation;

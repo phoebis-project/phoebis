@@ -1466,14 +1466,16 @@ export interface RecordCandidate {
   obstacle: { name: string; reason: string | null; scope: string | null; until: string | null; window: string | null } | null;
   overage: { observedAt: string; reset: string | null; since: string; source: string } | null;
   /**
-   * `score` is the spare rate: the remaining share less `fableReservation` per hour, less `burn`, the account's burn on
-   * `window`. `burn` is null on a version 1 record, which read none.
+   * `score` is the spare rate: the remaining share less `fableReservation` per hour, less `burn`, the burn on `window`
+   * of the pins the reservation does not stand for. `burn` is null on a version 1 record, which read none.
    */
   pace: {
     burn: number | null;
     deadline: string | null;
     end: string | null;
-    /** The share of the member's 7-day room the score holds back for its expected Fable use, null where none applies. */
+    /**
+     * The share of the member's 7-day room the score holds back for its expected Fable use, null where none applies.
+     */
     fableReservation: number | null;
     hours: number | null;
     remaining: number;

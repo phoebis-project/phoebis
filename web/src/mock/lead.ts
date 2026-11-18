@@ -10,9 +10,9 @@ export const earliest = (...at: (number | null)[]): number | null => at.reduce<n
 
 /**
  * The hours the router's Pace score spreads a window's share left over: to the deadline, the earlier of the reset and
- * the account's end, at least one, and a week where neither is read.
+ * the account's end, at least a minute, and a week where neither is read.
  */
-export const paceHours = (deadline: number | null, at: number): number => (deadline === null ? 168 : Math.max(1, (deadline - at) / HOUR));
+export const paceHours = (deadline: number | null, at: number): number => (deadline === null ? 168 : Math.max(1 / 60, (deadline - at) / HOUR));
 
 /** The Pace deadline: the earlier of the window's reset and the end the router's pace reads (`endOf`). */
 export const paceDeadline = (account: Pick<Account, 'canceled' | 'subscription'>, reset: number | null, at: number): number | null => earliest(reset, endOf(account, at));
@@ -29,7 +29,7 @@ interface PaceReading {
 /**
  * What a Pace read takes beside the account, the instant and the model: each window's reading and the burn per hour the
  * account's sessions spend on it, both by the window's wire key with `worst_bucket` for an API key, and whether the
- * member stands in the pick's first tier, the one set the router holds a Fable reservation on.
+ * read holds the reservation: a pick's first tier, or the pools route's ask.
  */
 interface PaceReads {
   burns: Record<string, number>;
@@ -38,8 +38,8 @@ interface PaceReads {
 }
 
 /**
- * A member's Pace figures for a request of `model` at `at`, as the router's `pace_of` works them. A model with a week of
- * its own reads that week and any other the 7-day window, one the account has not read counting as untouched. A paid
+ * A member's Pace figures for a request of `model` at `at`, as the router's `pace_of` works them. A model with a week
+ * of its own reads that week and any other the 7-day window, one the account has not read counting as untouched. A paid
  * source scores by its remaining allowance with no hours, no window and no burn: an API key its worst live bucket, and
  * a usage-based seat, which reads no plan window, the whole of it. A null model is the pools route's ask, which reads
  * as a request of a model without a week of its own.
@@ -61,14 +61,14 @@ export function paceOf(
   const whole = reads.burns[window] ?? 0;
   // The cost model's divisor of the Fable week, which turns a share of that week into one of the 7-day window.
   const factor = pricedWindow(TABLES, 'seven_day_fable')?.divisor ?? null;
-  // The mock keeps no record of Fable use per hour, so the account's Fable week burn stands both for its strongest Fable
-  // hour and for its pins' current Fable burn, the two rates the router takes the larger of.
+  // The mock keeps no record of Fable use per hour, so the account's Fable week burn stands both for its strongest
+  // Fable hour and for its pins' current Fable burn, the two rates the router takes the larger of.
   const fableBurn = reads.burns.seven_day_fable ?? 0;
   const fable = reads.readings.seven_day_fable;
-  const fableReservation = !reads.reserve || window !== 'seven_day' || fable === undefined || factor === null ? null : round(factor * Math.min(Math.max(0, 1 - fable.utilization), fableBurn * hours), 5);
+  const fableReservation = !reads.reserve || window !== 'seven_day' || fable === undefined || factor === null ? null : factor * Math.min(Math.max(0, 1 - fable.utilization), fableBurn * hours);
   // Beside a reservation the score takes off only the burn of the pins whose model draws no Fable week. The mock keeps
   // one 7-day burn per account, so the Fable pins' part of it is their Fable week burn in the 7-day window's share.
-  const burn = fableReservation === null ? whole : round(Math.max(0, whole - factor! * fableBurn), 5);
+  const burn = fableReservation === null ? whole : Math.max(0, whole - factor! * fableBurn);
   return { burn, deadline, end: endOf(account, at), fableReservation, hours, remaining, reset, score: round((remaining - (fableReservation ?? 0)) / hours - burn, 5), window };
 }
 

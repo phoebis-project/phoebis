@@ -174,11 +174,13 @@ const BEFORE_EDIT: Record<string, { at: number; keepalive: Partial<PoolKeepalive
 
 /**
  * The stamp a pool's row held at `at`: its last write by then, the edit or the members write that placed a deleted
- * account, else the row's own stamp. The delete of an account moves none, as its member row leaves by the cascade.
+ * account, else the stamp the edit replaced, else the row's own stamp. The delete of an account moves none, as its
+ * member row leaves by the cascade.
  */
 function stampAt(pool: PoolSeed, at: number): string {
-  const writes = [BEFORE_EDIT[pool.id]?.at, ...DELETED_ACCOUNTS.filter((d) => d.poolId === pool.id).map((d) => d.createdAt)].filter((w): w is number => w !== undefined && w <= at);
-  return writes.length === 0 ? pool.updatedAt : iso(Math.max(...writes));
+  const edit = BEFORE_EDIT[pool.id];
+  const writes = [edit?.at, ...DELETED_ACCOUNTS.filter((d) => d.poolId === pool.id).map((d) => d.createdAt)].filter((w): w is number => w !== undefined && w <= at);
+  return writes.length === 0 ? (edit?.settings.poolUpdatedAt ?? pool.updatedAt) : iso(Math.max(...writes));
 }
 
 /**
@@ -264,13 +266,14 @@ const walksPlacement = (spec: Spec) => (spec.kind === 'placed' || spec.kind === 
 /**
  * The windows a decision read on a member: the attempt's own reading on the account it went to, so the card and the
  * drawer agree, and the walk back at the decision's time elsewhere. A 429's head reports the limit past the reading
- * the decision read, so a rate-limited attempt's account reads the walk back too.
+ * the decision read, and an attempt with no head stores no reading, so a rate-limited or a headless attempt's account
+ * reads the walk back too.
  */
 function readingsOf(spec: Spec, accountId: string): AttemptWindow[] {
   const story = spec.readings?.[accountId];
   if (story) return story;
   const attempt = dispatchedAttempt(spec);
-  if (attempt?.accountId === accountId && attempt.upstreamStatus !== 429) return attempt.windows;
+  if (attempt?.accountId === accountId && attempt.windows.length > 0 && attempt.upstreamStatus !== 429) return attempt.windows;
   return oauthWindows(accountId, spec.at, () => OLDER_FACTOR);
 }
 
@@ -2122,13 +2125,14 @@ const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) =
 /**
  * A refusal at admission (a guardrail's block, a client's drift or contract) comes before any selection, so its record
  * leaves the parent agent, the lane, the chains, the accounts attempted and the holds empty. The block and the contract
- * keep the class and the count, marker and probe flags the request carried, the drift keeps none of them. A key refusal
- * is the selection's own and keeps the request's facts.
+ * keep the class and the count and probe flags the request carried, the drift keeps none of them, and each writes the
+ * marker flag false whatever the body, as the relay's three refusal records do. A key refusal is the selection's own
+ * and keeps the request's facts.
  */
 const refusedFacts = (r: RequestLog, drift: boolean): Pick<RecordRequest, 'attempted' | 'chain' | 'flags' | 'holds' | 'lane' | 'parentAgentId' | 'requestClass'> => ({
   attempted: [],
   chain: { boundaries: 0, staticBoundaries: 0, staticHash: false },
-  flags: { contextCompacted: false, count: !drift && r.kind === 'count_tokens', fast: false, marker: !drift && r.cacheMarker === true, portable: false, probe: !drift && r.kind === 'probe' },
+  flags: { contextCompacted: false, count: !drift && r.kind === 'count_tokens', fast: false, marker: false, portable: false, probe: !drift && r.kind === 'probe' },
   holds: [],
   lane: { effort: '', speed: '', thinking: '' },
   parentAgentId: null,

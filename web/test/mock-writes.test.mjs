@@ -360,6 +360,17 @@ test('an editor opened before its pool or key was deleted and created again is r
   assert.deepEqual([landedPool.name, landedKey.name], ['landed', 'landed'], "the replacement's own token lands");
 });
 
+test("a deleted key's session rows read historical and keep their placements, as the route lists a row no live key holds", async () => {
+  const api = await signedIn();
+  const laptop = async () => (await api.listSessions()).filter((s) => s.keyId === 'laptop');
+  const before = await laptop();
+  await api.deleteKey('laptop');
+  const after = await laptop();
+  assert.deepEqual([...new Set(before.map((s) => s.historical))], [false], "the story's laptop rows read live");
+  assert.deepEqual([...new Set(after.map((s) => s.historical))], [true], 'each of them reads historical once the key is gone');
+  assert.deepEqual(after.map((s) => s.placements), before.map((s) => s.placements), 'the delete moves no placement');
+});
+
 test("a pool deleted and created again under its id counts the pins of the keys it holds now, so it reads no former member's pin", async () => {
   const api = await signedIn();
   const poolOf = async (id) => (await api.listPools()).find((p) => p.id === id);

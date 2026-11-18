@@ -4,7 +4,7 @@ import type {
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import type { GuardrailMatch } from '@/api/types';
-import { keptWarmTokens } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, keptWarmTokens } from '@/lib/analytics';
 import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { equivalentIn, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
@@ -205,8 +205,10 @@ const EARLIER_LEAD = 0.56;
  * account but the story's leads its pace by the pool's shedding margin.
  */
 const walkBack = (w: RateLimitWindow, atMs: number, olderFactor: () => number): AttemptWindow => {
+  // A window the upstream answers with no reset has no period to walk back through, so its reading stands as read.
+  if (w.resetsAt === null) return { id: w.id, resetsAt: null, utilization: w.utilization };
   const period = w.periodHours * HOUR;
-  const resetsAt = Date.parse(w.resetsAt ?? '');
+  const resetsAt = Date.parse(w.resetsAt);
   const shift = Math.ceil(Math.max(0, resetsAt - period - atMs) / period);
   const resetThen = resetsAt - shift * period;
   const phase = 1 - (resetThen - atMs) / period;
@@ -313,13 +315,23 @@ const missRng = createRng(1_517);
 const MEMBER_CLIENT_KEYS: ReadonlySet<string> = new Set(['ci', 'desktop']);
 
 /**
- * Whether a request's body carried a cache breakpoint, the one fact the relay keeps for its selection and its row. The
- * story's clients mark a classifier call and a turn whose session a pinning pool holds, a probe replays a marked turn,
- * and a token count marks none.
+ * Whether a request's body carried a cache breakpoint of its own. The story's clients mark a classifier call and a
+ * turn whose session a pinning pool holds, a probe replays a marked turn, and a token count marks none.
  */
-function markerOf(r: Pick<RequestLog, 'classifier' | 'kind' | 'poolId' | 'sessionId'>): boolean {
+function ownMarkerOf(r: Pick<RequestLog, 'classifier' | 'kind' | 'poolId' | 'sessionId'>): boolean {
   if (r.kind === 'probe') return true;
   return r.kind === 'inference' && (r.classifier !== null || ((poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) > 0 && r.sessionId !== null));
+}
+
+/**
+ * The one marker fact the relay keeps for its selection and for the request's row: the body's own marker, or the one
+ * the pool's cache TTL policy adds to a body that carries none, which it adds to an inference or a probe of no
+ * auxiliary class where the policy is on with `inject_when_absent`.
+ */
+function markerOf(r: Pick<RequestLog, 'kind' | 'poolId' | 'requestClass'>, own: boolean): boolean {
+  const policy = poolById.get(r.poolId ?? '')?.cacheTtl;
+  const auxiliary = r.requestClass !== null && !CONVERSATION_CLASSES.some((c) => c === r.requestClass);
+  return own || ((r.kind === 'inference' || r.kind === 'probe') && policy?.enabled === true && policy.injectWhenAbsent && !auxiliary);
 }
 
 /**
@@ -700,8 +712,9 @@ function buildRequests(): RequestLog[] {
     const agent = storyAgent(sessionId, hints);
     // The marker reads the session, so the reasons the member decides follow its draw. They draw from a stream of their
     // own, so their place moves no draw of the main stream.
-    const cacheMarker = markerOf({ classifier: REQUEST_SAMPLE.classifier, kind, poolId: lane.poolId, sessionId });
-    const source = sourceOf(lane.keyId, lane.poolId, kind, tried.length > 0, cacheMarker);
+    const ownMarker = ownMarkerOf({ classifier: REQUEST_SAMPLE.classifier, kind, poolId: lane.poolId, sessionId });
+    const cacheMarker = markerOf({ kind, poolId: lane.poolId, requestClass: REQUEST_SAMPLE.requestClass }, ownMarker);
+    const source = sourceOf(lane.keyId, lane.poolId, kind, tried.length > 0, ownMarker);
     const diagnosis = diagnosed(tried, kind);
     const attempts =
       turn !== undefined && 'refusal' in turn
@@ -774,8 +787,9 @@ function buildRequests(): RequestLog[] {
       const moved = rows[rows.length - 1];
       // The pool's one member takes the request once: the answering attempt is the request's only one.
       const answered = moved.attempts[moved.attempts.length - 1];
-      const notebookMarker = markerOf({ ...moved, poolId: 'work' });
-      const notebookSource = sourceOf('notebook', 'work', kind, true, notebookMarker);
+      const notebookOwnMarker = ownMarkerOf({ ...moved, poolId: 'work' });
+      const notebookMarker = markerOf({ ...moved, poolId: 'work' }, notebookOwnMarker);
+      const notebookSource = sourceOf('notebook', 'work', kind, true, notebookOwnMarker);
       Object.assign(moved, {
         accountId: 'studio',
         attempts: [{ ...onAccount(answered, 'studio', Date.parse(answered.startedAt)), cacheMissReason: answered.cacheMissReason, index: 0 }],
@@ -1225,9 +1239,11 @@ function storyRow(seed: StorySeed): RequestLog {
   // An incomplete stream never reached the message_delta that carries the stop reason either, while the ledger still
   // files its attempt as an upstream error, so the stop reason reads a predicate of its own beside the outcome's.
   const stopless = cut || seed.outcome === 'incomplete';
-  // A refused request carries no marker, as the routing log's record of a refusal reads none.
-  const cacheMarker = seed.cacheMarker ?? (!seed.refused && markerOf({ classifier: seed.classifier ?? null, kind, poolId, sessionId }));
-  const source = sourceOf(seed.keyId, poolId, kind, seed.attempts.length > 0, cacheMarker);
+  // The relay publishes no marker for a refusal it decides ahead of its read of the body, and the mock reads each
+  // refusal so. The diagnostics gate reads the body's own marker, ahead of the pool's policy.
+  const ownMarker = seed.cacheMarker ?? (!seed.refused && ownMarkerOf({ classifier: seed.classifier ?? null, kind, poolId, sessionId }));
+  const cacheMarker = !seed.refused && markerOf({ kind, poolId, requestClass: seed.requestClass }, ownMarker);
+  const source = sourceOf(seed.keyId, poolId, kind, seed.attempts.length > 0, ownMarker);
   const attempts = seed.attempts.map((a, index): Attempt => {
     const windows = oauthWindows(a.accountId, a.at, () => SERVED_FACTOR);
     const oauth = accountById.get(a.accountId)?.kind === 'oauth';
@@ -1247,8 +1263,9 @@ function storyRow(seed: StorySeed): RequestLog {
       issuedDigest: null,
       // The ledger files an attempt with no head as a transport failure unless the request ended canceled.
       outcome: cut ? 'canceled' : a.headless ? 'transport_error' : a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
-      // A usage-based seat's head names no overage, so its attempt stores no flag, as an API key's does.
-      overageInUse: oauth && !usageBased ? false : null,
+      // A usage-based seat's head names no overage, so its attempt stores no flag, as an API key's does. The ledger
+      // fills the flag and the windows from a head alone, so a headless attempt stores neither.
+      overageInUse: oauth && !usageBased && !a.headless ? false : null,
       // Read off the day's rows once each stands as it ends (`walkSessionTurns`).
       previousInputTokens: null,
       response: { clearedInputTokens: null, inferenceGeo: answer ? (seed.geo ?? 'us') : null, inputTransformations: null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: answer ? (fast ? 'fast' : 'standard') : null, stopReason: answer && !stopless ? 'end_turn' : null, stopSequence: null },
@@ -1264,7 +1281,7 @@ function storyRow(seed: StorySeed): RequestLog {
       upstreamStatus: a.headless ? null : (a.status ?? null),
       usageBased,
       // A head reads the windows as they stand, or the 5-hour reading the seed gives where the answer moved past it.
-      windows: windows.map((w) => (w.id === '5h' && a.head5h !== undefined ? { ...w, utilization: a.head5h } : w)),
+      windows: a.headless ? [] : windows.map((w) => (w.id === '5h' && a.head5h !== undefined ? { ...w, utilization: a.head5h } : w)),
     };
   });
   const durationMs = seed.attempts.length ? last.at + last.ms - seed.attempts[0].at + (seed.held?.heldMs ?? 0) : null;
@@ -1739,8 +1756,8 @@ function storySeeds(): StorySeed[] {
     // conversation's prefix there afresh.
     { agentId: 'main', at: t(9, 47, 30), attempts: [{ accountId: 'primary', at: t(9, 47, 30), ms: 8_100, status: 200 }], id: DELETED_MOVE_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5', requestClass: 'main', session: RETIRED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 41_800, input: 1_700, output: 980 } },
     // Two laptop turns in the request log's first hour, which the Dashboard's day leaves out. The relay answers the
-    // rejection with the 503 it raises on the chosen account's body, and the router files the bare 502 under its status,
-    // since the body names no error type.
+    // rejection with the 503 it raises on the chosen account's body, and the router files the bare 502 under its
+    // status, since the body names no error type.
     { agentId: 'main', at: firstHour + 20 * MINUTE, attempts: [], capturedBodies: false, chosen: 'secondary', errorCode: 'accounts_unavailable', id: UNAVAILABLE_TURN_ID, keyId: 'laptop', model: 'claude-sonnet-5-5', outcome: 'rejected', requestClass: 'main', session: 'b3e8f14c-6a27-4d95-8c10-7e2a5d9f3b61', status: 503 },
     { agentId: 'main', at: firstHour + 35 * MINUTE, attempts: [{ accountId: 'primary', at: firstHour + 35 * MINUTE, ms: 1_200, status: 502 }], capturedBodies: false, errorCode: 'upstream_502', id: BARE_502_TURN_ID, keyId: 'laptop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'e5c27a9d-1f48-4b63-a0d7-9c3e6b2f8a15', unseeded: true },
     // The log's oldest row, in a lane hour of its own: it names no session, so it holds no pin and every seeded draw
@@ -1937,20 +1954,41 @@ function walkLivePins(visit: (r: RequestLog, live: LivePin | undefined) => void)
 }
 
 /**
+ * Whether the router's step 4 moves a live pin off its account before a renewal, to the account the request's drawn
+ * head stands on, which holds allowance on a plan outside overage: nightly's overage hands a standard request back
+ * where the pool prefers the plan, and an API key's pin returns once it has sat the pool's dwell there. The overage
+ * reads the instant the drawn heads give, since the renewal pass runs ahead of nightly's own.
+ */
+function stepFourMoves(r: RequestLog, live: LivePin, at: number, overageFrom: number): boolean {
+  const pool = poolById.get(r.poolId ?? '');
+  const head = r.attempts[0];
+  if (!pool || r.kind === 'count_tokens' || r.shape.requestedSpeed === 'fast') return false;
+  const kind = (id: string) => accountById.get(id)?.kind;
+  const inOverage = (id: string) => id === 'nightly' && at >= overageFrom;
+  const known = head.windows.some((w) => w.id === '5h' && w.utilization !== null) && head.windows.some((w) => w.id === '7d' && w.utilization !== null);
+  const toPlan = kind(head.accountId) === 'oauth' && !inOverage(head.accountId) && known && spentWindows(head.windows).length === 0;
+  if (pool.overagePolicy === 'prefer_plan' && kind(live.accountId) === 'oauth' && inOverage(live.accountId)) return toPlan;
+  return kind(live.accountId) === 'api_key' && toPlan && at - live.createdAt >= pool.shedDwellSeconds * 1_000;
+}
+
+/**
  * The drawn requests moved onto the pin their first selection found live on another account, by id, each with the
  * account its draw had chosen. The router renews a live pin on an account that can take the request ahead of any
- * placement, so the request's one attempt lands there with the answer it drew. A request whose answer cooled its
- * account keeps its draw, since that cooldown and the failover after it belong to the drawn account. The move runs
- * ahead of nightly's overage instant and the live pins below, which read the moved attempts.
+ * placement, where step 4 moves the pin nowhere, so the request's one attempt lands there with the answer it drew. A
+ * request whose answer cooled its account keeps its draw, since that cooldown and the failover after it belong to the
+ * drawn account. The move runs ahead of nightly's overage instant and the live pins below, which read the moved
+ * attempts.
  */
 export const RENEWED_ON_PIN: ReadonlyMap<string, string> = (() => {
   const renewed = new Map<string, string>();
+  const drawnHeads = REQUESTS.flatMap((r) => r.attempts).map((a) => (a.accountId === 'nightly' ? Date.parse(a.startedAt) : Number.NaN)).filter((at) => at >= NIGHTLY_CAP_RAISED);
+  const overageFrom = drawnHeads.length ? Math.min(...drawnHeads) : NIGHTLY_CAP_RAISED + MINUTE;
   walkLivePins((r, live) => {
     const head = r.attempts[0];
     if (!drawnRow(r) || live === undefined || live.accountId === head.accountId || r.attempts.length > 1 || head.cooldownSet !== null) return;
     const to = live.accountId;
     const at = Date.parse(head.startedAt);
-    if (!serves(to, r.canonicalModel) || !holdableAt(r, to, at)) return;
+    if (!serves(to, r.canonicalModel) || !holdableAt(r, to, at) || stepFourMoves(r, live, at, overageFrom)) return;
     const moved = onAccount(head, to, at);
     r.accountId = to;
     // The cache comparison follows the account's kind, since an API key answers without the beta.
@@ -2751,8 +2789,8 @@ function hourShares(accountId: string, model: string, client: string | null, pri
 // counts once, under its code.
 const upstreamFailed = (r: RequestLog) => r.outcome !== 'canceled' && r.status !== 200 && r.status !== 429 && r.status !== 529;
 
-/** A request's failovers: every attempt after the first but a resend in place. */
-const failoversOf = (r: RequestLog): number => r.attempts.filter((_, i) => i > 0 && !resentInPlace(r, i)).length;
+/** A request's failovers: each attempt on another account than the one before it, as the ledger counts a move. */
+const failoversOf = (r: RequestLog): number => r.attempts.filter((a, i) => i > 0 && a.accountId !== r.attempts[i - 1].accountId).length;
 
 /** One count under each key `keyOf` answers for an item, and none for an item it answers null for. */
 const tally = <T>(items: readonly T[], keyOf: (item: T) => string | null, into: Record<string, number> = emptyCounts()): Record<string, number> => {
@@ -2788,7 +2826,10 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
     // closely enough to credit the probe with the hit.
     const kept = new Set(isProbe || !warmsCaches(keyId, poolId) ? [] : okRows.filter((r) => r.usage.cacheRead > 0 && h.chance(0.35)));
     const moved = list.filter((r) => failoversOf(r) > 0 && r.status === 200);
-    const migrations = moved.length > 0 && h.chance(0.5) ? 1 : 0;
+    // The stream was seeded while a retry on the same account counted as a failover, so a lane hour whose answered
+    // request retried there still draws the chance, and drops it, which keeps every later draw in its place.
+    const retried = list.some((r) => r.status === 200 && r.attempts.some((_, i) => i > 0 && !resentInPlace(r, i)));
+    const migrations = retried && h.chance(0.5) && moved.length > 0 ? 1 : 0;
     const probeCostUsd = isProbe ? sumOf(list, (r) => r.costUsd) : 0;
     const probes = isProbe ? { ok: okRows.length, failed: list.length - okRows.length, held: 0, skipped: h.int(0, 2) } : null;
     const probeMigrated = isProbe && h.chance(0.35) ? Math.min(okRows.length, h.int(1, 2)) : 0;
@@ -2812,8 +2853,9 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
       const refusals = tally(refused, (r) => r.errorCode);
       // The ledger counts a served request's own code whatever its outcome, a client's cancel aside.
       const errors = tally(served, (r) => (clientLeft(r) ? null : r.errorCode));
-      // A rejected request counts under its outcome, so the counts by status leave it out and each request counts once.
-      const byStatus = served.filter((r) => r.outcome !== 'rejected');
+      // The ledger reads a rejected and an exhausted request off its outcome ahead of its status, so the counts by
+      // status leave both out and each request counts once.
+      const byStatus = served.filter((r) => r.outcome !== 'rejected' && r.outcome !== 'exhausted');
       const ok = served.filter((r) => r.status === 200);
       const cacheMissReasons = tally(partRows.flatMap((r) => r.attempts), (a) => a.cacheMissReason, emptyCacheMissReasons());
       // A hit counts under the serving attempt's reason, the one the route counts a request's reason on.
@@ -2857,6 +2899,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
           undecodable: byStatus.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
           upstream_error: byStatus.filter(upstreamFailed).length,
           rejected: served.filter((r) => r.outcome === 'rejected').length,
+          exhausted: served.filter((r) => r.outcome === 'exhausted').length,
           // The ledger files a stream the client closed, and one the router's own stop cut, under the canceled outcome,
           // each under the code the relay gave it.
           client_gone: served.filter((r) => r.errorCode === 'client_gone').length,
@@ -2864,6 +2907,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         },
         errors,
         refusals,
+        attempts: sumOf(partRows, (r) => r.attempts.length),
         failovers: sumOf(served, failoversOf),
         // The lane hour draws one migration, filed with the first request that moved.
         migrations: partRows.includes(moved[0]) ? migrations : 0,
@@ -2984,7 +3028,7 @@ function synthesizedErrors(kind: RequestKind, o: HourlyRollup['requests']): Reco
 }
 
 /** An hour's outcome counts at zero, which a synthesized hour sets its own over and a group's sums start from. */
-export const ZERO_OUTCOMES: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok: 0, overloaded: 0, rate_limited: 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
+export const ZERO_OUTCOMES: HourlyRollup['requests'] = { client_gone: 0, exhausted: 0, incomplete: 0, ok: 0, overloaded: 0, rate_limited: 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
 
 function historicalRollups(): HourlyRollup[] {
   const h = createRng(99);
@@ -3055,6 +3099,8 @@ function historicalRollups(): HourlyRollup[] {
       const outcomes: HourlyRollup['requests'] = { ...ZERO_OUTCOMES, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0 };
       // A failed request read and wrote no cache, so it counts as uncached beside the answers that read and wrote none.
       const uncached = Math.max(0, ok - Math.round(ok * 0.85)) + outcomes.rate_limited + outcomes.overloaded;
+      // The hour's first draw after its outcomes, ahead of the literal's own, so the stream keeps its order.
+      const failovers = err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0;
       const inference: HourlyRollup = {
         hour: iso(t),
         client: CLIENTS[lane.keyId] ?? '-',
@@ -3074,7 +3120,9 @@ function historicalRollups(): HourlyRollup[] {
         requests: outcomes,
         errors: synthesizedErrors('inference', outcomes),
         refusals: {},
-        failovers: err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0,
+        // The hour holds no request rows, so each request it counts made one attempt and each failover one more.
+        attempts: ok + outcomes.rate_limited + outcomes.overloaded + failovers,
+        failovers,
         migrations: h.chance(0.08) ? 1 : 0,
         tokens,
         cacheHits: Math.round(ok * h.float(0.6, 0.8)),
@@ -3085,7 +3133,7 @@ function historicalRollups(): HourlyRollup[] {
         cacheMissReasonHits: emptyCounts(),
         // The hour holds the lane's inference turns alone, so its uncached turns count where the lane's turns mark no
         // breakpoint.
-        uncacheable: markerOf({ classifier: null, kind: 'inference', poolId: lane.poolId, sessionId }) ? 0 : uncached,
+        uncacheable: markerOf({ kind: 'inference', poolId: lane.poolId, requestClass: classOfHour(`${t}|${lane.keyId}|${sessionId}`) }, ownMarkerOf({ classifier: null, kind: 'inference', poolId: lane.poolId, sessionId })) ? 0 : uncached,
         uncached,
         costUsd: costOf(model, usage, fast, t),
         cost: costSplitOf(model, usage, fast, t),
@@ -3140,6 +3188,7 @@ function historicalRollups(): HourlyRollup[] {
           requests: probeOutcomes,
           errors: synthesizedErrors('probe', probeOutcomes),
           refusals: {},
+          attempts: probes + failed,
           failovers: 0,
           migrations: 0,
           tokens: { uncachedInput: 0, cacheRead: probeUsage.cacheRead, cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS },
@@ -3208,6 +3257,7 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       requests: outcomes,
       errors: synthesizedErrors('probe', outcomes),
       refusals: {},
+      attempts: 1,
       failovers: 0,
       migrations: 0,
       tokens: { cacheRead: 0, cacheWrite1h: prefix, cacheWrite5m: 0, output: 1, ...NO_ANSWER_FACTS, uncachedInput: 0 },
@@ -3292,7 +3342,7 @@ export const requestSidesOf = (rows: RequestLog[]): Pick<TrafficBucket, 'billedU
     equivalent: plan.some((r) => tokensTotal(r.usage) > 0 && r.costEquivalent === null) ? null : sumOf(plan, (r) => r.costEquivalent ?? 0),
   };
 };
-export const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown + r.requests.rejected;
+export const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown + r.requests.rejected + r.requests.exhausted;
 export const tokensIn = (r: HourlyRollup) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const inWeek = (r: HourlyRollup) => Date.parse(r.hour) >= WEEK_FROM;
 
@@ -3446,15 +3496,14 @@ function accountRollups(): AccountRollup[] {
       };
       if (t >= from && t <= until) out.push(row);
     }
-    // The current hour holds no attempt, so the route lists it with zero counts and its samples' peaks, the poll's
-    // reading among them, since the history writes no sample of a window without a reset. Its cooldown counts each row
-    // the account holds from the later of its start and the hour's start to the earlier of its end and the read, as
-    // the route cuts the part it booked past the clock. It draws nothing, so the stream of the hours before it stays.
+    // The current hour holds no attempt, so the route lists it with zero counts and its samples' peaks. Its cooldown
+    // counts each row the account holds from the later of its start and the hour's start to the earlier of its end
+    // and the read, as the route cuts the part it booked past the clock. It draws nothing, so the stream of the hours
+    // before it stays.
     if (end >= from && end <= until) {
       const hourPeak = (id: WindowId): number | null => {
-        const reading = readWindows(last).find((w) => w.id === id);
-        const seen = [sampleIndex.get(`${account.id}|${id}`)?.get(end), reading !== undefined && startOfHour(Date.parse(reading.observedAt)) === end ? reading.utilization : undefined].filter((p): p is number => p !== undefined);
-        return seen.length === 0 ? null : round(Math.max(...seen), 3);
+        const peak = sampleIndex.get(`${account.id}|${id}`)?.get(end);
+        return peak === undefined ? null : round(peak, 3);
       };
       const cooledMs = account.cooldowns.reduce((n, c) => n + Math.max(0, Math.min(Date.parse(c.until), NOW) - Math.max(Date.parse(c.setAt), end)), 0);
       out.push({

@@ -438,9 +438,10 @@ const selectsKey = (selector: string, r: RequestLog, live: Map<string, number>) 
   r.keyId !== null && (selector.includes('@') ? `${r.keyId}@${r.keyGeneration}` === selector : r.keyId === selector && live.get(selector) === r.keyGeneration);
 
 function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>): boolean {
-  // A request the router never attributed to a key or a pool matches no filter on that field.
+  // A request the router never attributed to a key matches no key filter.
   if (q.keyIds?.length && !q.keyIds.some((k) => selectsKey(k, r, live))) return false;
-  if (q.poolIds?.length && (r.poolId === null || !q.poolIds.includes(r.poolId))) return false;
+  // The route reaches a request filed under no pool through the `-` selector, as the rollups file it.
+  if (q.poolIds?.length && !q.poolIds.includes(r.poolId ?? '-')) return false;
   // The route files a request no attempt served under the unattributed id, as the rollups do.
   if (q.accountIds?.length && !q.accountIds.includes(r.accountId ?? '-')) return false;
   // The route compares the lowercased selection against the canonical id, never the client's spelling.
@@ -1038,6 +1039,8 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (key) this.buriedKeys.set(id, Math.floor(key.revision / INCARNATION_STAMP));
     this.keys = this.keys.filter((k) => k.id !== id);
+    // The route reads a session row whose key no live key holds as historical, so the key's rows turn read-only.
+    this.sessions = this.sessions.map((s) => (s.keyId === id ? { ...s, historical: true } : s));
     // The key's attachments go in the delete's own transaction, since one subject column cannot cascade from two
     // tables.
     this.setSubjectGuardrails('keys', id, [], false);

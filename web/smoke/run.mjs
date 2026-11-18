@@ -18989,9 +18989,10 @@ await forView('/routing-log', async () => {
     {
       // The story's move off the account the operator deleted at 09:40:30, which the registry no longer holds: the
       // conversation the retired workspace answered at 09:40:20 sends its next turn at 09:47:30, which lands on primary
-      // (the seeds `RETIRED`, `RETIRED_TURN_ID` and `DELETED_MOVE_ID` in `web/src/mock/requests.ts`). The row words the
-      // cause as the release reads it and draws the id it left with the link each account id carries, and the panel
-      // names the account's state as what moved it and the same id as its From.
+      // (the seed `RETIRED` in `web/src/mock/pools.ts`, and `RETIRED_TURN_ID` and `DELETED_MOVE_ID` in
+      // `web/src/mock/requests.ts`). The row words the cause as the release reads it and draws the id it left with the
+      // link each account id carries, and the panel names the account's state as what moved it and the same id as its
+      // From.
       const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: ['pin_migrated'], limit: 200, to: iso(CLOCK_ORIGIN) })).rows;
       const e = listed.find((r) => r.detail.from_account === 'retired');
       const at = e === undefined ? CLOCK_ORIGIN : Date.parse(e.at);
@@ -20573,7 +20574,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   // The Peak chart draws a line for each account whose rows hold a 5-hour peak, which the approved Ultra seat's never
   // do, since its set lacks the window. Here studio's rows hold none either, so the chart draws no line for studio or
   // the seat. The Window usage card lists the accounts its own 5-hour samples draw: studio, whose samples stand, and
-  // neither the seat nor zephyr, whose 5-hour window carries no reset and so no sample.
+  // not the seat.
   const { listAccountRollups } = api;
   let answered = [];
   api.listAccountRollups = async (...args) => (answered = (await listAccountRollups.apply(api, args)).map((r) => (r.accountId === 'studio' ? { ...r, peak: { ...r.peak, '5h': null } } : r)));
@@ -20586,7 +20587,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const peaked = [...new Set(answered.filter((r) => r.peak['5h'] !== null).map((r) => r.accountId))].sort();
   results.push({
     name: '/analytics the Peak 5-hour legend lists an account only where the chart draws its line',
-    ok: peak.length > 0 && !peak.includes('studio') && JSON.stringify(peak) === JSON.stringify(peaked) && usage.includes('studio') && !usage.includes('workshop') && !usage.includes('zephyr'),
+    ok: peak.length > 0 && !peak.includes('studio') && JSON.stringify(peak) === JSON.stringify(peaked) && usage.includes('studio') && !usage.includes('workshop'),
     missing: [`Peak ${JSON.stringify(peak)}`, `with a 5-hour peak ${JSON.stringify(peaked)}`, `Window usage ${JSON.stringify(usage)}`],
   });
   page.unmount();
@@ -24389,9 +24390,9 @@ await forView('/analytics', async () => {
     const low = read(page, 'Traffic by model');
     page.unmount();
     const ZERO = ['claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5'];
-    // The day's Sonnet 5.5 rows fail 10 of 67, the turn the upstream answered 400, the bare 502 and the rejection beside
-    // it among them, and its Sonnet 4.5 rows 8 of 74. The Haiku rows fail 7 of 41 with the stream its client closed
-    // left out, still above Opus 5.5's 1 of 6.
+    // The day's Sonnet 5.5 rows fail 10 of 67, the turn the upstream answered 400, the bare 502 and the rejection
+    // beside it among them, and its Sonnet 4.5 rows 8 of 74. The Haiku rows fail 7 of 41 with the stream its client
+    // closed left out, still above Opus 5.5's 1 of 6.
     const want = {
       high: shown('down', ['claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-4-5', ...ZERO, 'no model'], '?by=model&sort=error_rate', 'Error rate', 'descending'),
       low: shown('up', [...ZERO, 'claude-sonnet-4-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1', 'no model'], '?by=model&sort=error_rate&dir=asc', 'Error rate', 'ascending'),
@@ -27162,9 +27163,11 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // the $0.4812 overflow's row billed and the neutral +2 in id order: overflow, whose API key billed that row with no
     // plan share and whose line carries its dollars, and secondary, whose plan windows the three secondary rows spent
     // on beside the row's primary. Under Native the cell draws its figure, no placeholder. The laptop row the ledger
-    // never saw reads a muted dash with the sentence, and the sub line reads the pin's burn per hour: the fleet
-    // session's usage-based seat at $0.36 an hour (`FLEET_BURN`), and studio's slowed session its 5-hour window share
-    // on hover (`SLOWED_PINS`' 0.0125).
+    // never saw reads a muted dash with the sentence, and the sub line reads the pin's burn per hour as the route
+    // serves it, decayed from the pin's last use to the clock over its pool's burn average: the fleet session's
+    // usage-based seat's $0.36 an hour (`FLEET_BURN`), folded at 14:25:30, 270 s on contract's 1,800 s, is
+    // 0.36 * e^-0.15 = $0.31, and studio's slowed session's 5-hour window share on hover (`SLOWED_PINS`' 0.0125),
+    // folded at 14:05:00, 1,500 s on work's 900 s, is 0.0125 * e^-1.667 = 0.236%.
     const costOf = (s) => {
       const td = cellOf(s, 'Cost');
       const badges = [...(td?.querySelectorAll('.badge') ?? [])].map((b) => ({ cls: b.className, text: b.textContent?.trim() ?? '', title: b.getAttribute('title') }));
@@ -27186,22 +27189,24 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         (dollars.title ?? '').startsWith('6 requests. ') &&
         native.written.main !== null && native.written.main !== '' && !native.written.skeleton &&
         JSON.stringify({ badges: native.unledgered.badges, main: native.unledgered.main, sub: native.unledgered.sub, title: native.unledgered.title }) === JSON.stringify({ badges: [], main: '-', sub: [], title: 'No ledgered request yet' }) &&
-        native.fleet.sub.at(-1) === '$0.36/h' &&
+        native.fleet.sub.at(-1) === '$0.31/h' &&
         /\/h$/.test(native.slowed.sub.at(-1) ?? '') &&
-        native.slowed.subTitles.at(-1) === '1.25% of the 5-hour window',
+        native.slowed.subTitles.at(-1) === '0.236% of the 5-hour window',
       missing: [JSON.stringify(dollars), JSON.stringify(native)],
     });
   }
   {
     // The burn line under the Cost figure reads the pin's rate in the Unit setting's unit, each position switched on
-    // the top bar. Studio's slowed notebook session is a plan pin (`SLOWED_PINS`' first entry, its share 0.0125 and its
-    // dollars 0.31 an hour): its Pro-week figure in the Ultra week, its dollars, a dash and its dollars under Native,
-    // All in dollars, Billed dollars and Dollar equivalent, with its share of the 5-hour window on hover wherever a
-    // figure draws. The fleet session's usage-based seat is a billed pin (`FLEET_BURN`, 0.36 an hour): its dollars
-    // three times and a dash under Dollar equivalent. The laptop session on primary (`CLIENT_SESSION_ID`) runs Sonnet
-    // 4.5, which the cost model has no weight for, so its pin answers no share beside the dollars its row drew, which
-    // the line reads with no hover under the two equivalent positions. Under Native it draws no line, so the Cost
-    // cell's own line stands last there and its read is left out.
+    // the top bar, as the route serves it decayed from the pin's last use to the clock. Studio's slowed notebook
+    // session is a plan pin (`SLOWED_PINS`' first entry, its share 0.0125 and its dollars 0.31 an hour, folded at
+    // 14:05:00, so 1,500 s on work's 900 s average leave e^-1.667 of each, a share of 0.236% and $0.06): its Pro-week
+    // figure in the Ultra week, its dollars, a dash and its dollars under Native, All in dollars, Billed dollars and
+    // Dollar equivalent, with its share of the 5-hour window on hover wherever a figure draws. The fleet session's
+    // usage-based seat is a billed pin (`FLEET_BURN`, 0.36 an hour, folded at 14:25:30, so 270 s on contract's 1,800 s
+    // leave e^-0.15 of it, $0.31): its dollars three times and a dash under Dollar equivalent. The laptop session on
+    // primary (`CLIENT_SESSION_ID`) runs Sonnet 4.5, which the cost model has no weight for, so its pin answers no
+    // share beside the dollars its row drew, which the line reads with no hover under the two equivalent positions.
+    // Under Native it draws no line, so the Cost cell's own line stands last there and its read is left out.
     const lineOf = (s) => {
       const line = [...(cellOf(s, 'Cost')?.querySelectorAll(':scope > .sub') ?? [])].at(-1);
       return line === undefined ? null : { text: line.textContent?.trim() ?? '', title: line.getAttribute('title') };
@@ -27214,14 +27219,14 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     await chooseUnit(page, 'native');
     localStorage.removeItem('phoebis.unit');
     const client = subjects.client;
-    const share = '1.25% of the 5-hour window';
+    const share = '0.236% of the 5-hour window';
     const sonnet45 = client?.model === 'claude-sonnet-4-5' && client.burnUnit === 'window_share' && client.burn === null && client.burnUsd > 0;
     const clientDollars = sonnet45 ? { text: `${fmtUsd(client.burnUsd)}/h`, title: null } : 'a Sonnet 4.5 plan pin with dollars and no share';
     const want = {
-      native: { fleet: { text: '$0.36/h', title: null }, slowed: { text: `${weekCell(subjects.slowed?.burnEquivalent ?? null)}/h`, title: share }, unit: 'native' },
-      all: { client: clientDollars, fleet: { text: '$0.36/h', title: null }, slowed: { text: '$0.31/h', title: share }, unit: 'all' },
-      usd: { client: { text: '-', title: RATE_NOTHING_BILLED_TITLE }, fleet: { text: '$0.36/h', title: null }, slowed: { text: '-', title: RATE_NOTHING_BILLED_TITLE }, unit: 'usd' },
-      equivalent: { client: clientDollars, fleet: { text: '-', title: NO_EQUIVALENT_TITLE }, slowed: { text: '$0.31/h', title: share }, unit: 'equivalent' },
+      native: { fleet: { text: '$0.31/h', title: null }, slowed: { text: `${weekCell(subjects.slowed?.burnEquivalent ?? null)}/h`, title: share }, unit: 'native' },
+      all: { client: clientDollars, fleet: { text: '$0.31/h', title: null }, slowed: { text: '$0.06/h', title: share }, unit: 'all' },
+      usd: { client: { text: '-', title: RATE_NOTHING_BILLED_TITLE }, fleet: { text: '$0.31/h', title: null }, slowed: { text: '-', title: RATE_NOTHING_BILLED_TITLE }, unit: 'usd' },
+      equivalent: { client: clientDollars, fleet: { text: '-', title: NO_EQUIVALENT_TITLE }, slowed: { text: '$0.06/h', title: share }, unit: 'equivalent' },
     };
     const { client: _, ...native } = read.native;
     const drawn = { ...read, native };

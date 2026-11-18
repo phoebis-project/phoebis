@@ -8,7 +8,7 @@ import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { anchorTier, equivalentIn, modelWeeks, pricedWindow, shareIn, tableAt, tierCapacity, type CostWindow, type Usage } from '@/lib/costs';
 import { addCounts, emptyCounts, groupInto } from '@/lib/counts';
-import { servingResponse } from '@/lib/dimensions';
+import { foldRequestClass, servingResponse } from '@/lib/dimensions';
 import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
 import { mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
@@ -30,6 +30,8 @@ import { DAY, HOUR, MINUTE, NOW, clock, hourCeil, iso, startOfHour } from './tim
  */
 export interface HourlyRollup {
   accountId: string;
+  /** Every attempt of the row's requests, a retry on the same account among them, as the ledger counts them. */
+  attempts: number;
   cacheHits: number;
   cacheMisses: number;
   /** Per reason, the requests under it that `hitUnderReason` reads as a hit. A reason with none is no key. */
@@ -97,8 +99,8 @@ export interface HourlyRollup {
   requestClass: string;
   /** `client_gone` counts the streams the client closed and `router_shutdown` the requests the router's own stop cut,
    *  with or without a head, both filed under the canceled outcome as the ledger files them. `rejected` counts the
-   *  requests the relay rejected after it chose an account, which the counts by status leave out. */
-  requests: { client_gone: number; incomplete: number; ok: number; overloaded: number; rate_limited: number; rejected: number; router_shutdown: number; undecodable: number; upstream_error: number };
+   *  requests the relay rejected and `exhausted` those their pool exhausted, which the counts by status leave out. */
+  requests: { client_gone: number; exhausted: number; incomplete: number; ok: number; overloaded: number; rate_limited: number; rejected: number; router_shutdown: number; undecodable: number; upstream_error: number };
   /** The kept-warm requests' saving in dollars, each priced at the cells its own prompt selects. */
   savingUsd: number;
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
@@ -360,8 +362,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
 
   return {
     ...equivalentsOfGroup(countedPlan, probePlan),
-    // Every attempt past the first on a request is a failover, so the two together are what the accounts saw.
-    attempts: requests + failovers,
+    attempts: sumOf(counted, (r) => r.attempts),
     billed: sumSplit(billed.map((r) => r.cost)),
     billedUsd: sumOf(billed, (r) => r.costUsd),
     cacheHits: sumOf(counted, (r) => r.cacheHits),
@@ -373,8 +374,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     costShares,
     costUsd: sumOf(priced, (r) => r.costUsd),
     errors,
-    // The fixture ledger records no exhausted pool.
-    exhausted: 0,
+    exhausted: outcomes.exhausted,
     expiredBetweenTurns: sumOf(counted, (r) => r.expiredBetweenTurns),
     failed: outcomes.overloaded + outcomes.upstream_error + outcomes.router_shutdown + outcomes.client_gone - clientCanceled,
     failovers,
@@ -397,8 +397,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     rateLimited: outcomes.rate_limited,
     refusals,
     refused: Object.values(refusals).reduce((n, c) => n + c, 0),
-    // A refused request files under the refusals map alone, so Rejected counts the requests the relay rejected after it
-    // chose an account.
+    // A refused request files under the refusals map alone, so Rejected counts the requests the relay rejected.
     rejected: outcomes.rejected,
     requests,
     savingUsd: sumOf(counted, (r) => r.savingUsd),
@@ -643,6 +642,9 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
   const sums = new Map<string, Map<number, BurnSum>>();
   // Per group, whether a row of the range's own hours holds a token and whether a row with a token was plan funded.
   const tokened = new Map<string, { inRange: boolean; plan: boolean }>();
+  // Per group, the five counts of the range's own hours, which the route ranks the sessions by, so a session's tokens
+  // in the first bucket's reach back take no part in its slot.
+  const ranked = new Map<string, number>();
   for (const r of rows) {
     const hour = Date.parse(r.hour);
     // The route prices each row by the funding it recorded whatever the registry holds now, so a row whose account left
@@ -664,6 +666,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     s.cached += r.tokens.cacheRead;
     s.tokens += tokens;
     s.uncached += r.tokens.uncachedInput;
+    if (hour >= hours.fromMs && hour < hours.toMs) ranked.set(group, (ranked.get(group) ?? 0) + tokens);
     // The route prices each row at the read, at the revision in force at the row, and splits the dollars by the row's
     // funding: a plan row's list dollars to the plan side and every other row's to the billed side. A free classifier
     // call prices at zero, so it adds nothing.
@@ -701,9 +704,8 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     addPlanFigures(s, r, week);
     if (week !== undefined) s.week.push(tier === undefined ? null : (r.shares[week] ?? null));
   }
-  const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
   let groups = [...sums.keys()].filter((group) => tokened.get(group)?.inRange === true).sort();
-  if (groupBy === 'session') groups = [...groups].sort((a, b) => tokensOf(b) - tokensOf(a)).slice(0, BURN_SESSIONS).sort();
+  if (groupBy === 'session') groups = [...groups].sort((a, b) => (ranked.get(b) ?? 0) - (ranked.get(a) ?? 0)).slice(0, BURN_SESSIONS).sort();
   // The route answers the shares and the unit where each group holds one account's rows: the account grouping, or a
   // filter naming exactly one account. A group of an account the registry no longer holds takes its unit from its own
   // rows: the window share where a row with a token was plan funded, dollars where each such row was billed.
@@ -816,17 +818,19 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], eve
 }
 
 /**
- * Whether a request row passes the account, key, model and pattern filters as the request routes match a row: the
- * serving attempt's account, with a request no attempt served under the unattributed id as the request log files it,
- * the key by the selector rule, the canonical model, and a pattern as the rollups key a row, the client as recorded and
- * the user agent folded to its first product token, each `-` where the request named none.
+ * Whether a request row passes the account, key, pool, model and pattern filters as the request routes match a row:
+ * the serving attempt's account, with a request no attempt served under the unattributed id as the request log files
+ * it, the key by the selector rule, the pool with a request filed under none under `-`, the canonical model, and a
+ * pattern as the rollups key a row, the client folded as the rollups fold a class (`foldRequestClass`) and the user
+ * agent folded to its first product token, each `-` where the request named none.
  */
-function passesRequestFilters(r: RequestLog, q: Pick<AnalyticsQuery, 'accountIds' | 'clients' | 'keyIds' | 'models' | 'userAgents'>): boolean {
+function passesRequestFilters(r: RequestLog, q: Pick<AnalyticsQuery, 'accountIds' | 'clients' | 'keyIds' | 'models' | 'poolIds' | 'userAgents'>): boolean {
   if (q.accountIds?.length && !q.accountIds.includes(r.accountId ?? '-')) return false;
   if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, { keyGeneration: r.keyGeneration, keyId: r.keyId ?? '-' }))) return false;
+  if (q.poolIds?.length && !q.poolIds.includes(r.poolId ?? '-')) return false;
   if (q.models?.length && !q.models.some((m) => m.toLowerCase() === r.canonicalModel)) return false;
   if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, agentTokenOf(r.userAgent)))) return false;
-  if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client ?? '-'))) return false;
+  if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, foldRequestClass(r.client)))) return false;
   return true;
 }
 
@@ -842,7 +846,6 @@ export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'ac
   for (const r of requests) {
     const at = Date.parse(r.at);
     if (at < fromMs || at >= toMs) continue;
-    if (q.poolIds?.length && !q.poolIds.includes(r.poolId ?? '-')) continue;
     if (!passesRequestFilters(r, q)) continue;
     for (const a of r.attempts) {
       const placement = a.selection?.placement ?? null;
@@ -865,9 +868,8 @@ export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'ac
  * largest count first and then the model and the category in byte order, where the dash sorts first, and beside them
  * the requests in range that presented a fallback digest. The route reads the request rows of the whole hours the range
  * touches, narrows them by the accounts, the keys, the pools, the models, the kinds, the probes switch and the client
- * and user agent patterns, and echoes the range as asked. A pattern matches as the rollups key a row: the client as
- * recorded and the user agent folded to its first product token, each `-` where the request named none. The user agent
- * groups partition the rows and narrow nothing.
+ * and user agent patterns as `passesRequestFilters` reads them, and echoes the range as asked. The user agent groups
+ * partition the rows and narrow nothing.
  */
 export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): RefusalCategoriesAnswer {
   const fromMs = Date.parse(q.from);
@@ -879,7 +881,6 @@ export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): 
     const at = Date.parse(r.at);
     if (at < hours.fromMs || at >= hours.toMs) continue;
     if (!passesRequestFilters(r, q)) continue;
-    if (q.poolIds?.length && (r.poolId === null || !q.poolIds.includes(r.poolId))) continue;
     if (q.kinds?.length && !q.kinds.includes(r.kind)) continue;
     if (r.kind === 'probe' && !q.includeProbes && !q.kinds?.includes('probe')) continue;
     if (r.fallbackDigest !== null) fallbacks += 1;

@@ -78,6 +78,7 @@ export { breakdownOf, burnOf, placementsOf, refusalCategoriesOf, rewritesOf } fr
 export { PRIOR_BURN } from '@/mock/fit';
 export { leadOf } from '@/mock/lead';
 export { insideSessionExpiry, refusalOnlyRows, sessionsListedAt, withinNonCompanionTimeout } from '@/mock/operations';
+export { ROUTING_EVENTS } from '@/mock/routingLog';
 export { poolById } from '@/mock/pools';
 export { ALL_ROLLUPS, requestById, rollups } from '@/mock/requests';
 export { GUARDRAIL_STORY_IDS, NIGHTLY_CAP_RAISED, SESSION_IDS, STORY_IDS, UNSEEDED_IDS } from '@/mock/requests';

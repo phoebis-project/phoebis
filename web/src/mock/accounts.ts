@@ -806,18 +806,16 @@ function carryLegacyEdges(account: (typeof ACCOUNTS)[number], w: RateLimitWindow
   });
 }
 
-// The samples are built from the literal's windows, since a flagged account answers none. A window with no reset has
-// no period to place samples in, so it answers none.
+// The samples are built from the literal's windows, since a flagged account answers none. The ledger writes a sample of
+// each polled window whatever its reset, and a window with no reset has no period to place earlier samples in, so it
+// answers the one its last poll wrote, at the reading.
 export const QUOTA_HISTORY: QuotaHistory[] = SEEDS.flatMap((seed, i) =>
-  readWindows(seed).flatMap((w) =>
-    w.resetsAt === null
-      ? []
-      : [
-          {
-            accountId: seed.id,
-            windowId: w.id,
-            samples: carryLegacyEdges(ACCOUNTS[i], w, sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt), w.periodHours * HOUR, w.utilization, samplesEndOf(ACCOUNTS[i]))),
-          },
-        ],
-  ),
+  readWindows(seed).map((w) => ({
+    accountId: seed.id,
+    windowId: w.id,
+    samples:
+      w.resetsAt === null
+        ? [{ at: iso(samplesEndOf(ACCOUNTS[i])), utilization: round(w.utilization, 3) }]
+        : carryLegacyEdges(ACCOUNTS[i], w, sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt), w.periodHours * HOUR, w.utilization, samplesEndOf(ACCOUNTS[i]))),
+  })),
 );

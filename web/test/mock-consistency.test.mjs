@@ -19,7 +19,7 @@ const iso = (ms) => new Date(ms).toISOString();
 const inHours = (ms, fromMs, toMs) => ms >= startOfHour(fromMs) && ms < Math.ceil(toMs / HOUR) * HOUR;
 
 /** A rollup row's requests, as the analytics routes count them. */
-const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown + r.requests.rejected;
+const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown + r.requests.rejected + r.requests.exhausted;
 const tokensOf = (r) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const sum = (list, read) => list.reduce((n, x) => n + read(x), 0);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
@@ -278,6 +278,15 @@ test("the placements answer counts a row from the hour that holds the range's st
   assert.deepEqual(answer.map((r) => [r.rung, r.placements]), [['static', 2]], 'the rows of 21:10 and 23:45');
 });
 
+test('the placements answer matches a Clients pattern against the client label folded as the rollups fold it', async () => {
+  const d = await import('./dist/api.js');
+  // A label of 72 bytes, past the fold's 64, which the route reads as `other`.
+  const placed = { at: '2026-09-16T21:10:00.000Z', attempts: [{ selection: { cacheRead: 100, placement: { prefixTokens: 0, rung: 'static' } } }], client: `claude-code/${'x'.repeat(60)}` };
+  const range = { from: '2026-09-16T21:00:00.000Z', to: '2026-09-16T22:00:00.000Z' };
+  assert.deepEqual(d.placementsOf([placed], { ...range, clients: ['other'] }).map((r) => r.placements), [1], 'under other');
+  assert.deepEqual(d.placementsOf([placed], { ...range, clients: ['claude-code/*'] }), [], 'under claude-code/*');
+});
+
 test("the rewrites answer counts a move from the hour that holds the range's start up to the hour ceiling of its end", async () => {
   const d = await import('./dist/api.js');
   // A move an account's state forced, which the ledger files in its hour's rollup.
@@ -297,6 +306,14 @@ test("the refusal categories answer counts a refusal from the hour that holds th
   const rows = [refused('2026-09-16T20:59:30.000Z'), refused('2026-09-16T21:10:00.000Z'), refused('2026-09-16T23:45:00.000Z'), refused('2026-09-17T00:00:00.000Z')];
   const answer = d.refusalCategoriesOf(rows, { from: '2026-09-16T21:31:00.000Z', groupBy: 'all', to: '2026-09-16T23:31:00.000Z' });
   assert.deepEqual(answer.rows, [{ category: 'cyber', model: 'claude-sonnet-5-5', requests: 2 }], 'the refusals of 21:10 and 23:45');
+});
+
+test('the refusal categories answer counts a request filed under no pool under the `-` pool selector', async () => {
+  const d = await import('./dist/api.js');
+  // Two refusals of one hour, one of a request the router filed under no pool and one on the work pool.
+  const refused = (poolId) => ({ at: '2026-09-16T21:10:00.000Z', attempts: [{ response: { refusalCategory: 'cyber', stopReason: 'refusal' } }], canonicalModel: 'claude-sonnet-5-5', fallbackDigest: null, kind: 'inference', poolId });
+  const answer = d.refusalCategoriesOf([refused(null), refused('work')], { from: '2026-09-16T21:00:00.000Z', groupBy: 'all', poolIds: ['-'], to: '2026-09-16T22:00:00.000Z' });
+  assert.deepEqual(answer.rows, [{ category: 'cyber', model: 'claude-sonnet-5-5', requests: 1 }], 'the refusal with no pool alone');
 });
 
 test("a billed probe's dollars count with probes off", async () => {
@@ -871,8 +888,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(earlier.length > 0, 'the earlier holder has requests');
     // The holder's last request ran hours before the story's clock, so the route's list leaves the row out there and
     // keeps it inside the hour of that request.
-    assert.ok(!s.sessions.some((x) => x.historical) && !s.lib.sessionsListedAt(s.now).some((x) => x.historical), "the route's list at the story's clock holds no earlier holder");
-    const historical = s.lib.sessionsListedAt(Date.parse(earlier[0].at) + HOUR / 2).filter((x) => x.historical);
+    assert.ok(!s.sessions.some((x) => x.historical) && !s.lib.sessionsListedAt(s.now, undefined, undefined, undefined, s.lib.ROUTING_EVENTS).some((x) => x.historical), "the route's list at the story's clock holds no earlier holder");
+    const historical = s.lib.sessionsListedAt(Date.parse(earlier[0].at) + HOUR / 2, undefined, undefined, undefined, s.lib.ROUTING_EVENTS).filter((x) => x.historical);
     assert.deepEqual(historical.map((x) => x.keyId), ['desktop'], 'one earlier holder is listed inside the hour of its last request');
     const [held] = historical;
     const holders = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === held.keyGeneration);
@@ -899,7 +916,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const [newest] = refusals;
     assert.ok(refusals.length > 0 && refusals.every((r) => r.refused && r.sessionId === newest.sessionId), 'one session holds the refusals');
     assert.ok(s.lib.insideSessionExpiry(newest.at, s.now), `the newest refusal at ${newest.at} is inside the span`);
-    const listedAt = (now) => s.lib.sessionsListedAt(now).filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
+    const listedAt = (now) => s.lib.sessionsListedAt(now, undefined, undefined, undefined, s.lib.ROUTING_EVENTS).filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
     const listed = listedAt(Date.parse(newest.at) + HOUR / 2);
     assert.ok(newest.userAgent !== null, 'the newest refusal names its client');
     assert.deepEqual(listed.map((x) => [x.accountId, x.spend, x.userAgent, x.lastRequestAt]), [[null, null, newest.userAgent, newest.at]], "listed off the ledger with no spend and the newest refusal's user agent inside the hour of that refusal");
@@ -923,7 +940,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
-    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
+    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds, undefined, s.lib.ROUTING_EVENTS);
     const seed = [...s.lib.requestById.values()];
     // The engine files its recipes under each key's live generation alone, so a row of an earlier holder reads none, as
     // the route clears them.
@@ -1040,7 +1057,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     // The runner's rows left the route's list under the non-companion timeout, so the case reads the seed through the
     // session expiry, which lists every row the story seeds.
-    const runner = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds).filter((x) => x.keyId === 'ci' && !x.historical);
+    const runner = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds, undefined, s.lib.ROUTING_EVENTS).filter((x) => x.keyId === 'ci' && !x.historical);
     assert.ok(runner.length > 0, 'the story holds sessions of the ci key');
     for (const x of runner) assert.equal(x.lastUsedAt, x.lastRequestAt, `${x.sessionId}'s last use`);
   });
@@ -1208,7 +1225,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const words = ['low', 'medium', 'high', 'max', null];
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
-    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
+    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds, undefined, s.lib.ROUTING_EVENTS);
     for (const row of seeded) {
       assert.ok(Array.isArray(row.agentContexts), `${row.keyId} ${row.sessionId} answers a list`);
       assert.ok(words.includes(row.effort), `${row.keyId} ${row.sessionId} reads the effort ${row.effort}`);
@@ -1309,7 +1326,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The session no mod reports: its cold line passes the timeout forty minutes on, while its warm one keeps the row.
     const noMod = plain.find((x) => x.agentContexts.length === 2 && x.agentContexts.some((c) => c.warm) && x.agentContexts.some((c) => !c.warm));
     assert.ok(noMod !== undefined, 'the session no mod reports is listed');
-    const later = s.lib.sessionsListedAt(s.now + 40 * 60_000).find((x) => x.keyId === noMod.keyId && x.sessionId === noMod.sessionId);
+    const later = s.lib.sessionsListedAt(s.now + 40 * 60_000, undefined, undefined, undefined, s.lib.ROUTING_EVENTS).find((x) => x.keyId === noMod.keyId && x.sessionId === noMod.sessionId);
     assert.deepEqual(later?.agentContexts.map((c) => c.warm), [true], 'the warm line stays and the cold one leaves');
   });
 
@@ -1330,7 +1347,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`every listed session reads its first request and its last turn at or before its last request, the first at or before the last turn, both null with no last request, and each agent entry's last request at or before the row's, at ${at}`, async () => {
     const s = await story;
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
-    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
+    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds, undefined, s.lib.ROUTING_EVENTS);
     // The route reads the instants off one set of the session's rows, so a fold that read them off two sets breaks an
     // order below.
     const notAfter = (a, b) => a === null || (b !== null && Date.parse(a) <= Date.parse(b));
@@ -4000,7 +4017,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY)));
     const [totals] = s.lib.breakdownOf(s.allRollups, { ...defaultRange(s), groupBy: 'all', includeProbes: false });
-    const outcomes = { clientCanceled: totals.clientCanceled, failed: totals.failed, incomplete: totals.incomplete, rateLimited: totals.rateLimited, rejected: totals.rejected, succeeded: totals.succeeded };
+    const outcomes = { clientCanceled: totals.clientCanceled, exhausted: totals.exhausted, failed: totals.failed, incomplete: totals.incomplete, rateLimited: totals.rateLimited, rejected: totals.rejected, succeeded: totals.succeeded };
     assert.equal(sum(Object.values(outcomes), (n) => n), totals.requests, `the outcomes ${JSON.stringify(outcomes)} against ${totals.requests} requests`);
     assert.equal(totals.requests, rows.length, 'each row counts once');
   });
@@ -4200,12 +4217,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 // The instant the smoke run and the browser pass pin, whose 14:00 hour the routing log's story writes by hand.
 const pinned = (loading = loading.then(() => storyAt('2026-09-16T14:30:00Z')));
 
-test("the story's 14:00 hour counts desktop's turn that marked no cache breakpoint and its token count as uncacheable", async () => {
+test("the story's 14:00 hour counts desktop's token count as uncacheable and the turn its pool's policy marked as no such request", async () => {
   const s = await pinned;
   // Three of desktop's answers in the hour read and wrote nothing: the subagent turn whose body marked no breakpoint
-  // (req_69e30548-32e), the token count (req_3b8e51f4-0a9) and the classifier call that marked one (req_7c2e9f41-d03).
+  // (req_69e30548-32e), which all's cache TTL policy marks, the token count (req_3b8e51f4-0a9) and the classifier call
+  // that marked one (req_7c2e9f41-d03).
   const [desktop] = s.lib.breakdownOf(s.allRollups, { from: '2026-09-16T14:00:00Z', groupBy: 'all', includeProbes: false, keyIds: ['desktop'], to: '2026-09-16T15:00:00Z' });
-  assert.deepEqual(desktop && [desktop.uncached, desktop.uncacheable], [3, 2]);
+  assert.deepEqual(desktop && [desktop.uncached, desktop.uncacheable], [3, 1]);
 });
 
 // An instant whose hour a full day back carries traffic.
@@ -4222,6 +4240,18 @@ test("the hour a full day back counts toward the accounts' and pools' day totals
   for (const p of s.pools) {
     assert.equal(p.traffic24h[0].requests, s.asked(early).filter((r) => r.poolId === p.id).length, `${p.id}'s first hour`);
   }
+});
+
+// An evening instant, whose drawn day holds a laptop turn that found its pin live on nightly in overage. It loads behind
+// the first hour's load, since two loads at once would each restore the other's pinned clock.
+const evening = (loading = firstHour.then(() => storyAt('2026-09-16T18:10:00Z')));
+
+test("a drawn turn whose live pin the overage rule moves stays on its own plan rather than renewing the pin", async () => {
+  const s = await evening;
+  // Nightly reads overage from the first head after its cap's raise at 11:30:12, and all prefers the plan, so step 4
+  // hands the 15:19 turn's pin from nightly to primary, which holds plan allowance, ahead of any renewal.
+  const first = (await s.api.getRequest('req_2aab0f53-c41'))?.request.attempts[0];
+  assert.deepEqual(first && [first.accountId, first.overageInUse, first.selection?.renewed], ['primary', false, false]);
 });
 
 test("a paired row's first reading is stamped at the list read that lands it, after the confirm", async () => {
