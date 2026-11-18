@@ -88,6 +88,14 @@ async fn the_cursor_neither_skips_nor_repeats() {
 }
 
 #[tokio::test]
+async fn a_malformed_cursor_answers_400() {
+    let parts = admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let answer = get(&parts.app, "/admin/feature-calls?cursor=x", Some(&cookie)).await;
+    assert_eq!(answer.status(), 400);
+}
+
+#[tokio::test]
 async fn a_filter_narrows_the_list() {
     let parts = admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
