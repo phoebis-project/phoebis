@@ -612,6 +612,9 @@ export function AnalyticsPage() {
     return funded || warming ? (costBreakdownAnswer ?? []) : groups;
   }, [sessionId, funding, funded, warming, groups, stale, fundedTab, kept, groupBy, agentGroups, latest, costBreakdownAnswer]);
   const costRequestGroups = useMemo(() => costGroups.filter(countsRequest), [costGroups]);
+  // With Include probes off the route answers a group of billed probes alone for its dollars beside no request, so the
+  // dollar table keeps a group whose dollars are above zero, as the total and the Cost by chart keep them.
+  const dollarCostGroups = useMemo(() => costGroups.filter((g) => countsRequest(g) || g.costUsd > 0), [costGroups]);
   const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
   const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
   // A session view folds the request log, which the page reads with the toggle, so its figure holds no probe while the
@@ -1097,13 +1100,14 @@ export function AnalyticsPage() {
                 groupLabel={groupLabel}
                 columns={analyticsKeysOf('cost', unit).slice(1).map((k) => k.label)}
                 order={tableOrder}
-                rows={costRequestGroups.map((g) => {
-                  const perRequest = per(g.costUsd, g.requests, 1) ?? 0;
-                  const perThousand = per(g.costUsd, g.tokens.output, 1000) ?? 0;
+                rows={dollarCostGroups.map((g) => {
+                  // $0.00 would read as a cost of nothing, so a ratio with a zero count to divide by draws the dash.
+                  const perRequest = per(g.costUsd, g.requests, 1);
+                  const perThousand = per(g.costUsd, g.tokens.output, 1000);
                   return {
                     key: g.key,
                     label: g.label,
-                    cells: [fmtInt(g.requests), fmtUsd(g.costUsd), fmtUsd(g.cost.input), usdOrDash(g.cost.cacheRead), usdOrDash(g.cost.cacheWrite), fmtUsd(g.cost.output), fmtUsd(perRequest), fmtUsd(perThousand)],
+                    cells: [fmtInt(g.requests), fmtUsd(g.costUsd), fmtUsd(g.cost.input), usdOrDash(g.cost.cacheRead), usdOrDash(g.cost.cacheWrite), fmtUsd(g.cost.output), usdOrDash(perRequest), usdOrDash(perThousand)],
                     figures: { cache_read: g.cost.cacheRead, cache_write: g.cost.cacheWrite, cost: g.costUsd, input: g.cost.input, output: g.cost.output, per_1k_output: perThousand, per_request: perRequest, requests: g.requests },
                   };
                 })}

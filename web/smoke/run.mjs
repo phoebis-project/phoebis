@@ -24422,10 +24422,12 @@ await forView('/analytics', async () => {
 await forView('/analytics', async () => {
   // The route answers a group for a key or a model whose rows in range were all refused, with no request. The Traffic
   // table keeps it for its Refused column, and the other group tables and the Cost by chart's legend leave it out,
-  // while a group of one failed request that priced nothing stays. The stub cuts the key and the model groupings to two
-  // story groups beside its own two: the stack folds every group past the seventh into Other, where a zero total ranks
-  // last, so beside the story's seven keys the legend would name no entry for it with or without the gate. Native and
-  // All in dollars read the page's own breakdown and series, so the stub reads no funding.
+  // while a group of one failed request that priced nothing stays. With Include probes off the route also answers a
+  // group of billed probes alone, with its dollars and no request, which a dollar Cost table keeps so that it explains
+  // the spend its total shows. The stub cuts the key and the model groupings to two story groups beside its own three:
+  // the stack folds every group past the seventh into Other, where a zero total ranks last, so beside the story's seven
+  // keys the legend would name no entry for it with or without the gate. Native and All in dollars read the page's own
+  // breakdown and series, so the stub reads no funding.
   localStorage.removeItem('phoebis.unit');
   const breakdownRead = api.getAnalyticsBreakdown;
   const seriesRead = api.getAnalyticsSeries;
@@ -24481,11 +24483,14 @@ await forView('/analytics', async () => {
     wastedProbeUsd: 0,
     wastedProbes: 0,
   });
-  // The second group is one upstream error with no usage, which the mock counts as a request that priced nothing.
+  // The second group is one upstream error with no usage, which the mock counts as a request that priced nothing. The
+  // third is one billed probe's cache read, $0.25, which a read with Include probes off counts as no request.
+  const PROBE_DOLLARS = { ...NO_SPLIT, cacheRead: 0.25 };
+  const billedProbe = (template) => ({ ...nothing(template, 'billed-probe'), billed: PROBE_DOLLARS, billedUsd: 0.25, cost: PROBE_DOLLARS, costUsd: 0.25, probeCostUsd: 0.25, probes: { failed: 0, held: 0, migrated: 0, ok: 1, planOk: 0, skipped: 0 } });
   const cut = (by, groups) =>
     STORY[by] === undefined || groups.length === 0
       ? groups
-      : [...groups.filter((g) => STORY[by].includes(g.key)), { ...nothing(groups[0], 'refused-only'), refusals: { client_not_allowed: 4 }, refused: 4 }, { ...nothing(groups[0], 'failed-only'), attempts: 1, errors: { api_error: 1 }, failed: 1, requests: 1 }];
+      : [...groups.filter((g) => STORY[by].includes(g.key)), { ...nothing(groups[0], 'refused-only'), refusals: { client_not_allowed: 4 }, refused: 4 }, { ...nothing(groups[0], 'failed-only'), attempts: 1, errors: { api_error: 1 }, failed: 1, requests: 1 }, billedProbe(groups[0])];
   api.getAnalyticsBreakdown = async (q) => cut(q.groupBy, await breakdownRead.call(api, q));
   api.getAnalyticsSeries = async (q) => (await seriesRead.call(api, q)).map((p) => ({ ...p, groups: cut(q.groupBy, p.groups) }));
   const page = await mount('/analytics', { now: CLOCK_ORIGIN });
@@ -24506,7 +24511,11 @@ await forView('/analytics', async () => {
   await tab(page, 'Cost');
   read.nativeCost = keysOf(tableOf('Cost by key'));
   await chooseUnit(page, 'all');
-  read.dollarCost = keysOf(tableOf('Cost by key'));
+  const dollarTable = tableOf('Cost by key');
+  read.dollarCost = keysOf(dollarTable);
+  const dollarHeads = [...(dollarTable?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+  const probeRow = rowsOf(dollarTable).find(([label]) => label === 'billed-probe') ?? [];
+  read.billedProbe = ['Requests', 'Cost', 'Per request', 'Per 1k output'].map((head) => probeRow[dollarHeads.indexOf(head)] ?? null);
   const chart = [...page.container.querySelectorAll('#cost .card:not(.card--table)')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by key');
   read.legend = [...(chart?.querySelectorAll('.legend li') ?? [])].map((li) => li.textContent?.trim() ?? '').sort();
   page.unmount();
@@ -24514,9 +24523,10 @@ await forView('/analytics', async () => {
   delete api.getAnalyticsSeries;
   localStorage.removeItem('phoebis.unit');
   const KEYS = ['ci', 'failed-only', 'laptop'];
-  const want = { traffic: ['0', '4'], latency: KEYS, misses: KEYS, dropped: KEYS, cacheByModel: ['claude-fable-5-1', 'claude-sonnet-5-5', 'failed-only'], nativeCost: KEYS, dollarCost: KEYS, legend: KEYS };
+  // The probe's ratios have no request and no output token to divide by.
+  const want = { traffic: ['0', '4'], latency: KEYS, misses: KEYS, dropped: KEYS, cacheByModel: ['claude-fable-5-1', 'claude-sonnet-5-5', 'failed-only'], nativeCost: KEYS, dollarCost: ['billed-probe', ...KEYS], billedProbe: ['0', '$0.25', '-', '-'], legend: ['billed-probe', ...KEYS] };
   results.push({
-    name: '/analytics a group of refused requests alone draws in the Traffic table only',
+    name: '/analytics a group of refused requests alone draws in the Traffic table only, and one of billed probes alone keeps its dollar Cost row',
     ok: JSON.stringify(read) === JSON.stringify(want),
     missing: Object.entries(read).map(([list, value]) => `${list} ${JSON.stringify(value)}`),
   });
