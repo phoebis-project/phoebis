@@ -1,4 +1,4 @@
-import { shareIn, weightOf } from '@/lib/costs';
+import { equivalentIn, modelWeeks, type Usage } from '@/lib/costs';
 import { SHARED_WINDOWS } from './accounts';
 import { MARKED_SESSION_IDS } from './requests';
 import { TABLES, tablesFor } from './samples';
@@ -7,19 +7,20 @@ import { TABLES, tablesFor } from './samples';
 // read one figure, and the rows need no import of the routing log, which imports them.
 
 /** The plan windows a model draws: both shared windows, and a Fable model its week as well. */
-export const drawnWindows = (model: string): string[] => (model.includes('fable') ? [...SHARED_WINDOWS, 'seven_day_fable'] : [...SHARED_WINDOWS]);
+export const drawnWindows = (model: string): string[] => [...SHARED_WINDOWS, ...modelWeeks(TABLES, model)];
 /** The weekly window the pick prices a pin's rewrite in: the model's week where it draws one, else the 7-day window. */
-export const rewriteWindowOf = (model: string): string => (drawnWindows(model).includes('seven_day_fable') ? 'seven_day_fable' : 'seven_day');
+export const rewriteWindowOf = (model: string): string => modelWeeks(TABLES, model)[0] ?? 'seven_day';
+const proWeekOf = (usage: Usage, model: string, client: string | null): number | null => equivalentIn(tablesFor(client), model, usage, false);
 /**
  * A rewrite of `tokens` as the Pro-week figure: the prompt written to the cache again, the Pro tier's share of its
  * 7-day window under the regime the pin's client label names, which no band weighs. Null for a model without a weight
  * of its own.
  */
 export const proWeekRewriteOf = (tokens: number, model: string, client: string | null): number | null =>
-  weightOf(TABLES, model, 'seven_day') !== null ? shareIn(tablesFor(client), 'seven_day', 'default_claude_ai', model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, false) : null;
+  proWeekOf({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, model, client);
 /** The same Pro-week figure of `tokens` as output, which the session pays again for the thinking a move drops. */
 const proWeekOutputOf = (tokens: number, model: string, client: string | null): number | null =>
-  weightOf(TABLES, model, 'seven_day') !== null ? shareIn(tablesFor(client), 'seven_day', 'default_claude_ai', model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: tokens }, false) : null;
+  proWeekOf({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: tokens }, model, client);
 
 /**
  * The thinking the stretch round read as dropped where it planned its first marked pin's move: the blocks the pin's

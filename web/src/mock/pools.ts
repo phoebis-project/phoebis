@@ -5,10 +5,10 @@ import { lookup } from '@/lib/counts';
 import { endOf } from '@/lib/quota';
 import { windingDown } from '@/lib/selection';
 import { windowKeyId } from '@/lib/windows';
-import { NO_CREDENTIAL, SHARED_WINDOWS, accountById } from './accounts';
+import { SHARED_WINDOWS, accountById, blankAccountRow } from './accounts';
 import { PRIOR_BURN, bindingOf, ceilingOn, windowFitOf, type Runway } from './fit';
 import { paceOf } from './lead';
-import { ACCOUNT_SAMPLE, KEY_SAMPLE, POOL_SAMPLE } from './samples';
+import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, clock, daysAgo, endOfMonth, iso, startOfDay } from './time';
 
 /**
@@ -58,6 +58,9 @@ function memberFitOf(account: Account, now: number, pool: Pick<Pool, 'fiveHourCe
   return { fit, runwayMs: bindingOf(fit === 'least_bad' ? walls : bounded)?.runway ?? null };
 }
 
+type ServedFigures = Pick<PoolMember, 'burn' | 'fableReservation' | 'factor' | 'fit' | 'paceScore' | 'runwayMs' | 'speed'>;
+const NO_FIGURES: ServedFigures = { burn: null, fableReservation: null, factor: null, fit: null, paceScore: null, runwayMs: null, speed: null };
+
 /**
  * A member's seven figures as the pools route serves them: the 7-day window's burn, the router's Pace score, the spare
  * rate on the 7-day window for an OAuth member (`paceOf` with no model, its Fable reservation held whatever the
@@ -67,16 +70,16 @@ function memberFitOf(account: Account, now: number, pool: Pick<Pool, 'fiveHourCe
  * as the pools route's member and the sessions route's row answer it, and the fit and the runway of `memberFitOf`,
  * which a member the router has not loaded reads none of.
  */
-export function servedFigures(accountId: string, now: number, pool: Pick<Pool, 'fiveHourCeiling' | 'slowDown' | 'weeklyCeiling' | 'windDownMinutes'>): Pick<PoolMember, 'burn' | 'fableReservation' | 'factor' | 'fit' | 'paceScore' | 'runwayMs' | 'speed'> {
+export function servedFigures(accountId: string, now: number, pool: Pick<Pool, 'fiveHourCeiling' | 'slowDown' | 'weeklyCeiling' | 'windDownMinutes'>): ServedFigures {
   const account = accountById.get(accountId);
-  if (account === undefined) return { burn: null, fableReservation: null, factor: null, fit: null, paceScore: null, runwayMs: null, speed: null };
+  if (account === undefined) return NO_FIGURES;
   const fit = UNLOADED_MEMBERS.has(accountId) ? { fit: null, runwayMs: null } : memberFitOf(account, now, pool);
-  if (account.kind === 'api_key') return { burn: null, fableReservation: null, factor: null, ...fit, paceScore: 1 - (lookup(WORST_BUCKET, accountId) ?? 0), speed: null };
+  if (account.kind === 'api_key') return { ...NO_FIGURES, ...fit, paceScore: 1 - (lookup(WORST_BUCKET, accountId) ?? 0) };
   const slowed = pool.slowDown ? account.slowDown : null;
   const factor = slowed?.factor ?? null;
   const speed = slowed !== null && slowed.since !== null ? slowed.speed : null;
   const week = account.windows.find((w) => w.id === '7d');
-  if (week === undefined) return { burn: null, fableReservation: null, factor, ...fit, paceScore: null, speed };
+  if (week === undefined) return { ...NO_FIGURES, factor, ...fit, speed };
   const fable = account.fableWindow;
   const pace = paceOf(account, now, null, {
     burns: { seven_day: week.burn ?? 0, seven_day_fable: fable?.burn ?? 0 },
@@ -128,28 +131,7 @@ export interface DeletedAccount {
  * each answer on today's state never do.
  */
 export const RETIRED: DeletedAccount = {
-  account: {
-    ...ACCOUNT_SAMPLE,
-    cooldowns: [],
-    credential: NO_CREDENTIAL,
-    email: null,
-    extraUsage: null,
-    fableWindow: null,
-    fastLane: null,
-    id: 'retired',
-    kind: 'api_key',
-    label: 'Retired workspace',
-    limitResets: null,
-    plan: null,
-    pool: null,
-    requests: { last24h: 0, last7d: 0, lifetime: 0 },
-    routingEnabled: true,
-    status: 'ready',
-    subscription: null,
-    usage: null,
-    usageBased: false,
-    windows: [],
-  },
+  account: { ...blankAccountRow({ id: 'retired', kind: 'api_key', label: 'Retired workspace' }, 'ready', null), usage: null, usageBased: false },
   createdAt: clock(9, 39),
   deletedAt: clock(9, 40, 30),
   // The pool's other API key account's priority, so the two share the paid tier behind the plans.
@@ -157,6 +139,8 @@ export const RETIRED: DeletedAccount = {
   poolId: 'all',
 };
 export const DELETED_ACCOUNTS: readonly DeletedAccount[] = [RETIRED];
+/** An account the story names: the registry's, or a deleted account's as it stood before its delete. */
+export const storyAccountOf = (id: string): Account | undefined => accountById.get(id) ?? DELETED_ACCOUNTS.find((d) => d.account.id === id)?.account;
 
 type Resolved = NonNullable<Pool['keepaliveResolved']>;
 

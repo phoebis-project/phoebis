@@ -1,5 +1,5 @@
 import type { Account } from '@/api/types';
-import { pricedWindow } from '@/lib/costs';
+import { modelWeeks, pricedWindow } from '@/lib/costs';
 import { endOf, isPaidSource } from '@/lib/quota';
 import { HOUR } from '@/lib/time';
 import { round } from './round';
@@ -50,7 +50,7 @@ export function paceOf(
   model: string | null,
   reads: PaceReads,
 ): { burn: number; deadline: number | null; end: number | null; fableReservation: number | null; hours: number | null; remaining: number; reset: number | null; score: number; window: string | null } {
-  const window = model?.includes('fable') ? 'seven_day_fable' : 'seven_day';
+  const window = (model === null ? undefined : modelWeeks(TABLES, model)[0]) ?? 'seven_day';
   const paid = isPaidSource(account);
   const reading = account.kind === 'api_key' ? reads.readings.worst_bucket : paid ? undefined : reads.readings[window];
   const remaining = reading === undefined ? 1 : Math.max(0, 1 - reading.utilization);

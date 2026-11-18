@@ -9,7 +9,7 @@ import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById, servedFigures } from './pools';
-import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, fastTurn } from './requests';
+import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, fastTurn, requestById } from './requests';
 import { dropSizeOf, droppedThinkingOf, moveSizeOf, proWeekRewriteOf } from './rewrite';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, tablesFor } from './samples';
@@ -433,12 +433,13 @@ const pinLine = (
     warmUntil,
   };
 };
+/** The later of two instants, either of which may be missing. */
+const laterOf = (a: string | null, b: string | null): string | null => (a === null ? b : b === null || Date.parse(a) >= Date.parse(b) ? a : b);
 /**
  * The newest use across a row's conversation pins, its display pin's and its lines', which the route answers as the
  * row's last use, so a subagent's turn keeps the row live.
  */
-const newestUse = (own: string | null, lines: readonly Pick<AgentContext, 'lastUsedAt'>[]): string | null =>
-  [own, ...lines.map((l) => l.lastUsedAt)].reduce<string | null>((newest, at) => (at !== null && (newest === null || Date.parse(at) > Date.parse(newest)) ? at : newest), null);
+const newestUse = (own: string | null, lines: readonly Pick<AgentContext, 'lastUsedAt'>[]): string | null => [own, ...lines.map((l) => l.lastUsedAt)].reduce(laterOf, null);
 /** The route's order of a session's lines: main first, then by agent id and model as bytes. */
 const lineOrder = (a: Pick<AgentContext, 'agentId' | 'model'>, b: Pick<AgentContext, 'agentId' | 'model'>) =>
   (a.agentId === 'main') !== (b.agentId === 'main') ? (a.agentId === 'main' ? -1 : 1) : byteOrder(a.agentId, b.agentId) || byteOrder(a.model, b.model);
@@ -488,7 +489,7 @@ function storyPinWrite(requestId: string, accountId: string, stamped: boolean): 
  */
 function storyPinPlaced(placedBy: { renewedBy: string; requestId: string }): { at: string; usedAt: string } {
   const atOf = (id: string) => {
-    const r = REQUESTS.find((x) => x.id === id);
+    const r = requestById.get(id);
     if (r === undefined) throw new Error(`the story holds no request ${id}`);
     return r.at;
   };
@@ -798,9 +799,6 @@ for (const pin of SESSIONS) {
   // registered-only session's `registered`, none elsewhere.
   pin.lifecycle = RECIPES.find((r) => r.sessionId === pin.sessionId && r.agentId === 'main')?.agentState ?? pin.lifecycle;
 }
-
-/** The later of two instants, either of which may be missing. */
-const laterOf = (a: string | null, b: string | null): string | null => (a === null ? b : b === null || Date.parse(a) >= Date.parse(b) ? a : b);
 
 /**
  * A subagent pin's tokens, set from its session's index and its line's place rather than drawn, so the rows after it

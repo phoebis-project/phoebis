@@ -1,4 +1,5 @@
 import type { Account, AttentionItem, Reconciliation, RoutingEvent } from '@/api/types';
+import { ATTENTION_KIND_VALUES } from '@/api/types';
 import { MIN_RISE, ratioOff } from '@/lib/analytics';
 import { lookup } from '@/lib/counts';
 import { tokensTotal, undatedModel } from '@/lib/format';
@@ -6,6 +7,7 @@ import { readWindows } from '@/lib/quota';
 import { WINDOW_KEY, hoursOfKey, windowEntry } from '@/lib/windows';
 import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
+import { ceilingSettingOf } from './fit';
 import { EXPIRED_BETWEEN_TURNS, KEEPALIVE_OVERVIEW, SETTINGS_WIRE } from './operations';
 import { KEYS, POOLS, keyById, poolById } from './pools';
 import { REQUESTS, planPaid, warmsCaches } from './requests';
@@ -18,11 +20,13 @@ import { DAY, HOUR, MINUTE, NOW, ago, iso } from './time';
 
 const ms = (at: string | null | undefined) => (at ? Date.parse(at) : null);
 
+const poolsOf = (accountId: string): string[] => POOLS.filter((p) => p.members.some((m) => m.accountId === accountId)).map((p) => p.id);
+
 /** The account as the route names it, with the pools it is a member of, which a pool card filters by. */
-const ofAccount = (id: string): Pick<AttentionItem, 'link' | 'pools' | 'subject'> => ({
+const ofAccount = (id: string, label = accountById.get(id)?.label ?? id): Pick<AttentionItem, 'link' | 'pools' | 'subject'> => ({
   link: { id, page: 'accounts' },
-  pools: POOLS.filter((p) => p.members.some((m) => m.accountId === id)).map((p) => p.id),
-  subject: { id, label: accountById.get(id)?.label ?? id, type: 'account' },
+  pools: poolsOf(id),
+  subject: { id, label, type: 'account' },
 });
 const ofRouter = (id: string, label: string): Pick<AttentionItem, 'link' | 'pools' | 'subject'> => ({ link: null, pools: [], subject: { id, label, type: 'router' } });
 
@@ -33,6 +37,9 @@ const PAIRING_WARNING_DAYS = 3;
 
 /** The route's order inside a kind: by when each item began, then by subject. */
 const bySinceThenSubject = (x: AttentionItem, y: AttentionItem) => Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id);
+const KIND_RANKS: readonly string[] = ATTENTION_KIND_VALUES;
+/** The route's order of the list: by kind, then by when each item began, then by subject. */
+export const byKindThenSince = (x: AttentionItem, y: AttentionItem) => KIND_RANKS.indexOf(x.kind) - KIND_RANKS.indexOf(y.kind) || bySinceThenSubject(x, y);
 
 /**
  * The `pairing_expiring` items of these accounts at an instant, by the reader's rule and in the route's order: an item
@@ -49,9 +56,16 @@ export const pairingExpiringOf = (accounts: readonly Account[], at: number): Att
       if (end === null) return [];
       const since = end - PAIRING_WARNING_DAYS * DAY;
       if (at < since) return [];
-      // The row's own label, as the detail reads it, so a renamed account's item names it as the row does.
-      const subject = { id: a.id, label: a.label, type: 'account' as const };
-      return [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), detail: { account: a.id, days_left: Math.floor((end - at) / DAY), expires: end, label: a.label }, kind: 'pairing_expiring' as const, since: iso(since), subject }];
+      return [
+        {
+          ...ATTENTION_ITEM_SAMPLE,
+          // The row's own label, as the detail reads it, so a renamed account's item names it as the row does.
+          ...ofAccount(a.id, a.label),
+          detail: { account: a.id, days_left: Math.floor((end - at) / DAY), expires: end, label: a.label },
+          kind: 'pairing_expiring' as const,
+          since: iso(since),
+        },
+      ];
     })
     .sort(bySinceThenSubject);
 
@@ -82,21 +96,15 @@ const preventable = EXPIRED_BETWEEN_TURNS.filter((r) => r.poolId !== null && r.k
 const lastDay = (kind: string) => ROUTING_EVENTS.filter((e) => e.kind === kind && Date.parse(e.at) >= NOW - DAY);
 const sorted = (values: unknown[]) => [...new Set(values.map(String))].sort();
 
-/**
- * `lead`, then the ceiling of each kind of window `windows` lists, each once, as the fold names them: the 5-hour
- * ceiling where a listed window is no week, the weekly one where one is.
- */
-const ceilingSettings = (lead: string[], windows: string[]): string[] => [
-  ...lead,
-  ...(windows.some((w) => hoursOfKey(w) !== 168) ? ['five_hour_ceiling'] : []),
-  ...(windows.some((w) => hoursOfKey(w) === 168) ? ['weekly_ceiling'] : []),
-];
+/** `lead`, then the ceiling setting of each window `windows` lists, each once and the 5-hour one first, as the fold
+ *  names them. */
+const ceilingSettings = (lead: string[], windows: string[]): string[] => [...lead, ...(['five_hour_ceiling', 'weekly_ceiling'] as const).filter((setting) => windows.some((w) => ceilingSettingOf(w) === setting))];
 
 /** A pool's value of each setting a condition names, as the reader joins it. */
 const settingValues = (poolId: string, names: string[]): Record<string, number> | null => {
   const pool = poolById.get(poolId);
   if (!pool) return null;
-  const value: Record<string, number> = { five_hour_ceiling: pool.fiveHourCeiling, shed_cap: pool.shedCap, weekly_ceiling: pool.weeklyCeiling };
+  const value: Record<string, number> = { five_hour_ceiling: pool.fiveHourCeiling, shed_cap: pool.shedCap, slow_down_stretch_seconds: pool.slowDownStretchSeconds, weekly_ceiling: pool.weeklyCeiling };
   return Object.fromEntries(
     names.flatMap((name) => {
       const v = lookup(value, name);
@@ -110,16 +118,18 @@ const settingValues = (poolId: string, names: string[]): Record<string, number> 
  * exactly one, none where it stands in several, since the reader would pick among them in no fixed order.
  */
 const onePoolOf = (accountId: string): string | null => {
-  const pools = POOLS.filter((p) => p.members.some((m) => m.accountId === accountId));
-  return pools.length === 1 ? pools[0].id : null;
+  const pools = poolsOf(accountId);
+  return pools.length === 1 ? pools[0] : null;
+};
+
+/** A condition's settings and their values on `poolId`, with no values where it names no pool the registry holds. */
+const settingsOf = (poolId: string | null, names: string[]) => {
+  const values = poolId === null ? null : settingValues(poolId, names);
+  return { setting: names, ...(values === null ? {} : { setting_values: values }) };
 };
 
 /** An account condition's settings with the values of its one pool, where it stands in exactly one. */
-const accountSettings = (accountId: string, names: string[]) => {
-  const pool = onePoolOf(accountId);
-  const values = pool === null ? null : settingValues(pool, names);
-  return { setting: names, ...(values === null ? {} : { setting_values: values }) };
-};
+const accountSettings = (accountId: string, names: string[]) => settingsOf(onePoolOf(accountId), names);
 
 /**
  * A model the cost model prices nothing for as the ledger counts it: the requests on it that a plan funded and that
@@ -193,9 +203,7 @@ function spentDestination(accountId: string): Pick<AttentionItem, 'detail' | 'si
 function roundsWithoutRunway(poolId: string): Pick<AttentionItem, 'detail' | 'since'> | null {
   const rounds = lastDay('shedding_round').filter((e) => e.poolId === poolId && e.detail.outcome === 'nothing_to_mark' && e.detail.reason === 'no_runway');
   if (rounds.length === 0) return null;
-  const setting = ['five_hour_ceiling', 'weekly_ceiling'];
-  const values = settingValues(poolId, setting);
-  return { detail: { accounts: sorted(rounds.map((e) => e.accountId)), rounds: rounds.length, setting, ...(values === null ? {} : { setting_values: values }) }, since: rounds[0].at };
+  return { detail: { accounts: sorted(rounds.map((e) => e.accountId)), rounds: rounds.length, ...settingsOf(poolId, ['five_hour_ceiling', 'weekly_ceiling']) }, since: rounds[0].at };
 }
 
 /** A routing log event as the slowed-account fold reads it. */
@@ -260,15 +268,13 @@ function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: number, 
   const newest = spans.reduce((a, b) => (b.since > a.since ? b : a));
   const barMs = Math.max(SLOWED_LONG_STRETCHES * (newest.thresholdMs ?? 0), SLOWED_LONG_FLOOR_MS);
   if (held.heldMs <= barMs) return null;
-  const stretch = poolById.get(newest.pool)?.slowDownStretchSeconds;
   return {
     detail: {
       bar_ms: barMs,
       held: held.held,
       held_ms: held.heldMs,
       open: spans.some((x) => x.open),
-      setting: ['slow_down_stretch_seconds'],
-      ...(stretch === undefined ? {} : { setting_values: { slow_down_stretch_seconds: stretch } }),
+      ...settingsOf(newest.pool, ['slow_down_stretch_seconds']),
       spans: spans.length,
     },
     since: iso(Math.min(...spans.map((x) => x.since))),
@@ -296,8 +302,6 @@ function drift(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | nul
   };
 }
 
-const CONDITION_ORDER: AttentionItem['kind'][] = ['meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
-
 /** The conditions the ledger folds per subscription account, each kind beside its fold. */
 const ACCOUNT_CONDITIONS: [AttentionItem['kind'], (accountId: string) => Pick<AttentionItem, 'detail' | 'since'> | null][] = [
   ['meter_drift', drift],
@@ -323,7 +327,7 @@ const CONDITIONS: AttentionItem[] = [
     const held = roundsWithoutRunway(p.id);
     return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...held, kind: 'shed_no_runway' as const, link: { id: p.id, page: 'pools' as const }, pools: [p.id], subject: { id: p.id, label: p.name, type: 'pool' as const } }] : [];
   }),
-].sort((x, y) => CONDITION_ORDER.indexOf(x.kind) - CONDITION_ORDER.indexOf(y.kind) || bySinceThenSubject(x, y));
+].sort(byKindThenSince);
 
 /**
  * One item per account whose stored block holds an unused reset that ends within the settings' days, read from the

@@ -10,7 +10,7 @@ import type {
   Subscription,
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
-import { AFFINITY_MODE_VALUES, ATTENTION_KIND_VALUES, COMPANION_PERMISSION_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
+import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
 import { has, lookup } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
@@ -19,11 +19,11 @@ import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf, readWindows } from '@/lib/quota';
-import { compareOrderKeys, compareRequests, orderKeyOf, type OrderKey } from '@/lib/requests';
+import { compareOrderKeys, compareRequests, orderKeyOf, requestOrder, type OrderKey } from '@/lib/requests';
 import { WINDOW_HOURS, WINDOW_KEY } from '@/lib/windows';
-import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, lastReadingOf, usageOf, withholdsWindows } from './accounts';
+import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, blankAccountRow, lastReadingOf, usageOf, withholdsWindows } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf, wholeHoursOf } from './analytics';
-import { ATTENTION, pairingExpiringOf } from './attention';
+import { ATTENTION, byKindThenSince, pairingExpiringOf } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
@@ -33,9 +33,9 @@ import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
-import { ROUTING_LOG_KINDS, WINDOW_DROP_MARGIN, claimDetail, cursorInteger, dropDetail, getDecision, listRoutingLog, routingCursorOf, wholePoints } from './routingLog';
+import { ROUTING_LOG_KINDS, WINDOW_DROP_MARGIN, claimDetail, cursorInteger, dropDetail, getDecision, listRoutingLog, routingCursorOf, subscriptionPair, wholePoints } from './routingLog';
 import { ROUTING_EVENTS, SUMMARIES } from './routingLog';
-import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
+import { KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, hourCeil, iso, startOfHour } from './time';
 
 // Fixed, so a pass over the mock reads the same secrets every run.
@@ -513,11 +513,6 @@ const cursorKeyOf = (cursor: string, order: RequestOrder): OrderKey | null => {
   return figure === null ? null : { figure, id };
 };
 
-const requestOrderOf = (order: RequestOrder, dir: 'asc' | 'desc') => {
-  const compare = compareOrderKeys(dir);
-  return (a: RequestLog, b: RequestLog): number => compare(orderKeyOf(a, order), orderKeyOf(b, order));
-};
-
 /** A window as the poll after a reset reads it: `by` taken off its use, and its lead and projection with it. */
 const lowered = (w: RateLimitWindow, by: number, at: number): RateLimitWindow => {
   const drop = Math.min(by, w.utilization);
@@ -541,13 +536,12 @@ function readingsAfterReset(a: Account, clears: readonly string[], kind: string,
  * the margin under its unchanged reset, from the stored reading's figure to the poll's, with the stored pair.
  */
 function dropsAfterReset(a: Account, after: Pick<Account, 'fableWindow' | 'windows'>): Record<string, unknown>[] {
-  const pair = { plan: a.subscription?.plan ?? null, tier: a.subscription?.rateLimitTier ?? null };
+  const pair = subscriptionPair(a.subscription);
   const read = new Map(readWindows(after).map((w) => [w.id, w.utilization]));
   return readWindows(a).flatMap((w) => {
-    const before = w.utilization;
     const next = read.get(w.id) ?? null;
-    if (w.periodHours !== WINDOW_HOURS['7d'] || w.resetsAt === null || before === null || next === null) return [];
-    return wholePoints(before) - wholePoints(next) > wholePoints(WINDOW_DROP_MARGIN) ? [dropDetail(WINDOW_KEY[w.id] ?? w.id, before, next, Date.parse(w.resetsAt), pair)] : [];
+    if (w.periodHours !== WINDOW_HOURS['7d'] || w.resetsAt === null || next === null) return [];
+    return wholePoints(w.utilization) - wholePoints(next) > wholePoints(WINDOW_DROP_MARGIN) ? [dropDetail(WINDOW_KEY[w.id] ?? w.id, w.utilization, next, Date.parse(w.resetsAt), pair)] : [];
   });
 }
 
@@ -602,10 +596,11 @@ export class MockApi implements Api {
     return Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[this.secretRng.int(0, 35)]).join('');
   }
 
-  /** The registry's lists as the routes read them, or none for a fresh installation. */
+  /** The registry's lists and the routing log rows the writes recorded, as the routes read them, or none for a fresh
+   *  installation. */
   private registry() {
     const empty = emptyStore();
-    return { accounts: empty ? [] : this.accounts, guardrails: empty ? [] : this.guardrails, keys: empty ? [] : this.keys, pools: empty ? [] : this.pools, sessions: empty ? [] : this.sessions };
+    return { accounts: empty ? [] : this.accounts, guardrails: empty ? [] : this.guardrails, keys: empty ? [] : this.keys, pools: empty ? [] : this.pools, sessions: empty ? [] : this.sessions, written: empty ? [] : this.written };
   }
 
   /**
@@ -782,26 +777,9 @@ export class MockApi implements Api {
   /** The row the create route builds, and the row the confirm of a pairing started for a new account writes. */
   private newAccountRow(input: AccountInput, status: Account['status'], email: string | null): Account {
     return {
-      ...ACCOUNT_SAMPLE,
-      cooldowns: [],
-      credential: NO_CREDENTIAL,
-      email,
-      extraUsage: null,
-      fableWindow: null,
-      fastLane: null,
-      id: input.id,
-      kind: input.kind,
-      label: input.label,
-      limitResets: null,
-      plan: null,
-      pool: null,
-      requests: { last24h: 0, last7d: 0, lifetime: 0 },
+      ...blankAccountRow(input, status, email),
       revision: ((this.buried.get(input.id) ?? 0) + 1) * INCARNATION + 1,
-      routingEnabled: true,
-      status,
-      subscription: null,
       usage: usageOf({ id: input.id, kind: input.kind, status, windows: [] }),
-      windows: [],
     };
   }
 
@@ -1111,11 +1089,12 @@ export class MockApi implements Api {
   getAnalyticsGuardrails(range: GuardrailRange): Promise<GuardrailCounts> {
     const from = range === '24h' ? NOW - DAY : Date.parse(range.from);
     const to = range === '24h' ? NOW : Date.parse(range.to);
-    const hours = wholeHoursOf({ from: iso(from), to: iso(to) });
+    const fromMs = startOfHour(from);
+    const toMs = hourCeil(to);
     const counts = new Map<string, { blocked: number; blockedBytes: number; observed: number }>();
     for (const r of ledger().requests) {
       const at = Date.parse(r.at);
-      if (at < hours.fromMs || at >= hours.toMs) continue;
+      if (at < fromMs || at >= toMs) continue;
       for (const m of r.guardrails) {
         const c = counts.get(m.id) ?? { blocked: 0, blockedBytes: 0, observed: 0 };
         if (m.blocked) {
@@ -1154,7 +1133,8 @@ export class MockApi implements Api {
    */
   getAnalyticsUnusedAllowance(span: Pick<AnalyticsQuery, 'from' | 'to'>, filters?: Pick<AnalyticsQuery, 'accountIds'>) {
     const { quotaHistory, routingEvents } = ledger();
-    return latency(unusedAllowanceOf([...routingEvents, ...(emptyStore() ? [] : this.written)], this.registry().accounts, quotaHistory, span, filters));
+    const { accounts, written } = this.registry();
+    return latency(unusedAllowanceOf([...routingEvents, ...written], accounts, quotaHistory, span, filters));
   }
 
   /**
@@ -1165,10 +1145,7 @@ export class MockApi implements Api {
   getAttention() {
     const { attention } = ledger();
     const listed = this.parkedLanded ? attention.filter((i) => i.kind !== 'ledger_record_parked') : attention;
-    const later: readonly string[] = ATTENTION_KIND_VALUES.slice(ATTENTION_KIND_VALUES.indexOf('pairing_expiring') + 1);
-    const ranked = listed.findIndex((i) => later.includes(i.kind));
-    const at = ranked < 0 ? listed.length : ranked;
-    return latency([...listed.slice(0, at), ...pairingExpiringOf(this.registry().accounts, NOW), ...listed.slice(at)]);
+    return latency([...listed, ...pairingExpiringOf(this.registry().accounts, NOW)].sort(byKindThenSince));
   }
 
   async getCapturedBodies(requestId: string) {
@@ -1235,39 +1212,41 @@ export class MockApi implements Api {
     let tokens = 0;
     let cached = 0;
     let cost = 0;
+    let requests = 0;
+    let errors = 0;
+    let refused = 0;
     const errorCodes = new Map<string, number>();
     const refusalCodes = new Map<string, number>();
-    const rated = last24h.filter((r) => !r.refused && r.kind !== 'probe');
     // The ledger's rate: a request that did not succeed is an error, the router's cut answered with a 200 among them,
     // and a client that hung up is none, so its code leaves "Most common" too.
     const erred = (r: RequestLog) => r.outcome !== 'succeeded' && !clientLeft(r);
     for (const r of last24h) {
       const bucket = hourlyMap.get(startOfHour(Date.parse(r.at)));
+      if (!r.refused) {
+        cost += r.costUsd;
+        if (bucket) bucket.cost += r.costUsd;
+      }
       // The day's rows hold a billed probe for its dollars, and nothing else of it counts, as the route skips a probe
       // ahead of its refusals.
-      if (r.kind === 'probe') {
-        if (!r.refused) {
-          cost += r.costUsd;
-          if (bucket) bucket.cost += r.costUsd;
-        }
-        continue;
-      }
+      if (r.kind === 'probe') continue;
       // The ledger's fold books a refused request under its refusals map and nothing else.
       if (r.refused) {
+        refused += 1;
         if (r.errorCode) refusalCodes.set(r.errorCode, (refusalCodes.get(r.errorCode) ?? 0) + 1);
         if (bucket) bucket.refused += 1;
         continue;
       }
-      cost += r.costUsd;
-      if (bucket) bucket.cost += r.costUsd;
       const total = tokensTotal(r.usage);
       tokens += total;
       cached += r.usage.cacheRead;
       if (r.errorCode && !clientLeft(r)) errorCodes.set(r.errorCode, (errorCodes.get(r.errorCode) ?? 0) + 1);
+      const failed = erred(r);
+      requests += 1;
+      if (failed) errors += 1;
       if (bucket) {
         bucket.requests += 1;
         bucket.tokens += total;
-        if (erred(r)) bucket.errors += 1;
+        if (failed) bucket.errors += 1;
       }
     }
     const top = [...errorCodes.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -1277,10 +1256,10 @@ export class MockApi implements Api {
       // Counted off the pools, so the dashboard and the Pools view cannot disagree on the router's pins.
       activePins: this.registry().pools.reduce((n, p) => n + poolPins(p, this.keys), 0),
       day24h: { billedUsd: day.billedUsd, cost, equivalent: day.equivalent },
-      errorRate24h: rated.length ? rated.filter(erred).length / rated.length : null,
+      errorRate24h: requests ? errors / requests : null,
       hourly: [...hourlyMap.values()],
-      refused24h: last24h.filter((r) => r.refused && r.kind !== 'probe').length,
-      requests24h: rated.length,
+      refused24h: refused,
+      requests24h: requests,
       tokens24h: tokens,
       tokensCached24h: cached,
       topErrorCode: top ? top[0] : null,
@@ -1316,9 +1295,8 @@ export class MockApi implements Api {
 
   listAccountRollups(from: string, to: string) {
     // As the route reads a range: from the hour holding the start up to the hour ceiling of the end, exclusive.
-    const fromHour = startOfHour(Date.parse(from));
-    const toCeiling = hourCeil(Date.parse(to));
-    return latency(ledger().accountRollups.filter((r) => Date.parse(r.hour) >= fromHour && Date.parse(r.hour) < toCeiling));
+    const { fromMs, toMs } = wholeHoursOf({ from, to });
+    return latency(ledger().accountRollups.filter((r) => Date.parse(r.hour) >= fromMs && Date.parse(r.hour) < toMs));
   }
 
   listAccounts() {
@@ -1378,7 +1356,7 @@ export class MockApi implements Api {
     const now = mockClock.now();
     const written = writtenBy(now);
     const since = query.landedAfter;
-    const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort(requestOrderOf(order, dir));
+    const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort(requestOrder(order, dir));
     const newest = matched.reduce((stamp, r) => Math.max(stamp, landedAt(r)), since ?? 0);
     const landedThrough = query.to && !query.fixedEnd ? Math.min(newest, Date.parse(query.to)) : newest;
     // The route resumes strictly past the cursor's row in the list's order, so rows sharing a figure are neither
@@ -1401,7 +1379,7 @@ export class MockApi implements Api {
     if (cursor === null) return Promise.reject(new ApiError(400, 'cursor is <at>:<rank>:<id>', null));
     const { routingEvents, summaries } = ledger();
     // The writes' rows are the ledger's too, so a fresh installation lists none of them.
-    return latency(listRoutingLog(query, Date.now(), { events: routingEvents, summaries, written: emptyStore() ? [] : this.written }, cursor));
+    return latency(listRoutingLog(query, Date.now(), { events: routingEvents, summaries, written: this.registry().written }, cursor));
   }
 
   listSessions() {

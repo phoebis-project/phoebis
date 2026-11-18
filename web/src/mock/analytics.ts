@@ -6,7 +6,7 @@ import type {
 import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
-import { anchorTier, equivalentIn, modelWeeks, pricedWindow, shareIn, tableAt, tierCapacity, withRegime, type CostWindow, type Usage } from '@/lib/costs';
+import { anchorTier, equivalentIn, modelWeeks, pricedWindow, shareIn, tableAt, tierCapacity, type CostWindow, type Usage } from '@/lib/costs';
 import { countOf, emptyCounts, groupInto } from '@/lib/counts';
 import { servingResponse } from '@/lib/dimensions';
 import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
@@ -17,10 +17,10 @@ import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
 import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { earliest } from './lead';
 import { keyById } from './pools';
-import { bandAt, freedPart, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
+import { ZERO_OUTCOMES, bandAt, freedPart, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
 import { createRng } from './rng';
 import { round } from './round';
-import { WINDOW_DROP_MARGIN, forcedReasons, readingPairAt, wholePoints, type EventSeed } from './routingLog';
+import { WINDOW_DROP_MARGIN, forcedReasons, readingPairAt, subscriptionPair, wholePoints, type ClaimDetail, type DropDetail, type EventSeed } from './routingLog';
 import { TABLES, tablesFor } from './samples';
 import { DAY, HOUR, MINUTE, NOW, clock, hourCeil, iso, startOfHour } from './time';
 
@@ -164,15 +164,21 @@ function passesFunding(r: HourlyRollup, funding: AnalyticsQuery['funding']): boo
   return funding === 'plan' ? r.funding === 'plan' : r.funding !== 'plan';
 }
 
+/** Whether a row passes the account, key and pool filters, an empty or missing list passing every row. */
+function passesMembers(r: HourlyRollup, q: Pick<AnalyticsQuery, 'accountIds' | 'keyIds' | 'poolIds'>): boolean {
+  if (q.accountIds?.length && !q.accountIds.includes(r.accountId)) return false;
+  if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, r))) return false;
+  if (q.poolIds?.length && !q.poolIds.includes(r.poolId)) return false;
+  return true;
+}
+
 function inQuery(r: HourlyRollup, q: AnalyticsQuery, hour: number, fromHour: number, toCeiling: number): boolean {
   // As the route reads a range: from the hour holding the start up to the hour ceiling of the end, exclusive.
   if (hour < fromHour || hour >= toCeiling) return false;
   if (!passesFunding(r, q.funding)) return false;
-  if (q.accountIds?.length && !q.accountIds.includes(r.accountId)) return false;
-  if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, r))) return false;
+  if (!passesMembers(r, q)) return false;
   if (q.kinds?.length && !q.kinds.includes(r.kind)) return false;
   if (q.models?.length && !q.models.includes(r.model)) return false;
-  if (q.poolIds?.length && !q.poolIds.includes(r.poolId)) return false;
   if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, r.userAgent))) return false;
   if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client))) return false;
   return true;
@@ -220,6 +226,7 @@ const TOKEN_KINDS: Record<keyof CostSplit, (u: Usage) => Usage> = {
  *  of its own. */
 const pricedRows = new WeakMap<HourlyRollup, Record<keyof CostSplit | 'keptRead' | 'keptWrite', number | null>>();
 const fiveHourRows = new WeakMap<HourlyRollup, number | null>();
+const tierRows = new WeakMap<HourlyRollup, Record<'equivalent' | 'fable' | 'fiveHour', Record<string, number | null>>>();
 
 /**
  * A row's Pro-week figures at the row's hour, under the regime its client label names: its four token kinds, and the
@@ -301,7 +308,6 @@ const shareAccountOf = (key: string, groupBy: AnalyticsGroupBy | BurnGroup, acco
 
 // The zeros a group's member-wise sums start from, the token one in the key order the answer carries.
 const ZERO_KEPT: HourlyRollup['keptWarm'] = { requests: 0, tokens1h: 0, tokens5m: 0 };
-const ZERO_OUTCOMES: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok: 0, overloaded: 0, rate_limited: 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
 const ZERO_PROBES: HourlyRollup['probes'] = { failed: 0, held: 0, ok: 0, skipped: 0 };
 const ZERO_TOKENS: HourlyRollup['tokens'] = { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, thinking: 0, uncachedInput: 0, webFetch: 0, webSearch: 0 };
 
@@ -463,24 +469,22 @@ function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
 }
 
 export function breakdownOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
-  const fromHour = startOfHour(Date.parse(q.from));
-  const toCeiling = hourCeil(Date.parse(q.to));
+  const { fromMs, toMs } = wholeHoursOf(q);
   return groupsOf(
-    rows.filter((r) => inQuery(r, q, Date.parse(r.hour), fromHour, toCeiling)),
+    rows.filter((r) => inQuery(r, q, Date.parse(r.hour), fromMs, toMs)),
     q,
   );
 }
 
 export function seriesOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsPoint[] {
-  const fromHour = startOfHour(Date.parse(q.from));
-  const toCeiling = hourCeil(Date.parse(q.to));
+  const { fromMs, toMs } = wholeHoursOf(q);
   const { slotOf, starts } = bucketsOf(q);
   // Each row is placed in its bucket in one pass, and a bucket keeps the rows' input order, so its sums add as a scan
   // of the whole list would. An index outside the starts names no bucket.
   const byBucket = starts.map((): HourlyRollup[] => []);
   for (const r of rows) {
     const hour = Date.parse(r.hour);
-    if (inQuery(r, q, hour, fromHour, toCeiling)) byBucket[slotOf(hour)]?.push(r);
+    if (inQuery(r, q, hour, fromMs, toMs)) byBucket[slotOf(hour)]?.push(r);
   }
   return starts.map((at, i) => ({ at: iso(at), groups: groupsOf(byBucket[i], q) }));
 }
@@ -531,18 +535,11 @@ const BURN_TIERS = [...new Set(TABLES.revisions.flatMap((r) => Object.keys(r.con
 const emptyTiers = (): Record<string, (number | null)[]> => Object.fromEntries(BURN_TIERS.map((tier) => [tier, []]));
 const ZERO_TIERS: Record<string, number | null> = Object.fromEntries(BURN_TIERS.map((tier) => [tier, 0]));
 
-/** The label prefix a row's client carries before its entrypoint token, as `tablesFor` reads it. */
-const ENTRYPOINT_PREFIX = 'claude-code/';
 /**
  * The cost model a row's tiers scale under, as the route prices a whole rollup row: the revision in force at the last
  * millisecond of the row's hour, under that revision's regime whose entrypoints name the row's client.
  */
-const tierTablesOf = (r: HourlyRollup): SubscriptionCosts => {
-  const revision = tableAt(TABLES, Date.parse(r.hour) + HOUR - 1);
-  const token = r.client.startsWith(ENTRYPOINT_PREFIX) ? r.client.slice(ENTRYPOINT_PREFIX.length) : null;
-  const regime = token === null ? undefined : Object.keys(revision.regimes).find((name) => revision.regimes[name].entrypoints.includes(token));
-  return withRegime(revision, regime ?? null);
-};
+const tierTablesOf = (r: HourlyRollup): SubscriptionCosts => tablesFor(r.client, tableAt(TABLES, Date.parse(r.hour) + HOUR - 1));
 /**
  * A row's base figure, a share of the anchor tier's `window`, as each plan tier's share of its own window over
  * `divisor`, the row's units over the tier's capacity in place of the anchor's. Null on every tier where the base is
@@ -595,11 +592,21 @@ const addPlanFigures = (s: BurnSum, r: HourlyRollup, week: string | undefined) =
     addZeros(s);
     return;
   }
-  const table = tierTablesOf(r);
-  const fable = pricedWindow(table, 'seven_day_fable');
-  pushTiers(s.equivalentByTier, byTier(table, r.equivalent, 'seven_day'));
-  pushTiers(s.fableEquivalentByTier, week !== 'seven_day_fable' ? ZERO_TIERS : byTier(table, fable === null ? null : r.equivalent, 'seven_day', fable?.divisor));
-  pushTiers(s.fiveHourEquivalentByTier, byTier(table, fiveHourEquivalentOf(r), 'five_hour'));
+  // The week reads the row's model alone, so the row's records hold for every read.
+  let tiers = tierRows.get(r);
+  if (tiers === undefined) {
+    const table = tierTablesOf(r);
+    const fable = pricedWindow(table, 'seven_day_fable');
+    tiers = {
+      equivalent: byTier(table, r.equivalent, 'seven_day'),
+      fable: week !== 'seven_day_fable' ? ZERO_TIERS : byTier(table, fable === null ? null : r.equivalent, 'seven_day', fable?.divisor),
+      fiveHour: byTier(table, fiveHourEquivalentOf(r), 'five_hour'),
+    };
+    tierRows.set(r, tiers);
+  }
+  pushTiers(s.equivalentByTier, tiers.equivalent);
+  pushTiers(s.fableEquivalentByTier, tiers.fable);
+  pushTiers(s.fiveHourEquivalentByTier, tiers.fiveHour);
   s.unpriced ||= r.equivalent === null;
 };
 const emptyBurn = (): BurnSum => ({
@@ -632,9 +639,6 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
   const first = starts[0] ?? 0;
   const end = (starts[starts.length - 1] ?? 0) + bucketMs;
   const hours = wholeHoursOf(range);
-  const accounts = filters.accountIds ?? [];
-  const keys = filters.keyIds ?? [];
-  const pools = filters.poolIds ?? [];
   const groupOf = burnGroupOf(groupBy, filters.userAgentGroups ?? []);
   const sums = new Map<string, Map<number, BurnSum>>();
   // Per group, whether a row of the range's own hours holds a token and whether a row with a token was plan funded.
@@ -643,12 +647,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     const hour = Date.parse(r.hour);
     // The route prices each row by the funding it recorded whatever the registry holds now, so a row whose account left
     // the registry stays.
-    const kept =
-      hour >= first &&
-      hour < end &&
-      (accounts.length === 0 || accounts.includes(r.accountId)) &&
-      (keys.length === 0 || keys.some((selector) => selectsKey(selector, r))) &&
-      (pools.length === 0 || pools.includes(r.poolId));
+    const kept = hour >= first && hour < end && passesMembers(r, filters);
     if (!kept) continue;
     const at = starts[slotOf(hour)];
     const oauth = accountById.get(r.accountId)?.kind === 'oauth';
@@ -817,13 +816,14 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], eve
 }
 
 /**
- * Whether a request row passes the account, model and pattern filters as the request routes match a row: the serving
- * attempt's account, with a request no attempt served under the unattributed id as the request log files it, the
- * canonical model, and a pattern as the rollups key a row, the client as recorded and the user agent folded to its
- * first product token, each `-` where the request named none.
+ * Whether a request row passes the account, key, model and pattern filters as the request routes match a row: the
+ * serving attempt's account, with a request no attempt served under the unattributed id as the request log files it,
+ * the key by the selector rule, the canonical model, and a pattern as the rollups key a row, the client as recorded and
+ * the user agent folded to its first product token, each `-` where the request named none.
  */
-function passesRequestFilters(r: RequestLog, q: Pick<AnalyticsQuery, 'accountIds' | 'clients' | 'models' | 'userAgents'>): boolean {
+function passesRequestFilters(r: RequestLog, q: Pick<AnalyticsQuery, 'accountIds' | 'clients' | 'keyIds' | 'models' | 'userAgents'>): boolean {
   if (q.accountIds?.length && !q.accountIds.includes(r.accountId ?? '-')) return false;
+  if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, { keyGeneration: r.keyGeneration, keyId: r.keyId ?? '-' }))) return false;
   if (q.models?.length && !q.models.some((m) => m.toLowerCase() === r.canonicalModel)) return false;
   if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, agentTokenOf(r.userAgent)))) return false;
   if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client ?? '-'))) return false;
@@ -842,7 +842,6 @@ export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'ac
   for (const r of requests) {
     const at = Date.parse(r.at);
     if (at < fromMs || at >= toMs) continue;
-    if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, { keyGeneration: r.keyGeneration, keyId: r.keyId ?? '-' }))) continue;
     if (q.poolIds?.length && !q.poolIds.includes(r.poolId ?? '-')) continue;
     if (!passesRequestFilters(r, q)) continue;
     for (const a of r.attempts) {
@@ -880,7 +879,6 @@ export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): 
     const at = Date.parse(r.at);
     if (at < hours.fromMs || at >= hours.toMs) continue;
     if (!passesRequestFilters(r, q)) continue;
-    if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, { keyGeneration: r.keyGeneration, keyId: r.keyId ?? '-' }))) continue;
     if (q.poolIds?.length && (r.poolId === null || !q.poolIds.includes(r.poolId))) continue;
     if (q.kinds?.length && !q.kinds.includes(r.kind)) continue;
     if (r.kind === 'probe' && !q.includeProbes && !q.kinds?.includes('probe')) continue;
@@ -1019,8 +1017,6 @@ export function reconciliationsOf(rows: Reconciliation[], filters: Pick<Analytic
   return { reconciliations: rows.filter((r) => accounts.length === 0 || accounts.includes(r.accountId)).map((r) => ({ ...r })), requestRetentionDays: REQUEST_RETENTION_DAYS };
 }
 
-const isWeekly = (window: string) => window === 'seven_day' || window.startsWith('seven_day_');
-
 /**
  * The term's end the route reads at `at`: the saved end while canceled, else a trial end still ahead, and the
  * plan-ended flag where it comes first, so a trial end that passed while the plan carried on ends no week.
@@ -1044,7 +1040,7 @@ function dropCleared(drop: EventSeed, window: string, utilization: number, event
   const claim = events
     .filter((e) => e.kind === 'limit_reset_claimed' && e.accountId === drop.accountId && e.detail.outcome === 'used' && Date.parse(e.at) <= at && at - Date.parse(e.at) <= CLAIM_JOIN_MS)
     .reduce<EventSeed | null>((newest, e) => (newest === null || Date.parse(e.at) > Date.parse(newest.at) ? e : newest), null);
-  if (claim !== null && claim.detail.result !== null) return (claim.detail.cleared as string[]).includes(window);
+  if (claim !== null && claim.detail.result !== null) return (claim.detail as ClaimDetail).cleared.includes(window);
   return wholePoints(utilization) < wholePoints(WINDOW_DROP_MARGIN);
 }
 
@@ -1067,6 +1063,10 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
   const toMs = Date.parse(span.to);
   const listed = filters.accountIds ?? [];
   const readAt = Math.min(toMs, NOW);
+  const leftOf = (utilization: number) => Math.min(1, Math.max(0, 1 - utilization));
+  // Grouped once, so each account and each of its drops reads its own rows rather than the whole log.
+  const own = groupInto(events, (e) => (e.kind === 'window_reset' || e.kind === 'window_dropped' ? e.accountId : null));
+  const claims = groupInto(events, (e) => (e.kind === 'limit_reset_claimed' && e.detail.outcome === 'used' ? e.accountId : null));
   const answered = accounts
     .filter((a) => a.kind === 'oauth' && (listed.length === 0 || listed.includes(a.id)))
     .sort((a, b) => byteOrder(a.id, b.id))
@@ -1076,28 +1076,28 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
       const ended = elapsed !== null && fromMs <= elapsed ? elapsed : null;
       const byWindow = new Map<string, AllowanceReset[]>();
       const add = (window: string, reset: AllowanceReset) => byWindow.set(window, [...(byWindow.get(window) ?? []), reset]);
-      for (const e of events) {
+      for (const e of own.get(a.id) ?? []) {
         const at = Date.parse(e.at);
-        if (e.accountId !== a.id || at < fromMs || at > toMs) continue;
+        if (at < fromMs || at > toMs) continue;
         if (e.kind === 'window_reset') {
           const d = e.detail as { observed: string; plan: string | null; reset_at: number; tier: string | null; utilization_before: number; window: string };
-          if (!isWeekly(d.window) || (elapsed !== null && d.reset_at >= elapsed)) continue;
-          add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: d.observed, tier: d.tier });
+          if (hoursOfKey(d.window) !== 168 || (elapsed !== null && d.reset_at >= elapsed)) continue;
+          add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset_at), shareLeft: leftOf(d.utilization_before), source: d.observed, tier: d.tier });
         } else if (e.kind === 'window_dropped') {
-          const d = e.detail as { plan: string | null; reset: number; tier: string | null; utilization: number; utilization_before: number; window: string };
-          if (!isWeekly(d.window) || (elapsed !== null && at >= elapsed) || !dropCleared(e, d.window, d.utilization, events)) continue;
-          add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: 'claim', tier: d.tier });
+          const d = e.detail as DropDetail;
+          if (hoursOfKey(d.window) !== 168 || (elapsed !== null && at >= elapsed) || !dropCleared(e, d.window, d.utilization, claims.get(a.id) ?? [])) continue;
+          add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset), shareLeft: leftOf(d.utilization_before), source: 'claim', tier: d.tier });
         }
       }
       if (ended !== null) {
         for (const h of history) {
           const window = WINDOW_KEY[h.windowId] ?? h.windowId;
-          if (h.accountId !== a.id || !isWeekly(window)) continue;
+          if (h.accountId !== a.id || hoursOfKey(window) !== 168) continue;
           const before = h.samples.filter((x) => Date.parse(x.at) < ended);
           const last = before[before.length - 1];
           const stored = h.samples.length === 0 ? null : Date.parse(h.samples[h.samples.length - 1].at);
           const { plan, tier } = stored === null ? { plan: null, tier: null } : readingPairAt(a.id, stored);
-          if (last) add(window, { observedAt: last.at, plan, resetAt: iso(ended), shareLeft: Math.min(1, Math.max(0, 1 - last.utilization)), source: 'term_ended', tier });
+          if (last) add(window, { observedAt: last.at, plan, resetAt: iso(ended), shareLeft: leftOf(last.utilization), source: 'term_ended', tier });
         }
       }
       const windows = [...byWindow]
@@ -1106,7 +1106,7 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
           const resets = [...listedResets].sort((x, y) => Date.parse(y.resetAt) - Date.parse(x.resetAt) || Date.parse(y.observedAt) - Date.parse(x.observedAt));
           return { resets, resetsCounted: resets.length, totalShareLeft: resets.reduce((sum, r) => sum + r.shareLeft, 0), window };
         });
-      return windows.length === 0 ? [] : [{ accountId: a.id, plan: a.subscription?.plan ?? null, tier: a.subscription?.rateLimitTier ?? null, windows }];
+      return windows.length === 0 ? [] : [{ accountId: a.id, ...subscriptionPair(a.subscription), windows }];
     });
   return { accounts: answered, from: iso(fromMs), to: iso(toMs) };
 }

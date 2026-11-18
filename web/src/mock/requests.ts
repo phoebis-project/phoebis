@@ -9,17 +9,18 @@ import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { equivalentIn, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
-import { NO_CLASS, NO_EFFORT, expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, hitUnderReason, latencySamples, servingAttempt, servingResponse } from '@/lib/dimensions';
+import { NO_CLASS, NO_EFFORT, expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, hitUnderReason, latencySamples, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
 import { fnv1a } from '@/lib/hash';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
+import { TRANSFORMATION_KEYS } from '@/lib/inputTransformations';
 import { MODEL_SCOPE_PREFIX, endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { WINDOW_KEY } from '@/lib/windows';
 import { ACCOUNTS, QUOTA_HISTORY, SHARED_WINDOWS, accountById, lastReadingOf, rankTier, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor, promptOf } from './catalog';
 import { leadOf, leftPerHour, paceDeadline } from './lead';
-import { DELETED_ACCOUNTS, RETIRED, keyById, poolById } from './pools';
+import { RETIRED, keyById, poolById, storyAccountOf } from './pools';
 import { createRng, type Rng } from './rng';
 import { round } from './round';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES, tablesFor } from './samples';
@@ -46,7 +47,7 @@ const STREAM_TAIL = 30;
  * reading a default.
  */
 const kindOf = (accountId: string): AccountKind => {
-  const kind = accountById.get(accountId)?.kind ?? DELETED_ACCOUNTS.find((d) => d.account.id === accountId)?.account.kind;
+  const kind = storyAccountOf(accountId)?.kind;
   if (kind === undefined) throw new Error(`the story names an account the registry lacks: ${accountId}`);
   return kind;
 };
@@ -342,18 +343,6 @@ function thinkingSourceOf(keyId: string | null, poolId: string | null, kind: Req
   return kind !== 'count_tokens' && poolById.get(poolId ?? '')?.thinkingDiagnostics === true ? 'router' : null;
 }
 
-/**
- * The word an answered attempt files, as the relay closes it: `not_requested` where its body carried no diagnostics
- * member, `not_returned` where it carried one and the answer drew no reason, else the reason the upstream `compared`.
- * An API-key account in this fixture answers without the beta, so it compares nothing, and neither does the upstream
- * on a probe, whose member the relay detaches whoever put it there.
- */
-function filedReason(compared: CacheMissReason | null, source: DiagnosticsSource | null, kind: RequestKind): CacheMissReason {
-  if (source === null) return 'not_requested';
-  if (compared === null || kind === 'probe') return 'not_returned';
-  return compared;
-}
-
 /** The reason an OAuth account's answer draws where the body named a message the account holds. */
 const compare = (): CacheMissReason =>
   missRng.weighted<CacheMissReason>([
@@ -366,16 +355,17 @@ const compare = (): CacheMissReason =>
   ]);
 
 /**
- * What each attempt of one request filed for its cache comparison. Diagnostics ride on a response body, so an attempt
- * that failed upstream carries none, and the token-count endpoint returns no usage block to compare against. A
- * failover's leg waits for `walkSessionTurns`, which reads it off the account of the leg before it.
+ * What the upstream compared for each attempt of one request, which `walkSessionTurns` files. Diagnostics ride on a
+ * response body, so an attempt that failed upstream carries none, and the token-count endpoint returns no usage block
+ * to compare against. An API-key account in this fixture answers without the beta, so it compares nothing. A failover's
+ * leg waits for the walk, which reads it off the account of the leg before it.
  */
-function diagnosed(attempts: Attempt[], kind: RequestKind, source: DiagnosticsSource | null): Attempt[] {
+function diagnosed(attempts: Attempt[], kind: RequestKind): Attempt[] {
   return attempts.map((a) => {
     if (a.upstreamStatus !== 200 || kind === 'count_tokens' || a.index > 0) return a;
     // The draw stands wherever an OAuth account's first answer stands, whatever word the attempt files, so every later
     // draw keeps its place.
-    return { ...a, cacheMissReason: filedReason(a.accountKind === 'oauth' ? compare() : null, source, kind) };
+    return { ...a, cacheMissReason: a.accountKind === 'oauth' ? compare() : null };
   });
 }
 
@@ -460,6 +450,12 @@ export function servable(accountId: string, atMs: number, model: string, fast: b
 
 /** An account a request is handed to, or a story attempt's, walks its windows back at a fixed factor, not a draw. */
 const SERVED_FACTOR = 0.8;
+
+/** An attempt handed to `accountId` at `at`, which reads that account's kind, tier, usage-based class and windows. */
+const onAccount = (a: Attempt, accountId: string, at: number): Attempt => {
+  const kind = kindOf(accountId);
+  return { ...a, accountId, accountKind: kind, overageInUse: kind === 'oauth' ? false : null, tier: accountTier(accountId), usageBased: usageBasedOf(accountId), windows: oauthWindows(accountId, at, () => SERVED_FACTOR) };
+};
 
 /**
  * The order the engine takes a token count's members in: the best tier first, then under Pace the highest score off
@@ -611,24 +607,17 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
     const members = (poolById.get(lane.poolId)?.members ?? []).map((m) => m.accountId);
     for (const accountId of count ? countOrder(members, lane.poolId, cursor, model, '') : members) {
       if (attempts.some((a) => a.accountId === accountId) || !servable(accountId, cursor, model, stillFast) || (stillFast && accountId === UNPRICED_ACCOUNT)) continue;
-      const windows = oauthWindows(accountId, cursor, () => SERVED_FACTOR);
+      const leg = onAccount(tail, accountId, cursor);
       const refuses = accountId === UNPRICED_ACCOUNT && !sonnet45;
-      const kind = kindOf(accountId);
       attempts.push({
-        ...tail,
-        accountId,
-        accountKind: kind,
-        cooldownSet: refuses ? { reason: 'model_rejected', until: iso(cursor + 300 + HOUR) } : rateLimitCooldown(windows, cursor + 300, 30),
+        ...leg,
+        cooldownSet: refuses ? { reason: 'model_rejected', until: iso(cursor + 300 + HOUR) } : rateLimitCooldown(leg.windows, cursor + 300, 30),
         durationMs: 300,
         index: attempts.length,
         outcome: refuses ? 'upstream_error' : 'rate_limited',
-        overageInUse: kind === 'oauth' ? false : null,
         startedAt: iso(cursor),
-        tier: accountTier(accountId),
         upstreamRequestId: upstreamId('req_011C'),
         upstreamStatus: refuses ? 404 : 429,
-        usageBased: usageBasedOf(accountId),
-        windows,
       });
       added += 1;
       cursor += 400;
@@ -713,7 +702,7 @@ function buildRequests(): RequestLog[] {
     // own, so their place moves no draw of the main stream.
     const cacheMarker = markerOf({ classifier: REQUEST_SAMPLE.classifier, kind, poolId: lane.poolId, sessionId });
     const source = sourceOf(lane.keyId, lane.poolId, kind, tried.length > 0, cacheMarker);
-    const diagnosis = diagnosed(tried, kind, source);
+    const diagnosis = diagnosed(tried, kind);
     const attempts =
       turn !== undefined && 'refusal' in turn
         ? onServing(diagnosis, (a) => ({ ...a, response: { ...a.response, refusalCategory: turn.refusal, refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } }))
@@ -744,7 +733,6 @@ function buildRequests(): RequestLog[] {
       usage,
       costUsd: round(costOf(model, usage, false, atMs), 4),
       diagnosticsSource: source,
-      thinkingDiagnosticsSource: thinkingSourceOf(lane.keyId, lane.poolId, kind),
       errorCode,
       sessionId,
       agentId: agent.id,
@@ -786,24 +774,11 @@ function buildRequests(): RequestLog[] {
       const moved = rows[rows.length - 1];
       // The pool's one member takes the request once: the answering attempt is the request's only one.
       const answered = moved.attempts[moved.attempts.length - 1];
-      const studio = kindOf('studio');
       const notebookMarker = markerOf({ ...moved, poolId: 'work' });
       const notebookSource = sourceOf('notebook', 'work', kind, true, notebookMarker);
       Object.assign(moved, {
         accountId: 'studio',
-        attempts: [
-          {
-            ...answered,
-            accountId: 'studio',
-            accountKind: studio,
-            cacheMissReason: filedReason(answered.cacheMissReason, notebookSource, kind),
-            index: 0,
-            overageInUse: studio === 'oauth' ? false : null,
-            tier: accountTier('studio'),
-            usageBased: usageBasedOf('studio'),
-            windows: oauthWindows('studio', Date.parse(answered.startedAt), () => SERVED_FACTOR),
-          },
-        ],
+        attempts: [{ ...onAccount(answered, 'studio', Date.parse(answered.startedAt)), cacheMissReason: answered.cacheMissReason, index: 0 }],
         // The answering attempt keeps its start, so the request runs from its arrival to that attempt's end.
         durationMs: attemptEnd(answered) - atMs,
         cacheMarker: notebookMarker,
@@ -816,7 +791,6 @@ function buildRequests(): RequestLog[] {
         model: drawn,
         poolId: 'work',
         responseTruncated: false,
-        thinkingDiagnosticsSource: thinkingSourceOf('notebook', 'work', kind),
       });
     }
   }
@@ -1266,7 +1240,7 @@ function storyRow(seed: StorySeed): RequestLog {
       accountKind: kindOf(a.accountId),
       // A failover's leg and a placement after the session's row expired wait for `walkSessionTurns`, which reads where
       // they landed.
-      cacheMissReason: !answer || kind === 'count_tokens' || index > 0 || seed.landsAfresh || seed.unfiled ? null : filedReason(!oauth ? null : seed.pending ? 'pending' : 'none', source, kind),
+      cacheMissReason: !answer || kind === 'count_tokens' || index > 0 || seed.landsAfresh || seed.unfiled ? null : !oauth ? null : seed.pending ? 'pending' : 'none',
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       index,
@@ -1343,7 +1317,6 @@ function storyRow(seed: StorySeed): RequestLog {
     sessionId,
     shape: { ...REQUEST_SAMPLE.shape, requestedSpeed: fast ? 'fast' : null },
     status,
-    thinkingDiagnosticsSource: thinkingSourceOf(seed.keyId, poolId, kind),
     transport: kind === 'inference' ? 'sse' : 'json',
     ttfbMs,
     ttftMs,
@@ -1866,11 +1839,12 @@ for (const id of GUARDRAIL_STORY_IDS) STORY_IDS.add(id);
 // The rejection is written whole too, so the draws after the rows leave it as the story wrote it. The routing log
 // derives the record of a request no attempt reached as an exhaustion, which this one is not, so it derives none.
 STORY_IDS.add(UNAVAILABLE_TURN_ID);
-export const UNSEEDED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.unseeded).map((s) => s.id));
+const STORY_SEEDS = storySeeds();
+export const UNSEEDED_IDS: ReadonlySet<string> = new Set(STORY_SEEDS.filter((s) => s.unseeded).map((s) => s.id));
 /** The story's rows whose stream ended before the answer reported its output count. */
-const OUTPUT_UNREPORTED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.outputUnreported).map((s) => s.id));
+const OUTPUT_UNREPORTED_IDS: ReadonlySet<string> = new Set(STORY_SEEDS.filter((s) => s.outputUnreported).map((s) => s.id));
 /** The story's rows the ledger stored before the relay filed its own words. */
-const UNFILED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.unfiled).map((s) => s.id));
+const UNFILED_IDS: ReadonlySet<string> = new Set(STORY_SEEDS.filter((s) => s.unfiled).map((s) => s.id));
 /**
  * A row the seeded passes may draw for or seat a story fact on: neither a routing-log story row nor one written whole.
  */
@@ -1888,7 +1862,12 @@ function traceForks() {
 export const REQUESTS: RequestLog[] = buildRequests();
 export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
 // A drawn row can give the story its slot, so the story's own estimates land after the drawn rows' and stand.
-for (const s of storySeeds()) if (s.bodyTokens !== undefined) COUNTED_BODY_TOKENS.set(s.id, s.bodyTokens);
+for (const s of STORY_SEEDS) if (s.bodyTokens !== undefined) COUNTED_BODY_TOKENS.set(s.id, s.bodyTokens);
+
+/** The router's pin key: the request's key, session, agent and canonical model. */
+export const pinKeyOf = (r: RequestLog) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+/** The rows oldest first by arrival, the order the router's pins and a session's turns see them in. */
+const byArrival = () => [...REQUESTS].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 
 /**
  * The story's late request, an arrival among the rows a page of 50 shows that ran long, so the ledger writes it a few
@@ -1941,11 +1920,11 @@ interface LivePin {
  */
 function walkLivePins(visit: (r: RequestLog, live: LivePin | undefined) => void) {
   const pins = new Map<string, LivePin & { at: number }>();
-  for (const r of [...REQUESTS].sort((x, y) => Date.parse(x.at) - Date.parse(y.at))) {
+  for (const r of byArrival()) {
     const ttl = (poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) * 1_000;
     const first = r.attempts[0] as Attempt | undefined;
     if (ttl === 0 || r.sessionId === null || first === undefined) continue;
-    const key = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+    const key = pinKeyOf(r);
     const held = pins.get(key);
     const live = held !== undefined && Date.parse(first.startedAt) - held.at <= ttl ? held : undefined;
     visit(r, live && { accountId: live.accountId, createdAt: live.createdAt });
@@ -1972,12 +1951,11 @@ export const RENEWED_ON_PIN: ReadonlyMap<string, string> = (() => {
     const to = live.accountId;
     const at = Date.parse(head.startedAt);
     if (!serves(to, r.canonicalModel) || !holdableAt(r, to, at)) return;
-    const kind = kindOf(to);
-    const moved: Attempt = { ...head, accountId: to, accountKind: kind, overageInUse: kind === 'oauth' ? false : null, tier: accountTier(to), usageBased: usageBasedOf(to), windows: oauthWindows(to, at, () => SERVED_FACTOR) };
+    const moved = onAccount(head, to, at);
     r.accountId = to;
     // The cache comparison follows the account's kind, since an API key answers without the beta.
-    if (kind === head.accountKind) r.attempts = [moved];
-    else r.attempts = diagnosed([{ ...moved, cacheMissReason: null }], r.kind, r.diagnosticsSource);
+    if (moved.accountKind === head.accountKind) r.attempts = [moved];
+    else r.attempts = diagnosed([{ ...moved, cacheMissReason: null }], r.kind);
     renewed.set(r.id, head.accountId);
   });
   return renewed;
@@ -2514,9 +2492,6 @@ function phaseRequests() {
   }
 }
 
-/** The rows oldest first by arrival, the order the router's pins and a session's turns see them in. */
-const byArrival = () => [...REQUESTS].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-
 /**
  * The session's turns as the router and the relay see them, over the rows' last fields, since the passes above move
  * arrivals. A first attempt takes its previous size as the selection hands it on: the size of the last usage report
@@ -2544,7 +2519,7 @@ function walkSessionTurns() {
   const pinned = new Map<string, string>();
   const answered = new Set<string>();
   for (const r of byArrival()) {
-    const pin = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+    const pin = pinKeyOf(r);
     const report = r.sessionId === null ? undefined : reports.get(pin);
     const landing = `${r.keyId}|${r.sessionId}|${r.agentId}`;
     const auxiliary = r.requestClass === 'auxiliary';
@@ -2568,6 +2543,10 @@ function walkSessionTurns() {
       }
       if (a.upstreamStatus !== 200 || r.kind === 'count_tokens' || UNFILED_IDS.has(r.id)) return;
       const named = !firstTurn && r.kind !== 'probe' && (left === undefined || left === a.accountId);
+      // As the relay closes an answered attempt: `not_requested` where its body carried no diagnostics member,
+      // `not_returned` where it carried one and the answer drew no reason, else the reason the upstream compared. An
+      // API-key account in this fixture answers without the beta, so it compares nothing, and neither does the upstream
+      // on a probe, whose member the relay detaches whoever put it there.
       if (r.diagnosticsSource === null) a.cacheMissReason = 'not_requested';
       else if (!named || a.accountKind !== 'oauth') a.cacheMissReason = 'not_returned';
       else if (a.cacheMissReason === null) a.cacheMissReason = drawnRow(r) ? compare() : 'none';
@@ -2579,9 +2558,9 @@ function walkSessionTurns() {
 }
 
 /** The entry the upstream lists for the client's standing block once its session compacted. */
-const PREFIX_KEY = 'thinking_dropped.prefix_binding_mismatch';
+const PREFIX_KEY: (typeof TRANSFORMATION_KEYS)[number] = 'thinking_dropped.prefix_binding_mismatch';
 /** A block that another end user's account wrote, which the upstream drops from an answer on this one. */
-const ACCOUNT_KEY = 'thinking_dropped.end_user_binding_mismatch';
+const ACCOUNT_KEY: (typeof TRANSFORMATION_KEYS)[number] = 'thinking_dropped.end_user_binding_mismatch';
 /** Where a session's first block sits, since the client's first request sends two messages. */
 const FIRST_BLOCK_MESSAGE = 2;
 
@@ -2630,15 +2609,14 @@ function fillDroppedBlocks() {
   const fresh = (): ThinkingHistory => ({ carriedBy: null, compacted: false, lastAnswered: null, move: null, thinkers: [] });
   const histories = new Map<string, ThinkingHistory>();
   for (const r of byArrival()) {
-    const pin = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+    const pin = pinKeyOf(r);
     const history = r.sessionId === null ? fresh() : (histories.get(pin) ?? fresh());
     if (r.sessionId !== null) histories.set(pin, history);
     if (r.contextCompacted !== null) {
       const own = r.kind === 'inference' ? (r.attempts.find((a) => a.upstreamStatus === 200)?.accountId ?? null) : null;
       Object.assign(history, { carriedBy: history.lastAnswered ?? own, compacted: true, move: null, thinkers: [] });
     }
-    // Only an answer to a head that carried the token reports, and the rule says whether one did whatever sender a
-    // builder wrote on the row.
+    // Only an answer to a head that carried the token reports, and the rule says whether one did.
     const token = thinkingSourceOf(r.keyId, r.poolId, r.kind);
     for (const a of r.attempts) {
       const from = migrationAt(r, a)?.detail?.from_account;
@@ -2660,7 +2638,7 @@ function fillDroppedBlocks() {
     const serving = servingAttempt(r);
     if (serving?.upstreamStatus === 200 && r.kind === 'inference') history.lastAnswered = serving.accountId;
     if (serving?.upstreamStatus === 200 && r.usage.thinking > 0) history.thinkers.push(serving.accountId);
-    if ((serving?.response.inputTransformations ?? null) === null) r.thinkingDiagnosticsSource = null;
+    r.thinkingDiagnosticsSource = (serving?.response.inputTransformations ?? null) === null ? null : token;
   }
 }
 
@@ -2776,6 +2754,15 @@ const upstreamFailed = (r: RequestLog) => r.outcome !== 'canceled' && r.status !
 /** A request's failovers: every attempt after the first but a resend in place. */
 const failoversOf = (r: RequestLog): number => r.attempts.filter((_, i) => i > 0 && !resentInPlace(r, i)).length;
 
+/** One count under each key `keyOf` answers for an item, and none for an item it answers null for. */
+const tally = <T>(items: readonly T[], keyOf: (item: T) => string | null, into: Record<string, number> = emptyCounts()): Record<string, number> => {
+  for (const item of items) {
+    const key = keyOf(item);
+    if (key !== null) into[key] = countOf(into, key) + 1;
+  }
+  return into;
+};
+
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
@@ -2822,22 +2809,15 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
       // The ledger files a refused request under the refusals map alone, so the counts read the served rows.
       const served = partRows.filter((r) => !r.refused);
       const refused = partRows.filter((r) => r.refused);
-      const refusals = emptyCounts();
-      for (const r of refused) if (r.errorCode !== null) refusals[r.errorCode] = countOf(refusals, r.errorCode) + 1;
+      const refusals = tally(refused, (r) => r.errorCode);
       // The ledger counts a served request's own code whatever its outcome, a client's cancel aside.
-      const errors = emptyCounts();
-      for (const r of served) if (r.errorCode !== null && !clientLeft(r)) errors[r.errorCode] = countOf(errors, r.errorCode) + 1;
+      const errors = tally(served, (r) => (clientLeft(r) ? null : r.errorCode));
       // A rejected request counts under its outcome, so the counts by status leave it out and each request counts once.
       const byStatus = served.filter((r) => r.outcome !== 'rejected');
       const ok = served.filter((r) => r.status === 200);
-      const cacheMissReasons = emptyCacheMissReasons();
-      for (const r of partRows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = countOf(cacheMissReasons, a.cacheMissReason) + 1;
+      const cacheMissReasons = tally(partRows.flatMap((r) => r.attempts), (a) => a.cacheMissReason, emptyCacheMissReasons());
       // A hit counts under the serving attempt's reason, the one the route counts a request's reason on.
-      const cacheMissReasonHits = emptyCounts();
-      for (const r of partRows) {
-        const reason = servingAttempt(r)?.cacheMissReason ?? null;
-        if (reason !== null && hitUnderReason(r)) cacheMissReasonHits[reason] = countOf(cacheMissReasonHits, reason) + 1;
-      }
+      const cacheMissReasonHits = tally(partRows, (r) => (hitUnderReason(r) ? servedMissReason(r) : null));
       const dropped: Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone'> = { inputTransformations: emptyCounts(), inputTransformationsMoved: 0, inputTransformationsNone: 0 };
       for (const r of partRows) {
         const serving = servingAttempt(r);
@@ -3001,6 +2981,9 @@ function synthesizedErrors(kind: RequestKind, o: HourlyRollup['requests']): Reco
   return errors;
 }
 
+/** An hour's outcome counts at zero, which a synthesized hour sets its own over and a group's sums start from. */
+export const ZERO_OUTCOMES: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok: 0, overloaded: 0, rate_limited: 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
+
 function historicalRollups(): HourlyRollup[] {
   const h = createRng(99);
   // A separate stream so the reason split does not shift the rest of the hour's draws.
@@ -3067,7 +3050,7 @@ function historicalRollups(): HourlyRollup[] {
       const takesMaxEffort = lane.keyId === 'laptop' && maxEffortOwed && t >= startOfHour(NOW) - 6 * DAY;
       if (takesMaxEffort) maxEffortOwed = false;
       const fast = fastTurn(lane.keyId, model, 'inference') && hf.chance(0.5);
-      const outcomes: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
+      const outcomes: HourlyRollup['requests'] = { ...ZERO_OUTCOMES, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0 };
       const uncached = Math.max(0, ok - Math.round(ok * 0.85));
       const inference: HourlyRollup = {
         hour: iso(t),
@@ -3134,7 +3117,7 @@ function historicalRollups(): HourlyRollup[] {
         const failed = h.chance(0.08) ? 1 : 0;
         const probeUsage: Usage = { input: 0, cacheRead: probes * h.int(30_000, 80_000), cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS };
         const probeCost = costOf(model, probeUsage, false, t);
-        const probeOutcomes: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: failed };
+        const probeOutcomes: HourlyRollup['requests'] = { ...ZERO_OUTCOMES, ok: probes, upstream_error: failed };
         out.push({
           hour: iso(t),
           client: CLIENTS[lane.keyId] ?? '-',
@@ -3201,7 +3184,7 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
   const costUsd = costOf(r.model, usage, false, at);
   const wastedProbeReasons = emptyWastedProbeReasons();
   wastedProbeReasons.idle_limit = 1;
-  const outcomes: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok: 1, overloaded: 0, rate_limited: 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
+  const outcomes: HourlyRollup['requests'] = { ...ZERO_OUTCOMES, ok: 1 };
   return [
     {
       hour: iso(startOfHour(at)),
@@ -3257,12 +3240,14 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
 export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...idleWarming(REQUESTS), ...ROLLUPS];
 
 // A probe is the router's own traffic, which the routes count nowhere, but a billed probe draws real dollars, so the
-// day's and the totals' rows hold its row for the cost and billed sums alone, and every count over them skips it.
-const priced = (from: number) => REQUESTS.filter((r) => (r.kind !== 'probe' || !planPaid(r)) && Date.parse(r.at) >= from);
-/** The rows the dashboard's day reads, from the hour a full day back as the day totals below. */
-export const DAY_ROWS: RequestLog[] = priced(TOTALS_FROM);
-/** The rows an account's or a pool's day total reads, and a pool's hourly buckets. */
-const TOTAL_ROWS: RequestLog[] = priced(TOTALS_FROM);
+// day's rows hold its row for the cost and billed sums alone, and every count over them skips it.
+/**
+ * The day's rows from the hour a full day back, which the dashboard's day reads through the registry's `dayRows`, and
+ * an account's or a pool's day total and a pool's hourly buckets through `deriveFigures`.
+ */
+export const DAY_ROWS: RequestLog[] = REQUESTS.filter((r) => (r.kind !== 'probe' || !planPaid(r)) && Date.parse(r.at) >= TOTALS_FROM);
+/** The day's rows the counts read, every row but a probe's. */
+const DAY_COUNTED_ROWS = DAY_ROWS.filter((r) => r.kind !== 'probe');
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 /** The rollups a key's totals read, every row but a plan probe's. */
 const PRICED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe' || r.funding !== 'plan');
@@ -3318,7 +3303,7 @@ function deriveFigures() {
     const mine = COUNTED_ROLLUPS.filter((r) => r.accountId === a.id);
     Object.assign(a, {
       requests: {
-        last24h: TOTAL_ROWS.filter((r) => r.accountId === a.id && r.kind !== 'probe').length,
+        last24h: DAY_COUNTED_ROWS.filter((r) => r.accountId === a.id).length,
         last7d: sumOf(mine.filter(inWeek), requestsIn),
         lifetime: Math.max(a.requests.lifetime, sumOf(mine, requestsIn)),
       },
@@ -3327,8 +3312,9 @@ function deriveFigures() {
   for (const k of keyById.values()) {
     // A bare id totals its live key alone, so an earlier holder's rows count for neither figure. A billed probe's
     // dollars join both dollar sums, and neither its requests nor its tokens count.
-    const mine = PRICED_ROLLUPS.filter((r) => r.keyId === k.id && r.keyGeneration === Date.parse(k.createdAt));
-    const counted = mine.filter((r) => r.kind !== 'probe');
+    const live = (r: HourlyRollup) => r.keyId === k.id && r.keyGeneration === Date.parse(k.createdAt);
+    const mine = PRICED_ROLLUPS.filter(live);
+    const counted = COUNTED_ROLLUPS.filter(live);
     const week = mine.filter(inWeek);
     const countedWeek = counted.filter(inWeek);
     const life = sidesOf(mine);
@@ -3344,23 +3330,25 @@ function deriveFigures() {
   }
   for (const p of poolById.values()) {
     // The route reads the fold, which books a refused request under none of the pool's traffic figures.
-    const mine = TOTAL_ROWS.filter((r) => r.poolId === p.id && !r.refused);
+    const ofPool = (r: RequestLog) => r.poolId === p.id && !r.refused;
+    const mine = DAY_ROWS.filter(ofPool);
+    const counted = DAY_COUNTED_ROWS.filter(ofPool);
     const traffic24h: TrafficBucket[] = Array.from({ length: 25 }, (_, i) => {
       const at = TOTALS_FROM + i * HOUR;
       const hour = mine.filter((r) => Date.parse(r.at) >= at && Date.parse(r.at) < at + HOUR);
       return { ...requestSidesOf(hour), at: iso(at), costUsd: 0, failed: 0, requests: 0, tokens: 0 };
     });
-    for (const r of mine) {
-      const bucket = traffic24h[Math.floor((Date.parse(r.at) - TOTALS_FROM) / HOUR)];
-      bucket.costUsd += r.costUsd;
-      if (r.kind === 'probe') continue;
+    const bucketOf = (r: RequestLog) => traffic24h[Math.floor((Date.parse(r.at) - TOTALS_FROM) / HOUR)];
+    for (const r of mine) bucketOf(r).costUsd += r.costUsd;
+    for (const r of counted) {
+      const bucket = bucketOf(r);
       // A client that hangs up is no failure of the pool, as the route's count reads it.
       bucket.failed += r.outcome === 'succeeded' || clientLeft(r) ? 0 : 1;
       bucket.requests += 1;
       bucket.tokens += tokensTotal(r.usage);
     }
     const day = requestSidesOf(mine);
-    Object.assign(p, { day24h: { billedUsd: day.billedUsd, cost: sumOf(mine, (r) => r.costUsd), equivalent: day.equivalent }, requests24h: mine.filter((r) => r.kind !== 'probe').length, traffic24h });
+    Object.assign(p, { day24h: { billedUsd: day.billedUsd, cost: sumOf(mine, (r) => r.costUsd), equivalent: day.equivalent }, requests24h: counted.length, traffic24h });
   }
 }
 

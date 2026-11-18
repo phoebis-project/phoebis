@@ -1,6 +1,6 @@
 import type {
   Account, AllowanceReset, Attempt, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordHold, RecordOutcome,
-  PoolKeepalive, RecordPin, RecordRequest, RecordSettings, Refusal, RequestEvent, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
+  PoolKeepalive, RecordPin, RecordRequest, RecordSettings, Refusal, RequestEvent, RequestLog, ResetOutcome, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, Subscription, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { DECISION_KIND_VALUES } from '@/api/types';
 import { lookup } from '@/lib/counts';
@@ -15,8 +15,8 @@ import { PRIOR_BURN, bindingOf, ceilingOn, windowFitOf, type Runway } from './fi
 import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
-import { DELETED_ACCOUNTS, KEY_REVOKED_AT, POOL_EDITED_AT, RETIRED, WORST_BUCKET, keyById, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById, resentInPlace } from './requests';
+import { DELETED_ACCOUNTS, KEY_REVOKED_AT, POOL_EDITED_AT, RETIRED, WORST_BUCKET, keyById, poolById, storyAccountOf, type PoolSeed } from './pools';
+import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, requestById, resentInPlace } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { drawnWindows, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf, STRETCH_DROPPED_THINKING } from './rewrite';
 import { createRng } from './rng';
@@ -440,7 +440,11 @@ function horizonOf(name: string, resetsAt: string | null, end: number | null, at
  * The account a candidate names: the registry's, or a deleted account's as it stood, which a record decided before its
  * delete still lists.
  */
-const accountOf = (id: string): Account => accountById.get(id) ?? DELETED_ACCOUNTS.find((d) => d.account.id === id)!.account;
+const accountOf = (id: string): Account => {
+  const account = storyAccountOf(id);
+  if (account === undefined) throw new Error(`a candidate names an account the story lacks: ${id}`);
+  return account;
+};
 
 /**
  * The line a window's projection is tested against, as the router's `HorizonBound::limit` reads it: the wall, 1, at a
@@ -1282,7 +1286,6 @@ interface PinState {
 }
 const pins = new Map<string, PinState>();
 let epochs = 0;
-const pinKeyOf = (r: RequestLog) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
 const recordShedOf = (shed: PinState['shed']): RecordPin['shed'] => (shed === null ? null : { at: iso(shed.at), from: shed.from, reason: shed.reason });
 /** The pin step's facts on the row it read, which follow its `found` fact. */
 const pinFacts = (state: PinState, idleMs: number, refreshAgeMs: number) => [fact('account_id', state.accountId, null, state.accountId), fact('epoch', state.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', refreshAgeMs, 'ms')];
@@ -2856,13 +2859,30 @@ function planEndedRows(account: Account): EventSeed[] {
   ];
 }
 
+/** The detail `claimDetail` writes, a type alias so a routing event's detail map takes it. */
+export type ClaimDetail = {
+  cleared: string[];
+  cooldown_until: number | null;
+  error: null;
+  grant_id: string;
+  incarnation: number;
+  label: string;
+  outcome: ResetOutcome;
+  reason: string | null;
+  request_id: string;
+  resets_left: number | null;
+  result: string | null;
+  status: number;
+  weekly_resets_at: number | null;
+};
+
 /**
  * A claim's detail as the router writes it: every key on every row, null where the claim has no such fact, and the
  * instants in epoch milliseconds. The claim's request id travels here alone, since the row's own column names a relayed
  * request. A claim the upstream answered without a `result` carries no answer. `incarnation` names the account row
  * that held the id when the claim left, since an id deleted and created again starts a new one.
  */
-export function claimDetail(grant: MockGrant, requestId: string, status: number, answer: MockUse | null, incarnation: number): Record<string, unknown> {
+export function claimDetail(grant: MockGrant, requestId: string, status: number, answer: MockUse | null, incarnation: number): ClaimDetail {
   return {
     cleared: answer?.cleared ?? [],
     cooldown_until: answer?.cooldown_until ?? null,
@@ -2886,11 +2906,14 @@ export function claimDetail(grant: MockGrant, requestId: string, status: number,
 export const WINDOW_DROP_MARGIN = 0.05;
 export const wholePoints = (utilization: number): number => Math.round(utilization * 100);
 
+/** The detail `dropDetail` writes, a type alias so a routing event's detail map takes it. */
+export type DropDetail = { plan: ReadingPair['plan']; reset: number; tier: ReadingPair['tier']; utilization: number; utilization_before: number; window: string };
+
 /**
  * A drop's detail as the router writes it: the stored reading's figure before the use, the first poll's after it, the
  * week's unchanged reset in epoch milliseconds and the stored reading's pair.
  */
-export const dropDetail = (window: string, before: number, after: number, reset: number, pair: ReadingPair): Record<string, unknown> => ({
+export const dropDetail = (window: string, before: number, after: number, reset: number, pair: ReadingPair): DropDetail => ({
   plan: pair.plan,
   reset,
   tier: pair.tier,
@@ -2936,11 +2959,11 @@ const WEEK = 7 * DAY;
 /** The plan word and the tier a `window_reset` stores, those of the reading it replaced. */
 type ReadingPair = Pick<AllowanceReset, 'plan' | 'tier'>;
 
-/** The account's pair as its subscription reads now, the one a reading taken under it stores. */
-const currentPair = (accountId: string): ReadingPair => {
-  const subscription = accountById.get(accountId)?.subscription;
-  return { plan: subscription?.plan ?? null, tier: subscription?.rateLimitTier ?? null };
-};
+/** The pair a subscription reads, the one a reading taken under it stores. */
+export const subscriptionPair = (s: Subscription | null): ReadingPair => ({ plan: s?.plan ?? null, tier: s?.rateLimitTier ?? null });
+
+/** The account's pair as its subscription reads now. */
+const currentPair = (accountId: string): ReadingPair => subscriptionPair(accountById.get(accountId)?.subscription ?? null);
 
 /**
  * The pair an account held up to an instant before it changed: a reset at or before `through` replaced a reading taken

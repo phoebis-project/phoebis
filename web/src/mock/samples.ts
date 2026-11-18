@@ -33,8 +33,8 @@ const ENTRYPOINT_PREFIX = 'claude-code/';
  *  prices it, and the base for a label no regime names. A regime lists entrypoint tokens such as `cli` while a row's
  *  label reads `claude-code/cli`, so the helper takes the token off the label and names the regime whose
  *  `entrypoints` hold it. */
-export const tablesFor = (client: string | null): SubscriptionCosts => {
+export const tablesFor = (client: string | null, costs: SubscriptionCosts = TABLES): SubscriptionCosts => {
   const token = client?.startsWith(ENTRYPOINT_PREFIX) ? client.slice(ENTRYPOINT_PREFIX.length) : null;
-  const regime = token === null ? undefined : Object.keys(TABLES.regimes).find((name) => TABLES.regimes[name].entrypoints.includes(token));
-  return withRegime(TABLES, regime ?? null);
+  const regime = token === null ? undefined : Object.keys(costs.regimes).find((name) => costs.regimes[name].entrypoints.includes(token));
+  return withRegime(costs, regime ?? null);
 };

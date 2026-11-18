@@ -9,8 +9,13 @@ import { HOUR } from './time';
  */
 export const PRIOR_BURN: Record<string, number> = { five_hour: 0.01, seven_day: 0.0012, seven_day_fable: 0.0024 };
 
+/** The pool setting that holds a window's own ceiling, by the window's wire key. */
+export const ceilingSettingOf = (window: string): 'five_hour_ceiling' | 'weekly_ceiling' => (window === 'five_hour' ? 'five_hour_ceiling' : 'weekly_ceiling');
+
+const CEILING_FIELD = { five_hour_ceiling: 'fiveHourCeiling', weekly_ceiling: 'weeklyCeiling' } as const;
+
 /** A window's own ceiling on a pool by its wire key. */
-export const ceilingOn = (pool: Pick<Pool, 'fiveHourCeiling' | 'weeklyCeiling'>, window: string): number => (window === 'five_hour' ? pool.fiveHourCeiling : pool.weeklyCeiling);
+export const ceilingOn = (pool: Pick<Pool, 'fiveHourCeiling' | 'weeklyCeiling'>, window: string): number => pool[CEILING_FIELD[ceilingSettingOf(window)]];
 
 /** A bounded runway on a window, and whether it ends short of the window's horizon. */
 export interface Runway {

@@ -17,13 +17,14 @@ const PROJECTED: readonly string[] = ['5h', '7d', '7d_fable'];
 /**
  * A window as the account routes answer it: `burn` is the share of the window the sessions on the account burn per
  * hour, and the projection runs it to the horizon, the reset on the 5-hour window and the earlier of the reset and five
- * hours out on a weekly one. A null burn is a window the router holds no reading of, which projects nothing, and any
- * other window, which the router does not project, carries none either. The demand is the burn the sessions would
- * reach unslowed, which equals the burn on an account no slow-down holds.
+ * hours out on a weekly one, five hours out on a window with no reset. A null burn is a window the router holds no
+ * reading of, which projects nothing, and any other window, which the router does not project, carries none either.
+ * The demand is the burn the sessions would reach unslowed, which equals the burn on an account no slow-down holds.
  */
-function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoMs = 40_000, given: number | null = 0): RateLimitWindow {
+function win(id: WindowId, utilization: number, resetsInMs: number | null, observedAgoMs = 40_000, given: number | null = 0): RateLimitWindow {
   const burn = PROJECTED.includes(id) ? given : null;
-  const horizonInMs = id === '5h' ? resetsInMs : Math.min(5 * HOUR, resetsInMs);
+  const reset = resetsInMs ?? 5 * HOUR;
+  const horizonInMs = id === '5h' ? reset : Math.min(5 * HOUR, reset);
   return {
     burn,
     demand: burn,
@@ -34,7 +35,7 @@ function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoM
     observedAt: ago(observedAgoMs),
     periodHours: periodHoursOf(id),
     projection: burn === null ? null : round(utilization + (burn * horizonInMs) / HOUR, 3),
-    resetsAt: ahead(resetsInMs),
+    resetsAt: resetsInMs === null ? null : ahead(resetsInMs),
     utilization,
   };
 }
@@ -125,6 +126,28 @@ type Seed = Omit<Account, 'subscription'> & { subscription: Omit<Subscription, '
 
 /** The credential of a row that holds no token. */
 export const NO_CREDENTIAL: Account['credential'] = { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null };
+
+/** A row the router holds nothing for yet: no token, no plan, no window, no pool and no request. */
+export const blankAccountRow = (input: Pick<Account, 'id' | 'kind' | 'label'>, status: Account['status'], email: string | null): Account => ({
+  ...ACCOUNT_SAMPLE,
+  cooldowns: [],
+  credential: NO_CREDENTIAL,
+  email,
+  extraUsage: null,
+  fableWindow: null,
+  fastLane: null,
+  id: input.id,
+  kind: input.kind,
+  label: input.label,
+  limitResets: null,
+  plan: null,
+  pool: null,
+  requests: { last24h: 0, last7d: 0, lifetime: 0 },
+  routingEnabled: true,
+  status,
+  subscription: null,
+  windows: [],
+});
 
 const CONTRACT_SUBSCRIPTION: Omit<Subscription, 'plan'> = { billingType: 'stripe_subscription_contracted', organizationType: 'claude_enterprise', planDisplayName: null, rateLimitTier: 'default_claude_zero', since: ago(45 * DAY), trialEndsAt: null, endsAt: null };
 
@@ -584,9 +607,7 @@ const SEEDS = [
     email: 'operator+zephyr@example.com',
     status: 'ready',
     routingEnabled: true,
-    // `win` reads a 5-hour window's horizon off its reset, so the window takes the horizon of a reset five hours out
-    // and then drops the reset it lacks.
-    windows: [{ ...win('5h', 0, 5 * HOUR), resetsAt: null }, win('7d', 0.04, 5 * DAY + 3 * HOUR)],
+    windows: [win('5h', 0, null), win('7d', 0.04, 5 * DAY + 3 * HOUR)],
     fableWindow: null,
     extraUsage: null,
     fastLane: null,
