@@ -21,16 +21,16 @@ use rcgen::{
 use crate::config::FeaturesConfig;
 use crate::tls::{read_checked, TlsError};
 
-pub const CA_CERT_FILE: &str = "feature-ca.pem";
-pub const CA_KEY_FILE: &str = "feature-ca-key.pem";
+const CA_CERT_FILE: &str = "feature-ca.pem";
+const CA_KEY_FILE: &str = "feature-ca-key.pem";
 /// The names the CA may sign for, each with the names beneath it, and the names the listener answers to.
-pub const FEATURE_HOSTS: [&str; 2] = ["api.anthropic.com", "mcp-proxy.anthropic.com"];
-pub const CA_VALIDITY: Duration = Duration::from_secs(3_650 * 86_400);
-pub const LEAF_VALIDITY: Duration = Duration::from_secs(7 * 86_400);
+pub(crate) const FEATURE_HOSTS: [&str; 2] = ["api.anthropic.com", "mcp-proxy.anthropic.com"];
+pub(crate) const CA_VALIDITY: Duration = Duration::from_secs(3_650 * 86_400);
+pub(crate) const LEAF_VALIDITY: Duration = Duration::from_secs(7 * 86_400);
 /// How far ahead of a certificate's end the next one is issued.
-pub const LEAF_RENEW_AHEAD: Duration = Duration::from_secs(86_400);
+pub(crate) const LEAF_RENEW_AHEAD: Duration = Duration::from_secs(86_400);
 /// How far ahead of its issue a certificate's validity starts, for a client whose clock runs behind.
-pub const BACKDATE: Duration = Duration::from_secs(300);
+pub(crate) const BACKDATE: Duration = Duration::from_secs(300);
 
 /// The prefix of each refusal, so the CA's lines read like a listener pair's under its own key.
 const KEY: &str = phoebis_attention::FEATURE_CA;
@@ -79,7 +79,7 @@ pub struct FeatureCa {
 impl FeatureCa {
     /// The CA of `data_dir`: read where both files stand, created where neither does, refused where one does.
     /// The flag says whether this call created it.
-    pub fn open(data_dir: &Path, now: i64) -> Result<(FeatureCa, bool), FeatureCaError> {
+    pub(crate) fn open(data_dir: &Path, now: i64) -> Result<(FeatureCa, bool), FeatureCaError> {
         let (cert_file, key_file) = files(data_dir);
         let created = !both_stand(&cert_file, &key_file)?;
         if created {
@@ -102,7 +102,7 @@ impl FeatureCa {
     }
 
     /// One certificate for `host` under the CA with a key of its own, valid until `now` plus `LEAF_VALIDITY`.
-    pub fn issue(&self, host: &str, now: i64) -> Result<IssuedLeaf, FeatureCaError> {
+    fn issue(&self, host: &str, now: i64) -> Result<IssuedLeaf, FeatureCaError> {
         let at = now.div_euclid(1_000);
         let not_after = at + seconds(LEAF_VALIDITY);
         let mut params = CertificateParams::new(vec![host.to_owned()]).map_err(issue_error)?;
@@ -155,16 +155,16 @@ impl FeatureCa {
     }
 }
 
-pub struct IssuedLeaf {
-    pub cert_der: Vec<u8>,
+pub(crate) struct IssuedLeaf {
+    pub(crate) cert_der: Vec<u8>,
     /// PKCS#8. It lives in memory alone.
-    pub key_der: Vec<u8>,
+    pub(crate) key_der: Vec<u8>,
     /// Unix milliseconds.
-    pub not_after: i64,
+    pub(crate) not_after: i64,
 }
 
 /// The certificates the feature listener serves, one per feature host.
-pub struct FeatureLeaves {
+pub(crate) struct FeatureLeaves {
     ca: Arc<FeatureCa>,
     clock: Clock,
     /// One certificate per name of `FEATURE_HOSTS`, in its order.
@@ -172,7 +172,7 @@ pub struct FeatureLeaves {
 }
 
 impl FeatureLeaves {
-    pub fn issue(ca: Arc<FeatureCa>, clock: Clock) -> Result<FeatureLeaves, FeatureCaError> {
+    pub(crate) fn issue(ca: Arc<FeatureCa>, clock: Clock) -> Result<FeatureLeaves, FeatureCaError> {
         let now = clock();
         let current = FEATURE_HOSTS
             .iter()
@@ -182,12 +182,12 @@ impl FeatureLeaves {
     }
 
     /// The current certificates, one per name of `FEATURE_HOSTS`, in its order.
-    pub fn leaves(&self) -> &[IssuedLeaf] {
+    pub(crate) fn leaves(&self) -> &[IssuedLeaf] {
         &self.current
     }
 
     /// The issuing step: replaces each certificate that ends within `LEAF_RENEW_AHEAD`.
-    pub fn renew_due(&mut self) -> Result<(), FeatureCaError> {
+    pub(crate) fn renew_due(&mut self) -> Result<(), FeatureCaError> {
         let now = (self.clock)();
         let ahead = millis(LEAF_RENEW_AHEAD);
         let due: Vec<usize> = self
@@ -340,4 +340,55 @@ fn subject(cert: &X509Ref) -> Result<Vec<u8>, FeatureCaError> {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::cmp::Ordering;
+    use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
+
+    use boring::asn1::Asn1Time;
+
+    #[test]
+    fn a_feature_certificate_is_issued_again_before_it_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        // The CA's own dates are checked against the wall clock as it is read, so the test's clock starts there.
+        let now = jiff::Timestamp::now().as_millisecond();
+        let (ca, _) = FeatureCa::open(dir.path(), now).unwrap();
+        let at = Arc::new(AtomicI64::new(now));
+        let clock: phoebis_store::Clock = {
+            let at = Arc::clone(&at);
+            Arc::new(move || at.load(AtomicOrdering::SeqCst))
+        };
+        let mut leaves = FeatureLeaves::issue(Arc::new(ca), clock).unwrap();
+        let end = |leaves: &FeatureLeaves| leaves.leaves()[0].not_after;
+        let first = end(&leaves);
+        let renewal = first - LEAF_RENEW_AHEAD.as_millis() as i64;
+
+        at.store(renewal - 1, AtomicOrdering::SeqCst);
+        leaves.renew_due().unwrap();
+        assert_eq!(end(&leaves), first);
+
+        at.store(renewal, AtomicOrdering::SeqCst);
+        leaves.renew_due().unwrap();
+        assert!(end(&leaves) > first, "{} against {first}", end(&leaves));
+    }
+
+    #[test]
+    fn an_issued_certificate_holds_for_a_client_whose_clock_runs_a_minute_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = jiff::Timestamp::now().as_millisecond();
+        let (ca, _) = FeatureCa::open(dir.path(), now).unwrap();
+        let leaf = ca.issue("api.anthropic.com", now).unwrap();
+        let cert = X509::from_der(&leaf.cert_der).unwrap();
+        let behind = Asn1Time::from_unix(now / 1_000 - 60).unwrap();
+        assert_ne!(
+            cert.not_before().compare(&behind).unwrap(),
+            Ordering::Greater,
+            "valid from {}",
+            cert.not_before()
+        );
+    }
 }

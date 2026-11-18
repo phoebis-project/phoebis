@@ -1,22 +1,15 @@
 //! The feature CA: a router started in-process with a `features` block serves the same CA at the download across a
 //! restart, refuses half of one, a key that does not match it and a CA under another subject, and writes its key at
-//! 0600. Through the CA's module with a clock the test moves, a certificate is issued again before it ends and holds
-//! for a client whose clock runs behind.
+//! 0600.
 
-use std::cmp::Ordering;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicI64, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering as AtomicOrdering;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use boring::asn1::Asn1Time;
-use boring::x509::X509;
 use fake_upstream::{generate_pair, FakeUpstream};
 use phoebis_router::config::Config;
-use phoebis_router::feature_ca::{
-    FeatureCa, FeatureLeaves, CA_CERT_FILE, CA_KEY_FILE, LEAF_RENEW_AHEAD,
-};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
@@ -188,7 +181,10 @@ async fn the_feature_ca_survives_a_restart() {
 async fn half_a_feature_ca_refuses_the_start() {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
-    let (cert, key) = (dir.path().join(CA_CERT_FILE), dir.path().join(CA_KEY_FILE));
+    let (cert, key) = (
+        dir.path().join("feature-ca.pem"),
+        dir.path().join("feature-ca-key.pem"),
+    );
     let (first, _) = start(dir.path(), &up).await;
     stop(first).await;
     std::fs::remove_file(&key).unwrap();
@@ -207,7 +203,7 @@ async fn the_feature_ca_key_file_is_created_at_0600() {
     let dir = tempfile::tempdir().unwrap();
     let (first, _) = start(dir.path(), &up).await;
     stop(first).await;
-    let mode = std::fs::metadata(dir.path().join(CA_KEY_FILE))
+    let mode = std::fs::metadata(dir.path().join("feature-ca-key.pem"))
         .unwrap()
         .permissions()
         .mode()
@@ -216,36 +212,11 @@ async fn the_feature_ca_key_file_is_created_at_0600() {
     up.shutdown().await;
 }
 
-#[test]
-fn a_feature_certificate_is_issued_again_before_it_ends() {
-    let dir = tempfile::tempdir().unwrap();
-    // The CA's own dates are checked against the wall clock as it is read, so the test's clock starts there.
-    let now = jiff::Timestamp::now().as_millisecond();
-    let (ca, _) = FeatureCa::open(dir.path(), now).unwrap();
-    let at = Arc::new(AtomicI64::new(now));
-    let clock: phoebis_store::Clock = {
-        let at = Arc::clone(&at);
-        Arc::new(move || at.load(AtomicOrdering::SeqCst))
-    };
-    let mut leaves = FeatureLeaves::issue(Arc::new(ca), clock).unwrap();
-    let end = |leaves: &FeatureLeaves| leaves.leaves()[0].not_after;
-    let first = end(&leaves);
-    let renewal = first - LEAF_RENEW_AHEAD.as_millis() as i64;
-
-    at.store(renewal - 1, AtomicOrdering::SeqCst);
-    leaves.renew_due().unwrap();
-    assert_eq!(end(&leaves), first);
-
-    at.store(renewal, AtomicOrdering::SeqCst);
-    leaves.renew_due().unwrap();
-    assert!(end(&leaves) > first, "{} against {first}", end(&leaves));
-}
-
 #[tokio::test]
 async fn a_key_that_does_not_match_the_feature_ca_refuses_the_start() {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
-    let key = dir.path().join(CA_KEY_FILE);
+    let key = dir.path().join("feature-ca-key.pem");
     let (first, _) = start(dir.path(), &up).await;
     stop(first).await;
     std::fs::write(&key, generate_pair(&["localhost"]).key_pem).unwrap();
@@ -263,7 +234,7 @@ async fn a_key_that_does_not_match_the_feature_ca_refuses_the_start() {
 async fn a_feature_ca_under_another_subject_refuses_the_start() {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
-    let cert = dir.path().join(CA_CERT_FILE);
+    let cert = dir.path().join("feature-ca.pem");
     // Its key matches and its dates hold, so its subject alone sets it apart from a CA the router made.
     let key = rcgen::KeyPair::generate().unwrap();
     let mut params = rcgen::CertificateParams::default();
@@ -272,7 +243,7 @@ async fn a_feature_ca_under_another_subject_refuses_the_start() {
     name.push(rcgen::DnType::CommonName, "A CA made by hand");
     params.distinguished_name = name;
     std::fs::write(&cert, params.self_signed(&key).unwrap().pem()).unwrap();
-    std::fs::write(dir.path().join(CA_KEY_FILE), key.serialize_pem()).unwrap();
+    std::fs::write(dir.path().join("feature-ca-key.pem"), key.serialize_pem()).unwrap();
 
     let line = refused(dir.path(), &up).await;
     assert!(
@@ -280,20 +251,4 @@ async fn a_feature_ca_under_another_subject_refuses_the_start() {
         "{line}"
     );
     up.shutdown().await;
-}
-
-#[test]
-fn an_issued_certificate_holds_for_a_client_whose_clock_runs_a_minute_behind() {
-    let dir = tempfile::tempdir().unwrap();
-    let now = jiff::Timestamp::now().as_millisecond();
-    let (ca, _) = FeatureCa::open(dir.path(), now).unwrap();
-    let leaf = ca.issue("api.anthropic.com", now).unwrap();
-    let cert = X509::from_der(&leaf.cert_der).unwrap();
-    let behind = Asn1Time::from_unix(now / 1_000 - 60).unwrap();
-    assert_ne!(
-        cert.not_before().compare(&behind).unwrap(),
-        Ordering::Greater,
-        "valid from {}",
-        cert.not_before()
-    );
 }

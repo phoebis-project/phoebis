@@ -27,7 +27,6 @@ use fake_upstream::{
 use hyper::Method;
 use phoebis_router::admin_client::{AdminClient, Answer, Common};
 use phoebis_router::config::{Config, FeaturesConfig};
-use phoebis_router::feature_ca::{CA_CERT_FILE, CA_KEY_FILE};
 use phoebis_router::status;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -716,7 +715,8 @@ async fn the_feature_ca_is_bound_to_the_two_hosts() {
 
     let ca = X509::from_pem(&ca_pem).unwrap();
     let ca_key =
-        PKey::private_key_from_pem(&std::fs::read(dir.path().join(CA_KEY_FILE)).unwrap()).unwrap();
+        PKey::private_key_from_pem(&std::fs::read(dir.path().join("feature-ca-key.pem")).unwrap())
+            .unwrap();
     let other_host = signed_under(&ca, &ca_key, |names| {
         names.dns("other.example");
     });
@@ -801,11 +801,11 @@ async fn the_cas_end_raises_the_item() {
     let end = jiff::Timestamp::now().as_second() + 20 * 86_400 + 12 * 3_600;
     params.not_after = rcgen::date_time_ymd(1970, 1, 1) + Duration::from_secs(end as u64);
     std::fs::write(
-        dir.path().join(CA_CERT_FILE),
+        dir.path().join("feature-ca.pem"),
         params.self_signed(&key).unwrap().pem(),
     )
     .unwrap();
-    std::fs::write(dir.path().join(CA_KEY_FILE), key.serialize_pem()).unwrap();
+    std::fs::write(dir.path().join("feature-ca-key.pem"), key.serialize_pem()).unwrap();
 
     let (stop_tx, server, ports) = start_with_features(dir.path(), &up).await;
     let (ending, _) = attention(ports.admin, &config).await;
