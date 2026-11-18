@@ -314,11 +314,12 @@ pub(crate) struct Attempt {
     /// failover's `cooldown`, `fast_lane` or `mark`, or for a placement that replaced a live pin on another account the
     /// first of `paused`, `disconnected`, `funding_required`, `reauth_required`, `unpaired`, `subscription_ended`,
     /// `unserved`, `cooldown`, `fast_rate_limit`, `fast_credits`, `budget_unknown`, `budget`, `overage`, `attempted`,
-    /// `spent` and `released` the selection found against the account the pin left (`deleted` never reads here: a
-    /// deleted account's pin leaves at the router's reload as an expiry)), `skipped` (array of `account_id`,
-    /// `obstacle`, every candidate the choice passed over), `placement` (null, or `rung` (`content`, `static`, or
-    /// `with_main`), `depth`, and `prefix_tokens` for a fresh placement with no pin of its own). The completion adds
-    /// `cache_read`, the tokens the answer read from the cache.
+    /// `spent` and `released` the selection found against the account the pin left, or `deleted` where the router's
+    /// reload took the pin off a deleted account and the session lands again while that pin's trace stands, at the
+    /// longest the pool's affinity TTL after the pin's last use), `skipped` (array of `account_id`, `obstacle`, every
+    /// candidate the choice passed over), `placement` (null, or `rung` (`content`, `static`, or `with_main`), `depth`,
+    /// and `prefix_tokens` for a fresh placement with no pin of its own). The completion adds `cache_read`, the tokens
+    /// the answer read from the cache.
     #[schema(value_type = Option<Object>)]
     pub selection: Option<Value>,
     pub response: AttemptResponse,
@@ -544,10 +545,13 @@ pub(crate) struct Event {
     /// `funding_required`, `reauth_required`, `unpaired`, `subscription_ended`, `unserved`, `cooldown`,
     /// `fast_rate_limit`, `fast_credits`, `budget_unknown`, `budget`, `overage`, `attempted`, `spent` and `released`
     /// the selection found against the account the pin left), and for such a placement `reasons`, the pin's whole
-    /// list, absent on a rule's move and a failover's landing. A deleted account's pin leaves at the router's reload
-    /// as `pin_expired` with `deleted`. A `pin_expired` event's detail carries `agent_id` and `reasons`, the facts the
-    /// selection found against the released pin's account (the documentation site's routing page describes them under
-    /// Moves), and a stored `pin_released` event's `agent_id`.
+    /// list, absent on a rule's move and a failover's landing. A deleted account's pin leaves at the router's reload,
+    /// and the session's next landing carries `deleted` as its `reason` and in `reasons` while the pin's trace stands:
+    /// until the pool's affinity TTL has passed since the pin's last use, its key is replaced or gone, its pool is gone
+    /// or an account is created again under the id. A trace that lapses first leaves as `pin_expired` with `deleted`. A
+    /// `pin_expired` event's detail carries `agent_id` and `reasons`, the facts the selection found against the
+    /// released pin's account (the documentation site's routing page describes them under Moves), and a stored
+    /// `pin_released` event's `agent_id`.
     #[schema(value_type = Option<Object>)]
     pub detail: Value,
     pub pool_id: Option<String>,
