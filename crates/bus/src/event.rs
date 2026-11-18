@@ -561,7 +561,7 @@ pub enum FeatureEnd {
     /// Refused by the router. It leaves no row.
     Refused {
         code: &'static str,
-        /// `artifacts` or `connectors`, `None` for a request that matched no row.
+        /// `artifacts` or `connectors`, `None` on a 401, on a domain check and for a request that matched no row.
         feature: Option<&'static str>,
         /// `None` on a 401 and on a domain check.
         key_id: Option<String>,
