@@ -706,6 +706,33 @@ pub async fn harness_with_bus_and_accounting(
     .await
 }
 
+/// `harness_with_accounting` over `pool` and `limits`, for the feature listener's calls while the ledger reads behind.
+pub async fn harness_with_pool_and_accounting(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    limits: Limits,
+    source: AccountingSource,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        limits,
+        None,
+        false,
+        None,
+        None,
+        RouterConfig::default(),
+        Some(source),
+        None,
+        None,
+    )
+    .await
+}
+
 /// The default harness whose catalog fake is the caller's own, for the tests that script it beyond the
 /// default `catalog_rules()` answers.
 pub async fn harness_with_catalog(

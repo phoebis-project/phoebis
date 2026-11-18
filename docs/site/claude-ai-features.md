@@ -525,11 +525,11 @@ The feature listener forwards the calls of this table and refuses each other one
 | each other method, host and path | | | | refuses it |
 
 For each call the router runs its checks in one order: the two calls without a key by their exact form, the key, the
-table, the feature's selection, the account's state, and then the forward. The key stands ahead of the table, so a
-caller without a key learns nothing of what the router forwards. The host of a call is its `Host` line, and no model
-request is served here: one that arrives on the feature listener is refused, as it belongs on `ANTHROPIC_BASE_URL`. A
-feature call passes none of a model request's other checks: no client class, no drift check, no guardrail, no model
-rule, no budget and no slow-down.
+table, the feature's selection, the account's state, the ledger's standing, and then the forward. The key stands ahead
+of the table, so a caller without a key learns nothing of what the router forwards. The host of a call is its `Host`
+line, and no model request is served here: one that arrives on the feature listener is refused, as it belongs on
+`ANTHROPIC_BASE_URL`. A feature call passes none of a model request's other checks: no client class, no drift check, no
+guardrail, no model rule, no budget and no slow-down.
 
 The router compares the path as the client sent it, without the query, and decodes nothing. A row with a whole path
 matches that path alone, and a row with a prefix matches a path that goes on behind the prefix by one character or more,
@@ -602,11 +602,12 @@ on this listener:
 | `403` `feature_not_allowed` | The table holds no row for the keyed call. |
 | `403` `feature_account_unset` | No account is selected for the call's feature, which the message names. |
 | `403` `feature_account_unavailable` | The selected account's state refuses ([What the account's state does](#what-the-accounts-state-does)). |
+| `503` `ledger_behind` | The ledger's writer is behind ([the ledger writer](statistics.md#the-ledger-writer)), on a keyed call ahead of its body's read and on a domain check ahead of its wait for a place. Nothing goes upstream, and the answer carries `Retry-After: 5`. |
 | `413` `request_too_large`, `503` `body_budget_exhausted`, `429` `key_body_reads` or `408` `request_timeout` | The read of the call's body passes a bound of the `proxy` block. |
 | `502` `upstream_unreachable` | The forward failed ahead of the upstream's answer head. |
 | `429` `domain_checks_at_cap` | A domain check waited out its 30 seconds for a place. The answer carries `Retry-After: 1`. |
 
-The first four rows are the checks of a keyed call in their order, and the first that fails answers. Each `403` carries
+The first five rows are the checks of a keyed call in their order, and the first that fails answers. Each `403` carries
 `x-should-retry: false`.
 
 A call's body is read under the `proxy` block's bounds, as a model request's body is ([proxy](installation.md#proxy)). A
@@ -675,7 +676,7 @@ The metrics listener counts the calls in two families ([Metrics](statistics.md#m
 | Family | Labels | Counts |
 | --- | --- | --- |
 | `phoebis_feature_calls_total` | `feature`, `key`, `outcome` | each call the router sent upstream, the domain check among them under the feature `domain_check` |
-| `phoebis_feature_refusals_total` | `code`, `feature`, `key` | each call the router refused with a `401` or a `403`, under the feature `none` for a call that matched no row and for each `401` |
+| `phoebis_feature_refusals_total` | `code`, `feature`, `key` | each call the router refused with a `401`, a `403` or the `503` `ledger_behind`, under the feature `none` for a call that matched no row, for each `401` and for a refused domain check |
 
 Neither family carries a path, a status or an account. A refused call and a domain check each write one line at `debug`
 too, with the code or the outcome, the method, the path without its query and the key's label.

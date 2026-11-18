@@ -6,6 +6,7 @@
 mod common;
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -972,6 +973,125 @@ async fn a_refused_feature_call_answers_while_the_ledger_is_behind_and_the_bus_q
     .expect("the refusal waited on the full queue");
     assert_eq!(status, 401);
     assert_eq!(refusal_of(status, &headers).1, "auth_missing");
+    up.shutdown().await;
+}
+
+/// The ledger's standing as `behind` holds it at each read, so a test moves it between two calls.
+fn standing(behind: &Arc<AtomicBool>) -> AccountingSource {
+    let behind = Arc::clone(behind);
+    Arc::new(move |_| Accounting {
+        behind: behind.load(Ordering::SeqCst),
+    })
+}
+
+#[tokio::test]
+async fn a_keyed_call_on_the_table_answers_ledger_behind_before_its_body_is_read() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = harness_with_pool_and_accounting(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        default_limits(),
+        standing(&Arc::new(AtomicBool::new(true))),
+    )
+    .await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(refusal_of(status, &headers), (503, "ledger_behind", "5"));
+    // The body never arrives whole, so a refusal that waited for it would come at the read's 60 seconds.
+    let held = listener.hold(API, &held_body_request()).await;
+    let (status, headers, _) = tokio::time::timeout(Duration::from_secs(5), held.answer())
+        .await
+        .expect("refused ahead of the body's read");
+    assert_eq!(refusal_of(status, &headers), (503, "ledger_behind", "5"));
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_domain_check_answers_ledger_behind_before_its_wait_for_a_place() {
+    let up = fake(vec![
+        (
+            "/api/web/domain_info?domain=held.example",
+            Respond::Gated(Box::new(json_200())),
+        ),
+        ("/api/web/domain_info", json_200()),
+    ])
+    .await;
+    let behind = Arc::new(AtomicBool::new(true));
+    let h = harness_with_pool_and_accounting(
+        &up,
+        &[api_key("acct", "sk-ant-api03-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        Limits {
+            domain_checks_per_source: 1,
+            ..default_limits()
+        },
+        standing(&behind),
+    )
+    .await;
+    let listener = Arc::new(feature_listener(&h).await);
+    let check = keyless("GET /api/web/domain_info?domain=example.com", "", b"");
+    let (status, headers, _) =
+        tokio::time::timeout(Duration::from_secs(5), listener.send(API, &check))
+            .await
+            .expect("refused at once");
+    assert_eq!(refusal_of(status, &headers), (503, "ledger_behind", "5"));
+    // A check admitted while the ledger is current holds the source's one place at the fake's gate.
+    behind.store(false, Ordering::SeqCst);
+    let first = tokio::spawn({
+        let listener = Arc::clone(&listener);
+        async move {
+            let request = keyless("GET /api/web/domain_info?domain=held.example", "", b"");
+            listener.send(API, &request).await.0
+        }
+    });
+    wait_for(Duration::from_secs(5), || {
+        (up.requests().len() == 1).then_some(())
+    })
+    .await;
+    behind.store(true, Ordering::SeqCst);
+    // A refusal behind the wait would hold the check for the place until the check's 30 seconds end.
+    let (status, headers, _) =
+        tokio::time::timeout(Duration::from_secs(5), listener.send(API, &check))
+            .await
+            .expect("refused ahead of the wait for a place");
+    assert_eq!(refusal_of(status, &headers), (503, "ledger_behind", "5"));
+    up.release();
+    assert_eq!(first.await.unwrap(), 200);
+    assert_eq!(
+        feature_lines(&up),
+        ["GET /api/web/domain_info?domain=held.example HTTP/1.1"]
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_call_its_account_cannot_serve_keeps_its_refusal_while_the_ledger_is_behind() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = harness_with_pool_and_accounting(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        default_limits(),
+        standing(&Arc::new(AtomicBool::new(true))),
+    )
+    .await;
+    h.store
+        .set_canceled("a", Cancellation::On { ends_at: Some(NOW) })
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(
+        refusal_of(status, &headers),
+        (403, "feature_account_unavailable", "")
+    );
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
     up.shutdown().await;
 }
 

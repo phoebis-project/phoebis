@@ -365,9 +365,10 @@ valid gzip is `invalid_body`. Any other token (`br`, `deflate`, `zstd` or an unk
 ASCII, and more than one `content-encoding` line are `unsupported_content_encoding`, refused before the body is read,
 since the relay never carries bytes it can neither read nor edit under an account's credential.
 
-`ledger_behind` is answered after the body is read and before any account is chosen while the ledger's writer channel
-holds at least half its depth, 2,048 records of 4,096, and `router_unavailable` when the router loop did not answer the
-request's selection.
+`ledger_behind` is answered while the ledger's writer channel holds at least half its depth, 2,048 records of 4,096: on
+the proxy listener after the body is read and before any account is chosen, and on the feature listener ahead of the
+body's read ([claude.ai features](claude-ai-features.md#what-the-router-refuses-and-what-the-client-shows)).
+`router_unavailable` is answered when the router loop did not answer the request's selection.
 
 ## Your key's usage
 
