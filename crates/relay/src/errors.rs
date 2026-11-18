@@ -30,7 +30,8 @@ pub(crate) struct Failure {
     pub retry_after: Option<u64>,
     /// Writes `x-should-retry: false`, so a client that retries its 4xx answers resends none of the refusals that no
     /// resend heals: a refused credential, what the client gate (`client_not_allowed`), the contract, the drift check
-    /// or a guardrail refused, and a body above the whole body budget.
+    /// or a guardrail refused, a body above the whole body budget, and a call on the feature listener that no row of
+    /// its table names, whose key resolves to no account for its feature or whose feature account cannot serve it.
     pub no_retry: bool,
     /// The outcome the ledger files the request under, carried by the answer itself so no reader infers it from the
     /// code.
