@@ -531,14 +531,17 @@ line, and no model request is served here: one that arrives on the feature liste
 `ANTHROPIC_BASE_URL`. A feature call passes none of a model request's other checks: no client class, no drift check, no
 guardrail, no model rule, no budget and no slow-down.
 
-The router compares the path as the client sent it, without the query, and decodes nothing. A row with a whole path
-matches that path alone, and a row with a prefix matches a path that goes on behind the prefix by one character or more,
-so `/api/frame` and `/api/framework/x` match no row. Some forms of a path match no row, and a keyed call with one gets
-the `403` `feature_not_allowed`: a segment `.` or `..`, an empty segment and so a closing slash, a backslash, an encoded
-slash, backslash or dot (`%2f`, `%5c` and `%2e` in either case), and a path parameter, which a semicolon opens. An
-upstream that folds such a path could otherwise serve a refused call under the feature account's sign-in, and the client
-builds none of these forms. The one excepted path, `POST /api/frame/track`, is an event report, and it is matched in
-each case of its letters, so `POST /api/frame/Track` is refused too.
+The router compares a row's path with the path as the client sent it, without the query, and forwards that path as it
+came. A row with a whole path matches that path alone, and a row with a prefix matches a path that goes on behind the
+prefix by one character or more, so `/api/frame` and `/api/framework/x` match no row. Some forms of a path match no row,
+and a keyed call with one gets the `403` `feature_not_allowed`: a segment `.` or `..`, an empty segment and so a closing
+slash, a backslash, an encoded slash, backslash or dot (`%2f`, `%5c` and `%2e` in either case), and a path parameter,
+which a semicolon opens. The router looks for these forms in the path as sent and in each form a percent-decode of it
+gives, decoded once more until no `%` with two hex digits behind it is left, so `%252e` counts as an encoded dot and
+`%3b` as a semicolon. An upstream that decodes or folds such a path could otherwise serve a refused call under the
+feature account's sign-in, and the client builds none of these forms. The one excepted path, `POST /api/frame/track`,
+is an event report. It is matched in each case of its letters and where a path decodes to it, so `POST
+/api/frame/Track` and `POST /api/frame/%74rack` are refused too.
 
 The two calls without a key match by their whole form. `GET` and `HEAD` on `/api/hello` answer `200` with an empty body
 and send nothing upstream, which is where the first-start check of an interactive client ends, so a start needs no

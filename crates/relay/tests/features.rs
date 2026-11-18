@@ -264,6 +264,9 @@ async fn a_path_an_upstream_could_fold_is_refused() {
         "GET /api/frame/..\\oauth/profile",
         "GET /api/frame/..;/oauth/profile",
         "POST /api/frame/Track",
+        "POST /api/frame/%74rack",
+        "POST /api/frame/track%3Bx",
+        "POST /api/frame/%2574rack",
     ] {
         let (status, _, _) = listener.send(API, &keyed(request_line, API, "", b"")).await;
         answers.push((request_line, status));
@@ -277,6 +280,9 @@ async fn a_path_an_upstream_could_fold_is_refused() {
             ("GET /api/frame/..\\oauth/profile", 403),
             ("GET /api/frame/..;/oauth/profile", 403),
             ("POST /api/frame/Track", 403),
+            ("POST /api/frame/%74rack", 403),
+            ("POST /api/frame/track%3Bx", 403),
+            ("POST /api/frame/%2574rack", 403),
         ]
     );
     let (status, headers, _) = listener
@@ -284,6 +290,25 @@ async fn a_path_an_upstream_could_fold_is_refused() {
         .await;
     assert_eq!(status, 200, "{headers:?}");
     assert_eq!(feature_lines(&up), ["GET /api/frame/x HTTP/1.1"]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_escape_that_decodes_to_no_refused_form_goes_upstream_as_sent() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(
+            API,
+            &keyed("POST /api/frame/retitle/my%20artifact", API, "", b""),
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    assert_eq!(
+        feature_lines(&up),
+        ["POST /api/frame/retitle/my%20artifact HTTP/1.1"]
+    );
     up.shutdown().await;
 }
 
