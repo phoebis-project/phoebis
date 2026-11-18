@@ -233,11 +233,11 @@ fn a_feature_certificate_is_issued_again_before_it_ends() {
     let renewal = first - LEAF_RENEW_AHEAD.as_millis() as i64;
 
     at.store(renewal - 1, AtomicOrdering::SeqCst);
-    assert_eq!(leaves.renew_due().unwrap(), 0);
+    leaves.renew_due().unwrap();
     assert_eq!(end(&leaves), first);
 
     at.store(renewal, AtomicOrdering::SeqCst);
-    assert_eq!(leaves.renew_due().unwrap(), 2);
+    leaves.renew_due().unwrap();
     assert!(end(&leaves) > first, "{} against {first}", end(&leaves));
 }
 

@@ -184,16 +184,15 @@ pub(crate) fn feature_acceptor(leaves: &FeatureLeaves) -> Result<SslAcceptor, Tl
 }
 
 /// The renewal's step: issues each certificate that is due, then puts an acceptor over the current certificates in
-/// front of the next connection. Answers how many it issued. The acceptor is built at each call, whatever was issued,
-/// since an issue the leaves took stays taken when the build behind it fails: a step that failed is tried whole at the
-/// next call.
+/// front of the next connection. The acceptor is built at each call, whatever was issued, since an issue the leaves
+/// took stays taken when the build behind it fails: a step that failed is tried whole at the next call.
 pub(crate) fn renew_feature_certificates(
     leaves: &mut FeatureLeaves,
     live: &LiveAcceptor,
-) -> Result<usize, FeatureCaError> {
-    let issued = leaves.renew_due()?;
+) -> Result<(), FeatureCaError> {
+    leaves.renew_due()?;
     live.replace(feature_acceptor(leaves)?);
-    Ok(issued)
+    Ok(())
 }
 
 /// One feature host's certificate and key on a context of their own. The ALPN callback is set here too, since the
@@ -731,7 +730,7 @@ mod tests {
             end - LEAF_RENEW_AHEAD.as_millis() as i64 + 1,
             AtomicOrdering::SeqCst,
         );
-        assert_eq!(renew_feature_certificates(&mut leaves, &live).unwrap(), 2);
+        renew_feature_certificates(&mut leaves, &live).unwrap();
         let next = served(&live).await;
         assert_eq!(
             next.not_after().compare(first.not_after()).unwrap(),
@@ -764,8 +763,8 @@ mod tests {
         );
         // What a step leaves whose build failed behind its issue: the new certificates in the leaves, and the acceptor
         // over the old ones in front of the connections.
-        assert_eq!(leaves.renew_due().unwrap(), 2);
-        assert_eq!(renew_feature_certificates(&mut leaves, &live).unwrap(), 0);
+        leaves.renew_due().unwrap();
+        renew_feature_certificates(&mut leaves, &live).unwrap();
         let next = served(&live).await;
         assert_eq!(
             next.not_after().compare(first.not_after()).unwrap(),

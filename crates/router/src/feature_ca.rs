@@ -186,8 +186,8 @@ impl FeatureLeaves {
         &self.current
     }
 
-    /// The issuing step: replaces each certificate that ends within `LEAF_RENEW_AHEAD` and answers how many.
-    pub fn renew_due(&mut self) -> Result<usize, FeatureCaError> {
+    /// The issuing step: replaces each certificate that ends within `LEAF_RENEW_AHEAD`.
+    pub fn renew_due(&mut self) -> Result<(), FeatureCaError> {
         let now = (self.clock)();
         let ahead = millis(LEAF_RENEW_AHEAD);
         let due: Vec<usize> = self
@@ -200,7 +200,7 @@ impl FeatureLeaves {
         for &at in &due {
             self.current[at] = self.ca.issue(FEATURE_HOSTS[at], now)?;
         }
-        Ok(due.len())
+        Ok(())
     }
 }
 
