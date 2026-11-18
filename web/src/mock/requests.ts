@@ -979,7 +979,7 @@ export const failsOver = (a: Attempt) => a.upstreamStatus === 429 || a.cooldownS
  */
 export const resentInPlace = (r: Pick<RequestLog, 'attempts'>, i: number): boolean => i > 0 && r.attempts[i - 1].upstreamStatus === null && r.attempts[i - 1].accountId === r.attempts[i].accountId;
 /** The instant an attempt's answer lands, which its cooldown, its events and its completion date from. */
-export const attemptEnd =(a: Pick<Attempt, 'durationMs' | 'startedAt'>): number => Date.parse(a.startedAt) + (a.durationMs ?? 0);
+export const attemptEnd = (a: Pick<Attempt, 'durationMs' | 'startedAt'>): number => Date.parse(a.startedAt) + (a.durationMs ?? 0);
 
 /** The rejection story's refused attempt: an account refuses a model it does not serve before any inference runs. */
 const REJECTION_MS = 180;
@@ -1055,8 +1055,6 @@ interface StorySeed {
   /** The client's own auto-mode classifier call, which the class header and the beta mark: `client` on the account and
    * incarnation its judged turn ended on, `client_off` off them. */
   classifier?: NonNullable<RequestLog['classifier']>;
-  /** The account the relay chose for a request it rejected before any attempt, which the row names. */
-  chosen?: string;
   /** The label the ledger wrote, where it is not the lane's. */
   client?: string | null;
   /** The item a contract refusal named. */
@@ -1194,9 +1192,10 @@ const CLIENT_ERROR_TURN_ID = 'req_c1e40a95-b28';
 const CLIENT_ERROR_SESSION_ID = 'f40a2c7e-9b31-4d58-8e06-1a7c3b5d9e24';
 /**
  * A laptop turn of the day before that the relay rejected on secondary, the account it chose, since it could not write
- * the account's id into the body. No attempt went upstream.
+ * the account's id into the body. No attempt went upstream, so the row names no account, while the routing log's
+ * placement names secondary.
  */
-const UNAVAILABLE_TURN_ID = 'req_4c1e8b27-d93';
+export const UNAVAILABLE_TURN_ID = 'req_4c1e8b27-d93';
 /** A laptop turn of the day before whose upstream answered 502 with a body that names no error type. */
 const BARE_502_TURN_ID = 'req_8f5a2d16-c47';
 /**
@@ -1295,7 +1294,7 @@ function storyRow(seed: StorySeed): RequestLog {
   return {
     ...REQUEST_SAMPLE,
     // The account whose answer the request ended on, a refusal's as much as a success's, as a drawn row reads it.
-    accountId: last?.accountId ?? seed.chosen ?? null,
+    accountId: last?.accountId ?? null,
     agentId: seed.agentId,
     agentType: seed.agentId === null || seed.agentId === 'main' ? null : (storyAgentsOf(sessionId).find((a) => a.id === seed.agentId)?.type ?? 'general-purpose'),
     at: iso(seed.at),
@@ -1591,9 +1590,9 @@ function storySeeds(): StorySeed[] {
     { agentId: 'main', at: t(13, 45), attempts: [{ accountId: 'primary', at: t(13, 45), ms: 3_800, status: 200 }], id: 'req_2c7d9f15-b63', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: 'b81e4f2a-7c3d-4a90-8e65-2d1f0c9b7a34', usage: { cacheWrite5m: 24_500, input: 2_900, output: 640 } },
     // A fresh placement whose reservation the answer's usage replaces.
     { agentId: 'main', at: t(13, 41, 15), attempts: [{ accountId: 'primary', at: t(13, 41, 15), ms: 7_200, status: 200 }], id: 'req_7a3f0c26-d81', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'c5d2e8a1-4f6b-4b17-a9c3-6e0d2f8b1a57', usage: { cacheWrite1h: 38_400, input: 2_600, output: 1_150 } },
-    // A renewal on primary whose round finds no sibling with runway for either pin. It follows the placement of 14:11:44
-    // on the same account, so its member names a message primary holds, and the upstream's comparison was still
-    // running when its answer went out.
+    // A renewal on primary whose round finds no sibling with runway for either pin. It follows the placement of
+    // 14:11:44 on the same account, so its member names a message primary holds, and the upstream's comparison was
+    // still running when its answer went out.
     { agentId: 'main', at: t(14, 12, 30), attempts: [{ accountId: 'primary', at: t(14, 12, 30), ms: 5_600, status: 200 }], id: 'req_6e1f3b98-a24', keyId: 'desktop', model: 'claude-sonnet-5-5', pending: true, requestClass: 'main', session: 'd7167642', usage: { cacheRead: 52_300, cacheWrite1h: 900, input: 2_100, output: 870 } },
     // A desktop session placed on secondary before its spent edge, whose next turn secondary answers with a 429 on the
     // spent 5-hour window while primary is full, so the turn fails over to primary.
@@ -1758,7 +1757,7 @@ function storySeeds(): StorySeed[] {
     // Two laptop turns in the request log's first hour, which the Dashboard's day leaves out. The relay answers the
     // rejection with the 503 it raises on the chosen account's body, and the router files the bare 502 under its
     // status, since the body names no error type.
-    { agentId: 'main', at: firstHour + 20 * MINUTE, attempts: [], capturedBodies: false, chosen: 'secondary', errorCode: 'accounts_unavailable', id: UNAVAILABLE_TURN_ID, keyId: 'laptop', model: 'claude-sonnet-5-5', outcome: 'rejected', requestClass: 'main', session: 'b3e8f14c-6a27-4d95-8c10-7e2a5d9f3b61', status: 503 },
+    { agentId: 'main', at: firstHour + 20 * MINUTE, attempts: [], capturedBodies: false, errorCode: 'accounts_unavailable', id: UNAVAILABLE_TURN_ID, keyId: 'laptop', model: 'claude-sonnet-5-5', outcome: 'rejected', requestClass: 'main', session: 'b3e8f14c-6a27-4d95-8c10-7e2a5d9f3b61', status: 503 },
     { agentId: 'main', at: firstHour + 35 * MINUTE, attempts: [{ accountId: 'primary', at: firstHour + 35 * MINUTE, ms: 1_200, status: 502 }], capturedBodies: false, errorCode: 'upstream_502', id: BARE_502_TURN_ID, keyId: 'laptop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'e5c27a9d-1f48-4b63-a0d7-9c3e6b2f8a15', unseeded: true },
     // The log's oldest row, in a lane hour of its own: it names no session, so it holds no pin and every seeded draw
     // stays where it was. The relay sends a request that never reached the upstream once more on the same account, a
@@ -1854,7 +1853,8 @@ const FORK_IDS: ReadonlySet<string> = new Set(guardrailSeeds().filter((s) => s.f
 // routing log derives no decision for them: a block is refused before any selection.
 for (const id of GUARDRAIL_STORY_IDS) STORY_IDS.add(id);
 // The rejection is written whole too, so the draws after the rows leave it as the story wrote it. The routing log
-// derives the record of a request no attempt reached as an exhaustion, which this one is not, so it derives none.
+// derives the record of a request no attempt reached as an exhaustion, while the router placed this one before the
+// relay rejected it, so its record is the story's.
 STORY_IDS.add(UNAVAILABLE_TURN_ID);
 const STORY_SEEDS = storySeeds();
 export const UNSEEDED_IDS: ReadonlySet<string> = new Set(STORY_SEEDS.filter((s) => s.unseeded).map((s) => s.id));
@@ -2542,7 +2542,8 @@ function phaseRequests() {
  * The account a first attempt leaves is its agent's newest landing under the key and session, whatever the model, as
  * each selection moves it: a placement, a renewal and a probe's renewal stamp the pin they land on. An auxiliary call
  * reads its own pin's account, and its pins answer no other request. A token count creates no pin, and an answer of 400
- * releases the pin it placed. A failover's leg leaves the account of the leg before it.
+ * releases the pin it placed. A failover's leg of a row with a session leaves the account of the leg before it, since
+ * the router gives a request that takes no pin no failover entry.
  *
  * A body's member names the message its agent's last answer carried, a fork's its parent's while it has none of its
  * own, so an agent's first answered turn that is no fork names none. The relay detaches the member's message on an
@@ -2569,7 +2570,7 @@ function walkSessionTurns() {
       if (resentInPlace(r, i)) {
         if (r.sessionId !== null) a.previousInputTokens = r.attempts[i - 1].previousInputTokens;
       } else if (i > 0) {
-        left = r.attempts[i - 1].accountId;
+        if (r.sessionId !== null) left = r.attempts[i - 1].accountId;
         a.previousInputTokens = null;
       } else if (r.sessionId !== null) {
         left = auxiliary ? pinned.get(pin) : newest.get(landing);
@@ -2650,10 +2651,7 @@ function fillDroppedBlocks() {
     const pin = pinKeyOf(r);
     const history = r.sessionId === null ? fresh() : (histories.get(pin) ?? fresh());
     if (r.sessionId !== null) histories.set(pin, history);
-    if (r.contextCompacted !== null) {
-      const own = r.kind === 'inference' ? (r.attempts.find((a) => a.upstreamStatus === 200)?.accountId ?? null) : null;
-      Object.assign(history, { carriedBy: history.lastAnswered ?? own, compacted: true, move: null, thinkers: [] });
-    }
+    if (r.contextCompacted !== null) Object.assign(history, { carriedBy: history.lastAnswered, compacted: true, move: null, thinkers: [] });
     // Only an answer to a head that carried the token reports, and the rule says whether one did.
     const token = thinkingSourceOf(r.keyId, r.poolId, r.kind);
     for (const a of r.attempts) {
@@ -2689,6 +2687,21 @@ phaseRequests();
 traceForks();
 walkSessionTurns();
 fillDroppedBlocks();
+
+/** A cooldown row as the routing state holds it: the accounts' own rows and every row an attempt's answer set. */
+export interface CooldownRow {
+  accountId: string;
+  reason: string;
+  scope: string;
+  setAt: number;
+  until: number;
+  window: string;
+}
+
+/** Every row an attempt's answer set, with the model it answered and its request, which the row's event names. */
+export const ATTEMPT_COOLDOWNS: (CooldownRow & { model: string; requestId: string })[] = REQUESTS.flatMap((r) =>
+  r.attempts.flatMap((a) => (a.cooldownSet ? [{ accountId: a.accountId, ...cooldownOf(a.cooldownSet.reason, r.canonicalModel), setAt: attemptEnd(a), until: Date.parse(a.cooldownSet.until), model: r.canonicalModel, requestId: r.id }] : [])),
+);
 
 function histogramsOf(rows: RequestLog[]): LatencyHistograms {
   const samples = rows.filter((r) => r.status === 200).map((r) => ({ kind: r.kind, ...latencySamples(r) }));
@@ -3497,7 +3510,8 @@ function accountRollups(): AccountRollup[] {
       if (t >= from && t <= until) out.push(row);
     }
     // The current hour holds no attempt, so the route lists it with zero counts and its samples' peaks. Its cooldown
-    // counts each row the account holds from the later of its start and the hour's start to the earlier of its end
+    // counts each row the account holds, its own and each one a story attempt's answer set, one row per scope and
+    // end as the routing log merges them, from the later of its start and the hour's start to the earlier of its end
     // and the read, as the route cuts the part it booked past the clock. It draws nothing, so the stream of the hours
     // before it stays.
     if (end >= from && end <= until) {
@@ -3505,7 +3519,9 @@ function accountRollups(): AccountRollup[] {
         const peak = sampleIndex.get(`${account.id}|${id}`)?.get(end);
         return peak === undefined ? null : round(peak, 3);
       };
-      const cooledMs = account.cooldowns.reduce((n, c) => n + Math.max(0, Math.min(Date.parse(c.until), NOW) - Math.max(Date.parse(c.setAt), end)), 0);
+      const own = account.cooldowns.map((c) => ({ scope: c.scope, setAt: Date.parse(c.setAt), until: Date.parse(c.until) }));
+      const rows = [...new Map([...own, ...ATTEMPT_COOLDOWNS.filter((c) => c.accountId === account.id)].map((c) => [`${c.scope}|${c.until}`, c])).values()];
+      const cooledMs = rows.reduce((n, c) => n + Math.max(0, Math.min(c.until, NOW) - Math.max(c.setAt, end)), 0);
       out.push({
         ...ACCOUNT_ROLLUP_SAMPLE,
         accountId: account.id,

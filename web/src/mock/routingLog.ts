@@ -18,7 +18,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
 import { DELETED_ACCOUNTS, KEY_REVOKED_AT, RETIRED, WORST_BUCKET, keyById, poolById, storyAccountOf, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, requestById, resentInPlace } from './requests';
+import { ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, requestById, resentInPlace, type CooldownRow } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { drawnWindows, droppedThinkingOf, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
@@ -282,21 +282,6 @@ const causeOf = (reason: string, model: string): MoveCause => {
   const c = cooldownOf(reason, model);
   return { cause: null, reason: c.reason, scope: c.scope, state: null, window: c.window };
 };
-
-/** A cooldown row as the routing state holds it: the accounts' own rows and every row an attempt's answer set. */
-interface CooldownRow {
-  accountId: string;
-  reason: string;
-  scope: string;
-  setAt: number;
-  until: number;
-  window: string;
-}
-
-/** Every row an attempt's answer set, with the model it answered and its request, which the row's event names. */
-const ATTEMPT_COOLDOWNS: (CooldownRow & { model: string; requestId: string })[] = REQUESTS.flatMap((r) =>
-  r.attempts.flatMap((a) => (a.cooldownSet ? [{ accountId: a.accountId, ...cooldownOf(a.cooldownSet.reason, r.canonicalModel), setAt: attemptEnd(a), until: Date.parse(a.cooldownSet.until), model: r.canonicalModel, requestId: r.id }] : [])),
-);
 
 const cooldownRows: CooldownRow[] = [
   ...ACCOUNTS.flatMap((a) =>
@@ -1601,8 +1586,7 @@ function completionOf(spec: Spec, pool: PoolSeed, chosen: RecordCandidate | unde
     freed: spec.heldBefore !== undefined,
     heldMs: spec.heldBefore?.heldMs ?? null,
     hit: cache.hit,
-    // A token count's answer is its body's count, which the router stores no usage for.
-    inputTokens: cache.hasUsage ? (r.kind === 'count_tokens' ? bodyTokensOf(r) : usage.input) : null,
+    inputTokens: cache.hasUsage ? usage.input : null,
     inputTransformations: attempt?.response.inputTransformations ?? null,
     promisedTokens: cache.promised,
     status: attempt?.upstreamStatus ?? null,
@@ -1708,7 +1692,9 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   const pinWritten = pinWriteOf(spec, pinning, pinKey, stamps);
   const usage = r.usage;
   const promised = spec.rung && spec.rung.rung !== 'with_main' ? spec.rung.prefixTokens : null;
-  const hasUsage = answered && bodyTokensOf(r) > 0;
+  // The router stores no usage for a token count's answer, so its completion reads no cache figure, as the route
+  // answers an attempt with no usage.
+  const hasUsage = answered && r.kind !== 'count_tokens' && bodyTokensOf(r) > 0;
   const hit = !hasUsage ? null : spec.rung ? placementHit(spec.rung, usage.cacheRead) : usage.cacheRead > 0;
   const completion = dispatched ? completionOf(spec, pool, chosen, attempt, { answered, hasUsage, hit, promised }) : null;
   const hold = holdOf(spec, pool);
@@ -2112,10 +2098,11 @@ const RESERVATION_FABLE_BURN = 0.008;
  * Fable week on the 7-day window: a cold Sonnet 5.5 pin, whose 0.0016 an hour covers the cap's half of the walked burn,
  * and the current pin, whose Sonnet 4.5 has no weight of its own and so no priced burn, which lifts the guard. The Fable
  * pin leaves the round before the order with no figure, though its 0.008 an hour on the Fable week spends the room the
- * reservation holds.
+ * reservation holds. The cold pin is seeded: no row places a pin of a priced model other than Fable on primary inside
+ * all's affinity window ahead of the round, so the pin's session holds no row of its own, and none places it elsewhere.
  */
 const RESERVATION_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.0016, cold: true, keyId: 'desktop', lastInputTokens: 36_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: sessionId('0d588de5'), skip: null },
+  { agentId: 'main', burn: 0.0016, cold: true, keyId: 'desktop', lastInputTokens: 36_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: 'f6c2a8d4-3b71-4e95-8a0c-5d9e1b7f2c63', skip: null },
   { agentId: 'e90b', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: false, model: 'claude-sonnet-4-5', note: 'current', sessionId: sessionId('c64358b5'), skip: 'unpriced' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 52_000, marked: false, model: 'claude-fable-5-1', note: null, sessionId: sessionId('7bea4514'), skip: 'fable_model' },
 ];
@@ -2219,7 +2206,8 @@ function storySpecs(): Spec[] {
     // 7-day reading leaves a room under the Fable reservation Pace holds back for its Fable week, while every window
     // reads under its line, so this renewal runs the reservation's round. The 7-day burn is the walked pin's and the
     // Fable pin's, its Fable week burn in the 7-day window's share, and the 5-hour burn the sessions' before the
-    // afternoon.
+    // afternoon. The 7-day reading is written over the request head's own, so on that window the card parts from the
+    // drawer, which `readingsOf` otherwise keeps in step.
     at('req_5d1f8c3a-b27', 1, 1, t(11, 13, 40), 'renewed', 'primary', {
       burns: { primary: { five_hour: PRIMARY_EARLIER_BURN, seven_day: 0.0056, seven_day_fable: RESERVATION_FABLE_BURN } },
       pin: live('continues_pin', 310_000),
@@ -2282,6 +2270,9 @@ function storySpecs(): Spec[] {
     // The desktop key's own guardrail refused the day's last auxiliary fork on it.
     at('req_a8f3c6d0-e17', 1, 1, t(12, 52, 20), 'refused', null, { pin: 'not_looked_up', refusal: blockOf('req_a8f3c6d0-e17') }),
     at('req_51d0e2b8-7a0', 1, 1, t(14, 16, 40), 'exhausted', null, { exhaustion: { deadline: iso(startOfDay(t(14, 16, 40)) + DAY), kind: 'timed', obstacle: null, reason: null, window: 'overage' }, pin: 'pinning_off' }),
+    // The router placed the laptop turn of the day before on secondary, and the relay rejected it there as it built
+    // the body, so the placement sent no attempt and its completion reads no answer.
+    at(UNAVAILABLE_TURN_ID, 1, 1, Date.parse(requestById.get(UNAVAILABLE_TURN_ID)!.at), 'placed', 'secondary'),
     // The compacted conversation renews its pin cold.
     at('req_31f0b7c2-6e1', 1, 1, t(14, 17, 52), 'renewed', 'primary', { pin: live('compacted', 491_000, 'cold') }),
     at('req_9a07c4e1-d55', 1, 1, t(14, 19, 2), 'renewed', 'primary', { pin: live('continues_pin', 438_000) }),
@@ -2471,10 +2462,11 @@ function buildDecisions() {
   const messageRows = new Map<string, number>();
   for (const spec of specs) messageRows.set(spec.request.id, Math.max(messageRows.get(spec.request.id) ?? 1, spec.cacheMap?.messages ?? 1));
   for (const spec of specs) {
-    // The router reads its live counters at both of a probe's selections, a second apart, so a pinned answer carries
-    // the counts its leg's decision drew, its pinned member's less the probe's own slot.
+    // The router reads its live counters at both of a probe's selections, a second apart. It wrote the leg's record
+    // ahead of the charge of the probe's own slot, and the leg's 429 dropped that slot again, so a pinned answer
+    // carries the counts its leg's decision drew whole.
     const leg = pinnedAnswerOf(spec) ? decisions.get(`${spec.request.id}/${spec.seq - 1}`) : undefined;
-    const counted = leg === undefined ? spec : { ...spec, inFlight: Object.fromEntries(leg.candidates.map((c) => [c.accountId, c.accountId === leg.outcome.accountId ? Math.max(0, c.inFlight - 1) : c.inFlight])) };
+    const counted = leg === undefined ? spec : { ...spec, inFlight: Object.fromEntries(leg.candidates.map((c) => [c.accountId, c.inFlight])) };
     const { record, summary } = build(counted, messageRows.get(spec.request.id) ?? 1);
     // The mock answers the record as it built it, so the card's copy is the record itself.
     const { raw: _, ...answered } = record;
@@ -2793,7 +2785,8 @@ const endCauseOf = (r: RequestLog) => (r.outcome === 'canceled' ? 'canceled' : r
 
 /**
  * The bookings a request's end released with no usage to replace them, one per request at its end. A later placement
- * or move, a failover's among them, replaces the request's booking, and a renewal books none and leaves it.
+ * or move, a failover's among them, replaces the request's booking, and a renewal books none and leaves it. A request
+ * the relay rejected before any attempt ends at its placement.
  */
 function expiredReservations(): EventSeed[] {
   const booked = new Map<string, DecisionRecord | null>();
@@ -2803,9 +2796,9 @@ function expiredReservations(): EventSeed[] {
   return [...booked.values()].flatMap((record) => {
     const booking = record?.outcome.reservation;
     const r = record ? requestById.get(record.requestId) : undefined;
-    const last = r ? servingAttempt(r) : null;
-    if (!record || !booking || !r || !last || r.outcome === 'succeeded') return [];
-    const ended = attemptEnd(last);
+    if (!record || !booking || !r || r.outcome === 'succeeded') return [];
+    const last = servingAttempt(r);
+    const ended = last === null ? Date.parse(record.request.at) : attemptEnd(last);
     const detail = { age_ms: ended - Date.parse(record.request.at), attempt: record.request.attempt, cause: endCauseOf(r), shares: booking.rewrite };
     return [{ accountId: booking.accountId, at: iso(ended), detail, kind: 'reservation_expired', requestId: record.requestId }];
   });
@@ -3248,23 +3241,23 @@ function buildEvents(): RoutingEvent[] {
       kind: 'registry_changed',
       poolId: 'all',
     },
-    // The annex unpaused and renamed with its secret replaced: the store records the secret as its flag alone, and the
-    // ledger's row names the account in its target alone.
+    // The annex unpaused and renamed with its secret replaced: the store records the secret as its flag alone. The
+    // ledger's row names each change's subject in the column of its kind, as its target names it.
     {
-      accountId: null,
+      accountId: 'annex',
       actor: 'admin',
       at: iso(t(9, 8, 30)),
       detail: { diff: { enabled: { from: false, to: annex.routingEnabled }, label: { from: 'annex', to: annex.label }, secret_replaced: true }, kind: 'account_updated', target: 'annex' },
       kind: 'registry_changed',
     },
     // The operator's pause of the Overflow workspace after its lapse, which the store records as the switch's pair alone.
-    { accountId: null, actor: 'admin', at: iso(OVERFLOW_PAUSED_AT), detail: { diff: { enabled: { from: true, to: false } }, kind: 'account_updated', target: 'overflow' }, kind: 'registry_changed' },
+    { accountId: 'overflow', actor: 'admin', at: iso(OVERFLOW_PAUSED_AT), detail: { diff: { enabled: { from: true, to: false } }, kind: 'account_updated', target: 'overflow' }, kind: 'registry_changed' },
     // The ci key's revocation, after the last request it reached selection with.
-    { accountId: null, actor: 'admin', at: iso(KEY_REVOKED_AT), detail: { diff: {}, kind: 'key_revoked', target: 'ci' }, kind: 'registry_changed' },
+    { accountId: null, actor: 'admin', at: iso(KEY_REVOKED_AT), detail: { diff: {}, kind: 'key_revoked', target: 'ci' }, keyId: 'ci', kind: 'registry_changed' },
     // The retired workspace's life: the store's creation, which names its kind and label, and the members write that
     // places it in its pool, which stores the whole list. An API key account is born ready, so no state row opens its
     // history. At its delete, the store's change, which stores no diff, and the account's last state row.
-    { accountId: null, actor: 'admin', at: iso(RETIRED.createdAt), detail: { diff: { kind: RETIRED.account.kind, label: RETIRED.account.label }, kind: 'account_created', target: RETIRED.account.id }, kind: 'registry_changed' },
+    { accountId: RETIRED.account.id, actor: 'admin', at: iso(RETIRED.createdAt), detail: { diff: { kind: RETIRED.account.kind, label: RETIRED.account.label }, kind: 'account_created', target: RETIRED.account.id }, kind: 'registry_changed' },
     {
       accountId: null,
       actor: 'admin',
@@ -3277,7 +3270,7 @@ function buildEvents(): RoutingEvent[] {
       kind: 'registry_changed',
       poolId: RETIRED.poolId,
     },
-    { accountId: null, actor: 'admin', at: iso(RETIRED.deletedAt), detail: { diff: {}, kind: 'account_deleted', target: RETIRED.account.id }, kind: 'registry_changed' },
+    { accountId: RETIRED.account.id, actor: 'admin', at: iso(RETIRED.deletedAt), detail: { diff: {}, kind: 'account_deleted', target: RETIRED.account.id }, kind: 'registry_changed' },
     { accountId: RETIRED.account.id, at: iso(RETIRED.deletedAt), detail: { cause: 'deleted', detail: null, from: 'ready', to: 'deleted' }, kind: 'account_state_changed' },
     { accountId: 'primary', at: iso(t(9, 0, 41)), detail: { added: ['claude-opus-5-5'], count: 12, removed: [] }, kind: 'catalog_changed' },
     { accountId: null, at: iso(t(6, 12, 40)), detail: { affinity_entries_loaded: 34, down_since: t(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, kind: 'router_started' },
@@ -3305,8 +3298,9 @@ function buildEvents(): RoutingEvent[] {
   const studioRefresh = accountById.get('studio')?.credential.refreshTokenExpiresAt ?? null;
   seeds.push({ accountId: 'studio', at: iso(LATE_EVENT_AT), detail: { access_expires_at: LATE_EVENT_AT + 8 * HOUR, refresh_expires_at: studioRefresh === null ? null : Date.parse(studioRefresh), until: LATE_EVENT_AT + 8 * HOUR }, kind: 'refresh_succeeded' });
   // At one instant the kinds read alphabetically, save that a placement writes the release of the row it replaces
-  // before the pin it creates, so the ledger numbers the release first.
-  const instantKey = (kind: string) => (kind === 'pin_expired' || kind === 'pin_released' ? `pin_0${kind.slice(4)}` : kind);
+  // before the pin it creates, so the ledger numbers the release first, and that the ledger's mirror records a
+  // registry change before the sweep that writes the changed account's state row.
+  const instantKey = (kind: string) => (kind === 'pin_expired' || kind === 'pin_released' ? `pin_0${kind.slice(4)}` : kind === 'registry_changed' ? 'account_registry_changed' : kind);
   return seeds
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || instantKey(a.kind).localeCompare(instantKey(b.kind)))
     .map((e, i) => ({ type: 'event', accountId: e.accountId, actor: e.actor ?? null, agentId: e.agentId ?? null, at: e.at, detail: e.detail, id: i + 1, keyId: e.keyId ?? null, kind: e.kind, model: e.model ?? null, poolId: e.poolId ?? null, requestId: e.requestId ?? null, sessionId: e.sessionId ?? null }));

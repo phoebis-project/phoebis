@@ -294,7 +294,7 @@ test("the mock's burn fold sums the rows' own shares, prices only rows with toke
   const usageOf = (input) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input, output: 0 });
   // A row carries its requests' shares, each priced at its completion, which can land past the hour it arrived in.
   const sharesAt = (model, input, at) => Object.fromEntries(['five_hour', 'seven_day'].map((w) => [w, d.shareIn(costs, w, tier, model, usageOf(input), d.inBand(costs, at))]));
-  const row = (model, uncachedInput, completedAt = hour) => ({ accountId: 'primary', client: '-', costUsd: 0, equivalent: d.equivalentIn(costs, model, usageOf(uncachedInput), d.inBand(costs, completedAt)), funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', shares: sharesAt(model, uncachedInput, completedAt), tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
+  const row = (model, uncachedInput, completedAt = hour) => ({ accountId: 'primary', client: '-', costUsd: 0, equivalent: d.equivalentIn(costs, model, usageOf(uncachedInput), d.inBand(costs, completedAt)), funding: 'plan', hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', shares: sharesAt(model, uncachedInput, completedAt), tier, tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
   // Two hours, so a token in the second keeps a group whose first hour holds rows with no token alone.
   const range = { from: new Date(hour).toISOString(), to: new Date(hour + 2 * HOUR).toISOString() };
   const shareOf = (rows) => d.burnOf(rows, range, 'account').points.find((p) => p.group === 'primary' && Date.parse(p.at) === hour).fiveHourShare;

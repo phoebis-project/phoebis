@@ -16833,7 +16833,8 @@ await forView('/routing-log', async () => {
     page.unmount();
   }
   {
-    // The ledger's row names an edited account in its detail alone, so the Account cell reads the change's target.
+    // The ledger's row names an edited account in its account column, as the change's target names it, and the
+    // Account cell links that account once.
     const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 24 * HOUR), kinds: ['registry_changed'], limit: 25, to: iso(CLOCK_ORIGIN) })).rows;
     const edit = listed.find((r) => r.detail.kind === 'account_updated');
     const page = await mount('/routing-log?kinds=registry_changed&range=24h', { now: CLOCK_ORIGIN });
@@ -16841,7 +16842,7 @@ await forView('/routing-log', async () => {
     const links = [...(cell(tr, 'account')?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'));
     results.push({
       name: "/routing-log an account edit's Account cell links the account it edited",
-      ok: edit !== undefined && edit.accountId === null && JSON.stringify(links) === JSON.stringify([`/accounts/${edit.detail.target}`]),
+      ok: edit !== undefined && edit.accountId === edit.detail.target && JSON.stringify(links) === JSON.stringify([`/accounts/${edit.detail.target}`]),
       missing: [edit ? `${edit.detail.target}, account ${edit.accountId}` : 'no account edit in the story', `links ${JSON.stringify(links)}`, cell(tr, 'account')?.textContent ?? 'no row'],
     });
     page.unmount();

@@ -652,7 +652,6 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     const kept = hour >= first && hour < end && passesMembers(r, filters);
     if (!kept) continue;
     const at = starts[slotOf(hour)];
-    const oauth = accountById.get(r.accountId)?.kind === 'oauth';
     // A fast answer spends usage credits and an overage row the account's overage, each in dollars on either kind
     // and off every plan window: on a tier the cost model sizes they read as a zero share, so the account is still a
     // priced one.
@@ -683,7 +682,9 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     held.plan ||= !billed;
     tokened.set(group, held);
     const week = modelWeeks(TABLES, r.model)[0];
-    const tier = oauth ? accountById.get(r.accountId)?.subscription?.rateLimitTier : undefined;
+    // The tier the row recorded, as the router reads it, so a plan row of an account that left the registry keeps its
+    // shares.
+    const tier = r.tier ?? undefined;
     if (billed) {
       // Every billed row adds a zero figure, so a bucket with tokens and no plan row reads 0 and only an idle one null.
       // The zero share rests on the tier alone, as the route reads a dollar-billed row, and an API key account has no

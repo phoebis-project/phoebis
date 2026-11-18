@@ -503,7 +503,8 @@ export interface PoolMember {
   eligible: MemberEligibility;
   /**
    * The share of the member's 7-day room Pace holds back for its expected Fable use, the reservation `paceScore`
-   * subtracts. Null on an API-key member, a usage-based seat and a member with no Fable reading.
+   * subtracts. Null on an API-key member, a usage-based seat and a member with no Fable reading, and while the router
+   * does not answer.
    */
   fableReservation: number | null;
   /** The factor the pool's slow-down computed for the account, null where the account route answers no `slowDown`. */

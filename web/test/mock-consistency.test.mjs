@@ -351,8 +351,9 @@ test("the burn answer keeps an unregistered account's plan row in its share and 
   // Three accounts the registry no longer holds, one group each under the account grouping.
   const rows = [
     row('gone-plan', { costUsd: 0.25, tokens: tokens(1_000) }),
-    // A request the upstream rate limited, which books the account a row with no token.
-    row('gone-failed', {}),
+    // A request the upstream rate limited, which books the account a row with no token, its figure 0 as the rollups
+    // write it.
+    row('gone-failed', { equivalent: 0 }),
     // A model the cost model has no weight for, so the row's tokens carry no figure.
     row('gone-unpriced', { equivalent: null, model: 'claude-unknown-1', tokens: tokens(1_000) }),
   ];
@@ -520,10 +521,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the accounts answer ends at the current hour and cuts an open cooldown at the read, at ${at}`, async () => {
     const s = await story;
-    // Secondary's account row and its model row (mock/accounts.ts) stand open at the read, each counted from the later
-    // of its start and the hour's start: 1,229 s and 1,800 s at 14:30, where the model row started at 13:56, and 1,229 s
-    // and 2,040 s at 03:40.
-    const want = { '2026-09-16T14:30:00Z': 3_029, '2026-09-20T03:40:00Z': 3_269 }[at];
+    // Secondary's model row (mock/accounts.ts) and the story attempts' rows on it (mock/requests.ts), each counted from
+    // the later of its start and the hour's start to the earlier of its end and the read: the model row's 1,800 s at
+    // 14:30, where it started at 13:56, and 2,040 s at 03:40, the 5-hour row's 1,329 s from the 429 of
+    // `req_b8c3e9d4-e61` at 14:07:50.9, which the account's own row of 14:09:31 repeats under its scope and end, and
+    // the 20 s each of the two 20 s retry-afters at 14:02:11 and 14:06:31.
+    const want = { '2026-09-16T14:30:00Z': 3_169, '2026-09-20T03:40:00Z': 3_409 }[at];
     const rows = (await s.api.listAccountRollups(iso(s.now - DAY), iso(s.now + DAY))).filter((r) => r.accountId === 'secondary');
     const newest = rows.map((r) => r.hour).sort().at(-1);
     assert.deepEqual([newest, rows.find((r) => r.hour === newest)?.cooldownSeconds], [iso(startOfHour(s.now)), want]);
@@ -2106,8 +2109,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     };
     for (const e of changes) {
       if (e.detail.kind === 'key_revoked') assert.deepEqual(e.detail.diff, {}, `${e.id}: a revocation stores no diff`);
-      // The ledger's mirror names a pool on a pool's change alone and a key on none.
-      assert.equal(e.keyId ?? null, null, `${e.id}: a registry row carries no key id`);
+      // The ledger's mirror names each change's subject in the column of its kind: an account's change its account, a
+      // key's its key and a pool's its pool.
+      const subject = (prefix) => (e.detail.kind.startsWith(prefix) ? e.detail.target : null);
+      assert.deepEqual([e.accountId ?? null, e.keyId ?? null, e.poolId ?? null], [subject('account_'), subject('key_'), subject('pool_')], `${e.id}: a registry row names its subject in its own column`);
       if (e.detail.kind === 'pool_updated') {
         const pairs = pairsOf(e, POOL_DIFF_MEMBERS);
         assert.ok(!('secret_replaced' in e.detail.diff), `${e.id}: a pool holds no secret`);
@@ -2857,7 +2862,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`a round the projection fired records the line its horizon set, the wall at a 5-hour reset and the window's own ceiling at the five-hour bound, at ${at}`, async () => {
+  test(`every story round records the line its trigger tested, the wall at a 5-hour reset and the window's own ceiling past the five-hour bound and at every horizon of the stretch, at ${at}`, async () => {
     const s = await story;
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round').sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
     // The 08:30 round's 7-day Fable reset lies days past the five-hour bound, so it tests all's weekly ceiling of 0.78
@@ -3098,9 +3103,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of [...records].sort((x, y) => x.seq - y.seq)) if (r.outcome.kind === 'placed' || r.outcome.kind === 'moved') booked.set(r.requestId, r.outcome.reservation === null ? null : r);
     const causeOf = (r) =>
       r.outcome === 'canceled' ? 'canceled' : r.outcome === 'exhausted' ? 'exhausted' : r.outcome === 'incomplete' || r.errorCode === 'stream_undecodable' ? 'transport_error' : 'refused';
+    // A request the relay rejected before any attempt ends at its placement.
     const want = s.requests.filter((r) => r.outcome !== 'succeeded' && booked.get(r.id)).map((r) => {
       const last = r.attempts[r.attempts.length - 1];
-      return [r.id, Date.parse(last.startedAt) + (last.durationMs ?? 0), booked.get(r.id).request.attempt, causeOf(r)];
+      const ended = last === undefined ? Date.parse(booked.get(r.id).request.at) : Date.parse(last.startedAt) + (last.durationMs ?? 0);
+      return [r.id, ended, booked.get(r.id).request.attempt, causeOf(r)];
     });
     const read = expired.map((e) => [e.requestId, Date.parse(e.at), e.detail.attempt, e.detail.cause]);
     const order = (x, y) => x[0].localeCompare(y[0]);
