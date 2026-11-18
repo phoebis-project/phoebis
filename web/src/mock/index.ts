@@ -945,7 +945,8 @@ export class MockApi implements Api {
       // the next read, whose member no token from before the pairing matches. The upstream's grants and uses stay in
       // the block, since a pairing changes nothing upstream. Its confirm sets the account's state ready, which the
       // account view folds with the enabled bit and the cooldowns.
-      this.putAccount({ ...held, credential: { ...held.credential, ...tokens }, limitResets: null, status: statusOf(held, held.routingEnabled, null), ...(flagged !== null && !kept ? { planEndedAt: null } : {}) });
+      const credential = { ...held.credential, ...tokens };
+      this.putAccount({ ...held, credential, featureGrants: featureGrantsOf({ credential, kind: held.kind }), limitResets: null, status: statusOf(held, held.routingEnabled, null), ...(flagged !== null && !kept ? { planEndedAt: null } : {}) });
       const block = lookup(this.resetBlocks, held.id);
       if (block !== undefined) this.resetBlocks = { ...this.resetBlocks, [held.id]: { ...block, folds: block.folds + 1 } };
     }

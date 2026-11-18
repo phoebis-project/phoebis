@@ -737,6 +737,17 @@ test("a second re-pair of legacy after its disconnect and a confirm confirms, si
   assert.equal((await repair()).status, 'confirmed', 'the next re-pair confirms over the credential the last one stored');
 });
 
+test('a disconnected account paired again reads both features in its grants, which the scopes of its new sign-in cover', async () => {
+  const api = await signedIn();
+  // The story seals legacy's credential under another storage key, so its re-pair confirms after a disconnect, which
+  // leaves the row no grant.
+  await api.disconnectAccount('legacy');
+  const started = await api.startPairing({ accountId: 'legacy' });
+  await api.completePairing(started.id, { code: 'code', state: started.state });
+  await api.confirmPairing(started.id);
+  assert.deepEqual((await storyAccount(api, 'legacy')).featureGrants, ['artifacts', 'connectors']);
+});
+
 test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect moves the account\'s revision, so an edit read before it is refused as stale', async () => {
   const api = await signedIn();
   const end = '2026-10-19T09:15:00.000Z';
