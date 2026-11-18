@@ -6,7 +6,7 @@ import { listWords, noun } from '@/lib/format';
  */
 export type AnalyticsControl = 'accounts' | 'agent' | 'clients' | 'keys' | 'models' | 'pools' | 'probes' | 'session' | 'userAgents';
 /** A card, or a part of one, whose read applies fewer controls than the bar holds. */
-export type AnalyticsCard = 'accountsTab' | 'burn' | 'guardrails' | 'placements' | 'refusals' | 'rewrites' | 'rewritesHeld' | 'unusedAllowance';
+type AnalyticsCard = 'accountsTab' | 'burn' | 'guardrails' | 'placements' | 'refusals' | 'rewrites' | 'rewritesHeld' | 'unusedAllowance';
 
 /** Per card, the controls its read applies: the members the page's call sends to the card's route. */
 const APPLIED: Record<AnalyticsCard, readonly AnalyticsControl[]> = {

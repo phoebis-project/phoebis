@@ -494,7 +494,7 @@ export function unpricedNote(labels: readonly string[], buckets: number): string
 }
 /** The Cost head's sentence above a figure of the routes' sums over rows that can hold a billed probe while the Include
  *  probes toggle is off: the routes add a billed probe's dollars to the cost and billed sums whatever the flag says. */
-export const BILLED_PROBE_NOTE = "A billed probe's dollars count whatever the Include probes toggle says";
+const BILLED_PROBE_NOTE = "A billed probe's dollars count whatever the Include probes toggle says";
 /** The Cost section's head under a position, as `costHeadOf` reads it. */
 export interface CostHead {
   meta: string;
@@ -768,7 +768,7 @@ export const lastBucketPartial = (buckets: readonly { at: number }[], bucketMs: 
 
 /** How a read covers its range: a rollup read sums whole hours, the burn read starts at its first bucket, and a
  *  session view folds the request log over the range itself. */
-export type ReadSource = 'burn' | 'rollup' | 'session';
+type ReadSource = 'burn' | 'rollup' | 'session';
 /** The window a read covers. Its end is the hour ceiling of the range's end and no later than the read's instant,
  *  the range's own end in a session view. Its start is the hour that holds the range's start for a rollup read,
  *  the first bucket's start for the burn read, and the range's own start in a session view. A burn answer with no

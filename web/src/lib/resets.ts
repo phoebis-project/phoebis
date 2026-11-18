@@ -167,9 +167,9 @@ export const resetHolds = (account: string, after: Pick<ResetGrant, 'resetsLeft'
   after === null ? `The next read of ${account} shows whether it was used.` : `${account} holds ${after.resetsLeft} of ${after.resetsTotal} now.`;
 
 // One window with use left is something to clear, so the warning waits for every one of them to read full.
-/** Whether a use would clear nothing yet: the grant names a window, and every window it clears reads 100% left now.
- *  A grant that names none answers false, since no window shows that it has nothing to clear. `cleared` holds one
- *  entry per window of the grant's `clears`, null where the account reads none. */
+/** Whether a use would clear nothing yet: every window the grant clears reads 100% left now. A grant that names none
+ *  answers false, since no window shows that it has nothing to clear. `cleared` holds one entry per window of the
+ *  grant's `clears`, null where the account reads none. */
 export const resetClearsNothing = (cleared: readonly (RateLimitWindow | null)[], now: number): boolean => cleared.length > 0 && cleared.every((window) => readsFull(window, now));
 
 /** The windows a grant clears as joined tags ("5h and 7d"), null for a grant that names none. */

@@ -237,10 +237,10 @@ export const weekReadingOf = (costs: SubscriptionCosts | null, error: string | n
  *  cost model cannot weigh read null on every tier. */
 export interface FiguredPoint extends BurnPoint { figure: number | null; gap: GapCause }
 /** One plan card over a range: its points, and the sentence it reads in place of its chart, null where it draws. */
-export interface PlanCardFigures { points: FiguredPoint[]; unpriced: string | null }
+interface PlanCardFigures { points: FiguredPoint[]; unpriced: string | null }
 
 type TierMap = Record<string, number | null>;
-export type GapCause = 'unpriced' | 'unsized' | null;
+type GapCause = 'unpriced' | 'unsized' | null;
 
 /**
  * A plan card's points read under the chosen week's tier: a number there is the figure, a 0 reading as idle, and a

@@ -5,6 +5,19 @@
 const REST = 'rest';
 
 /**
+ * The key of a theme under a palette, which every measure leads its lines with and the shots' directory takes: the bare
+ * theme under the default palette, whose shots the site reads, and `<theme>-github` under the other.
+ */
+export const keyOf = (theme, palette) => (palette === 'default' ? theme : `${theme}-${palette}`);
+
+/**
+ * The pass's walks over the views, each theme under each palette and the default palette's first. The router's pass
+ * walks the default palette alone, since its test counts one shot per view and theme. `mock-pass.mjs` reads the mock's
+ * walks here, since `views.mjs` runs its pass on import.
+ */
+export const walksOf = (mock) => (mock ? ['default', 'github'] : ['default']).flatMap((palette) => ['light', 'dark'].map((mode) => ({ key: keyOf(mode, palette), mode, palette })));
+
+/**
  * The parts `value` names, in the pass's own order and each once: the walks of `walkKeys` it names, and `rest`. A value
  * that names nothing names every part, and a word that names no part throws, since a mistyped part would run no
  * measure and leave the pass green.

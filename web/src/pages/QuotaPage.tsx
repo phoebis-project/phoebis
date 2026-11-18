@@ -680,7 +680,6 @@ function PlanLane({ account, color, frame, period, window: w }: { account: Accou
   // the current bar names no share: the previous window's use would fill a window the sample never read.
   const share = isExpired(w, now) ? null : `${fmtPct(remainingOf(w))} left`;
   const windowMs = w.periodHours * HOUR;
-  const resetAt = Date.parse(w.resetsAt ?? '');
   // A canceled account's saved end: no window opens after it, and the one that spans it stops there.
   const endsAt = canceledEndOf(account);
   const endMs = endsAt ? Date.parse(endsAt) : Number.POSITIVE_INFINITY;
@@ -688,7 +687,7 @@ function PlanLane({ account, color, frame, period, window: w }: { account: Accou
   const bars: { end: number; start: number; stop: number }[] = [];
   // A window with no reset has no period to project, so its lane keeps its chips over an empty track.
   if (noResetWord(w) === null) {
-    let start = resetAt - windowMs;
+    let start = Date.parse(w.resetsAt ?? '') - windowMs;
     while (start > span.startMs) start -= windowMs;
     for (; start < span.endMs; start += windowMs) {
       const end = start + windowMs;

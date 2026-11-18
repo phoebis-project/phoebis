@@ -12,7 +12,7 @@ const OUTLINE_MIN_WIDTH = 4;
  * that parts its segments as its `stroke`, and a bar under the outline's floor draws without it, so that it keeps its
  * fill. A bar with no height draws nothing, since `Rectangle` draws none.
  */
-export const chartBar = (handed: unknown): ReactElement => {
+const chartBar = (handed: unknown): ReactElement => {
   // Recharts hands a shape the Bar's props with the bucket's x, y, width and height, which its type offers as unknown.
   const props = handed as RectangleProps;
   const width = props.width ?? 0;

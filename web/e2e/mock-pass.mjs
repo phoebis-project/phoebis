@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fanOut, selectParts } from './parts.mjs';
+import { fanOut, selectParts, walksOf } from './parts.mjs';
 import { serve } from './serve.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -19,14 +19,12 @@ if (!existsSync(join(bundle, 'index.html'))) {
 const CLOCK = '2026-09-16T14:30:00Z';
 
 /**
- * The keys of `WALKS` in `views.mjs` under the mock, copied since that file runs its pass on import: a walk added there
- * runs here only once this list names it. The mock's story lives in each page, so no part reads another's writes, and
- * each part runs in a `views.mjs` of its own beside the others.
+ * The mock's story lives in each page, so no part reads another's writes, and each part runs in a `views.mjs` of its
+ * own beside the others.
  */
-const WALK_KEYS = ['light', 'dark', 'light-github', 'dark-github'];
 let parts;
 try {
-  parts = selectParts(process.env.PHOEBIS_E2E_WALKS, WALK_KEYS);
+  parts = selectParts(process.env.PHOEBIS_E2E_WALKS, walksOf(true).map((walk) => walk.key));
 } catch (error) {
   console.error(error.message);
   process.exit(2);

@@ -27,7 +27,7 @@ const proWeekOutputOf = (tokens: number, model: string, client: string | null): 
  * account wrote, which the destination's binding drops. The round's record and the pin's session line read this one
  * seed, so the line answers the figures the round divided by.
  */
-export const STRETCH_DROPPED_THINKING = { agentId: 'main', model: 'claude-sonnet-5-5', sessionId: MARKED_SESSION_IDS[1], tokens: 2_400 } as const;
+const STRETCH_DROPPED_THINKING = { agentId: 'main', model: 'claude-sonnet-5-5', sessionId: MARKED_SESSION_IDS[1], tokens: 2_400 } as const;
 /** The thinking a pin's move drops at its destination, null where the story learned no fact of the pair. */
 export const droppedThinkingOf = (sessionId: string, agentId: string, model: string): number | null =>
   sessionId === STRETCH_DROPPED_THINKING.sessionId && agentId === STRETCH_DROPPED_THINKING.agentId && model === STRETCH_DROPPED_THINKING.model ? STRETCH_DROPPED_THINKING.tokens : null;

@@ -16170,8 +16170,8 @@ await forView('/routing-log', async () => {
 });
 
 // The Routing log's Sort control, Time alone: newest first at rest, and under Ascending the page draws the rows of the
-// ascending answer it received from that answer's first row, each Time cell dated. The read sends the direction, the
-// address carries it and a reload reads it back.
+// ascending answer it received from that answer's first row. In each state the first row's Time cell is dated. The read
+// sends the direction, the address carries it and a reload reads it back.
 await forView('/routing-log', async () => {
   const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
   const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };

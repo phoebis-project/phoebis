@@ -21,7 +21,7 @@ export const paceDeadline = (account: Pick<Account, 'canceled' | 'subscription'>
 export const leftPerHour = (utilization: number, deadline: number | null, at: number): number => Math.max(0, 1 - utilization) / paceHours(deadline, at);
 
 /** A window's share used and its reset as a Pace read takes them, off a record's reading or an account's window. */
-export interface PaceReading {
+interface PaceReading {
   reset: string | null;
   utilization: number;
 }
@@ -31,7 +31,7 @@ export interface PaceReading {
  * account's sessions spend on it, both by the window's wire key with `worst_bucket` for an API key, and whether the
  * member stands in the pick's first tier, the one set the router holds a Fable reservation on.
  */
-export interface PaceReads {
+interface PaceReads {
   burns: Record<string, number>;
   readings: Record<string, PaceReading | undefined>;
   reserve: boolean;

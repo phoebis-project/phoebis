@@ -26,7 +26,7 @@ export interface Runway {
 
 /** One plan window's reading for a request with `rewrite` and `burn` on it: whether the rewrite lands under the
  *  window's ceiling, the runway to the ceiling, the runway to 1.0, and whether the window holds no allowance. */
-export interface WindowFit {
+interface WindowFit {
   lands: boolean;
   runwayMs: number | null;
   spent: boolean;

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { selectParts } from './parts.mjs';
+import { keyOf, selectParts, walksOf } from './parts.mjs';
 
 const base = process.env.PHOEBIS_E2E_BASE ?? 'http://127.0.0.1:8081';
 const secret = process.env.PHOEBIS_E2E_SECRET;
@@ -111,18 +111,9 @@ const VIEWS = [
   { path: '/meter', title: 'Meter', wait: '.meter-table', slug: 'meter', mockOnly: true },
 ];
 
-/**
- * The key of a theme under a palette, which every measure leads its lines with and the shots' directory takes: the bare
- * theme under the default palette, whose shots the site reads, and `<theme>-github` under the other.
- */
-const keyOf = (theme, palette) => (palette === 'default' ? theme : `${theme}-${palette}`);
 /** The theme a key names, for a check against the theme the page drew. */
 const themeOf = (key) => key.split('-')[0];
-/**
- * The pass's walks over the views, each theme under each palette and the default palette's first. The router's pass
- * walks the default palette alone, since its test counts one shot per view and theme.
- */
-const WALKS = (mock ? ['default', 'github'] : ['default']).flatMap((palette) => ['light', 'dark'].map((mode) => ({ key: keyOf(mode, palette), mode, palette })));
+const WALKS = walksOf(mock);
 /**
  * The parts this process runs. Unset, that is every part in one process, which the router's pass keeps: its walks
  * share the router's registry.

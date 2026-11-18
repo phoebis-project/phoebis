@@ -113,7 +113,7 @@ function periodEndAfter(period: BudgetPeriod, now: number): string {
 export const KEY_REVOKED_AT = clock(14, 17, 30);
 
 /** An account the story deletes during the day, as it stood in its one pool from its creation up to its delete. */
-export interface DeletedAccount {
+interface DeletedAccount {
   account: Account;
   createdAt: number;
   deletedAt: number;
