@@ -42,7 +42,8 @@ use crate::stream::Checkin;
 
 /// Why a forward handed back no answer of the upstream's.
 pub(crate) enum Unanswered {
-    /// The manager refused the account's token for a state only the operator cures.
+    /// The manager refused the account's token for a state only the operator cures, or the account under the id no
+    /// longer stands in the sign-in the call was admitted under.
     Refused(Failure),
     /// A failure ahead of the upstream's answer head, by the word the DEBUG line names its case with, and the text a
     /// pooled connection's loss carries, since that one word takes in a cut, a late head and an unreadable one.
@@ -92,8 +93,9 @@ pub(crate) async fn read_body(
 /// gets the account's one forced refresh and the call once more under the new token, and that answer goes back
 /// whatever it is, while a refresh that gives no newer token sends the first 401 back as it came. A 401 under the
 /// token the listener's holds keep for the account goes back as it came too, and a resend's own such 401 holds the new
-/// token there. `ending` arms at the first send and ends with the answer that goes back, or as unanswered where the
-/// forward fails ahead of a head.
+/// token there. The call leaves under the sign-in it was admitted under alone: one that moved by the first send
+/// refuses the call, and one that moved by its 401 sends that 401 back as it came. `ending` arms at the first send and
+/// ends with the answer that goes back, or as unanswered where the forward fails ahead of a head.
 pub(crate) async fn forward(
     listener: &Listener,
     account: &AccountRow,
@@ -148,6 +150,11 @@ async fn answer_of(
             });
         }
     };
+    if !signed_in(relay, account) {
+        return Err(Unanswered::Refused(feature_account_unavailable(
+            &Obstacle::Unready,
+        )));
+    }
     let target = target_of(parts);
     let length = body.as_ref().map(Bytes::len);
     let body = body.unwrap_or_default();
@@ -175,9 +182,11 @@ async fn answer_of(
     )
     .await?;
     // A token the upstream rejected behind its own refresh gets no second one. The call went out once, since the
-    // upstream can accept the token on another path, and its 401 goes back as it came.
+    // upstream can accept the token on another path, and its 401 goes back as it came. So does the 401 of a sign-in
+    // that moved while the send waited, since the refresh would rotate the new sign-in's token.
     if !wants_refresh(first.head())
         || holds.holds(&account.id, Rejected::of(account, token.generation))
+        || !signed_in(relay, account)
     {
         return Ok(first);
     }
@@ -266,6 +275,21 @@ pub(crate) async fn keyless(
     };
     ending.unanswered();
     Err(case)
+}
+
+/// Whether the account under `account`'s id still stands in the sign-in the call was admitted under, its incarnation
+/// and its lifecycle generation, on the routing snapshot in force now. The manager reads a token by the id alone, and
+/// each sign-in starts its tokens' count at 1. As on the model path, a write that landed and is not yet swapped into
+/// the snapshot passes for the one reload it takes.
+fn signed_in(relay: &Relay, account: &AccountRow) -> bool {
+    relay
+        .router()
+        .snapshot()
+        .account(&account.id)
+        .is_some_and(|row| {
+            (row.incarnation, row.lifecycle_generation)
+                == (account.incarnation, account.lifecycle_generation)
+        })
 }
 
 /// Whether an answer asks for the account's credential once more: a 401 without `X-Mcp-Error-Code`. A connector that

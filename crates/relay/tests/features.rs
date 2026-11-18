@@ -6,7 +6,7 @@
 mod common;
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1638,6 +1638,104 @@ async fn a_new_sign_in_starts_without_the_hold() {
         .await;
     assert_eq!(status, 401, "{headers:?}");
     assert_eq!((feature_requests(&up).len(), token_posts(&up)), (4, 3));
+    up.shutdown().await;
+}
+
+/// A deletion of `id` and an account created again under it with `secret`, as the admin's two routes leave the store,
+/// the manager and the routing: a new incarnation, the lifecycle and the token's count at 1 again, and the selections
+/// the deletion cleared left clear.
+async fn created_again(h: &Harness, id: &'static str, secret: &str) {
+    h.store.delete_account(id, "test").unwrap();
+    h.store
+        .insert_account(&test_account_row(&oauth(id, "", 0)))
+        .unwrap();
+    let row = h.store.account(id).unwrap().unwrap();
+    h.store
+        .commit_credentials(
+            id,
+            row.incarnation,
+            row.lifecycle_generation,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new(secret),
+                refresh_token: Some(Secret::new(&format!("{secret}-refresh"))),
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    h.manager.invalidate(id);
+    h.router.reload().await.unwrap();
+}
+
+/// A ledger that stays current and adds one to `admitted` at each counted reading, which a keyed call takes behind its
+/// admission checks and ahead of its body's read, so a test learns there that a call was admitted.
+fn counted(admitted: &Arc<AtomicUsize>) -> AccountingSource {
+    let admitted = Arc::clone(admitted);
+    Arc::new(move |counts| {
+        if counts {
+            admitted.fetch_add(1, Ordering::SeqCst);
+        }
+        Accounting { behind: false }
+    })
+}
+
+#[tokio::test]
+async fn a_call_whose_account_is_created_again_while_its_body_arrives_is_refused() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let admitted = Arc::new(AtomicUsize::new(0));
+    let h = harness_with_pool_and_accounting(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        default_limits(),
+        counted(&admitted),
+    )
+    .await;
+    let listener = feature_listener(&h).await;
+    let mut held = listener.hold(API, &held_body_request()).await;
+    wait_for(Duration::from_secs(5), || {
+        (admitted.load(Ordering::SeqCst) == 1).then_some(())
+    })
+    .await;
+    created_again(&h, "a", "sk-ant-oat01-PLACEHOLDER-B").await;
+    // The ten bytes the head declared beyond the six it carried.
+    held.write(br#""example"}"#).await;
+    let (status, headers, _) = held.answer().await;
+    assert_eq!(
+        refusal_of(status, &headers),
+        (403, "feature_account_unavailable", "")
+    );
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_401_whose_account_signed_in_again_while_it_waited_goes_back_without_a_refresh() {
+    let up = fake(vec![
+        ("/api/frame/", Respond::Gated(Box::new(expired()))),
+        ("/v1/oauth/token", token_answer()),
+    ])
+    .await;
+    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let held = listener
+        .hold(API, &keyed_title("/api/frame/artifacts", API))
+        .await;
+    wait_for(Duration::from_secs(5), || {
+        (feature_requests(&up).len() == 1).then_some(())
+    })
+    .await;
+    signed_in_again(&h, "a", "sk-ant-oat01-PLACEHOLDER-AGAIN").await;
+    up.release();
+    let (status, headers, body) = held.answer().await;
+    assert_eq!(status, 401, "{headers:?}");
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains(EXPIRED_BODY), "{body}");
+    assert_eq!((feature_requests(&up).len(), token_posts(&up)), (1, 0));
     up.shutdown().await;
 }
 

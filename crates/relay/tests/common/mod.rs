@@ -1269,6 +1269,14 @@ impl FeatureListener {
 pub struct HeldRequest(tokio_boring::SslStream<tokio::net::TcpStream>);
 
 impl HeldRequest {
+    /// Writes `bytes` behind what the connection carried so far, the rest of a body its head declared.
+    pub async fn write(&mut self, bytes: &[u8]) {
+        use tokio::io::AsyncWriteExt;
+
+        self.0.write_all(bytes).await.unwrap();
+        self.0.flush().await.unwrap();
+    }
+
     /// The status, the head's lines as sent and the body of the answer, read to the connection's end.
     pub async fn answer(mut self) -> (u16, Vec<(String, String)>, Vec<u8>) {
         use tokio::io::AsyncReadExt;
