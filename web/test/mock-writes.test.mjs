@@ -612,6 +612,15 @@ test('an editor opened before its account was deleted and created again is refus
   assert.deepEqual([stored.label, stored.canceled, stored.revision], ['again', replacement.canceled, replacement.revision], 'the stale saves stored nothing');
 });
 
+test("an account's deletion sets the key's word that names it to none and keeps the key's other word", async () => {
+  const api = await signedIn();
+  await api.createAccount({ id: 'fresh', kind: 'oauth', label: 'fresh', secret: null });
+  await api.createKey({ ...keyInput, featureAccounts: { artifacts: { accountId: 'fresh', mode: 'account' }, connectors: { accountId: 'primary', mode: 'account' } }, name: 'named' });
+  await api.deleteAccount('fresh');
+  const key = (await api.listKeys()).find((k) => k.id === 'named');
+  assert.deepEqual(key?.featureAccounts, { artifacts: { accountId: null, mode: 'none' }, connectors: { accountId: 'primary', mode: 'account' } });
+});
+
 test('a pairing started for a new account writes its row at the confirm and none at a cancel', async () => {
   const api = await signedIn();
   const before = (await api.listAccounts()).length;
