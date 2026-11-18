@@ -9,13 +9,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Body;
-use axum::http::Request;
 use bytes::Bytes;
 use common::*;
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule, SseEvent};
 use phoebis_bus::{Bus, Delivery, Event, FeatureEnd, FeatureOutcome, ResponseChunk, QUEUE_DEPTH};
-use phoebis_profile::claude_code_2_1_310_linux_x64;
 use phoebis_relay::{Accounting, AccountingSource, Limits, Relay};
 use phoebis_store::{
     AccountState, Cancellation, FeatureOverride, KeyFeatureAccounts, NewBundle,
@@ -724,37 +721,25 @@ async fn a_call_without_a_body_takes_no_place_in_the_body_bounds() {
     up.shutdown().await;
 }
 
-type BodySender = tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>;
-
-/// A keyed `POST /api/frame/x` for the feature module's routes in process, its head declaring `declared` bytes, and the
-/// sender its body arrives through. The channel holds one chunk, so a second send returns once the read took the first.
-fn held_body_request(declared: usize) -> (Request<Body>, BodySender) {
-    let (tx, rx) = tokio::sync::mpsc::channel(1);
-    let request = Request::post("/api/frame/x")
-        .header("host", API)
-        .header("authorization", format!("Bearer {KEY}"))
-        .header("content-length", declared)
-        .body(Body::from_stream(
-            tokio_stream::wrappers::ReceiverStream::new(rx),
-        ))
-        .unwrap();
-    (request, tx)
+/// A keyed `POST /api/frame/x` whose head declares 16 bytes of body, with the first 6 of them.
+fn held_body_request() -> Vec<u8> {
+    keyed(
+        "POST /api/frame/x",
+        API,
+        "Content-Length: 16\r\n",
+        b"{\"a\": ",
+    )
 }
 
 /// The status and the `x-phoebis-error-code` and `retry-after` lines of an answer, an absent line read as empty.
-fn refusal_of(answer: &axum::http::Response<Body>) -> (u16, &str, &str) {
+fn refusal_of(status: u16, headers: &[(String, String)]) -> (u16, &str, &str) {
     let line = |name: &str| {
-        answer
-            .headers()
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
+        headers
+            .iter()
+            .find(|(held, _)| held.eq_ignore_ascii_case(name))
+            .map_or("", |(_, value)| value.as_str())
     };
-    (
-        answer.status().as_u16(),
-        line("x-phoebis-error-code"),
-        line("retry-after"),
-    )
+    (status, line("x-phoebis-error-code"), line("retry-after"))
 }
 
 #[tokio::test]
@@ -770,38 +755,19 @@ async fn a_body_past_the_keys_read_slots_is_refused() {
         },
     )
     .await;
-    let app = phoebis_relay::features::router(
-        h.relay.clone(),
-        h.control.clone(),
-        &claude_code_2_1_310_linux_x64().features,
-    );
-    let (held, tx) = held_body_request(16);
-    let first = tokio::spawn({
-        let app = app.clone();
-        async move { app.oneshot(held).await.unwrap() }
-    });
-    for chunk in [&b"{\"a\":"[..], b" "] {
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            tx.send(Ok(Bytes::from_static(chunk))),
-        )
-        .await
-        .expect("the read takes the chunk")
-        .expect("the read is open");
-    }
-    let second = Request::post("/api/frame/x")
-        .header("host", API)
-        .header("authorization", format!("Bearer {KEY}"))
-        .header("content-length", 2)
-        .body(Body::from("{}"))
-        .unwrap();
-    let refused = tokio::time::timeout(Duration::from_secs(5), app.oneshot(second))
-        .await
-        .expect("refused at once")
-        .unwrap();
-    assert_eq!(refusal_of(&refused), (429, "key_body_reads", "1"));
+    let listener = feature_listener(&h).await;
+    let _first = listener.hold(API, &held_body_request()).await;
+    let (status, headers, _) = tokio::time::timeout(
+        Duration::from_secs(5),
+        listener.send(
+            API,
+            &keyed("POST /api/frame/x", API, "Content-Length: 2\r\n", b"{}"),
+        ),
+    )
+    .await
+    .expect("refused at once");
+    assert_eq!(refusal_of(status, &headers), (429, "key_body_reads", "1"));
     assert_eq!(feature_lines(&up), Vec::<String>::new());
-    first.abort();
     up.shutdown().await;
 }
 
@@ -818,20 +784,12 @@ async fn a_body_that_stalls_is_ended_at_the_reads_deadline() {
         },
     )
     .await;
-    let (request, _tx) = held_body_request(16);
-    let answer = tokio::time::timeout(
-        Duration::from_secs(5),
-        phoebis_relay::features::router(
-            h.relay.clone(),
-            h.control.clone(),
-            &claude_code_2_1_310_linux_x64().features,
-        )
-        .oneshot(request),
-    )
-    .await
-    .expect("answered within a few seconds")
-    .unwrap();
-    assert_eq!(refusal_of(&answer), (408, "request_timeout", ""));
+    let listener = feature_listener(&h).await;
+    let held = listener.hold(API, &held_body_request()).await;
+    let (status, headers, _) = tokio::time::timeout(Duration::from_secs(5), held.answer())
+        .await
+        .expect("answered within a few seconds");
+    assert_eq!(refusal_of(status, &headers), (408, "request_timeout", ""));
     assert_eq!(feature_lines(&up), Vec::<String>::new());
     up.shutdown().await;
 }
@@ -1002,24 +960,18 @@ async fn a_refused_feature_call_answers_while_the_ledger_is_behind_and_the_bus_q
         behind,
     )
     .await;
-    let request = Request::get("/")
-        .header("host", API)
-        .body(Body::empty())
-        .unwrap();
-    let answer = tokio::time::timeout(
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = tokio::time::timeout(
         Duration::from_secs(1),
-        phoebis_relay::features::router(
-            h.relay.clone(),
-            h.control.clone(),
-            &claude_code_2_1_310_linux_x64().features,
-        )
-        .oneshot(request),
+        listener.send(
+            API,
+            b"GET / HTTP/1.1\r\nHost: api.anthropic.com\r\nConnection: close\r\n\r\n",
+        ),
     )
     .await
-    .expect("the refusal waited on the full queue")
-    .unwrap();
-    assert_eq!(answer.status(), 401);
-    assert_eq!(answer.headers()["x-phoebis-error-code"], "auth_missing");
+    .expect("the refusal waited on the full queue");
+    assert_eq!(status, 401);
+    assert_eq!(refusal_of(status, &headers).1, "auth_missing");
     up.shutdown().await;
 }
 

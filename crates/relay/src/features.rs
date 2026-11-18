@@ -49,7 +49,7 @@ struct Listener {
 
 /// The feature listener's routes. Each request on that listener is a feature endpoint request, whatever its path.
 /// The calls of the control plane leave through `control`, and `table` is the feature table of the router's profile.
-pub fn router(
+pub(crate) fn router(
     relay: Arc<Relay>,
     control: Arc<ControlClient>,
     table: &'static FeatureTable,

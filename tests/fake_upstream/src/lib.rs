@@ -126,6 +126,14 @@ pub enum Respond {
         headers: Vec<(String, String)>,
         events: Vec<SseEvent>,
     },
+    /// `SseCut` that holds the connection after the events until `cut` is notified through `notify_one`, so a test
+    /// reads what arrived ahead of the cut before it lets the cut happen.
+    SseCutOn {
+        status: u16,
+        headers: Vec<(String, String)>,
+        events: Vec<SseEvent>,
+        cut: Arc<Notify>,
+    },
     SseGated {
         status: u16,
         headers: Vec<(String, String)>,
@@ -856,6 +864,31 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                     }
                 }
                 shared.mark_written(index);
+                return;
+            }
+            Respond::SseCutOn {
+                status,
+                headers,
+                events,
+                cut,
+            } => {
+                if write_sse_head(&mut stream, status, event_stream_headers(headers))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                for e in &events {
+                    if write_chunk(&mut stream, render_event(e).as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                shared.mark_written(index);
+                // A `notify_one` that came first left its permit, so the wait ends at once.
+                cut.notified().await;
                 return;
             }
             Respond::SseGated {

@@ -137,6 +137,135 @@ pub async fn harness_with_features(
     h
 }
 
+/// The feature module on a loopback port, served through `serve_features` under a pair of the test's own making for
+/// both feature hosts, as the relay's harness serves it.
+pub struct FeatureListener {
+    addr: std::net::SocketAddr,
+    pair: fake_upstream::GeneratedPair,
+    /// Dropped with the listener, which ends its accept loop.
+    _stop: tokio::sync::watch::Sender<bool>,
+}
+
+pub async fn feature_listener(h: &Harness) -> FeatureListener {
+    let pair = fake_upstream::generate_pair(&["api.anthropic.com", "mcp-proxy.anthropic.com"]);
+    let acceptor = phoebis_relay::LiveAcceptor::new(fake_upstream::acceptor_for(&pair));
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop, stop_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(phoebis_relay::serve_features(
+        listener,
+        h.relay.clone(),
+        h.control.clone(),
+        &claude_code_2_1_310_linux_x64().features,
+        stop_rx,
+        phoebis_relay::ListenLimits {
+            drain_timeout: Duration::from_secs(30),
+            header_read_timeout: Duration::from_secs(30),
+            max_connections: 64,
+        },
+        Arc::new(acceptor),
+    ));
+    FeatureListener {
+        addr,
+        pair,
+        _stop: stop,
+    }
+}
+
+impl FeatureListener {
+    /// Sends `request`, the bytes of one HTTP/1.1 request that carries `Connection: close`, on a new TLS connection
+    /// that names `host`, and answers once the head arrived. The listener stays up for as long as the answer.
+    pub async fn open(self, host: &str, request: &[u8]) -> Answer {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let socket = tokio::net::TcpStream::connect(self.addr).await.unwrap();
+        let mut tls =
+            tokio_boring::connect(fake_upstream::connector_trusting(&self.pair), host, socket)
+                .await
+                .unwrap();
+        tls.write_all(request).await.unwrap();
+        let mut read = Vec::new();
+        let split = loop {
+            if let Some(split) = read.windows(4).position(|window| window == b"\r\n\r\n") {
+                break split;
+            }
+            let mut piece = [0u8; 4096];
+            let n = tokio::time::timeout(Duration::from_secs(30), tls.read(&mut piece))
+                .await
+                .expect("the answer's head stalled")
+                .unwrap_or(0);
+            assert!(
+                n > 0,
+                "the connection ended before the answer's head: {:?}",
+                String::from_utf8_lossy(&read)
+            );
+            read.extend_from_slice(&piece[..n]);
+        };
+        let head = String::from_utf8_lossy(&read[..split]).into_owned();
+        let status = head
+            .split("\r\n")
+            .next()
+            .and_then(|line| line.split(' ').nth(1))
+            .and_then(|code| code.parse().ok())
+            .unwrap_or_else(|| panic!("no status line in {head:?}"));
+        Answer {
+            status,
+            tls,
+            left: read[split + 4..].to_vec(),
+            _listener: self,
+        }
+    }
+}
+
+/// An answer whose head was read, its body still on the connection. Dropping it closes the caller's connection.
+pub struct Answer {
+    pub status: u16,
+    tls: tokio_boring::SslStream<tokio::net::TcpStream>,
+    /// What the reads ahead of `body` took of the body.
+    left: Vec<u8>,
+    _listener: FeatureListener,
+}
+
+impl Answer {
+    /// Reads the body until the bytes read so far hold `needle`, and keeps them for `body`.
+    pub async fn read_until(&mut self, needle: &[u8]) {
+        use tokio::io::AsyncReadExt;
+
+        while !self
+            .left
+            .windows(needle.len())
+            .any(|window| window == needle)
+        {
+            let mut piece = [0u8; 4096];
+            let n = tokio::time::timeout(Duration::from_secs(30), self.tls.read(&mut piece))
+                .await
+                .expect("the body stalled ahead of the bytes awaited")
+                .unwrap_or(0);
+            assert!(
+                n > 0,
+                "the connection ended ahead of {:?}: {:?}",
+                String::from_utf8_lossy(needle),
+                String::from_utf8_lossy(&self.left)
+            );
+            self.left.extend_from_slice(&piece[..n]);
+        }
+    }
+
+    /// The body to the connection's end, in its framing.
+    pub async fn body(mut self) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+
+        let mut body = std::mem::take(&mut self.left);
+        // A peer that closes without a TLS close_notify ends the read with an error after the whole answer.
+        let _ = tokio::time::timeout(Duration::from_secs(30), self.tls.read_to_end(&mut body))
+            .await
+            .expect("the answer stalled before the connection ended");
+        body
+    }
+}
+
 /// `with_usage` builds the harness's `UsageService`, and `false` builds none.
 pub async fn harness_on(
     store: Arc<Store>,

@@ -1174,7 +1174,13 @@ impl FeatureListener {
     /// the status, the head's lines as sent and the body. The answer is read to the connection's end, so `request`
     /// carries `Connection: close`, and a chunked body comes back in its framing.
     pub async fn send(&self, host: &str, request: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        self.hold(host, request).await.answer().await
+    }
+
+    /// Writes `request` on a new TLS connection that names `host` and hands the connection back open, so a head that
+    /// declares more body than `request` carries keeps the router reading for as long as the test holds it.
+    pub async fn hold(&self, host: &str, request: &[u8]) -> HeldRequest {
+        use tokio::io::AsyncWriteExt;
 
         let socket = tokio::net::TcpStream::connect(self.addr).await.unwrap();
         let mut tls =
@@ -1182,27 +1188,7 @@ impl FeatureListener {
                 .await
                 .unwrap();
         tls.write_all(request).await.unwrap();
-        let mut answer = Vec::new();
-        // A peer that closes without a TLS close_notify ends the read with an error after the whole answer.
-        let _ = tokio::time::timeout(Duration::from_secs(30), tls.read_to_end(&mut answer))
-            .await
-            .expect("the answer stalled before the connection ended");
-        let split = answer
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-            .unwrap_or_else(|| panic!("no answer head in {:?}", String::from_utf8_lossy(&answer)));
-        let head = String::from_utf8_lossy(&answer[..split]).into_owned();
-        let mut lines = head.split("\r\n");
-        let status = lines
-            .next()
-            .and_then(|line| line.split(' ').nth(1))
-            .and_then(|code| code.parse().ok())
-            .unwrap_or_else(|| panic!("no status line in {head:?}"));
-        let headers = lines
-            .filter_map(|line| line.split_once(':'))
-            .map(|(name, value)| (name.to_owned(), value.trim().to_owned()))
-            .collect();
-        (status, headers, answer[split + 4..].to_vec())
+        HeldRequest(tls)
     }
 
     /// Sends `request` as `send` does and answers once the head arrived: the status, the head's lines as sent, and
@@ -1249,6 +1235,38 @@ impl FeatureListener {
             left: read[split + 4..].to_vec(),
         };
         (status, headers, body)
+    }
+}
+
+/// A connection the test wrote a request on and keeps open. Dropping it closes the connection.
+pub struct HeldRequest(tokio_boring::SslStream<tokio::net::TcpStream>);
+
+impl HeldRequest {
+    /// The status, the head's lines as sent and the body of the answer, read to the connection's end.
+    pub async fn answer(mut self) -> (u16, Vec<(String, String)>, Vec<u8>) {
+        use tokio::io::AsyncReadExt;
+
+        let mut answer = Vec::new();
+        // A peer that closes without a TLS close_notify ends the read with an error after the whole answer.
+        let _ = tokio::time::timeout(Duration::from_secs(30), self.0.read_to_end(&mut answer))
+            .await
+            .expect("the answer stalled before the connection ended");
+        let split = answer
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap_or_else(|| panic!("no answer head in {:?}", String::from_utf8_lossy(&answer)));
+        let head = String::from_utf8_lossy(&answer[..split]).into_owned();
+        let mut lines = head.split("\r\n");
+        let status = lines
+            .next()
+            .and_then(|line| line.split(' ').nth(1))
+            .and_then(|code| code.parse().ok())
+            .unwrap_or_else(|| panic!("no status line in {head:?}"));
+        let headers = lines
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.to_owned(), value.trim().to_owned()))
+            .collect();
+        (status, headers, answer[split + 4..].to_vec())
     }
 }
 

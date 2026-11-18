@@ -16,7 +16,7 @@ mod drift;
 mod errors;
 mod exhaustion;
 mod facts;
-pub mod features;
+mod features;
 mod headers;
 mod hold;
 mod identity;

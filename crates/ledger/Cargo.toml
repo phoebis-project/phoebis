@@ -52,4 +52,6 @@ phoebis-transport = { path = "../transport" }
 rand = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+# The feature call tests open the feature listener's TLS connections through it.
+tokio-boring = { workspace = true }
 tower = { workspace = true }

@@ -464,7 +464,8 @@ struct Open {
     call: Call,
     clock: Clock,
     kind: Kind,
-    /// The status of the head that went to the caller, so a 401 a forced refresh dropped never reaches it.
+    /// The status of the upstream's head that the listener passed on, so a 401 a forced refresh dropped never reaches
+    /// it.
     status: Option<u16>,
 }
 

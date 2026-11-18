@@ -3,21 +3,18 @@
 
 mod common;
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Body;
-use axum::http::Request;
-use axum::response::Response;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
-use http_body_util::BodyExt;
 use phoebis_bus::{Event, FeatureCall, FeatureEnd, FeatureOutcome};
 use phoebis_ledger::{
     list_feature_calls, list_requests, run_retention_blocking, Direction, FeatureCallFilter,
     FeatureCallRow, LedgerConfig, LiveKeys, PriceRevisions, RequestFilter, RequestOrder,
 };
 use phoebis_store::{FeatureOverride, KeyFeatureAccounts, PoolFeatureAccounts};
-use tower::ServiceExt;
+use tokio::sync::Notify;
 
 const API: &str = "api.anthropic.com";
 
@@ -50,26 +47,17 @@ async fn features_harness(up: &FakeUpstream) -> Harness {
 }
 
 /// A request under the router key with the `Host` line of `api.anthropic.com`.
-fn keyed(method: &str, target: &str) -> Request<Body> {
-    Request::builder()
-        .method(method)
-        .uri(target)
-        .header("host", API)
-        .header("authorization", format!("Bearer {KEY}"))
-        .body(Body::empty())
-        .unwrap()
+fn keyed(method: &str, target: &str) -> Vec<u8> {
+    format!(
+        "{method} {target} HTTP/1.1\r\nHost: {API}\r\nAuthorization: Bearer {KEY}\r\n\
+         Connection: close\r\n\r\n"
+    )
+    .into_bytes()
 }
 
 /// The feature listener's answer to `request`, its body unread.
-async fn call(h: &Harness, request: Request<Body>) -> Response {
-    phoebis_relay::features::router(
-        h.relay.clone(),
-        h.control.clone(),
-        &phoebis_profile::claude_code_2_1_310_linux_x64().features,
-    )
-    .oneshot(request)
-    .await
-    .unwrap()
+async fn call(h: &Harness, request: &[u8]) -> Answer {
+    feature_listener(h).await.open(API, request).await
 }
 
 async fn rows(h: &Harness) -> Vec<FeatureCallRow> {
@@ -117,9 +105,9 @@ fn stream_event() -> SseEvent {
 async fn the_path_is_stored_without_its_query() {
     let up = fake("/api/frame/", json_200()).await;
     let h = features_harness(&up).await;
-    let answer = call(&h, keyed("GET", "/api/frame/artifacts?kind=page&limit=5")).await;
-    assert_eq!(answer.status(), 200);
-    answer.into_body().collect().await.unwrap();
+    let answer = call(&h, &keyed("GET", "/api/frame/artifacts?kind=page&limit=5")).await;
+    assert_eq!(answer.status, 200);
+    answer.body().await;
     let rows = landed(&h).await;
     assert_eq!(
         rows.iter().map(|row| row.path.as_str()).collect::<Vec<_>>(),
@@ -132,11 +120,11 @@ async fn the_path_is_stored_without_its_query() {
 async fn a_refused_call_leaves_no_row() {
     let up = fake("/api/", json_200()).await;
     let h = features_harness(&up).await;
-    let refused = call(&h, keyed("GET", "/api/oauth/profile")).await;
-    assert_eq!(refused.status(), 403);
-    let answer = call(&h, keyed("GET", "/api/frame/x")).await;
-    assert_eq!(answer.status(), 200);
-    answer.into_body().collect().await.unwrap();
+    let refused = call(&h, &keyed("GET", "/api/oauth/profile")).await;
+    assert_eq!(refused.status, 403);
+    let answer = call(&h, &keyed("GET", "/api/frame/x")).await;
+    assert_eq!(answer.status, 200);
+    answer.body().await;
     let rows = rows_once(&h, "/api/frame/x").await;
     assert_eq!(
         rows.iter().map(|row| row.path.as_str()).collect::<Vec<_>>(),
@@ -149,9 +137,9 @@ async fn a_refused_call_leaves_no_row() {
 async fn a_feature_call_leaves_no_request_row() {
     let up = fake("/api/frame/", json_200()).await;
     let h = features_harness(&up).await;
-    let answer = call(&h, keyed("GET", "/api/frame/x")).await;
-    assert_eq!(answer.status(), 200);
-    answer.into_body().collect().await.unwrap();
+    let answer = call(&h, &keyed("GET", "/api/frame/x")).await;
+    assert_eq!(answer.status, 200);
+    answer.body().await;
     landed(&h).await;
     let requests =
         h.db.read_blocking(|c| {
@@ -184,9 +172,9 @@ async fn the_row_names_the_account_that_served() {
         },
     )
     .await;
-    let answer = call(&h, keyed("GET", "/api/frame/x")).await;
-    assert_eq!(answer.status(), 200);
-    answer.into_body().collect().await.unwrap();
+    let answer = call(&h, &keyed("GET", "/api/frame/x")).await;
+    assert_eq!(answer.status, 200);
+    answer.body().await;
     let rows = landed(&h).await;
     assert_eq!(
         rows.iter()
@@ -257,8 +245,8 @@ async fn a_call_whose_caller_left_leaves_a_row_that_reads_canceled() {
     )
     .await;
     let h = features_harness(&up).await;
-    let answer = call(&h, keyed("GET", "/api/frame/stream")).await;
-    assert_eq!(answer.status(), 200);
+    let answer = call(&h, &keyed("GET", "/api/frame/stream")).await;
+    assert_eq!(answer.status, 200);
     drop(answer);
     let rows = landed(&h).await;
     assert_eq!(end_of(&rows), ("canceled", Some(200), None));
@@ -270,8 +258,8 @@ async fn a_call_whose_caller_left_leaves_a_row_that_reads_canceled() {
 async fn a_forward_that_failed_leaves_a_row_with_its_code() {
     let up = fake("/api/frame/", Respond::CloseImmediately).await;
     let h = features_harness(&up).await;
-    let answer = call(&h, keyed("GET", "/api/frame/x")).await;
-    assert_eq!(answer.status(), 502);
+    let answer = call(&h, &keyed("GET", "/api/frame/x")).await;
+    assert_eq!(answer.status, 502);
     let rows = landed(&h).await;
     assert_eq!(
         end_of(&rows),
@@ -282,20 +270,25 @@ async fn a_forward_that_failed_leaves_a_row_with_its_code() {
 
 #[tokio::test]
 async fn an_answer_cut_behind_its_head_leaves_a_failed_row_with_its_status() {
+    let cut = Arc::new(Notify::new());
     let up = fake(
         "/api/frame/",
-        Respond::SseCut {
+        Respond::SseCutOn {
             status: 200,
             headers: vec![],
             events: vec![stream_event()],
+            cut: cut.clone(),
         },
     )
     .await;
     let h = features_harness(&up).await;
-    let answer = call(&h, keyed("GET", "/api/frame/stream")).await;
-    assert_eq!(answer.status(), 200);
+    let mut answer = call(&h, &keyed("GET", "/api/frame/stream")).await;
+    assert_eq!(answer.status, 200);
+    answer.read_until(b"data: first").await;
+    cut.notify_one();
+    // On the wire the error is a chunked body that ends ahead of its last chunk.
     assert!(
-        answer.into_body().collect().await.is_err(),
+        !answer.body().await.ends_with(b"0\r\n\r\n"),
         "the cut ends the caller's body with an error"
     );
     let rows = landed(&h).await;
@@ -315,9 +308,9 @@ async fn an_answer_without_a_body_leaves_a_forwarded_row() {
     )
     .await;
     let h = features_harness(&up).await;
-    let answer = call(&h, keyed("DELETE", "/api/frame/x")).await;
-    assert_eq!(answer.status(), 204);
-    // A server writes a 204 without a poll of its body and drops the body, as this caller does.
+    let answer = call(&h, &keyed("DELETE", "/api/frame/x")).await;
+    assert_eq!(answer.status, 204);
+    // The listener's server writes a 204 without a poll of its body and drops the body.
     drop(answer);
     let rows = landed(&h).await;
     assert_eq!(end_of(&rows), ("forwarded", Some(204), None));
