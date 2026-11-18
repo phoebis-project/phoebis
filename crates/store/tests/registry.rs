@@ -1911,6 +1911,33 @@ fn a_stored_word_outside_the_list_fails_the_read() {
     );
 }
 
+#[test]
+fn an_unknown_stored_feature_word_fails_the_pool_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &key).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        r#"UPDATE pools SET feature_accounts_json = '{"third":"a"}' WHERE id = 'main'"#,
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &key).unwrap();
+    let error = store.pool("main").unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            StoreError::Sqlite(rusqlite::Error::FromSqlConversionFailure(_, _, cause))
+                if cause.to_string() == r#"unknown word "third""#
+        ),
+        "{error:?}"
+    );
+}
+
 /// Reads a word as a row on disk holds it, through the type's own column reader.
 fn stored_word<T: rusqlite::types::FromSql>(word: &str) -> T {
     rusqlite::Connection::open_in_memory()
