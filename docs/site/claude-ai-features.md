@@ -215,6 +215,10 @@ trap 'rm -f "$new_ca" "$head_file"' EXIT
 # Some shells run the exit trap for a signal only where the signal has a trap of its own.
 trap 'exit 1' HUP INT TERM
 
+# A closing slash would make the fetch ask for //v0/features/ca.pem, and the router's 404 for that path reads as
+# a router without a feature listener.
+BASE_URL=${BASE_URL%/}
+
 # The fetch goes straight to the router, with no proxy in between.
 rc=0
 status=$(curl --silent --noproxy '*' --connect-timeout 10 --max-time 30 ${BASE_CA:+--cacert "$BASE_CA"} \
