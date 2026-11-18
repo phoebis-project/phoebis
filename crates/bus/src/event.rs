@@ -558,12 +558,12 @@ impl FeatureOutcome {
 pub enum FeatureEnd {
     /// The domain check, sent upstream without an account. It leaves no row.
     DomainCheck { outcome: FeatureOutcome },
-    /// Refused by the router with a 401 or a 403. It leaves no row.
+    /// Refused by the router. It leaves no row.
     Refused {
         code: &'static str,
         /// `artifacts` or `connectors`, `None` for a request that matched no row.
         feature: Option<&'static str>,
-        /// `None` on a 401.
+        /// `None` on a 401 and on a domain check.
         key_id: Option<String>,
     },
     /// Sent upstream under an account, the one end that leaves a row. `status` is the status that went back,
