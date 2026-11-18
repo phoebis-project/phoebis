@@ -20993,6 +20993,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     });
     localStorage.removeItem('phoebis.week');
     // The two funded reads: none while Traffic shows, one series and one breakdown call per dollar position on Cost.
+    // Cache warming draws no chart of the funded series, so its one funded series call is its own chart's.
     const fundingOf = (spy) => spy.calls.map((c) => c[0]?.funding).filter((f) => f !== undefined);
     const spied = async (act) => {
       const series = countCalls('getAnalyticsSeries');
@@ -21005,11 +21006,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const onCost = await spied(() => chooseUnit(m, 'usd'));
     const onTraffic = await spied(() => tab(m, 'Traffic'));
     const backOnCost = await spied(() => tab(m, 'Cost'));
+    const [onWarming] = await spied(() => tab(m, 'Cache warming'));
+    await tab(m, 'Cost');
     const equivalent = await spied(() => chooseUnit(m, 'equivalent'));
     results.push({
-      name: '/analytics Billed dollars and Dollar equivalent read the series and breakdown once more with funding',
-      ok: JSON.stringify(onCost) === '[["billed"],["billed"]]' && JSON.stringify(onTraffic) === '[[],[]]' && JSON.stringify(backOnCost) === '[["billed"],["billed"]]' && JSON.stringify(equivalent) === '[["plan"],["plan"]]',
-      missing: [`on Cost ${JSON.stringify(onCost)}`, `on Traffic ${JSON.stringify(onTraffic)}`, `back on Cost ${JSON.stringify(backOnCost)}`, `equivalent ${JSON.stringify(equivalent)}`],
+      name: "/analytics Billed dollars and Dollar equivalent read the series and breakdown once more with funding, and Cache warming one funded series, its own chart's",
+      ok: JSON.stringify(onCost) === '[["billed"],["billed"]]' && JSON.stringify(onTraffic) === '[[],[]]' && JSON.stringify(backOnCost) === '[["billed"],["billed"]]' && JSON.stringify(onWarming) === '["billed"]' && JSON.stringify(equivalent) === '[["plan"],["plan"]]',
+      missing: [`on Cost ${JSON.stringify(onCost)}`, `on Traffic ${JSON.stringify(onTraffic)}`, `back on Cost ${JSON.stringify(backOnCost)}`, `series on Cache warming ${JSON.stringify(onWarming)}`, `equivalent ${JSON.stringify(equivalent)}`],
     });
     const metas = { equivalent: costMeta() };
     await chooseUnit(m, 'usd');

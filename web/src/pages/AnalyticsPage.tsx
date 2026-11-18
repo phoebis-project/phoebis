@@ -450,7 +450,7 @@ export function AnalyticsPage() {
   // while one of them shows. The whole reads the page's own.
   const fundedTab = tab === 'cache' || tab === 'cache-warming' || tab === 'cost';
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
-  // The funded series feeds the Cache card's cost bars and the Cost tab's cost by group, and Cache warming draws
+  // The funded series feeds the Cache card's cost bars and the Cost tab's Cost by group chart, and Cache warming draws
   // neither.
   const seriesTab = tab === 'cache' || tab === 'cost';
   const costSeries = useGatedRead(funded && seriesTab, () => stamped(api.getAnalyticsSeries({ ...query, funding })), [query, funding, funded, seriesTab, generation], reload);
