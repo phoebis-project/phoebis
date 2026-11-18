@@ -515,9 +515,16 @@ proxy:
 ```
 
 One pair serves both listeners: `proxy.tls` and `admin.tls` name the same two files, since `acme.sh` installs the
-certificate at one path and the key stays at its own. The admin listener is bound where the router's name reaches it,
-which the reload command relies on. The install then runs once more, with the reload command that `acme.sh` stores and
-runs after each renewal:
+certificate at one path and the key stays at its own.
+
+The block takes the admin listener off the loopback address of a host install, `127.0.0.1:8081`, and binds it on every
+interface, because the reload command below reaches the listener by the router's name. On `0.0.0.0` the console's login
+and each admin route answer on each network the host is on, behind TLS and the one admin secret. To narrow the bind, put
+an address of the router's host in place of `0.0.0.0`, one that `router.example.com` resolves to on that host. The
+listener then answers on that address alone, and the reload command stays as printed, `--url` included, since the leaf
+names the router's name and no address.
+
+The install then runs once more, with the reload command that `acme.sh` stores and runs after each renewal:
 
 ```sh
 acme.sh --install-cert -d router.example.com --fullchain-file /etc/phoebis/proxy.pem --reloadcmd '
