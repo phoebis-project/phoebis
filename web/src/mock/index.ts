@@ -26,7 +26,7 @@ import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, 
 import { ATTENTION, byKindThenSince, pairingExpiringOf } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
-import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
+import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, rowsOfDeletedKey, sessionsListedAt } from './operations';
 import { KEYS, POOLS, UNLOADED_MEMBERS, UNTIL_DRAWN, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
@@ -1039,11 +1039,7 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (key) this.buriedKeys.set(id, Math.floor(key.revision / INCARNATION_STAMP));
     this.keys = this.keys.filter((k) => k.id !== id);
-    // The route reads a session row whose key no live key holds as historical, so the key's rows turn read-only. The
-    // engine keys its sessions and recipes under the live generation alone, so such a row reads none of them.
-    this.sessions = this.sessions.map((s): Session =>
-      s.keyId === id ? { ...s, companion: 'none', companionSince: null, historical: true, keepalive: { cause: null, nextProbeAt: null }, lifecycle: null, presenceAgeSeconds: null } : s,
-    );
+    this.sessions = this.sessions.flatMap((s) => (s.keyId === id ? rowsOfDeletedKey(s) : [s]));
     // The key's attachments go in the delete's own transaction, since one subject column cannot cascade from two
     // tables.
     this.setSubjectGuardrails('keys', id, [], false);

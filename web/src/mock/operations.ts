@@ -975,6 +975,20 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
 });
 
 /**
+ * A session's row once the operator deleted its key: the store deletes the key's pins with the key and the engine's
+ * next tick ends its sessions, so the route lists the row off the ledger alone, its account and model those of its
+ * newest request, and a session the ledger holds no request of leaves the list.
+ */
+export const rowsOfDeletedKey = (s: Session): Session[] => {
+  // The seed runs newest first.
+  const newest = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === s.keyId && r.keyGeneration === s.keyGeneration && r.sessionId === s.sessionId);
+  if (newest === undefined) return [];
+  const row = ledgerOnlyRow({ accountId: newest.accountId, historical: true, keyGeneration: s.keyGeneration, keyId: s.keyId, lastRequestAt: newest.at, model: newest.canonicalModel, sessionId: s.sessionId });
+  // The ledger names the fork off the session's requests, which outlive the key.
+  return [{ ...row, forkDepth: s.forkDepth, forkedFrom: s.forkedFrom }];
+};
+
+/**
  * Studio's notebook sessions in work, pinned there while the slow-down holds it: the slowed one with its subagent, whose
  * main pin has the cycle its turns since the placement give, the two the round marked and the one whose turn opened the
  * span, whose pins have none yet. Each burn is the main pin's demand at the account's half speed, and each `burnUsd`

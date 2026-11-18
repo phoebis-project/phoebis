@@ -3523,9 +3523,9 @@ function accountRollups(): AccountRollup[] {
       const cooledMs = [...own, ...ATTEMPT_COOLDOWNS.filter((c) => c.accountId === account.id)]
         .sort((a, b) => a.setAt - b.setAt)
         .reduce((n, c) => {
-          const from = Math.max(c.setAt, counted.get(c.scope) ?? c.setAt, end);
+          const countedFrom = Math.max(c.setAt, counted.get(c.scope) ?? c.setAt, end);
           counted.set(c.scope, Math.max(counted.get(c.scope) ?? c.until, c.until));
-          return n + Math.max(0, Math.min(c.until, NOW) - from);
+          return n + Math.max(0, Math.min(c.until, NOW) - countedFrom);
         }, 0);
       out.push({
         ...ACCOUNT_ROLLUP_SAMPLE,

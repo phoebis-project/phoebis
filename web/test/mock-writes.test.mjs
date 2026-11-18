@@ -360,7 +360,7 @@ test('an editor opened before its pool or key was deleted and created again is r
   assert.deepEqual([landedPool.name, landedKey.name], ['landed', 'landed'], "the replacement's own token lands");
 });
 
-test("a deleted key's session rows read historical and keep their placements, as the route lists a row no live key holds", async () => {
+test("a deleted key's session rows read historical with no pin and keep their placements, as the route lists a row no live key holds", async () => {
   const api = await signedIn();
   const laptop = async () => (await api.listSessions()).filter((s) => s.keyId === 'laptop');
   const before = await laptop();
@@ -368,10 +368,15 @@ test("a deleted key's session rows read historical and keep their placements, as
   const after = await laptop();
   assert.deepEqual([...new Set(before.map((s) => s.historical))], [false], "the story's laptop rows read live");
   assert.deepEqual([...new Set(after.map((s) => s.historical))], [true], 'each of them reads historical once the key is gone');
-  // A historical row reports no companion, so laptop's silent row, idle 95 minutes (mock/operations.ts), leaves the
-  // list past the 3,600 s non-companion timeout, as the route drops it.
-  const placements = (rows) => rows.map((s) => [s.sessionId, s.placements]);
-  assert.deepEqual(placements(after), placements(before.filter((s) => s.companion !== 'silent')), 'the delete moves no placement');
+  // With the key's pins gone, the list reads each row's last request alone against the 3,600 s non-companion timeout.
+  // The story's requests 15 m 40 s and 7 m 07 s back keep 5eeed6ce and 7d3e1c20. The other six laptop rows leave:
+  // 1c0f9727, c64358b5 and 76ddb35b hold drawn requests at most, which all fall over an hour back, and cd9a5904,
+  // 0f1d7c64 and 3e9b7c21 hold no laptop request.
+  const pins = Object.fromEntries(after.map((s) => [s.sessionId, { lines: s.agentContexts.length, pinned: s.pinned }]));
+  const kept = { '5eeed6ce-bf6f-4c62-91f4-775b7fa78f23': { lines: 0, pinned: false }, '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f': { lines: 0, pinned: false } };
+  assert.deepEqual(pins, kept, 'the rows a ledger request inside the timeout keeps, each with no pin and no line');
+  const placements = (rows) => Object.fromEntries(rows.map((s) => [s.sessionId, s.placements]));
+  assert.deepEqual(placements(after), placements(before.filter((s) => s.sessionId in kept)), 'the delete moves no placement');
 });
 
 test("a pool deleted and created again under its id counts the pins of the keys it holds now, so it reads no former member's pin", async () => {
