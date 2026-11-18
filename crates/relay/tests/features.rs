@@ -1448,7 +1448,8 @@ async fn a_later_token_is_refreshed_and_resent_again() {
         .send(API, &keyed_title("/api/frame/artifacts", API))
         .await;
     assert_eq!(status, 401, "{headers:?}");
-    // The model path's forced refresh moves the account past the held generation 2.
+    // A forced refresh outside the feature path, as the model path runs one, moves the account past the held
+    // generation 2.
     h.manager.refresh_now("a", 2).await.unwrap();
     // Generation 3 gets its refresh and its resend again, and the resend's 401 holds generation 4 in place of 2, so
     // the third call goes out once with no refresh.
