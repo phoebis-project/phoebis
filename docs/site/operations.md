@@ -539,8 +539,8 @@ unless `--ca` names a bundle, and its default address is the loopback address, w
 runs the command at once, and its two lines show that the router serves the pair:
 
 ```text
-proxy: reloaded, certificate /etc/phoebis/proxy.pem expires 2027-02-16T01:17:18Z
-admin: reloaded, certificate /etc/phoebis/proxy.pem expires 2027-02-16T01:17:18Z
+proxy: reloaded, certificate /etc/phoebis/proxy.pem expires {expires}
+admin: reloaded, certificate /etc/phoebis/proxy.pem expires {expires}
 ```
 
 The renewal is `acme.sh`'s own from here on. The cron entry of its install runs `acme.sh --cron`, and a run renews each
