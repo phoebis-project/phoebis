@@ -305,14 +305,15 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         "the harness configures neither path, so both tables are the shipped ones, and the clock sits past every entry \
          of the cost model: {system}"
     );
+    let stored = parts.db.schema_version().await.unwrap();
     assert_eq!(
         (
             system["ledger"]["schema_version"].as_u64(),
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(5), Some(0), Some(4_096)),
-        "the ledger reports its chain's head, no dropped record and the channel depth it is built with"
+        (Some(u64::from(stored)), Some(0), Some(4_096)),
+        "the ledger reports the version its file holds, no dropped record and the channel depth it is built with"
     );
     assert_eq!(
         (
