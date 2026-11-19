@@ -8,7 +8,9 @@ permissions:
   contents: read
 jobs:
   checks:
-    runs-on: ubuntu-24.04
+    # ubuntu-latest carries the curl that exits 7 for a CONNECT a proxy refuses, where the curl of ubuntu-24.04 exits
+    # 56. A launch script that misreads that exit passes scripts/tests/launch-script.sh on the older image.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
