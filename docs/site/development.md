@@ -499,20 +499,22 @@ documentation repository, and the job that writes to Pages runs in that reposito
 The `Documentation` workflow runs on every push to `main` and every pull request, in three jobs. `checks` runs
 `scripts/tests/check-docs.sh`, `scripts/tests/launch-script.sh` and the six checks under `scripts/check-docs.py`. `site`
 calls the build workflow of `phoebis-docs`, which checks out this repository at the run's commit and `phoebis-docs`, the
-companion and the proxy at `main`, runs its scripts' cases, the assembly, `zensical build --clean --strict`, the link
-check and the prose check, and uploads the built site as an artifact. On a pull request the run's commit is GitHub's
+companion and the proxy at `main`, and runs its scripts' cases, the assembly, `zensical build --clean --strict`, the
+link check and the prose check. The built site holds the pages of each product, so the build uploads it as an artifact
+in one run alone, the `Deploy` run of `phoebis-docs` that publishes it. On a pull request the run's commit is GitHub's
 merge of the pull request into its base branch, so the build reads the pages as they stand once merged. `start-deploy`
 runs on a push to `main` once both passed and starts the `Deploy` workflow of `phoebis-docs`.
 
 The two jobs that reach another repository each use a token of a GitHub App, under a credential of their own. The build
-reads the four repositories with the read credential: each of the four holds its client id as the variable
-`DOCS_APP_CLIENT_ID` and its private key as the secret `DOCS_APP_PRIVATE_KEY`. Where either is not set, the checkouts
-use the job's own token, which reads no other private repository. A pull request from a fork gets no secret and builds
-on that path, so its `site` job passes only once each of the four repositories is public. `start-deploy` writes to the
-Actions of `phoebis-docs` with the start credential, which each product repository holds as the variable
-`DOCS_DEPLOY_APP_CLIENT_ID` and the secret `DOCS_DEPLOY_APP_PRIVATE_KEY`. It runs in the organization's repository
-alone, so a fork's own `main` starts nothing. Where a half of the start credential is not set, the job fails with a line
-that says which.
+reads the four repositories with the read credential: the organization holds its client id as the variable
+`DOCS_APP_CLIENT_ID` and its private key as the secret `DOCS_APP_PRIVATE_KEY`, each open to the four. Where either is
+not set, the checkouts use the job's own token, which reads no other private repository. A pull request from a fork gets
+no secret and builds on that path, so its `site` job passes only once each of the four repositories is public.
+`start-deploy` writes to the Actions of `phoebis-docs` with the start credential. The organization holds its client id
+as the variable `DOCS_DEPLOY_APP_CLIENT_ID`, and each product repository holds its private key as the secret
+`DOCS_DEPLOY_APP_PRIVATE_KEY` of the environment `docs-deploy`. That environment allows `main` alone, so a workflow on
+another branch gets no key. The job runs in the organization's repository alone, so a fork's own `main` starts nothing.
+Where a half of the start credential is not set, the job fails with a line that says which.
 
 The site deploys from `phoebis-docs` alone. Its `Deploy` workflow runs on a push to its `main`, on a manual start and on
 the start a product's push sends. It builds from the four `main` heads and deploys to Pages. The deploy job runs only
