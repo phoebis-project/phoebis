@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use fake_upstream::{FakeUpstream, Respond, Rule};
+use fake_upstream::{acceptor_for, generate_pair, FakeUpstream, Respond, Rule};
 use phoebis_profile::{
     claude_code_2_1_310_linux_x64,
     fixtures::{control_head, control_response, ControlFixture},
@@ -10,7 +10,11 @@ use phoebis_transport::{
     control::{ControlClient, ResolveFuture, Resolver, StreamFailure},
     Plane, TransportError,
 };
-use std::{sync::Arc, time::Duration};
+use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::task::{JoinHandle, JoinSet};
+use tokio_boring::SslStream;
 
 #[tokio::test]
 async fn control_requests_reach_the_upstream_byte_identical() {
@@ -324,4 +328,102 @@ async fn bytes_that_are_no_answer_head_are_named_unreadable() {
         .expect_err("the upstream answers no head");
     assert!(matches!(error, StreamFailure::Undecodable(_)), "{error:?}");
     up.shutdown().await;
+}
+
+/// A TLS upstream for `api.anthropic.com` that hands its connection to `end` once the request has come up to its blank
+/// line, for the ends the fake cannot script, since each of its answers ends a connection in order. It serves the first
+/// connection whose handshake completes and drops each other, since a daemon of the development host connects to each
+/// new loopback listener. Answers the address, the CA and the task, whose join shows a failure of the upstream's own.
+async fn upstream_that_ends<F, Fut>(end: F) -> (SocketAddr, String, JoinHandle<()>)
+where
+    F: FnOnce(SslStream<TcpStream>) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send,
+{
+    let pair = generate_pair(&["api.anthropic.com"]);
+    let acceptor = acceptor_for(&pair);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let mut handshakes = JoinSet::new();
+        let mut tls = loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let (sock, _) = accepted.unwrap();
+                    let acceptor = acceptor.clone();
+                    handshakes.spawn(async move { tokio_boring::accept(&acceptor, sock).await });
+                }
+                Some(joined) = handshakes.join_next() => {
+                    if let Ok(Ok(tls)) = joined {
+                        break tls;
+                    }
+                }
+            }
+        };
+        let mut request = Vec::new();
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            let mut piece = [0u8; 1024];
+            let n = tls.read(&mut piece).await.unwrap();
+            assert_ne!(n, 0, "the client ended its request before the blank line");
+            request.extend_from_slice(&piece[..n]);
+        }
+        end(tls).await;
+    });
+    (addr, pair.ca_pem, task)
+}
+
+#[tokio::test]
+async fn a_peer_that_resets_before_the_answer_head_is_named_a_cut() {
+    let (addr, ca_pem, upstream) = upstream_that_ends(|tls| async move {
+        // A zero linger turns the close into a reset, so the client's read fails rather than ends.
+        tls.get_ref().set_zero_linger().unwrap();
+        drop(tls);
+    })
+    .await;
+    let profile = claude_code_2_1_310_linux_x64();
+    let mut b = connector_builder(profile, Plane::Control).unwrap();
+    phoebis_transport::trust_extra_ca(&mut b, &ca_pem).unwrap();
+    let resolver: Resolver =
+        Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
+    let client = ControlClient::new(profile, b.build(), resolver);
+    let error = client
+        .send_streaming(
+            frame_request(),
+            "api.anthropic.com",
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .await
+        .map(|_| ())
+        .expect_err("the upstream resets without an answer");
+    assert!(matches!(error, StreamFailure::Cut(_)), "{error:?}");
+    upstream.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_peer_that_closes_inside_the_answer_head_is_named_a_cut() {
+    let (addr, ca_pem, upstream) = upstream_that_ends(|mut tls| async move {
+        tls.write_all(b"HTTP/1.1 200 OK\r\nContent-Le")
+            .await
+            .unwrap();
+        tls.shutdown().await.unwrap();
+    })
+    .await;
+    let profile = claude_code_2_1_310_linux_x64();
+    let mut b = connector_builder(profile, Plane::Control).unwrap();
+    phoebis_transport::trust_extra_ca(&mut b, &ca_pem).unwrap();
+    let resolver: Resolver =
+        Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
+    let client = ControlClient::new(profile, b.build(), resolver);
+    let error = client
+        .send_streaming(
+            frame_request(),
+            "api.anthropic.com",
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .await
+        .map(|_| ())
+        .expect_err("the upstream ends its session inside the head");
+    assert!(matches!(error, StreamFailure::Cut(_)), "{error:?}");
+    upstream.await.unwrap();
 }

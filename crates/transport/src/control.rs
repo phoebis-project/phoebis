@@ -4,13 +4,11 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::time::Duration;
 
 use boring::ssl::SslConnector;
 use bytes::{Bytes, BytesMut};
 use phoebis_profile::Profile;
-use tokio::io::{AsyncRead, ReadBuf};
 
 use crate::decode::{decoder, encoding};
 use crate::pool::Conn;
@@ -176,18 +174,14 @@ impl ControlClient {
                     }
                     WriteProgress::Written => StreamFailure::Cut(failure.error.to_string()),
                 })?;
-            let mut watched = EndWatch {
-                conn: &mut conn,
-                ended: false,
-            };
-            let read = read_head(&mut watched, &mut buf).await;
-            read.map_err(|error| {
-                if watched.ended {
-                    StreamFailure::Cut(error.to_string())
-                } else {
-                    StreamFailure::Undecodable(error.to_string())
-                }
-            })
+            read_head(&mut conn, &mut buf)
+                .await
+                .map_err(|error| match error {
+                    TransportError::ClosedBeforeHead | TransportError::Io(_) => {
+                        StreamFailure::Cut(error.to_string())
+                    }
+                    _ => StreamFailure::Undecodable(error.to_string()),
+                })
         };
         let head = match tokio::time::timeout(head_timeout, exchange).await {
             Ok(read) => read?,
@@ -209,32 +203,6 @@ impl ControlClient {
 
 fn unsent(host: &str, error: &std::io::Error) -> String {
     format!("request to {host} was not sent: {error}")
-}
-
-/// Notes whether the peer ended the connection or failed a read, since `read_head` names a close before the head's
-/// end and a head that does not parse with one error, and the two are different cases of a failed send.
-struct EndWatch<'a> {
-    conn: &'a mut Conn,
-    ended: bool,
-}
-
-impl AsyncRead for EndWatch<'_> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        let before = buf.filled().len();
-        // A read into a full buffer fills nothing without the peer having ended anything.
-        let room = buf.remaining() > 0;
-        let polled = Pin::new(&mut *self.conn).poll_read(cx, buf);
-        match &polled {
-            Poll::Ready(Ok(())) if room && buf.filled().len() == before => self.ended = true,
-            Poll::Ready(Err(_)) => self.ended = true,
-            _ => {}
-        }
-        polled
-    }
 }
 
 #[cfg(test)]

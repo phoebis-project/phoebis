@@ -78,9 +78,7 @@ pub async fn read_head<R: AsyncRead + Unpin>(
                     return Err(TransportError::Response("head too large".into()));
                 }
                 if !refill(r, buf).await? {
-                    return Err(TransportError::Response(
-                        "connection closed before head".into(),
-                    ));
+                    return Err(TransportError::ClosedBeforeHead);
                 }
             }
         }
