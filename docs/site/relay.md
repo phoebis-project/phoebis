@@ -4,7 +4,7 @@ What the router changes on the wire between Claude Code and Anthropic, what it s
 companion mod and how long it waits on an upstream. The client's environment block, the refusal table and the models
 listing are on [The client](client.md), the cooldown tables on [Pools, keys and
 routing](routing.md#cooldowns-and-failover), and the mod's install and settings on [The companion
-mod](companion-mod.md).
+mod](../companion/install.md).
 
 ## The frame
 
@@ -569,7 +569,7 @@ out before a registration has been acknowledged. What each answer makes the mod 
 - An `agent_limit` on an `agent_start`: the start goes back and that agent's reports wait behind it, retried along the
   same backoff under the agent's own retry time, while the heartbeats and the other agents' reports go on.
 - A `401` or a `403`: the mod empties its queue and reports nothing more until a later start's check no longer refuses
-  the key ([The start check](companion-mod.md#the-start-check)), and a `401` also leaves the allowance tool unconfigured
+  the key ([The start check](../companion/start-check.md)), and a `401` also leaves the allowance tool unconfigured
   until such a start.
 - `agent_exists`: the mod drops the report, counts the agent as announced and registers again.
 - `agent_released` with a generation: the mod drops the report and adopts the generation, and the agent's next report
@@ -600,7 +600,7 @@ valid id. The answer is the key's pool as the router reads it at that instant, e
 the asking session's pins, as JSON under `Cache-Control: no-store`, which every answer of the route carries. The route
 writes no ledger row and counts in no request figure, so a read shows in no statistic and no view. The mod reads it once
 at session start and then at the model's call, from a cache of ten seconds ([The allowance
-tool](companion-mod.md#the-allowance-tool)), and the router holds no limiter of its own on the route.
+tool](../companion/allowance-tool.md)), and the router holds no limiter of its own on the route.
 
 A refusal takes the two shapes of the keepalive route. A missing, malformed, ambiguous or refused key is answered the
 relay's way, the same `401` in Anthropic's error shape that `/v1/messages` answers, with `x-phoebis-error-code` naming

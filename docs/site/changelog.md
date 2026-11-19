@@ -153,10 +153,10 @@ shortly before the cache entry would expire, sends a probe that reads it ([Keepa
 ceilings, `max_idle_seconds`, `max_parked_seconds` and `scheduled_horizon_seconds`, bound how long a recipe is probed,
 the parked and horizon ceilings capped at their break-even and the idle ceiling taken as set ([The four
 fields](keepalive.md#the-four-fields)). The router reads session liveness and agent state from the companion mod, a
-Claude Code plugin inside the client's process that holds no policy ([The companion mod](companion-mod.md)), over [The
-keepalive protocol](relay.md#the-keepalive-protocol). A probe kept past its recipe's end follows a model's resolution to
-its dated id, the kept-warm credit goes to the newest probe that covered the entry over a later one that did not cover
-it, and a failed turn decides no probe, so the retry after it earns the credit ([Which requests re-arm a
+Claude Code plugin inside the client's process that holds no policy ([The companion mod](../companion/index.md)), over
+[The keepalive protocol](relay.md#the-keepalive-protocol). A probe kept past its recipe's end follows a model's
+resolution to its dated id, the kept-warm credit goes to the newest probe that covered the entry over a later one that
+did not cover it, and a failed turn decides no probe, so the retry after it earns the credit ([Which requests re-arm a
 recipe](keepalive.md#which-requests-re-arm-a-recipe)). A chain of probes on one model, speed and account, where each
 later probe read the entry back, settles against its last probe's entry, so a request on that lineage that reads the
 cache inside that entry answers every probe of the chain, and a completed compaction stops the recipe until the next
@@ -169,8 +169,8 @@ measures the kept-warm gap from the turn that answered, and a probe under a twin
 instance across a `/clear` and retries a start the router refused for a live holder once that holder's lease lapses, and
 the router warns once per session at the first request that names another owner while the holder's lease is live and
 lets such a request take the session over once the lease has lapsed ([The owner
-header](companion-mod.md#the-owner-header)). A released agent's record leaves the engine one pool cache TTL after its
-release, freeing its slot of the agent cap ([The five states](keepalive.md#the-five-states)). A failed or canceled
+header](../companion/reports.md#the-owner-header)). A released agent's record leaves the engine one pool cache TTL after
+its release, freeing its slot of the agent cap ([The five states](keepalive.md#the-five-states)). A failed or canceled
 request leaves the last answered recipe armed, and a probe's transient failure retries on a ladder bounded by the
 entry's expiry ([The five states](keepalive.md#the-five-states)). A message's text-only content array hashes as its
 blocks up to the last one carrying the cache marker, a single block as its text, an idle window counts a return on
@@ -756,7 +756,7 @@ as the Companion id ([Accounts](console.md#accounts)). The companion mod, a Clau
 mod of the pre-release builds: it carries the lifecycle reports over unchanged on the keepalive protocol, adds four
 settings, checks the router at session start and names a missing setting, a refused key or a silent router in the
 transcript, and gives the model the `allowance` tool, which answers the route's body from a cache of ten seconds ([The
-companion mod](companion-mod.md)).
+companion mod](../companion/index.md)).
 
 The router serves two claude.ai features of Claude Code, Artifacts and the claude.ai connectors, whose calls the client
 sends to `api.anthropic.com` and `mcp-proxy.anthropic.com` whatever its base URL names. With the `features` block the

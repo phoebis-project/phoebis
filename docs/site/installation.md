@@ -894,13 +894,14 @@ it in the client's spelling.
 ### phoebis-proxy
 
 A client in the "Base URL and proxy" setup reaches the feature listener through `phoebis-proxy`, a tunnel proxy in a
-repository of its own, [phoebis-project/phoebis-proxy](https://github.com/phoebis-project/phoebis-proxy), whose README
-holds its install and its settings. Its image is `ghcr.io/phoebis-project/phoebis-proxy`. `deploy/compose.yaml` carries
-the proxy as a commented service behind the router's: the upstream `phoebis:8443`, which is the router's service name
-with the feature listener's port, an allow list for the network the clients come from, and the proxy's port 8318,
-published. The proxy reaches the feature listener inside the compose network, so the router's configuration holds the
-`features` block and the compose file publishes no port of that listener. [Base URL and
-proxy](claude-ai-features.md#base-url-and-proxy) says where else the proxy runs and what a client sets for it.
+repository of its own, [phoebis-project/phoebis-proxy](https://github.com/phoebis-project/phoebis-proxy), whose pages on
+this site hold its [install](../proxy/install.md) and its [settings](../proxy/settings.md). Its image is
+`ghcr.io/phoebis-project/phoebis-proxy`. `deploy/compose.yaml` carries the proxy as a commented service behind the
+router's: the upstream `phoebis:8443`, which is the router's service name with the feature listener's port, an allow
+list for the network the clients come from, and the proxy's port 8318, published. The proxy reaches the feature listener
+inside the compose network, so the router's configuration holds the `features` block and the compose file publishes no
+port of that listener. [Base URL and proxy](claude-ai-features.md#base-url-and-proxy) says where else the proxy runs and
+what a client sets for it.
 
 ## Storage
 

@@ -103,12 +103,13 @@ the router alone. The redirect holds for each program of the machine, and it nee
 ## Base URL and proxy
 
 `phoebis-proxy` is a small program in [a repository of its own](https://github.com/phoebis-project/phoebis-proxy), whose
-README holds the install from a release archive or from the image `ghcr.io/phoebis-project/phoebis-proxy`, the settings
-and the log lines. It serves one kind of request, `CONNECT`, over plain HTTP, by default on `127.0.0.1:8318`. A
-`CONNECT` for `api.anthropic.com` or `mcp-proxy.anthropic.com` on port 443 ends at the proxy's upstream, which is the
-router's feature listener, and a `CONNECT` for each other target ends at that target. The proxy holds no router key, no
-account and no CA. It ends no TLS and reads no byte of a tunnel, so the client's TLS session ends at the router and the
-router key stays inside it.
+pages on this site hold the [install](../proxy/install.md) from a release archive or from the image
+`ghcr.io/phoebis-project/phoebis-proxy`, the [settings](../proxy/settings.md) and the [log lines](../proxy/logs.md). It
+serves one kind of request, `CONNECT`, over plain HTTP, by default on `127.0.0.1:8318`. A `CONNECT` for
+`api.anthropic.com` or `mcp-proxy.anthropic.com` on port 443 ends at the proxy's upstream, which is the router's feature
+listener, and a `CONNECT` for each other target ends at that target. The proxy holds no router key, no account and no
+CA. It ends no TLS and reads no byte of a tunnel, so the client's TLS session ends at the router and the router key
+stays inside it.
 
 The upstream is the host and the port of the feature listener as the proxy's machine reaches them, such as
 `router.example.com:8443`, set through `--upstream` or `PHOEBIS_PROXY_UPSTREAM`. It names the listener's own port, so

@@ -155,7 +155,7 @@ lane is open, priced in dollars from usage credits, and moved to a sibling when 
 
 The companion mod needs Claude Code 2.1.287 or later, and its `allowance` tool 2.1.293 or later. With its settings unset
 it reports to `ANTHROPIC_BASE_URL` under the key it finds in the client's variables, in the order [The companion
-mod](companion-mod.md) states, so the block above needs no line of its own for it beyond
+mod](../companion/install.md#configure) states, so the block above needs no line of its own for it beyond
 [`CLAUDE_CODE_SUBSCRIPTION_TYPE`](#claude_code_subscription_type), which lets its requests leave the process. At session
 start the mod writes its owner header, `X-Keepalive-Owner-Id`, into `ANTHROPIC_CUSTOM_HEADERS` beside the variable's
 other lines, and the client sends it on every model request of the process. The router reads it to tell that process's

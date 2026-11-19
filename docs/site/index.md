@@ -72,7 +72,7 @@ a loopback router works, [A second machine](second-machine.md) covers a LAN host
 every setting. [Pairing an account](pairing.md) is for the operator adding an account in the console or by `curl`. An
 operator tuning pools and keys, or reading why a request landed where it did, reads [Pools, keys and
 routing](routing.md). [Keepalive](keepalive.md) is for the operator turning cache warming on, and [The companion
-mod](companion-mod.md) for the one installing and configuring the mod on a client machine. [claude.ai
+mod](../companion/index.md) for the one installing and configuring the mod on a client machine. [claude.ai
 features](claude-ai-features.md) is for the operator who wants Artifacts and the claude.ai connectors behind the router,
 and for the user who starts the client through the launch script. [The relay](relay.md) says what the router changes on
 the wire and sends on its own. [The console](console.md) is for the operator reading or using a view.

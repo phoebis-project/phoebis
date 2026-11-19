@@ -81,8 +81,8 @@ line lacks it. The probe's answer files its `input_transformations` on the probe
 The engine learns which sessions are alive, which agents they run and what each agent is doing from the companion mod, a
 Claude Code plugin that runs inside the client's own process, reports session liveness and agent state to the router and
 holds no policy: every ceiling and switch is a pool field or a constant of the router. Installing the mod, its settings,
-the order it reads its credential in and what it reports are on [The companion mod](companion-mod.md), and the route it
-reports to, its six events, the acknowledgment and the refusal codes are on [The
+the order it reads its credential in and what it reports are on [The companion mod](../companion/index.md), and the
+route it reports to, its six events, the acknowledgment and the refusal codes are on [The
 relay](relay.md#the-keepalive-protocol). With its settings unset the mod reports under the URL and the key of [the
 environment block](client.md#the-environment-block). On the router's side, a registration holds a lease over the
 session, 90 seconds long, which each heartbeat renews, and the Sessions view names the mod's state for each session:
