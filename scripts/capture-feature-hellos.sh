@@ -35,10 +35,10 @@
 # nothing. The socket's hello is set against both pinned files, and the socket verdict line ahead of the last compare
 # names the one it equals, and with it the connector the router's upstream leg of the socket takes, or says that it
 # equals neither or was not recorded. It decides nothing for the exit either, so a build that dials no socket fails no
-# caller. The last compare, the fetch path's hello against the one toward mcp-proxy.anthropic.com,
-# gives the exit status: 0 where the two are equal under the masks, 3 where they differ, after the two masked hellos
-# and the first part that differs, and 4 where one of the two was not recorded. Exit 1 is lib.sh's refusal or a step
-# that failed. The log ends with one verdict line.
+# caller. The last compare, the fetch path's hello against the one toward mcp-proxy.anthropic.com, gives the exit
+# status: 0 where the two are equal under the masks, 3 where they differ, after the two masked hellos and the first part
+# that differs, and 4 where one of the two was not recorded. Exit 1 is lib.sh's refusal, a run outside the capture's
+# namespace or a step that failed. The log ends with one verdict line.
 #
 # Nothing here talks to Anthropic. The recordings hold each header the client sent, its dummy token among them, and
 # stay out of the repository.
@@ -56,17 +56,23 @@ fi
 # The client resolves api.anthropic.com itself ahead of its dial, under a proxy too, and loopback passes its guard.
 hosts=$(mktemp)
 { cat /etc/hosts; echo "127.0.0.1 api.anthropic.com"; } >"$hosts"
-mount --bind "$hosts" /etc/hosts
+# A refused bind ends the run, and its copy of the hosts file goes first.
+if ! mount --bind "$hosts" /etc/hosts; then
+  rm -f "$hosts"
+  exit 1
+fi
 rm -f "$hosts"
 
 CA="$OUT/certs/ca.pem"
 FIXTURES="$ROOT/crates/profile/fixtures"
 HELLO_LIB="$CAPTURE_DIR/hello_lib.py"
+PAGE="$CLIENT_CWD/capture-page.html"
 PROXY="http://127.0.0.1:$CONTROL_RECEIVER_PORT"
 
 # As in scripts/capture-control.sh: the keys go once the receiver no longer presents the leaf, and the receiver's
-# status is dropped, since a non-zero return inside the trap would skip the removal under set -e.
-trap 'stop_receiver; stop_control_receiver || true; rm -f "$OUT"/certs/*.key' EXIT
+# status is dropped, since a non-zero return inside the trap would skip the removal under set -e. The invented page
+# goes too, since the other captures' clients run in the same working directory.
+trap 'stop_receiver; stop_control_receiver || true; rm -f "$OUT"/certs/*.key "$PAGE"' EXIT
 
 "$CAPTURE_DIR/mkcerts.sh" "$OUT"
 
@@ -79,12 +85,11 @@ rm -f "$OUT"/{recording,hellos,feature_hellos}.json "$OUT"/{fetch,axios,connecto
 : >"$STATE/feature-env"
 # The model receiver's canned tool call publishes this invented page. A print-mode run has no one to approve the
 # publish, so --allowedTools lets the Artifact tool run.
-page="$CLIENT_CWD/capture-page.html"
-printf '%s\n' '<!doctype html><title>Capture page</title><p>An invented page of the feature capture.</p>' >"$page"
+printf '%s\n' '<!doctype html><title>Capture page</title><p>An invented page of the feature capture.</p>' >"$PAGE"
 CLI_ARGS=(--allowedTools Artifact)
 
-start_receiver count_receiver.py "$HTTP_PORT" "$OUT/inference" "$CLEAN_DURATION" "$page" \
-  Artifact "{\"file_path\": \"$page\", \"icon\": \"page\"}"
+start_receiver count_receiver.py "$HTTP_PORT" "$OUT/inference" "$CLEAN_DURATION" "$PAGE" \
+  Artifact "{\"file_path\": \"$PAGE\", \"icon\": \"page\"}"
 start_control_receiver "$OUT/recording.json" "$CLEAN_DURATION" "$OUT/certs" "$FIXTURES/responses" "$OUT/hellos.json" \
   || { echo "$SCRIPT_NAME: the control receiver did not start" >&2; exit 1; }
 ALLOW_NONESSENTIAL_TRAFFIC=1 runcli feature-hellos feature-hellos hi \

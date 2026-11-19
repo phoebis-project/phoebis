@@ -12,8 +12,9 @@
 # With <hellos-json>, as scripts/capture-feature-hellos.sh starts it, the receiver also writes each connection's
 # ClientHello there under the connection's seq, and answers the connector list and a connector's MCP initialize with
 # the invented bodies below, so the client goes on to open a connector session. It answers an artifact's publish and
-# its page read the same way, so the client goes on to arm the artifact's watch. The control capture leaves both out,
-# so its client meets the receiver its fixtures were captured against.
+# its page read the same way, so the client goes on to arm the artifact's watch. The control capture leaves out
+# <hellos-json>, and with it the hellos and each of these answers, so its client meets the receiver its fixtures were
+# captured against.
 #
 # It listens on 127.0.0.1 alone and never connects anywhere. The token endpoint answers any grant, so no account is
 # involved. Every header and body is recorded verbatim, the authorization header and the token grant's body
@@ -79,9 +80,10 @@ def sync_token():
 
 
 # Invented too: the publish of one artifact and its page read. The client keeps the slug only where it reads as a
-# lowercase UUID, and the page read's syncClient and syncToken send its watch to the socket on api.anthropic.com.
+# lowercase UUID, and the page read's syncClient and syncToken send its watch to the socket on api.anthropic.com. Only
+# a receiver with <hellos-json> serves them, so only that one builds them and reads the profile for the token.
 ARTIFACT_SLUG = "00000000-0000-4000-8000-000000000003"
-ARTIFACT_ANSWERS = {
+ARTIFACT_ANSWERS = {} if HELLOS is None else {
     ("GET", f"/api/frame/{ARTIFACT_SLUG}"): json.dumps({
         "assetToken": "capture-asset-token",
         "syncClient": True,

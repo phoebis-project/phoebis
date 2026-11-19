@@ -365,7 +365,8 @@ refused until the router runs a build re-pinned to the client. To re-pin the pro
    plane each row leaves on, which follow the client's own code for each call of Artifacts and the connectors. Then run
    `scripts/capture-feature-hellos.sh <path-to-claude-binary> <output-dir>` again, whose verdict line says whether the
    hello toward `mcp-proxy.anthropic.com` still equals the fetch path's toward `api.anthropic.com`, which the inference
-   connector's use for both hosts rests on.
+   connector's use for both hosts rests on. Its socket verdict line has to read that the socket's hello still equals
+   `hello_inference.hex` under the masks, which the inference connector's use for the artifact watch's socket rests on.
 5. Land the re-pin as a change to the repository.
    `python3 -I scripts/build-fixtures.py --control <variant-dir> <baseline-dir>` writes the inference and control
    fixtures from the variant that recorded the usage read, and
