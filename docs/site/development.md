@@ -518,22 +518,7 @@ Where a half of the start credential is not set, the job fails with a line that 
 
 The site deploys from `phoebis-docs` alone. Its `Deploy` workflow runs on a push to its `main`, on a manual start and on
 the start a product's push sends. It builds from the four `main` heads and deploys to Pages. The deploy job runs only
-from `main` and only when the repository variable `DOCS_PAGES` of `phoebis-docs` is `1`, so a push to `main` stays green
-until Pages is enabled.
-
-While `phoebis-docs` is private, the build needs its Actions settings to give the organization's repositories access to
-its workflows, and it becomes public no later than the first product repository.
-
-To publish: in the Pages settings of `phoebis-docs`, set the source to GitHub Actions. A private repository needs a
-GitHub plan that offers Pages there. Otherwise the repository has to be made public first. Under Settings, Secrets and
-variables, Actions, Variables, add `DOCS_PAGES` with the value `1`. The next push to `main` deploys the site to
-`https://phoebis-project.github.io/phoebis-docs/`.
-
-To pause deployments, delete the `DOCS_PAGES` variable. The build job keeps running on every push, the deploy job
-stops, and GitHub Pages keeps serving the last deployment at the same URL.
-
-To unpublish the site instead, use the Pages settings' unpublish operation: choose "Unpublish site" and confirm, then
-check that the published URL answers `404` before treating the site as taken down.
+from `main`.
 
 ## Releasing
 
