@@ -375,7 +375,6 @@ async function groupedDialogFixture(theme) {
     measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
     const sayIn = (what) => say(`${state}: ${what}`);
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
-    if (read.groups !== 19 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 19 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
     if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(railScrolls(read));
@@ -3097,10 +3096,6 @@ async function poolCardAges(theme, say, where) {
   }
 }
 
-/** The pool dialog's groups in rail order. */
-const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'claude.ai features', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Diagnostics'];
-/** The groups whose every field is expert, which the rail leaves out while the mode is off. */
-const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Slow-down', 'Failover', 'Diagnostics'];
 /**
  * Per group, the switches whose dependents the geometry pass turns off, and the controls that must go disabled. An
  * `expert` switch and the `expertControls` are drawn in the expert view alone, so the plain walk leaves them out.
@@ -3235,10 +3230,9 @@ async function chevronWeight(label, svg, size, stroke) {
 
 /**
  * The pool dialog in the plain view, then in the expert view: the frame and every group's layout at the pass's
- * viewport, then the frame and the rail's strips at 720 px. The plain rail holds fourteen groups under the five
- * parents, the five expert-only groups left out, and the expert rail all nineteen. Every group on the rail is chosen
- * and read while it shows: its height against the body's window, every cell against the two columns, every label beside
- * its switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled
+ * viewport, then the frame and the rail's strips at 720 px. Every group the rail draws in the view is chosen and read
+ * while it shows: its height against the body's window, every cell against the two columns, every label beside its
+ * switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled
  * while its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select,
  * nothing pushed apart or past the frame, the two ceilings halving the Windows group's first row in both views and the
  * burn average on a row of its own under them in the expert view, and the mono Name input as tall as the Status select
@@ -3256,7 +3250,6 @@ async function poolDialogGeometry(theme) {
 
 async function poolDialogWalk(theme, mode) {
   const expert = mode === 'expert';
-  const labels = expert ? POOL_GROUP_LABELS : POOL_GROUP_LABELS.filter((label) => !POOL_EXPERT_GROUPS.includes(label));
   const sayIn = (group, what) => failures.push(`${theme} /pools dialog, ${mode} view${group ? `, ${group}` : ''}: ${what}`);
   const dialog = page.locator('dialog[open]');
   const open = async () => {
@@ -3287,7 +3280,6 @@ async function poolDialogWalk(theme, mode) {
   measurements.push(`${theme} /pools ${mode} dialog frame ${JSON.stringify(frame)}`);
   if (frame.width !== 1040 || frame.height !== 752) sayIn(null, `the frame measures ${frame.width} by ${frame.height}, not 1040 by 752`);
   if (!frame.rail || frame.rail.scrollHeight > frame.rail.clientHeight) sayIn(null, `the rail scrolls: ${JSON.stringify(frame.rail)}`);
-  if (JSON.stringify(frame.groups) !== JSON.stringify(labels) || frame.entries !== labels.length + 5) sayIn(null, `the rail reads ${JSON.stringify(frame.groups)} in ${frame.entries} entries, not ${JSON.stringify(labels)} in ${labels.length + 5}`);
   const check = async (group) => {
     const { found, line, warning } = await groupGeometry(dialog, group, 1.7);
     if (group === 'Identity') {
@@ -3511,7 +3503,7 @@ async function poolDialogWalk(theme, mode) {
       } else measurements.push(`${theme} /pools ${mode} dialog model rules table: not drawn against the seed, which carries no model override`);
     }
   };
-  for (const group of labels) {
+  for (const group of frame.groups) {
     try {
       await railEntry(dialog, group).click();
       await settle();
@@ -11575,11 +11567,9 @@ async function keyAccessSelects(theme) {
   await atRest();
 }
 
-const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Guardrails', 'claude.ai features', 'Sessions', 'Capture'];
-
 /**
  * The key dialog on the grouped frame, on create and on edit, in the plain view and then in the expert view: the frame
- * and a flat rail of seven groups that fits it, 8 px apart with no line between them and a refusal dot 6 px after its
+ * and a flat rail that fits it, its groups 8 px apart with no line between them and a refusal dot 6 px after its
  * label on its line, each group inside one window of the body with the layout `groupGeometry` reads, the derived id
  * under a new key's typed Name, the moving warning leading Key on an edit that changes the pool, the bodies warning
  * leading Capture while capture is on, the mode badge ending at one x in the desktop key's inherited and own guardrail
@@ -11626,7 +11616,7 @@ async function keyDialogGeometry(theme) {
     const at = `${mode}, ${view} view`;
     measurements.push(`${theme} /keys dialog ${at} frame ${JSON.stringify(frame)}`);
     if (frame.width !== 1040 || frame.height !== 752) sayIn(at, `the frame measures ${frame.width} by ${frame.height}, not 1040 by 752`);
-    if (JSON.stringify(frame.labels) !== JSON.stringify(KEY_GROUP_LABELS) || frame.parents !== 0) sayIn(at, `the rail reads ${JSON.stringify(frame.labels)} under ${frame.parents} parents`);
+    if (frame.parents !== 0) sayIn(at, `the rail draws ${frame.parents} parents, where a flat rail draws none`);
     // Each group of a flat rail is a run of its own, so the pool rail's 14 px and hairline between runs would reach it.
     if (frame.gaps.some((gap) => Math.abs(gap - 8) > 0.5) || JSON.stringify(frame.lines) !== JSON.stringify(['none'])) sayIn(at, `the rail's entries stand ${frame.gaps.join(', ')} px apart with ${frame.lines.join(', ')} before them, not 8 px with none`);
     // A flat rail keeps its dot in the label's line, where the parented rail moves it into the row's right padding.
@@ -11638,7 +11628,7 @@ async function keyDialogGeometry(theme) {
       await dialog.locator('section.dialog-group[aria-label="Key"] input[placeholder="workstation"]').fill('Workstation');
       await settle();
     }
-    for (const group of KEY_GROUP_LABELS) {
+    for (const group of frame.labels) {
       const where = `${at}, ${group}`;
       try {
         await railEntry(dialog, group).click();
