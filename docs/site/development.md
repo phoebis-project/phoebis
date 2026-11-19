@@ -394,42 +394,58 @@ refused until the router runs a build re-pinned to the client. To re-pin the pro
 
 ## The documentation
 
-Zensical builds this site from `docs/site/` under `zensical.toml`. From the repository root:
+The pages of this part live in this repository under `docs/site/`, with their navigation in `docs/nav.toml`. The
+documentation repository, [`phoebis-project/phoebis-docs`](https://github.com/phoebis-project/phoebis-docs), holds the
+site's configuration, its scripts, its start page, its theme and its workflows. Its build copies the `docs/site/` of
+each product into one tree under the product's folder, `router/` for these pages, merges the nav files and runs Zensical
+over the result. The build refuses a page that no nav entry names, and its link check fails on a nav entry whose page is
+gone, so a page that is added, renamed or removed changes `docs/nav.toml` in the same pull request.
+
+From a checkout of `phoebis-docs`, with a checkout of each product beside it, one command assembles the tree, serves it
+and assembles again when a page changes:
 
 ```sh
-pipx run zensical==0.0.62 build --clean --strict
-python3 scripts/check-docs.py links
-python3 scripts/check-docs.py client
-python3 scripts/check-docs.py check-config
-python3 scripts/check-docs.py codes
-python3 scripts/check-docs.py example
-python3 scripts/check-docs.py unit
-python3 scripts/check-docs.py schema
-python3 scripts/check-docs.py prose docs/site/<page>.md
+python3 scripts/preview.py --checkout router=../phoebis --checkout companion=../phoebis-companion --checkout proxy=../phoebis-proxy
 ```
 
-The build writes `site/`, and a warning fails it. The workflow pins the same version, so a local build passes or fails
-as the workflow's does. `pipx run zensical==0.0.62 serve` previews the site. The checks under `scripts/check-docs.py`
-read files and print one line per problem, exit 1 on any and 2 on a usage error, and fail on a source shape they cannot
-read rather than dropping it:
+The build a pull request gets is the strict one, which a warning fails, with two checks behind it: the link check over
+the built site and the prose check over the assembled pages. The README of `phoebis-docs` holds the commands of that
+build and of the two checks, with the version of Zensical the workflow pins, so a local build passes or fails as the
+workflow's does. The assembly writes `build/`, and the build writes `build/site/`. The two checks are arms of
+`scripts/check-site.py` in `phoebis-docs`. They print one line per problem, exit 1 on any and 2 on a usage error:
 
 - `links` walks the built site for an internal link or image that resolves to nothing, and for a link whose fragment
   names no heading or anchor on the page it lands on.
-- `client` compares the proxy listener's route table with the table on
-  [The client](client.md#what-the-proxy-accepts), so a route added or removed in the router fails the build until the
-  page follows.
+- `prose` holds the site's prose to its mechanical rules, by path or, with no path, over each page of the build tree and
+  the README of `phoebis-docs`: a semicolon on a prose line, a line over 120 columns that is not a table row, an em-dash
+  or an en-dash, a word from its list of words no page carries, and a bare `api_key` outside a code span. It drops
+  fenced blocks and code spans before it reads. The workflow hands it the README of each product too, and `python3
+  scripts/check-site.py prose ../phoebis/README.md` reads this repository's.
+
+The checks that compare a page with the code stay in this repository. From the repository root:
+
+```sh
+python3 scripts/check-docs.py check-config
+python3 scripts/check-docs.py client
+python3 scripts/check-docs.py codes
+python3 scripts/check-docs.py example
+python3 scripts/check-docs.py schema
+python3 scripts/check-docs.py unit
+```
+
+They read files and print one line per problem, exit 1 on any and 2 on a usage error, and fail on a source shape they
+cannot read rather than dropping it:
+
 - `check-config` compares the lines the binary's `check-config` arm prints with the list under
   [Commands](installation.md#commands) on Installation.
+- `client` compares the proxy listener's route table with the table on [The client](client.md#what-the-proxy-accepts),
+  so a route added or removed in the router fails the workflow until the page follows.
 - `codes` compares the refusal codes the `x-phoebis-error-code` header carries on the proxy listener with the table
   under [Refusal codes](client.md#refusal-codes) on The client.
 - `example` compares the installation page's quoted example with `deploy/config.example.yaml`.
-- `unit` compares the installation page's quoted unit with `deploy/phoebis.service`.
 - `schema` compares the schema versions the operations page states with the last step of the registry's and the ledger's
   migration tables.
-- `prose` holds the site's prose to its mechanical rules, by path or, with no path, over every page and the README: a
-  semicolon on a prose line, a line over 120 columns that is not a table row, an em-dash or an en-dash, a word from
-  its list of words no page carries, and a bare `api_key` outside a code span. It drops fenced blocks and code spans
-  before it reads.
+- `unit` compares the installation page's quoted unit with `deploy/phoebis.service`.
 
 `bash scripts/tests/check-docs.sh` runs the checker's own cases against throwaway trees, and the favicon case at the end
 against the real one, so the checker fails on what it exists to catch.
@@ -440,32 +456,75 @@ host's curl. Loopback stubs play the router's CA download and three states of th
 listens, a proxy that answers the `CONNECT` with `403`, and a proxy whose upstream is down. In each state the script has
 to stop with the message of that state and print no other line.
 
+### Links to another product
+
+A page of this part links to a page of the companion or the proxy with a relative path through the built tree, such as
+`../companion/install.md#configure`, and their pages link here the same way. The strict build checks the page and the
+anchor, and a failure names the linking file with its product's folder. A page links to a file outside `docs/site/` by
+its address on GitHub.
+
+The three folder names, `companion`, `proxy` and `router`, are therefore a contract between the repositories, and so is
+each page and each anchor of this part that another product links to. A change to such a target stays green in one
+repository at a time under two rules:
+
+- A heading that another product links to keeps its anchor when its text changes, through an explicit id on the heading,
+  as `## Upgrades and renewals { #upgrades }` on the operations page has one.
+- A page or an anchor that is renamed or removed goes in three steps: the new target beside the old one, then the links
+  in the other repository, then the removal of the old one.
+
+The site's mark and favicon belong to the same contract. They are this repository's `docs/site/assets/favicon.svg`,
+`docs/site/assets/phoebis-router-light.svg` and `docs/site/assets/phoebis-router.svg`, which the site's configuration
+and its theme name under `router/assets/`, so each of the three keeps its path.
+
 ## Continuous checks
 
 Two GitHub Actions workflows run on every pull request and every push to `main`. `Tests` runs the `rust` and `web` jobs
 of [The tests](#the-tests) and a third job, also named `Tests`, that reports the two as the one check the branch
 protection on `main` requires, a canceled or skipped job included. The `web` job runs the console's build,
 `check-build`, lint and unit tests, and the browser checks run on a developer's host before a merge, since on the
-hosted runner they run past the job's cap. A newer push to a pull request cancels its older run. `Documentation`
-builds and checks this site ([Publishing the site](#publishing-the-site)). The third workflow, `Release`, runs on a
-release, a manual dispatch, and a pull request that touches the image's or the binary's inputs
-([Releasing](#releasing)). The three are separate workflows, so a failed test never blocks the site's build.
+hosted runner they run past the job's cap. A newer push to a pull request cancels its older run. `Documentation` runs
+the checks that compare a page with the code and calls the build workflow of the documentation repository, which builds
+the site with this repository's pages at the run's commit ([Publishing the site](#publishing-the-site)). The third
+workflow, `Release`, runs on a release, a manual dispatch, and a pull request that touches the image's or the binary's
+inputs ([Releasing](#releasing)). The three are separate workflows, so a failed test never blocks the site's build.
 
 The release workflow's jobs run with a read-only token except `build`, which writes packages, `publish`, which writes
-packages and the release's archives, and `smoke`, which reads packages. The `Tests` jobs read alone, and in
-`Documentation` only the deploy job writes, to Pages.
+packages and the release's archives, and `smoke`, which reads packages. The `Tests` jobs read alone, and so do the jobs
+of `Documentation`. Its last job starts the deploy with a GitHub App's token that is scoped to the Actions of the
+documentation repository, and the job that writes to Pages runs in that repository.
 
 ## Publishing the site
 
-The `Documentation` workflow builds this site on every push to `main` and every pull request:
-`scripts/tests/check-docs.sh`, `scripts/tests/launch-script.sh`, `zensical build --clean --strict`, the checks under
-`scripts/check-docs.py`, and the built `site/` directory uploaded as an artifact. The deploy job runs only on a push,
-and only when the repository variable `DOCS_PAGES` is `1`, so a push to `main` stays green until Pages is enabled.
+The `Documentation` workflow runs on every push to `main` and every pull request, in three jobs. `checks` runs
+`scripts/tests/check-docs.sh`, `scripts/tests/launch-script.sh` and the six checks under `scripts/check-docs.py`. `site`
+calls the build workflow of `phoebis-docs`, which checks out this repository at the run's commit and the companion and
+the proxy at `main`, runs its scripts' cases, the assembly, `zensical build --clean --strict`, the link check and the
+prose check, and uploads the built site as an artifact. On a pull request the run's commit is GitHub's merge of the pull
+request into its base branch, so the build reads the pages as they stand once merged. `start-deploy` runs on a push to
+`main` once both passed and starts the `Deploy` workflow of `phoebis-docs`.
 
-To publish: in the repository's Pages settings, set the source to GitHub Actions. A private repository needs a GitHub
-plan that offers Pages there. Otherwise the repository has to be made public first. Under Settings, Secrets and
+The two jobs that reach another repository each use a token of a GitHub App, under a credential of their own. The build
+reads the four repositories with the read credential: each of the four holds its client id as the variable
+`DOCS_APP_CLIENT_ID` and its private key as the secret `DOCS_APP_PRIVATE_KEY`. Where either is not set, the checkouts
+use the job's own token, which reads no other private repository. A pull request from a fork gets no secret and builds
+on that path, so its `site` job passes only once each of the four repositories is public. `start-deploy` writes to the
+Actions of `phoebis-docs` with the start credential, which each product repository holds as the variable
+`DOCS_DEPLOY_APP_CLIENT_ID` and the secret `DOCS_DEPLOY_APP_PRIVATE_KEY`. It runs in the organization's repository
+alone, so a fork's own `main` starts nothing. Where a half of the start credential is not set, the job fails with a line
+that says which.
+
+The site deploys from `phoebis-docs` alone. Its `Deploy` workflow runs on a push to its `main`, on a manual start and on
+the start a product's push sends. It builds from the four `main` heads and deploys to Pages. The deploy job runs only
+when the repository variable `DOCS_PAGES` of `phoebis-docs` is `1`, so a push to `main` stays green until Pages is
+enabled.
+
+While `phoebis-docs` is private, the build needs its Actions settings to give the organization's repositories access to
+its workflows, and it becomes public no later than the first product repository.
+
+To publish: in the Pages settings of `phoebis-docs`, set the source to GitHub Actions. A private repository needs a
+GitHub plan that offers Pages there. Otherwise the repository has to be made public first. Under Settings, Secrets and
 variables, Actions, Variables, add `DOCS_PAGES` with the value `1`. The next push to `main` deploys the site to
-`https://phoebis-project.github.io/phoebis/`.
+`https://phoebis-project.github.io/phoebis-docs/`.
 
 To pause deployments, delete the `DOCS_PAGES` variable. The build job keeps running on every push, the deploy job
 stops, and GitHub Pages keeps serving the last deployment at the same URL.
