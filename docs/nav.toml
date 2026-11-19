@@ -1,0 +1,24 @@
+nav = [
+  { "Overview" = "index.md" },
+  { "Getting started" = [
+    { "Quick start" = "quickstart.md" },
+    { "The client" = "client.md" },
+    { "A second machine" = "second-machine.md" },
+  ] },
+  { "Reference" = [
+    { "Installation" = "installation.md" },
+    { "Pairing an account" = "pairing.md" },
+    { "Pools, keys and routing" = "routing.md" },
+    { "Guardrails" = "guardrails.md" },
+    { "Keepalive" = "keepalive.md" },
+    { "The companion mod" = "companion-mod.md" },
+    { "claude.ai features" = "claude-ai-features.md" },
+    { "The relay" = "relay.md" },
+    { "The console" = "console.md" },
+    { "Statistics" = "statistics.md" },
+    { "API reference" = "api-reference.md" },
+  ] },
+  { "Operations" = "operations.md" },
+  { "Development" = "development.md" },
+  { "Changelog" = "changelog.md" },
+]
