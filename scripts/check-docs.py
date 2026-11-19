@@ -717,59 +717,38 @@ def check_codes(code_files, client_md):
     return 1 if findings else 0
 
 
-USAGE = (
-    "usage: check-docs.py check-config [MAIN_RS INSTALLATION_MD] | client [ROUTE_RS... CLIENT_MD]"
-    " | codes [RS_FILE... CLIENT_MD] | example [EXAMPLE_YAML INSTALLATION_MD]"
-    " | schema [REGISTRY_SCHEMA_RS LEDGER_SCHEMA_RS OPERATIONS_MD] | unit [UNIT_FILE INSTALLATION_MD]"
-)
+# name: (check, its usage arguments, its default paths, whether its leading paths are a list of files)
+COMMANDS = {
+    "check-config": (check_check_config, "MAIN_RS INSTALLATION_MD", (MAIN_RS, INSTALLATION_MD), False),
+    "client": (check_client, "ROUTE_RS... CLIENT_MD", (PROXY_ROUTE_FILES, CLIENT_MD), True),
+    "codes": (check_codes, "RS_FILE... CLIENT_MD", (CODE_FILES, CLIENT_MD), True),
+    "example": (check_example, "EXAMPLE_YAML INSTALLATION_MD", (EXAMPLE_YAML, INSTALLATION_MD), False),
+    "schema": (
+        check_schema,
+        "REGISTRY_SCHEMA_RS LEDGER_SCHEMA_RS OPERATIONS_MD",
+        (REGISTRY_SCHEMA_RS, LEDGER_SCHEMA_RS, OPERATIONS_MD),
+        False,
+    ),
+    "unit": (check_unit, "UNIT_FILE INSTALLATION_MD", (UNIT_FILE, INSTALLATION_MD), False),
+}
+USAGE = "usage: check-docs.py " + " | ".join(f"{name} [{usage}]" for name, (_, usage, _, _) in COMMANDS.items())
 
 
 def main(argv):
-    if len(argv) >= 2 and argv[1] == "client":
-        if len(argv) == 3:
-            # A route file without the client page to check it against is a mistake, not a default.
-            print(USAGE)
-            return 2
-        files = [pathlib.Path(p) for p in argv[2:-1]] if len(argv) > 3 else PROXY_ROUTE_FILES
-        client_md = pathlib.Path(argv[-1]) if len(argv) > 3 else CLIENT_MD
-        return check_client(files, client_md)
-    if len(argv) >= 2 and argv[1] == "check-config":
-        if len(argv) not in (2, 4):
-            print(USAGE)
-            return 2
-        main_rs = pathlib.Path(argv[2]) if len(argv) == 4 else MAIN_RS
-        page = pathlib.Path(argv[3]) if len(argv) == 4 else INSTALLATION_MD
-        return check_check_config(main_rs, page)
-    if len(argv) >= 2 and argv[1] == "codes":
-        if len(argv) == 3:
-            # A code file without the page to check it against is a mistake, as it is for `client`.
-            print(USAGE)
-            return 2
-        files = [pathlib.Path(p) for p in argv[2:-1]] if len(argv) > 3 else CODE_FILES
-        client_md = pathlib.Path(argv[-1]) if len(argv) > 3 else CLIENT_MD
-        return check_codes(files, client_md)
-    if len(argv) >= 2 and argv[1] == "example":
-        if len(argv) not in (2, 4):
-            print(USAGE)
-            return 2
-        example = pathlib.Path(argv[2]) if len(argv) == 4 else EXAMPLE_YAML
-        page = pathlib.Path(argv[3]) if len(argv) == 4 else INSTALLATION_MD
-        return check_example(example, page)
-    if len(argv) >= 2 and argv[1] == "unit":
-        if len(argv) not in (2, 4):
-            print(USAGE)
-            return 2
-        unit = pathlib.Path(argv[2]) if len(argv) == 4 else UNIT_FILE
-        page = pathlib.Path(argv[3]) if len(argv) == 4 else INSTALLATION_MD
-        return check_unit(unit, page)
-    if len(argv) >= 2 and argv[1] == "schema":
-        if len(argv) not in (2, 5):
-            print(USAGE)
-            return 2
-        registry_rs = pathlib.Path(argv[2]) if len(argv) == 5 else REGISTRY_SCHEMA_RS
-        ledger_rs = pathlib.Path(argv[3]) if len(argv) == 5 else LEDGER_SCHEMA_RS
-        page = pathlib.Path(argv[4]) if len(argv) == 5 else OPERATIONS_MD
-        return check_schema(registry_rs, ledger_rs, page)
+    command = COMMANDS.get(argv[1]) if len(argv) >= 2 else None
+    if command is None:
+        print(USAGE)
+        return 2
+    check, _, defaults, listed = command
+    given = [pathlib.Path(p) for p in argv[2:]]
+    if not given:
+        return check(*defaults)
+    if listed:
+        # A route or code file without the client page to check it against is a mistake, not a default.
+        if len(given) >= 2:
+            return check(given[:-1], given[-1])
+    elif len(given) == len(defaults):
+        return check(*given)
     print(USAGE)
     return 2
 
