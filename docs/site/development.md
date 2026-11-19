@@ -239,10 +239,9 @@ the page's read with invented bodies, so the client arms the page's watch and di
 `api.anthropic.com`. The run sets `CLAUDE_CODE_ENTRYPOINT=sdk-ts`, the entry point of an Agent SDK session, since a
 plain print-mode run of 2.1.327 arms no watch. The client resolves `api.anthropic.com` itself ahead of the socket's
 dial, so the script binds a private hosts file with a loopback line for that name over `/etc/hosts`, inside the
-capture's namespace alone, and the model receiver holds the answer that ends the turn for ten seconds, since the client
-exits at the turn's end and the watch dials in the background. The control receiver writes each connection's
-ClientHello beside its recording, and the script joins the two into `feature_hellos.json`: one entry per connection
-with the `CONNECT` authority, the hello as hex, and the first request's line and `User-Agent`.
+capture's namespace alone. The control receiver writes each connection's ClientHello beside its recording, and the
+script joins the two into `feature_hellos.json`: one entry per connection with the `CONNECT` authority, the hello as
+hex, and the first request's line and `User-Agent`.
 `python3 -I scripts/capture/hello_lib.py <first.hex> <second.hex>` compares two hellos with the random, the session id,
 the server name and the key shares masked, and names the first part that differs: the cipher list, the compression
 methods, or an extension by its type and place. The script reports the fetch path's hello toward `api.anthropic.com`

@@ -83,10 +83,8 @@ page="$CLIENT_CWD/capture-page.html"
 printf '%s\n' '<!doctype html><title>Capture page</title><p>An invented page of the feature capture.</p>' >"$page"
 CLI_ARGS=(--allowedTools Artifact)
 
-# The publish arms the artifact's watch in the background, and the client exits at its turn's end, so the answer that
-# ends the turn waits ten seconds for the watch to dial its socket.
 start_receiver count_receiver.py "$HTTP_PORT" "$OUT/inference" "$CLEAN_DURATION" "$page" \
-  Artifact "{\"file_path\": \"$page\", \"icon\": \"page\"}" 10
+  Artifact "{\"file_path\": \"$page\", \"icon\": \"page\"}"
 start_control_receiver "$OUT/recording.json" "$CLEAN_DURATION" "$OUT/certs" "$FIXTURES/responses" "$OUT/hellos.json" \
   || { echo "$SCRIPT_NAME: the control receiver did not start" >&2; exit 1; }
 ALLOW_NONESSENTIAL_TRAFFIC=1 runcli feature-hellos feature-hellos hi \

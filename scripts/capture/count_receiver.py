@@ -1,14 +1,12 @@
 # Records every HTTP/1.1 request sent to it like http_raw.py and answers the first POST /v1/messages with a canned
 # streamed tool_use answer for Read on the file named on the command line, so the client runs the tool and its
 # pre-turn token count reaches the wire; every other request is answered a canned 400. Never connects anywhere.
-# Usage: count_receiver.py <port> <output-dir> <seconds> <file-path> [<tool-name> <tool-input-json> [<hold-seconds>]]
+# Usage: count_receiver.py <port> <output-dir> <seconds> <file-path> [<tool-name> <tool-input-json>]
 # With the pair, as scripts/capture-feature-hellos.sh starts it, the tool_use calls that tool with that input in place
-# of Read. With <hold-seconds> the answer to the second POST /v1/messages waits that long, since a print-mode client
-# exits at its turn's end and would cut short what the tool started in the background.
+# of Read.
 import json, os, signal, socket, sys, threading, time
-PORT=int(sys.argv[1]); OUT=sys.argv[2]; DUR=int(sys.argv[3]); FILE=sys.argv[4]; reqs=[]; lock=threading.RLock(); posts=[0]
+PORT=int(sys.argv[1]); OUT=sys.argv[2]; DUR=int(sys.argv[3]); FILE=sys.argv[4]; reqs=[]; lock=threading.RLock(); answered=[False]
 TOOL,INPUT=(sys.argv[5],sys.argv[6]) if len(sys.argv)>=7 else ('Read',json.dumps({"file_path":FILE}))
-HOLD=float(sys.argv[7]) if len(sys.argv)>=8 else 0
 os.makedirs(OUT,exist_ok=True)
 def dump(*_):
     with lock: json.dump(reqs,open(os.path.join(OUT,'clean_modes.json'),'w'),indent=1)
@@ -45,14 +43,12 @@ def handle(c):
             reqs.append({'t':round(time.time(),2),'request_line':line,'headers':[l.decode() for l in lines[1:]],'body':rest.decode('utf8','replace')})
             dump()
             parts=line.split(' ')
-            post=len(parts)>1 and parts[0]=='POST' and parts[1].split('?')[0]=='/v1/messages'
-            if post: posts[0]+=1
-            first=post and posts[0]==1; second=post and posts[0]==2
+            first=len(parts)>1 and parts[0]=='POST' and parts[1].split('?')[0]=='/v1/messages' and not answered[0]
+            if first: answered[0]=True
         if first:
             body=tool_use_answer()
             c.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: '+str(len(body)).encode()+b'\r\nConnection: close\r\n\r\n'+body)
         else:
-            if second: time.sleep(HOLD)
             body=b'{"type":"error","error":{"type":"invalid_request_error","message":"capture"}}'
             c.sendall(b'HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: '+str(len(body)).encode()+b'\r\nConnection: close\r\n\r\n'+body)
     finally: c.close()
