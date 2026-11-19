@@ -19,9 +19,8 @@ protective measures, and they say nothing about one person who holds several sub
 commercial service with consumer subscriptions. On its own side the router never presents an SDK client as the CLI, and
 an OAuth account refuses a request that names no user.
 
-The documentation lives under [`docs/site/`](docs/site/index.md), starting with the
-[Quick start](docs/site/quickstart.md), and is published at <https://phoebis-project.github.io/phoebis-docs/> once
-GitHub Pages is enabled for the documentation site.
+The documentation lives under [`docs/site/`](docs/site/index.md), starting with the [Quick
+start](docs/site/quickstart.md), and is published at <https://phoebis-project.github.io/phoebis-docs/>.
 
 ## License
 
