@@ -2,7 +2,7 @@
 """Read-only checks that compare the documentation's pages with the code.
 
 `client` compares the proxy listener's route table with the table on the client page, so a route added or removed
-in the router fails the build until the page follows.
+in the router fails the workflow until the page follows.
 
 `check-config` compares the lines the binary's `check-config` arm prints with the installation page's list,
 `codes` the refusal codes the `x-phoebis-error-code` header carries on the proxy and the feature listener with the

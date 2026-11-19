@@ -419,8 +419,8 @@ workflow's does. The assembly writes `build/`, and the build writes `build/site/
 - `prose` holds the site's prose to its mechanical rules, by path or, with no path, over each page of the build tree and
   the README of `phoebis-docs`: a semicolon on a prose line, a line over 120 columns that is not a table row, an em-dash
   or an en-dash, a word from its list of words no page carries, and a bare `api_key` outside a code span. It drops
-  fenced blocks and code spans before it reads. The workflow hands it the README of each product too, and `python3
-  scripts/check-site.py prose ../phoebis/README.md` reads this repository's.
+  fenced blocks, code spans and HTML comments before it reads. The workflow hands it the README of each product too, and
+  `python3 scripts/check-site.py prose ../phoebis/README.md` reads this repository's.
 
 The checks that compare a page with the code stay in this repository. From the repository root:
 
@@ -497,11 +497,11 @@ documentation repository, and the job that writes to Pages runs in that reposito
 
 The `Documentation` workflow runs on every push to `main` and every pull request, in three jobs. `checks` runs
 `scripts/tests/check-docs.sh`, `scripts/tests/launch-script.sh` and the six checks under `scripts/check-docs.py`. `site`
-calls the build workflow of `phoebis-docs`, which checks out this repository at the run's commit and the companion and
-the proxy at `main`, runs its scripts' cases, the assembly, `zensical build --clean --strict`, the link check and the
-prose check, and uploads the built site as an artifact. On a pull request the run's commit is GitHub's merge of the pull
-request into its base branch, so the build reads the pages as they stand once merged. `start-deploy` runs on a push to
-`main` once both passed and starts the `Deploy` workflow of `phoebis-docs`.
+calls the build workflow of `phoebis-docs`, which checks out this repository at the run's commit and `phoebis-docs`, the
+companion and the proxy at `main`, runs its scripts' cases, the assembly, `zensical build --clean --strict`, the link
+check and the prose check, and uploads the built site as an artifact. On a pull request the run's commit is GitHub's
+merge of the pull request into its base branch, so the build reads the pages as they stand once merged. `start-deploy`
+runs on a push to `main` once both passed and starts the `Deploy` workflow of `phoebis-docs`.
 
 The two jobs that reach another repository each use a token of a GitHub App, under a credential of their own. The build
 reads the four repositories with the read credential: each of the four holds its client id as the variable
@@ -515,8 +515,8 @@ that says which.
 
 The site deploys from `phoebis-docs` alone. Its `Deploy` workflow runs on a push to its `main`, on a manual start and on
 the start a product's push sends. It builds from the four `main` heads and deploys to Pages. The deploy job runs only
-when the repository variable `DOCS_PAGES` of `phoebis-docs` is `1`, so a push to `main` stays green until Pages is
-enabled.
+from `main` and only when the repository variable `DOCS_PAGES` of `phoebis-docs` is `1`, so a push to `main` stays green
+until Pages is enabled.
 
 While `phoebis-docs` is private, the build needs its Actions settings to give the organization's repositories access to
 its workflows, and it becomes public no later than the first product repository.
