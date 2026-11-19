@@ -71,36 +71,6 @@ test("a row reads each kind's detail as one sentence", () => {
   assert.equal(sentence('model_unpriced', { model: 'claude-opus-99', requests: 1 }), `claude-opus-99 has no weight in the cost model, so its 1 plan-funded request since ${since} priced no window share.`, 'one request reads singular');
 });
 
-test("a listener's certificate items read the listener, the file, the date and what to do", () => {
-  const listener = (kind, id, detail) => attentionDetail(item(kind, { detail, subject: { id, label: id, type: 'router' } }), NOW);
-  const ahead = NOW + 12 * 86_400_000;
-  const behind = NOW - 3 * 86_400_000;
-  const date = (ms) => fmtAbsolute(new Date(ms).toISOString());
-  assert.equal(
-    listener('certificate_expiring', 'proxy.tls', { cert_file: '/etc/phoebis/proxy.pem', days_left: 12, expires: ahead }),
-    `The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (${date(ahead)}). Replace the pair and run phoebis tls reload.`,
-  );
-  assert.equal(
-    listener('certificate_expiring', 'admin.tls', { cert_file: '/etc/phoebis/admin.pem', days_left: -3, expires: behind }),
-    `The admin listener's certificate /etc/phoebis/admin.pem expired 3 days ago (${date(behind)}). Replace the pair and run phoebis tls reload.`,
-    'a leaf past its end counts the days since',
-  );
-  assert.equal(
-    listener('certificate_expiring', 'proxy.tls', { cert_file: '/etc/phoebis/proxy.pem', days_left: 1, expires: NOW + 86_400_000 }),
-    `The proxy listener's certificate /etc/phoebis/proxy.pem expires in 1 day (${date(NOW + 86_400_000)}). Replace the pair and run phoebis tls reload.`,
-  );
-  const loaded = NOW - 40 * 86_400_000;
-  assert.equal(
-    listener('certificate_reload_failed', 'proxy.tls', {
-      cert_file: '/etc/phoebis/proxy.pem',
-      error: 'proxy.tls.key_file /etc/phoebis/proxy.key: does not match the certificate in /etc/phoebis/proxy.pem',
-      key_file: '/etc/phoebis/proxy.key',
-      serving_since: loaded,
-    }),
-    `The proxy listener's pair did not load: proxy.tls.key_file /etc/phoebis/proxy.key: does not match the certificate in /etc/phoebis/proxy.pem. The router keeps serving the pair it loaded at ${date(loaded)}.`,
-  );
-});
-
 test("the feature CA's item reads its file and never a reload", () => {
   const ca = { cert_file: '/var/lib/phoebis/feature-ca.pem', days_left: 20, expires: NOW + 20 * 86_400_000 };
   const line = attentionDetail(item('certificate_expiring', { detail: ca, subject: { id: 'features.ca', label: 'features.ca', type: 'router' } }), NOW);

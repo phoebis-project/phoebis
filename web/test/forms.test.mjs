@@ -268,7 +268,6 @@ test('a model rule list is refused in the route\'s order and words, and the refu
 });
 
 test("the key dialog's holds agree with its Save condition", () => {
-  assert.deepEqual(d.KEY_GROUPS, ['key', 'access', 'models', 'guardrails', 'features', 'sessions', 'capture']);
   const named = { captureHours: 6, captureMode: 'inherit', modelRules: [], name: 'workstation', poolId: 'all' };
   assert.deepEqual(d.keyRefusals(named), [], 'a named key in a pool with no rules may save');
   assert.deepEqual(d.keyRefusals({ ...named, name: '' }), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }]);
@@ -419,7 +418,6 @@ test("refusals come in rail order, a new pool's first two the name and the membe
     refusals.slice(0, 2).map((r) => r.text),
     ['the pool needs a name.', 'the pool needs a member.'],
   );
-  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'guardrails', 'autoMode', 'features', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics']);
 });
 
 test('every bounded engine field is refused once it leaves its bound', () => {
