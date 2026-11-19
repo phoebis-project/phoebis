@@ -233,17 +233,27 @@ fixtures under `not captured (control plane):` and grades everything it could re
 features in the same namespace, with the same throwaway CA and the dummy OAuth token. One print-mode run carries the
 variables of a feature setup with `CLAUDE_CODE_ARTIFACT=1` and the nonessential traffic left on, so the client opens the
 artifacts MCP session through its fetch path and, past an invented connector list the control receiver answers, a
-connector session toward `mcp-proxy.anthropic.com`. The receiver writes each connection's ClientHello beside its
-recording, and the script joins the two into `feature_hellos.json`: one entry per connection with the `CONNECT`
-authority, the hello as hex, and the first request's line and `User-Agent`.
+connector session toward `mcp-proxy.anthropic.com`. The model receiver, `scripts/capture/count_receiver.py`, answers the
+turn with a call of the Artifact tool that publishes an invented page, and the control receiver answers the publish and
+the page's read with invented bodies, so the client arms the page's watch and dials its socket, `GET /api/frame/sync` on
+`api.anthropic.com`. The run sets `CLAUDE_CODE_ENTRYPOINT=sdk-ts`, the entry point of an Agent SDK session, since a
+plain print-mode run of 2.1.327 arms no watch. The client resolves `api.anthropic.com` itself ahead of the socket's
+dial, so the script binds a private hosts file with a loopback line for that name over `/etc/hosts`, inside the
+capture's namespace alone, and the model receiver holds the answer that ends the turn for ten seconds, since the client
+exits at the turn's end and the watch dials in the background. The control receiver writes each connection's
+ClientHello beside its recording, and the script joins the two into `feature_hellos.json`: one entry per connection
+with the `CONNECT` authority, the hello as hex, and the first request's line and `User-Agent`.
 `python3 -I scripts/capture/hello_lib.py <first.hex> <second.hex>` compares two hellos with the random, the session id,
 the server name and the key shares masked, and names the first part that differs: the cipher list, the compression
 methods, or an extension by its type and place. The script reports the fetch path's hello toward `api.anthropic.com`
-against `hello_inference.hex` and the axios path's against `hello_control.hex`, and exits with the compare of the hello
-toward `mcp-proxy.anthropic.com` against the fetch path's: 0 where the two are equal under the masks, 3 where they
-differ, and 4 where one of them was not recorded. Its log ends with one verdict line. Measured on 2.1.325, the two are
-equal, which is why the router's inference connector serves the connectors' sessions toward `mcp-proxy.anthropic.com` as
-it serves `api.anthropic.com`.
+against `hello_inference.hex` and the axios path's against `hello_control.hex`. It compares the socket's hello with both
+pinned files and prints, ahead of the last compare, a socket verdict line that names the file the hello equals, or says
+that it equals neither or was not recorded. It exits with the compare of the hello toward `mcp-proxy.anthropic.com`
+against the fetch path's: 0 where the two are equal under the masks, 3 where they differ, and 4 where one of them was
+not recorded. Its log ends with one verdict line. Measured on 2.1.325, the two are equal, which is why the router's
+inference connector serves the connectors' sessions toward `mcp-proxy.anthropic.com` as it serves `api.anthropic.com`.
+Measured on 2.1.327, the socket's hello equals `hello_inference.hex` under the masks, so it is the hello of the router's
+inference connector.
 
 The written fixtures are redacted. `scripts/build-fixtures.py` puts a placeholder in for the device id, the session id
 (one value in the session header and in `metadata.user_id`), the prompt id (one value in the prompt id header and in

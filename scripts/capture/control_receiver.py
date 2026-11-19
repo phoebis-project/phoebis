@@ -11,7 +11,8 @@
 #
 # With <hellos-json>, as scripts/capture-feature-hellos.sh starts it, the receiver also writes each connection's
 # ClientHello there under the connection's seq, and answers the connector list and a connector's MCP initialize with
-# the invented bodies below, so the client goes on to open a connector session. The control capture leaves both out,
+# the invented bodies below, so the client goes on to open a connector session. It answers an artifact's publish and
+# its page read the same way, so the client goes on to arm the artifact's watch. The control capture leaves both out,
 # so its client meets the receiver its fixtures were captured against.
 #
 # It listens on 127.0.0.1 alone and never connects anywhere. The token endpoint answers any grant, so no account is
@@ -23,7 +24,7 @@
 # each carrying the seq of its connection. A connection whose answer fails after its request was recorded keeps both
 # entries under its seq. The file is rewritten after every entry and on SIGTERM, so a capture stopped early keeps what
 # it saw.
-import json, pathlib, signal, socket, ssl, sys, threading, time
+import base64, json, pathlib, signal, socket, ssl, sys, threading, time
 
 if len(sys.argv) not in (6, 7):
     sys.exit(f"usage: {sys.argv[0]} <port> <output-json> <seconds> <certs-dir> <responses-dir> [<hellos-json>]")
@@ -63,6 +64,32 @@ INITIALIZE_RESULT = {
     "capabilities": {"tools": {}},
     "protocolVersion": "2026-07-28",
     "serverInfo": {"name": "example-connector", "version": "1.0.0"},
+}
+
+
+def sync_token():
+    """A sync token of the shape the client checks before it dials the artifact watch's socket: the account UUID's text
+    as base64url, the organization UUID, a role that ends in _agent, the issue and the end in Unix seconds, and 43
+    letters where the signature stands. The two UUIDs are the canned profile's, so the token names the session's own
+    account."""
+    profile = json.loads(CANNED[("GET", "/api/oauth/profile")])
+    account = base64.urlsafe_b64encode(profile["account"]["uuid"].encode()).decode()
+    start = int(time.time())
+    return ".".join([account, profile["organization"]["uuid"], "owner_agent", str(start), str(start + 900), "A" * 43])
+
+
+# Invented too: the publish of one artifact and its page read. The client keeps the slug only where it reads as a
+# lowercase UUID, and the page read's syncClient and syncToken send its watch to the socket on api.anthropic.com.
+ARTIFACT_SLUG = "00000000-0000-4000-8000-000000000003"
+ARTIFACT_ANSWERS = {
+    ("GET", f"/api/frame/{ARTIFACT_SLUG}"): json.dumps({
+        "assetToken": "capture-asset-token",
+        "syncClient": True,
+        "syncToken": sync_token(),
+        "ver": "1",
+    }).encode(),
+    ("POST", "/api/frame/deploy/direct"): json.dumps({"slug": ARTIFACT_SLUG, "version": "1"}).encode(),
+    ("POST", "/api/frame/deploy/prepare"): json.dumps({"slug": ARTIFACT_SLUG}).encode(),
 }
 
 # The receiver's clients sit on loopback and send their requests at once, so a connection idle this long has
@@ -136,6 +163,8 @@ def feature_answer(method, path, body):
     the request's own id, which the client matches it by."""
     if (method, path) == ("GET", "/v1/mcp_servers"):
         return CONNECTOR_LIST
+    if (method, path) in ARTIFACT_ANSWERS:
+        return ARTIFACT_ANSWERS[(method, path)]
     if method != "POST" or not path.startswith("/v1/mcp/"):
         return None
     try:

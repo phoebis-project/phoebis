@@ -13,8 +13,9 @@
 # starting from the credentials the login wrote and its inference post reaching the inference receiver past the proxy,
 # moves on past a login the driver gives up on, stops in a phase whose control receiver cannot bind its port, and
 # refuses a real token. lib.sh's runcli takes KEEP_CONFIG and ALLOW_NONESSENTIAL_TRAFFIC from a call's prefix and never
-# from the caller's environment, and its start_receiver runs the receiver isolated. Every case runs against a throwaway
-# tree, never /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
+# from the caller's environment, and its start_receiver runs the receiver isolated. capture-feature-hellos.sh stops
+# ahead of its hosts file's bind where no namespace of its own stands. Every case runs against a throwaway tree, never
+# /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -647,5 +648,30 @@ out=$(env -u ANTHROPIC_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN KEEP_CONFIG=1 ALLOW_NO
   || status=$?
 [[ "$status" -eq 0 ]] || fail "the lib.sh harness exited $status, want 0: $out"
 [[ "$out" == "$want" ]] || fail "the lib.sh harness with both switches exported printed: $out"
+
+# --- capture-feature-hellos.sh ---
+
+# A caller's PHOEBIS_CAPTURE_NETNS=1 skips the namespace, and a bind made then would lie over the machine's own
+# /etc/hosts under root. A process under a map of one id already stands in such a namespace and cannot show the stop.
+mapfile -t id_map </proc/self/uid_map
+read -r inside _ count <<<"${id_map[0]:-}"
+if [[ "${#id_map[@]}" -eq 1 && "$inside" == 0 && "$count" == 1 ]]; then
+  echo "capture-tooling: this process stands in a namespace of one id, the case of the bind did not run"
+else
+  bound="$tmp/no-namespace"
+  mkdir -p "$bound/bin"
+  printf '#!/usr/bin/env bash\necho "$*" >"%s"\nexit 1\n' "$bound/mount-args" >"$bound/bin/mount"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$bound/client"
+  chmod +x "$bound/bin/mount" "$bound/client"
+  status=0
+  out=$(env -u ANTHROPIC_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN PATH="$bound/bin:$PATH" PHOEBIS_CAPTURE_NETNS=1 \
+    PHOEBIS_CAPTURE_STATE="$bound/state" \
+    bash "$here/scripts/capture-feature-hellos.sh" "$bound/client" "$bound/out" 2>&1 >/dev/null) || status=$?
+  [[ "$status" -eq 1 ]] || fail "capture-feature-hellos.sh without its namespace exited $status, want 1: $out"
+  [[ ! -e "$bound/mount-args" ]] \
+    || fail "capture-feature-hellos.sh without its namespace still bound: $(cat "$bound/mount-args")"
+  [[ "$out" == *"capture-feature-hellos.sh: no namespace of this capture stands, so no hosts file is bound"* ]] \
+    || fail "capture-feature-hellos.sh without its namespace printed: $out"
+fi
 
 echo "capture-tooling: ok"
