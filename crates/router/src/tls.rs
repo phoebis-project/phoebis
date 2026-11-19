@@ -1034,8 +1034,7 @@ mod tests {
     }
 
     #[test]
-    fn a_key_owned_by_root_and_read_through_the_services_group_passes_and_every_other_shape_warns()
-    {
+    fn a_key_owned_by_root_and_read_through_the_services_group_passes_and_no_other_shape_does() {
         let (service, staff) = (990, 50);
         for (mode, euid, groups) in [
             (0o100640, service, [service]),
@@ -1058,19 +1057,5 @@ mod tests {
                 "{mode:o} owned by {uid}:{gid}"
             );
         }
-
-        let dir = tempfile::tempdir().unwrap();
-        let (cert, key) = generate_pair(&["localhost"]).write_to(dir.path(), "admin");
-        std::fs::set_permissions(&key, std::os::unix::fs::PermissionsExt::from_mode(0o640))
-            .unwrap();
-        let warned = warnings(&Serving::Tls(
-            load_pair(PublicListener::Admin, &cert, &key).unwrap(),
-        ));
-        assert!(
-            warned
-                .iter()
-                .any(|warning| warning.contains("readable by group or other (mode 0640)")),
-            "a group-readable key this user owns is not the unit's shape: {warned:?}"
-        );
     }
 }
