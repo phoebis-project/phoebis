@@ -7,8 +7,8 @@ on:
 permissions:
   contents: read
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  checks:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -16,35 +16,46 @@ jobs:
           python-version: "3.x"
       - run: scripts/tests/check-docs.sh
       - run: scripts/tests/launch-script.sh
-      # Pinned to the version the site is written and checked against. A newer Zensical may warn on
-      # syntax this one accepts, and a warning fails the build below.
-      - run: pip install zensical==0.0.62
-      - run: zensical build --clean --strict
-      - run: python3 scripts/check-docs.py links
-      - run: python3 scripts/check-docs.py client
       - run: python3 scripts/check-docs.py check-config
+      - run: python3 scripts/check-docs.py client
       - run: python3 scripts/check-docs.py codes
       - run: python3 scripts/check-docs.py example
-      - run: python3 scripts/check-docs.py unit
       - run: python3 scripts/check-docs.py schema
-      - run: python3 scripts/check-docs.py prose
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: site
-  deploy:
-    # Pages is the operator's switch: the job waits for a repository variable set after Pages is enabled,
-    # so a push to main stays green until then. configure-pages lives here rather than in build because it
-    # fails on a repository where Pages is not enabled.
-    if: github.event_name == 'push' && vars.DOCS_PAGES == '1'
-    needs: build
-    permissions:
-      id-token: write
-      pages: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+      - run: python3 scripts/check-docs.py unit
+  site:
+    uses: phoebis-project/phoebis-docs/.github/workflows/build.yml@main
+    with:
+      product: router
+      ref: ${{ github.sha }}
+    secrets:
+      DOCS_APP_PRIVATE_KEY: ${{ secrets.DOCS_APP_PRIVATE_KEY }}
+  start-deploy:
+    # The site deploys from phoebis-docs alone. A push to main here starts that workflow, which builds from the four
+    # main heads. A fork's own main starts nothing and fails nothing.
+    if: github.event_name == 'push' && github.repository_owner == 'phoebis-project'
+    needs: [checks, site]
+    runs-on: ubuntu-24.04
+    env:
+      # A step's condition cannot read a secret, so the job states once for each half of the start credential
+      # whether it is set.
+      CLIENT_ID_SET: ${{ vars.DOCS_DEPLOY_APP_CLIENT_ID != '' }}
+      PRIVATE_KEY_SET: ${{ secrets.DOCS_DEPLOY_APP_PRIVATE_KEY != '' }}
     steps:
-      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
-        id: deployment
+      # Without the start credential this push would end green and start no deploy. The line says for each half
+      # whether it is set and prints no value.
+      - if: env.CLIENT_ID_SET != 'true' || env.PRIVATE_KEY_SET != 'true'
+        run: |
+          echo "::error::No deploy started. Variable DOCS_DEPLOY_APP_CLIENT_ID set: $CLIENT_ID_SET." \
+            "Secret DOCS_DEPLOY_APP_PRIVATE_KEY set: $PRIVATE_KEY_SET."
+          exit 1
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.DOCS_DEPLOY_APP_CLIENT_ID }}
+          owner: phoebis-project
+          permission-actions: write
+          private-key: ${{ secrets.DOCS_DEPLOY_APP_PRIVATE_KEY }}
+          repositories: phoebis-docs
+      - run: gh workflow run deploy.yml --repo phoebis-project/phoebis-docs --ref main
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}

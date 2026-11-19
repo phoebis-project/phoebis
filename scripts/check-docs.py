@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
-"""Read-only checks over the documentation site.
+"""Read-only checks that compare the documentation's pages with the code.
 
-`links` walks the built site for an internal link or image that resolves to nothing, and for a link whose fragment
-names no heading or anchor on the page it lands on. `client` compares the proxy listener's route table with the table
-on the client page, so a route added or removed in the router fails the build until the page follows.
+`client` compares the proxy listener's route table with the table on the client page, so a route added or removed
+in the router fails the build until the page follows.
 
-`check-config` compares the lines the binary's `check-config` arm prints with the installation page's list, `codes`
-the refusal codes the `x-phoebis-error-code` header carries on the proxy and the feature listener with the client
-page's table, `example` the installation page's quoted example with the file, `unit` the installation page's quoted
-unit with `deploy/phoebis.service`, `schema` the schema versions the operations page states with the last step of the
-registry's and the ledger's migration tables, and `prose` holds the mechanical content rules of the site's prose.
+`check-config` compares the lines the binary's `check-config` arm prints with the installation page's list,
+`codes` the refusal codes the `x-phoebis-error-code` header carries on the proxy and the feature listener with the
+client page's table, `example` the installation page's quoted example with the file, `schema` the schema versions
+the operations page states with the last step of the registry's and the ledger's migration tables, and `unit` the
+installation page's quoted unit with `deploy/phoebis.service`.
+
+The link check over the built site and the prose check over its pages are `scripts/check-site.py` of the
+documentation repository.
 """
-import functools
-import html.parser
 import pathlib
 import re
 import sys
-import urllib.parse
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SITE = ROOT / "site"
 # The proxy listener's route tables: the relay's own router, the keepalive mod's route, and every router the
 # binary merges beside them. A file listed here that does not exist fails the check rather than narrowing it.
 PROXY_ROUTE_FILES = [
@@ -49,14 +47,6 @@ CODE_FILES = [
 # The markers render to nothing and anchor what two checks read on a page.
 CHECK_CONFIG_BEGIN, CHECK_CONFIG_END = "<!-- check-config: begin -->", "<!-- check-config: end -->"
 REFUSAL_CODES_BEGIN, REFUSAL_CODES_END = "<!-- refusal-codes: begin -->", "<!-- refusal-codes: end -->"
-# The path zensical.toml's site_url publishes the site under; a root-relative link carries it.
-PREFIX = "phoebis"
-
-# Another host's links are not this script's business.
-SKIPPED = ("http:", "https:", "mailto:", "javascript:", "data:", "tel:")
-# The theme's skip link points at a page's first heading, and 404.html, built from no Markdown, has none, so the
-# theme writes `#__skip` there with nothing carrying that id.
-SKIP_LINK = "#__skip"
 
 METHODS = ("any", "delete", "get", "head", "options", "patch", "post", "put", "trace")
 METHOD_CALL = re.compile(r"\b(" + "|".join(METHODS) + r")\(")
@@ -74,107 +64,6 @@ CHAR_LIT = re.compile(r"b?'(\\u\{[0-9a-fA-F_]+\}|\\.|[^\\'\n])'")
 RAW_OPEN = re.compile(r'b?r(#*)"')
 # A route path written as a raw string, read back to its contents.
 RAW_PATH = re.compile(r'^r(#*)"(.*)"\1$', re.S)
-
-
-class Links(html.parser.HTMLParser):
-    """The hrefs and srcs a page carries, and the ids the site build gave its headings and anchors."""
-
-    def __init__(self):
-        super().__init__()
-        self.found = []
-        # A `src` fragment is the theme's light and dark switch on an image, not a place on a page, so only an
-        # `href` has its fragment checked.
-        self.hrefs = []
-        self.ids = set()
-
-    def handle_starttag(self, tag, attrs):
-        for name, value in attrs:
-            if name in ("href", "src") and value:
-                self.found.append(value)
-            if name == "href" and value:
-                self.hrefs.append(value)
-            if name == "id" and value:
-                self.ids.add(value)
-
-
-@functools.cache
-def ids_of(page):
-    parser = Links()
-    parser.feed(page.read_text(encoding="utf-8"))
-    return parser.ids
-
-
-def target_of(site, page, raw):
-    """The file a link lands on, a directory read as its `index.html` and a link without a path as `page`
-    itself, or None when the link resolves to nothing."""
-    path = urllib.parse.unquote(urllib.parse.urlsplit(raw).path)
-    if not path:
-        return page
-    site = site.resolve()
-    if path.startswith("/"):
-        # A root-relative link must carry the prefix site_url publishes this site under; a browser resolves
-        # it against the host root, not against site/, so a link missing the prefix is dangling regardless
-        # of whether some other path happens to exist under site/.
-        parts = path.lstrip("/").split("/", 1)
-        if parts[0] != PREFIX:
-            return None
-        remainder = parts[1] if len(parts) == 2 else ""
-        candidates = [site / remainder] if remainder else [site]
-    else:
-        candidates = [page.parent / path]
-    for target in candidates:
-        target = target.resolve()
-        if not target.is_relative_to(site):
-            continue
-        if target.is_file():
-            return target
-        if target.is_dir() and (target / "index.html").is_file():
-            return target / "index.html"
-    return None
-
-
-def resolves(site, page, raw):
-    return target_of(site, page, raw) is not None
-
-
-def fragment_missing_from(site, page, raw):
-    """The page whose ids lack a link's fragment: the page itself for a bare `#x`, the resolved target for
-    `page/#x`. None when the fragment is among them or there is none to check."""
-    fragment = urllib.parse.unquote(urllib.parse.urlsplit(raw).fragment)
-    if not fragment or raw == SKIP_LINK:
-        return None
-    target = target_of(site, page, raw)
-    # A link that lands nowhere is the path check's finding, and an image or a file other than a page has no ids.
-    if target is None or target.suffix != ".html":
-        return None
-    return None if fragment in ids_of(target) else target
-
-
-def check_links(site):
-    # Resolved first, so a page and the target a link resolves to share one root for the paths a finding prints.
-    site = site.resolve()
-    pages = sorted(site.rglob("*.html"))
-    if not pages:
-        print(f"no pages under {site}; build the site first")
-        return 1
-    dangling = 0
-    for page in pages:
-        parser = Links()
-        parser.feed(page.read_text(encoding="utf-8"))
-        for raw in parser.found:
-            if raw.startswith(SKIPPED):
-                continue
-            if not resolves(site, page, raw):
-                print(f"{page.relative_to(site)}: {raw} resolves to nothing")
-                dangling += 1
-        for raw in parser.hrefs:
-            if raw.startswith(SKIPPED):
-                continue
-            target = fragment_missing_from(site, page, raw)
-            if target is not None:
-                print(f"{page.relative_to(site)}: {raw} names no heading or anchor in {target.relative_to(site)}")
-                dangling += 1
-    return 1 if dangling else 0
 
 
 def line_of(text, at):
@@ -828,92 +717,14 @@ def check_codes(code_files, client_md):
     return 1 if findings else 0
 
 
-FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
-CODE_SPAN = re.compile(r"(`+)(.+?)\1")
-HTML_COMMENT = re.compile(r"<!--.*?-->")
-DASHES = ("—", "–")
-# The words of a working document that a reference page does not use. "commit", "lane", "plan" and "review" have a
-# product sense (a committed stream, the fast lane, the plan meter, auto mode's review) and stay off the list. "shape"
-# with a capital letter is case-sensitive, since "the shape a client sends" is prose.
-VOCABULARY = re.compile(
-    r"\b(sub-projects?|subprojects?|rulings?|tasks?|findings?|worktrees?|workstreams?|item [0-9]+|option [0-9])\b",
-    re.IGNORECASE,
-)
-SHAPE_LETTER = re.compile(r"\bshape [A-Z]\b")
-BARE_API_KEY = re.compile(r"\bapi_key\b")
-
-
-def prose_files():
-    return sorted((ROOT / "docs/site").glob("*.md")) + [ROOT / "README.md"]
-
-
-def check_prose(files):
-    """The mechanical content rules over a page's prose: fenced blocks dropped (a fence closes only on a bare fence
-    line of its own character, at least as long), code spans removed with an open span carried across lines until a
-    blank line or a fence ends its paragraph, HTML comments removed from each remaining line, the column count read
-    on the original line."""
-    findings = 0
-    for path in files:
-        if not path.is_file():
-            print(f"{path} is missing")
-            findings += 1
-            continue
-        shown = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
-        fence, spanned = None, False
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            marker = FENCE.match(line)
-            if fence is None and (marker or not line.strip()):
-                # A code span never crosses a paragraph, so a backtick left open ends at a blank line or a fence.
-                spanned = False
-            if fence is None and marker:
-                fence = marker.group(1)
-                continue
-            if fence is not None:
-                # A shorter fence line, or one with an info string (a three-backtick `sh` line inside a three- or
-                # four-backtick block), is content, not the close.
-                run = marker.group(1) if marker else None
-                if run and line.strip() == run and run[0] == fence[0] and len(run) >= len(fence):
-                    fence = None
-                continue
-            if len(line) > 120 and not line.lstrip().startswith("|"):
-                print(f"{shown}:{number}: columns: {len(line)}")
-                findings += 1
-            text = line
-            if spanned:
-                # The previous line opened a span: the text up to its closing backtick is code.
-                closing = text.find("`")
-                spanned = closing < 0
-                text = "" if spanned else text[closing + 1 :]
-            text = CODE_SPAN.sub("", text)
-            if text.count("`") % 2:
-                # An odd backtick count opens a span that wraps onto the next line.
-                text = text[: text.rfind("`")]
-                spanned = True
-            text = HTML_COMMENT.sub("", text)
-            hits = (
-                ("semicolon", ";" in text),
-                ("dash", any(dash in text for dash in DASHES)),
-                ("vocabulary", bool(VOCABULARY.search(text) or SHAPE_LETTER.search(text))),
-                ("api_key", bool(BARE_API_KEY.search(text))),
-            )
-            for rule, hit in hits:
-                if hit:
-                    print(f"{shown}:{number}: {rule}: {text.strip()}")
-                    findings += 1
-    return 1 if findings else 0
-
-
 USAGE = (
-    "usage: check-docs.py links [SITE_DIR] | client [ROUTE_RS... CLIENT_MD]"
-    " | check-config [MAIN_RS INSTALLATION_MD] | codes [RS_FILE... CLIENT_MD]"
-    " | example [EXAMPLE_YAML INSTALLATION_MD] | unit [UNIT_FILE INSTALLATION_MD]"
-    " | schema [REGISTRY_SCHEMA_RS LEDGER_SCHEMA_RS OPERATIONS_MD] | prose [FILE...]"
+    "usage: check-docs.py check-config [MAIN_RS INSTALLATION_MD] | client [ROUTE_RS... CLIENT_MD]"
+    " | codes [RS_FILE... CLIENT_MD] | example [EXAMPLE_YAML INSTALLATION_MD]"
+    " | schema [REGISTRY_SCHEMA_RS LEDGER_SCHEMA_RS OPERATIONS_MD] | unit [UNIT_FILE INSTALLATION_MD]"
 )
 
 
 def main(argv):
-    if len(argv) >= 2 and argv[1] == "links":
-        return check_links(pathlib.Path(argv[2]) if len(argv) > 2 else SITE)
     if len(argv) >= 2 and argv[1] == "client":
         if len(argv) == 3:
             # A route file without the client page to check it against is a mistake, not a default.
@@ -959,8 +770,6 @@ def main(argv):
         ledger_rs = pathlib.Path(argv[3]) if len(argv) == 5 else LEDGER_SCHEMA_RS
         page = pathlib.Path(argv[4]) if len(argv) == 5 else OPERATIONS_MD
         return check_schema(registry_rs, ledger_rs, page)
-    if len(argv) >= 2 and argv[1] == "prose":
-        return check_prose([pathlib.Path(p) for p in argv[2:]] or prose_files())
     print(USAGE)
     return 2
 
