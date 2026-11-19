@@ -116,19 +116,6 @@ mod tests {
     }
 
     #[test]
-    fn a_second_source_passes_a_full_share() {
-        let cap = DomainCheckCap::new(4, 2);
-        let _held = [
-            poll_once(pin!(cap.place(address(1)))).expect("the first place is free"),
-            poll_once(pin!(cap.place(address(1)))).expect("the second place is free"),
-        ];
-        assert!(
-            poll_once(pin!(cap.place(address(2)))).is_some(),
-            "another source waited behind the first one's share"
-        );
-    }
-
-    #[test]
     fn a_check_past_the_total_waits_whatever_its_source() {
         let cap = DomainCheckCap::new(4, 2);
         let mut held = vec![

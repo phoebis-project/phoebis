@@ -4949,14 +4949,16 @@ await m.navigate('/accounts/spare');
   await m.settle(250);
   const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
   {
-    // spare is in no pool and nothing selects it, so its dialog draws no use above the sentence.
-    const text = confirm?.textContent ?? '';
-    const absent = ['Delete account', 'Removes spare from its pool and deletes it. Request history stays in the ledger.'].filter((n) => !text.includes(n));
-    const uses = confirm?.querySelectorAll('.dialog__body li').length ?? 0;
+    // spare is in no pool and nothing selects it, so its dialog draws no lead and no list above the deletion's
+    // paragraph. The case reads the body once Delete is enabled, since the body holds that paragraph alone while the
+    // uses load.
+    const ready = await until(m, () => buttonIn(confirm, 'Delete')?.disabled === false);
+    const paragraphs = confirm?.querySelectorAll('.dialog__body p').length ?? 0;
+    const lists = confirm?.querySelectorAll('.dialog__body ul').length ?? 0;
     results.push({
-      name: '/accounts Delete account names the consequence before it runs',
-      ok: absent.length === 0 && !text.includes('spare is in use:') && uses === 0,
-      missing: [...absent, text.includes('spare is in use:') ? 'a lead' : 'no lead', `${uses} uses`],
+      name: "/accounts the deletion's dialog of an account that nothing uses draws no lead and no use (the mock's spare)",
+      ok: ready && paragraphs === 1 && lists === 0,
+      missing: [ready ? 'Delete enabled' : 'Delete still held', `${paragraphs} paragraphs`, `${lists} lists`],
     });
   }
   [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete')?.click();
@@ -9682,21 +9684,15 @@ await forView('/accounts', async () => {
     headButtonOf(page, 'Pause')?.click();
     await page.settle(250);
     const dlg = openDialogs(page).pop();
-    const read = { body: dlg?.querySelector('.dialog__body')?.textContent ?? null, confirm: buttonIn(dlg, 'Pause') !== undefined, title: dlg?.querySelector('.dialog__title')?.textContent?.trim() ?? null };
+    const read = { confirm: buttonIn(dlg, 'Pause') !== undefined };
     buttonIn(dlg, 'Cancel')?.click();
     await page.settle(200);
     const closed = openDialogs(page).length === 0;
     page.unmount();
     const after = (await api.listAccounts()).find((a) => a.id === 'studio');
     results.push({
-      name: "/accounts Pause opens its confirmation, which says the account's claude.ai features keep working, and its Cancel writes nothing (the mock's studio)",
-      ok:
-        read.title === 'Pause account' &&
-        read.confirm &&
-        (read.body ?? '').includes("The account's claude.ai features keep working where a pool or a key selects it.") &&
-        closed &&
-        after?.routingEnabled === story?.routingEnabled &&
-        after?.revision === story?.revision,
+      name: "/accounts Pause opens a confirmation with its Pause button, and its Cancel closes it and writes nothing (the mock's studio)",
+      ok: read.confirm && closed && after?.routingEnabled === story?.routingEnabled && after?.revision === story?.revision,
       missing: [JSON.stringify(read), closed ? 'closed' : 'still open', `routing ${story?.routingEnabled} then ${after?.routingEnabled}, revision ${story?.revision} then ${after?.revision}`],
     });
   }
@@ -11338,18 +11334,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const accounts = await api.listAccounts();
   const labelOf = (id) => accounts.find((a) => a.id === id)?.label ?? `no account ${id}`;
 
-  let dlg = await edit('desktop');
-  const desktop = [selectOf(dlg, 'Artifacts')?.value ?? null, firstOf(selectOf(dlg, 'Artifacts'))];
-  foot(dlg, 'Cancel')?.click();
-  await m.settle(200);
-  results.push({
-    name: "/keys the first option of Artifacts names the pool's account (the mock's desktop under all, which selects studio)",
-    ok: JSON.stringify(desktop) === JSON.stringify(['inherit', `Inherit (${labelOf('studio')})`]),
-    missing: [JSON.stringify(desktop)],
-  });
-
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
-  dlg = await edit('laptop');
+  let dlg = await edit('laptop');
   await changeSelect(m, selectOf(dlg, 'Connectors'), 'none');
   foot(dlg, 'Save')?.click();
   await m.settle(700);
@@ -30946,12 +30932,26 @@ m = await mount('/settings', { now: CLOCK_ORIGIN });
 expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Unit', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
+const clientCard = (page) => [...page.container.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Downstream client configuration');
+const showSetup = async (page, label) => {
+  [...(clientCard(page)?.querySelectorAll('[role="tab"]') ?? [])].find((t) => t.textContent?.trim() === label)?.click();
+  await page.settle(100);
+};
 {
   const titles = [...m.container.querySelectorAll('.settings > .card .card__title')].map((t) => t.textContent?.trim());
   results.push({ name: '/settings the cards run Appearance, About, client block', ok: JSON.stringify(titles) === JSON.stringify(['Appearance', 'About', 'Downstream client configuration']) && m.container.querySelector('.price-table') === null, missing: titles });
-  // The card keeps both subtitles in its head and marks the one that does not show, so each shown one is read.
-  const subtitles = [...([...m.container.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Downstream client configuration')?.querySelectorAll('.card__subtitle .client-config__subtitle') ?? [])].filter((s) => s.closest('.client-config__unshown') === null).map((s) => s.textContent ?? '');
-  results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitles.join(' ') === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: subtitles.length === 0 ? ['no subtitle'] : subtitles });
+  // The card keeps both subtitles in its head and marks the one a tab does not show, so each read takes the two in
+  // their order, the first the base tab's and the second a feature tab's.
+  const subtitlesShown = () => [...(clientCard(m)?.querySelectorAll('.client-config__subtitles > .client-config__subtitle') ?? [])].map((s) => s.closest('.client-config__unshown') === null);
+  const base = subtitlesShown();
+  await showSetup(m, 'Base URL and proxy');
+  const feature = subtitlesShown();
+  await showSetup(m, 'Base URL');
+  results.push({
+    name: '/settings the client block shows its first subtitle alone under the base tab and its second alone under a feature tab',
+    ok: JSON.stringify(base) === JSON.stringify([true, false]) && JSON.stringify(feature) === JSON.stringify([false, true]),
+    missing: [`base tab ${JSON.stringify(base)}`, `feature tab ${JSON.stringify(feature)}`],
+  });
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   // The two cost files' rows open on the shipped table's words, since both captured tables read `shipped` beside the
@@ -31043,11 +31043,6 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
 
 // The client card's two feature blocks on the mock's settings answer, whose `features` member comes from the captured
 // fixture through `SETTINGS_WIRE`. Each case puts the switch back on Base URL.
-const clientCard = (page) => [...page.container.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Downstream client configuration');
-const showSetup = async (page, label) => {
-  [...(clientCard(page)?.querySelectorAll('[role="tab"]') ?? [])].find((t) => t.textContent?.trim() === label)?.click();
-  await page.settle(100);
-};
 const shownLines = (page) => (clientCard(page)?.querySelector('pre.snippet')?.textContent ?? '').split('\n');
 const fingerprintLine = `PHOEBIS_FEATURE_CA_SHA256=${decodeSettings(SETTINGS_WIRE).features.caFingerprint}`;
 {

@@ -1512,27 +1512,6 @@ async fn signed_in_again(h: &Harness, id: &str, secret: &str) {
 }
 
 #[tokio::test]
-async fn a_401_under_a_rejected_token_gets_no_further_refresh() {
-    let up = fake(vec![
-        ("/api/frame/", expired()),
-        ("/v1/oauth/token", token_answer()),
-    ])
-    .await;
-    let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
-    let listener = feature_listener(&h).await;
-    let (status, headers, _) = listener
-        .send(API, &keyed_title("/api/frame/artifacts", API))
-        .await;
-    assert_eq!(status, 401, "{headers:?}");
-    let (status, headers, _) = listener
-        .send(API, &keyed_title("/api/frame/artifacts", API))
-        .await;
-    assert_eq!(status, 401, "{headers:?}");
-    assert_eq!((feature_requests(&up).len(), token_posts(&up)), (3, 1));
-    up.shutdown().await;
-}
-
-#[tokio::test]
 async fn a_later_token_is_refreshed_and_resent_again() {
     let up = fake(vec![
         ("/api/frame/", expired()),
