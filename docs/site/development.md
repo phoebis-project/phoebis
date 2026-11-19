@@ -417,10 +417,11 @@ workflow's does. The assembly writes `build/`, and the build writes `build/site/
 - `links` walks the built site for an internal link or image that resolves to nothing, and for a link whose fragment
   names no heading or anchor on the page it lands on.
 - `prose` holds the site's prose to its mechanical rules, by path or, with no path, over each page of the build tree and
-  the README of `phoebis-docs`: a semicolon on a prose line, a line over 120 columns that is not a table row, an em-dash
-  or an en-dash, a word from its list of words no page carries, and a bare `api_key` outside a code span. It drops
-  fenced blocks, code spans and HTML comments before it reads. The workflow hands it the README of each product too, and
-  `python3 scripts/check-site.py prose ../phoebis/README.md` reads this repository's.
+  the README of `phoebis-docs`: a bare `api_key` outside a code span, an em-dash or an en-dash, a line over 120 columns
+  that is not a table row, a semicolon on a prose line, and a word from its list of words no page carries. It reads no
+  fenced block, counts a line's columns as the line is written, and drops code spans and HTML comments before it looks
+  for the four others. The workflow hands it the README of each product too, and `python3 scripts/check-site.py prose
+  ../phoebis/README.md` reads this repository's.
 
 The checks that compare a page with the code stay in this repository. From the repository root:
 
