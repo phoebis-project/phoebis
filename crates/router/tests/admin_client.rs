@@ -1,6 +1,7 @@
 //! The admin client of `status` and `tls reload` against routers started in-process: the bearer on a plain listener,
-//! the CA `--ca` names trusted and no other, the system roots left unconsulted once `--ca` names a bundle, a refused
-//! secret, a port nothing listens on, a route's own refusal, and a body that stalls past the deadline.
+//! the CA `--ca` names trusted and no other, the system roots left unconsulted once `--ca` names a bundle, a leaf for
+//! another host refused, a refused secret, a port nothing listens on, a route's own refusal, and a body that stalls
+//! past the deadline.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -311,6 +312,44 @@ async fn a_named_ca_replaces_the_system_roots() {
     assert!(
         line.starts_with(&format!("the admin listener did not answer on {url}: "))
             && line.contains("verif"),
+        "{line}"
+    );
+    running.stop().await;
+}
+
+/// The leaf names `localhost` alone and the client dials `127.0.0.1`, so the admin CA vouches for the chain and the
+/// name check alone can refuse the leaf. The call is made under the lock: it builds its connector through
+/// `SslConnector::builder`, which reads `SSL_CERT_FILE` through C `getenv`, so a test that sets the variable meanwhile
+/// would change the roots the call reads. Each test runs on its own current-thread runtime, so no task of this test
+/// waits on the lock it holds.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn the_client_refuses_a_leaf_that_names_another_host() {
+    let pair = generate_pair(&["localhost"]);
+    let running = start(Some(&pair), "TEST_CLIENT_OTHER_HOST").await;
+    let admin_ca = running
+        .admin_ca
+        .clone()
+        .expect("the router was started with an admin pair");
+    let mut common = flags(None, None);
+    common.ca = Some(admin_ca);
+    let client = client_with(
+        &common,
+        &running.config,
+        "TEST_CLIENT_OTHER_HOST",
+        ADMIN_SECRET,
+    )
+    .unwrap();
+    let env = env_lock();
+    let error = refused(client.expect(Method::GET, "/admin/system", None).await);
+    drop(env);
+    let line = error.to_string();
+    assert!(matches!(error, ClientError::Transport { .. }), "{line}");
+    assert!(
+        line.starts_with(&format!(
+            "the admin listener did not answer on https://127.0.0.1:{}: ",
+            running.admin
+        )) && line.contains("verif"),
         "{line}"
     );
     running.stop().await;
