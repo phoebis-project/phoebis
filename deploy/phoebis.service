@@ -1,6 +1,6 @@
 [Unit]
 Description=Phoebis Router
-Documentation=https://phoebis-project.github.io/phoebis/operations/
+Documentation=https://phoebis-project.github.io/phoebis-docs/router/operations/
 After=network-online.target
 Wants=network-online.target
 

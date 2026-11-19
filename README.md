@@ -20,8 +20,8 @@ commercial service with consumer subscriptions. On its own side the router never
 an OAuth account refuses a request that names no user.
 
 The documentation lives under [`docs/site/`](docs/site/index.md), starting with the
-[Quick start](docs/site/quickstart.md), and is published at <https://phoebis-project.github.io/phoebis/> once GitHub
-Pages is enabled for the repository.
+[Quick start](docs/site/quickstart.md), and is published at <https://phoebis-project.github.io/phoebis-docs/> once
+GitHub Pages is enabled for the documentation site.
 
 ## License
 

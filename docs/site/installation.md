@@ -121,7 +121,7 @@ The block below is the shipped `deploy/phoebis.service`, quoted whole:
 ```ini title="deploy/phoebis.service"
 [Unit]
 Description=Phoebis Router
-Documentation=https://phoebis-project.github.io/phoebis/operations/
+Documentation=https://phoebis-project.github.io/phoebis-docs/router/operations/
 After=network-online.target
 Wants=network-online.target
 

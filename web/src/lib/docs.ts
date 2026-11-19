@@ -1,5 +1,5 @@
-/** The documentation site's address, the `site_url` its configuration publishes each page under. */
-const DOCS_SITE = 'https://phoebis-project.github.io/phoebis/';
+/** The router's part of the documentation site: the `site_url` the site's configuration publishes, with the router's folder. */
+const DOCS_SITE = 'https://phoebis-project.github.io/phoebis-docs/router/';
 
 export type DocsPage = 'claude-ai-features' | 'installation';
 
