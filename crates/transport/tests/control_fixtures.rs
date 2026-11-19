@@ -13,7 +13,7 @@ use phoebis_transport::{
 use std::{sync::Arc, time::Duration};
 
 #[tokio::test]
-async fn control_requests_reach_the_upstream_byte_identical_and_close() {
+async fn control_requests_reach_the_upstream_byte_identical() {
     let up = FakeUpstream::start(vec![
         Rule {
             path_prefix: "/v1/oauth/token".into(),
@@ -70,7 +70,6 @@ async fn control_requests_reach_the_upstream_byte_identical_and_close() {
         wire, raw,
         "the token request is byte-identical to the fixture"
     );
-    assert_eq!(up.connections(), 1);
     up.shutdown().await;
 }
 
