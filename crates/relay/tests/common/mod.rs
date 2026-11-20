@@ -4,6 +4,7 @@
 //! the other.
 #![allow(dead_code)]
 
+use std::future::Future;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,6 +53,22 @@ pub const SDK_USER_AGENT: &str = "anthropic-sdk-python/0.40.0";
 pub const NOW: i64 = 1_000_000;
 /// The startup bound every harness passes to `CatalogService::new`, short enough for a test to wait past it.
 pub const STARTUP_BOUND: Duration = Duration::from_millis(500);
+
+/// How long `on_held_clock` waits for its work, in real time.
+const HELD_CLOCK_BOUND: Duration = Duration::from_secs(5);
+
+/// `work`'s output, or `None` where `work` takes longer than `HELD_CLOCK_BOUND` of real time, with the paused clock
+/// held still meanwhile. The runtime moves the clock on each time it has nothing else to do, which it can find while
+/// bytes are still on their way through the system's sockets, and a blocking task that runs keeps it from doing so.
+pub async fn on_held_clock<T>(work: impl Future<Output = T>) -> Option<T> {
+    // The sender lives until the return, so the blocking task ends at the bound or at the return, whichever is first.
+    let (_running, returned) = std::sync::mpsc::channel::<()>();
+    let hold = tokio::task::spawn_blocking(move || returned.recv_timeout(HELD_CLOCK_BOUND));
+    tokio::select! {
+        output = work => Some(output),
+        _ = hold => None,
+    }
+}
 
 pub fn user(text: &str) -> serde_json::Value {
     serde_json::json!({"role": "user", "content": text})
@@ -250,6 +267,10 @@ pub struct Harness {
     pub control: Arc<phoebis_transport::control::ControlClient>,
     /// How many of the next lookups answer no address. The harness's resolver counts it down.
     pub failing_lookups: Arc<AtomicUsize>,
+    /// How long, in milliseconds on tokio's clock, a lookup sleeps before it answers.
+    pub lookup_delay_ms: Arc<AtomicU64>,
+    /// How many lookups have begun, so a case on the paused clock steps the clock only once a lookup's sleep stands.
+    pub lookups_started: Arc<AtomicUsize>,
     /// The manager the relay was built with, so a test reads `backoff_until` before it steps the clock.
     pub manager: Arc<phoebis_oauth::CredentialManager>,
     /// The relay behind `app`, for the suites that serve it on a real socket instead of calling it in process.
@@ -990,10 +1011,17 @@ async fn build(
     let connector_addr = connector_host.map(FakeUpstream::addr);
     // An authority with an explicit port names another loopback fake on that port, the connectors' host names
     // `connector_host` where there is one, and everything else is `up`, apart from the lookups that
-    // `failing_lookups` still holds, which answer no address.
+    // `failing_lookups` still holds, which answer no address. A zero delay takes no sleep, so a case that sets none
+    // sees each lookup answer on its first poll.
     let failing_lookups = Arc::new(AtomicUsize::new(0));
     let failing = failing_lookups.clone();
+    let lookup_delay_ms = Arc::new(AtomicU64::new(0));
+    let delay_ms = lookup_delay_ms.clone();
+    let lookups_started = Arc::new(AtomicUsize::new(0));
+    let started = lookups_started.clone();
     let resolver: phoebis_transport::control::Resolver = Arc::new(move |authority: &str| {
+        started.fetch_add(1, Ordering::SeqCst);
+        let delay = Duration::from_millis(delay_ms.load(Ordering::SeqCst));
         let fails = failing
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(1)
@@ -1006,7 +1034,12 @@ async fn build(
             .or(connector_addr.filter(|_| authority == CONNECTOR_HOST))
             .or(Some(addr))
             .filter(|_| !fails);
-        Box::pin(async move { resolved }) as phoebis_transport::control::ResolveFuture
+        Box::pin(async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            resolved
+        }) as phoebis_transport::control::ResolveFuture
     });
     let mut cb =
         phoebis_transport::connector_builder(p, phoebis_transport::Plane::Control).unwrap();
@@ -1106,6 +1139,8 @@ async fn build(
         clock: clock_cell,
         control,
         failing_lookups,
+        lookup_delay_ms,
+        lookups_started,
         manager,
         relay,
         router: router_handle,

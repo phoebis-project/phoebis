@@ -2063,3 +2063,57 @@ async fn a_domain_check_whose_answer_stalls_behind_its_head_ends_at_its_limit_an
     assert_eq!(status, 200, "{headers:?}");
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_domain_check_whose_lookup_takes_most_of_its_limit_gets_the_502_at_its_limit() {
+    let up = fake(vec![(
+        "/api/web/domain_info",
+        Respond::Gated(Box::new(json_200())),
+    )])
+    .await;
+    let h = domain_check_harness(&up, Duration::from_secs(10), 4).await;
+    let listener = Arc::new(feature_listener(&h).await);
+    tokio::time::pause();
+    h.lookup_delay_ms.store(8_000, Ordering::SeqCst);
+    let check = {
+        let listener = Arc::clone(&listener);
+        tokio::spawn(async move {
+            let request = keyless("GET /api/web/domain_info?domain=example.com", "", b"");
+            listener.send(API, &request).await
+        })
+    };
+    // A timer of the test's own never fires while the clock stands, so each wait yields until its state shows.
+    on_held_clock(async {
+        while h.lookups_started.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the check made no lookup");
+    // Past the lookup's 8 s, since a timer's deadline rounds up to the clock's next millisecond.
+    on_held_clock(async {
+        tokio::time::advance(Duration::from_millis(8_001)).await;
+        while up.requests().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the check never reached the fake");
+    // Just past the check's limit at 10 s. The head bound runs from the connect's end, to 18 s.
+    let (status, headers, _) = on_held_clock(async {
+        tokio::time::advance(Duration::from_millis(2_001)).await;
+        check.await.unwrap()
+    })
+    .await
+    .expect("no answer with the clock at the check's limit");
+    let code = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-phoebis-error-code"))
+        .map(|(_, value)| value.as_str());
+    assert_eq!(
+        (status, code),
+        (502, Some("upstream_unreachable")),
+        "{headers:?}"
+    );
+    up.shutdown().await;
+}
