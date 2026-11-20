@@ -10,7 +10,7 @@ use phoebis_oauth::{Clock, CredentialManager};
 use phoebis_profile::catalog::{MODELS_TARGET, MODELS_USER_AGENT};
 pub use phoebis_routing::listing::CatalogRow;
 use phoebis_routing::listing::{snapshot_date, undated, undated_id};
-use phoebis_routing::{Report, RouterHandle};
+use phoebis_routing::RouterHandle;
 use phoebis_store::{AccountKind, AccountRow, AccountState, Secret, Store};
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding};
@@ -25,6 +25,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::dispatch::UPSTREAM_AUTHORITY;
 use crate::headers::credential_header;
+use crate::messages::report_landed;
 
 /// A models list is a few hundred short objects; anything past this is not one.
 pub const MAX_BODY: usize = 4 * 1024 * 1024;
@@ -770,11 +771,7 @@ impl CatalogService {
                             %error,
                             "the catalog discovery could not obtain the account's credential"
                         );
-                        // The manager's store write starts no reload, so the mark reaches the routing through
-                        // the report the relay sends for its own.
-                        if let Some(mark) = error.landed_mark() {
-                            self.router.report(Report::from(mark)).await;
-                        }
+                        report_landed(&self.router, &error).await;
                         return Err(DiscoveryError::NoCredential);
                     }
                 };
