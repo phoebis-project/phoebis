@@ -731,7 +731,9 @@ The metrics listener counts the calls in two families ([Metrics](statistics.md#m
 | `phoebis_feature_refusals_total` | `code`, `feature`, `key` | each call the router refused with a `401`, a `403`, the `429` `domain_checks_at_cap` of a domain check or the `503` `ledger_behind`, under the feature `none` for a call that matched no row, for each `401` and for a refused domain check |
 
 Neither family carries a path, a status or an account. A refused call and a domain check each write one line at `debug`
-too, with the code or the outcome, the method, the path without its query and the key's label.
+too, with the code or the outcome, the method, the path without its query and the key's label. Under
+`RUST_LOG=info,phoebis_relay::features=debug` the router writes the feature module's `debug` lines, these among them,
+and keeps each other module at `info` ([Environment variables](installation.md#environment-variables)).
 
 ## The CA over time
 
