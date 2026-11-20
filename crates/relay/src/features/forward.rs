@@ -27,7 +27,7 @@ use tokio_util::task::TaskTracker;
 
 use super::cap::Place;
 use super::refresh_hold::Rejected;
-use super::socket::Admitted;
+use super::socket::{signed_in_as, Admitted};
 use super::watch::Tee;
 use super::Listener;
 use crate::budget::Reservation;
@@ -115,6 +115,7 @@ pub(crate) async fn forward(
         Ok(held) => {
             let tee = Tee::of(
                 &listener.tokens,
+                listener.table.sockets,
                 method,
                 parts.uri.path(),
                 held.head(),
@@ -252,25 +253,7 @@ pub(crate) async fn keyless(
     mut ending: Ending,
 ) -> Result<Response, &'static str> {
     let Listener { control, relay, .. } = listener;
-    // The shape admits an empty body alone, and a head that framed it by its length keeps that line, as a keyed
-    // forward writes it.
-    let length = parts
-        .headers
-        .contains_key(header::CONTENT_LENGTH)
-        .then_some(0);
-    let request = RawRequest {
-        method,
-        target: target_of(parts),
-        headers: feature_headers(
-            &parts.headers,
-            parts.extensions.get::<OriginalHead>(),
-            None,
-            host,
-            Hop::Close,
-            length,
-        ),
-        body: Bytes::new(),
-    };
+    let request = bodiless(method, parts, host, Hop::Close);
     let left = deadline.saturating_duration_since(Instant::now());
     let sent = control.send_streaming(
         request,
@@ -292,19 +275,39 @@ pub(crate) async fn keyless(
     Err(case)
 }
 
+/// The request of a shape that admits no body, toward `host` over `hop` with no credential line.
+pub(super) fn bodiless(method: &'static str, parts: &Parts, host: &str, hop: Hop) -> RawRequest {
+    // The shape admits an empty body alone, and a head that framed it by its length keeps that line, as a keyed
+    // forward writes it.
+    let length = parts
+        .headers
+        .contains_key(header::CONTENT_LENGTH)
+        .then_some(0);
+    RawRequest {
+        method,
+        target: target_of(parts),
+        headers: feature_headers(
+            &parts.headers,
+            parts.extensions.get::<OriginalHead>(),
+            None,
+            host,
+            hop,
+            length,
+        ),
+        body: Bytes::new(),
+    }
+}
+
 /// Whether the account under `account`'s id still stands in the sign-in the call was admitted under, its incarnation
 /// and its lifecycle generation, on the routing snapshot in force now. An acquisition reads a token by the id alone,
 /// and each sign-in starts its tokens' count at 1. As on the model path, a write that landed and is not yet swapped
 /// into the snapshot passes for the one reload it takes.
 fn signed_in(relay: &Relay, account: &AccountRow) -> bool {
-    relay
-        .router()
-        .snapshot()
-        .account(&account.id)
-        .is_some_and(|row| {
-            (row.incarnation, row.lifecycle_generation)
-                == (account.incarnation, account.lifecycle_generation)
-        })
+    signed_in_as(
+        &relay.router().snapshot(),
+        &account.id,
+        (account.incarnation, account.lifecycle_generation),
+    )
 }
 
 /// Whether an answer asks for the account's credential once more: a 401 without `X-Mcp-Error-Code`. A connector that
@@ -404,9 +407,8 @@ async fn pooled(
                 };
                 return Ok(Held::Pooled(sent, checkin));
             }
-            Err(AttemptFailure::Unresolved) => return Err(Unanswered::Failed("unreachable", None)),
             Err(AttemptFailure::Unsent { connect: false, .. }) if !fresh => fresh = true,
-            Err(AttemptFailure::Unsent { .. }) => {
+            Err(AttemptFailure::Unresolved | AttemptFailure::Unsent { .. }) => {
                 return Err(Unanswered::Failed("unreachable", None));
             }
             Err(AttemptFailure::Lost(text)) => return Err(Unanswered::Failed("cut", Some(text))),

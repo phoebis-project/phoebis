@@ -34,7 +34,7 @@ use self::cap::DomainCheckCap;
 use self::forward::{forward, keyless, read_body, Call, Ending, Unanswered};
 use self::refresh_hold::Holds;
 pub(crate) use self::socket::Handover;
-use self::socket::{held, open, row_of, Admitted, Full, Lapsed, Sockets};
+use self::socket::{held, open, row_of, Admitted, Full, Sockets, Unheld};
 use self::watch::{Entry, TokenMap, SOCKET_TOKEN_UNKNOWN};
 
 /// The longest value of the domain check's one query parameter.
@@ -215,23 +215,15 @@ async fn socket_request(
     let relay = &listener.relay;
     let now = (relay.clock)();
     let Some(entry) = listener.tokens.entry(&parts.headers, now) else {
-        return refusal_under(
-            relay,
-            call,
-            &auth_failure(&AuthError::Missing),
-            SOCKET_TOKEN_UNKNOWN,
-            UNATTRIBUTED_POOL,
-        )
-        .await;
+        return token_unknown(relay, call).await;
     };
-    // The `403` and the `503` behind the entry carry its key and the feature, and the `401` of a failed check takes
-    // both off again.
+    // The `403` and the `503` behind the entry carry its key and the feature.
     call.key_id = Some(entry.admitted.key_id.clone());
     call.feature = Some(row.feature);
     let snapshot = relay.router().snapshot();
     let (key, account) = match held(&snapshot, &entry.admitted, now) {
         Ok(rows) => rows,
-        Err(unheld) => return lapsed(listener, call, &entry, unheld.into()).await,
+        Err(unheld) => return lapsed(listener, call, &entry, unheld).await,
     };
     // As for a keyed call, behind each other check so those keep their own answers. No key's last use is stamped,
     // since the request presents no secret and the page read ahead of it stamped the key.
@@ -266,27 +258,17 @@ async fn socket_request(
     }
 }
 
-/// The refusal of a socket request whose identity no longer holds, at the admission or at the upstream's `101`: the
-/// `401` of a request without a key for the key, the selection and the sign-in, with the entry the lookup read
-/// removed, and the `403` of a keyed call for the account.
-async fn lapsed(listener: &Listener, mut call: Call, entry: &Entry, lapsed: Lapsed) -> Response {
+/// The refusal of a socket request whose identity no longer holds, at the admission or at the upstream's `101`. The
+/// key, the selection and the sign-in are one cause to the caller, so each gets the `401` of a request without a key,
+/// with the entry the lookup read removed, and the account gets the `403` of a keyed call.
+async fn lapsed(listener: &Listener, call: Call, entry: &Entry, unheld: Unheld) -> Response {
     let relay = &listener.relay;
-    match lapsed {
-        Lapsed::Identity => {
+    match unheld {
+        Unheld::Key | Unheld::Selection | Unheld::SignIn => {
             listener.tokens.forget(entry);
-            // Each `401` of the listener counts under no feature and no key.
-            call.feature = None;
-            call.key_id = None;
-            refusal_under(
-                relay,
-                call,
-                &auth_failure(&AuthError::Missing),
-                SOCKET_TOKEN_UNKNOWN,
-                UNATTRIBUTED_POOL,
-            )
-            .await
+            token_unknown(relay, call).await
         }
-        Lapsed::Account(key, obstacle) => {
+        Unheld::Account(key, obstacle) => {
             refusal(relay, call, &feature_account_unavailable(&obstacle), &key).await
         }
     }
@@ -330,6 +312,21 @@ async fn refusal_under(
         }
     }
     answer
+}
+
+/// The socket's `401`: the answer of a request without a key, under the watch's own code.
+async fn token_unknown(relay: &Relay, mut call: Call) -> Response {
+    // Each `401` of the listener counts under no feature and no key.
+    call.feature = None;
+    call.key_id = None;
+    refusal_under(
+        relay,
+        call,
+        &auth_failure(&AuthError::Missing),
+        SOCKET_TOKEN_UNKNOWN,
+        UNATTRIBUTED_POOL,
+    )
+    .await
 }
 
 /// The DEBUG line of a refused feature endpoint request, with the path alone.

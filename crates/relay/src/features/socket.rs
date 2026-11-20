@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::request::Parts;
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Uri};
+use axum::http::{header, HeaderMap, HeaderName, Uri};
 use axum::response::Response;
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
 use phoebis_bus::FeatureOutcome;
@@ -19,17 +19,16 @@ use phoebis_routing::{feature_ready, Obstacle, RegistrySnapshot};
 use phoebis_store::{AccountRow, ApiKeyRow, Feature};
 use phoebis_transport::control::{ControlAnswer, UpgradeAnswer};
 use phoebis_transport::pool::Conn;
-use phoebis_transport::request::RawRequest;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::watch;
 use tokio::time::{Instant, MissedTickBehavior};
 
-use super::forward::{answered, case_of, Call, Ending};
+use super::forward::{answered, bodiless, case_of, Call, Ending};
 use super::{no_body, plain_path, Listener};
-use crate::casing::{HeadRecorder, OriginalHead};
+use crate::casing::HeadRecorder;
 use crate::errors::UPSTREAM_UNREACHABLE;
-use crate::headers::{feature_headers, Hop};
-use crate::messages::{built, copied_head, target_of, Relay};
+use crate::headers::Hop;
+use crate::messages::{built, copied_head, with_line, Relay};
 use crate::serve::{stopped, Accepted};
 
 /// The most one read of either leg hands over: the payload of one TLS record.
@@ -47,15 +46,15 @@ pub(crate) struct Admitted {
 }
 
 /// The check an identity failed.
-pub(crate) enum Unheld<'a> {
-    /// `feature_ready` refuses the account. The key's row stands, for the refusal's label.
-    Account(&'a ApiKeyRow, Obstacle),
+pub(crate) enum Unheld {
+    /// `feature_ready` refuses the account, with the key's label for the refusal.
+    Account(String, Obstacle),
     Key,
     Selection,
     SignIn,
 }
 
-impl Unheld<'_> {
+impl Unheld {
     /// The failed check's word in the tunnel's line: `account`, `key`, `selection` or `sign_in`.
     pub(crate) fn word(&self) -> &'static str {
         match self {
@@ -72,39 +71,30 @@ pub(crate) fn held<'a>(
     snapshot: &'a RegistrySnapshot,
     admitted: &Admitted,
     now: i64,
-) -> Result<(&'a ApiKeyRow, &'a AccountRow), Unheld<'a>> {
+) -> Result<(&'a ApiKeyRow, &'a AccountRow), Unheld> {
     let key = snapshot
         .authenticate_id(&admitted.key_id, admitted.key_generation, now)
         .map_err(|_| Unheld::Key)?;
     if snapshot.feature_account(key, admitted.feature) != Some(admitted.account_id.as_str()) {
         return Err(Unheld::Selection);
     }
-    let signed_in = snapshot
-        .account(&admitted.account_id)
-        .is_some_and(|row| (row.incarnation, row.lifecycle_generation) == admitted.sign_in);
-    if !signed_in {
+    if !signed_in_as(snapshot, &admitted.account_id, admitted.sign_in) {
         return Err(Unheld::SignIn);
     }
     let account = feature_ready(snapshot, &admitted.account_id, now)
-        .map_err(|obstacle| Unheld::Account(key, obstacle))?;
+        .map_err(|obstacle| Unheld::Account(key.label.clone(), obstacle))?;
     Ok((key, account))
 }
 
-/// A failed check without the snapshot it was read on, for a caller that refuses behind the snapshot's end: the key's
-/// label and the obstacle where the account is the cause. The key, the selection and the sign-in are one cause to the
-/// caller, whose refusal reads as a request without a key.
-pub(crate) enum Lapsed {
-    Account(String, Obstacle),
-    Identity,
-}
-
-impl From<Unheld<'_>> for Lapsed {
-    fn from(unheld: Unheld<'_>) -> Lapsed {
-        match unheld {
-            Unheld::Account(key, obstacle) => Lapsed::Account(key.label.clone(), obstacle),
-            Unheld::Key | Unheld::Selection | Unheld::SignIn => Lapsed::Identity,
-        }
-    }
+/// Whether the snapshot's account under `account_id` stands in `sign_in`, its incarnation and its lifecycle generation.
+pub(crate) fn signed_in_as(
+    snapshot: &RegistrySnapshot,
+    account_id: &str,
+    sign_in: (u64, u64),
+) -> bool {
+    snapshot
+        .account(account_id)
+        .is_some_and(|row| (row.incarnation, row.lifecycle_generation) == sign_in)
 }
 
 /// The socket row a request falls under: a `GET` whose host and plain path equal a row's, whose head asks for a
@@ -120,11 +110,6 @@ pub(crate) fn row_of(
         return None;
     }
     let host = host?;
-    let path = plain_path(uri.path())?;
-    let row = table
-        .sockets
-        .iter()
-        .find(|row| row.host == host && row.path.as_bytes() == path.as_slice())?;
     let websocket = lists(headers, header::UPGRADE, |protocol| {
         // A protocol names its version behind a slash, which the shape does not read.
         let name = protocol.split('/').next().unwrap_or(protocol);
@@ -133,7 +118,14 @@ pub(crate) fn row_of(
     let upgrade = lists(headers, header::CONNECTION, |option| {
         option.eq_ignore_ascii_case("upgrade")
     });
-    (websocket && upgrade && no_body(headers)).then_some(row)
+    if !(websocket && upgrade && no_body(headers)) {
+        return None;
+    }
+    let path = plain_path(uri.path())?;
+    table
+        .sockets
+        .iter()
+        .find(|row| row.host == host && row.path.as_bytes() == path.as_slice())
 }
 
 /// Whether one item of the comma lists of `name`'s lines holds for `item`.
@@ -218,48 +210,8 @@ pub(crate) async fn open(
     mut parts: Parts,
     call: Call,
     place: SocketPlace,
-) -> Result<Response, (Call, Lapsed)> {
+) -> Result<Response, (Call, Unheld)> {
     let Listener { control, relay, .. } = listener;
-    let slot = parts.extensions.get::<Handover>().cloned();
-    let (Some(slot), Some(client)) = (slot, parts.extensions.remove::<OnUpgrade>()) else {
-        // Each connection of the feature listener carries both, so this names a request that reached the handler
-        // some other way, and nothing goes upstream for it.
-        tracing::debug!(
-            outcome = "failed",
-            method = %call.method,
-            path = call.path.as_str(),
-            key = %key.label,
-            case = "unupgradable",
-            "a feature call failed ahead of the upstream's answer"
-        );
-        Ending::sent(
-            relay,
-            call.clone(),
-            account.id.clone(),
-            row.feature,
-            key.id.clone(),
-        )
-        .unanswered();
-        return Ok(UPSTREAM_UNREACHABLE.response(&call.id));
-    };
-    // The shape admits an empty body alone, and a head that framed it by its length keeps that line.
-    let length = parts
-        .headers
-        .contains_key(header::CONTENT_LENGTH)
-        .then_some(0);
-    let request = RawRequest {
-        method: "GET",
-        target: target_of(&parts),
-        headers: feature_headers(
-            &parts.headers,
-            parts.extensions.get::<OriginalHead>(),
-            None,
-            row.host,
-            Hop::Socket,
-            length,
-        ),
-        body: Bytes::new(),
-    };
     let mut ending = Ending::sent(
         relay,
         call.clone(),
@@ -267,6 +219,15 @@ pub(crate) async fn open(
         row.feature,
         key.id.clone(),
     );
+    let slot = parts.extensions.get::<Handover>().cloned();
+    let (Some(slot), Some(client)) = (slot, parts.extensions.remove::<OnUpgrade>()) else {
+        // Each connection of the feature listener carries both, so this names a request that reached the handler
+        // some other way, and nothing goes upstream for it.
+        let answer = unreachable(&call, &key.label, "unupgradable");
+        ending.unanswered();
+        return Ok(answer);
+    };
+    let request = bodiless("GET", &parts, row.host, Hop::Socket);
     ending.arm();
     let (connect, head) = (relay.limits.connect_timeout, relay.limits.head_timeout);
     // A fresh connection on either plane, which no pool takes back: the socket's protocol owns it from the `101`.
@@ -289,7 +250,7 @@ pub(crate) async fn open(
             // the call's one end, so the call that got no `101` leaves no row, and the return drops the connection.
             if let Err(unheld) = held(&relay.router().snapshot(), &admitted, (relay.clock)()) {
                 ending.withdraw();
-                return Err((call, unheld.into()));
+                return Err((call, unheld));
             }
             // The record is the upgrade request's, so it ends at the `101` the caller gets, whatever the socket's life.
             ending.went_back(head.status);
@@ -297,7 +258,6 @@ pub(crate) async fn open(
             slot.leave(Tunnel {
                 admitted,
                 client,
-                idle: relay.limits.socket_idle_timeout,
                 key: key.label.clone(),
                 leftover,
                 method: call.method,
@@ -314,17 +274,22 @@ pub(crate) async fn open(
         }
         Err(failure) => {
             ending.unanswered();
-            tracing::debug!(
-                outcome = "failed",
-                method = %call.method,
-                path = call.path.as_str(),
-                key = %key.label,
-                case = case_of(&failure),
-                "a feature call failed ahead of the upstream's answer"
-            );
-            Ok(UPSTREAM_UNREACHABLE.response(&call.id))
+            Ok(unreachable(&call, &key.label, case_of(&failure)))
         }
     }
+}
+
+/// The `502` of a socket request that failed ahead of the upstream's answer, behind its DEBUG line.
+fn unreachable(call: &Call, key: &str, case: &'static str) -> Response {
+    tracing::debug!(
+        outcome = "failed",
+        method = %call.method,
+        path = call.path.as_str(),
+        key = %key,
+        case,
+        "a feature call failed ahead of the upstream's answer"
+    );
+    UPSTREAM_UNREACHABLE.response(&call.id)
 }
 
 /// The slot of one connection: an admitted socket's handler leaves the tunnel there, and the connection's future
@@ -343,12 +308,11 @@ impl Handover {
 }
 
 /// The client's `OnUpgrade`, the upstream connection with the bytes that came behind its `101`, the identity the socket
-/// was admitted with and the relay whose registry its checks read, the socket's idle time and its place in the counts,
-/// and what the tunnel's line names.
+/// was admitted with and the relay whose registry its checks read, the socket's place in the counts, and what the
+/// tunnel's line names.
 pub(crate) struct Tunnel {
     admitted: Admitted,
     client: OnUpgrade,
-    idle: Duration,
     key: String,
     leftover: BytesMut,
     method: String,
@@ -368,7 +332,6 @@ impl Tunnel {
         let Tunnel {
             admitted,
             client,
-            idle,
             key,
             leftover,
             method,
@@ -391,7 +354,7 @@ impl Tunnel {
             biased;
             () = stopped(&mut stop) => ("stopped", None),
             word = unheld(&relay, &admitted, opened) => ("check_failed", Some(word)),
-            () = silent(&last, idle) => ("idle", None),
+            () = silent(&last, relay.limits.socket_idle_timeout) => ("idle", None),
             cause = carry(client, upstream, leftover, place, &last) => (cause, None),
         };
         tracing::debug!(
@@ -547,17 +510,14 @@ async fn whole(to: &mut (impl AsyncWrite + Unpin), bytes: &[u8]) -> std::io::Res
 /// The `101` as the client gets it: the upstream's head as `copied_head` passes it, with the upstream's `connection`
 /// and `upgrade` lines back in, since the client's handshake reads both.
 fn switched(head: &phoebis_transport::response::ResponseHead) -> Response {
-    let mut builder = copied_head(head, |_| false);
-    for (name, value) in &head.headers {
-        if !(name.eq_ignore_ascii_case("connection") || name.eq_ignore_ascii_case("upgrade")) {
-            continue;
-        }
-        if let (Ok(name), Ok(value)) = (
-            HeaderName::from_bytes(name.as_bytes()),
-            HeaderValue::from_str(value),
-        ) {
-            builder = builder.header(name, value);
-        }
-    }
+    let builder = head
+        .headers
+        .iter()
+        .filter(|(name, _)| {
+            name.eq_ignore_ascii_case("connection") || name.eq_ignore_ascii_case("upgrade")
+        })
+        .fold(copied_head(head, |_| false), |builder, (name, value)| {
+            with_line(builder, name, value)
+        });
     built(builder, Body::empty())
 }

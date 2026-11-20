@@ -5,10 +5,10 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use axum::http::HeaderMap;
+use axum::http::{header, HeaderMap};
+use phoebis_profile::SocketRow;
 use phoebis_transport::decode::{decoder_into, encoding, SinkDecoder};
 use phoebis_transport::response::ResponseHead;
-use sha2::{Digest, Sha256};
 
 use super::plain_path;
 use super::socket::Admitted;
@@ -38,7 +38,7 @@ pub(crate) struct TokenHash([u8; 32]);
 
 impl TokenHash {
     fn of(token: &str) -> TokenHash {
-        TokenHash(Sha256::digest(token.as_bytes()).into())
+        TokenHash(crate::credit::digest_of(token))
     }
 }
 
@@ -240,7 +240,7 @@ impl TokenMap {
 /// read, admits nothing it did not check.
 fn offered(headers: &HeaderMap) -> Option<&str> {
     let mut found = None;
-    for line in headers.get_all("sec-websocket-protocol") {
+    for line in headers.get_all(header::SEC_WEBSOCKET_PROTOCOL) {
         for item in line.to_str().ok()?.split(',').map(str::trim) {
             if token_shaped(item) {
                 if found.is_some() {
@@ -255,10 +255,9 @@ fn offered(headers: &HeaderMap) -> Option<&str> {
 
 /// The client's shape of a token: six dot-joined parts over `[A-Za-z0-9_-]`, at most 1,024 characters.
 fn token_shaped(value: &str) -> bool {
-    let parts: Vec<&str> = value.split('.').collect();
     (1..=TOKEN_MAX).contains(&value.len())
-        && parts.len() == 6
-        && parts.iter().all(|part| {
+        && value.split('.').count() == 6
+        && value.split('.').all(|part| {
             !part.is_empty()
                 && part
                     .bytes()
@@ -287,6 +286,9 @@ struct Scan {
     window: Vec<u8>,
     /// The value of the member, a candidate until the body ended clean.
     found: Option<String>,
+    /// The place in `window` the next search starts at. A place ahead of it holds no name or another member, and
+    /// another member stays one whatever bytes come behind it.
+    searched: usize,
 }
 
 /// What the window holds of a member at one place.
@@ -305,24 +307,29 @@ impl Write for Scan {
             return Ok(data.len());
         }
         self.window.extend_from_slice(data);
-        let mut from = 0;
-        while let Some(at) = self.window[from..]
-            .windows(MEMBER.len())
-            .position(|bytes| bytes == MEMBER)
-            .map(|at| from + at)
-        {
+        let mut from = self.searched;
+        let resume = loop {
+            let Some(at) = self.window[from..]
+                .windows(MEMBER.len())
+                .position(|bytes| bytes == MEMBER)
+                .map(|at| from + at)
+            else {
+                // A name the window's end cuts starts in its last `MEMBER.len() - 1` bytes.
+                break from.max(self.window.len().saturating_sub(MEMBER.len() - 1));
+            };
             match member_at(&self.window[at + MEMBER.len()..]) {
                 Member::Value(value) => {
                     self.found = Some(value);
                     self.window = Vec::new();
                     return Ok(data.len());
                 }
-                Member::Pending => break,
+                Member::Pending => break at,
                 Member::Not => from = at + 1,
             }
-        }
+        };
         let behind = self.window.len().saturating_sub(WINDOW);
         self.window.drain(..behind);
+        self.searched = resume.saturating_sub(behind);
         Ok(data.len())
     }
 
@@ -369,10 +376,13 @@ pub(crate) struct Tee {
 }
 
 impl Tee {
-    /// The tee of a keyed `GET` of `/api/frame/` and one segment other than `sync` that the upstream answered `200`,
-    /// whatever its query. `key` is the label of the read's key and `path` the read's path without its query.
+    /// The tee of a keyed `GET` of `/api/frame/` and one segment other than a socket row's path that the upstream
+    /// answered `200`, whatever its query. `key` is the label of the read's key and `path` the read's path without its
+    /// query.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn of(
         map: &Arc<TokenMap>,
+        sockets: &[SocketRow],
         method: &str,
         path: &str,
         head: &ResponseHead,
@@ -380,12 +390,18 @@ impl Tee {
         key: &str,
         now: i64,
     ) -> Option<Tee> {
+        if method != "GET" || head.status != 200 {
+            return None;
+        }
         let page = plain_path(path).is_some_and(|plain| {
             plain
                 .strip_prefix(b"/api/frame/")
-                .is_some_and(|slug| !slug.is_empty() && !slug.contains(&b'/') && slug != b"sync")
+                .is_some_and(|slug| !slug.is_empty() && !slug.contains(&b'/'))
+                && !sockets
+                    .iter()
+                    .any(|row| row.path.as_bytes() == plain.as_slice())
         });
-        if method != "GET" || !page || head.status != 200 {
+        if !page {
             return None;
         }
         let Ok(coding) = encoding(head) else {
@@ -425,10 +441,10 @@ impl Tee {
         let found = match decoder.sink().found.take() {
             Some(found) => found,
             None => match decoder.finish() {
-                Ok(scan) => match scan.found {
-                    Some(found) => found,
-                    None => return,
-                },
+                Ok(Scan {
+                    found: Some(found), ..
+                }) => found,
+                Ok(_) => return,
                 Err(_) => {
                     unscanned("undecodable", &self.path);
                     return;
@@ -475,5 +491,19 @@ mod tests {
         map.store(token, admitted(), "desktop", "/api/frame/x", 1_000_000);
         map.forget(&first);
         assert!(map.entry(&headers, 1_000_000).is_some());
+    }
+
+    #[test]
+    fn a_name_cut_at_the_end_of_a_write_past_the_window_is_found_by_the_next() {
+        let mut first = vec![b'x'; 2_000];
+        first.extend_from_slice(b"\"syncToken");
+        let mut scan = Scan::default();
+        scan.write_all(&first).unwrap();
+        scan.write_all(b"\": \"aaa.bbb.owner_agent.1000.1600.sig\"")
+            .unwrap();
+        assert_eq!(
+            scan.found.as_deref(),
+            Some("aaa.bbb.owner_agent.1000.1600.sig")
+        );
     }
 }

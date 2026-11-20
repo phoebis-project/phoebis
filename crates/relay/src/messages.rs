@@ -5362,15 +5362,20 @@ pub(crate) fn copied_head(head: &ResponseHead, skip: impl Fn(&str) -> bool) -> B
         if NOT_FORWARDED.iter().any(|n| name.eq_ignore_ascii_case(n)) || skip(name) {
             continue;
         }
-        let (Ok(name), Ok(value)) = (
-            HeaderName::from_bytes(name.as_bytes()),
-            HeaderValue::from_str(value),
-        ) else {
-            continue;
-        };
-        builder = builder.header(name, value);
+        builder = with_line(builder, name, value);
     }
     builder
+}
+
+/// `builder` with the line `name: value` where both parse, else `builder` as it was.
+pub(crate) fn with_line(builder: Builder, name: &str, value: &str) -> Builder {
+    let (Ok(name), Ok(value)) = (
+        HeaderName::from_bytes(name.as_bytes()),
+        HeaderValue::from_str(value),
+    ) else {
+        return builder;
+    };
+    builder.header(name, value)
 }
 
 pub(crate) fn built(builder: Builder, body: Body) -> Response {
