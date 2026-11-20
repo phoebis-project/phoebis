@@ -169,9 +169,15 @@ pub struct Limits {
     pub idle_timeout: Duration,
     /// The bodies one key may have arriving at once.
     pub key_body_reads: u32,
+    /// The open sockets of one key on the feature listener.
+    pub key_sockets: usize,
     pub max_request_bytes: usize,
     /// How long an account is skipped for a model it answered 404 for.
     pub model_rejection: Duration,
+    /// How long an open socket of the feature listener may move no byte in either direction.
+    pub socket_idle_timeout: Duration,
+    /// The open sockets of the feature listener, whatever their key.
+    pub sockets_total: usize,
     pub upstream_gzip: UpstreamGzip,
 }
 

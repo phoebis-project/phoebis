@@ -66,6 +66,14 @@ const DOMAIN_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const DOMAIN_CHECKS_PER_SOURCE: usize = 4;
 const DOMAIN_CHECKS_TOTAL: usize = 16;
 
+/// Five sessions at the client's most, with 25 watches and 25 presence connections each.
+const KEY_SOCKETS: usize = 256;
+/// Half of the listener's connections, so the keyed calls keep the other half.
+const SOCKETS_TOTAL: usize = 2_048;
+/// Past the client's own 80 s of silence, and four of the upstream's pings. It ends the sockets whose client died
+/// without a close under the DNS redirect, where no proxy's TCP keepalive finds one.
+const SOCKET_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+
 // A completion is published on every path, the handler's drop guard included, so an in-flight entry silent this
 // long belongs to a stream the relay itself ended at its idle timeout: the assembler's TTL must outwait it, or a
 // still-open stream would be aged out from under a request that has not finished.
@@ -344,8 +352,11 @@ pub async fn run_until(
             hold_timeout: HOLD_TIMEOUT,
             idle_timeout: IDLE_TIMEOUT,
             key_body_reads: config.proxy.key_body_reads,
+            key_sockets: KEY_SOCKETS,
             max_request_bytes: config.proxy.max_request_bytes,
             model_rejection: Duration::from_secs(config.routing.model_rejection_seconds),
+            socket_idle_timeout: SOCKET_IDLE_TIMEOUT,
+            sockets_total: SOCKETS_TOTAL,
             upstream_gzip: config.proxy.upstream_gzip,
         },
         catalog.clone(),

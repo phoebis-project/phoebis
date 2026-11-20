@@ -26,7 +26,7 @@ use tokio::time::Instant;
 use crate::auth::{resolve_key, AuthError};
 use crate::errors::{
     auth_failure, domain_checks_at_cap, feature_account_unavailable, feature_account_unset,
-    ledger_behind, Failure, FEATURE_NOT_ALLOWED, UPSTREAM_UNREACHABLE,
+    key_sockets, ledger_behind, sockets_at_cap, Failure, FEATURE_NOT_ALLOWED, UPSTREAM_UNREACHABLE,
 };
 use crate::messages::{new_request_id, Relay};
 
@@ -34,21 +34,22 @@ use self::cap::DomainCheckCap;
 use self::forward::{forward, keyless, read_body, Call, Ending, Unanswered};
 use self::refresh_hold::Holds;
 pub(crate) use self::socket::Handover;
-use self::socket::{held, open, row_of, Admitted, Lapsed};
+use self::socket::{held, open, row_of, Admitted, Full, Lapsed, Sockets};
 use self::watch::{Entry, TokenMap, SOCKET_TOKEN_UNKNOWN};
 
 /// The longest value of the domain check's one query parameter.
 const DOMAIN_MAX_BYTES: usize = 512;
 
 /// What the handler reads: the one cap of this listener's domain checks, the client its control-plane calls leave
-/// through, the tokens its feature hosts rejected behind a forced refresh, the relay, the feature table of the
-/// router's profile, and the tokens its page reads handed out.
+/// through, the tokens its feature hosts rejected behind a forced refresh, the relay, the counts of its open sockets,
+/// the feature table of the router's profile, and the tokens its page reads handed out.
 #[derive(Clone)]
 struct Listener {
     cap: Arc<DomainCheckCap>,
     control: Arc<ControlClient>,
     holds: Arc<Holds>,
     relay: Arc<Relay>,
+    sockets: Arc<Sockets>,
     table: &'static FeatureTable,
     tokens: Arc<TokenMap>,
 }
@@ -69,6 +70,7 @@ pub(crate) fn router(
         control,
         holds: Arc::new(Holds::default()),
         relay,
+        sockets: Arc::new(Sockets::default()),
         table,
         tokens: Arc::new(TokenMap::default()),
     })
@@ -236,6 +238,17 @@ async fn socket_request(
     if relay.ledger_behind(true) {
         return refusal(relay, call, &ledger_behind(), &key.label).await;
     }
+    // Refused at once where a count is full, since a socket holds its place for as long as it stays open and nothing
+    // bounds a wait for one.
+    let limits = &relay.limits;
+    let place = match listener
+        .sockets
+        .try_take(&key.id, limits.key_sockets, limits.sockets_total)
+    {
+        Ok(place) => place,
+        Err(Full::Key) => return refusal(relay, call, &key_sockets(), &key.label).await,
+        Err(Full::Total) => return refusal(relay, call, &sockets_at_cap(), &key.label).await,
+    };
     match open(
         listener,
         row,
@@ -244,6 +257,7 @@ async fn socket_request(
         account,
         parts,
         call,
+        place,
     )
     .await
     {
@@ -278,12 +292,12 @@ async fn lapsed(listener: &Listener, mut call: Call, entry: &Entry, lapsed: Laps
     }
 }
 
-/// A refusal of the key, the table, the selection, the account's state, the ledger's standing or the domain check's
-/// cap: its DEBUG line, its end, which the ledger counts and writes no row for, and its answer. `key` is the key's
-/// label, `-` where none resolved. The end is a fact published ahead of the answer, so it reaches the ledger ahead of
-/// any later call of the same caller. While the ledger stands behind, the end goes out best-effort and the bus counts
-/// it where it drops it: a writer that stopped draining fills the bus queue, and a refusal that waited there would hold
-/// its connection, a caller's without a key among them.
+/// A refusal of the key, the table, the selection, the account's state, the ledger's standing, the domain check's cap
+/// or a count of the open sockets: its DEBUG line, its end, which the ledger counts and writes no row for, and its
+/// answer. `key` is the key's label, `-` where none resolved. The end is a fact published ahead of the answer, so it
+/// reaches the ledger ahead of any later call of the same caller. While the ledger stands behind, the end goes out
+/// best-effort and the bus counts it where it drops it: a writer that stopped draining fills the bus queue, and a
+/// refusal that waited there would hold its connection, a caller's without a key among them.
 async fn refusal(relay: &Relay, call: Call, failure: &Failure, key: &str) -> Response {
     refusal_under(relay, call, failure, failure.code, key).await
 }

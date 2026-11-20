@@ -3053,3 +3053,212 @@ async fn a_socket_whose_101_cannot_reach_its_client_ends_the_upstream_leg() {
     assert_eq!(received, None);
     up.shutdown().await;
 }
+
+/// The fake of a watch whose two page reads, both under the account's one bearer, answer `first` and then `second`.
+async fn two_reads_fake(first: &str, second: &str, sockets: &Switched) -> FakeUpstream {
+    let up = watch_fake(json_200(), switch(sockets)).await;
+    up.push_credential_rule(SECRET_A, "/api/frame/", page_answer(first));
+    up.push_credential_rule(SECRET_A, "/api/frame/", page_answer(second));
+    up
+}
+
+/// The harness's second key, `laptop`, in the pool of `desktop`.
+async fn add_laptop(h: &Harness) {
+    let desktop = h.store.api_key("desktop").unwrap().unwrap();
+    h.store
+        .insert_api_key(
+            &phoebis_store::ApiKeyRow {
+                id: "laptop".into(),
+                label: "laptop".into(),
+                secret_digest: h.store.api_key_digest(LAPTOP).to_vec(),
+                prefix: phoebis_store::key_prefix(LAPTOP),
+                ..desktop
+            },
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+}
+
+/// A page read of `/api/frame/x` under `laptop`, answered `200` and read whole.
+async fn read_page_as_laptop(listener: &FeatureListener) {
+    let read = format!(
+        "GET /api/frame/x HTTP/1.1\r\nHost: {API}\r\nAuthorization: Bearer {LAPTOP}\r\n\
+         Connection: close\r\n\r\n"
+    );
+    let (status, headers, _) = listener.send(API, read.as_bytes()).await;
+    assert_eq!(status, 200, "{headers:?}");
+}
+
+#[tokio::test]
+async fn a_key_at_its_count_gets_the_429_and_a_second_key_is_admitted() {
+    let sockets = Switched::default();
+    let (desktop_token, laptop_token) = (sync_token(1_600), sync_token(1_601));
+    let up = two_reads_fake(&desktop_token, &laptop_token, &sockets).await;
+    let limits = Limits {
+        key_sockets: 1,
+        sockets_total: 16,
+        ..default_limits()
+    };
+    let h = harness_with_limits(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        limits,
+    )
+    .await;
+    add_laptop(&h).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    read_page_as_laptop(&listener).await;
+    let (status, headers, _open) = listener.open(API, &upgrade_request(&desktop_token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&desktop_token)).await;
+    assert_eq!(refusal_of(status, &headers), (429, "key_sockets", ""));
+    assert_eq!(
+        upgrade_heads(&up).len(),
+        1,
+        "a refused upgrade went upstream"
+    );
+    let (status, headers, _laptops) = listener.open(API, &upgrade_request(&laptop_token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_socket_past_the_total_gets_the_429_of_the_total() {
+    let sockets = Switched::default();
+    let (desktop_token, laptop_token) = (sync_token(1_600), sync_token(1_601));
+    let up = two_reads_fake(&desktop_token, &laptop_token, &sockets).await;
+    let limits = Limits {
+        key_sockets: 16,
+        sockets_total: 1,
+        ..default_limits()
+    };
+    let h = harness_with_limits(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        limits,
+    )
+    .await;
+    add_laptop(&h).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    read_page_as_laptop(&listener).await;
+    let (status, headers, _open) = listener.open(API, &upgrade_request(&desktop_token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&laptop_token)).await;
+    assert_eq!(refusal_of(status, &headers), (429, "sockets_at_cap", ""));
+    up.shutdown().await;
+}
+
+/// The harness of one key that may hold one open socket.
+async fn one_socket_harness(up: &FakeUpstream) -> Harness {
+    let limits = Limits {
+        key_sockets: 1,
+        ..default_limits()
+    };
+    harness_with_limits(up, &[oauth("a", SECRET_A, 0)], both_features_at_a(), limits).await
+}
+
+#[tokio::test]
+async fn a_keys_next_socket_is_admitted_once_one_of_its_sockets_ended() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = one_socket_harness(&up).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let (client, mut socket) = tunnel(&listener, &token, &sockets).await;
+    drop(client);
+    let received = tokio::time::timeout(Duration::from_secs(5), socket.received())
+        .await
+        .expect("the upstream leg stayed open behind the client's leave");
+    assert_eq!(received, None);
+    let (status, headers, _next) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_upgrade_the_upstream_refuses_frees_its_keys_place() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let refused = Respond::Stall {
+        status: 403,
+        headers: vec![],
+        events: vec![],
+    };
+    let up = watch_fake(page_answer(&token), refused).await;
+    up.set_rule_after(1, "/api/frame/sync", switch(&sockets));
+    let h = one_socket_harness(&up).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    // The refusal's body waits for the release, and the client keeps its connection with the head alone.
+    let (status, headers, _waiting) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 403, "{headers:?}");
+    let (status, headers, _next) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_socket_stays_open_while_bytes_move_and_ends_once_it_is_silent_past_its_idle_time() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let limits = Limits {
+        socket_idle_timeout: Duration::from_secs(5),
+        ..default_limits()
+    };
+    let h = harness_with_limits(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        limits,
+    )
+    .await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    // On the running clock, since the fake hands its side of the socket over behind a timer of its own.
+    let (mut client, mut socket) = tunnel(&listener, &token, &sockets).await;
+    tokio::time::pause();
+    // A byte at an instant of the paused clock, whatever real time the opening took, from which each step counts.
+    on_held_clock(async {
+        client.write(b"z").await;
+        assert_eq!(upstream_receives(&mut socket, 1).await, b"z");
+    })
+    .await
+    .expect("z never reached the upstream");
+    on_held_clock(async {
+        tokio::time::advance(Duration::from_millis(4_999)).await;
+        client.write(b"a").await;
+        assert_eq!(upstream_receives(&mut socket, 1).await, b"a");
+    })
+    .await
+    .expect("a never reached the upstream");
+    on_held_clock(async {
+        tokio::time::advance(Duration::from_millis(4_999)).await;
+        socket.send(b"b").await;
+        assert_eq!(client_reads(&mut client, 1).await, b"b");
+    })
+    .await
+    .expect("b never reached the client");
+    on_held_clock(async {
+        tokio::time::advance(Duration::from_millis(4_999)).await;
+        client.write(b"c").await;
+        assert_eq!(upstream_receives(&mut socket, 1).await, b"c");
+    })
+    .await
+    .expect("c never reached the upstream");
+    let ends = on_held_clock(async {
+        tokio::time::advance(Duration::from_millis(5_001)).await;
+        (client.next().await, socket.received().await)
+    })
+    .await
+    .expect("the socket stayed open past its idle time");
+    assert_eq!(ends, (None, None));
+    up.shutdown().await;
+}

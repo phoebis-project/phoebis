@@ -901,6 +901,8 @@ on this listener:
 | `413` `request_too_large`, `503` `body_budget_exhausted`, `429` `key_body_reads` or `408` `request_timeout` | The read of the call's body passes a bound of the `proxy` block. |
 | `502` `upstream_unreachable` | The forward failed ahead of the upstream's answer head. |
 | `429` `domain_checks_at_cap` | A domain check waited out its 30 seconds for a place. The answer carries `Retry-After: 1`. |
+| `429` `key_sockets` | The socket request's key has 256 sockets open. The answer carries no `Retry-After`. |
+| `429` `sockets_at_cap` | The listener carries 2,048 open sockets, whatever their keys. The answer carries no `Retry-After`. |
 
 The first five rows are the checks of a keyed call in their order, and the first that fails answers. Each `403` carries
 `x-should-retry: false`.
@@ -938,11 +940,15 @@ in its log. The session shows no error line for any of these reads.
 WebSocket for the page's live updates, the watch that tells a session of a new version or a comment, and a session that
 edits a page opens a second one beside it, the presence connection. Each dials right behind a page read, whose token
 admits it ([What the router forwards](#what-the-router-forwards)). The client resolves `api.anthropic.com` itself ahead
-of the dial and refuses a private, carrier-NAT, link-local or unique-local address, so under `SETUP=redirect` the name
-has to lead to a loopback address or a public one ([Base URL and DNS redirect](#base-url-and-dns-redirect)). Where the
-router refuses a watch, or ends its socket at the router's stop, the session reads a lost connection and, by the
-client's code, dials again behind a new page read. The client's event report, `POST /api/frame/track`, gets the `403`,
-which the session shows nowhere.
+of the dial and refuses a carrier-NAT, link-local, private or unique-local address, so under `SETUP=redirect` the name
+has to lead to a loopback address or a public one ([Base URL and DNS redirect](#base-url-and-dns-redirect)). The router
+counts the open sockets of each key and of the listener and refuses a socket request above either count with a `429`
+([What the router refuses and what the client shows](#what-the-router-refuses-and-what-the-client-shows)), and it ends
+a socket that moved no byte in either direction for 90 seconds. No setting moves the two counts or the idle time. Where
+the router refuses a watch for another cause than a full count, or ends its socket after the idle time or at the
+router's stop, the session reads a lost connection and, by the client's code, dials again behind a new page read. At the
+`429` of a full count the session waits 30 seconds or more, counts no failure and dials again, by the client's code. The
+client's event report, `POST /api/frame/track`, gets the `403`, which the session shows nowhere.
 
 **The `/usage` dialog** cannot read the account's usage. Its read gets the `403`, and the dialog's Usage tab reads
 "Couldn't load usage data" and prints the router's whole answer body below it, a `permission_error` with the message
@@ -1001,16 +1007,16 @@ The metrics listener counts the calls in two families ([Metrics](statistics.md#m
 | Family | Labels | Counts |
 | --- | --- | --- |
 | `phoebis_feature_calls_total` | `feature`, `key`, `outcome` | each call the router sent upstream, the domain check among them under the feature `domain_check` |
-| `phoebis_feature_refusals_total` | `code`, `feature`, `key` | each call the router refused with a `401`, a `403`, the `429` `domain_checks_at_cap` of a domain check or the `503` `ledger_behind`, under the feature `none` for a call that matched no row, for each `401` and for a refused domain check, and the `401` of a socket request that no token admits under the code `socket_token_unknown` |
+| `phoebis_feature_refusals_total` | `code`, `feature`, `key` | each call the router refused with a `401`, a `403`, the `429` `domain_checks_at_cap` of a domain check, the `429` `key_sockets` or `sockets_at_cap` of a socket request or the `503` `ledger_behind`, under the feature `none` for a call that matched no row, for each `401` and for a refused domain check, and the `401` of a socket request that no token admits under the code `socket_token_unknown` |
 
 Neither family carries a path, a status or an account. A refused call and a domain check each write one line at `debug`
 too, with the code or the outcome, the method, the path without its query and the key's label. A socket's tunnel writes
-one at its end, with the cause (`client_ended`, `client_failed`, `stopped`, `upstream_ended` or `upstream_failed`), the
-method, the path, the key's label and the socket's life in milliseconds. The router writes one where a page read under
-one key returns a token that another key read, with the path and the two keys' labels, and one where it cannot scan a
-page read's answer, with the cause and the path. None of these lines holds a token or a byte of a body. Under
-`RUST_LOG=info,phoebis_relay::features=debug` the router writes the feature module's `debug` lines, these among them,
-and keeps each other module at `info` ([Environment variables](installation.md#environment-variables)).
+one at its end, with the cause (`client_ended`, `client_failed`, `idle`, `stopped`, `upstream_ended` or
+`upstream_failed`), the method, the path, the key's label and the socket's life in milliseconds. The router writes one
+where a page read under one key returns a token that another key read, with the path and the two keys' labels, and one
+where it cannot scan a page read's answer, with the cause and the path. None of these lines holds a token or a byte of a
+body. Under `RUST_LOG=info,phoebis_relay::features=debug` the router writes the feature module's `debug` lines, these
+among them, and keeps each other module at `info` ([Environment variables](installation.md#environment-variables)).
 
 ## The CA over time
 

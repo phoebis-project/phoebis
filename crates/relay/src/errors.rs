@@ -233,6 +233,33 @@ pub(crate) fn domain_checks_at_cap() -> Failure {
     }
 }
 
+/// 429 `rate_limit_error`, code `key_sockets`, no `Retry-After`: the key has as many sockets open as one key may. No
+/// time bounds the wait for a place, so the answer names none.
+pub(crate) fn key_sockets() -> Failure {
+    Failure {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        error_type: "rate_limit_error",
+        code: "key_sockets",
+        message: Cow::Borrowed("this key has as many sockets open as it allows"),
+        retry_after: None,
+        no_retry: false,
+        class: FailureClass::Refused,
+    }
+}
+
+/// 429 `rate_limit_error`, code `sockets_at_cap`, no `Retry-After`: the listener carries as many sockets as it may.
+pub(crate) fn sockets_at_cap() -> Failure {
+    Failure {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        error_type: "rate_limit_error",
+        code: "sockets_at_cap",
+        message: Cow::Borrowed("as many sockets are open as the router carries at once"),
+        retry_after: None,
+        no_retry: false,
+        class: FailureClass::Refused,
+    }
+}
+
 /// A rejected caller credential is always a `401`: telling the caller which of the three ways it failed would
 /// help an attacker enumerate. The answer also tells the client not to resend the request.
 pub(crate) fn auth_failure(error: &AuthError) -> Failure {

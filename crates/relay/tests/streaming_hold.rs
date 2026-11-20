@@ -232,8 +232,11 @@ async fn a_stream_that_never_commits_is_relayed_as_received_after_the_hold_timeo
         head_timeout: Duration::from_secs(10),
         idle_timeout: Duration::from_secs(600),
         key_body_reads: 128,
+        key_sockets: 256,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        socket_idle_timeout: Duration::from_secs(90),
+        sockets_total: 2_048,
         upstream_gzip: phoebis_relay::UpstreamGzip::Auto,
     };
     let h = harness_with(&up, &[oauth("a", A, 0)], PoolSpec::default(), limits).await;

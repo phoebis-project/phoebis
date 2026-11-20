@@ -279,11 +279,11 @@ as JSON, or as one HTML page when `Accept` prefers `text/html`. The JSON carries
 Every refusal the relay answers on the proxy listener and on the feature listener is in Anthropic's error shape,
 `{"type": "error", "error": {"type", "message"}, "request_id"}`, with the header `x-phoebis-error-code` naming the code
 and `Retry-After` where the row says so. A client meets `domain_checks_at_cap`, `feature_account_unavailable`,
-`feature_account_unset` and `feature_not_allowed` on the feature listener alone ([claude.ai
-features](claude-ai-features.md#what-the-router-refuses-and-what-the-client-shows)), and the `401` codes of a key on
-both. The companion mod's routes answer a refused key the same way and their other refusals in their own shape,
-described on [The relay](relay.md#the-keepalive-protocol). One row per code, with every message the code is answered
-with.
+`feature_account_unset`, `feature_not_allowed`, `key_sockets` and `sockets_at_cap` on the feature listener alone
+([claude.ai features](claude-ai-features.md#what-the-router-refuses-and-what-the-client-shows)), and the `401` codes of
+a key on both. The companion mod's routes answer a refused key the same way and their other refusals in their own
+shape, described on [The relay](relay.md#the-keepalive-protocol). One row per code, with every message the code is
+answered with.
 
 <!-- refusal-codes: begin -->
 | Code | Status | Type | Messages | What to do |
@@ -313,6 +313,7 @@ with.
 | `invalid_limit` | 400 | `invalid_request_error` | `limit must be between 1 and 1000` | Ask `GET /v1/models` for 1 to 1000 rows. |
 | `invalid_model` | 400 | `invalid_request_error` | `the request body's model is not a usable model name` | Set a model the listing names ([the models listing](#the-models-listing)). |
 | `key_body_reads` | 429 | `rate_limit_error` | `this key has as many request bodies arriving as it allows` | Wait one second (`Retry-After: 1`) and send it again. |
+| `key_sockets` | 429 | `rate_limit_error` | `this key has as many sockets open as it allows` | The key has as many sockets open on the feature listener as one key may, a count [claude.ai features](claude-ai-features.md#what-the-router-refuses-and-what-the-client-shows) names. The client waits and dials again by itself, and a place frees as soon as one of the key's sockets ends. The answer carries no `Retry-After`, since no time bounds the wait for a place. |
 | `ledger_behind` | 503 | `api_error` | `the router is not accepting requests right now` | Wait out the `Retry-After` of 5 seconds. The operator reads the writer's standing on [Statistics](statistics.md#the-ledger-writer). |
 | `method_not_allowed` | 405 | `invalid_request_error` | `the method is not supported on this route` | Use the method the table in [What the proxy accepts](#what-the-proxy-accepts) names. |
 | `missing_model` | 400 | `invalid_request_error` | `the request body has no model` | Set `model` in the body. |
@@ -324,6 +325,7 @@ with.
 | `request_timeout` | 408 | `invalid_request_error` | `the request body did not arrive in time` | The body took longer than `proxy.body_read_seconds`. Send the request again. |
 | `request_too_large` | 413 | `request_too_large` | `the request body is too large` | The body is over `proxy.max_request_bytes`, before or after inflation. |
 | `router_unavailable` | 503 | `api_error` | `the router is not available` | Send the request again. The operator reads the router's log. |
+| `sockets_at_cap` | 429 | `rate_limit_error` | `as many sockets are open as the router carries at once` | The feature listener carries as many open sockets as it may, whatever their keys, a count [claude.ai features](claude-ai-features.md#what-the-router-refuses-and-what-the-client-shows) names. The client waits and dials again by itself, and a place frees as soon as any socket ends. The answer carries no `Retry-After`, since no time bounds the wait for a place. |
 | `unsupported_content_encoding` | 415 | `invalid_request_error` | `the request body's content-encoding is not supported. Send gzip or identity` | Send the body as gzip or identity. |
 | `upstream_cut` | 502 | `api_error` | `the upstream response could not be read after its head` | Send the request again. |
 | `upstream_stalled` | 502 | `api_error` | `the upstream stalled after its head` | The upstream sent nothing for 600 seconds. Send the request again. |
