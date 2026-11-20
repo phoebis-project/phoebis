@@ -58,7 +58,8 @@ pub enum PathRule {
 pub struct FeatureRow {
     /// A method and a whole path the row leaves out. The path holds visible ASCII characters alone and no percent
     /// escape, since the listener compares it with the visible ASCII characters of the last decoded form of a request's
-    /// path, which holds no escape, up to that form's first `?` or `#`. A path with an escape, a space or a character
+    /// path, which holds no escape, up to that form's first `?` or `#`. It holds no empty segment and no closing slash,
+    /// since the compare drops them from the request's side alone. A path with an escape, a space or a character
     /// outside ASCII would match no request, including one that sends it as written, and the call it names would go
     /// upstream under the feature account's token.
     pub except: &'static [(&'static str, &'static str)],

@@ -836,12 +836,15 @@ a percent-decode gives (`%00` to `%1f` and `%7f`), and a path parameter, which a
 these forms in the path as sent and in each form a percent-decode of it gives, decoded once more until no `%` with two
 hex digits behind it is left, so `%252e` counts as an encoded dot and `%3b` as a semicolon. Where a decoded form holds a
 `?` or a `#`, the part ahead of the first one is read for a segment `.` or `..` and an empty segment too, so
-`/api/frame/x/%3Fy` and `/api/frame/x/.%3Fy` match no row. An upstream that decodes or folds such a path could otherwise
-serve a refused call under the feature account's sign-in, and the client builds none of these forms. The one excepted
-path, `POST /api/frame/track`, is an event report. It is matched in each case of its letters, where a path decodes to
-it, where a decoded path reads it ahead of a `?` or a `#`, and where a decoded path reads it with each space and each
-character outside ASCII left out, so `POST /api/frame/Track`, `POST /api/frame/%74rack`, `POST /api/frame/track%3Fx` and
-`POST /api/frame/track%20` are refused too.
+`/api/frame/x/%3Fy` and `/api/frame/x/.%3Fy` match no row. A segment, and the part of one ahead of a decoded `?` or `#`,
+counts as `.` or `..` too where a decoded form holds spaces or characters outside ASCII beside its dots, so
+`/api/frame/..%20/x` matches no row. An upstream that decodes or folds such a path could otherwise serve a refused call
+under the feature account's sign-in, and the client builds none of these forms. The one excepted path,
+`POST /api/frame/track`, is an event report. It is matched in each case of its letters, where a path decodes to it,
+where a decoded path reads it ahead of a `?` or a `#`, and where a decoded path reads it with each space and each
+character outside ASCII left out and with each empty segment that this leaves dropped, so `POST /api/frame/Track`,
+`POST /api/frame/%74rack`, `POST /api/frame/track%3Fx`, `POST /api/frame/track%20` and `POST /api/frame/track/%20` are
+refused too.
 
 The two calls without a key match by their whole form. `GET` and `HEAD` on `/api/hello` answer `200` with an empty body
 and send nothing upstream, which is where the first-start check of an interactive client ends, so a start needs no

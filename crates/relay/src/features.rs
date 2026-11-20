@@ -441,10 +441,11 @@ fn request_host(headers: &HeaderMap) -> Option<String> {
 
 /// The row a keyed request falls under, with its feature and the row's own spelling of the method. A row's prefix or
 /// whole path is compared with the path as sent, which the forward sends on as it came. Its decoded forms are read
-/// too, since an upstream that decodes a path once or more would serve another call than the one the row names: each
-/// form has to be plain, the part of a form ahead of each `?` or `#` it holds keeps a plain form's segment rules, and
-/// an excepted path holds where the visible ASCII characters of the last form's part ahead of its first `?` or `#`
-/// spell it.
+/// too, since an upstream that decodes a path once or more would serve another call than the one the row names. Each
+/// form has to be plain, and the part of a form ahead of each `?` or `#` it holds keeps a plain form's segment rules,
+/// so neither a segment nor such a part reads `.` or `..` by its visible ASCII characters. An excepted path holds where
+/// the visible ASCII characters of the last form's part ahead of its first `?` or `#` spell it with each empty segment
+/// left out.
 fn matched(
     table: &'static FeatureTable,
     method: &str,
@@ -456,14 +457,17 @@ fn matched(
     let mut call = plain_path(path)?;
     // An upstream that decodes a path and then cuts it at a `?` or a `#` would read the part ahead of the mark as the
     // path, so each form's part keeps the segment rules. The cut can change the last segment of a part alone, and the
-    // marks of the last form stand in for each form's: an empty, `.` or `..` segment holds no escape and no decode
-    // yields a slash, so where a form holds one ahead of a mark, the last form holds it ahead of the same mark. One
-    // pass keeps the read linear in a path with many marks in one segment.
+    // marks of the last form stand in for each form's: an empty segment or a dot segment by its visible characters
+    // holds no `%`, so no decode changes it, and no decode yields a slash, so where a form holds one ahead of a mark,
+    // the last form holds it ahead of the same mark. One pass keeps the read linear in a path with many marks in one
+    // segment.
     let mut segment = 0;
     for (at, byte) in call.iter().enumerate() {
         match byte {
             b'/' => segment = at + 1,
-            b'?' | b'#' if matches!(&call[segment..at], b"" | b"." | b"..") => return None,
+            b'?' | b'#' if call[segment..at].is_empty() || dotted(&call[segment..at]) => {
+                return None
+            }
             _ => {}
         }
     }
@@ -475,6 +479,13 @@ fn matched(
     // An upstream that drops a space or a byte outside ASCII would read the excepted call in a part that holds one at
     // any place, so the compare reads the visible characters alone.
     call.retain(u8::is_ascii_graphic);
+    // An upstream that drops such a byte leaves an empty segment where a segment held nothing else, and one that then
+    // folds a doubled or a closing slash would read the excepted call, so the compare drops each empty segment. No dot
+    // segment is left to fold: a part with one by its visible characters matched no row above.
+    call.dedup_by(|byte, kept| *byte == b'/' && *kept == b'/');
+    if call.ends_with(b"/") {
+        call.pop();
+    }
     let features = [
         (Feature::Artifacts, table.artifacts),
         (Feature::Connectors, table.connectors),
@@ -500,11 +511,12 @@ fn matched(
 
 /// The last of a path's forms where each of them is plain, `None` where one is not. A form is the path as sent, or
 /// what one more percent-decode of a form yields, down to a form that holds no escape, a `%` with two hex digits behind
-/// it. A `%` without them stays as it is. A plain form has no segment `.` or `..`, no empty segment at any place, the
-/// last among them, no backslash, no semicolon, which opens a path parameter an upstream may drop, and no encoded
-/// slash, backslash or dot in either case. A form is not plain either where a decode gave it a control byte, since an
-/// upstream that drops such a byte or cuts the path at it would read another path. The forms are compared as bytes, so
-/// a decoded byte outside ASCII needs no text decode.
+/// it. A `%` without them stays as it is. A plain form has no empty segment at any place, the last among them, no
+/// segment whose visible ASCII characters read `.` or `..`, since an upstream that drops the other bytes would resolve
+/// it, no backslash, no semicolon, which opens a path parameter an upstream may drop, and no encoded slash, backslash
+/// or dot in either case. A form is not plain either where a decode gave it a control byte, since an upstream that
+/// drops such a byte or cuts the path at it would read another path. The forms are compared as bytes, so a decoded
+/// byte outside ASCII needs no text decode.
 fn plain_path(path: &str) -> Option<Vec<u8>> {
     let segments = path.strip_prefix('/')?;
     let encoded = path.as_bytes().windows(3).any(|three| {
@@ -516,13 +528,25 @@ fn plain_path(path: &str) -> Option<Vec<u8>> {
     });
     let plain = !encoded
         && !path.contains(['\\', ';'])
-        && segments
-            .split('/')
-            .all(|segment| !matches!(segment, "" | "." | ".."));
+        && segments.split('/').all(|segment| !segment.is_empty());
     if !plain {
         return None;
     }
-    last_form(path.as_bytes())
+    let form = last_form(path.as_bytes())?;
+    // The last form stands in for each form: a segment that reads `.` or `..` by its visible characters holds no `%`,
+    // so no decode changes it, and a form that holds such a segment holds it as the last form does.
+    let dots = form.split(|byte| *byte == b'/').any(dotted);
+    (!dots).then_some(form)
+}
+
+/// Whether the visible ASCII characters of `segment` spell `.` or `..`. An upstream that drops a space or a byte
+/// outside ASCII would read such a segment as a dot segment.
+fn dotted(segment: &[u8]) -> bool {
+    let mut visible = segment.iter().filter(|byte| byte.is_ascii_graphic());
+    matches!(
+        [visible.next(), visible.next(), visible.next()],
+        [Some(b'.'), None, _] | [Some(b'.'), Some(b'.'), None]
+    )
 }
 
 /// The last form of a path whose first form is plain, `None` where a decode on the way yields a slash, a backslash, a
