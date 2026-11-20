@@ -726,7 +726,7 @@ The metrics listener counts the calls in two families ([Metrics](statistics.md#m
 | Family | Labels | Counts |
 | --- | --- | --- |
 | `phoebis_feature_calls_total` | `feature`, `key`, `outcome` | each call the router sent upstream, the domain check among them under the feature `domain_check` |
-| `phoebis_feature_refusals_total` | `code`, `feature`, `key` | each call the router refused with a `401`, a `403` or the `503` `ledger_behind`, under the feature `none` for a call that matched no row, for each `401` and for a refused domain check |
+| `phoebis_feature_refusals_total` | `code`, `feature`, `key` | each call the router refused with a `401`, a `403`, the `429` `domain_checks_at_cap` of a domain check or the `503` `ledger_behind`, under the feature `none` for a call that matched no row, for each `401` and for a refused domain check |
 
 Neither family carries a path, a status or an account. A refused call and a domain check each write one line at `debug`
 too, with the code or the outcome, the method, the path without its query and the key's label.

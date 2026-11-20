@@ -172,12 +172,12 @@ async fn feature_call(State(listener): State<Listener>, request: Request) -> Res
     }
 }
 
-/// A refusal of the key, the table, the selection, the account's state or the ledger's standing: its DEBUG line, its
-/// end, which the ledger counts and writes no row for, and its answer. `key` is the key's label, `-` where none
-/// resolved. The end is a fact published ahead of the answer, so it reaches the ledger ahead of any later call of the
-/// same caller. While the ledger stands behind, the end goes out best-effort and the bus counts it where it drops it: a
-/// writer that stopped draining fills the bus queue, and a refusal that waited there would hold its connection, a
-/// caller's without a key among them.
+/// A refusal of the key, the table, the selection, the account's state, the ledger's standing or the domain check's
+/// cap: its DEBUG line, its end, which the ledger counts and writes no row for, and its answer. `key` is the key's
+/// label, `-` where none resolved. The end is a fact published ahead of the answer, so it reaches the ledger ahead of
+/// any later call of the same caller. While the ledger stands behind, the end goes out best-effort and the bus counts
+/// it where it drops it: a writer that stopped draining fills the bus queue, and a refusal that waited there would hold
+/// its connection, a caller's without a key among them.
 async fn refusal(relay: &Relay, mut call: Call, failure: &Failure, key: &str) -> Response {
     refused_line(failure, &call, key);
     let answer = failure.response(&call.id);
@@ -212,7 +212,7 @@ fn refused_line(failure: &Failure, call: &Call, key: &str) {
 
 /// A domain check under the cap and its one deadline from `arrived`, which bounds the wait for a place, the send and
 /// each read of the answer's body. Its lines hold the path alone, since the query names the domain. A check whose time
-/// ends in the wait publishes no end.
+/// ends in the wait is refused with the `429` and publishes a refusal's end.
 async fn domain_check(
     listener: &Listener,
     host: &'static str,
@@ -234,15 +234,7 @@ async fn domain_check(
         .get::<ConnectInfo<SocketAddr>>()
         .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |peer| peer.0.ip());
     let Ok(place) = tokio::time::timeout_at(deadline, cap.place(source)).await else {
-        let failure = domain_checks_at_cap();
-        tracing::debug!(
-            code = failure.code,
-            method,
-            path = parts.uri.path(),
-            key = UNATTRIBUTED_POOL,
-            "a domain check was refused"
-        );
-        return failure.response(&call.id);
+        return refusal(relay, call, &domain_checks_at_cap(), UNATTRIBUTED_POOL).await;
     };
     let id = call.id.clone();
     // The place rides in the ending to the answer's end, whether the body ended whole, failed or the caller left.

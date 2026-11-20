@@ -2117,3 +2117,61 @@ async fn a_domain_check_whose_lookup_takes_most_of_its_limit_gets_the_502_at_its
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_domain_check_that_waits_out_its_limit_for_a_place_publishes_a_refused_end() {
+    let up = fake(vec![("/api/web/domain_info", json_200())]).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    // A total of no place, so the check's whole limit runs out in its wait for one. A held first check frees its place
+    // at its own deadline, which comes ahead of a second's, so the second would get the place and answer the 502.
+    let h = harness_with_bus_limits(
+        &up,
+        &[api_key("acct", "sk-ant-api03-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        bus,
+        Limits {
+            domain_check_timeout: Duration::from_millis(300),
+            domain_checks_total: 0,
+            ..default_limits()
+        },
+    )
+    .await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(
+            API,
+            &keyless("GET /api/web/domain_info?domain=example.com", "", b""),
+        )
+        .await;
+    let code = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-phoebis-error-code"))
+        .map(|(_, value)| value.as_str());
+    assert_eq!(
+        (status, code),
+        (429, Some("domain_checks_at_cap")),
+        "{headers:?}"
+    );
+    let end = loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), sub.events.recv())
+            .await
+            .expect("the refused check's end stayed off the bus")
+            .expect("the bus stays open");
+        if let Event::FeatureCall(call) = event {
+            break (call.path, call.end);
+        }
+    };
+    assert_eq!(
+        end,
+        (
+            "/api/web/domain_info".to_owned(),
+            FeatureEnd::Refused {
+                code: "domain_checks_at_cap",
+                feature: None,
+                key_id: None,
+            }
+        )
+    );
+    up.shutdown().await;
+}
