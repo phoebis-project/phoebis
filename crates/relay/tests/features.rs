@@ -348,6 +348,127 @@ async fn a_decoded_mark_beside_no_exception_goes_upstream_as_sent() {
 }
 
 #[tokio::test]
+async fn a_path_that_decodes_to_a_control_byte_is_refused() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let mut answers = Vec::new();
+    for request_line in [
+        "GET /api/frame/x%00",
+        "GET /api/frame/x%1Fy",
+        "GET /api/frame/x%7F",
+        "GET /api/frame/x%2509",
+    ] {
+        let (status, headers, _) = listener.send(API, &keyed(request_line, API, "", b"")).await;
+        let (status, code, _) = refusal_of(status, &headers);
+        answers.push((request_line, status, code.to_owned()));
+    }
+    assert_eq!(
+        answers,
+        [
+            ("GET /api/frame/x%00", 403, "feature_not_allowed".to_owned()),
+            (
+                "GET /api/frame/x%1Fy",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+            ("GET /api/frame/x%7F", 403, "feature_not_allowed".to_owned()),
+            (
+                "GET /api/frame/x%2509",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_decoded_mark_behind_a_closing_slash_or_a_dot_segment_is_refused() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let mut answers = Vec::new();
+    for request_line in [
+        "POST /api/frame/track/%3Fx",
+        "POST /api/frame/track/.%3Fx",
+        "POST /api/frame/track/x/..%23y",
+        "POST /api/frame/retitle/%3Fx",
+    ] {
+        let (status, headers, _) = listener.send(API, &keyed(request_line, API, "", b"")).await;
+        let (status, code, _) = refusal_of(status, &headers);
+        answers.push((request_line, status, code.to_owned()));
+    }
+    assert_eq!(
+        answers,
+        [
+            (
+                "POST /api/frame/track/%3Fx",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+            (
+                "POST /api/frame/track/.%3Fx",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+            (
+                "POST /api/frame/track/x/..%23y",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+            (
+                "POST /api/frame/retitle/%3Fx",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_spelling_of_the_excepted_call_with_a_space_or_a_byte_outside_ascii_is_refused() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let mut answers = Vec::new();
+    for request_line in [
+        "POST /api/frame/track%20",
+        "POST /api/frame/tr%20ack",
+        "POST /api/frame/track%C2%A0",
+    ] {
+        let (status, headers, _) = listener.send(API, &keyed(request_line, API, "", b"")).await;
+        let (status, code, _) = refusal_of(status, &headers);
+        answers.push((request_line, status, code.to_owned()));
+    }
+    assert_eq!(
+        answers,
+        [
+            (
+                "POST /api/frame/track%20",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+            (
+                "POST /api/frame/tr%20ack",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+            (
+                "POST /api/frame/track%C2%A0",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_call_without_a_key_reaches_no_upstream() {
     let up = fake(vec![("/api/frame/", json_200())]).await;
     let h = features_harness(&up, both_features_at_a()).await;

@@ -442,8 +442,8 @@ fn request_host(headers: &HeaderMap) -> Option<String> {
 /// The row a keyed request falls under, with its feature and the row's own spelling of the method. A row's prefix or
 /// whole path is compared with the path as sent, which the forward sends on as it came. Its decoded forms are read
 /// too, since an upstream that decodes a path once or more would serve another call than the one the row names: each
-/// form has to be plain, and an excepted path holds where the path decodes to it, the last form read up to its first
-/// `?` or `#`.
+/// form has to be plain, the part of the last form ahead of its first `?` or `#` keeps a plain form's segment rules,
+/// and an excepted path holds where the visible ASCII characters of that part spell it.
 fn matched(
     table: &'static FeatureTable,
     method: &str,
@@ -452,13 +452,20 @@ fn matched(
 ) -> Option<(Feature, &'static FeatureRow, &'static str)> {
     let host = host?;
     // A path the upstream could fold into another one would carry a refused call under the account's token.
-    let decoded = plain_path(path)?;
-    // An upstream that decodes a path and then cuts it at a `?` or a `#` would read the excepted call in a path that
-    // goes on behind one, so the compare ends where such an upstream's would.
-    let call = decoded
-        .split(|byte| matches!(byte, b'?' | b'#'))
-        .next()
-        .unwrap_or(&decoded);
+    let mut call = plain_path(path)?;
+    // An upstream that decodes a path and then cuts it at a `?` or a `#` would read the part ahead of the mark as the
+    // path, so that part keeps the segment rules, and the excepted call is looked for in it. The cut can change the
+    // last segment of the part alone: each segment ahead of it is a whole segment of the last form.
+    if let Some(mark) = call.iter().position(|byte| matches!(byte, b'?' | b'#')) {
+        call.truncate(mark);
+        let last = call.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
+        if matches!(last, b"" | b"." | b"..") {
+            return None;
+        }
+    }
+    // An upstream that drops a space or a byte outside ASCII would read the excepted call in a path that holds one
+    // among its letters, so the compare reads the visible characters alone.
+    call.retain(u8::is_ascii_graphic);
     let features = [
         (Feature::Artifacts, table.artifacts),
         (Feature::Connectors, table.connectors),
@@ -476,7 +483,7 @@ fn matched(
             // excepted call under another spelling. An excepted path holds no `%`, so of the path's forms the last,
             // which holds no escape, is the one that can be it.
             let excepted = row.except.iter().any(|(held, whole)| {
-                *held == method && whole.as_bytes().eq_ignore_ascii_case(call)
+                *held == method && whole.as_bytes().eq_ignore_ascii_case(&call)
             });
             (row.host == host && on_path && !excepted).then_some((feature, row, method))
         })
@@ -486,8 +493,9 @@ fn matched(
 /// what one more percent-decode of a form yields, down to a form that holds no escape, a `%` with two hex digits behind
 /// it. A `%` without them stays as it is. A plain form has no segment `.` or `..`, no empty segment at any place, the
 /// last among them, no backslash, no semicolon, which opens a path parameter an upstream may drop, and no encoded
-/// slash, backslash or dot in either case. The forms are compared as bytes, so a decoded byte outside ASCII needs no
-/// text decode.
+/// slash, backslash or dot in either case. A form is not plain either where a decode gave it a control byte, since an
+/// upstream that drops such a byte or cuts the path at it would read another path. The forms are compared as bytes, so
+/// a decoded byte outside ASCII needs no text decode.
 fn plain_path(path: &str) -> Option<Vec<u8>> {
     let segments = path.strip_prefix('/')?;
     let encoded = path.as_bytes().windows(3).any(|three| {
@@ -509,14 +517,14 @@ fn plain_path(path: &str) -> Option<Vec<u8>> {
 }
 
 /// The last form of a path whose first form is plain, `None` where a decode on the way yields a slash, a backslash, a
-/// dot or a semicolon: the form that holds such an escape, or the form after it, is not plain.
+/// dot, a semicolon or a control byte: the form that holds such an escape, or the form after it, is not plain.
 ///
 /// Two escapes never overlap, since `%` is no hex digit, so the order of the decodes changes neither the last form nor
 /// the bytes the decodes yield. One pass that decodes an escape as soon as its last byte stands therefore reaches the
 /// last form and sees each byte a decode of a form yields. A decode of one form after another would read the path once
 /// per form, and nested escapes give a path about half as many forms as it has bytes. A decode that yields no slash,
 /// dot or backslash leaves each later form the segments of the first, so the first form's segment rules hold for each,
-/// and a semicolon a decode yields stays in each later form.
+/// and a semicolon or a control byte a decode yields stays in each later form.
 fn last_form(path: &[u8]) -> Option<Vec<u8>> {
     let mut form = Vec::with_capacity(path.len());
     for &byte in path {
@@ -527,7 +535,7 @@ fn last_form(path: &[u8]) -> Option<Vec<u8>> {
                 break;
             };
             let decoded = (high << 4) | low;
-            if matches!(decoded, b'/' | b'\\' | b'.' | b';') {
+            if matches!(decoded, b'/' | b'\\' | b'.' | b';') || decoded.is_ascii_control() {
                 return None;
             }
             form.truncate(form.len() - 3);

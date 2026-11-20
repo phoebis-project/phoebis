@@ -831,14 +831,17 @@ The router compares a row's path with the path as the client sent it, without th
 came. A row with a whole path matches that path alone, and a row with a prefix matches a path that goes on behind the
 prefix by one character or more, so `/api/frame` and `/api/framework/x` match no row. Some forms of a path match no row,
 and a keyed call with one gets the `403` `feature_not_allowed`: a segment `.` or `..`, an empty segment and so a closing
-slash, a backslash, an encoded slash, backslash or dot (`%2f`, `%5c` and `%2e` in either case), and a path parameter,
-which a semicolon opens. The router looks for these forms in the path as sent and in each form a percent-decode of it
-gives, decoded once more until no `%` with two hex digits behind it is left, so `%252e` counts as an encoded dot and
-`%3b` as a semicolon. An upstream that decodes or folds such a path could otherwise serve a refused call under the
-feature account's sign-in, and the client builds none of these forms. The one excepted path, `POST /api/frame/track`,
-is an event report. It is matched in each case of its letters, where a path decodes to it, and where a decoded path
-reads it ahead of a `?` or a `#`, so `POST /api/frame/Track`, `POST /api/frame/%74rack` and `POST /api/frame/track%3Fx`
-are refused too.
+slash, a backslash, an encoded slash, backslash or dot (`%2f`, `%5c` and `%2e` in either case), a control character that
+a percent-decode gives (`%00` to `%1f` and `%7f`), and a path parameter, which a semicolon opens. The router looks for
+these forms in the path as sent and in each form a percent-decode of it gives, decoded once more until no `%` with two
+hex digits behind it is left, so `%252e` counts as an encoded dot and `%3b` as a semicolon. Where a decoded form holds a
+`?` or a `#`, the part ahead of the first one is read for a segment `.` or `..` and an empty segment too, so
+`/api/frame/x/%3Fy` and `/api/frame/x/.%3Fy` match no row. An upstream that decodes or folds such a path could otherwise
+serve a refused call under the feature account's sign-in, and the client builds none of these forms. The one excepted
+path, `POST /api/frame/track`, is an event report. It is matched in each case of its letters, where a path decodes to
+it, where a decoded path reads it ahead of a `?` or a `#`, and where a decoded path reads it with each space and each
+character outside ASCII left out, so `POST /api/frame/Track`, `POST /api/frame/%74rack`, `POST /api/frame/track%3Fx` and
+`POST /api/frame/track%20` are refused too.
 
 The two calls without a key match by their whole form. `GET` and `HEAD` on `/api/hello` answer `200` with an empty body
 and send nothing upstream, which is where the first-start check of an interactive client ends, so a start needs no
