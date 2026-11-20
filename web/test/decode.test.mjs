@@ -495,6 +495,14 @@ test("encodeKey sends the feature accounts under the wire's names", () => {
   assert.deepEqual(d.encodeKey(input).feature_accounts, { artifacts: { account_id: 'studio', mode: 'account' }, connectors: { account_id: null, mode: 'none' } });
 });
 
+test('a key decodes each feature word the route writes as the choice it names', () => {
+  const row = fixture('keys').keys[0];
+  const named = d.decodeKey({ ...row, feature_accounts: { artifacts: { account_id: 'studio', mode: 'account' }, connectors: { account_id: null, mode: 'none' } } });
+  assert.deepEqual(named.featureAccounts, { artifacts: { accountId: 'studio', mode: 'account' }, connectors: { accountId: null, mode: 'none' } }, 'an account keeps its id and none stays none');
+  const inherited = d.decodeKey({ ...row, feature_accounts: { artifacts: { account_id: null, mode: 'inherit' }, connectors: { account_id: 'desk', mode: 'account' } } });
+  assert.deepEqual(inherited.featureAccounts, { artifacts: { accountId: null, mode: 'inherit' }, connectors: { accountId: 'desk', mode: 'account' } }, 'inherit stays inherit');
+});
+
 test('decodeKey reads the companion permissions and encodeKey writes the words that are on', () => {
   const key = d.decodeKey({ ...fixture('keys').keys[0], companion_permissions: ['allowance'] });
   assert.deepEqual(key.companionPermissions, ['allowance']);

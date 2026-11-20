@@ -9,7 +9,7 @@ const byName = <T extends { name: string }>(rows: readonly T[]): T[] => [...rows
 
 export const poolFeaturesNaming = (pool: Pick<Pool, 'featureAccounts'>, accountId: string): FeatureWord[] => FEATURE_WORD_VALUES.filter((f) => pool.featureAccounts[f] === accountId);
 
-// The key's own choice and never its resolved value, which names the pool's account under inherit.
+// The key's own choice alone: under inherit the account is the pool's selection, a use `poolFeaturesNaming` lists.
 export const keyFeaturesNaming = (key: Pick<ApiKey, 'featureAccounts'>, accountId: string): FeatureWord[] => FEATURE_WORD_VALUES.filter((f) => key.featureAccounts[f].mode === 'account' && key.featureAccounts[f].accountId === accountId);
 
 /** Where an account is in use: the pool it is a member of, each pool that selects it for a feature and each

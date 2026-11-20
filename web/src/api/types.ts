@@ -8,7 +8,6 @@ export type FeatureWord = (typeof FEATURE_WORD_VALUES)[number];
 /** Per feature, the id of the account its calls act under, or null for none. */
 export type FeatureAccountIds = Record<FeatureWord, string | null>;
 export const KEY_FEATURE_MODE_VALUES = ['account', 'inherit', 'none'] as const;
-export type KeyFeatureMode = (typeof KEY_FEATURE_MODE_VALUES)[number];
 /** A key's value for one feature: an account by its id, the pool's account, or none. Each arm holds `accountId`, as
  * the wire does, so each row has one set of members. */
 export type KeyFeatureAccount =
