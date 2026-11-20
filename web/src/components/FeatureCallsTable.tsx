@@ -96,7 +96,7 @@ export function FeatureCallsTable({
   const { timeFormat } = useAppSettings();
   // A cursor belongs to the range and the filters it was read under, so a change of either starts the walk again.
   const address = JSON.stringify([range, span.from, span.to, filters]);
-  const { cursor, reset, setPaging, stack } = usePaging(address);
+  const { atFirst, cursor, next, previous, reset } = usePaging(address);
   const custom = range.preset === 'custom';
   // A preset's read sends no end, so auto reload and a section opened long after the page took its range reach the
   // calls received since, and a cursor page is bounded by its cursor. Keyed on the span itself, so Refresh on a custom
@@ -124,12 +124,7 @@ export function FeatureCallsTable({
     if (Object.keys(picked).length > 0) onFiltersChange((f) => ({ ...f, ...picked }));
   };
   const goNext = () => {
-    if (nextCursor !== null) setPaging({ cursor: nextCursor, for: address, stack: [...stack, cursor] });
-  };
-  const goPrevious = () => {
-    const earlier = [...stack];
-    const previous = earlier.pop();
-    setPaging({ cursor: previous, for: address, stack: earlier });
+    if (nextCursor !== null) next(nextCursor);
   };
 
   return (
@@ -210,7 +205,7 @@ export function FeatureCallsTable({
           </table>
         </div>
         <footer className="pager">
-          <PagerNav atFirst={stack.length === 0} atLast={nextCursor === null} onFirst={reset} onNext={goNext} onPrevious={goPrevious} />
+          <PagerNav atFirst={atFirst} atLast={nextCursor === null} onFirst={reset} onNext={goNext} onPrevious={previous} />
         </footer>
       </Card>
     </>

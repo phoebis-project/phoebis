@@ -60,7 +60,7 @@ export function RoutingLogPage() {
   const modelOptions = useMemo<Option[]>(() => tierOrder((catalog.data ?? []).map((m) => m.id), modelTiers).map((id) => ({ label: id, value: id })), [catalog.data, modelTiers]);
 
   // `pagedTo` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
-  const { cursor, pagedTo, reset: resetPaging, setPaging, stack } = usePaging(address);
+  const { atFirst, cursor, next, pagedTo, previous, reset: resetPaging } = usePaging(address);
   // The open rows belong to the page they were opened on, so another page or another filter starts with every row shut.
   const pageKey = `${cursor ?? ''}|${address}`;
   const [opened, setOpened] = useState<{ for: string; ids: Set<string> }>({ for: pageKey, ids: new Set() });
@@ -99,16 +99,16 @@ export function RoutingLogPage() {
     identity: identityOf,
     intervalMs: polledMs,
     list: log.data,
+    next,
     pagedTo,
     paused: holdCause !== null,
+    previous,
     // The route carries no watermark, so a poll stops at its first page of known rows. Walking from the newest page
     // makes that the first page the poll has seen whatever order the table shows, and `compare` merges in that order.
     // With no list rows of this query the poll stands in for the list's first page, so it reads the list's order.
     // Under Time ascending a poll that overruns its pages leaves rows the table has not drawn, and the reload the
     // overrun line asks for reads them.
     read: (c, to) => api.listRoutingLog({ ...query, cursor: c, dir: log.data === null || log.stale ? dir : 'desc', to: iso(readEnd(custom, range.to, to)) }),
-    setPaging,
-    stack,
     stale: log.stale,
   });
 
@@ -226,7 +226,7 @@ export function RoutingLogPage() {
             </table>
           </div>
           <footer className="pager">
-            <PagerNav atFirst={stack.length === 0} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
+            <PagerNav atFirst={atFirst} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
           </footer>
         </Card>
       </div>

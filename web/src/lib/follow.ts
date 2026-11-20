@@ -100,7 +100,7 @@ export interface Paging {
 
 /**
  * The pager's state under `address`, or the empty state where the paging belongs to another address. The stack keeps
- * the first page's undefined cursor, which `goNext` pushes when the reader leaves the first page.
+ * the first page's undefined cursor, which `next` of `usePaging` pushes when the reader leaves the first page.
  */
 export function pagingFor(paging: Paging, address: string): { cursor: string | undefined; stack: (string | undefined)[]; to: number | undefined } {
   return paging.for === address ? { cursor: paging.cursor, stack: paging.stack, to: paging.to } : { cursor: undefined, stack: [], to: undefined };

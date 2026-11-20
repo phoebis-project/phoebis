@@ -31,15 +31,15 @@ export function useFollow<R>(input: {
   /** The auto reload interval in milliseconds, 0 for off. */
   intervalMs: number;
   list: { landedThrough?: number; nextCursor: string | null; rows: R[] } | null;
+  next: (cursor: string, to?: number) => void;
   pagedTo: number | undefined;
   /** The page's own pause (an open drawer). A cursor page and a hidden tab are the hook's. */
   paused: boolean;
+  previous: () => void;
   read: (cursor: string | undefined, to: number, landedAfter?: number) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>;
-  setPaging: Dispatch<SetStateAction<Paging>>;
-  stack: (string | undefined)[];
   stale: boolean;
 }): { error: string | null; fresh: Set<string>; goNext: () => void; goPrevious: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>> } {
-  const { address, compare, cursor, error, fixedEnd, identity, intervalMs, list, pagedTo, paused, read, setPaging, stack, stale } = input;
+  const { address, compare, cursor, error, fixedEnd, identity, intervalMs, list, next, pagedTo, paused, previous, read, stale } = input;
   const [followed, setFollowed] = useState<Followed<R> | null>(null);
   // The tint marks what the last poll brought, or after the tab's return what its read and the tick after it brought,
   // and with auto reload off no poll follows to take it away.
@@ -164,14 +164,9 @@ export function useFollow<R>(input: {
     if (!nextCursor) return;
     // The cursor pauses the poll, and the tint marks what the last poll brought with no poll to take it away.
     setFollowed((f) => f && { ...f, fresh: new Set() });
-    setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor], to: walk?.to ?? pagedTo });
+    next(nextCursor, walk?.to ?? pagedTo);
   };
-  const goPrevious = () => {
-    const copy = [...stack];
-    const previous = copy.pop();
-    setPaging({ for: address, cursor: previous, stack: copy, to: pagedTo });
-  };
-  return { error: standIn === null ? error : null, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed };
+  return { error: standIn === null ? error : null, fresh, goNext, goPrevious: previous, nextCursor, overrun, rows, setFollowed };
 }
 
 /**
@@ -181,9 +176,27 @@ export function useFollow<R>(input: {
  * so changing a filter back does not return to the page left behind under it. `pagedTo` is the end the walk's cursor
  * came from, and `reset` returns to the first page.
  */
-export function usePaging(address: string): { cursor: string | undefined; pagedTo: number | undefined; reset: () => void; setPaging: Dispatch<SetStateAction<Paging>>; stack: (string | undefined)[] } {
+export function usePaging(address: string): {
+  /** Whether no page stands before this one, which is what the pager's First and Previous read. */
+  atFirst: boolean;
+  cursor: string | undefined;
+  /** Walks on to `cursor` and keeps this page's cursor for the way back. `to` is the end the walk carries from
+   * there, none for a walk without one. */
+  next: (cursor: string, to?: number) => void;
+  pagedTo: number | undefined;
+  /** Back to the page before this one, under the end the walk holds. */
+  previous: () => void;
+  reset: () => void;
+} {
   const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
-  return { cursor, pagedTo, reset: () => setPaging({ for: address, stack: [] }), setPaging, stack };
+  return {
+    atFirst: stack.length === 0,
+    cursor,
+    next: (nextCursor, to) => setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor], to }),
+    pagedTo,
+    previous: () => setPaging({ for: address, cursor: stack.at(-1), stack: stack.slice(0, -1), to: pagedTo }),
+    reset: () => setPaging({ for: address, stack: [] }),
+  };
 }

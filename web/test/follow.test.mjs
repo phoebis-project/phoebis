@@ -12,7 +12,7 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const d = await import('./dist/api.js');
-const { act, api, createElement: h, createRoot, fakeClock, installClock, pagingFor, setHooks, useFollow, useRangeTakenAt, useState } = await import('./dist/ui.js');
+const { act, api, createElement: h, createRoot, fakeClock, installClock, setHooks, useFollow, usePaging, useRangeTakenAt } = await import('./dist/ui.js');
 
 const at = (s) => new Date(Date.UTC(2026, 8, 16, 14, 0, s)).toISOString();
 const byId = (r) => r.id;
@@ -214,11 +214,10 @@ async function settled() {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 }
 
-/** The page's side of the hook: the paging state it holds over one address. */
+/** The page's side of the hook: the paging a log reads under its address. */
 function Host({ input, seen }) {
-  const [paging, setPaging] = useState({ for: 'q', stack: [] });
-  const { cursor, stack, to: pagedTo } = pagingFor(paging, input.address);
-  seen.push({ ...useFollow({ ...input, cursor, pagedTo, setPaging, stack }), paging });
+  const paging = usePaging(input.address);
+  seen.push({ ...useFollow({ ...input, cursor: paging.cursor, next: paging.next, pagedTo: paging.pagedTo, previous: paging.previous }), paging });
   return null;
 }
 
@@ -610,9 +609,9 @@ test("Next from the first page keeps the first page's cursor on the stack, and P
   frozen();
   const f = follow();
   act(() => f.last().goNext());
-  assert.deepEqual(d.pagingFor(f.last().paging, 'q'), { cursor: '26', stack: [undefined], to: undefined }, 'the stack holds the first page, whose cursor is undefined');
+  assert.deepEqual([f.last().paging.cursor, f.last().paging.atFirst], ['26', false], 'the first page, whose cursor is undefined, stands before the second');
   act(() => f.last().goPrevious());
-  assert.deepEqual(d.pagingFor(f.last().paging, 'q'), { cursor: undefined, stack: [], to: undefined }, 'Previous pops it and reads the first page');
+  assert.deepEqual([f.last().paging.cursor, f.last().paging.atFirst], [undefined, true], 'Previous reads the first page, with nothing before it');
 });
 
 test('an ended span polls nothing', () => {
@@ -853,7 +852,7 @@ test("a list with no stamp walks Next past an overrun under the end its poll rea
   await settled();
   assert.deepEqual([f.last().overrun, f.last().nextCursor], [{ cursor: '200', to: ORIGIN + 5_000 }, '200'], 'eight pages leave rows 200 to 209 unread');
   act(() => f.last().goNext());
-  assert.deepEqual(d.pagingFor(f.last().paging, 'q'), { cursor: '200', stack: [undefined], to: ORIGIN + 5_000 }, "Next walks from the poll's cursor under the poll's end");
+  assert.deepEqual([f.last().paging.cursor, f.last().paging.pagedTo], ['200', ORIGIN + 5_000], "Next walks from the poll's cursor under the poll's end");
 });
 
 test("Next from a poll's stand-in walks on under the end its page was read to", async () => {
@@ -863,7 +862,7 @@ test("Next from a poll's stand-in walks on under the end its page was read to", 
   act(() => clock.tick(5_000));
   await settled();
   act(() => f.last().goNext());
-  assert.deepEqual(d.pagingFor(f.last().paging, 'q'), { cursor: 'p2', stack: [undefined], to: ORIGIN + 5_000 });
+  assert.deepEqual([f.last().paging.cursor, f.last().paging.pagedTo], ['p2', ORIGIN + 5_000]);
 });
 
 test("a custom range's poll reads the next poll at the stamp its first page answered, with the range's own end kept", async () => {
