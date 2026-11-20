@@ -1,6 +1,6 @@
 //! The feature CA: a router started in-process with a `features` block serves the same CA at the download across a
-//! restart, refuses half of one, a key that does not match it and a CA under another subject, and writes its key at
-//! 0600.
+//! restart, refuses half of one, a key that does not match it, a file with a second certificate, a CA without a key
+//! identifier, a CA under another subject and a CA without the name constraint, and writes its key at 0600.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -8,6 +8,13 @@ use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use boring::asn1::{Asn1Time, Asn1Type};
+use boring::bn::BigNum;
+use boring::hash::MessageDigest;
+use boring::nid::Nid;
+use boring::pkey::PKey;
+use boring::x509::extension::BasicConstraints;
+use boring::x509::{X509Builder, X509NameBuilder};
 use fake_upstream::{generate_pair, FakeUpstream};
 use phoebis_router::config::Config;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -235,7 +242,8 @@ async fn a_feature_ca_under_another_subject_refuses_the_start() {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
     let cert = dir.path().join("feature-ca.pem");
-    // Its key matches and its dates hold, so its subject alone sets it apart from a CA the router made.
+    // Its key matches, its dates hold and it carries a key identifier. It lacks the name constraint as well, which the
+    // read compares behind the subject, so the subject alone decides the line.
     let key = rcgen::KeyPair::generate().unwrap();
     let mut params = rcgen::CertificateParams::default();
     params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
@@ -246,9 +254,115 @@ async fn a_feature_ca_under_another_subject_refuses_the_start() {
     std::fs::write(dir.path().join("feature-ca-key.pem"), key.serialize_pem()).unwrap();
 
     let line = refused(dir.path(), &up).await;
-    assert!(
-        line.starts_with(&format!("features.ca.cert_file {}", cert.display())),
-        "{line}"
+    assert_eq!(
+        line,
+        format!(
+            "features.ca.cert_file {}: holds no CA this router made",
+            cert.display()
+        )
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_feature_ca_without_the_name_constraint_refuses_the_start() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cert = dir.path().join("feature-ca.pem");
+    // Its key matches, its dates hold, it carries a key identifier and its subject is the router's, so the missing
+    // constraint alone sets it apart from a CA the router made.
+    let key = rcgen::KeyPair::generate().unwrap();
+    let mut params = rcgen::CertificateParams::default();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+    let mut name = rcgen::DistinguishedName::new();
+    name.push(rcgen::DnType::CommonName, "Phoebis feature CA");
+    params.distinguished_name = name;
+    std::fs::write(&cert, params.self_signed(&key).unwrap().pem()).unwrap();
+    std::fs::write(dir.path().join("feature-ca-key.pem"), key.serialize_pem()).unwrap();
+
+    let line = refused(dir.path(), &up).await;
+    assert_eq!(
+        line,
+        format!(
+            "features.ca.cert_file {}: holds a CA without the name constraint this router writes",
+            cert.display()
+        )
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_feature_ca_without_a_key_identifier_refuses_the_start() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cert = dir.path().join("feature-ca.pem");
+    // rcgen writes a key identifier into each CA it signs, so this one is built through BoringSSL. Its key matches,
+    // its dates hold and its subject is the router's, so a read that took a derived identifier in place of the missing
+    // one would reach the name constraint and answer that line.
+    let key = rcgen::KeyPair::generate().unwrap();
+    let signing = PKey::private_key_from_pem(key.serialize_pem().as_bytes()).unwrap();
+    let mut subject = X509NameBuilder::new().unwrap();
+    subject
+        .append_entry_by_nid_with_type(Nid::COMMONNAME, "Phoebis feature CA", Asn1Type::UTF8STRING)
+        .unwrap();
+    let subject = subject.build();
+    let mut constraint = BasicConstraints::new();
+    let constraint = constraint.critical().ca().pathlen(0).build().unwrap();
+    let mut builder = X509Builder::new().unwrap();
+    builder.set_version(2).unwrap();
+    builder
+        .set_serial_number(&BigNum::from_u32(7).unwrap().to_asn1_integer().unwrap())
+        .unwrap();
+    builder.set_subject_name(&subject).unwrap();
+    builder.set_issuer_name(&subject).unwrap();
+    builder.set_pubkey(&signing).unwrap();
+    builder
+        .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+        .unwrap();
+    builder
+        .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+        .unwrap();
+    builder.append_extension(&constraint).unwrap();
+    builder.sign(&signing, MessageDigest::sha256()).unwrap();
+    std::fs::write(&cert, builder.build().to_pem().unwrap()).unwrap();
+    std::fs::write(dir.path().join("feature-ca-key.pem"), key.serialize_pem()).unwrap();
+
+    let line = refused(dir.path(), &up).await;
+    assert_eq!(
+        line,
+        format!(
+            "features.ca.cert_file {}: holds no CA this router made",
+            cert.display()
+        )
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_feature_ca_file_with_a_second_certificate_refuses_the_start() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cert = dir.path().join("feature-ca.pem");
+    let (first, _) = start(dir.path(), &up).await;
+    stop(first).await;
+    let mut params = rcgen::CertificateParams::default();
+    let mut name = rcgen::DistinguishedName::new();
+    name.push(rcgen::DnType::CommonName, "A certificate nobody checked");
+    params.distinguished_name = name;
+    let second = params
+        .self_signed(&rcgen::KeyPair::generate().unwrap())
+        .unwrap();
+    let mut file = std::fs::read_to_string(&cert).unwrap();
+    file.push_str(&second.pem());
+    std::fs::write(&cert, file).unwrap();
+
+    let line = refused(dir.path(), &up).await;
+    assert_eq!(
+        line,
+        format!(
+            "features.ca.cert_file {}: holds more than one certificate",
+            cert.display()
+        )
     );
     up.shutdown().await;
 }

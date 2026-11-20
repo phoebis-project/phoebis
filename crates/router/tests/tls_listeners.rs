@@ -841,14 +841,25 @@ async fn the_cas_end_raises_the_item() {
         "a CA the start created: {created:?}"
     );
 
-    // Under the router's own subject, since the start refuses a CA under another. The reader counts whole days to the
-    // end, so the half day keeps 20 for the first 12 hours after the making.
+    // Under the router's own subject and name constraint, since the start refuses a CA under another subject or
+    // without that constraint. The reader counts whole days to the end, so the half day keeps 20 for the first 12
+    // hours after the making.
     let key = rcgen::KeyPair::generate().unwrap();
     let mut params = rcgen::CertificateParams::default();
     params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
     let mut name = rcgen::DistinguishedName::new();
     name.push(rcgen::DnType::CommonName, "Phoebis feature CA");
     params.distinguished_name = name;
+    params.name_constraints = Some(rcgen::NameConstraints {
+        permitted_subtrees: vec![
+            rcgen::GeneralSubtree::DnsName("api.anthropic.com".to_owned()),
+            rcgen::GeneralSubtree::DnsName("mcp-proxy.anthropic.com".to_owned()),
+        ],
+        excluded_subtrees: vec![
+            rcgen::GeneralSubtree::IpAddress(rcgen::CidrSubnet::V4([0; 4], [0; 4])),
+            rcgen::GeneralSubtree::IpAddress(rcgen::CidrSubnet::V6([0; 16], [0; 16])),
+        ],
+    });
     let end = jiff::Timestamp::now().as_second() + 20 * 86_400 + 12 * 3_600;
     params.not_after = rcgen::date_time_ymd(1970, 1, 1) + Duration::from_secs(end as u64);
     std::fs::write(

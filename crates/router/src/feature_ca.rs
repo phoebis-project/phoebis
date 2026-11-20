@@ -14,8 +14,8 @@ use phoebis_store::permissions::{check_private_file, create_private_file};
 use phoebis_store::Clock;
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, CidrSubnet, DistinguishedName,
-    DnType, ExtendedKeyUsagePurpose, GeneralSubtree, IsCa, KeyPair, KeyUsagePurpose,
-    NameConstraints,
+    DnType, DnValue, ExtendedKeyUsagePurpose, GeneralSubtree, IsCa, KeyIdMethod, KeyPair,
+    KeyUsagePurpose, NameConstraints,
 };
 
 use crate::config::FeaturesConfig;
@@ -38,8 +38,13 @@ const KEY: &str = phoebis_attention::FEATURE_CA;
 /// The CA's subject. Each certificate names it as its issuer, so the issuer rebuilt at a later start repeats it.
 const CA_NAME: &str = "Phoebis feature CA";
 
+/// The name constraint's id, 2.5.29.30, as the contents of its DER element.
+const NAME_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x1e];
+
 #[derive(Debug, thiserror::Error)]
 pub enum FeatureCaError {
+    #[error("features.ca.cert_file {path}: holds more than one certificate")]
+    Chain { path: PathBuf },
     #[error("features.ca.cert_file {path}: holds no CA this router made")]
     Foreign { path: PathBuf },
     #[error("features.ca: {present} stands without {missing}: restore the missing file, or remove both for a new CA")]
@@ -50,6 +55,10 @@ pub enum FeatureCaError {
     KeyCannotSign { path: PathBuf, error: rcgen::Error },
     #[error(transparent)]
     Pair(#[from] crate::tls::TlsError),
+    #[error(
+        "features.ca.cert_file {path}: holds a CA without the name constraint this router writes"
+    )]
+    Unconstrained { path: PathBuf },
     #[error("features.ca {path}: {error}")]
     Write {
         path: PathBuf,
@@ -122,22 +131,49 @@ impl FeatureCa {
         })
     }
 
-    /// Both files through the reader a listener's pair takes. The issuer rcgen signs under is rebuilt from the
-    /// module's own parameters and the stored key, since rcgen's default build parses no stored certificate.
+    /// Both files through the reader a listener's pair takes, then the stored certificate's own checks: it stands
+    /// alone in its file, and it carries a key identifier, the subject and the name constraint `ca_params` writes.
+    /// The issuer rcgen signs under is rebuilt from those parameters, the stored key and the stored key identifier,
+    /// since rcgen's default build parses no stored certificate.
     fn read(cert_file: PathBuf, key_file: PathBuf) -> Result<FeatureCa, FeatureCaError> {
         let pair = read_checked(KEY, &cert_file, &key_file)?;
+        // The download serves the file whole and each launcher trusts what it serves, so a certificate behind the
+        // first would join that trust unchecked.
+        if !pair.chain.is_empty() {
+            return Err(FeatureCaError::Chain { path: cert_file });
+        }
         let key = KeyPair::from_pem(&String::from_utf8_lossy(&pair.key_pem)).map_err(|error| {
             FeatureCaError::KeyCannotSign {
                 path: key_file.clone(),
                 error,
             }
         })?;
-        let issuer = ca_params().self_signed(&key).map_err(issue_error)?;
+        // Each leaf repeats the CA's key identifier as its authority key identifier, which a client chains by, and
+        // each CA the router makes carries one.
+        let Some(key_identifier) = pair.leaf.subject_key_id() else {
+            return Err(FeatureCaError::Foreign { path: cert_file });
+        };
+        let params = ca_params(KeyIdMethod::PreSpecified(
+            key_identifier.as_slice().to_vec(),
+        ));
+        let issuer = params.self_signed(&key).map_err(issue_error)?;
         // Each certificate signed here names the rebuilt issuer's subject, so under a CA of another subject a client
         // builds no chain and each handshake fails with no line on the router.
         let rebuilt = X509::from_der(issuer.der()).map_err(stack)?;
         if subject(&pair.leaf)? != subject(&rebuilt)? {
             return Err(FeatureCaError::Foreign { path: cert_file });
+        }
+        // A launcher is told that the file binds its trust to the two feature hosts, which this constraint makes so.
+        let der = pair.leaf.to_der().map_err(stack)?;
+        let constrained = match (
+            extension(&der, NAME_CONSTRAINTS),
+            extension(issuer.der(), NAME_CONSTRAINTS),
+        ) {
+            (Some(stored), Some(written)) => stored.0 && stored == written,
+            _ => false,
+        };
+        if !constrained {
+            return Err(FeatureCaError::Unconstrained { path: cert_file });
         }
         // Read once into text, so the fingerprint is taken over the very bytes the download serves.
         let pem = String::from_utf8_lossy(&pair.cert_pem).into_owned();
@@ -264,7 +300,7 @@ fn stands(path: &Path) -> bool {
 fn create(cert_file: &Path, key_file: &Path, now: i64) -> Result<(), FeatureCaError> {
     let at = now.div_euclid(1_000);
     let key = KeyPair::generate().map_err(issue_error)?;
-    let mut params = ca_params();
+    let mut params = ca_params(KeyIdMethod::Sha256);
     valid(&mut params, at, at + seconds(CA_VALIDITY));
     let cert = params.self_signed(&key).map_err(issue_error)?;
     write_private(key_file, key.serialize_pem().as_bytes())?;
@@ -273,10 +309,13 @@ fn create(cert_file: &Path, key_file: &Path, now: i64) -> Result<(), FeatureCaEr
 
 /// The CA's parameters but its dates: a path length of zero, so no intermediate stands between it and a leaf, and a
 /// critical name constraint in two parts. The DNS subtrees bind DNS names alone, so without the excluded address
-/// ranges a certificate whose name is an IP address would pass under the CA.
-fn ca_params() -> CertificateParams {
+/// ranges a certificate whose name is an IP address would pass under the CA. `key_identifier` gives the CA's key
+/// identifier, which each leaf repeats: the library's derivation for a new CA, and the stored identifier for a CA
+/// read back, so no change of the library's default moves the identifier a client chains a leaf by.
+fn ca_params(key_identifier: KeyIdMethod) -> CertificateParams {
     let mut params = CertificateParams::default();
     params.distinguished_name = named(CA_NAME);
+    params.key_identifier_method = key_identifier;
     params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
     params.key_usages = vec![KeyUsagePurpose::KeyCertSign];
     params.name_constraints = Some(NameConstraints {
@@ -292,9 +331,14 @@ fn ca_params() -> CertificateParams {
     params
 }
 
+/// The string type is written out, so the bytes a stored CA's subject is compared with hang on no default of the
+/// library.
 fn named(common_name: &str) -> DistinguishedName {
     let mut name = DistinguishedName::new();
-    name.push(DnType::CommonName, common_name);
+    name.push(
+        DnType::CommonName,
+        DnValue::Utf8String(common_name.to_owned()),
+    );
     name
 }
 
@@ -336,6 +380,70 @@ fn stack(error: ErrorStack) -> FeatureCaError {
 /// The subject as its encoding, the form a leaf's issuer field repeats.
 fn subject(cert: &X509Ref) -> Result<Vec<u8>, FeatureCaError> {
     cert.subject_name().to_der().map_err(stack)
+}
+
+/// The critical flag and the value of the extension `oid` names in the certificate `der`, `None` for a certificate
+/// without it or with a length the walk cannot follow. BoringSSL's binding offers no read of the name constraint, so
+/// the walk reads the certificate's encoding. A name constraint with the same subtrees in the same order has one DER
+/// form, so a compare of the value hangs on no default of the library that wrote it.
+fn extension<'a>(der: &'a [u8], oid: &[u8]) -> Option<(bool, &'a [u8])> {
+    const BOOLEAN: u8 = 0x01;
+    const OCTET_STRING: u8 = 0x04;
+    const OBJECT_IDENTIFIER: u8 = 0x06;
+    const SEQUENCE: u8 = 0x30;
+    /// The context tag 3 of the certificate's body, which holds its extensions.
+    const EXTENSIONS: u8 = 0xa3;
+
+    /// The element at the head of `der`: its tag, its contents and the bytes behind it.
+    fn element(der: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+        let (&tag, rest) = der.split_first()?;
+        let (&first, rest) = rest.split_first()?;
+        let (length, rest) = match first {
+            0..=0x7f => (usize::from(first), rest),
+            0x81..=0x84 => {
+                let (bytes, rest) = rest.split_at_checked(usize::from(first & 0x7f))?;
+                let length = bytes
+                    .iter()
+                    .fold(0, |length, &byte| (length << 8) | usize::from(byte));
+                (length, rest)
+            }
+            _ => return None,
+        };
+        let (contents, rest) = rest.split_at_checked(length)?;
+        Some((tag, contents, rest))
+    }
+
+    fn tagged(der: &[u8], tag: u8) -> Option<(&[u8], &[u8])> {
+        element(der)
+            .filter(|(found, _, _)| *found == tag)
+            .map(|(_, contents, rest)| (contents, rest))
+    }
+
+    let (certificate, _) = tagged(der, SEQUENCE)?;
+    let (mut fields, _) = tagged(certificate, SEQUENCE)?;
+    let extensions = loop {
+        let (tag, contents, rest) = element(fields)?;
+        if tag == EXTENSIONS {
+            break contents;
+        }
+        fields = rest;
+    };
+    let (mut entries, _) = tagged(extensions, SEQUENCE)?;
+    while !entries.is_empty() {
+        let (entry, rest) = tagged(entries, SEQUENCE)?;
+        entries = rest;
+        let (id, entry) = tagged(entry, OBJECT_IDENTIFIER)?;
+        if id != oid {
+            continue;
+        }
+        // DER leaves the flag out where it is false.
+        let (critical, entry) = match tagged(entry, BOOLEAN) {
+            Some((flag, entry)) => (flag == [0xff], entry),
+            None => (false, entry),
+        };
+        return tagged(entry, OCTET_STRING).map(|(value, _)| (critical, value));
+    }
+    None
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -387,6 +495,27 @@ mod tests {
             Ordering::Greater,
             "valid from {}",
             cert.not_before()
+        );
+    }
+
+    #[test]
+    fn a_leaf_names_the_stored_cas_key_identifier() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = jiff::Timestamp::now().as_millisecond();
+        let at = now / 1_000;
+        let key = KeyPair::generate().unwrap();
+        // An identifier the library would derive from no key, so a leaf that names it took it from the stored CA.
+        let mut params = ca_params(KeyIdMethod::PreSpecified(vec![0x11; 20]));
+        valid(&mut params, at, at + seconds(CA_VALIDITY));
+        let (cert_file, key_file) = files(dir.path());
+        std::fs::write(&cert_file, params.self_signed(&key).unwrap().pem()).unwrap();
+        std::fs::write(&key_file, key.serialize_pem()).unwrap();
+
+        let ca = FeatureCa::read(cert_file, key_file).unwrap();
+        let leaf = X509::from_der(&ca.issue("api.anthropic.com", now).unwrap().cert_der).unwrap();
+        assert_eq!(
+            leaf.authority_key_id().map(|id| id.as_slice().to_vec()),
+            Some(vec![0x11; 20])
         );
     }
 }

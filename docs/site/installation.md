@@ -826,13 +826,19 @@ A start with a `features` block reads the feature CA's two files as it reads a l
 refuses there, with the lines the list below gives for a pair under `features.ca` in place of `proxy.tls`, such as
 `features.ca.key_file {path}: does not match the certificate in {cert_file}`. It refuses one file without the other
 too, with `features.ca: {path} stands without {path}: restore the missing file, or remove both for a new CA`, and
-creates nothing, since a new CA written over half of an old one would change the fingerprint. Two more lines are the
-CA's own: `features.ca.cert_file {path}: holds no CA this router made` for a certificate under another subject than the
-one the router gives its CA, since each certificate it issued would name an issuer the served CA does not carry, and
-`features.ca.key_file {path}: holds a key that cannot sign: {error}` for a key the router cannot sign with. A first
-start that cannot write one of the two files refuses with `features.ca {path}: {OS error}`. `check-config` reads the
-two files the same way with the block alone. A key file with a wider mode or another owner draws a warning from the
-start and from `check-config` and refuses nothing.
+creates nothing, since a new CA written over half of an old one would change the fingerprint. Four more lines are the
+CA's own. A certificate file that holds a second certificate gets
+`features.ca.cert_file {path}: holds more than one certificate`, since the download serves the file whole and each
+launcher trusts it whole. A certificate under another subject than the one the router gives its CA gets
+`features.ca.cert_file {path}: holds no CA this router made`, since each certificate the router issued would name an
+issuer the served CA does not carry, and so does a certificate that carries no key identifier, which each CA the router
+makes carries. A certificate whose name constraint is not the one the router writes gets
+`features.ca.cert_file {path}: holds a CA without the name constraint this router writes`, since a launcher is told
+that the file binds its trust to the two feature hosts. A key the router cannot sign with gets
+`features.ca.key_file {path}: holds a key that cannot sign: {error}`. A first start that cannot write one of the two
+files refuses with `features.ca {path}: {OS error}`. `check-config` reads the two files the same way with the block
+alone. A key file with a wider mode or another owner draws a warning from the start and from `check-config` and
+refuses nothing.
 
 The start reads the pair once, before it binds a port, and a renewal puts new files at both paths and asks the running
 router to re-read every listener's pair with `phoebis tls reload`, as [Upgrades and renewals](operations.md#upgrades)
