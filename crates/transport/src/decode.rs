@@ -482,6 +482,15 @@ mod tests {
         assert_eq!(round_trip(Encoding::Zstd, &compressed), sample);
     }
 
+    #[test]
+    fn a_zstd_stream_fed_whole_into_a_sink_reaches_it_at_finish() {
+        let sample = sample_bytes();
+        let compressed = zstd::stream::encode_all(&sample[..], 0).unwrap();
+        let mut decoder = decoder_into(Encoding::Zstd, Vec::new());
+        decoder.feed(&compressed).unwrap();
+        assert_eq!(decoder.finish().unwrap(), sample);
+    }
+
     fn gzip(payload: &[u8]) -> Vec<u8> {
         let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         enc.write_all(payload).unwrap();
