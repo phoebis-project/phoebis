@@ -666,8 +666,8 @@ Each family means what its entry below says, the text a `# HELP` line would hold
 - `phoebis_attention` reads 1 while an attention condition holds on its subject and 0 once it clears
   ([Conditions and gauges](#conditions-and-gauges)).
 - `phoebis_bus_dropped_total` counts the events the in-process event bus dropped for a subscriber whose queue was full.
-  A subscriber that reads one kind of event counts that kind alone: the attention reader's series counts lost
-  completions.
+  A subscriber that reads some kinds of event counts those kinds alone: the attention reader's series counts lost
+  completions, and the keepalive engine's series counts no claude.ai feature call, which the engine does not read.
 - `phoebis_bus_subscriber_panics_total` counts the panics that stopped a subscriber of the event bus.
 - `phoebis_feature_calls_total` counts the [claude.ai feature](claude-ai-features.md#the-records) calls the router sent
   upstream, by feature, key and outcome (`canceled`, `failed` or `forwarded`), with the domain check under the feature

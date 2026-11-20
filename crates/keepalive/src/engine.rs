@@ -2707,11 +2707,15 @@ pub struct AgentStatus {
 /// counts it. A rise in that counter means events this task never saw, so every observation still open is
 /// discarded before the next event is applied.
 pub fn spawn_observer(engine: Arc<Engine>) -> tokio::task::JoinHandle<()> {
-    // Best-effort: a drop reads as a gap below, which discards the observations it could have misled.
-    let subscriber = engine
-        .parts
-        .bus
-        .subscribe("keepalive", Delivery::BestEffort);
+    // Best-effort: a drop reads as a gap below, which discards the observations it could have misled. The queue holds
+    // the kinds the engine reads, so a burst of feature calls, which move nothing it keeps warm, raises no gap.
+    let subscriber =
+        engine
+            .parts
+            .bus
+            .subscribe_filtered("keepalive", Delivery::BestEffort, |event| {
+                !matches!(event, BusEvent::FeatureCall(_))
+            });
     spawn_subscriber(subscriber, move |mut subscriber| async move {
         let mut seen_dropped = 0u64;
         while let Some(event) = subscriber.events.recv().await {

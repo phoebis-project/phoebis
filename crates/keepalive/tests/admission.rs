@@ -7,7 +7,8 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::capture_tracing;
 use phoebis_bus::{
-    AttemptOutcome, Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, ResponseHead, Usage,
+    AttemptOutcome, Event as BusEvent, FeatureCall, FeatureEnd, Kind, Outcome, Phase,
+    ResponseChunk, ResponseHead, Usage,
 };
 use phoebis_keepalive::{
     recipe_state, AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary,
@@ -1143,6 +1144,41 @@ async fn a_bus_gap_discards_the_pending_observation_and_keeps_an_armed_recipe() 
     r.engine
         .observe(r.complete("open", Outcome::Succeeded, Some(usage(2_000, 0))));
     assert_eq!(r.status("main").next_probe_at, None);
+    observer.abort();
+}
+
+#[tokio::test]
+async fn a_burst_of_feature_calls_raises_no_gap_in_the_engine() {
+    let r = rig(RigSpec::default()).await;
+    // The case never yields, so on the current-thread runtime the observer reads nothing and its queue stays as the
+    // burst left it, with the bus's count of what it could not take.
+    let observer = phoebis_keepalive::spawn_observer(r.engine.clone());
+    let call = BusEvent::FeatureCall(FeatureCall {
+        duration_ms: 0,
+        end: FeatureEnd::Refused {
+            code: "auth_missing",
+            feature: None,
+            key_id: None,
+        },
+        id: "feature-call".into(),
+        method: "GET".into(),
+        path: "/api/frame/sync".into(),
+        received_at: 1_700_000_000_000,
+    });
+    for _ in 0..phoebis_bus::QUEUE_DEPTH + 1 {
+        r.bus.publish(call.clone());
+    }
+    let dropped = r
+        .bus
+        .stats()
+        .into_iter()
+        .find(|(name, _)| *name == "keepalive")
+        .map(|(_, stats)| stats.dropped.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(
+        dropped,
+        Some(0),
+        "the engine's subscriber is offered no feature call, so none of the burst is dropped for it"
+    );
     observer.abort();
 }
 
