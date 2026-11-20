@@ -530,9 +530,9 @@ companion or the proxy reads the failed commit either, with one exception: a pro
 in this paragraph. A run that is still in progress when a deploy starts gets about five minutes to end. A run that
 failed for a reason outside its commit, such as a link to a page that the other product's newest green commit does not
 hold yet, stays red until someone starts it again, and its last job then starts the deploy. Where a product has no green
-run on `main` among its 100 newest, the deploy stops and the site keeps its last state, and each build that is no deploy
-reads that product at `main`. The README of `phoebis-docs` holds the rules in full. The deploy job runs only from
-`main`.
+run on `main` among its 100 newest, the deploy stops and the site keeps its last state, and the `Documentation` runs of
+the other products and the pull requests of `phoebis-docs` read that product at `main`. The README of `phoebis-docs`
+holds the rules in full. The deploy job runs only from `main`.
 
 ## Releasing
 
