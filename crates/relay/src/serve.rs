@@ -134,14 +134,34 @@ pub async fn serve_features(
     acceptor: Arc<LiveAcceptor>,
 ) -> std::io::Result<()> {
     let shutdown_mark = relay.shutdown_mark();
-    serve_recorded(
+    let app = crate::features::router(relay, control, table);
+    let builder = http1_builder(limits.header_read_timeout);
+    let stop_for_connections = stop.clone();
+    accept_loop(
         "features",
         listener,
-        crate::features::router(relay, control, table),
         stop,
         limits,
         shutdown_mark,
         Some(acceptor),
+        // hyper-util's watcher cannot watch a connection served with upgrades, so the future races the stop itself.
+        move |stream, watcher| {
+            let (io, service) = recorded(stream, &app);
+            let connection = builder.serve_connection(io, service).with_upgrades();
+            let mut stop = stop_for_connections.clone();
+            async move {
+                // Held to the end, so the graceful wait counts the connection for as long as this future runs.
+                let _watcher = watcher;
+                let mut connection = std::pin::pin!(connection);
+                tokio::select! {
+                    ended = connection.as_mut() => ended,
+                    () = stopped(&mut stop) => {
+                        connection.as_mut().graceful_shutdown();
+                        connection.await
+                    }
+                }
+            }
+        },
     )
     .await
 }
@@ -172,19 +192,32 @@ async fn serve_recorded(
         shutdown_mark,
         acceptor,
         move |stream, watcher| {
-            let peer = peer_of(&stream);
-            let queue = head_queue();
-            let io = TokioIo::new(HeadRecorder::new(stream, queue.clone()));
-            let service = WithOriginalHead {
-                inner: TowerToHyperService::new(app.clone()),
-                peer,
-                queue,
-            };
+            let (io, service) = recorded(stream, &app);
             // No upgrades: no route on the relayed surface switches protocols.
             watcher.watch(builder.serve_connection(io, service))
         },
     )
     .await
+}
+
+/// The accepted stream under a recorder of its heads, and `app` behind the service that hands each request the head
+/// the recorder took and the connection's peer.
+fn recorded(
+    stream: Accepted,
+    app: &Router,
+) -> (
+    TokioIo<HeadRecorder<Accepted>>,
+    WithOriginalHead<TowerToHyperService<Router>>,
+) {
+    let peer = peer_of(&stream);
+    let queue = head_queue();
+    let io = TokioIo::new(HeadRecorder::new(stream, queue.clone()));
+    let service = WithOriginalHead {
+        inner: TowerToHyperService::new(app.clone()),
+        peer,
+        queue,
+    };
+    (io, service)
 }
 
 /// The peer of an accepted connection. A socket the system can no longer name a peer for, as one already reset, has

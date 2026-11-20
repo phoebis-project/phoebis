@@ -1212,10 +1212,30 @@ pub struct FeatureListener {
     pub addr: std::net::SocketAddr,
     pair: fake_upstream::GeneratedPair,
     /// Dropped with the listener, which ends its accept loop.
-    _stop: tokio::sync::watch::Sender<bool>,
+    stop: tokio::sync::watch::Sender<bool>,
 }
 
 pub async fn feature_listener(h: &Harness) -> FeatureListener {
+    let (listener, _serving) = feature_listener_under(
+        h,
+        phoebis_relay::ListenLimits {
+            drain_timeout: Duration::from_secs(30),
+            header_read_timeout: Duration::from_secs(30),
+            max_connections: 64,
+        },
+    )
+    .await;
+    listener
+}
+
+/// `feature_listener` under `limits`, with the task that serves it, so a test awaits the listener's return.
+pub async fn feature_listener_under(
+    h: &Harness,
+    limits: phoebis_relay::ListenLimits,
+) -> (
+    FeatureListener,
+    tokio::task::JoinHandle<std::io::Result<()>>,
+) {
     let pair = fake_upstream::generate_pair(&["api.anthropic.com", "mcp-proxy.anthropic.com"]);
     let acceptor = phoebis_relay::LiveAcceptor::new(fake_upstream::acceptor_for(&pair));
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
@@ -1223,27 +1243,25 @@ pub async fn feature_listener(h: &Harness) -> FeatureListener {
         .unwrap();
     let addr = listener.local_addr().unwrap();
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
-    tokio::spawn(phoebis_relay::serve_features(
+    let serving = tokio::spawn(phoebis_relay::serve_features(
         listener,
         h.relay.clone(),
         h.control.clone(),
         &claude_code_2_1_310_linux_x64().features,
         stop_rx,
-        phoebis_relay::ListenLimits {
-            drain_timeout: Duration::from_secs(30),
-            header_read_timeout: Duration::from_secs(30),
-            max_connections: 64,
-        },
+        limits,
         Arc::new(acceptor),
     ));
-    FeatureListener {
-        addr,
-        pair,
-        _stop: stop,
-    }
+    (FeatureListener { addr, pair, stop }, serving)
 }
 
 impl FeatureListener {
+    /// Flips the listener's stop.
+    pub fn stop(&self) {
+        // `send` fails once the listener has returned and dropped its receiver.
+        self.stop.send_replace(true);
+    }
+
     /// Sends `request`, the bytes of one HTTP/1.1 request, on a new TLS connection that names `host`, and answers
     /// the status, the head's lines as sent and the body. The answer is read to the connection's end, so `request`
     /// carries `Connection: close`, and a chunked body comes back in its framing.
@@ -1349,6 +1367,18 @@ impl HeldRequest {
             .map(|(name, value)| (name.to_owned(), value.trim().to_owned()))
             .collect();
         (status, headers, answer[split + 4..].to_vec())
+    }
+
+    /// The bytes the connection carries to its end, empty where the router closed it with no answer.
+    pub async fn rest(mut self) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+
+        let mut read = Vec::new();
+        // A peer that closes without a TLS close_notify ends the read with an error after what it sent.
+        let _ = tokio::time::timeout(Duration::from_secs(30), self.0.read_to_end(&mut read))
+            .await
+            .expect("the connection stayed open");
+        read
     }
 }
 

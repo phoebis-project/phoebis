@@ -1,4 +1,6 @@
-//! The proxy listener ends a connection that sends no head in time and admits at most its cap at once.
+//! The proxy listener ends a connection that sends no head in time and admits at most its cap at once. A stop of the
+//! proxy or the feature listener ends an idle connection at once, lets a call in flight finish and cuts what still
+//! runs at the drain bound.
 
 mod common;
 
@@ -152,6 +154,153 @@ async fn a_stop_ends_a_silent_handshake_well_before_its_bound() {
     assert!(
         matches!(returned, Ok(Ok(Ok(())))),
         "the listener returned with a silent peer mid-handshake: {returned:?}"
+    );
+    up.shutdown().await;
+}
+
+/// The feature listener serves its connections with upgrades, which hyper-util's watcher cannot watch, so a stop
+/// reaches an idle keep-alive connection only where the connection's own future races it.
+#[tokio::test]
+async fn a_stop_ends_an_idle_connection_of_the_feature_listener_well_before_the_drain_bound() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let (listener, serving) = feature_listener_under(
+        &h,
+        phoebis_relay::ListenLimits {
+            drain_timeout: Duration::from_secs(30),
+            header_read_timeout: Duration::from_secs(30),
+            max_connections: 8,
+        },
+    )
+    .await;
+    // Kept to the end: a client that closed its side would end the connection without the stop.
+    let (status, headers, _open) = listener
+        .open(
+            "api.anthropic.com",
+            b"GET /api/hello HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n",
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    listener.stop();
+    let returned = tokio::time::timeout(Duration::from_secs(3), serving).await;
+    assert!(
+        matches!(returned, Ok(Ok(Ok(())))),
+        "the listener returned with an idle connection open: {returned:?}"
+    );
+    up.shutdown().await;
+}
+
+/// The connection's future holds its watcher to its end, so the drain bound cuts a feature call that outlives it.
+#[tokio::test]
+async fn a_feature_call_still_in_flight_at_the_drain_bound_is_ended_before_the_listener_returns() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/api/web/domain_info".into(),
+        respond: Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        })),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let (listener, serving) = feature_listener_under(
+        &h,
+        phoebis_relay::ListenLimits {
+            drain_timeout: Duration::from_millis(300),
+            header_read_timeout: Duration::from_secs(30),
+            max_connections: 8,
+        },
+    )
+    .await;
+    // The harness bounds a domain check at 30 seconds, so the check's own limit ends nothing inside this case.
+    let held = listener
+        .hold(
+            "api.anthropic.com",
+            b"GET /api/web/domain_info?domain=example.com HTTP/1.1\r\nHost: api.anthropic.com\r\n\
+              Connection: close\r\n\r\n",
+        )
+        .await;
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        (up.requests().len() == 1).then_some(())
+    })
+    .await;
+    listener.stop();
+    let returned = tokio::time::timeout(Duration::from_secs(3), serving).await;
+    assert!(
+        matches!(returned, Ok(Ok(Ok(())))),
+        "the listener returned at the drain bound: {returned:?}"
+    );
+    up.release();
+    assert_eq!(
+        String::from_utf8_lossy(&held.rest().await),
+        "",
+        "the call was cut, not answered"
+    );
+    up.shutdown().await;
+}
+
+/// A stop asks a connection that has not upgraded to finish what it holds, so a feature call in flight at the stop
+/// gets its answer and the listener returns behind it, well inside the drain bound.
+#[tokio::test]
+async fn a_feature_call_in_flight_at_the_stop_finishes_under_the_drain_bound() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/api/web/domain_info".into(),
+        respond: Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        })),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let (listener, serving) = feature_listener_under(
+        &h,
+        phoebis_relay::ListenLimits {
+            drain_timeout: Duration::from_secs(30),
+            header_read_timeout: Duration::from_secs(30),
+            max_connections: 8,
+        },
+    )
+    .await;
+    let held = listener
+        .hold(
+            "api.anthropic.com",
+            b"GET /api/web/domain_info?domain=example.com HTTP/1.1\r\nHost: api.anthropic.com\r\n\
+              Connection: close\r\n\r\n",
+        )
+        .await;
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        (up.requests().len() == 1).then_some(())
+    })
+    .await;
+    // The test runs on one thread, where the stop's wake runs ahead of the gate's, so the connection meets the stop
+    // before its answer.
+    listener.stop();
+    up.release();
+    let answer = String::from_utf8_lossy(&held.rest().await).into_owned();
+    assert!(
+        answer.starts_with("HTTP/1.1 200 "),
+        "the call in flight at the stop was answered: {answer:?}"
+    );
+    let returned = tokio::time::timeout(Duration::from_secs(3), serving).await;
+    assert!(
+        matches!(returned, Ok(Ok(Ok(())))),
+        "the listener returned behind the answer: {returned:?}"
     );
     up.shutdown().await;
 }
