@@ -18,8 +18,8 @@ use phoebis_oauth::{grant_states, resets_left, Grant, GrantStatus, LimitResets, 
 use phoebis_routing::term::end_of;
 use phoebis_routing::{feature_ready, shed_cap, Obstacle, RegistrySnapshot, RouterHandle, DAY_MS};
 use phoebis_store::{
-    AccountExtras, AccountKind, AccountRow, AccountState, Feature, FeatureOverride, PoolRow,
-    RefreshHistory, ResolvedAttempt, Settled, Store, StoreError,
+    AccountExtras, AccountKind, AccountRow, AccountState, Feature, PoolRow, RefreshHistory,
+    ResolvedAttempt, Settled, Store, StoreError,
 };
 use serde_json::json;
 
@@ -519,31 +519,37 @@ struct Selection {
 /// A key that inherits its pool's account is no selection of its own.
 fn feature_selections(snapshot: &RegistrySnapshot) -> HashMap<String, Vec<Selection>> {
     let mut selections: HashMap<String, Vec<Selection>> = HashMap::new();
+    let mut select = |account: &str, selection: Selection| {
+        selections
+            .entry(account.to_string())
+            .or_default()
+            .push(selection);
+    };
     for pool in snapshot.pools() {
         for feature in Feature::ALL {
             if let Some(account) = pool.feature_accounts.get(feature) {
-                selections
-                    .entry(account.clone())
-                    .or_default()
-                    .push(Selection {
+                select(
+                    account,
+                    Selection {
                         feature,
                         key: None,
                         pool: pool.id.clone(),
-                    });
+                    },
+                );
             }
         }
     }
     for key in snapshot.keys() {
         for feature in Feature::ALL {
-            if let FeatureOverride::Account(account) = key.feature_accounts.get(feature) {
-                selections
-                    .entry(account.clone())
-                    .or_default()
-                    .push(Selection {
+            if let Some(account) = key.feature_accounts.get(feature).account_id() {
+                select(
+                    account,
+                    Selection {
                         feature,
                         key: Some(key.id.clone()),
                         pool: key.pool_id.clone(),
-                    });
+                    },
+                );
             }
         }
     }
@@ -761,6 +767,11 @@ pub(crate) fn conditions(
             .get(&account.id)
             .map(Vec::as_slice)
             .unwrap_or_default();
+        // The extras are read apart from the accounts, so one deleted in between has no entry and no date.
+        let state_changed_at = resets
+            .extras
+            .get(&account.id)
+            .map(|extras| extras.state_changed_at);
         let condition = |kind: Kind, holds: bool, since: Option<i64>, detail: serde_json::Value| {
             account_condition(
                 kind,
@@ -780,11 +791,7 @@ pub(crate) fn conditions(
         }
         for (kind, held_state) in states {
             let holds = account.state == held_state;
-            // The extras are read apart from the accounts, so one deleted in between has no entry and no date.
-            let since = holds
-                .then(|| resets.extras.get(&account.id))
-                .flatten()
-                .map(|extras| extras.state_changed_at);
+            let since = state_changed_at.filter(|_| holds);
             out.push(condition(
                 kind,
                 holds,
@@ -800,13 +807,7 @@ pub(crate) fn conditions(
             // The listener's own test, so the item holds exactly while the selections' feature calls get the `403`.
             // A deletion clears each selection that names the account, so `Deleted` never holds the item.
             let (obstacle, since) = match feature_ready(&snapshot, &account.id, now) {
-                Err(Obstacle::Unready) => (
-                    Some("unready"),
-                    resets
-                        .extras
-                        .get(&account.id)
-                        .map(|extras| extras.state_changed_at),
-                ),
+                Err(Obstacle::Unready) => (Some("unready"), state_changed_at),
                 // The least of the term's ends, which is no later than the read wherever the term has ended, so a
                 // later end that still stands dates nothing.
                 Err(Obstacle::Ended) => (

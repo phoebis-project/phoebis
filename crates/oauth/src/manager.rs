@@ -501,26 +501,25 @@ impl CredentialManager {
         // sign-in's token or refusal, which is not this call's own. The next round reads the row again: it refuses a
         // call of an earlier sign-in, and a call of the current one joins or starts anew, since the finished refresh
         // has left the in-flight map by then.
-        loop {
-            let (stored, bundle) = self.inner.ready_account(account)?;
+        let token = loop {
+            let (stored, bundle) = self.inner.ready_account(&account.id, held)?;
             if bundle.generation > rejected_generation {
-                self.inner.still_signed_in(&account.id, held)?;
-                return Ok(access_token(&stored, &bundle));
+                break access_token(&stored, &bundle);
             }
-            let token = match self
+            match self
                 .join_or_start(&account.id, bundle.generation, Some(held))
                 .await
             {
-                Ok(token) if token.sign_in == held => token,
-                Ok(_) | Err(AcquireError::Stale) => continue,
+                Ok(token) if token.sign_in == held => break token,
+                Ok(_) | Err(AcquireError::Stale) => {}
                 Err(error) => return Err(error),
-            };
-            self.inner.still_signed_in(&account.id, held)?;
-            if token.generation <= rejected_generation {
-                return Err(AcquireError::NotRefreshed);
             }
-            return Ok(token);
+        };
+        self.inner.still_signed_in(&account.id, held)?;
+        if token.generation <= rejected_generation {
+            return Err(AcquireError::NotRefreshed);
         }
+        Ok(token)
     }
 
     /// Quarantines every account whose last refresh never resolved: the process died between sending a
@@ -836,11 +835,16 @@ impl Inner {
     /// ahead of each token it answers, since the row and the bundle behind that token were two reads, and a sign-in
     /// between them puts its bundle beside the earlier row. Under one id a row never returns to a pair it has left, so
     /// a row of the held pair now was of it at both reads.
-    fn still_signed_in(&self, account_id: &str, held: (u64, u64)) -> Result<(), AcquireError> {
-        if sign_in(&self.stored_account(account_id)?) != held {
+    fn still_signed_in(
+        &self,
+        account_id: &str,
+        held: (u64, u64),
+    ) -> Result<AccountRow, AcquireError> {
+        let account = self.stored_account(account_id)?;
+        if sign_in(&account) != held {
             return Err(AcquireError::Stale);
         }
-        Ok(())
+        Ok(account)
     }
 
     /// Loads an account that is allowed to hand out a credential, with its current bundle. A stored row of another
@@ -848,13 +852,10 @@ impl Inner {
     /// current one.
     fn ready_account(
         &self,
-        held: &AccountRow,
+        account_id: &str,
+        held: (u64, u64),
     ) -> Result<(AccountRow, CredentialBundle), AcquireError> {
-        let account_id = held.id.as_str();
-        let account = self.stored_account(account_id)?;
-        if sign_in(&account) != sign_in(held) {
-            return Err(AcquireError::Stale);
-        }
+        let account = self.still_signed_in(account_id, held)?;
         refuse_unusable(&account)?;
         let bundle = self
             .store
