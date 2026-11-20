@@ -113,6 +113,13 @@ pub enum Respond {
         headers: Vec<(String, String)>,
         body: Vec<u8>,
     },
+    /// A chunked body with one HTTP chunk for each piece, since a reader hands no piece across a chunk's end and
+    /// `Chunked` writes its whole body as one chunk.
+    Pieces {
+        status: u16,
+        headers: Vec<(String, String)>,
+        pieces: Vec<Vec<u8>>,
+    },
     Sse {
         status: u16,
         headers: Vec<(String, String)>,
@@ -152,6 +159,57 @@ pub enum Respond {
         headers: Vec<(String, String)>,
         events: Vec<SseEvent>,
     },
+    /// Answers `101 Switching Protocols` with `headers`, writes `first` in the head's write, and hands the connection
+    /// to the test through `sockets`, so the bytes behind the head pass both ways under the test's hand.
+    Switch {
+        headers: Vec<(String, String)>,
+        first: Vec<u8>,
+        sockets: Switched,
+    },
+}
+
+/// The connections a `Respond::Switch` answered, in the order they switched. A clone reads the same queue, so the
+/// rule and the test share one.
+#[derive(Clone, Default)]
+pub struct Switched(Arc<Mutex<VecDeque<UpstreamSocket>>>);
+
+impl Switched {
+    /// The next connection the fake switched, once its `101` is on the wire.
+    pub async fn next(&self) -> UpstreamSocket {
+        let give_up = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(socket) = self.0.lock().unwrap().pop_front() {
+                return socket;
+            }
+            assert!(
+                Instant::now() < give_up,
+                "fake-upstream: no connection switched"
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+}
+
+/// The fake's side of a switched connection. Dropping it closes the connection.
+pub struct UpstreamSocket {
+    inbound: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    outbound: tokio::sync::mpsc::UnboundedSender<(Vec<u8>, oneshot::Sender<()>)>,
+}
+
+impl UpstreamSocket {
+    /// Writes `bytes` toward the client and returns once they are on the connection.
+    pub async fn send(&mut self, bytes: &[u8]) {
+        let (written, on_wire) = oneshot::channel();
+        self.outbound
+            .send((bytes.to_vec(), written))
+            .expect("fake-upstream: the switched connection ended");
+        let _ = on_wire.await;
+    }
+
+    /// The next bytes the client sent, `None` once the client's side of the connection ended.
+    pub async fn received(&mut self) -> Option<Vec<u8>> {
+        self.inbound.recv().await
+    }
 }
 
 #[derive(Clone)]
@@ -830,6 +888,19 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                 }
                 shared.mark_written(index);
             }
+            Respond::Pieces {
+                status,
+                headers,
+                pieces,
+            } => {
+                if write_pieces(&mut stream, status, headers, pieces)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                shared.mark_written(index);
+            }
             Respond::Sse {
                 status,
                 headers,
@@ -940,6 +1011,24 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                 if write_chunk_terminator(&mut stream).await.is_ok() {
                     shared.mark_written(index);
                 }
+                return;
+            }
+            Respond::Switch {
+                headers,
+                first,
+                sockets,
+            } => {
+                let mut out = b"HTTP/1.1 101 Switching Protocols\r\n".to_vec();
+                for (n, v) in &headers {
+                    out.extend_from_slice(format!("{n}: {v}\r\n").as_bytes());
+                }
+                out.extend_from_slice(b"\r\n");
+                out.extend_from_slice(&first);
+                if stream.write_all(&out).await.is_err() || stream.flush().await.is_err() {
+                    return;
+                }
+                shared.mark_written(index);
+                switched(&mut stream, &mut buf, &sockets).await;
                 return;
             }
         }
@@ -1155,6 +1244,89 @@ async fn write_chunked<S: AsyncWrite + Unpin>(
     write_sse_head(stream, status, headers).await?;
     write_chunk(stream, &body).await?;
     write_chunk_terminator(stream).await
+}
+
+async fn write_pieces<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    status: u16,
+    headers: Vec<(String, String)>,
+    pieces: Vec<Vec<u8>>,
+) -> std::io::Result<()> {
+    write_sse_head(stream, status, headers).await?;
+    for piece in &pieces {
+        write_chunk(stream, piece).await?;
+    }
+    write_chunk_terminator(stream).await
+}
+
+/// Carries a switched connection's bytes between the client and the test's `UpstreamSocket` until either side ends.
+/// What the client sent behind the request's head reaches the test first.
+async fn switched<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    buf: &mut BytesMut,
+    sockets: &Switched,
+) {
+    let (from_client, inbound) = tokio::sync::mpsc::unbounded_channel();
+    let (outbound, mut toward_client) = tokio::sync::mpsc::unbounded_channel();
+    if !buf.is_empty() {
+        let _ = from_client.send(buf.split().to_vec());
+    }
+    sockets
+        .0
+        .lock()
+        .unwrap()
+        .push_back(UpstreamSocket { inbound, outbound });
+    loop {
+        buf.reserve(4096);
+        tokio::select! {
+            sent = toward_client.recv() => {
+                let Some((bytes, written)) = sent else {
+                    return;
+                };
+                if stream.write_all(&bytes).await.is_err() || stream.flush().await.is_err() {
+                    return;
+                }
+                let _ = written.send(());
+            }
+            read = stream.read_buf(buf) => {
+                if !matches!(read, Ok(n) if n > 0) {
+                    return;
+                }
+                let _ = from_client.send(buf.split().to_vec());
+            }
+        }
+    }
+}
+
+/// A sync token of the client's shape from invented UUIDs, six dot-joined parts with `end` as part 5, in Unix seconds.
+pub fn sync_token(end: i64) -> String {
+    let account = "00000000-0000-4000-8000-0000000000a1";
+    let organization = "00000000-0000-4000-8000-0000000000b2";
+    let issued = end - 900;
+    format!("{account}.{organization}.owner_agent.{issued}.{end}.c2lnbmF0dXJl")
+}
+
+/// A page read's `200`, whose JSON body holds `"syncClient":true` and `token` as `syncToken` behind a member of page
+/// text.
+pub fn page_answer(token: &str) -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![("Content-Type".into(), "application/json".into())],
+        body: format!(
+            r#"{{"text":"<p>an invented page</p>","syncClient":true,"syncToken":"{token}"}}"#
+        )
+        .into_bytes(),
+    }
+}
+
+/// A watch's upgrade request on `api.anthropic.com` that offers `token` beside the client's subprotocol.
+pub fn upgrade_request(token: &str) -> Vec<u8> {
+    format!(
+        "GET /api/frame/sync HTTP/1.1\r\nHost: api.anthropic.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+         Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: aW52ZW50ZWQga2V5IDAwMQ==\r\n\
+         Sec-WebSocket-Protocol: frame-sync.v1,{token}\r\n\r\n"
+    )
+    .into_bytes()
 }
 
 async fn write_drop_head<S: AsyncWrite + Unpin>(stream: &mut S) -> std::io::Result<()> {

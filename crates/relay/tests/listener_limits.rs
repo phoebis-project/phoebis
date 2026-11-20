@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent, Switched};
 use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_relay::LiveAcceptor;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -305,6 +305,73 @@ async fn a_feature_call_in_flight_at_the_stop_finishes_under_the_drain_bound() {
     up.shutdown().await;
 }
 
+/// The fake of `api.anthropic.com` for a watch: each page read answered with `token`, and each upgrade request with a
+/// `101` that hands the connection to `sockets`.
+async fn watch_upstream(token: &str, sockets: &Switched) -> FakeUpstream {
+    FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/api/frame/sync".into(),
+            respond: Respond::Switch {
+                headers: vec![
+                    ("Connection".into(), "Upgrade".into()),
+                    ("Upgrade".into(), "websocket".into()),
+                ],
+                first: Vec::new(),
+                sockets: sockets.clone(),
+            },
+        },
+        Rule {
+            path_prefix: "/api/frame/".into(),
+            respond: page_answer(token),
+        },
+    ])
+    .await
+}
+
+/// A keyed page read that hands out the token, answered `200` and read whole.
+async fn read_page(listener: &FeatureListener) {
+    let (status, headers, _) = listener
+        .send(
+            "api.anthropic.com",
+            &keyed("GET /api/frame/x", "api.anthropic.com", "", b""),
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+}
+
+/// The stop reaches a connection that has upgraded only where the tunnel races it, since a watch never ends by itself.
+#[tokio::test]
+async fn a_stop_ends_an_open_tunnel_well_before_the_drain_bound() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_upstream(&token, &sockets).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let (listener, serving) = feature_listener_under(
+        &h,
+        phoebis_relay::ListenLimits {
+            drain_timeout: Duration::from_secs(30),
+            header_read_timeout: Duration::from_secs(30),
+            max_connections: 8,
+        },
+    )
+    .await;
+    read_page(&listener).await;
+    let (status, headers, mut client) = listener
+        .open("api.anthropic.com", &upgrade_request(&token))
+        .await;
+    assert_eq!(status, 101, "{headers:?}");
+    let mut socket = sockets.next().await;
+    socket.send(b"open").await;
+    assert_eq!(client.next().await.as_deref(), Some(&b"open"[..]));
+    listener.stop();
+    let returned = tokio::time::timeout(Duration::from_secs(3), serving).await;
+    assert!(
+        matches!(returned, Ok(Ok(Ok(())))),
+        "the listener returned with a tunnel open: {returned:?}"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_connection_cap_holds_the_next_accept_until_a_slot_frees() {
     let limits = phoebis_relay::ListenLimits {
@@ -331,6 +398,59 @@ async fn the_connection_cap_holds_the_next_accept_until_a_slot_frees() {
     assert!(std::str::from_utf8(&buf[..late])
         .unwrap()
         .starts_with("HTTP/1.1 200"));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_open_tunnel_keeps_its_connections_place() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_upstream(&token, &sockets).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    // This host's daemon dials each new loopback listener and sends nothing, and the short bound frees the place such
+    // a dial holds well inside the case.
+    let (listener, _serving) = feature_listener_under(
+        &h,
+        phoebis_relay::ListenLimits {
+            drain_timeout: Duration::from_secs(30),
+            header_read_timeout: Duration::from_millis(500),
+            max_connections: 2,
+        },
+    )
+    .await;
+    let listener = Arc::new(listener);
+    read_page(&listener).await;
+    let (status, headers, first) = listener
+        .open("api.anthropic.com", &upgrade_request(&token))
+        .await;
+    assert_eq!(status, 101, "{headers:?}");
+    let (status, headers, _second) = listener
+        .open("api.anthropic.com", &upgrade_request(&token))
+        .await;
+    assert_eq!(status, 101, "{headers:?}");
+    let mut third = tokio::spawn({
+        let listener = Arc::clone(&listener);
+        async move {
+            listener
+                .send(
+                    "api.anthropic.com",
+                    b"GET /api/hello HTTP/1.1\r\nHost: api.anthropic.com\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .0
+        }
+    });
+    let early = tokio::time::timeout(Duration::from_millis(200), &mut third).await;
+    assert!(
+        early.is_err(),
+        "the third connection waits behind the two tunnels"
+    );
+    drop(first);
+    let late = tokio::time::timeout(Duration::from_secs(5), third)
+        .await
+        .expect("the third connection got the place a tunnel left")
+        .unwrap();
+    assert_eq!(late, 200);
     up.shutdown().await;
 }
 

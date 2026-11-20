@@ -268,6 +268,82 @@ impl<W: SinkWriter> Decoder for Streaming<W> {
     }
 }
 
+/// A decoder of one coding that writes into a sink of the caller's, in the output blocks its library produces. It
+/// holds no budget: what the sink keeps of each write bounds the memory.
+pub struct SinkDecoder<S: Write + Send + 'static>(Sinking<S>);
+
+/// The library's writer over the sink, or the sink itself for `Identity`. The brotli writer holds its tables inline,
+/// so it stands behind a box and the other codings carry none of its size.
+enum Sinking<S: Write + Send + 'static> {
+    Brotli(Box<brotli::DecompressorWriter<S>>),
+    Deflate(flate2::write::ZlibDecoder<S>),
+    Gzip(flate2::write::GzDecoder<S>),
+    Identity(S),
+    Zstd(zstd::stream::write::Decoder<'static, S>),
+}
+
+pub fn decoder_into<S: Write + Send + 'static>(e: Encoding, sink: S) -> SinkDecoder<S> {
+    SinkDecoder(match e {
+        Encoding::Identity => Sinking::Identity(sink),
+        Encoding::Gzip => Sinking::Gzip(flate2::write::GzDecoder::new(sink)),
+        Encoding::Deflate => Sinking::Deflate(flate2::write::ZlibDecoder::new(sink)),
+        Encoding::Brotli => Sinking::Brotli(Box::new(brotli::DecompressorWriter::new(sink, 4096))),
+        // Context creation only fails under allocation failure, which is unrecoverable here regardless.
+        Encoding::Zstd => {
+            Sinking::Zstd(zstd::stream::write::Decoder::new(sink).expect("zstd decoder context"))
+        }
+    })
+}
+
+impl<S: Write + Send + 'static> SinkDecoder<S> {
+    /// Decodes `input` into the sink. Nothing is flushed, so a library can keep its last block until `finish`.
+    pub fn feed(&mut self, input: &[u8]) -> Result<(), TransportError> {
+        let wrote = match &mut self.0 {
+            Sinking::Brotli(writer) => writer.write_all(input),
+            Sinking::Deflate(writer) => writer.write_all(input),
+            Sinking::Gzip(writer) => writer.write_all(input),
+            Sinking::Identity(sink) => sink.write_all(input),
+            Sinking::Zstd(writer) => writer.write_all(input),
+        };
+        wrote.map_err(undecodable)
+    }
+
+    /// The sink, for a caller that reads its state between two feeds.
+    pub fn sink(&mut self) -> &mut S {
+        match &mut self.0 {
+            Sinking::Brotli(writer) => writer.get_mut(),
+            Sinking::Deflate(writer) => writer.get_mut(),
+            Sinking::Gzip(writer) => writer.get_mut(),
+            Sinking::Identity(sink) => sink,
+            Sinking::Zstd(writer) => writer.get_mut(),
+        }
+    }
+
+    /// Ends the stream, writes the library's last block and hands the sink back.
+    pub fn finish(self) -> Result<S, TransportError> {
+        match self.0 {
+            Sinking::Brotli(mut writer) => {
+                writer.close().map_err(undecodable)?;
+                // The close ran whole, so the second one inside `into_inner` has nothing left to refuse.
+                (*writer)
+                    .into_inner()
+                    .map_err(|_| TransportError::Decode("the brotli stream did not end".into()))
+            }
+            Sinking::Deflate(writer) => writer.finish().map_err(undecodable),
+            Sinking::Gzip(writer) => writer.finish().map_err(undecodable),
+            Sinking::Identity(sink) => Ok(sink),
+            Sinking::Zstd(mut writer) => {
+                writer.flush().map_err(undecodable)?;
+                Ok(writer.into_inner())
+            }
+        }
+    }
+}
+
+fn undecodable(error: io::Error) -> TransportError {
+    TransportError::Decode(error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

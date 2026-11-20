@@ -75,6 +75,16 @@ pub struct KeylessRow {
     pub path: &'static str,
 }
 
+/// One socket of a claude.ai feature: a `GET` that upgrades to a WebSocket on a whole path.
+#[derive(Clone, Copy, Debug)]
+pub struct SocketRow {
+    /// The feature's word, as `Feature::as_str` spells it.
+    pub feature: &'static str,
+    pub host: &'static str,
+    pub path: &'static str,
+    pub plane: Plane,
+}
+
 /// The calls of each claude.ai feature the router forwards, as this client build sends them, and the two it serves
 /// without a key.
 pub struct FeatureTable {
@@ -84,6 +94,8 @@ pub struct FeatureTable {
     pub domain_check: KeylessRow,
     /// The first-start check of an interactive client, which the router answers itself.
     pub hello: KeylessRow,
+    /// The sockets the router carries, each admitted by its feature's own rule rather than a router key.
+    pub sockets: &'static [SocketRow],
 }
 
 pub struct TlsProfiles {
@@ -188,6 +200,14 @@ static PROFILE_2_1_310: Profile = Profile {
             methods: &["GET", "HEAD"],
             path: "/api/hello",
         },
+        // A capture of the client's socket hello equals the inference connector's, so the socket leaves on that plane,
+        // whatever the plane of the page reads under `/api/frame/`.
+        sockets: &[SocketRow {
+            feature: "artifacts",
+            host: "api.anthropic.com",
+            path: "/api/frame/sync",
+            plane: Plane::Inference,
+        }],
     },
     tls: TlsProfiles {
         curves: "X25519MLKEM768:X25519:P-256:P-384",

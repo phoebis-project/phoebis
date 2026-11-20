@@ -26,6 +26,7 @@ use tokio_boring::SslStream;
 use tokio_util::either::Either;
 
 use crate::casing::{head_queue, HeadQueue, HeadRecorder};
+use crate::features::Handover;
 use crate::messages::{router, Relay, ShutdownMark};
 
 /// How long the loop waits out a listener error. An accept that fails for a reason the process cannot fix,
@@ -146,20 +147,26 @@ pub async fn serve_features(
         Some(acceptor),
         // hyper-util's watcher cannot watch a connection served with upgrades, so the future races the stop itself.
         move |stream, watcher| {
-            let (io, service) = recorded(stream, &app);
+            let handover = Handover::default();
+            let (io, service) = recorded(stream, &app, Some(handover.clone()));
             let connection = builder.serve_connection(io, service).with_upgrades();
             let mut stop = stop_for_connections.clone();
             async move {
                 // Held to the end, so the graceful wait counts the connection for as long as this future runs.
                 let _watcher = watcher;
                 let mut connection = std::pin::pin!(connection);
-                tokio::select! {
+                let ended = tokio::select! {
                     ended = connection.as_mut() => ended,
                     () = stopped(&mut stop) => {
                         connection.as_mut().graceful_shutdown();
                         connection.await
                     }
+                };
+                // In this task, so a socket keeps the listener's permit and stays in the set the drain's cut reaches.
+                if let Some(tunnel) = handover.take() {
+                    tunnel.run(stop).await;
                 }
+                ended
             }
         },
     )
@@ -192,7 +199,7 @@ async fn serve_recorded(
         shutdown_mark,
         acceptor,
         move |stream, watcher| {
-            let (io, service) = recorded(stream, &app);
+            let (io, service) = recorded(stream, &app, None);
             // No upgrades: no route on the relayed surface switches protocols.
             watcher.watch(builder.serve_connection(io, service))
         },
@@ -201,10 +208,11 @@ async fn serve_recorded(
 }
 
 /// The accepted stream under a recorder of its heads, and `app` behind the service that hands each request the head
-/// the recorder took and the connection's peer.
+/// the recorder took, the connection's peer and `handover`, the connection's slot for a socket where it has one.
 fn recorded(
     stream: Accepted,
     app: &Router,
+    handover: Option<Handover>,
 ) -> (
     TokioIo<HeadRecorder<Accepted>>,
     WithOriginalHead<TowerToHyperService<Router>>,
@@ -213,6 +221,7 @@ fn recorded(
     let queue = head_queue();
     let io = TokioIo::new(HeadRecorder::new(stream, queue.clone()));
     let service = WithOriginalHead {
+        handover,
         inner: TowerToHyperService::new(app.clone()),
         peer,
         queue,
@@ -347,7 +356,7 @@ where
 
 /// Resolves once the stop flag is set. The borrowed guard `wait_for` yields is not `Send`, so it is dropped
 /// here rather than becoming part of the accept loop's future.
-async fn stopped(stop: &mut watch::Receiver<bool>) {
+pub(crate) async fn stopped(stop: &mut watch::Receiver<bool>) {
     let _ = stop.wait_for(|stop| *stop).await;
 }
 
@@ -355,6 +364,8 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
 /// compared before the head is used, so a queue that ever drifts out of step with hyper costs the caller's
 /// casing rather than putting one request's headers on another's wire.
 struct WithOriginalHead<S> {
+    /// The connection's slot for a socket, which the feature listener's connections carry and the proxy's do not.
+    handover: Option<Handover>,
     inner: S,
     /// The connection's peer, which the request's own head never names.
     peer: Option<ConnectInfo<SocketAddr>>,
@@ -385,6 +396,9 @@ where
         drop(queue);
         if let Some(peer) = self.peer {
             request.extensions_mut().insert(peer);
+        }
+        if let Some(handover) = &self.handover {
+            request.extensions_mut().insert(handover.clone());
         }
         self.inner.call(request)
     }

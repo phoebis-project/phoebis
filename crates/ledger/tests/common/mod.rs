@@ -27,7 +27,10 @@ use phoebis_store::{
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
 #[allow(unused_imports)]
-pub use fake_upstream::{capture_tracing, stays_for, stays_for_async, wait_for, wait_for_async};
+pub use fake_upstream::{
+    capture_tracing, page_answer, stays_for, stays_for_async, sync_token, upgrade_request,
+    wait_for, wait_for_async,
+};
 
 pub const KEY: &str = "phoebis-testkey";
 pub const NOW: i64 = 1_000_000;
@@ -175,10 +178,13 @@ pub async fn feature_listener(h: &Harness) -> FeatureListener {
 }
 
 impl FeatureListener {
-    /// Sends `request`, the bytes of one HTTP/1.1 request that carries `Connection: close`, on a new TLS connection
-    /// that names `host`, and answers once the head arrived. The listener stays up for as long as the answer.
-    pub async fn open(self, host: &str, request: &[u8]) -> Answer {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    /// Writes `request` on a new TLS connection that names `host`.
+    async fn connect(
+        &self,
+        host: &str,
+        request: &[u8],
+    ) -> tokio_boring::SslStream<tokio::net::TcpStream> {
+        use tokio::io::AsyncWriteExt;
 
         let socket = tokio::net::TcpStream::connect(self.addr).await.unwrap();
         let mut tls =
@@ -186,6 +192,38 @@ impl FeatureListener {
                 .await
                 .unwrap();
         tls.write_all(request).await.unwrap();
+        tls
+    }
+
+    /// Sends `request` as `open` does and answers the status and the bytes behind the head, read to the connection's
+    /// end, while the listener stays up for the next request.
+    pub async fn send_open(&self, host: &str, request: &[u8]) -> (u16, Vec<u8>) {
+        use tokio::io::AsyncReadExt;
+
+        let mut tls = self.connect(host, request).await;
+        let mut answer = Vec::new();
+        // A peer that closes without a TLS close_notify ends the read with an error after the whole answer.
+        let _ = tokio::time::timeout(Duration::from_secs(30), tls.read_to_end(&mut answer))
+            .await
+            .expect("the answer stalled before the connection ended");
+        let split = answer
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap_or_else(|| panic!("no answer head in {:?}", String::from_utf8_lossy(&answer)));
+        let status = String::from_utf8_lossy(&answer[..split])
+            .split(' ')
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .unwrap_or_else(|| panic!("no status in {:?}", String::from_utf8_lossy(&answer)));
+        (status, answer[split + 4..].to_vec())
+    }
+
+    /// Sends `request`, the bytes of one HTTP/1.1 request that carries `Connection: close`, on a new TLS connection
+    /// that names `host`, and answers once the head arrived. The listener stays up for as long as the answer.
+    pub async fn open(self, host: &str, request: &[u8]) -> Answer {
+        use tokio::io::AsyncReadExt;
+
+        let mut tls = self.connect(host, request).await;
         let mut read = Vec::new();
         let split = loop {
             if let Some(split) = read.windows(4).position(|window| window == b"\r\n\r\n") {

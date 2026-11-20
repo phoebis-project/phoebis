@@ -153,6 +153,11 @@ impl<S> HeadRecorder<S> {
         }
     }
 
+    /// The stream, for a connection that leaves HTTP. What the recorder held of a head goes with it.
+    pub fn into_inner(self) -> S {
+        self.inner
+    }
+
     fn observe(&mut self, data: &[u8]) {
         // Each head found hands back how far into the read it ended, so a keep-alive connection whose next head
         // arrived in the same segment is picked up without recursing per request.

@@ -310,10 +310,7 @@ the table after any accepted re-pin.
   `41077d10-94b8-4194-be48-d251e9eb21b4` with the scopes `user:profile user:inference`, where the router's Console
   pairing sends the claude.ai client id and the full login scope list.
 - The paths under `/api/frame/` that no capture and no session sent: the assets, the comments, the database and the
-  sharing calls. One protocol upgrade is measured, the WebSocket of an artifact's live updates, whose upgrade request
-  gets the router's `401` ([claude.ai
-  features](claude-ai-features.md#what-the-router-refuses-and-what-the-client-shows)). The path of that request was not
-  read.
+  sharing calls.
 - The quota-wall usage variant of token counting on the wire. The Read tool's pre-turn count is the measured one
   (`count.json` and the three `count_*.http` heads under the fixtures).
 - The usage read under `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. With the switch set the `/usage` dialog opens on

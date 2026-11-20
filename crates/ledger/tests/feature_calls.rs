@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent, Switched};
 use phoebis_bus::{Event, FeatureCall, FeatureEnd, FeatureOutcome};
 use phoebis_ledger::{
     list_feature_calls, list_requests, run_retention_blocking, Direction, FeatureCallFilter,
@@ -314,5 +314,43 @@ async fn an_answer_without_a_body_leaves_a_forwarded_row() {
     drop(answer);
     let rows = landed(&h).await;
     assert_eq!(end_of(&rows), ("forwarded", Some(204), None));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_socket_leaves_its_row_at_the_101_while_it_is_open() {
+    let token = sync_token(1_600);
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/api/frame/sync".into(),
+            respond: Respond::Switch {
+                headers: vec![
+                    ("Connection".into(), "Upgrade".into()),
+                    ("Upgrade".into(), "websocket".into()),
+                ],
+                first: Vec::new(),
+                sockets: Switched::default(),
+            },
+        },
+        Rule {
+            path_prefix: "/api/frame/".into(),
+            respond: page_answer(&token),
+        },
+    ])
+    .await;
+    let h = features_harness(&up).await;
+    let listener = feature_listener(&h).await;
+    let (status, _) = listener.send_open(API, &keyed("GET", "/api/frame/x")).await;
+    assert_eq!(status, 200);
+    // Held to the end, so the socket is still open while the list is read.
+    let socket = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(socket.status, 101);
+    let rows = rows_once(&h, "/api/frame/sync").await;
+    let row = rows
+        .iter()
+        .find(|row| row.path == "/api/frame/sync")
+        .unwrap();
+    assert_eq!((row.status, row.outcome.as_str()), (Some(101), "forwarded"));
+    drop(socket);
     up.shutdown().await;
 }

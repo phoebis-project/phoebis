@@ -27,6 +27,8 @@ use tokio_util::task::TaskTracker;
 
 use super::cap::Place;
 use super::refresh_hold::Rejected;
+use super::socket::Admitted;
+use super::watch::Tee;
 use super::Listener;
 use crate::budget::Reservation;
 use crate::casing::OriginalHead;
@@ -34,7 +36,7 @@ use crate::dispatch::{attempt, AttemptFailure, Sent};
 use crate::errors::{
     feature_account_unavailable, key_body_reads, relay_failure, Failure, UPSTREAM_UNREACHABLE,
 };
-use crate::headers::feature_headers;
+use crate::headers::{feature_headers, Hop};
 use crate::messages::{
     built, copied_head, publish_from_drop, read_outcome, report_landed, target_of, Relay,
 };
@@ -95,7 +97,9 @@ pub(crate) async fn read_body(
 /// token the listener's holds keep for the account goes back as it came too, and a resend's own such 401 holds the new
 /// token there. The call leaves under the sign-in it was admitted under alone: one that moved by the first send
 /// refuses the call, and one that moved by its 401 sends that 401 back as it came. `ending` arms at the first send and
-/// ends with the answer that goes back, or as unanswered where the forward fails ahead of a head.
+/// ends with the answer that goes back, or as unanswered where the forward fails ahead of a head. A page read's answer
+/// passes the map of the listener's tokens on its way, under the read's identity `admitted` and its key's label `key`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn forward(
     listener: &Listener,
     account: &AccountRow,
@@ -104,9 +108,22 @@ pub(crate) async fn forward(
     parts: &Parts,
     body: Option<Bytes>,
     mut ending: Ending,
+    admitted: &Admitted,
+    key: &str,
 ) -> Result<Response, Unanswered> {
     match answer_of(listener, account, row, method, parts, body, &mut ending).await {
-        Ok(held) => Ok(held.streamed(ending)),
+        Ok(held) => {
+            let tee = Tee::of(
+                &listener.tokens,
+                method,
+                parts.uri.path(),
+                held.head(),
+                admitted,
+                key,
+                (listener.relay.clock)(),
+            );
+            Ok(held.streamed(ending, tee))
+        }
         Err(unanswered) => {
             if let Unanswered::Failed(..) = unanswered {
                 ending.unanswered();
@@ -167,7 +184,7 @@ async fn answer_of(
             parts.extensions.get::<OriginalHead>(),
             Some(bearer),
             row.host,
-            row.plane,
+            Hop::from(row.plane),
             length,
         ),
         body: body.clone(),
@@ -249,7 +266,7 @@ pub(crate) async fn keyless(
             parts.extensions.get::<OriginalHead>(),
             None,
             host,
-            Plane::Control,
+            Hop::Close,
             length,
         ),
         body: Bytes::new(),
@@ -264,7 +281,7 @@ pub(crate) async fn keyless(
     ending.arm();
     let case = match tokio::time::timeout_at(deadline, sent).await {
         Ok(Ok(ControlAnswer { head, body })) => {
-            return Ok(answered(head, body, None, Some(deadline), ending))
+            return Ok(answered(head, body, None, Some(deadline), ending, None))
         }
         Ok(Err(failure)) => case_of(&failure),
         // No head came in the call's time: the connect and the head bounds are each capped at the time left, so
@@ -276,9 +293,9 @@ pub(crate) async fn keyless(
 }
 
 /// Whether the account under `account`'s id still stands in the sign-in the call was admitted under, its incarnation
-/// and its lifecycle generation, on the routing snapshot in force now. The manager reads a token by the id alone, and
-/// each sign-in starts its tokens' count at 1. As on the model path, a write that landed and is not yet swapped into
-/// the snapshot passes for the one reload it takes.
+/// and its lifecycle generation, on the routing snapshot in force now. An acquisition reads a token by the id alone,
+/// and each sign-in starts its tokens' count at 1. As on the model path, a write that landed and is not yet swapped
+/// into the snapshot passes for the one reload it takes.
 fn signed_in(relay: &Relay, account: &AccountRow) -> bool {
     relay
         .router()
@@ -310,9 +327,9 @@ impl Held {
         }
     }
 
-    /// The answer handed back under `ending`, whichever plane it came on. A pooled connection goes back to the pool
-    /// once the body ended and the head lets it be kept.
-    fn streamed(self, ending: Ending) -> Response {
+    /// The answer handed back under `ending` and through `tee`, whichever plane it came on. A pooled connection goes
+    /// back to the pool once the body ended and the head lets it be kept.
+    fn streamed(self, ending: Ending, tee: Option<Tee>) -> Response {
         let (head, body, kept) = match self {
             Held::Control(ControlAnswer { head, body }) => (head, body, None),
             Held::Pooled(
@@ -329,7 +346,7 @@ impl Held {
                 (head, BodyReader::new(conn, leftover, framing), kept)
             }
         };
-        answered(head, body, kept, None, ending)
+        answered(head, body, kept, None, ending, tee)
     }
 }
 
@@ -406,20 +423,23 @@ async fn pooled(
 /// half-read connection would hand the account's next call the rest of this one. `ending` takes the head's status and
 /// ends with the stream: `forwarded` at the body's end, `failed` at a failed read, and `canceled` where the caller left
 /// first. An answer whose framing holds no body ends `forwarded` here, since the server drops such a body unpolled.
-fn answered(
+/// `tee` sees each piece beside the caller and the body's clean end ahead of the call's, so the token it found stands
+/// before the caller can read the last chunk. A failed read and a caller that left drop it.
+pub(super) fn answered(
     head: ResponseHead,
     body: BodyReader<Conn>,
     kept: Option<Checkin>,
     deadline: Option<Instant>,
     mut ending: Ending,
+    tee: Option<Tee>,
 ) -> Response {
     ending.went_back(head.status);
     if let Framing::ContentLength(0) = framing(&head) {
         ending.end(FeatureOutcome::Forwarded);
     }
-    let state = Some((body, kept, ending));
+    let state = Some((body, kept, ending, tee));
     let pieces = futures::stream::unfold(state, move |state| async move {
-        let (mut reader, kept, mut ending) = state?;
+        let (mut reader, kept, mut ending, mut tee) = state?;
         let read = match deadline {
             Some(deadline) => tokio::time::timeout_at(deadline, reader.next_chunk())
                 .await
@@ -427,10 +447,18 @@ fn answered(
             None => reader.next_chunk().await,
         };
         match read {
-            Ok(Some(piece)) => Some((Ok(piece), Some((reader, kept, ending)))),
+            Ok(Some(piece)) => {
+                if let Some(tee) = &mut tee {
+                    tee.feed(&piece);
+                }
+                Some((Ok(piece), Some((reader, kept, ending, tee))))
+            }
             Ok(None) => {
                 if let Some(checkin) = kept {
                     checkin.put(reader.into_inner());
+                }
+                if let Some(tee) = tee {
+                    tee.end();
                 }
                 ending.end(FeatureOutcome::Forwarded);
                 None
@@ -535,13 +563,13 @@ impl Ending {
         }))
     }
 
-    fn arm(&mut self) {
+    pub(super) fn arm(&mut self) {
         if let Some(open) = &mut self.0 {
             open.armed = true;
         }
     }
 
-    fn went_back(&mut self, status: u16) {
+    pub(super) fn went_back(&mut self, status: u16) {
         if let Some(open) = &mut self.0 {
             open.status = Some(status);
         }
@@ -549,18 +577,23 @@ impl Ending {
 
     /// The end of a call no upstream head answered, which the 502 answers. It counts armed or not, since the token
     /// manager's own failure answers that 502 too.
-    fn unanswered(&mut self) {
+    pub(super) fn unanswered(&mut self) {
         if let Some(open) = self.0.take() {
             open.publish(FeatureOutcome::Failed, Some(UPSTREAM_UNREACHABLE.code));
         }
     }
 
     /// The end the answer read. A later end and the drop publish nothing.
-    fn end(&mut self, outcome: FeatureOutcome) {
+    pub(super) fn end(&mut self, outcome: FeatureOutcome) {
         if let Some(open) = self.0.take() {
             open.ended_line(outcome);
             open.publish(outcome, None);
         }
+    }
+
+    /// Ends the call with no end of this guard's, for a caller that publishes a refusal in its place.
+    pub(super) fn withdraw(mut self) {
+        self.0.take();
     }
 }
 
@@ -625,7 +658,7 @@ impl Open {
 }
 
 /// The word of a failed send's case, which the answer does not tell apart.
-fn case_of(failure: &StreamFailure) -> &'static str {
+pub(super) fn case_of(failure: &StreamFailure) -> &'static str {
     match failure {
         StreamFailure::Cut(_) => "cut",
         StreamFailure::Stalled => "stalled",

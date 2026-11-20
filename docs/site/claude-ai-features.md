@@ -546,18 +546,19 @@ The feature listener forwards the calls of this table and refuses each other one
 | --- | --- | --- | --- | --- |
 | The client's first-start check | `GET`, `HEAD` | `api.anthropic.com` | `/api/hello` | answers `200` itself, without a key |
 | The WebFetch tool's domain check | `GET` | `api.anthropic.com` | `/api/web/domain_info`, with the query `domain=<host>` | forwards it without a credential, without a key |
+| An artifact's live updates, as a WebSocket | `GET` | `api.anthropic.com` | `/api/frame/sync` | admits it by the token a keyed page read handed out, without a key, and carries the socket as a tunnel of bytes |
 | The Artifacts MCP server | `DELETE`, `GET`, `POST` | `api.anthropic.com` | `/api/artifacts/mcp` | forwards it under the account selected for Artifacts |
 | An artifact's publish, list, read, deletion and sharing | `DELETE`, `GET`, `PATCH`, `POST` | `api.anthropic.com` | under `/api/frame/`, except `POST /api/frame/track` | forwards it under the account selected for Artifacts |
 | The connector list | `GET` | `api.anthropic.com` | `/v1/mcp_servers` | forwards it under the account selected for the connectors |
 | A connector's MCP session | `DELETE`, `GET`, `POST` | `mcp-proxy.anthropic.com` | under `/v1/mcp/` | forwards it under the account selected for the connectors |
 | each other method, host and path | | | | refuses it |
 
-For each call the router runs its checks in one order: the two calls without a key by their exact form, the key, the
-table, the feature's selection, the account's state, the ledger's standing, and then the forward. The key stands ahead
-of the table, so a caller without a key learns nothing of what the router forwards. The host of a call is its `Host`
-line, and no model request is served here: one that arrives on the feature listener is refused, as it belongs on
-`ANTHROPIC_BASE_URL`. A feature call passes none of a model request's other checks: no client class, no drift check, no
-guardrail, no model rule, no budget and no slow-down.
+For each call the router runs its checks in one order: three shapes that take no key, each by its exact form, the two
+calls without a key and the socket request, then the key, the table, the feature's selection, the account's state, the
+ledger's standing, and then the forward. The key stands ahead of the table, so a caller without a key learns nothing of
+what the router forwards. The host of a call is its `Host` line, and no model request is served here: one that arrives
+on the feature listener is refused, as it belongs on `ANTHROPIC_BASE_URL`. A feature call passes none of a model
+request's other checks: no client class, no drift check, no guardrail, no model rule, no budget and no slow-down.
 
 The router compares a row's path with the path as the client sent it, without the query, and forwards that path as it
 came. A row with a whole path matches that path alone, and a row with a prefix matches a path that goes on behind the
@@ -580,6 +581,23 @@ whole call 30 seconds, and forwards 16 checks at one time, 4 from one source add
 for a place inside its 30 seconds. A request on either path in another form is no call without a key and meets the key
 check.
 
+A socket request matches by its whole form too: a `GET` on `api.anthropic.com` whose path is `/api/frame/sync`, compared
+whole in each decoded form the path check reads, with an `Upgrade` line that names `websocket`, a `Connection` line that
+lists `upgrade` and no body. The router reads no router key on it and admits it by its token, the one entry of the
+client's token shape in its `Sec-WebSocket-Protocol` list. A keyed `GET` of `/api/frame/{id}` that the upstream answers
+`200` hands out such a token in its JSON member `syncToken`, whatever the read's query, so the read ahead of a watch and
+the read ahead of a presence connection each hand one out. The router reads the member beside the answer's stream, in
+each content coding it decodes, and at the body's clean end it keeps the token's SHA-256 in memory with the key that
+read it and the account the read went out under, until the token's own end, held between 300 and 900 seconds behind the
+read. It keeps 1,024 tokens for each key and drops a key's oldest at one more, a read whose body fails behind its token
+keeps nothing, and a restart starts with none.
+
+Behind the token the router checks what a keyed call meets: the key that read the token still stands, its selection for
+Artifacts still names the account, the account still holds the sign-in the read went out under, the account's state lets
+it serve, and the ledger is not behind. A socket request stamps no key's last use, since it presents no key and the page
+read ahead of it stamped one. The router checks the key, the selection, the sign-in and the account's state once more
+when the upstream's `101` arrives, so a key deleted while the upstream held the upgrade opens no socket.
+
 A forwarded call's head goes upstream as the client sent it, in the client's order and spelling. The router puts the
 account's credential in the place of the router key, writes its own `Host`, `Content-Length` and `Connection` and leaves
 out the lines the relay copies for no request ([The header edits](relay.md#the-header-edits)). It merges no beta and
@@ -592,6 +610,15 @@ and keeps these head lines of the upstream to itself: `anthropic-organization-id
 `keep-alive`, `proxy-authenticate`, `proxy-authorization`, `set-cookie`, `te`, `trailer`, `transfer-encoding` and
 `upgrade`. Each other line passes, the upstream's rate-limit lines among them where it sends them, which a model answer
 hides. A key holder can read the feature account's plan standing from those.
+
+A socket request's head goes upstream as the client sent it, with the client's `Connection` and `Upgrade` lines and no
+credential line: the router drops each `Authorization` and `x-api-key` line and adds none, since the token in the
+subprotocol is the upstream's one credential. It leaves on a fresh connection of the inference connector, which no pool
+takes back. The upstream's `101` goes back with its `connection` and `upgrade` lines, which the router keeps out of each
+other answer, and from then on the router carries the socket's bytes both ways unread until one side ends or fails, or
+the router stops. It then closes both sides and writes no close code of its own. Each open socket holds one of the
+listener's connections. An answer other than a `101`, the upstream's own `403` for a token it refuses among them, goes
+back as each answer does, and a request that gets no answer head gets the `502`.
 
 ## What the account's state does
 
@@ -631,7 +658,7 @@ on this listener:
 
 | Answer | When |
 | --- | --- |
-| `401` `auth_ambiguous`, `auth_malformed`, `auth_missing` or `auth_unknown` | The call carries no valid router key, on each call apart from the two that take none, as on the proxy listener. |
+| `401` `auth_ambiguous`, `auth_malformed`, `auth_missing` or `auth_unknown` | The call carries no valid router key, on each call apart from the two that take none and a socket request, as on the proxy listener. A socket request that no token admits gets `auth_missing` too, and the refusal family counts it under `socket_token_unknown`. |
 | `403` `feature_not_allowed` | The table holds no row for the keyed call. |
 | `403` `feature_account_unset` | No account is selected for the call's feature, which the message names. |
 | `403` `feature_account_unavailable` | The selected account's state refuses ([What the account's state does](#what-the-accounts-state-does)). |
@@ -642,6 +669,15 @@ on this listener:
 
 The first five rows are the checks of a keyed call in their order, and the first that fails answers. Each `403` carries
 `x-should-retry: false`.
+
+No token admits a socket request where no page read handed its token out, where it offers no token or two, where its
+token has ended, where the key that read it, that key's selection or the account's sign-in moved since the read, or
+where two keys of one feature account read the same token. Each such request gets the one `401` `auth_missing`, the
+answer of a call without a key, so the answer tells a caller nothing of the socket's path. The client drops its token at
+a `401` and dials again behind a new page read. A token that two keys read stays refused until its end, so each client
+then dials with the token of its own next read. Behind its token a socket request meets the `403`
+`feature_account_unavailable` and the `503` `ledger_behind` as a keyed call does, and the `403` and the `401` hold at
+the upstream's `101` too.
 
 A call's body is read under the `proxy` block's bounds, as a model request's body is ([proxy](installation.md#proxy)). A
 publish over a slow line can therefore meet the `408` `request_timeout`, and the operator moves that bound with
@@ -663,14 +699,15 @@ and under `max` and `pro` the reads [`CLAUDE_CODE_SUBSCRIPTION_TYPE`](client.md#
 `GET /api/directory/server-urls`, and gets the `401` `auth_missing`, which by the client's code costs it one error line
 in its log. The session shows no error line for any of these reads.
 
-**Live updates of an artifact** do not work behind the router. After a publish the client opens a WebSocket for the
-page's live updates, the watch that tells a session of a new version or a comment. The upgrade request reaches the
-feature listener with no router key where the listener reads one and gets the `401` `auth_missing`, and the listener
-serves no protocol upgrade. The client tries again with a growing pause, and after a few minutes, three to four in the
-measured sessions, it prints `Stopped watching Artifact: "{title}" (connection lost)` with the page's title. Publish,
-update in place, list and read work beside that. While the client tries, the session also reads `GET /api/frame/{id}`
-again and again, and each read is a row of the feature call list ([The records](#the-records)). The client's event
-report, `POST /api/frame/track`, gets the `403`, which the session shows nowhere.
+**Live updates of an artifact** work through the feature listener in both setups. After a publish the client opens a
+WebSocket for the page's live updates, the watch that tells a session of a new version or a comment, and a session that
+edits a page opens a second one beside it, the presence connection. Each dials right behind a page read, whose token
+admits it ([What the router forwards](#what-the-router-forwards)). The client resolves `api.anthropic.com` itself ahead
+of the dial and refuses a private, carrier-NAT, link-local or unique-local address, so under `SETUP=redirect` the name
+has to lead to a loopback address or a public one ([Base URL and DNS redirect](#base-url-and-dns-redirect)). Where the
+router refuses a watch, or ends its socket at the router's stop, the session reads a lost connection and, by the
+client's code, dials again behind a new page read. The client's event report, `POST /api/frame/track`, gets the `403`,
+which the session shows nowhere.
 
 **The `/usage` dialog** cannot read the account's usage. Its read gets the `403`, and the dialog's Usage tab reads
 "Couldn't load usage data" and prints the router's whole answer body below it, a `permission_error` with the message
@@ -713,10 +750,11 @@ of the feature account's own content, an artifact's id or a connector's server i
 neither does the domain check. The rows age out with the request rows ([Retention](statistics.md#retention)), and a
 feature call enters no request row, no rollup, no price, no session and no analytics figure.
 
-A session that published an artifact leaves a run of rows with one path. While the client tries to open its watch of the
-page's live updates, it reads `GET /api/frame/{id}` again and again, and each read is a forwarded call with a row of its
-own ([What the router refuses and what the client shows](#what-the-router-refuses-and-what-the-client-shows)). The
-watch's refused upgrade request and the refused event report leave no row.
+A session that watches a page leaves two rows for each socket it opens: the page read with the status 200 and, right
+behind it, `GET /api/frame/sync` with the status 101 and the outcome `forwarded`, written at the `101` while the socket
+stays open. Its `duration_ms` runs to the `101`, and no row tells how long the socket ran. A presence connection leaves
+the same two rows, and each redial adds two more. A socket request the router refuses leaves no row, one it refused at
+the upstream's `101` among them though that request went upstream, and neither does the refused event report.
 
 The console lists the rows in the Requests view's section [Feature calls](console.md#feature-calls), with its filters
 and its empty state. `GET /admin/feature-calls` answers them newest first as `feature_calls` with `next_cursor`, under
@@ -728,10 +766,14 @@ The metrics listener counts the calls in two families ([Metrics](statistics.md#m
 | Family | Labels | Counts |
 | --- | --- | --- |
 | `phoebis_feature_calls_total` | `feature`, `key`, `outcome` | each call the router sent upstream, the domain check among them under the feature `domain_check` |
-| `phoebis_feature_refusals_total` | `code`, `feature`, `key` | each call the router refused with a `401`, a `403`, the `429` `domain_checks_at_cap` of a domain check or the `503` `ledger_behind`, under the feature `none` for a call that matched no row, for each `401` and for a refused domain check |
+| `phoebis_feature_refusals_total` | `code`, `feature`, `key` | each call the router refused with a `401`, a `403`, the `429` `domain_checks_at_cap` of a domain check or the `503` `ledger_behind`, under the feature `none` for a call that matched no row, for each `401` and for a refused domain check, and the `401` of a socket request that no token admits under the code `socket_token_unknown` |
 
 Neither family carries a path, a status or an account. A refused call and a domain check each write one line at `debug`
-too, with the code or the outcome, the method, the path without its query and the key's label. Under
+too, with the code or the outcome, the method, the path without its query and the key's label. A socket's tunnel writes
+one at its end, with the cause (`client_ended`, `client_failed`, `stopped`, `upstream_ended` or `upstream_failed`), the
+method, the path, the key's label and the socket's life in milliseconds. The router writes one where a page read under
+one key returns a token that another key read, with the path and the two keys' labels, and one where it cannot scan a
+page read's answer, with the cause and the path. None of these lines holds a token or a byte of a body. Under
 `RUST_LOG=info,phoebis_relay::features=debug` the router writes the feature module's `debug` lines, these among them,
 and keeps each other module at `info` ([Environment variables](installation.md#environment-variables)).
 
@@ -767,9 +809,6 @@ The script's own files stand under `${XDG_STATE_HOME:-$HOME/.local/state}/phoebi
 - A further proxy behind `phoebis-proxy`: the proxy connects to each destination directly, whatever proxy variables its
   own environment holds.
 - A launch script for PowerShell: this page gains one once a run on Windows has checked it.
-- An artifact's live updates: the watch that tells a session of a page's new version or of a comment opens a WebSocket,
-  and the feature listener serves no protocol upgrade ([What the router refuses and what the client
-  shows](#what-the-router-refuses-and-what-the-client-shows)).
 - Remote Control: it stays unavailable behind the router in each setup ([Headers and
   transport](client.md#headers-and-transport)).
 - The DesignSync tool: its calls under `/v1/design/` are on no row, so one that carries a router key gets the `403`

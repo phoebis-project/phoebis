@@ -37,7 +37,9 @@ use tokio::sync::broadcast;
 use tower::ServiceExt;
 // The polls live with the fake so every integration suite has them; the call sites here name them as before.
 #[allow(unused_imports)]
-pub use fake_upstream::{stays_for, wait_for, wait_for_async};
+pub use fake_upstream::{
+    page_answer, stays_for, sync_token, upgrade_request, wait_for, wait_for_async,
+};
 
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 /// The Claude Code CLI's user agent, so a test whose point is not the client class needs no shape of its own.
@@ -1405,6 +1407,44 @@ impl OpenBody {
             .unwrap_or(0);
         (n > 0).then(|| piece[..n].to_vec())
     }
+
+    /// Writes `bytes` on the connection, behind what it carried so far.
+    pub async fn write(&mut self, bytes: &[u8]) {
+        use tokio::io::AsyncWriteExt;
+
+        self.tls.write_all(bytes).await.unwrap();
+        self.tls.flush().await.unwrap();
+    }
+}
+
+/// The access token of the account `a`, which each feature call leaves under.
+pub const SECRET_A: &str = "sk-ant-oat01-PLACEHOLDER-A";
+
+/// The pool `main` with the OAuth account `a` as its account for both features.
+pub fn both_features_at_a() -> PoolSpec {
+    PoolSpec {
+        feature_accounts: PoolFeatureAccounts {
+            artifacts: Some("a".into()),
+            connectors: Some("a".into()),
+        },
+        ..PoolSpec::default()
+    }
+}
+
+pub async fn features_harness(up: &FakeUpstream, pool: PoolSpec) -> Harness {
+    harness(up, &[oauth("a", SECRET_A, 0)], pool).await
+}
+
+/// A request under the router key: `request_line` without its version, the head's `Host` line `host`, then `lines`,
+/// each ending in CRLF, and `body`.
+pub fn keyed(request_line: &str, host: &str, lines: &str, body: &[u8]) -> Vec<u8> {
+    let mut request = format!(
+        "{request_line} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {KEY}\r\n{lines}\
+         Connection: close\r\n\r\n"
+    )
+    .into_bytes();
+    request.extend_from_slice(body);
+    request
 }
 
 /// Bounds no test is meant to reach unless it asks for them.

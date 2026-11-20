@@ -12,20 +12,19 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use common::*;
-use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule, SseEvent};
+use fake_upstream::{
+    FakeUpstream, RecordedRequest, Respond, Rule, SseEvent, Switched, UpstreamSocket,
+};
 use phoebis_bus::{Bus, Delivery, Event, FeatureEnd, FeatureOutcome, ResponseChunk, QUEUE_DEPTH};
 use phoebis_relay::{Accounting, AccountingSource, Limits, Relay};
 use phoebis_store::{
-    AccountState, Cancellation, FeatureOverride, KeyFeatureAccounts, NewBundle,
-    PoolFeatureAccounts, Secret, StateCause,
+    AccountState, Cancellation, FeatureOverride, KeyFeatureAccounts, NewBundle, Secret, StateCause,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
 
 const API: &str = "api.anthropic.com";
-/// The access token of the account `a`, which each feature call leaves under.
-const SECRET_A: &str = "sk-ant-oat01-PLACEHOLDER-A";
 
 /// The fake of `api.anthropic.com`, answering a model request with 200, so a model route that served on the feature
 /// listener would reach it and answer that 200.
@@ -183,33 +182,6 @@ async fn fake(rules: Vec<(&str, Respond)>) -> FakeUpstream {
             .collect(),
     )
     .await
-}
-
-/// The pool `main` with the OAuth account `a` as its account for both features.
-fn both_features_at_a() -> PoolSpec {
-    PoolSpec {
-        feature_accounts: PoolFeatureAccounts {
-            artifacts: Some("a".into()),
-            connectors: Some("a".into()),
-        },
-        ..PoolSpec::default()
-    }
-}
-
-async fn features_harness(up: &FakeUpstream, pool: PoolSpec) -> Harness {
-    harness(up, &[oauth("a", SECRET_A, 0)], pool).await
-}
-
-/// A request under the router key: `request_line` without its version, the head's `Host` line `host`, then `lines`,
-/// each ending in CRLF, and `body`.
-fn keyed(request_line: &str, host: &str, lines: &str, body: &[u8]) -> Vec<u8> {
-    let mut request = format!(
-        "{request_line} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {KEY}\r\n{lines}\
-         Connection: close\r\n\r\n"
-    )
-    .into_bytes();
-    request.extend_from_slice(body);
-    request
 }
 
 /// The request lines the fake recorded, the model route's left out.
@@ -2247,5 +2219,807 @@ async fn a_domain_check_that_waits_out_its_limit_for_a_place_publishes_a_refused
             }
         )
     );
+    up.shutdown().await;
+}
+
+/// The answer to a socket request that gets no `101`, its body read to the length its head declares, since the
+/// connection stays open behind it.
+async fn refused_upgrade(
+    listener: &FeatureListener,
+    request: &[u8],
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let (status, headers, mut body) = listener.open(API, request).await;
+    let length: usize = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .map_or(0, |(_, value)| value.parse().unwrap());
+    let mut read = Vec::new();
+    while read.len() < length {
+        read.extend(
+            body.next()
+                .await
+                .expect("the body ended ahead of its length"),
+        );
+    }
+    (status, headers, read)
+}
+
+/// The value of the head's `x-phoebis-error-code` line.
+fn error_code(headers: &[(String, String)]) -> Option<&str> {
+    headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-phoebis-error-code"))
+        .map(|(_, value)| value.as_str())
+}
+
+/// An error answer's JSON without its request id, which differs for each request.
+fn without_request_id(body: &[u8]) -> serde_json::Value {
+    let mut value: serde_json::Value = serde_json::from_slice(body).unwrap();
+    value.as_object_mut().unwrap().remove("request_id");
+    value
+}
+
+/// The end the bus delivers for the first feature call on `path`.
+async fn end_on(sub: &mut phoebis_bus::Subscriber, path: &str) -> FeatureEnd {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), sub.events.recv())
+            .await
+            .expect("the call's end stayed off the bus")
+            .expect("the bus stays open");
+        if let Event::FeatureCall(call) = event {
+            if call.path == path {
+                return call.end;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_socket_without_an_admitting_token_gets_the_answer_of_a_call_without_a_key() {
+    let up = fake(vec![]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (socket_status, socket_headers, socket_body) =
+        refused_upgrade(&listener, &upgrade_request(&sync_token(1_600))).await;
+    let (status, headers, body) = listener
+        .send(
+            API,
+            b"GET /off/the/table HTTP/1.1\r\nHost: api.anthropic.com\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+    assert_eq!(socket_status, status);
+    assert_eq!(error_code(&socket_headers), error_code(&headers));
+    assert_eq!(without_request_id(&socket_body), without_request_id(&body));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_socket_without_an_admitting_token_counts_under_its_own_code() {
+    let up = fake(vec![]).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", SECRET_A, 0)], both_features_at_a(), bus).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) =
+        refused_upgrade(&listener, &upgrade_request(&sync_token(1_600))).await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!(
+        end_on(&mut sub, "/api/frame/sync").await,
+        FeatureEnd::Refused {
+            code: "socket_token_unknown",
+            feature: None,
+            key_id: None,
+        }
+    );
+    up.shutdown().await;
+}
+
+/// The fake of `api.anthropic.com` for a watch: each page read under `/api/frame/` answered as `page`, and the upgrade
+/// request on `/api/frame/sync` as `upgrade`.
+async fn watch_fake(page: Respond, upgrade: Respond) -> FakeUpstream {
+    fake(vec![("/api/frame/sync", upgrade), ("/api/frame/", page)]).await
+}
+
+/// The upstream's `101` to an upgrade request, with the connection handed to `sockets`.
+fn switch(sockets: &Switched) -> Respond {
+    Respond::Switch {
+        headers: vec![
+            ("Connection".into(), "Upgrade".into()),
+            ("Upgrade".into(), "websocket".into()),
+        ],
+        first: Vec::new(),
+        sockets: sockets.clone(),
+    }
+}
+
+/// A keyed page read of `/api/frame/x`, answered `200` and read whole.
+async fn read_page(listener: &FeatureListener) {
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+}
+
+/// The upgrade requests the fake holds, by their heads.
+fn upgrade_heads(up: &FakeUpstream) -> Vec<RecordedRequest> {
+    up.requests()
+        .into_iter()
+        .filter(|request| request.line.starts_with("GET /api/frame/sync "))
+        .collect()
+}
+
+/// `token` with another signature, which no page read handed out.
+fn signed_otherwise(token: &str) -> String {
+    format!("{}.b3RoZXIgc2lnbmF0dXJl", token.rsplit_once('.').unwrap().0)
+}
+
+fn gzip(payload: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(payload).unwrap();
+    encoder.finish().unwrap()
+}
+
+/// The JSON body `page_answer` answers for `token`.
+fn page_body(token: &str) -> Vec<u8> {
+    let Respond::Json { body, .. } = page_answer(token) else {
+        unreachable!("a page's answer is JSON")
+    };
+    body
+}
+
+#[tokio::test]
+async fn a_token_a_page_read_brought_admits_and_one_no_read_brought_is_refused() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let (status, headers, _socket) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    let (status, headers, _) =
+        refused_upgrade(&listener, &upgrade_request(&signed_otherwise(&token))).await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!(upgrade_heads(&up).len(), 1, "an unread token went upstream");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_token_from_a_gzip_answer_admits() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let page = Respond::Json {
+        status: 200,
+        headers: vec![
+            ("Content-Type".into(), "application/json".into()),
+            ("Content-Encoding".into(), "gzip".into()),
+        ],
+        body: gzip(&page_body(&token)),
+    };
+    let up = watch_fake(page, switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let (status, headers, _socket) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_token_admits_inside_its_life_and_is_refused_past_its_end() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    h.clock.store(1_599_999, Ordering::SeqCst);
+    let (status, headers, _socket) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    h.clock.store(1_600_000, Ordering::SeqCst);
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&token)).await;
+    assert_eq!(status, 401, "{headers:?}");
+    up.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn a_read_past_a_keys_bound_drops_its_oldest_token() {
+    let sockets = Switched::default();
+    let up = watch_fake(json_200(), switch(&sockets)).await;
+    // One answer for each read in the order the reads arrive, each with a token of its own: part 5 moves by a second
+    // from answer to answer.
+    for end in 1_000..2_025 {
+        up.push_credential_rule(SECRET_A, "/api/frame/", page_answer(&sync_token(end)));
+    }
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = Arc::new(feature_listener(&h).await);
+    // The first read stores the oldest token and the last read the newest. The reads between them run side by side,
+    // since one by one they take a minute.
+    read_page(&listener).await;
+    let between: Vec<_> = (0..1_023)
+        .map(|_| {
+            let listener = Arc::clone(&listener);
+            tokio::spawn(async move { read_page(&listener).await })
+        })
+        .collect();
+    for read in between {
+        read.await.unwrap();
+    }
+    read_page(&listener).await;
+    let (status, headers, _) =
+        refused_upgrade(&listener, &upgrade_request(&sync_token(1_000))).await;
+    assert_eq!(status, 401, "{headers:?}");
+    let (status, headers, _socket) = listener
+        .open(API, &upgrade_request(&sync_token(2_024)))
+        .await;
+    assert_eq!(status, 101, "{headers:?}");
+    up.shutdown().await;
+}
+
+/// The values of the lines named `name` in the head of the fake's first request whose line starts with `line`.
+fn lines_of(up: &FakeUpstream, line: &str, name: &str) -> Vec<String> {
+    let requests = up.requests();
+    let request = requests
+        .iter()
+        .find(|request| request.line.starts_with(line))
+        .unwrap_or_else(|| panic!("no request {line:?}"));
+    request
+        .headers
+        .iter()
+        .filter(|(held, _)| held.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn the_upgrade_lines_leave_on_a_socket_request_alone() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(
+            API,
+            &keyed("GET /api/frame/x", API, "Upgrade: websocket\r\n", b""),
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let (status, headers, _socket) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    assert_eq!(
+        lines_of(&up, "GET /api/frame/sync ", "connection"),
+        ["Upgrade"]
+    );
+    assert_eq!(
+        lines_of(&up, "GET /api/frame/sync ", "upgrade"),
+        ["websocket"]
+    );
+    assert_eq!(lines_of(&up, "GET /api/frame/x ", "connection"), ["close"]);
+    assert_eq!(
+        lines_of(&up, "GET /api/frame/x ", "upgrade"),
+        Vec::<String>::new()
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_socket_request_leaves_with_no_credential_line() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let mut request = upgrade_request(&token);
+    request.truncate(request.len() - 2);
+    request.extend_from_slice(format!("x-api-key: {KEY}\r\n\r\n").as_bytes());
+    let (status, headers, _socket) = listener.open(API, &request).await;
+    assert_eq!(status, 101, "{headers:?}");
+    let heads = upgrade_heads(&up);
+    let credentials: Vec<&str> = heads[0]
+        .headers
+        .iter()
+        .filter(|(name, _)| {
+            name.eq_ignore_ascii_case("authorization") || name.eq_ignore_ascii_case("x-api-key")
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(credentials, Vec::<&str>::new());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_101_reaches_the_client_with_its_connection_and_upgrade_lines() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let upgrade = Respond::Switch {
+        headers: vec![
+            ("Connection".into(), "Upgrade".into()),
+            ("Upgrade".into(), "websocket".into()),
+            ("Sec-WebSocket-Accept".into(), "x".into()),
+        ],
+        first: Vec::new(),
+        sockets: sockets.clone(),
+    };
+    let up = watch_fake(page_answer(&token), upgrade).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let (status, headers, _socket) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    let value = |name: &str| {
+        headers
+            .iter()
+            .find(|(held, _)| held.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    };
+    assert_eq!(
+        (
+            value("connection"),
+            value("upgrade"),
+            value("sec-websocket-accept")
+        ),
+        (Some("Upgrade"), Some("websocket"), Some("x")),
+        "{headers:?}"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_upstream_refusal_of_an_admitted_socket_goes_back_with_its_row() {
+    let token = sync_token(1_600);
+    let refusal = br#"{"error":"an invented refusal"}"#;
+    let upgrade = Respond::Json {
+        status: 403,
+        headers: vec![("Content-Type".into(), "application/json".into())],
+        body: refusal.to_vec(),
+    };
+    let up = watch_fake(page_answer(&token), upgrade).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", SECRET_A, 0)], both_features_at_a(), bus).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let (status, headers, mut body) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 403, "{headers:?}");
+    // The answer goes back in chunks, and the last one ends it.
+    let mut framed = Vec::new();
+    while !framed.ends_with(b"0\r\n\r\n") {
+        let Some(piece) = body.next().await else {
+            break;
+        };
+        framed.extend(piece);
+    }
+    assert!(
+        framed
+            .windows(refusal.len())
+            .any(|window| window == refusal),
+        "{:?}",
+        String::from_utf8_lossy(&framed)
+    );
+    assert_eq!(
+        end_on(&mut sub, "/api/frame/sync").await,
+        FeatureEnd::Sent {
+            account_id: "a".into(),
+            error_code: None,
+            feature: "artifacts",
+            key_id: "desktop".into(),
+            outcome: FeatureOutcome::Forwarded,
+            status: Some(403),
+        }
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_admitted_socket_whose_upstream_sends_no_head_gets_the_502_and_a_failed_end() {
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), Respond::CloseAfterRequest).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", SECRET_A, 0)], both_features_at_a(), bus).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&token)).await;
+    assert_eq!(
+        (status, error_code(&headers)),
+        (502, Some("upstream_unreachable")),
+        "{headers:?}"
+    );
+    assert_eq!(
+        end_on(&mut sub, "/api/frame/sync").await,
+        FeatureEnd::Sent {
+            account_id: "a".into(),
+            error_code: Some("upstream_unreachable"),
+            feature: "artifacts",
+            key_id: "desktop".into(),
+            outcome: FeatureOutcome::Failed,
+            status: None,
+        }
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_token_that_straddles_two_pieces_of_the_answer_admits() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let body = page_body(&token);
+    let start = body
+        .windows(token.len())
+        .position(|window| window == token.as_bytes())
+        .unwrap();
+    let cut = start + 10;
+    let page = Respond::Pieces {
+        status: 200,
+        headers: vec![("Content-Type".into(), "application/json".into())],
+        pieces: vec![body[..cut].to_vec(), body[cut..].to_vec()],
+    };
+    let up = watch_fake(page, switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let (status, headers, _socket) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_page_read_in_a_coding_the_router_cannot_read_goes_back_whole() {
+    let sockets = Switched::default();
+    let page = Respond::Json {
+        status: 200,
+        headers: vec![("Content-Encoding".into(), "compress".into())],
+        body: b"invented 16 byte".to_vec(),
+    };
+    let up = watch_fake(page, switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, body) = listener
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    // In its framing, one chunk of the 16 bytes and the last chunk.
+    assert_eq!(body, b"10\r\ninvented 16 byte\r\n0\r\n\r\n");
+    let (status, headers, _) =
+        refused_upgrade(&listener, &upgrade_request(&sync_token(1_600))).await;
+    assert_eq!(status, 401, "{headers:?}");
+    up.shutdown().await;
+}
+
+/// The secret of the harness's second key, `laptop`, in the pool of `desktop`.
+const LAPTOP: &str = "phoebis-testkey-laptop";
+
+#[tokio::test]
+async fn a_token_that_two_keys_read_admits_no_socket() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let desktop = h.store.api_key("desktop").unwrap().unwrap();
+    h.store
+        .insert_api_key(
+            &phoebis_store::ApiKeyRow {
+                id: "laptop".into(),
+                label: "laptop".into(),
+                secret_digest: h.store.api_key_digest(LAPTOP).to_vec(),
+                prefix: phoebis_store::key_prefix(LAPTOP),
+                ..desktop
+            },
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let listener = feature_listener(&h).await;
+    let laptop_read = format!(
+        "GET /api/frame/x HTTP/1.1\r\nHost: {API}\r\nAuthorization: Bearer {LAPTOP}\r\n\
+         Connection: close\r\n\r\n"
+    );
+    read_page(&listener).await;
+    read_page(&listener).await;
+    let (status, headers, _socket) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    let (status, headers, _) = listener.send(API, laptop_read.as_bytes()).await;
+    assert_eq!(status, 200, "{headers:?}");
+    read_page(&listener).await;
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&token)).await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!(
+        upgrade_heads(&up).len(),
+        1,
+        "a second upgrade went upstream"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_socket_request_that_offers_two_tokens_is_refused() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let offered = format!("{token},{}", sync_token(1_601));
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&offered)).await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!(upgrade_heads(&up).len(), 0, "an upgrade went upstream");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_page_read_cut_behind_its_token_admits_nothing() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let page = Respond::SseCut {
+        status: 200,
+        headers: vec![],
+        events: vec![SseEvent {
+            event: "message".into(),
+            data: String::from_utf8(page_body(&token)).unwrap(),
+        }],
+    };
+    let up = watch_fake(page, switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    // A cut can end the caller's connection ahead of the head the listener had written, so nothing of the read is
+    // checked but its end.
+    listener
+        .hold(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await
+        .rest()
+        .await;
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&token)).await;
+    assert_eq!(status, 401, "{headers:?}");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_token_behind_text_that_expands_far_admits() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let text = "a".repeat(16 << 20);
+    let body = format!(r#"{{"text":"{text}","syncClient":true,"syncToken":"{token}"}}"#);
+    let page = Respond::Json {
+        status: 200,
+        headers: vec![
+            ("Content-Type".into(), "application/json".into()),
+            ("Content-Encoding".into(), "gzip".into()),
+        ],
+        body: gzip(body.as_bytes()),
+    };
+    let up = watch_fake(page, switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let (status, headers, _socket) = listener.open(API, &upgrade_request(&token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_token_of_a_deleted_key_is_refused() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    h.store.delete_api_key("desktop", "test").unwrap();
+    h.router.reload().await.unwrap();
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&token)).await;
+    assert_eq!(status, 401, "{headers:?}");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_token_of_a_key_whose_selection_moved_is_refused() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = harness(
+        &up,
+        &[
+            oauth("a", SECRET_A, 0),
+            oauth("b", "sk-ant-oat01-PLACEHOLDER-B", 1),
+        ],
+        both_features_at_a(),
+    )
+    .await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let desktop = h.store.api_key("desktop").unwrap().unwrap();
+    h.store
+        .update_api_key(
+            &phoebis_store::ApiKeyRow {
+                feature_accounts: KeyFeatureAccounts {
+                    artifacts: FeatureOverride::Account("b".into()),
+                    connectors: FeatureOverride::Inherit,
+                },
+                ..desktop.clone()
+            },
+            desktop.updated_at,
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&token)).await;
+    assert_eq!(status, 401, "{headers:?}");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_token_read_before_a_new_pairing_is_refused() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    signed_in_again(&h, "a", "sk-ant-oat01-PLACEHOLDER-AGAIN").await;
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&token)).await;
+    assert_eq!(status, 401, "{headers:?}");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_admitted_socket_gets_the_503_while_the_ledger_stands_behind() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let behind = Arc::new(AtomicBool::new(false));
+    let h = harness_with_pool_and_accounting(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        default_limits(),
+        standing(&behind),
+    )
+    .await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    behind.store(true, Ordering::SeqCst);
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&token)).await;
+    assert_eq!(refusal_of(status, &headers), (503, "ledger_behind", "5"));
+    assert_eq!(upgrade_heads(&up).len(), 0, "an upgrade went upstream");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_key_deleted_while_the_upstream_holds_the_upgrade_opens_no_socket() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(
+        page_answer(&token),
+        Respond::Gated(Box::new(switch(&sockets))),
+    )
+    .await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = Arc::new(feature_listener(&h).await);
+    read_page(&listener).await;
+    let upgrade = tokio::spawn({
+        let listener = Arc::clone(&listener);
+        let request = upgrade_request(&token);
+        async move { refused_upgrade(&listener, &request).await.0 }
+    });
+    wait_for(Duration::from_secs(5), || {
+        (upgrade_heads(&up).len() == 1).then_some(())
+    })
+    .await;
+    h.store.delete_api_key("desktop", "test").unwrap();
+    h.router.reload().await.unwrap();
+    up.release();
+    assert_eq!(upgrade.await.unwrap(), 401);
+    let mut socket = sockets.next().await;
+    let received = tokio::time::timeout(Duration::from_secs(5), socket.received())
+        .await
+        .expect("the upstream connection stayed open");
+    assert_eq!(received, None);
+    up.shutdown().await;
+}
+
+/// The next `n` bytes the client reads on its side of a socket.
+async fn client_reads(body: &mut OpenBody, n: usize) -> Vec<u8> {
+    let mut read = Vec::new();
+    while read.len() < n {
+        read.extend(
+            body.next()
+                .await
+                .expect("the client's side of the socket ended"),
+        );
+    }
+    read
+}
+
+/// The next `n` bytes the upstream's side of a socket receives.
+async fn upstream_receives(socket: &mut UpstreamSocket, n: usize) -> Vec<u8> {
+    let mut received = Vec::new();
+    while received.len() < n {
+        let piece = tokio::time::timeout(Duration::from_secs(5), socket.received())
+            .await
+            .expect("no bytes reached the upstream")
+            .expect("the upstream's side of the socket ended");
+        received.extend(piece);
+    }
+    received
+}
+
+/// A watch on `listener` whose upstream sends `first` with its `101`: the client's side and the upstream's.
+async fn tunnel(
+    listener: &FeatureListener,
+    token: &str,
+    sockets: &Switched,
+) -> (OpenBody, UpstreamSocket) {
+    let (status, headers, client) = listener.open(API, &upgrade_request(token)).await;
+    assert_eq!(status, 101, "{headers:?}");
+    (client, sockets.next().await)
+}
+
+#[tokio::test]
+async fn bytes_cross_the_tunnel_both_ways_behind_what_came_with_the_101() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let upgrade = Respond::Switch {
+        headers: vec![
+            ("Connection".into(), "Upgrade".into()),
+            ("Upgrade".into(), "websocket".into()),
+        ],
+        first: b"hello".to_vec(),
+        sockets: sockets.clone(),
+    };
+    let up = watch_fake(page_answer(&token), upgrade).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let (mut client, mut socket) = tunnel(&listener, &token, &sockets).await;
+    assert_eq!(client_reads(&mut client, 5).await, b"hello");
+    socket.send(b"one").await;
+    assert_eq!(client_reads(&mut client, 3).await, b"one");
+    client.write(b"two").await;
+    assert_eq!(upstream_receives(&mut socket, 3).await, b"two");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_clients_leave_ends_the_upstream_leg() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let (mut client, mut socket) = tunnel(&listener, &token, &sockets).await;
+    socket.send(b"one").await;
+    assert_eq!(client_reads(&mut client, 3).await, b"one");
+    drop(client);
+    let received = tokio::time::timeout(Duration::from_secs(5), socket.received())
+        .await
+        .expect("the upstream leg stayed open behind the client's leave");
+    assert_eq!(received, None);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn bytes_sent_with_the_upgrade_request_reach_the_upstream_first() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let early = [upgrade_request(&token), b"early".to_vec()].concat();
+    let (status, headers, mut client) = listener.open(API, &early).await;
+    assert_eq!(status, 101, "{headers:?}");
+    let mut socket = sockets.next().await;
+    client.write(b"late").await;
+    // Read up to the later bytes, so a tunnel that dropped the early ones shows what came instead.
+    let mut received = Vec::new();
+    while !received.ends_with(b"late") {
+        received.extend(upstream_receives(&mut socket, 1).await);
+    }
+    assert_eq!(String::from_utf8_lossy(&received), "earlylate");
     up.shutdown().await;
 }

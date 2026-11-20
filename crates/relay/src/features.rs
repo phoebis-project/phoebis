@@ -4,6 +4,8 @@
 mod cap;
 mod forward;
 mod refresh_hold;
+mod socket;
+mod watch;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -21,23 +23,26 @@ use phoebis_store::Feature;
 use phoebis_transport::control::ControlClient;
 use tokio::time::Instant;
 
-use crate::auth::resolve_key;
+use crate::auth::{resolve_key, AuthError};
 use crate::errors::{
-    domain_checks_at_cap, feature_account_unavailable, feature_account_unset, ledger_behind,
-    Failure, FEATURE_NOT_ALLOWED, UPSTREAM_UNREACHABLE,
+    auth_failure, domain_checks_at_cap, feature_account_unavailable, feature_account_unset,
+    ledger_behind, Failure, FEATURE_NOT_ALLOWED, UPSTREAM_UNREACHABLE,
 };
 use crate::messages::{new_request_id, Relay};
 
 use self::cap::DomainCheckCap;
 use self::forward::{forward, keyless, read_body, Call, Ending, Unanswered};
 use self::refresh_hold::Holds;
+pub(crate) use self::socket::Handover;
+use self::socket::{held, open, row_of, Admitted, Lapsed};
+use self::watch::{Entry, TokenMap, SOCKET_TOKEN_UNKNOWN};
 
 /// The longest value of the domain check's one query parameter.
 const DOMAIN_MAX_BYTES: usize = 512;
 
 /// What the handler reads: the one cap of this listener's domain checks, the client its control-plane calls leave
-/// through, the tokens its feature hosts rejected behind a forced refresh, the relay, and the feature table of the
-/// router's profile.
+/// through, the tokens its feature hosts rejected behind a forced refresh, the relay, the feature table of the
+/// router's profile, and the tokens its page reads handed out.
 #[derive(Clone)]
 struct Listener {
     cap: Arc<DomainCheckCap>,
@@ -45,6 +50,7 @@ struct Listener {
     holds: Arc<Holds>,
     relay: Arc<Relay>,
     table: &'static FeatureTable,
+    tokens: Arc<TokenMap>,
 }
 
 /// The feature listener's routes. Each request on that listener is a feature endpoint request, whatever its path.
@@ -64,12 +70,14 @@ pub(crate) fn router(
         holds: Arc::new(Holds::default()),
         relay,
         table,
+        tokens: Arc::new(TokenMap::default()),
     })
 }
 
-/// The checks run in their one order: the two keyless shapes, each compared whole, then the key, so a caller without
-/// one learns nothing of what the router forwards, and the account's token is taken only for a call that passed each
-/// of them. A request that misses a keyless shape by anything meets the key check as each other request does.
+/// The checks run in their one order: the two keyless shapes and the shape of a socket request, each compared whole,
+/// then the key, so a caller without one learns nothing of what the router forwards, and the account's token is taken
+/// only for a call that passed each of them. A request that misses a shape by anything meets the key check as each
+/// other request does.
 async fn feature_call(State(listener): State<Listener>, request: Request) -> Response {
     // The domain check's one deadline runs from here, over its wait for a place too.
     let arrived = Instant::now();
@@ -105,6 +113,10 @@ async fn feature_call(State(listener): State<Listener>, request: Request) -> Res
             call,
         )
         .await;
+    }
+    // Ahead of the key, which a socket request does not present: its feature's own rule admits it.
+    if let Some(row) = row_of(table, method, host.as_deref(), &parts.uri, &parts.headers) {
+        return socket_request(&listener, row, parts, call).await;
     }
     let snapshot = relay.router().snapshot();
     let now = (relay.clock)();
@@ -148,7 +160,7 @@ async fn feature_call(State(listener): State<Listener>, request: Request) -> Res
         Ok(read) => read.unzip(),
         // Nothing left for the call, so the body's own bounds count in no family and publish no end.
         Err(failure) => {
-            refused_line(&failure, &call, &key.label);
+            refused_line(failure.code, &call, &key.label);
             return failure.response(&call.id);
         }
     };
@@ -159,7 +171,19 @@ async fn feature_call(State(listener): State<Listener>, request: Request) -> Res
         feature.as_str(),
         key.id.clone(),
     );
-    match forward(&listener, account, row, method, &parts, body, ending).await {
+    // As `authenticate_id` reads the key and as `signed_in` takes the account's sign-in, for a page read's token.
+    let admitted = Admitted {
+        account_id: account.id.clone(),
+        feature,
+        key_generation: key.created_at,
+        key_id: key.id.clone(),
+        sign_in: (account.incarnation, account.lifecycle_generation),
+    };
+    match forward(
+        &listener, account, row, method, &parts, body, ending, &admitted, &key.label,
+    )
+    .await
+    {
         Ok(answer) => answer,
         Err(Unanswered::Refused(failure)) => refusal(relay, call, &failure, &key.label).await,
         Err(Unanswered::Failed(case, detail)) => {
@@ -177,18 +201,108 @@ async fn feature_call(State(listener): State<Listener>, request: Request) -> Res
     }
 }
 
+/// A socket request of `row`, admitted by the token a keyed page read handed out. One without an admitting entry gets
+/// the `401` of a request without a key, so its answer tells a caller without a key nothing of the socket's path, and
+/// counts under the watch's own code.
+async fn socket_request(
+    listener: &Listener,
+    row: &'static phoebis_profile::SocketRow,
+    parts: Parts,
+    mut call: Call,
+) -> Response {
+    let relay = &listener.relay;
+    let now = (relay.clock)();
+    let Some(entry) = listener.tokens.entry(&parts.headers, now) else {
+        return refusal_under(
+            relay,
+            call,
+            &auth_failure(&AuthError::Missing),
+            SOCKET_TOKEN_UNKNOWN,
+            UNATTRIBUTED_POOL,
+        )
+        .await;
+    };
+    // The `403` and the `503` behind the entry carry its key and the feature, and the `401` of a failed check takes
+    // both off again.
+    call.key_id = Some(entry.admitted.key_id.clone());
+    call.feature = Some(row.feature);
+    let snapshot = relay.router().snapshot();
+    let (key, account) = match held(&snapshot, &entry.admitted, now) {
+        Ok(rows) => rows,
+        Err(unheld) => return lapsed(listener, call, &entry, unheld.into()).await,
+    };
+    // As for a keyed call, behind each other check so those keep their own answers. No key's last use is stamped,
+    // since the request presents no secret and the page read ahead of it stamped the key.
+    if relay.ledger_behind(true) {
+        return refusal(relay, call, &ledger_behind(), &key.label).await;
+    }
+    match open(
+        listener,
+        row,
+        entry.admitted.clone(),
+        key,
+        account,
+        parts,
+        call,
+    )
+    .await
+    {
+        Ok(answer) => answer,
+        Err((call, check)) => lapsed(listener, call, &entry, check).await,
+    }
+}
+
+/// The refusal of a socket request whose identity no longer holds, at the admission or at the upstream's `101`: the
+/// `401` of a request without a key for the key, the selection and the sign-in, with the entry the lookup read
+/// removed, and the `403` of a keyed call for the account.
+async fn lapsed(listener: &Listener, mut call: Call, entry: &Entry, lapsed: Lapsed) -> Response {
+    let relay = &listener.relay;
+    match lapsed {
+        Lapsed::Identity => {
+            listener.tokens.forget(entry);
+            // Each `401` of the listener counts under no feature and no key.
+            call.feature = None;
+            call.key_id = None;
+            refusal_under(
+                relay,
+                call,
+                &auth_failure(&AuthError::Missing),
+                SOCKET_TOKEN_UNKNOWN,
+                UNATTRIBUTED_POOL,
+            )
+            .await
+        }
+        Lapsed::Account(key, obstacle) => {
+            refusal(relay, call, &feature_account_unavailable(&obstacle), &key).await
+        }
+    }
+}
+
 /// A refusal of the key, the table, the selection, the account's state, the ledger's standing or the domain check's
 /// cap: its DEBUG line, its end, which the ledger counts and writes no row for, and its answer. `key` is the key's
 /// label, `-` where none resolved. The end is a fact published ahead of the answer, so it reaches the ledger ahead of
 /// any later call of the same caller. While the ledger stands behind, the end goes out best-effort and the bus counts
 /// it where it drops it: a writer that stopped draining fills the bus queue, and a refusal that waited there would hold
 /// its connection, a caller's without a key among them.
-async fn refusal(relay: &Relay, mut call: Call, failure: &Failure, key: &str) -> Response {
-    refused_line(failure, &call, key);
+async fn refusal(relay: &Relay, call: Call, failure: &Failure, key: &str) -> Response {
+    refusal_under(relay, call, failure, failure.code, key).await
+}
+
+/// `refusal` with `code` in its line and its end while the answer is `failure`'s, for the one refusal whose count
+/// tells apart what its answer must not: a socket request without an admitting entry answers as a request without a
+/// key does.
+async fn refusal_under(
+    relay: &Relay,
+    mut call: Call,
+    failure: &Failure,
+    code: &'static str,
+    key: &str,
+) -> Response {
+    refused_line(code, &call, key);
     let answer = failure.response(&call.id);
     if let Some(bus) = &relay.bus {
         let end = FeatureEnd::Refused {
-            code: failure.code,
+            code,
             feature: call.feature,
             key_id: call.key_id.take(),
         };
@@ -205,9 +319,9 @@ async fn refusal(relay: &Relay, mut call: Call, failure: &Failure, key: &str) ->
 }
 
 /// The DEBUG line of a refused feature endpoint request, with the path alone.
-fn refused_line(failure: &Failure, call: &Call, key: &str) {
+fn refused_line(code: &str, call: &Call, key: &str) {
     tracing::debug!(
-        code = failure.code,
+        code,
         method = %call.method,
         path = call.path.as_str(),
         key = %key,
@@ -271,7 +385,12 @@ fn is_domain_check(
 ) -> Option<&'static str> {
     let value = uri.query()?.strip_prefix("domain=")?;
     let one_value = (1..=DOMAIN_MAX_BYTES).contains(&value.len()) && !value.contains('&');
-    let no_body = !headers.contains_key(header::TRANSFER_ENCODING)
+    keyless_method(row, method, host, uri.path()).filter(|_| one_value && no_body(headers))
+}
+
+/// Whether a head declares no body: no `Transfer-Encoding` line, and no `Content-Length` other than 0.
+fn no_body(headers: &HeaderMap) -> bool {
+    !headers.contains_key(header::TRANSFER_ENCODING)
         && headers
             .get_all(header::CONTENT_LENGTH)
             .iter()
@@ -279,8 +398,7 @@ fn is_domain_check(
                 length
                     .to_str()
                     .is_ok_and(|length| length.trim().parse::<u64>() == Ok(0))
-            });
-    keyless_method(row, method, host, uri.path()).filter(|_| one_value && no_body)
+            })
 }
 
 /// The row's own spelling of the method where a request names one of a keyless row's methods, its host and its whole

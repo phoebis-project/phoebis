@@ -216,25 +216,48 @@ pub fn outbound_headers(
     }
 }
 
+/// What a feature call's `Connection` line reads and whether its `Upgrade` line leaves.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Hop {
+    /// The control plane's word, `close`.
+    Close,
+    /// The inference plane's word, `keep-alive`, in the caller's line alone.
+    KeepAlive,
+    /// An admitted socket request: the caller's `Connection` and `Upgrade` lines as sent.
+    Socket,
+}
+
+impl From<Plane> for Hop {
+    fn from(plane: Plane) -> Hop {
+        match plane {
+            Plane::Control => Hop::Close,
+            Plane::Inference => Hop::KeepAlive,
+        }
+    }
+}
+
 /// The head a feature call leaves with: each caller line as sent and in its place, except the never-copied set
 /// and a second credential line. The first credential line's place takes `bearer` as the model path writes an OAuth
 /// account's credential, under the name `credential_header` spells, and `None` drops each. `host` takes its line's
 /// place, and `content_length` is `None` for a request without a body. Each of the two is appended where the caller
-/// sent no line of its own. `plane` decides the `Connection` line: the control plane opens a connection for each call
+/// sent no line of its own. `hop` decides the `Connection` line: the control plane opens a connection for each call
 /// and keeps none, so `close` takes the caller's line or is appended, as each control request of the router carries
 /// it, and the inference plane pools its connections, so `keep-alive` takes the caller's line alone, as the model path
-/// writes it.
+/// writes it. A socket's connection is the upgrade's own, so its `Connection` and `Upgrade` lines leave as the caller
+/// sent them, past the never-copied set that keeps an `Upgrade` line off each other call.
 pub(crate) fn feature_headers(
     caller: &HeaderMap,
     original: Option<&OriginalHead>,
     bearer: Option<&Secret>,
     host: &str,
-    plane: Plane,
+    hop: Hop,
     content_length: Option<usize>,
 ) -> Vec<(String, String)> {
-    let connection = match plane {
-        Plane::Control => "close",
-        Plane::Inference => "keep-alive",
+    // `None` for a socket, whose `Connection` and `Upgrade` lines leave as the caller sent them.
+    let connection = match hop {
+        Hop::Close => Some("close"),
+        Hop::KeepAlive => Some("keep-alive"),
+        Hop::Socket => None,
     };
     let sent = sent_lines(caller, original);
     let mut out: Vec<(String, String)> = Vec::with_capacity(sent.len() + 2);
@@ -253,10 +276,13 @@ pub(crate) fn feature_headers(
                     }
                 }
             }
+            "connection" | "upgrade" if connection.is_none() => {
+                out.push((name.into(), value.into()));
+            }
             "connection" => {
                 if !saw_connection {
                     saw_connection = true;
-                    out.push((name.into(), connection.into()));
+                    out.extend(connection.map(|word| (name.into(), word.into())));
                 }
             }
             "content-length" => {
@@ -280,8 +306,8 @@ pub(crate) fn feature_headers(
     if !saw_host {
         out.push(("Host".into(), host.into()));
     }
-    if !saw_connection && plane == Plane::Control {
-        out.push(("Connection".into(), connection.into()));
+    if !saw_connection && hop == Hop::Close {
+        out.push(("Connection".into(), "close".into()));
     }
     if let (false, Some(length)) = (saw_length, content_length) {
         out.push(("Content-Length".into(), length.to_string()));
