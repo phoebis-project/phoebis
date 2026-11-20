@@ -1382,6 +1382,11 @@ impl HeldRequest {
             .expect("the connection stayed open");
         read
     }
+
+    /// Ends the connection with a reset, as a client that dies does, so the router's next write on it fails.
+    pub fn reset(self) {
+        self.0.get_ref().set_zero_linger().unwrap();
+    }
 }
 
 /// The body of an answer whose head was read. Dropping it closes the caller's connection.

@@ -154,12 +154,16 @@ pub async fn serve_features(
             async move {
                 // Held to the end, so the graceful wait counts the connection for as long as this future runs.
                 let _watcher = watcher;
-                let mut connection = std::pin::pin!(connection);
-                let ended = tokio::select! {
-                    ended = connection.as_mut() => ended,
-                    () = stopped(&mut stop) => {
-                        connection.as_mut().graceful_shutdown();
-                        connection.await
+                // The connection ends inside this block: where hyper could not write a `101`, the connection keeps the
+                // upgrade it never handed over, and only its drop fails the tunnel's wait for the stream.
+                let ended = {
+                    let mut connection = std::pin::pin!(connection);
+                    tokio::select! {
+                        ended = connection.as_mut() => ended,
+                        () = stopped(&mut stop) => {
+                            connection.as_mut().graceful_shutdown();
+                            connection.await
+                        }
                     }
                 };
                 // In this task, so a socket keeps the listener's permit and stays in the set the drain's cut reaches.

@@ -3023,3 +3023,33 @@ async fn bytes_sent_with_the_upgrade_request_reach_the_upstream_first() {
     assert_eq!(String::from_utf8_lossy(&received), "earlylate");
     up.shutdown().await;
 }
+
+/// The client's bytes behind its head keep the listener from reading the reset, so it meets the reset only at the
+/// write of the `101`, behind which hyper hands nothing over.
+#[tokio::test]
+async fn a_socket_whose_101_cannot_reach_its_client_ends_the_upstream_leg() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(
+        page_answer(&token),
+        Respond::Gated(Box::new(switch(&sockets))),
+    )
+    .await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let early = [upgrade_request(&token), b"early".to_vec()].concat();
+    let client = listener.hold(API, &early).await;
+    wait_for(Duration::from_secs(5), || {
+        (upgrade_heads(&up).len() == 1).then_some(())
+    })
+    .await;
+    client.reset();
+    up.release();
+    let mut socket = sockets.next().await;
+    let received = tokio::time::timeout(Duration::from_secs(5), socket.received())
+        .await
+        .expect("the upstream leg stayed open behind the client's reset");
+    assert_eq!(received, None);
+    up.shutdown().await;
+}
