@@ -14,7 +14,7 @@ use phoebis_profile::Profile;
 use crate::decode::{decoder, encoding};
 use crate::pool::Conn;
 use crate::request::{write_request, ProgressCell, RawRequest, WriteProgress};
-use crate::response::{framing, read_head, read_upgrade_head, BodyReader, ResponseHead};
+use crate::response::{framing, read_final_head, read_head, BodyReader, ResponseHead};
 use crate::{connect_tls, TransportError};
 
 /// Maps a host name to an address; production resolves DNS with a bound, tests map both control hosts to a
@@ -88,7 +88,7 @@ impl ControlClient {
     ) -> Result<(ResponseHead, Bytes), TransportError> {
         let addr = address(&self.resolver, host)
             .await
-            .map_err(TransportError::Unreachable)?;
+            .map_err(|error| TransportError::Unreachable(error.to_string()))?;
         // Read by the timeout arm below, which cannot see how far `send_once` got on its own.
         let progress = ProgressCell::default();
         match tokio::time::timeout(timeout, self.send_once(req, host, addr, &progress)).await {
@@ -169,11 +169,7 @@ impl ControlClient {
             false,
         )
         .await?;
-        let f = framing(&head);
-        Ok(ControlAnswer {
-            head,
-            body: BodyReader::new(conn, buf, f),
-        })
+        Ok(answer(conn, head, buf))
     }
 
     /// `send_upgrade` over this client's connector and resolver.
@@ -223,11 +219,15 @@ pub(crate) async fn send_upgrade(
             leftover,
         });
     }
+    Ok(UpgradeAnswer::Answered(answer(conn, head, leftover)))
+}
+
+fn answer(conn: Conn, head: ResponseHead, buf: BytesMut) -> ControlAnswer {
     let f = framing(&head);
-    Ok(UpgradeAnswer::Answered(ControlAnswer {
+    ControlAnswer {
         head,
-        body: BodyReader::new(conn, leftover, f),
-    }))
+        body: BodyReader::new(conn, buf, f),
+    }
 }
 
 /// The connect, the write and the head read that both streaming sends share, with `upgrade` for whether the request
@@ -244,7 +244,7 @@ async fn exchange(
     let connecting = async {
         let addr = address(resolver, host)
             .await
-            .map_err(StreamFailure::Unreachable)?;
+            .map_err(|error| StreamFailure::Unreachable(error.to_string()))?;
         connect_tls(connector, host, addr)
             .await
             .map_err(|error| StreamFailure::Unreachable(error.to_string()))
@@ -265,11 +265,7 @@ async fn exchange(
                 WriteProgress::Unsent => StreamFailure::Unreachable(unsent(host, &failure.error)),
                 WriteProgress::Written => StreamFailure::Cut(failure.error.to_string()),
             })?;
-        let read = if upgrade {
-            read_upgrade_head(&mut conn, &mut buf).await
-        } else {
-            read_head(&mut conn, &mut buf).await
-        };
+        let read = read_final_head(&mut conn, &mut buf, upgrade).await;
         read.map_err(|error| match error {
             TransportError::ClosedBeforeHead | TransportError::Io(_) => {
                 StreamFailure::Cut(error.to_string())
@@ -284,10 +280,10 @@ async fn exchange(
     Ok((conn, head, buf))
 }
 
-async fn address(resolver: &Resolver, host: &str) -> Result<SocketAddr, String> {
+pub(crate) async fn address(resolver: &Resolver, host: &str) -> Result<SocketAddr, TransportError> {
     resolver(host)
         .await
-        .ok_or_else(|| format!("no address for {host}"))
+        .ok_or_else(|| TransportError::Unresolved(host.to_owned()))
 }
 
 fn unsent(host: &str, error: &std::io::Error) -> String {

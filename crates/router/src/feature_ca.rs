@@ -165,10 +165,7 @@ impl FeatureCa {
         }
         // A launcher is told that the file binds its trust to the two feature hosts, which this constraint makes so.
         let der = pair.leaf.to_der().map_err(stack)?;
-        let constrained = match (
-            extension(&der, NAME_CONSTRAINTS),
-            extension(issuer.der(), NAME_CONSTRAINTS),
-        ) {
+        let constrained = match (name_constraint(&der), name_constraint(issuer.der())) {
             (Some(stored), Some(written)) => stored.0 && stored == written,
             _ => false,
         };
@@ -382,11 +379,11 @@ fn subject(cert: &X509Ref) -> Result<Vec<u8>, FeatureCaError> {
     cert.subject_name().to_der().map_err(stack)
 }
 
-/// The critical flag and the value of the extension `oid` names in the certificate `der`, `None` for a certificate
-/// without it or with a length the walk cannot follow. BoringSSL's binding offers no read of the name constraint, so
-/// the walk reads the certificate's encoding. A name constraint with the same subtrees in the same order has one DER
-/// form, so a compare of the value hangs on no default of the library that wrote it.
-fn extension<'a>(der: &'a [u8], oid: &[u8]) -> Option<(bool, &'a [u8])> {
+/// The critical flag and the value of the name constraint in the certificate `der`, `None` for a certificate without
+/// one or with a length the walk cannot follow. BoringSSL's binding offers no read of the name constraint, so the walk
+/// reads the certificate's encoding. A name constraint with the same subtrees in the same order has one DER form, so a
+/// compare of the value hangs on no default of the library that wrote it.
+fn name_constraint(der: &[u8]) -> Option<(bool, &[u8])> {
     const BOOLEAN: u8 = 0x01;
     const OCTET_STRING: u8 = 0x04;
     const OBJECT_IDENTIFIER: u8 = 0x06;
@@ -433,7 +430,7 @@ fn extension<'a>(der: &'a [u8], oid: &[u8]) -> Option<(bool, &'a [u8])> {
         let (entry, rest) = tagged(entries, SEQUENCE)?;
         entries = rest;
         let (id, entry) = tagged(entry, OBJECT_IDENTIFIER)?;
-        if id != oid {
+        if id != NAME_CONSTRAINTS {
             continue;
         }
         // DER leaves the flag out where it is false.

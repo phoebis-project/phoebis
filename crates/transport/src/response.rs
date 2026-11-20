@@ -41,18 +41,9 @@ pub async fn read_head<R: AsyncRead + Unpin>(
     read_final_head(r, buf, false).await
 }
 
-/// `read_head` for a request that asked for an upgrade: a `101` is the final head, and what `buf` holds behind it are
-/// the peer's first bytes on the switched connection. Each other head from 100 to 199 is skipped as `read_head` skips
-/// it.
-pub async fn read_upgrade_head<R: AsyncRead + Unpin>(
-    r: &mut R,
-    buf: &mut BytesMut,
-) -> Result<ResponseHead, TransportError> {
-    read_final_head(r, buf, true).await
-}
-
-/// The one head read behind `read_head` and `read_upgrade_head`, with `upgrade` for whether a `101` ends it.
-async fn read_final_head<R: AsyncRead + Unpin>(
+/// The one head read behind `read_head` and `exchange`, with `upgrade` for whether a `101` ends it. Where it does, what
+/// `buf` holds behind the `101` are the peer's first bytes on the switched connection.
+pub(crate) async fn read_final_head<R: AsyncRead + Unpin>(
     r: &mut R,
     buf: &mut BytesMut,
     upgrade: bool,
@@ -324,7 +315,7 @@ mod tests {
         .await
         .unwrap();
         let mut buf = BytesMut::new();
-        let head = read_upgrade_head(&mut rx, &mut buf).await.unwrap();
+        let head = read_final_head(&mut rx, &mut buf, true).await.unwrap();
         assert_eq!(head.status, 101);
         assert_eq!(&buf[..], b"\x81\x02hi");
     }

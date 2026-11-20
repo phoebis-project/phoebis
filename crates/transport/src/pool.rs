@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 
-use crate::control::{send_upgrade, Resolver, StreamFailure, UpgradeAnswer};
+use crate::control::{address, send_upgrade, Resolver, StreamFailure, UpgradeAnswer};
 use crate::request::RawRequest;
 use crate::{connect_tls, TransportError};
 
@@ -59,9 +59,7 @@ impl Pool {
         if let Some(c) = reused {
             return Ok((c, true));
         }
-        let addr = resolver(&key.host)
-            .await
-            .ok_or_else(|| TransportError::Unresolved(key.host.clone()))?;
+        let addr = address(resolver, &key.host).await?;
         connect_tls(&self.connector, &key.host, addr)
             .await
             .map(|c| (c, false))

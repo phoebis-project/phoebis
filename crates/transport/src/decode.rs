@@ -121,7 +121,7 @@ impl BoundedSink {
         if self.tripped {
             return Err(TransportError::TooLarge(budget));
         }
-        wrote.map_err(|error| TransportError::Decode(error.to_string()))?;
+        wrote.map_err(undecodable)?;
         Ok(std::mem::take(&mut self.buf))
     }
 }
@@ -174,21 +174,10 @@ fn at_bound(error: TransportError, bound: usize) -> TransportError {
 pub fn decoder(e: Encoding) -> Box<dyn Decoder> {
     match e {
         Encoding::Identity => Box::new(Identity),
-        Encoding::Gzip => Box::new(Streaming(Some(flate2::write::GzDecoder::new(
+        coding => Box::new(Streaming(Some(decoder_into(
+            coding,
             BoundedSink::default(),
         )))),
-        Encoding::Deflate => Box::new(Streaming(Some(flate2::write::ZlibDecoder::new(
-            BoundedSink::default(),
-        )))),
-        Encoding::Brotli => Box::new(Streaming(Some(brotli::DecompressorWriter::new(
-            BoundedSink::default(),
-            4096,
-        )))),
-        // Context creation only fails under allocation failure, which is unrecoverable here regardless.
-        Encoding::Zstd => Box::new(Streaming(Some(
-            zstd::stream::write::Decoder::new(BoundedSink::default())
-                .expect("zstd decoder context"),
-        ))),
     }
 }
 
@@ -216,40 +205,17 @@ fn already_finished() -> TransportError {
     TransportError::Response("decoder used after finish".into())
 }
 
-/// A library writer decoding into the sink. The codings differ only in the call that ends the stream.
-trait SinkWriter: Write + Send {
-    fn sink(&mut self) -> &mut BoundedSink;
-    fn end(&mut self) -> io::Result<()>;
-}
-
-macro_rules! sink_writer {
-    ($writer:ty, $end:ident) => {
-        impl SinkWriter for $writer {
-            fn sink(&mut self) -> &mut BoundedSink {
-                self.get_mut()
-            }
-            fn end(&mut self) -> io::Result<()> {
-                self.$end()
-            }
-        }
-    };
-}
-
-sink_writer!(flate2::write::GzDecoder<BoundedSink>, try_finish);
-sink_writer!(flate2::write::ZlibDecoder<BoundedSink>, try_finish);
-sink_writer!(brotli::DecompressorWriter<BoundedSink>, close);
-sink_writer!(zstd::stream::write::Decoder<'static, BoundedSink>, flush);
-
 /// `None` once `finish_bounded` ended the stream, so a later call is refused rather than written to a finished writer.
-struct Streaming<W>(Option<W>);
+struct Streaming(Option<SinkDecoder<BoundedSink>>);
 
-impl<W: SinkWriter> Decoder for Streaming<W> {
+impl Decoder for Streaming {
     fn feed_bounded(&mut self, input: &[u8], budget: usize) -> Result<Vec<u8>, TransportError> {
         let d = self.0.as_mut().ok_or_else(already_finished)?;
         d.sink().prepare(budget);
         // A write-side decoder keeps what it just decoded until the next write, so without the flush a caller
         // reading the stream as it arrives would see one chunk's bytes only after the following chunk.
-        let wrote = d.write_all(input).and_then(|()| d.flush());
+        let w = d.writer();
+        let wrote = w.write_all(input).and_then(|()| w.flush());
         d.sink().collect(budget, wrote)
     }
 
@@ -298,14 +264,7 @@ pub fn decoder_into<S: Write + Send + 'static>(e: Encoding, sink: S) -> SinkDeco
 impl<S: Write + Send + 'static> SinkDecoder<S> {
     /// Decodes `input` into the sink. Nothing is flushed, so a library can keep its last block until `finish`.
     pub fn feed(&mut self, input: &[u8]) -> Result<(), TransportError> {
-        let wrote = match &mut self.0 {
-            Sinking::Brotli(writer) => writer.write_all(input),
-            Sinking::Deflate(writer) => writer.write_all(input),
-            Sinking::Gzip(writer) => writer.write_all(input),
-            Sinking::Identity(sink) => sink.write_all(input),
-            Sinking::Zstd(writer) => writer.write_all(input),
-        };
-        wrote.map_err(undecodable)
+        self.writer().write_all(input).map_err(undecodable)
     }
 
     /// The sink, for a caller that reads its state between two feeds.
@@ -320,22 +279,39 @@ impl<S: Write + Send + 'static> SinkDecoder<S> {
     }
 
     /// Ends the stream, writes the library's last block and hands the sink back.
-    pub fn finish(self) -> Result<S, TransportError> {
+    pub fn finish(mut self) -> Result<S, TransportError> {
+        self.end().map_err(undecodable)?;
         match self.0 {
-            Sinking::Brotli(mut writer) => {
-                writer.close().map_err(undecodable)?;
-                // The close ran whole, so the second one inside `into_inner` has nothing left to refuse.
-                (*writer)
-                    .into_inner()
-                    .map_err(|_| TransportError::Decode("the brotli stream did not end".into()))
-            }
+            // The close ran whole, so the second one inside `into_inner` has nothing left to refuse.
+            Sinking::Brotli(writer) => (*writer)
+                .into_inner()
+                .map_err(|_| TransportError::Decode("the brotli stream did not end".into())),
             Sinking::Deflate(writer) => writer.finish().map_err(undecodable),
             Sinking::Gzip(writer) => writer.finish().map_err(undecodable),
             Sinking::Identity(sink) => Ok(sink),
-            Sinking::Zstd(mut writer) => {
-                writer.flush().map_err(undecodable)?;
-                Ok(writer.into_inner())
-            }
+            Sinking::Zstd(writer) => Ok(writer.into_inner()),
+        }
+    }
+
+    fn writer(&mut self) -> &mut dyn Write {
+        match &mut self.0 {
+            Sinking::Brotli(writer) => &mut **writer,
+            Sinking::Deflate(writer) => writer,
+            Sinking::Gzip(writer) => writer,
+            Sinking::Identity(sink) => sink,
+            Sinking::Zstd(writer) => writer,
+        }
+    }
+
+    /// Writes the library's last block into the sink and leaves the sink in place, so a caller can still read what
+    /// it kept after an end that failed.
+    fn end(&mut self) -> io::Result<()> {
+        match &mut self.0 {
+            Sinking::Brotli(writer) => writer.close(),
+            Sinking::Deflate(writer) => writer.try_finish(),
+            Sinking::Gzip(writer) => writer.try_finish(),
+            Sinking::Identity(_) => Ok(()),
+            Sinking::Zstd(writer) => writer.flush(),
         }
     }
 }
@@ -584,7 +560,7 @@ mod tests {
             .write_all(&gzip(&vec![0u8; (8 << 20) + 5_000]))
             .unwrap();
         *inner.get_mut() = BoundedSink::default();
-        let mut d = Streaming(Some(inner));
+        let mut d = Streaming(Some(SinkDecoder(Sinking::Gzip(inner))));
         let error = d.finish_bounded(1024).unwrap_err();
         assert!(matches!(error, TransportError::TooLarge(1024)), "{error}");
         assert!(d.retained() <= 1024, "{}", d.retained());
