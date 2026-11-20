@@ -1,13 +1,14 @@
 import type { Account, ApiKey, AttentionItem, FeatureWord, Pool, Reconciliation, RoutingEvent } from '@/api/types';
-import { ATTENTION_KIND_VALUES, FEATURE_WORD_VALUES } from '@/api/types';
+import { ATTENTION_KIND_VALUES } from '@/api/types';
+import { keyFeaturesNaming, poolFeaturesNaming } from '@/lib/accountUses';
 import { MIN_RISE, ratioOff } from '@/lib/analytics';
 import { lookup } from '@/lib/counts';
 import { byteOrder, tokensTotal, undatedModel } from '@/lib/format';
 import { featureObstacleOf } from '@/lib/forms';
-import { canceledEndOf, readWindows } from '@/lib/quota';
+import { readWindows } from '@/lib/quota';
 import { WINDOW_KEY, hoursOfKey, windowEntry } from '@/lib/windows';
 import { ACCOUNTS, accountById } from './accounts';
-import { RECONCILIATIONS } from './analytics';
+import { RECONCILIATIONS, termEndOf } from './analytics';
 import { ceilingSettingOf } from './fit';
 import { EXPIRED_BETWEEN_TURNS, KEEPALIVE_OVERVIEW, SETTINGS_WIRE } from './operations';
 import { KEYS, POOLS, keyById, poolById } from './pools';
@@ -92,25 +93,16 @@ const keyOrder = (x: string | null, y: string | null): number => (x === y ? 0 : 
 export const featureAccountUnavailableOf = (
   registry: { accounts: readonly Account[]; keys: readonly Pick<ApiKey, 'featureAccounts' | 'id' | 'poolId'>[]; pools: readonly Pick<Pool, 'featureAccounts' | 'id'>[] },
   at: number,
-): AttentionItem[] => {
-  const selections = new Map<string, FeatureSelection[]>();
-  const select = (accountId: string | null, selection: FeatureSelection) => {
-    if (accountId !== null) selections.set(accountId, [...(selections.get(accountId) ?? []), selection]);
-  };
-  for (const p of registry.pools) for (const feature of FEATURE_WORD_VALUES) select(p.featureAccounts[feature], { feature, key: null, pool: p.id });
-  for (const k of registry.keys) {
-    for (const feature of FEATURE_WORD_VALUES) {
-      const choice = k.featureAccounts[feature];
-      select(choice.mode === 'account' ? choice.accountId : null, { feature, key: k.id, pool: k.poolId });
-    }
-  }
-  return registry.accounts
+): AttentionItem[] =>
+  registry.accounts
     .flatMap((a) => {
-      const named = [...(selections.get(a.id) ?? [])].sort((x, y) => byteOrder(x.pool, y.pool) || keyOrder(x.key, y.key) || byteOrder(x.feature, y.feature));
+      const named: FeatureSelection[] = [
+        ...registry.pools.flatMap((p) => poolFeaturesNaming(p, a.id).map((feature) => ({ feature, key: null, pool: p.id }))),
+        ...registry.keys.flatMap((k) => keyFeaturesNaming(k, a.id).map((feature) => ({ feature, key: k.id, pool: k.poolId }))),
+      ].sort((x, y) => byteOrder(x.pool, y.pool) || keyOrder(x.key, y.key) || byteOrder(x.feature, y.feature));
+      if (named.length === 0) return [];
       const obstacle = a.kind === 'oauth' ? featureObstacleOf(a, at) : null;
-      if (named.length === 0 || obstacle === null) return [];
-      const ends = [canceledEndOf(a), a.planEndedAt].flatMap((end) => (end === null ? [] : [Date.parse(end)]));
-      const signedOutSince = ATTENTION.find((i) => i.kind === 'reauth_required' && i.subject.id === a.id)?.since ?? iso(at);
+      if (obstacle === null) return [];
       return [
         {
           ...ATTENTION_ITEM_SAMPLE,
@@ -118,12 +110,11 @@ export const featureAccountUnavailableOf = (
           detail: { account: a.id, label: a.label, obstacle, selections: named },
           kind: 'feature_account_unavailable' as const,
           pools: [...new Set(named.map((s) => s.pool))],
-          since: obstacle === 'ended' ? iso(Math.min(...ends)) : signedOutSince,
+          since: obstacle === 'ended' ? iso(termEndOf(a, at) ?? at) : (ATTENTION.find((i) => i.kind === 'reauth_required' && i.subject.id === a.id)?.since ?? iso(at)),
         },
       ];
     })
     .sort(bySinceThenSubject);
-};
 
 /**
  * A pool's exhaustion as the reader dates it from the rows: the first exhausted answer after the pool's last success,

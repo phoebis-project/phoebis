@@ -371,9 +371,14 @@ export type FeatureObstacle = 'ended' | 'unready';
  */
 export function featureObstacleOf(account: Account, now: number): FeatureObstacle | null {
   if (account.status === 'unpaired' || account.status === 'reauth_required') return 'unready';
+  return termEnded(account, now) ? 'ended' : null;
+}
+
+/** Whether the router reads the account's term as over: canceled with its saved end passed, or flagged plan ended. */
+export function termEnded(account: Pick<Account, 'canceled' | 'planEndedAt' | 'subscription'>, now: number): boolean {
   // As the routing crate's `term::ended` reads it, an end at the instant of now has passed.
   const passed = (at: string | null) => at !== null && Date.parse(at) <= now;
-  return passed(canceledEndOf(account)) || passed(account.planEndedAt) ? 'ended' : null;
+  return passed(canceledEndOf(account)) || passed(account.planEndedAt);
 }
 
 /** What refuses a feature call under the OAuth `account` at `now`, as the words behind its label, null for one that

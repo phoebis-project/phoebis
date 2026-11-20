@@ -11,7 +11,7 @@ import { armPoll, counted, readQuiet, type Streak, streakFailed, streakLanded, u
  * that finds a poll of the hook still out is skipped, and so is one while no rows show under `address` and the list's
  * read has not failed, since the list's own read is then still out. The caller hands in the list's last answer, its
  * error and its paging state, and reads back the rows to draw, the error to show, the pager's next cursor and the
- * pager's handlers, so nothing the caller passes depends on the hook's own state.
+ * pager's Next handler, so nothing the caller passes depends on the hook's own state.
  *
  * A list that answers `landedThrough` runs the poll under a watermark: every page of a poll reads the rows written
  * after it (`read`'s `landedAfter`), the list's own stamp first and then each poll's first page's, so a request that
@@ -32,14 +32,12 @@ export function useFollow<R>(input: {
   intervalMs: number;
   list: { landedThrough?: number; nextCursor: string | null; rows: R[] } | null;
   next: (cursor: string, to?: number) => void;
-  pagedTo: number | undefined;
   /** The page's own pause (an open drawer). A cursor page and a hidden tab are the hook's. */
   paused: boolean;
-  previous: () => void;
   read: (cursor: string | undefined, to: number, landedAfter?: number) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>;
   stale: boolean;
-}): { error: string | null; fresh: Set<string>; goNext: () => void; goPrevious: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>> } {
-  const { address, compare, cursor, error, fixedEnd, identity, intervalMs, list, next, pagedTo, paused, previous, read, stale } = input;
+}): { error: string | null; fresh: Set<string>; goNext: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>> } {
+  const { address, compare, cursor, error, fixedEnd, identity, intervalMs, list, next, paused, read, stale } = input;
   const [followed, setFollowed] = useState<Followed<R> | null>(null);
   // The tint marks what the last poll brought, or after the tab's return what its read and the tick after it brought,
   // and with auto reload off no poll follows to take it away.
@@ -164,9 +162,9 @@ export function useFollow<R>(input: {
     if (!nextCursor) return;
     // The cursor pauses the poll, and the tint marks what the last poll brought with no poll to take it away.
     setFollowed((f) => f && { ...f, fresh: new Set() });
-    next(nextCursor, walk?.to ?? pagedTo);
+    next(nextCursor, walk?.to);
   };
-  return { error: standIn === null ? error : null, fresh, goNext, goPrevious: previous, nextCursor, overrun, rows, setFollowed };
+  return { error: standIn === null ? error : null, fresh, goNext, nextCursor, overrun, rows, setFollowed };
 }
 
 /**
@@ -181,7 +179,7 @@ export function usePaging(address: string): {
   atFirst: boolean;
   cursor: string | undefined;
   /** Walks on to `cursor` and keeps this page's cursor for the way back. `to` is the end the walk carries from
-   * there, none for a walk without one. */
+   * there, and a walk given no end keeps the one it holds. */
   next: (cursor: string, to?: number) => void;
   pagedTo: number | undefined;
   /** Back to the page before this one, under the end the walk holds. */
@@ -194,7 +192,7 @@ export function usePaging(address: string): {
   return {
     atFirst: stack.length === 0,
     cursor,
-    next: (nextCursor, to) => setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor], to }),
+    next: (nextCursor, to) => setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor], to: to ?? pagedTo }),
     pagedTo,
     previous: () => setPaging({ for: address, cursor: stack.at(-1), stack: stack.slice(0, -1), to: pagedTo }),
     reset: () => setPaging({ for: address, stack: [] }),

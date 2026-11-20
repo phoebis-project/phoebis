@@ -217,7 +217,7 @@ async function settled() {
 /** The page's side of the hook: the paging a log reads under its address. */
 function Host({ input, seen }) {
   const paging = usePaging(input.address);
-  seen.push({ ...useFollow({ ...input, cursor: paging.cursor, next: paging.next, pagedTo: paging.pagedTo, previous: paging.previous }), paging });
+  seen.push({ ...useFollow({ ...input, cursor: paging.cursor, next: paging.next }), paging });
   return null;
 }
 
@@ -590,7 +590,7 @@ test('an older page pauses the poll and keeps the followed rows, and the first p
   act(() => clock.tick(5_000));
   await settled();
   assert.deepEqual(f.polls(), [ORIGIN + 5_000], 'the tick on the older page reads nothing');
-  act(() => f.last().goPrevious());
+  act(() => f.last().paging.previous());
   assert.deepEqual(f.last().rows.map(byId), followed, 'the first page draws the followed rows again');
   assert.deepEqual(f.polls(), [ORIGIN + 5_000, ORIGIN + 10_000], 'a full interval after the last answer, the first page reads at once');
   await settled();
@@ -610,7 +610,7 @@ test("Next from the first page keeps the first page's cursor on the stack, and P
   const f = follow();
   act(() => f.last().goNext());
   assert.deepEqual([f.last().paging.cursor, f.last().paging.atFirst], ['26', false], 'the first page, whose cursor is undefined, stands before the second');
-  act(() => f.last().goPrevious());
+  act(() => f.last().paging.previous());
   assert.deepEqual([f.last().paging.cursor, f.last().paging.atFirst], [undefined, true], 'Previous reads the first page, with nothing before it');
 });
 

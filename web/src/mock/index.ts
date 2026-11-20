@@ -16,14 +16,14 @@ import { type Clock, wallClock } from '@/lib/clock';
 import { has, lookup } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
-import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
+import { modelRulesRefusal, poolWarnings, termEnded, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf, readWindows } from '@/lib/quota';
 import { compareOrderKeys, compareRequests, orderKeyOf, requestOrder, type OrderKey } from '@/lib/requests';
 import { WINDOW_HOURS, WINDOW_KEY } from '@/lib/windows';
 import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, blankAccountRow, featureGrantsOf, lastReadingOf, usageOf, withholdsWindows } from './accounts';
-import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf, wholeHoursOf } from './analytics';
+import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, unusedAllowanceOf, wholeHoursOf } from './analytics';
 import { ATTENTION, byKindThenSince, featureAccountUnavailableOf, pairingExpiringOf } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
@@ -185,7 +185,7 @@ const subjectsTwice = (input: Pick<Partial<GuardrailInput>, 'keys' | 'pools'>): 
 };
 
 /** The accounts a key's choices name, in the shape the routes' check of a selection reads. */
-const namedFeatureAccounts = (words: Record<FeatureWord, KeyFeatureAccount>): FeatureAccountIds => perFeature((f) => (words[f].mode === 'account' ? words[f].accountId : null));
+const namedFeatureAccounts = (words: Record<FeatureWord, KeyFeatureAccount>): FeatureAccountIds => perFeature((f) => words[f].accountId);
 
 /** The route's 409 for a member another pool holds, since an account belongs to one pool. */
 const heldElsewhere = (members: PoolInput['members'], pools: { id: string; members: { accountId: string }[] }[], poolId: string): string | null => {
@@ -393,12 +393,6 @@ const budgetUntilOf = (member: BudgetedSeed, now: number): string | null =>
  * type but the free one, so a row with no document reports one too.
  */
 const reportsPlan = (a: Pick<Account, 'subscription'>): boolean => a.subscription?.organizationType !== 'claude_free';
-
-/** Whether the router reads the account's term as over: canceled with its saved end passed, or flagged plan ended. */
-const termEnded = (a: Account, now: number): boolean => {
-  const end = termEndOf(a, now);
-  return end !== null && end <= now;
-};
 
 /**
  * The pool route's reading of a member, in the selector's order: an account the registry lacks is unavailable, a member

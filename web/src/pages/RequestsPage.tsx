@@ -322,7 +322,7 @@ export function RequestsPage() {
   const requests = useAsync(() => api.listRequests(query), [query]);
   // The open drawer reads one of the rows, and an open menu or popover under the bar stands over the list, so the poll
   // waits for either to close. Under the feature calls the list is not drawn, so it waits there too.
-  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RequestLog>({
+  const { error, fresh, goNext, nextCursor, overrun, rows, setFollowed } = useFollow<RequestLog>({
     address,
     compare: requestOrder(order, dir),
     cursor,
@@ -332,9 +332,7 @@ export function RequestsPage() {
     intervalMs: polledMs,
     list: requests.data && listed(requests.data),
     next,
-    pagedTo,
     paused: Boolean(requestId) || holdCause !== null || section === 'feature-calls',
-    previous,
     read: (c, to, landedAfter) => api.listRequests(pollQuery(query, custom, span.to, to, c, landedAfter)).then(listed),
     stale: requests.stale,
   });
@@ -569,7 +567,7 @@ export function RequestsPage() {
                       ))}
                     </Select>
                   </label>
-                  <PagerNav atFirst={atFirst} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
+                  <PagerNav atFirst={atFirst} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={previous} />
                 </footer>
               </Card>
             </div>

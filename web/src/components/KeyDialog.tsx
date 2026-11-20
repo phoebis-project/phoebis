@@ -378,7 +378,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
         {accountsFailed !== null && <ErrorState title="The account list did not load" body={accountsFailed} retry={accountsRead.reload} />}
         {FEATURE_WORD_VALUES.map((feature) => {
           const choice = featureAccounts[feature];
-          const named = choice.mode === 'account' ? choice.accountId : null;
+          const named = choice.accountId;
           const options = featureAccountOptions(accounts, feature, poolNameOf, now, named);
           // The selection of the pool the form names, so a key moved in this dialog reads the pool it lands in.
           const inherited = pool?.featureAccounts[feature] ?? null;

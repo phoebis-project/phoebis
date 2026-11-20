@@ -89,7 +89,7 @@ export function RoutingLogPage() {
   const log = useAsync(() => api.listRoutingLog(query), [query]);
 
   // An open menu or popover under the bar stands over the list, so the poll waits for it to close.
-  const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RoutingLogRow>({
+  const { error, fresh, goNext, nextCursor, overrun, rows, setFollowed } = useFollow<RoutingLogRow>({
     address,
     // Ascending is the stream reversed whole, as the read pages it, so a tie at one instant flips with the time.
     compare: dir === 'asc' ? (a, b) => compareRows(b, a) : compareRows,
@@ -100,9 +100,7 @@ export function RoutingLogPage() {
     intervalMs: polledMs,
     list: log.data,
     next,
-    pagedTo,
     paused: holdCause !== null,
-    previous,
     // The route carries no watermark, so a poll stops at its first page of known rows. Walking from the newest page
     // makes that the first page the poll has seen whatever order the table shows, and `compare` merges in that order.
     // With no list rows of this query the poll stands in for the list's first page, so it reads the list's order.
@@ -226,7 +224,7 @@ export function RoutingLogPage() {
             </table>
           </div>
           <footer className="pager">
-            <PagerNav atFirst={atFirst} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={goPrevious} />
+            <PagerNav atFirst={atFirst} atLast={nextCursor === null} onFirst={resetPaging} onNext={goNext} onPrevious={previous} />
           </footer>
         </Card>
       </div>
