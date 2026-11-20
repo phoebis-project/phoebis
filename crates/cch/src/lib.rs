@@ -1119,11 +1119,16 @@ struct Scanner<'a> {
     edits: Vec<Edit>,
 }
 
-fn excluded_key(key: &[u8]) -> bool {
-    matches!(
-        key,
-        b"\"max_tokens\"" | b"\"fallbacks\"" | b"\"fallback_credit_token\""
-    )
+/// The client's hash cuts one of these members only where the value opens with the byte the client's key table pairs
+/// with the key: a quote for the credit token, a bracket for the fallbacks, a digit for the token limit. A member with
+/// any other value stays in the client's hash, as the `"fallbacks":"default"` of a compaction request does.
+fn excluded_member(key: &[u8], value_first: Option<&u8>) -> bool {
+    match key {
+        b"\"fallback_credit_token\"" => value_first == Some(&b'"'),
+        b"\"fallbacks\"" => value_first == Some(&b'['),
+        b"\"max_tokens\"" => value_first.is_some_and(u8::is_ascii_digit),
+        _ => false,
+    }
 }
 
 /// Builds the hash view without re-serializing: model string values are emptied and dispatch-only members are cut.
@@ -1296,7 +1301,7 @@ impl<'a> Scanner<'a> {
             }
             self.ws();
             let key = &self.body[ks..ke];
-            let excluded = collect && excluded_key(key);
+            let excluded = collect && excluded_member(key, self.body.get(self.pos));
             if collect && key == b"\"model\"" && self.body.get(self.pos) == Some(&b'"') {
                 let (vs, ve) = self.string()?;
                 self.edits.push(Edit {

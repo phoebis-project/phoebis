@@ -57,6 +57,37 @@ fn captured_first_party_bodies_resign_to_their_native_value() {
     );
 }
 
+/// A body the 2.1.329 client stamped, kept byte for byte with the client's digits. Each comes from one headless turn
+/// against a loopback listener, with `CLAUDE_CODE_EXTRA_BODY` adding the member under test with a value the client's
+/// hash keeps. The prompt id in the billing line is the run's own and must stay, since the hash covers it.
+fn assert_resigns_to_the_client_digits(native: &[u8]) {
+    // `sign` writes the five digits alone, so equal digits make the re-signed body the native one.
+    assert_eq!(cch_of(&sign(native).unwrap()), cch_of(native));
+}
+
+#[test]
+fn a_fallbacks_string_stays_in_the_hash() {
+    assert_resigns_to_the_client_digits(include_bytes!("fixtures/native_fallbacks_string.json"));
+}
+
+/// A view that cut a list or an object would still pass the string case.
+#[test]
+fn a_fallbacks_object_stays_in_the_hash() {
+    assert_resigns_to_the_client_digits(include_bytes!("fixtures/native_fallbacks_object.json"));
+}
+
+#[test]
+fn a_fallback_credit_token_object_stays_in_the_hash() {
+    assert_resigns_to_the_client_digits(include_bytes!("fixtures/native_credit_token_object.json"));
+}
+
+/// The body's own top-level `max_tokens` number is cut, so the string sits one level down, where the rule applies as
+/// it does at the top.
+#[test]
+fn a_max_tokens_string_stays_in_the_hash() {
+    assert_resigns_to_the_client_digits(include_bytes!("fixtures/native_max_tokens_string.json"));
+}
+
 #[test]
 fn a_nested_system_member_does_not_capture_the_scan() {
     let with_decoy = BASE.replacen(
