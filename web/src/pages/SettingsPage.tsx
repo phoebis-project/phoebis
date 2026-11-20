@@ -15,10 +15,9 @@ import { positionOf, UNIT_LABEL, UNIT_POSITIONS } from '@/lib/unit';
 
 /**
  * The list under the shown block names the terms of the block's lines, in this order, which is the blocks' own. The
- * prompt cache's entry comes last and is listed under every setup, since no block holds its line. `feature` is the
- * sentence a term gains under a feature setup.
+ * prompt cache's entry comes last and is listed under every setup, since no block holds its line.
  */
-const ENV_TERMS: { always?: boolean; body: string; feature?: string; term: string }[] = [
+const ENV_TERMS: { always?: boolean; body: string; term: string }[] = [
   {
     term: 'ANTHROPIC_BASE_URL',
     body: "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the companion mod's reports go here.",
@@ -30,12 +29,10 @@ const ENV_TERMS: { always?: boolean; body: string; feature?: string; term: strin
   {
     term: 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max',
     body: "Marks the session a consumer subscription, which no organization policy governs, so the client skips the policy check that under the first-party variable goes to api.anthropic.com with the router key, fails, and refuses the companion mod's reports. The client documents it nowhere, and a future build may drop it.",
-    feature: 'The claude.ai features need this line, as max or pro.',
   },
   {
     term: '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
     body: 'Makes Claude Code send its first-party request shape to the router: the billing hash, the cache diagnostics beta, and the first-party betas. Without it the client sends its reduced shape and the router restores the fields before relaying it. It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
-    feature: 'The claude.ai features need this line.',
   },
   {
     term: 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
@@ -50,28 +47,36 @@ const ENV_TERMS: { always?: boolean; body: string; feature?: string; term: strin
     body: 'Lets fast mode work behind the router: without it the client asks api.anthropic.com whether the organization has fast mode, the check fails with a router key, and fast mode stays off.',
   },
   {
-    term: 'CLAUDE_CODE_OAUTH_SCOPES',
-    body: 'The scopes the client believes its token holds. The connectors open under user:mcp_servers.',
+    term: 'BASE_URL',
+    body: "Holds the URL of the router's proxy listener.",
   },
   {
-    term: 'CLAUDE_ENV_FILE',
-    body: 'Names the file the launch script writes, which gives each Bash command back the proxy and trust settings the shell had.',
-  },
-  {
-    term: 'HTTPS_PROXY',
-    body: "Sends the client's other HTTPS calls through phoebis-proxy, which hands the two feature hosts to the router. Replace the address where the proxy runs elsewhere.",
-  },
-  {
-    term: 'NODE_EXTRA_CA_CERTS',
-    body: "Names the feature CA's certificate, which the launch script fetches from the router and checks against the fingerprint.",
-  },
-  {
-    term: 'NO_PROXY',
-    body: 'Keeps the model requests and the CA fetch on their direct road to the router. Replace the placeholder host as in the base URL, and add no other host: an entry that matches a feature host sends the router key to the upstream.',
+    term: 'ROUTER_KEY',
+    body: "Holds the key's secret.",
   },
   {
     term: 'PHOEBIS_FEATURE_CA_SHA256',
-    body: "The launch script's input for its fingerprint compare. The client reads no such variable.",
+    body: "Holds the fingerprint of the router's feature CA, from the operator. The client reads no such variable.",
+  },
+  {
+    term: 'SETUP',
+    body: 'Holds proxy for "Base URL and proxy", redirect for "Base URL and DNS redirect".',
+  },
+  {
+    term: 'PROXY_URL',
+    body: 'Holds the address of phoebis-proxy, read under SETUP=proxy alone.',
+  },
+  {
+    term: 'PRIVATE_HOSTS',
+    body: "Holds no, or yes for a hosts file of each start's own on Linux, read under SETUP=redirect alone.",
+  },
+  {
+    term: 'PLAN',
+    body: 'Holds max or pro.',
+  },
+  {
+    term: 'BASE_CA',
+    body: "Holds the file of a private CA behind the base URL's certificate, empty where it has none.",
   },
   {
     term: 'CLAUDE_CODE_PROMPT_CACHE_TTL=5m',
@@ -257,7 +262,7 @@ export function SettingsPage() {
               Put it in the env block of the client&apos;s settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.
             </span>
             <span className={snippet === null || !featureSetup ? 'client-config__subtitle client-config__unshown' : 'client-config__subtitle'}>
-              The launch script sets these lines. Give the script the base URL, a key from the Keys page and the fingerprint below.
+              Paste these lines over the inputs at the head of the launch script, and replace the key with one from the Keys page.
             </span>
           </span>
         }
@@ -293,9 +298,9 @@ export function SettingsPage() {
                   <a href={docsHref('claude-ai-features', 'the-launch-script')} target="_blank" rel="noreferrer">
                     The launch script
                   </a>{' '}
-                  of the claude.ai features page sets these lines. The script fetches the CA, compares the fingerprint,
-                  checks the road and writes the env file before it starts the client.
-                  {setup === 'redirect' && " The machine's name resolution must lead api.anthropic.com and mcp-proxy.anthropic.com to the router's feature listener on port 443."}
+                  of the claude.ai features page reads these inputs. It fetches the CA, compares the fingerprint, checks
+                  the road and writes the env file before it starts the client.
+                  {setup === 'redirect' && " The machine's name resolution must lead api.anthropic.com and mcp-proxy.anthropic.com to the router's feature listener on port 443. On Linux, PRIVATE_HOSTS set to yes leads both names to loopback for one start, where a relay passes port 443 on to the router, so live updates work where the router has a private address."}
                 </p>
               )}
               {featureSetup && s?.features && <FeatureCaLine features={s.features} />}
@@ -305,7 +310,7 @@ export function SettingsPage() {
                     <dt>
                       <code>{t.term}</code>
                     </dt>
-                    <dd>{featureSetup && t.feature !== undefined ? `${t.body} ${t.feature}` : t.body}</dd>
+                    <dd>{t.body}</dd>
                   </div>
                 ))}
               </dl>

@@ -31047,21 +31047,22 @@ const showSetup = async (page, label) => {
 }
 
 // The client card's two feature blocks on the mock's settings answer, whose `features` member comes from the captured
-// fixture through `SETTINGS_WIRE`. Each case puts the switch back on Base URL.
+// fixture through `SETTINGS_WIRE` and whose proxy bind, 127.0.0.1:8080, gives the base URL its port. Each case puts the
+// switch back on Base URL.
 const shownLines = (page) => (clientCard(page)?.querySelector('pre.snippet')?.textContent ?? '').split('\n');
-const fingerprintLine = `PHOEBIS_FEATURE_CA_SHA256=${decodeSettings(SETTINGS_WIRE).features.caFingerprint}`;
+const fingerprintLine = `PHOEBIS_FEATURE_CA_SHA256='${decodeSettings(SETTINGS_WIRE).features.caFingerprint}'`;
 {
   await showSetup(m, 'Base URL and proxy');
   const lines = shownLines(m);
-  results.push({ name: "/settings the Base URL and proxy block holds an HTTPS_PROXY line and the settings answer's fingerprint", ok: lines.some((l) => l.startsWith('HTTPS_PROXY=')) && lines.includes(fingerprintLine), missing: lines });
+  results.push({ name: "/settings the Base URL and proxy block holds the router's base URL, the setup's word and the settings answer's fingerprint", ok: lines.includes("BASE_URL='http://router.example.com:8080'") && lines.includes("SETUP='proxy'") && lines.includes(fingerprintLine), missing: lines });
   await showSetup(m, 'Base URL');
 }
 {
   await showSetup(m, 'Base URL and DNS redirect');
   const lines = shownLines(m);
   results.push({
-    name: "/settings the Base URL and DNS redirect block holds the settings answer's fingerprint and no HTTPS_PROXY or NO_PROXY line",
-    ok: lines.includes(fingerprintLine) && !lines.some((l) => l.startsWith('HTTPS_PROXY=') || l.startsWith('NO_PROXY=')),
+    name: "/settings the Base URL and DNS redirect block holds the setup's word and the settings answer's fingerprint",
+    ok: lines.includes("SETUP='redirect'") && lines.includes(fingerprintLine),
     missing: lines,
   });
   await showSetup(m, 'Base URL');

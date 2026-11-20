@@ -598,22 +598,26 @@ the status of a refused `CONNECT`.
 
 ### The inputs
 
-The console's client configuration card prints the lines of a feature setup with the router's fingerprint among them.
-The script reads eight inputs and sets each line of the card by itself:
+The script reads eight inputs at its head. For each feature setup the console's client configuration card prints the
+eight input lines in the script's order, with the router's values where it knows them: the base URL's scheme and port,
+the fingerprint of the feature CA and the setup's word. Paste the card's block over the input lines at the script's
+head, which replaces the eight lines with their comments, then replace `<key>` with the key's secret and the placeholder
+host `router.example.com` with the name that reaches the router. Each input, with the variable the script sets from it:
 
-| Input | Holds | The card's line it stands for |
+| Input | Holds | The variable it sets |
 | --- | --- | --- |
 | `BASE_URL` | the URL of the router's proxy listener | `ANTHROPIC_BASE_URL` |
 | `ROUTER_KEY` | the key's secret | `CLAUDE_CODE_OAUTH_TOKEN` |
-| `PHOEBIS_FEATURE_CA_SHA256` | the fingerprint of the router's feature CA, from the operator | `PHOEBIS_FEATURE_CA_SHA256`, as it stands |
-| `SETUP` | `proxy` for "Base URL and proxy", `redirect` for "Base URL and DNS redirect" | none, it picks the card's block |
+| `PHOEBIS_FEATURE_CA_SHA256` | the fingerprint of the router's feature CA, from the operator | none, the script compares the fetched CA with it |
+| `SETUP` | `proxy` for "Base URL and proxy", `redirect` for "Base URL and DNS redirect" | none, it picks the road and whether the script sets `HTTPS_PROXY` and `NO_PROXY` |
 | `PROXY_URL` | the address of `phoebis-proxy`, read under `SETUP=proxy` alone | `HTTPS_PROXY` |
 | `PRIVATE_HOSTS` | `no`, or `yes` for a hosts file of each start's own on Linux ([A hosts file for one start](#a-hosts-file-for-one-start)), read under `SETUP=redirect` alone | none |
 | `PLAN` | `max` or `pro` | `CLAUDE_CODE_SUBSCRIPTION_TYPE` |
-| `BASE_CA` | the file of a private CA behind the base URL's certificate, empty where it has none | none |
+| `BASE_CA` | the file of a private CA behind the base URL's certificate, empty where it has none | `NODE_EXTRA_CA_CERTS`, through `ca-bundle.pem` |
 
-The script writes each other line of the card, with the paths the card marks, and no line of the card goes under the
-inputs. A pasted proxy or trust line would reach each Bash command of the session as the shell's own value.
+The script sets each variable of the client by itself, with the paths of its own files ([The
+variables](#the-variables)), so the shell that starts it needs none of them. A proxy or trust line set in that shell
+would reach each Bash command of the session as the shell's own value.
 
 Ahead of the fetch the script stops where `ROUTER_KEY` or `PHOEBIS_FEATURE_CA_SHA256` is empty or still reads its
 placeholder, where `SETUP` is neither `proxy` nor `redirect`, where `PRIVATE_HOSTS` is neither `no` nor `yes` under
@@ -702,7 +706,7 @@ nothing. A start under `PRIVATE_HOSTS=yes` wrote both lines itself and prints no
 
 ### The variables
 
-The table holds the lines the script exports, in the card's order. [The environment
+The table holds the lines the script exports, in the script's order. [The environment
 block](client.md#the-environment-block) on The client describes the first seven, and the other lines have their one
 place here:
 
@@ -717,11 +721,11 @@ place here:
 | `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK` | `1` | Fast mode works, and the client sends one refused call less at each start. |
 | `CLAUDE_CODE_OAUTH_SCOPES` | `user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload` | The client opens the connectors under `user:mcp_servers`. The list is what the client believes of a token it does not hold, and what the upstream grants is a fact of the feature account's stored sign-in. |
 | `CLAUDE_ENV_FILE` | the path of `claude-env.sh` | Bash commands of the session get their environment back ([The env file](#the-env-file)). |
-| `HTTPS_PROXY` | `PROXY_URL`, under `SETUP=proxy` alone | The client's calls for the two feature hosts go through `phoebis-proxy`. |
 | `NODE_EXTRA_CA_CERTS` | the path of `feature-ca.pem`, or of `ca-bundle.pem` | The client trusts the feature CA. |
+| `HTTPS_PROXY` | `PROXY_URL`, under `SETUP=proxy` alone | The client's calls for the two feature hosts go through `phoebis-proxy`. |
 | `NO_PROXY` | the base URL's host, `localhost`, `127.0.0.1` and `::1`, under `SETUP=proxy` alone | The model requests go to the router directly, and no entry of the shell takes a feature host off the proxy. |
 
-`PHOEBIS_FEATURE_CA_SHA256`, the card's last line, is the script's input and no variable of the client.
+`PHOEBIS_FEATURE_CA_SHA256` is the script's input and no variable of the client.
 
 Under `SETUP=proxy` the client's `NO_PROXY` takes no entry of the shell. An inherited entry that covers a feature host
 would send the client's call for that host past the proxy, straight to the upstream and with the router key in it. The

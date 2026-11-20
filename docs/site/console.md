@@ -1698,29 +1698,32 @@ reaches the listener, and the scheme and the port too where a TLS proxy or a por
 it.`
 
 The two other blocks are the setups of a client that uses Artifacts and the claude.ai connectors through the router
-([claude.ai features](claude-ai-features.md)). Each holds the seven lines, then `CLAUDE_CODE_OAUTH_SCOPES`,
-`CLAUDE_ENV_FILE`, `NODE_EXTRA_CA_CERTS` and `PHOEBIS_FEATURE_CA_SHA256` with the router's feature CA fingerprint, and
-"Base URL and proxy" adds `HTTPS_PROXY=http://127.0.0.1:8318` and a `NO_PROXY` of the placeholder host and the loopback
-names, which the redirect's block leaves out. The router knows no client's files, so the file lines carry marked places.
-A feature block's lines are what the launch script of the claude.ai features page sets, and no reader pastes them, so
-the subtitle there reads "The launch script sets these lines. Give the script the base URL, a key from the Keys page and
-the fingerprint below." "Copy snippet" copies the block shown. Under the listener hint a second hint reads "The launch
-script of the claude.ai features page sets these lines. The script fetches the CA, compares the fingerprint, checks the
-road and writes the env file before it starts the client.", its first words a link to the script, and under the
-redirect's block it adds "The machine's name resolution must lead api.anthropic.com and mcp-proxy.anthropic.com to the
-router's feature listener on port 443." The line "Feature CA fingerprint" follows with the fingerprint, "Copy
-fingerprint" and "Download feature-ca.pem", which saves the CA's certificate from the settings answer as the file
-`feature-ca.pem`. On a router whose configuration names no `features.listen` a feature block shows only "This router
-serves no feature call until its configuration names features.listen." with a link to Installation. Before the settings
-arrive it shows a placeholder, and after a failed read the error with "Try again", each with no subtitle and no copy
-control.
+([claude.ai features](claude-ai-features.md)). Each holds the eight input lines of the launch script on that page, in
+the script's order: `BASE_URL`, `ROUTER_KEY`, `PHOEBIS_FEATURE_CA_SHA256`, `SETUP`, `PROXY_URL`, `PRIVATE_HOSTS`, `PLAN`
+and `BASE_CA`. The router fills in the three values it knows: the base URL as the "Base URL" block builds it, the
+feature CA's fingerprint, and the tab's setup, `proxy` under "Base URL and proxy" and `redirect` under "Base URL and DNS
+redirect". The other five read as the script's head reads them: `ROUTER_KEY='<key>'`,
+`PROXY_URL='http://127.0.0.1:8318'`, `PRIVATE_HOSTS='no'`, `PLAN='max'` and `BASE_CA=''`. Both blocks print
+`PRIVATE_HOSTS='no'`, which the script reads under `SETUP=redirect` alone. A reader pastes the block over the eight
+input lines at the script's head, which replaces them with their comments, and a paste that keeps `<key>` stops the
+start ahead of the fetch. The subtitle there reads "Paste these lines over the inputs at the head of the launch script,
+and replace the key with one from the Keys page." "Copy snippet" copies the block shown. Under the listener hint a
+second hint reads "The launch script of the claude.ai features page reads these inputs. It fetches the CA, compares the
+fingerprint, checks the road and writes the env file before it starts the client.", its first words a link to the
+script, and under the redirect's block it adds "The machine's name resolution must lead api.anthropic.com and
+mcp-proxy.anthropic.com to the router's feature listener on port 443. On Linux, PRIVATE_HOSTS set to yes leads both
+names to loopback for one start, where a relay passes port 443 on to the router, so live updates work where the router
+has a private address." The line "Feature CA fingerprint" follows with the fingerprint, "Copy fingerprint" and "Download
+feature-ca.pem", which saves the CA's certificate from the settings answer as the file `feature-ca.pem`. On a router
+whose configuration names no `features.listen` a feature block shows only "This router serves no feature call until its
+configuration names features.listen." with a link to Installation. Before the settings arrive it shows a placeholder,
+and after a failed read the error with "Try again", each with no subtitle and no copy control.
 
 One definition per variable follows the block, and the list follows the shown block: its lines in the block's order,
-then `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, which is defined under each setup although no block holds it. Under a feature
-block the definitions of `CLAUDE_CODE_SUBSCRIPTION_TYPE=max` and `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1` add that
-the claude.ai features need the line. [The environment block](client.md#the-environment-block) on The client explains
-each of the base block's seven lines, and [The variables](claude-ai-features.md#the-variables) on claude.ai features the
-lines a feature block adds. The view writes browser preferences alone and changes no router setting.
+then `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, which is defined under each setup although no block holds it. [The environment
+block](client.md#the-environment-block) on The client explains each of the base block's seven lines, and [The
+inputs](claude-ai-features.md#the-inputs) on claude.ai features the lines of a feature block. The view writes browser
+preferences alone and changes no router setting.
 
 ## Routing log
 

@@ -44,12 +44,11 @@ managed entry over a user or project entry.
 
 The card's Setup switch shows two more blocks, "Base URL and proxy" and "Base URL and DNS redirect", for a client that
 uses Artifacts and the claude.ai connectors through the router ([claude.ai features](claude-ai-features.md)). Each holds
-these seven lines, then `CLAUDE_CODE_OAUTH_SCOPES`, `CLAUDE_ENV_FILE`, `NODE_EXTRA_CA_CERTS` and the router's feature CA
-fingerprint as `PHOEBIS_FEATURE_CA_SHA256`, and the first adds `HTTPS_PROXY` and `NO_PROXY`. Their lines are what [the
-launch script](claude-ai-features.md#the-launch-script) of that page sets, and no reader pastes them: the script writes
-each line by itself, and a pasted proxy or trust line would reach each Bash command of the session as the shell's own
-value. Beside those two blocks the card shows the fingerprint, which the script takes as an input, with a copy control,
-and offers the CA's certificate as the file `feature-ca.pem`.
+the eight inputs of [the launch script](claude-ai-features.md#the-launch-script) of that page with the values the router
+knows: the base URL with the listener's scheme and port, the feature CA's fingerprint, and the setup's word. Paste the
+block over the inputs at the script's head and replace the key. The script then sets each line of the client's
+environment by itself, these seven among them. Beside those two blocks the card shows the fingerprint, which the script
+takes as an input, with a copy control, and offers the CA's certificate as the file `feature-ca.pem`.
 
 ### ANTHROPIC_BASE_URL
 

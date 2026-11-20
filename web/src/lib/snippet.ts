@@ -8,18 +8,18 @@ export const SETUPS = ['base', 'proxy', 'redirect'] as const;
 export type Setup = (typeof SETUPS)[number];
 export const SETUP_LABEL: Record<Setup, string> = { base: 'Base URL', proxy: 'Base URL and proxy', redirect: 'Base URL and DNS redirect' };
 
-/** Quoted in the line, since the list holds spaces and the block shows the lines as the launch script sets them. */
-const FEATURE_SCOPES = 'user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload';
-
 /**
- * The lines of one setup: the seven that point Claude Code at the router, and for a feature setup the lines the launch
- * script sets beside them.
+ * The lines of one setup: the seven that point Claude Code at the router, and for a feature setup the eight input lines
+ * of the launch script in its order, which a reader pastes over the inputs at the script's head. The script sets the
+ * client's environment itself, so a feature setup prints none of it.
  *
- * `ANTHROPIC_BASE_URL` takes its scheme from whether the proxy listener terminates TLS and its port from the
- * listener's bind, the two parts the router knows. The host stays a placeholder, since the router knows no host a
- * client reaches it at. Without a settings answer the URL reads the whole placeholder, https with no port, and a bind
- * that names no port reads none. The router knows no client's proxy and no client's files either, so those lines carry
- * the proxy's default address and marked places.
+ * The base URL takes its scheme from whether the proxy listener terminates TLS and its port from the listener's bind,
+ * the two parts the router knows. The host stays a placeholder, since the router knows no host a client reaches it at.
+ * Without a settings answer the URL reads the whole placeholder, https with no port, and a bind that names no port
+ * reads none. A feature setup's lines carry the router's fingerprint and the tab's setup word. The key stays a
+ * placeholder, since the router stores a hash of a key's secret and shows the secret once, and the proxy's address is
+ * its default, since the router knows no client's proxy. The lines carry none of the script's comments, which keep
+ * their one place in the script.
  *
  * Null for a feature setup without the answer's `features` member, which is a router without the feature listener or
  * an answer that has not arrived. The page tells the two apart by its own read's state.
@@ -31,15 +31,14 @@ export function snippetFor(setup: Setup, listeners: { proxy: string; proxyTls: b
   const base = [`ANTHROPIC_BASE_URL=${baseUrl}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1'];
   if (setup === 'base') return base.join('\n');
   if (features === null) return null;
-  // The redirect leads the two feature hosts to the router by name resolution, so it sets no proxy at all.
-  const proxied = setup === 'proxy';
   return [
-    ...base,
-    `CLAUDE_CODE_OAUTH_SCOPES="${FEATURE_SCOPES}"`,
-    'CLAUDE_ENV_FILE=<path of the env file>',
-    ...(proxied ? ['HTTPS_PROXY=http://127.0.0.1:8318'] : []),
-    'NODE_EXTRA_CA_CERTS=<path of feature-ca.pem>',
-    ...(proxied ? [`NO_PROXY=${PLACEHOLDER_HOST},localhost,127.0.0.1,::1`] : []),
-    `PHOEBIS_FEATURE_CA_SHA256=${features.caFingerprint}`,
+    `BASE_URL='${baseUrl}'`,
+    "ROUTER_KEY='<key>'",
+    `PHOEBIS_FEATURE_CA_SHA256='${features.caFingerprint}'`,
+    `SETUP='${setup}'`,
+    "PROXY_URL='http://127.0.0.1:8318'",
+    "PRIVATE_HOSTS='no'",
+    "PLAN='max'",
+    "BASE_CA=''",
   ].join('\n');
 }
