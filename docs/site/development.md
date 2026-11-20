@@ -396,10 +396,10 @@ refused until the router runs a build re-pinned to the client. To re-pin the pro
 
 The pages of this part live in this repository under `docs/site/`, with their navigation in `docs/nav.toml`. The
 documentation repository, [`phoebis-project/phoebis-docs`](https://github.com/phoebis-project/phoebis-docs), holds the
-site's configuration, its scripts, its start page, its theme and its workflows. Its build copies the `docs/site/` of
-each product into one tree under the product's folder, `router/` for these pages, merges the nav files and runs Zensical
-over the result. The build refuses a page that no nav entry names, and its link check fails on a nav entry whose page is
-gone, so a page that is added, renamed or removed changes `docs/nav.toml` in the same pull request.
+site's configuration, its fonts, its scripts, its start page, its theme and its workflows. Its build copies the
+`docs/site/` of each product into one tree under the product's folder, `router/` for these pages, merges the nav files
+and runs Zensical over the result. The build refuses a page that no nav entry names, and its link check fails on a nav
+entry whose page is gone, so a page that is added, renamed or removed changes `docs/nav.toml` in the same pull request.
 
 From a checkout of `phoebis-docs`, with a checkout of each product beside it, one command assembles the tree, serves it
 and assembles again when a page changes:
@@ -414,8 +414,9 @@ build and of the two checks, with the version of Zensical the workflow pins, so 
 workflow's does. The assembly writes `build/`, and the build writes `build/site/`. The two checks are arms of
 `scripts/check-site.py` in `phoebis-docs`. They print one line per problem, exit 1 on any and 2 on a usage error:
 
-- `links` walks the built site for an internal link or image that resolves to nothing, and for a link whose fragment
-  names no heading or anchor on the page it lands on.
+- `links` walks the built site for an internal link or an image that resolves to nothing, for a fragment that names no
+  heading or anchor on the page it lands on, for a `url()` or an `@import` of a style sheet that resolves to nothing and
+  for a link of a page or a style sheet to one of Google's two font hosts.
 - `prose` holds the site's prose to its mechanical rules, by path or, with no path, over each page of the build tree and
   the README of `phoebis-docs`: a bare `api_key` outside a code span, an em-dash or an en-dash, a line over 120 columns
   that is not a table row, a semicolon on a prose line, and a word from its list of words no page carries. It reads no
@@ -524,13 +525,14 @@ with a line that says which.
 The site deploys from `phoebis-docs` alone. Its `Deploy` workflow runs on a push to its `main`, on a manual start and on
 the start a product's push sends. It builds `phoebis-docs` at `main` and each product at its newest commit on `main`
 whose `Documentation` run ended green, and deploys to Pages. A commit of this repository that fails a job of
-`Documentation` is therefore not published, and no build of the companion or the proxy reads it: the site keeps these
-pages from the last commit that passed. A run that is still in progress when a deploy starts gets about five minutes to
-end. A run that failed for a reason outside its commit, such as a link to a page that the other product's newest green
-commit does not hold yet, stays red until someone starts it again, and its last job then starts the deploy. Where a
-product has no green run on `main` among its 100 newest, the deploy stops and the site keeps its last state, and each
-other build reads that product at `main`. The README of `phoebis-docs` holds the rules in full. The deploy job runs only
-from `main`.
+`Documentation` is therefore not published: the site keeps these pages from the last commit that passed. No build of the
+companion or the proxy reads the failed commit either, with one exception: a product with no green run, the case later
+in this paragraph. A run that is still in progress when a deploy starts gets about five minutes to end. A run that
+failed for a reason outside its commit, such as a link to a page that the other product's newest green commit does not
+hold yet, stays red until someone starts it again, and its last job then starts the deploy. Where a product has no green
+run on `main` among its 100 newest, the deploy stops and the site keeps its last state, and each build that is no deploy
+reads that product at `main`. The README of `phoebis-docs` holds the rules in full. The deploy job runs only from
+`main`.
 
 ## Releasing
 
