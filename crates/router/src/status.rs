@@ -1202,7 +1202,7 @@ mod tests {
             block(&lines, "  attention:")[..2],
             [
                 "    pool_exhausted Main since 12:16",
-                "    pairing_expiring Seat since 10-10 12:16",
+                "    feature_account_unavailable Seat since 10-10 12:16",
             ],
             "{screen}"
         );
