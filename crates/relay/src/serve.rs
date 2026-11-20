@@ -110,14 +110,20 @@ pub async fn serve(
     acceptor: Option<Arc<LiveAcceptor>>,
 ) -> std::io::Result<()> {
     let shutdown_mark = relay.shutdown_mark();
-    serve_recorded(
+    let app = router(relay).merge(extra);
+    let builder = http1_builder(limits.header_read_timeout);
+    accept_loop(
         "proxy",
         listener,
-        router(relay).merge(extra),
         stop,
         limits,
         shutdown_mark,
         acceptor,
+        move |stream, watcher| {
+            let (io, service) = recorded(stream, &app, None);
+            // No upgrades: no route on the relayed surface switches protocols.
+            watcher.watch(builder.serve_connection(io, service))
+        },
     )
     .await
 }
@@ -177,50 +183,23 @@ pub async fn serve_features(
     .await
 }
 
-/// Serves `app` on `listener` until `stop` flips, each request with the head the connection's recorder took and the
-/// connection's peer.
-async fn serve_recorded(
-    name: &'static str,
-    listener: TcpListener,
-    app: Router,
-    stop: watch::Receiver<bool>,
-    limits: Limits,
-    shutdown_mark: Option<ShutdownMark>,
-    acceptor: Option<Arc<LiveAcceptor>>,
-) -> std::io::Result<()> {
-    // HTTP/1 only. An h2c caller's head reaches the relay through hyper's own map, in hyper's own spelling,
-    // which is the silently different outbound shape the pass-through exists to prevent, so refusing the
-    // connection is the honest answer.
-    //
-    // Left at hyper's default parser configuration on purpose: the recorder ends a head where this builder's
-    // `httparse` pass ends it, and a leniency option set here would have to be given to the recorder too.
-    let builder = http1_builder(limits.header_read_timeout);
-    accept_loop(
-        name,
-        listener,
-        stop,
-        limits,
-        shutdown_mark,
-        acceptor,
-        move |stream, watcher| {
-            let (io, service) = recorded(stream, &app, None);
-            // No upgrades: no route on the relayed surface switches protocols.
-            watcher.watch(builder.serve_connection(io, service))
-        },
-    )
-    .await
-}
+/// The io `recorded` builds, named once so a socket's upgrade downcasts to the type the listener served.
+pub(crate) type RecordedIo = TokioIo<HeadRecorder<Accepted>>;
 
 /// The accepted stream under a recorder of its heads, and `app` behind the service that hands each request the head
 /// the recorder took, the connection's peer and `handover`, the connection's slot for a socket where it has one.
+///
+/// The builder that serves this io speaks HTTP/1 only. An h2c caller's head reaches the relay through hyper's own map,
+/// in hyper's own spelling, which is the silently different outbound shape the pass-through exists to prevent, so
+/// refusing the connection is the honest answer.
+///
+/// That builder stays at hyper's default parser configuration on purpose: the recorder ends a head where the builder's
+/// `httparse` pass ends it, and a leniency option set on the builder would have to be given to the recorder too.
 fn recorded(
     stream: Accepted,
     app: &Router,
     handover: Option<Handover>,
-) -> (
-    TokioIo<HeadRecorder<Accepted>>,
-    WithOriginalHead<TowerToHyperService<Router>>,
-) {
+) -> (RecordedIo, WithOriginalHead<TowerToHyperService<Router>>) {
     let peer = peer_of(&stream);
     let queue = head_queue();
     let io = TokioIo::new(HeadRecorder::new(stream, queue.clone()));

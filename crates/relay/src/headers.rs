@@ -253,12 +253,6 @@ pub(crate) fn feature_headers(
     hop: Hop,
     content_length: Option<usize>,
 ) -> Vec<(String, String)> {
-    // `None` for a socket, whose `Connection` and `Upgrade` lines leave as the caller sent them.
-    let connection = match hop {
-        Hop::Close => Some("close"),
-        Hop::KeepAlive => Some("keep-alive"),
-        Hop::Socket => None,
-    };
     let sent = sent_lines(caller, original);
     let mut out: Vec<(String, String)> = Vec::with_capacity(sent.len() + 2);
     let (mut saw_connection, mut saw_credential, mut saw_host, mut saw_length) =
@@ -276,13 +270,18 @@ pub(crate) fn feature_headers(
                     }
                 }
             }
-            "connection" | "upgrade" if connection.is_none() => {
+            "connection" | "upgrade" if hop == Hop::Socket => {
                 out.push((name.into(), value.into()));
             }
             "connection" => {
                 if !saw_connection {
                     saw_connection = true;
-                    out.extend(connection.map(|word| (name.into(), word.into())));
+                    let word = if hop == Hop::Close {
+                        "close"
+                    } else {
+                        "keep-alive"
+                    };
+                    out.push((name.into(), word.into()));
                 }
             }
             "content-length" => {

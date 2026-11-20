@@ -12,7 +12,6 @@ use axum::http::{header, HeaderMap, HeaderName, Uri};
 use axum::response::Response;
 use bytes::BytesMut;
 use hyper::upgrade::OnUpgrade;
-use hyper_util::rt::TokioIo;
 use phoebis_bus::FeatureOutcome;
 use phoebis_profile::{FeatureTable, Plane, SocketRow};
 use phoebis_routing::{feature_ready, Obstacle, RegistrySnapshot};
@@ -25,11 +24,10 @@ use tokio::time::{Instant, MissedTickBehavior};
 
 use super::forward::{answered, bodiless, case_of, Call, Ending};
 use super::{no_body, plain_path, Listener};
-use crate::casing::HeadRecorder;
 use crate::errors::UPSTREAM_UNREACHABLE;
 use crate::headers::Hop;
 use crate::messages::{built, copied_head, with_line, Relay};
-use crate::serve::{stopped, Accepted};
+use crate::serve::{stopped, Accepted, RecordedIo};
 
 /// The most one read of either leg hands over: the payload of one TLS record.
 const COPY_BUFFER: usize = 16 * 1024;
@@ -412,7 +410,7 @@ async fn carry(
         return CLIENT.failed;
     };
     // Each connection of the feature listener hands over this type.
-    let Ok(parts) = upgraded.downcast::<TokioIo<HeadRecorder<Accepted>>>() else {
+    let Ok(parts) = upgraded.downcast::<RecordedIo>() else {
         return CLIENT.failed;
     };
     // Out of the recorder too: its parse would meet each byte of the socket's life, and nothing reads its queue

@@ -2977,10 +2977,7 @@ impl Relay {
                 }
                 Err(AttemptFailure::Unresolved) => {
                     tracing::warn!(host = %authority, "the upstream host does not resolve");
-                    if let Some(leg_head) = leg_head.as_mut() {
-                        leg_head.goes_on();
-                    }
-                    return Leg::FailOver { auth_marked: false };
+                    Next::FailOver { auth_marked: false }
                 }
                 Err(failure) => {
                     let written = matches!(failure, AttemptFailure::Lost(_));
