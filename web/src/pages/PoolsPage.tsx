@@ -1840,7 +1840,7 @@ export function PoolDialog({
           {accountsFailed !== null && <ErrorState title="The account list did not load" body={accountsFailed} retry={onRetryAccounts} />}
           {FEATURE_WORD_VALUES.map((feature) => {
             const chosen = form.featureAccounts[feature];
-            const options = featureAccountOptions(accounts, feature, poolNameOf, chosen);
+            const options = featureAccountOptions(accounts, feature, poolNameOf, now, chosen);
             const account = chosen === null ? undefined : accounts.find((a) => a.id === chosen);
             return (
               <Field key={feature} label={FEATURE_LABEL[feature]} hint={account && featureStandingLine(account, now)}>

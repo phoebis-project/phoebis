@@ -377,7 +377,7 @@ export function KeyDialog({ accounts: accountsRead, open, onClose, onCreated, on
         {FEATURE_WORD_VALUES.map((feature) => {
           const choice = featureAccounts[feature];
           const named = choice.mode === 'account' ? choice.accountId : null;
-          const options = featureAccountOptions(accounts, feature, poolNameOf, named);
+          const options = featureAccountOptions(accounts, feature, poolNameOf, now, named);
           // The selection of the pool the form names, so a key moved in this dialog reads the pool it lands in.
           const inherited = pool?.featureAccounts[feature] ?? null;
           const inheritedAccount = inherited === null ? undefined : accounts.find((a) => a.id === inherited);

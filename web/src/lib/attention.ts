@@ -13,6 +13,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   client_drift: 'Client drift',
   destination_spent: 'Destination spent within the hour',
   expired_between_turns: 'Expired between turns',
+  feature_account_unavailable: 'Feature account unavailable',
   funding_required: 'Funding required',
   keepalive_bus_gaps: 'Keepalive bus gaps',
   keepalive_cap: 'Keepalive cap',
@@ -39,6 +40,7 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'info' | 'seriou
   client_drift: 'serious',
   destination_spent: 'warning',
   expired_between_turns: 'warning',
+  feature_account_unavailable: 'serious',
   funding_required: 'serious',
   keepalive_bus_gaps: 'serious',
   keepalive_cap: 'warning',
@@ -175,6 +177,10 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       return 'serves nothing until its credential is renewed';
     case 'funding_required':
       return 'serves nothing until its organization is funded again';
+    case 'feature_account_unavailable': {
+      const refused = `the feature calls of ${plural(list(d.selections).length, 'selection')} are refused`;
+      return d.obstacle === 'ended' ? `its plan ended, and ${refused}` : `it is signed out, and ${refused}`;
+    }
     case 'refresh_failed': {
       const error = text(d.last_error);
       return `${num(d.failures)} refreshes failed in a row${error ? `: ${error}` : ''}`;

@@ -1,9 +1,10 @@
-//! The twenty-one conditions, read fresh on every call: the account states, the pools and the stored limit resets from
-//! the registry, the refresh runs and the refresh token ends from the store, the parked records, the ledger's degraded
-//! state, the unpriced models its landing or a catalog listing saw, the routing conditions its hourly fold wrote and
-//! the expiries between turns its rollups count from the ledger, the routing state writer's, the listeners' pairs and
-//! the feature CA from the router, the bus gaps and the caps from the keepalive engine, the poll's standing from the
-//! usage service, and the exhaustions and drift refusals from the request outcomes the bus arm keeps.
+//! The twenty-two conditions, read fresh on every call: the account states, the pools, the feature selections and the
+//! stored limit resets from the registry, the refresh runs and the refresh token ends from the store, the parked
+//! records, the ledger's degraded state, the unpriced models its landing or a catalog listing saw, the routing
+//! conditions its hourly fold wrote and the expiries between turns its rollups count from the ledger, the routing state
+//! writer's, the listeners' pairs and the feature CA from the router, the bus gaps and the caps from the keepalive
+//! engine, the poll's standing from the usage service, and the exhaustions and drift refusals from the request outcomes
+//! the bus arm keeps.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -14,10 +15,11 @@ use phoebis_ledger::{
     WALL_SETTINGS, WEEKLY_CEILING_SETTING,
 };
 use phoebis_oauth::{grant_states, resets_left, Grant, GrantStatus, LimitResets, UsageService};
-use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle, DAY_MS};
+use phoebis_routing::term::end_of;
+use phoebis_routing::{feature_ready, shed_cap, Obstacle, RegistrySnapshot, RouterHandle, DAY_MS};
 use phoebis_store::{
-    AccountExtras, AccountKind, AccountRow, AccountState, PoolRow, RefreshHistory, ResolvedAttempt,
-    Settled, Store, StoreError,
+    AccountExtras, AccountKind, AccountRow, AccountState, Feature, FeatureOverride, PoolRow,
+    RefreshHistory, ResolvedAttempt, Settled, Store, StoreError,
 };
 use serde_json::json;
 
@@ -72,18 +74,19 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// Declared worst first, so the derived order is the ranking: a pool that serves nothing, a client build refused in
 /// every pool, a writer that cannot persist what the router decides (a degraded ledger also holds budgeted members
 /// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
-/// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, an account's
-/// refresh token near its fixed end, the router's own certificate about to lapse, an account's unused limit reset about
-/// to end, the fourth lapse with a date on it and the one whose miss stops no traffic, priced records the ledger file
-/// keeps until the next start or a replay lands them, a keepalive engine that missed bus events in the last day,
-/// windows that read stale, a model that served plan-funded traffic and prices nothing, while nothing is broken, and an
-/// account whose meter charged its windows off the cost model's figures. That last one names a pricing that is off and
-/// ranks above the four routing conditions, whose causes it can explain. Those four stop no traffic and rank under
-/// every kind that does, worst first among themselves: an account that reached its wall, a move whose destination was
-/// spent within the hour, a pool whose rounds found no destination with runway, and an account whose requests waited
-/// past twice its pool's stretch threshold in the day, a slow-down that worked for long. The keepalive engine's two
-/// warnings rank last: a cap filled to 90 percent or more, then cache entries that expired between turns on a pool that
-/// warms caches, under a key the keepalive may probe for.
+/// stand), an account that serves nothing until the operator acts, an account whose claude.ai features a selection asks
+/// for and that cannot serve them, an account's credential about to lapse, an account's refresh token near its fixed
+/// end, the router's own certificate about to lapse, an account's unused limit reset about to end, the fourth lapse
+/// with a date on it and the one whose miss stops no traffic, priced records the ledger file keeps until the next start
+/// or a replay lands them, a keepalive engine that missed bus events in the last day, windows that read stale, a model
+/// that served plan-funded traffic and prices nothing, while nothing is broken, and an account whose meter charged its
+/// windows off the cost model's figures. That last one names a pricing that is off and ranks above the four routing
+/// conditions, whose causes it can explain. Those four stop no traffic and rank under every kind that does, worst first
+/// among themselves: an account that reached its wall, a move whose destination was spent within the hour, a pool whose
+/// rounds found no destination with runway, and an account whose requests waited past twice its pool's stretch
+/// threshold in the day, a slow-down that worked for long. The keepalive engine's two warnings rank last: a cap filled
+/// to 90 percent or more, then cache entries that expired between turns on a pool that warms caches, under a key the
+/// keepalive may probe for.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
@@ -92,6 +95,7 @@ pub enum Kind {
     CertificateReloadFailed,
     ReauthRequired,
     FundingRequired,
+    FeatureAccountUnavailable,
     RefreshFailed,
     PairingExpiring,
     CertificateExpiring,
@@ -118,6 +122,7 @@ impl Kind {
             Kind::CertificateReloadFailed => "certificate_reload_failed",
             Kind::ReauthRequired => "reauth_required",
             Kind::FundingRequired => "funding_required",
+            Kind::FeatureAccountUnavailable => "feature_account_unavailable",
             Kind::RefreshFailed => "refresh_failed",
             Kind::PairingExpiring => "pairing_expiring",
             Kind::CertificateExpiring => "certificate_expiring",
@@ -151,6 +156,7 @@ impl Kind {
             | Kind::CertificateReloadFailed
             | Kind::ReauthRequired
             | Kind::FundingRequired
+            | Kind::FeatureAccountUnavailable
             | Kind::RefreshFailed
             | Kind::PairingExpiring
             | Kind::CertificateExpiring
@@ -502,6 +508,52 @@ fn account_pools(snapshot: &RegistrySnapshot) -> HashMap<String, Vec<String>> {
     pools
 }
 
+/// One feature selection that names an account: a pool's own, or a key's own with the key's pool.
+struct Selection {
+    feature: Feature,
+    key: Option<String>,
+    pool: String,
+}
+
+/// Each account's selections, from one walk of the snapshot's pools and keys, in the order the detail lists them.
+/// A key that inherits its pool's account is no selection of its own.
+fn feature_selections(snapshot: &RegistrySnapshot) -> HashMap<String, Vec<Selection>> {
+    let mut selections: HashMap<String, Vec<Selection>> = HashMap::new();
+    for pool in snapshot.pools() {
+        for feature in Feature::ALL {
+            if let Some(account) = pool.feature_accounts.get(feature) {
+                selections
+                    .entry(account.clone())
+                    .or_default()
+                    .push(Selection {
+                        feature,
+                        key: None,
+                        pool: pool.id.clone(),
+                    });
+            }
+        }
+    }
+    for key in snapshot.keys() {
+        for feature in Feature::ALL {
+            if let FeatureOverride::Account(account) = key.feature_accounts.get(feature) {
+                selections
+                    .entry(account.clone())
+                    .or_default()
+                    .push(Selection {
+                        feature,
+                        key: Some(key.id.clone()),
+                        pool: key.pool_id.clone(),
+                    });
+            }
+        }
+    }
+    // A pool's own selection has no key, and `None` orders first, so it stands ahead of its keys'.
+    for list in selections.values_mut() {
+        list.sort_by(|a, b| (&a.pool, &a.key, a.feature).cmp(&(&b.pool, &b.key, b.feature)));
+    }
+    selections
+}
+
 /// Each OAuth account's newest settled refresh attempts and its refresh token end as its stored credential holds it,
 /// both read from the store at each read rather than kept here: a run of failures survives a restart, and the later
 /// end a re-pair stores clears the item at the next read.
@@ -555,7 +607,8 @@ impl ResetFacts<'_> {
 /// `window_cleared` followed its spent window. `pairs` is `None` where no listener is built, and neither certificate
 /// kind then has a series. `feature_ca` is `None` on a router without the feature listener, and `features.ca` then
 /// has no series. `pairing_expiring` has a series for an OAuth account whose credential holds a refresh token end and
-/// for no other account. `unpriced` is the ledger's map, empty where no ledger is built.
+/// for no other account. `feature_account_unavailable` has a series for each OAuth account, since a selection names no
+/// other. `unpriced` is the ledger's map, empty where no ledger is built.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
@@ -574,6 +627,7 @@ pub(crate) fn conditions(
 ) -> Result<Vec<Condition>, AttentionError> {
     let snapshot = router.snapshot();
     let pools_of = account_pools(&snapshot);
+    let selections_of = feature_selections(&snapshot);
     // Each asked account's block is parsed once per read, for the reset-ending item and the wall's join both.
     let blocks: HashMap<&str, (&AccountRow, LimitResets)> = accounts
         .iter()
@@ -739,6 +793,51 @@ pub(crate) fn conditions(
             ));
         }
         if account.kind == AccountKind::Oauth {
+            let selections = selections_of
+                .get(&account.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            // The listener's own test, so the item holds exactly while the selections' feature calls get the `403`.
+            // A deletion clears each selection that names the account, so `Deleted` never holds the item.
+            let (obstacle, since) = match feature_ready(&snapshot, &account.id, now) {
+                Err(Obstacle::Unready) => (
+                    Some("unready"),
+                    resets
+                        .extras
+                        .get(&account.id)
+                        .map(|extras| extras.state_changed_at),
+                ),
+                // The least of the term's ends, which is no later than the read wherever the term has ended, so a
+                // later end that still stands dates nothing.
+                Err(Obstacle::Ended) => (
+                    Some("ended"),
+                    snapshot
+                        .term(&account.id)
+                        .and_then(|term| end_of(term, now)),
+                ),
+                _ => (None, None),
+            };
+            let holds = obstacle.is_some() && !selections.is_empty();
+            // The selecting pools, a member's pools or not, each once: the selections stand in the order of the pools.
+            let mut cards: Vec<String> = selections.iter().map(|s| s.pool.clone()).collect();
+            cards.dedup();
+            out.push(account_condition(
+                Kind::FeatureAccountUnavailable,
+                Subject::account(account),
+                &cards,
+                true,
+                holds,
+                since.filter(|_| holds),
+                json!({
+                    "account": account.id,
+                    "label": account.label,
+                    "obstacle": obstacle,
+                    "selections": selections
+                        .iter()
+                        .map(|s| json!({ "feature": s.feature.as_str(), "key": s.key, "pool": s.pool }))
+                        .collect::<Vec<_>>(),
+                }),
+            ));
             let refresh = refresh_facts.get(&account.id);
             let attempts = refresh
                 .map(|facts| facts.attempts.as_slice())

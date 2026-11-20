@@ -2702,7 +2702,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
             "analytics_unused_allowance",
             "/admin/analytics/unused_allowance",
         ),
-        ("attention", "/admin/attention"),
         ("dashboard", "/admin/dashboard"),
         ("guardrail_presets", "/admin/guardrails/presets"),
         (
@@ -3086,6 +3085,34 @@ async fn every_route_is_captured_and_holds_its_shape() {
     ] {
         hold(&planted, name, &format!("GET {route}"), body);
     }
+
+    // The seat, which the key selects for Artifacts, becomes the pool's own Artifacts choice too and then passes its
+    // plan's end, so the attention list holds an item of each kind of selection under the ended account. The pool's
+    // write moves its row and the change log, so it stands behind every capture that reads either. The mirror's
+    // copy of the change lands ahead of the replay below, which holds the ledger's writer.
+    let response = patch(
+        app,
+        "/admin/pools/main",
+        r#"{"feature_accounts":{"artifacts":"usage-seat"}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        200,
+        "the pool selects the seat for Artifacts"
+    );
+    mirror_caught_up(&parts, baseline).await;
+    assert!(parts.store.set_plan_ended("usage-seat", now - DAY).unwrap());
+    parts.router.reload().await.unwrap();
+    let response = get(app, "/admin/attention", Some(&cookie)).await;
+    assert_eq!(response.status(), 200, "/admin/attention");
+    hold(
+        &planted,
+        "attention",
+        "GET /admin/attention",
+        json(response).await,
+    );
 
     // Last, since it steps the clock: the refusal of a replay whose bound passed while the writer held a batch on the
     // capped file, then the writer freed.

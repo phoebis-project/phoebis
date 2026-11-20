@@ -547,8 +547,14 @@ test('the options reach beyond the pool and leave out what cannot be selected', 
     featureAccount({ featureGrants: ['artifacts'], id: 'bravo', label: 'Bravo' }),
   ];
   const poolOf = { alpha: 'Main', bravo: 'Spare', delta: 'Main' };
-  const options = d.featureAccountOptions(listed, 'connectors', (a) => poolOf[a.id] ?? null);
+  const options = d.featureAccountOptions(listed, 'connectors', (a) => poolOf[a.id] ?? null, NOW);
   assert.deepEqual(options.map((o) => [o.accountId, o.disabled]), [['bravo', true], ['charlie', false], ['alpha', false]]);
+});
+
+test("a signed-out account that holds the feature's scope is a disabled option", () => {
+  const studio = featureAccount({ id: 'studio', label: 'Studio', status: 'reauth_required' });
+  const options = d.featureAccountOptions([studio], 'connectors', () => 'Main', NOW);
+  assert.deepEqual(options.map((o) => [o.accountId, o.disabled]), [['studio', true]]);
 });
 
 test('an account that is paused and signed out stands as signed out', () => {

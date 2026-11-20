@@ -13013,7 +13013,7 @@ export const FIXTURES: Record<string, Fixture> = {
           }
         },
         {
-          "kind": "pairing_expiring",
+          "kind": "feature_account_unavailable",
           "subject": {
             "type": "account",
             "id": "usage-seat",
@@ -13030,7 +13030,38 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "account": "usage-seat",
             "label": "Seat",
-            "days_left": 2,
+            "obstacle": "ended",
+            "selections": [
+              {
+                "feature": "artifacts",
+                "key": null,
+                "pool": "main"
+              },
+              {
+                "feature": "artifacts",
+                "key": "desktop",
+                "pool": "main"
+              }
+            ]
+          }
+        },
+        {
+          "kind": "pairing_expiring",
+          "subject": {
+            "type": "account",
+            "id": "usage-seat",
+            "label": "Seat"
+          },
+          "link": {
+            "page": "accounts",
+            "id": "usage-seat"
+          },
+          "pools": [],
+          "since": 1791634600000,
+          "detail": {
+            "account": "usage-seat",
+            "label": "Seat",
+            "days_left": 1,
             "expires": 1791893800000
           }
         },

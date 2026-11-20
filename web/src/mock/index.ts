@@ -24,7 +24,7 @@ import { compareOrderKeys, compareRequests, orderKeyOf, requestOrder, type Order
 import { WINDOW_HOURS, WINDOW_KEY } from '@/lib/windows';
 import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, blankAccountRow, featureGrantsOf, lastReadingOf, usageOf, withholdsWindows } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf, wholeHoursOf } from './analytics';
-import { ATTENTION, byKindThenSince, pairingExpiringOf } from './attention';
+import { ATTENTION, byKindThenSince, featureAccountUnavailableOf, pairingExpiringOf } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, rowsOfDeletedKey, sessionsListedAt } from './operations';
@@ -1212,13 +1212,16 @@ export class MockApi implements Api {
 
   /**
    * The story's conditions, or none for a fresh installation, the parked records' items gone once a replay landed them.
-   * The refresh tokens near their end are read off the live accounts, so a re-pair's new end clears its item, and they
-   * stand at their kind's rank, as the route ranks the kinds.
+   * The refresh tokens near their end are read off the live accounts, so a re-pair's new end clears its item, and the
+   * feature accounts that cannot serve off the live pools, keys and accounts at the read's instant, the one the dialogs'
+   * options read, so a moved selection or a new pairing clears its item. Both stand at their kind's rank, as the route
+   * ranks the kinds.
    */
   getAttention() {
     const { attention } = ledger();
     const listed = this.parkedLanded ? attention.filter((i) => i.kind !== 'ledger_record_parked') : attention;
-    return latency([...listed, ...pairingExpiringOf(this.registry().accounts, NOW)].sort(byKindThenSince));
+    const registry = this.registry();
+    return latency([...listed, ...pairingExpiringOf(registry.accounts, NOW), ...featureAccountUnavailableOf(registry, mockClock.now())].sort(byKindThenSince));
   }
 
   async getCapturedBodies(requestId: string) {

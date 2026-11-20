@@ -791,7 +791,12 @@ Connectors. Each lists "None (refused)", a new pool's choice, which refuses the 
 account of the router in the order of the labels, as `{label} ({pool})` or `{label} (no pool)`. An API-key account is
 not listed, and an account whose stored sign-in lacks the feature's scope is listed disabled as
 `{label} ({pool}), holds no sign-in with this feature's scope. A new pairing adds it.`
-[Pairing an account](pairing.md#two-kinds-of-account) names the scope each feature needs. The selects wait for the
+[Pairing an account](pairing.md#two-kinds-of-account) names the scope each feature needs. An account that cannot
+serve a feature call is listed disabled with its reason as well, as
+`{label} ({pool}), needs re-auth. Feature calls are refused until it is paired again.`,
+`{label} ({pool}), is not paired. Feature calls are refused until it is paired.` or
+`{label} ({pool}), is past its plan's end. Feature calls are refused.` The scope's reason wins where both hold. A
+stored choice of a disabled account keeps its option, which the select draws as its value. The selects wait for the
 account list, a failed read of it draws "The account list did not load" with "Try again", and a stored choice the list
 does not hold reads `{id} (not listed)`. A change in Members leaves both choices as they are, so an account taken out of
 the pool stays selected and reads `(no pool)` at once. Under a choice whose account cannot serve, a line says why in the

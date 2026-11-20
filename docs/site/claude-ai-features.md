@@ -629,6 +629,12 @@ Before each forward the router reads the selected account's state. Three states 
 is, or it is past its subscription's end. The message closes on `(operator)` for the first two and on
 `(subscription_ended)` for the third.
 
+While a selection of a pool or of a key names an account that is not ready or past its subscription's end, the
+dashboard's attention line and the selecting pools' cards show the item `feature_account_unavailable`
+([Conditions and gauges](statistics.md#conditions-and-gauges)), and the selects of the pool dialog and the key dialog
+list the account disabled with its reason. The stored selection stays as it is, and its calls keep getting the `403`
+until the account can serve again or the selection moves.
+
 A paused account keeps serving the features. A pause stops the routing of model requests and nothing else, and the
 router keeps a paused account's sign-in fresh. A spent window, a cooldown, a budget, overage, the utilization ceiling, a
 slow-down and a session's pin do not stop a feature call either, since the router counts no feature call in a plan

@@ -324,15 +324,17 @@ export interface FeatureAccountOption {
 }
 
 /** The accounts a feature's selection can name: each OAuth account in the order of the labels, with its pool
- * behind the label, disabled where its grants lack the feature. An API-key account is left out. */
-export function featureAccountOptions(accounts: readonly Account[], feature: FeatureWord, poolNameOf: (account: Account) => string | null, selected: string | null = null): FeatureAccountOption[] {
+ * behind the label, disabled where its grants lack the feature or where it cannot serve a feature call at `now`,
+ * with the reason behind the pool, the scope's where both hold. An API-key account is left out. */
+export function featureAccountOptions(accounts: readonly Account[], feature: FeatureWord, poolNameOf: (account: Account) => string | null, now: number, selected: string | null = null): FeatureAccountOption[] {
   const options = accounts
     .filter(isSubscription)
     .sort((a, b) => a.label.localeCompare(b.label))
     .map((a) => {
       const named = `${a.label} (${poolNameOf(a) ?? 'no pool'})`;
-      const granted = a.featureGrants?.includes(feature) ?? false;
-      return { accountId: a.id, disabled: !granted, label: granted ? named : `${named}, holds no sign-in with this feature's scope. A new pairing adds it.` };
+      if (!(a.featureGrants?.includes(feature) ?? false)) return { accountId: a.id, disabled: true, label: `${named}, holds no sign-in with this feature's scope. A new pairing adds it.` };
+      const refused = featureRefusalWords(a, now);
+      return { accountId: a.id, disabled: refused !== null, label: refused === null ? named : `${named}, ${refused}` };
     });
   // A select whose value matches no option draws its first, so a stored choice the list lacks keeps an option of
   // its own.
@@ -358,18 +360,43 @@ export function featureAccountOf(value: string): string | null {
   return value.startsWith(ACCOUNT_VALUE) ? value.slice(ACCOUNT_VALUE.length) : null;
 }
 
+/** What keeps a feature call from going out under an account, in the attention item's words. */
+export type FeatureObstacle = 'ended' | 'unready';
+
+/**
+ * What refuses a feature call under the OAuth `account` at `now` (Unix milliseconds), null for one that serves: the
+ * disabled option, the line under a choice and the mock's attention item all read it. In the order the router admits a
+ * feature call, it refuses an account that is not ready before one past its end, and a pause or a cooldown stops model
+ * requests alone.
+ */
+export function featureObstacleOf(account: Account, now: number): FeatureObstacle | null {
+  if (account.status === 'unpaired' || account.status === 'reauth_required') return 'unready';
+  // As the routing crate's `term::ended` reads it, an end at the instant of now has passed.
+  const passed = (at: string | null) => at !== null && Date.parse(at) <= now;
+  return passed(canceledEndOf(account)) || passed(account.planEndedAt) ? 'ended' : null;
+}
+
+/** What refuses a feature call under the OAuth `account` at `now`, as the words behind its label, null for one that
+ * serves. */
+function featureRefusalWords(account: Account, now: number): string | null {
+  switch (featureObstacleOf(account, now)) {
+    case 'unready':
+      return account.status === 'unpaired' ? 'is not paired. Feature calls are refused until it is paired.' : 'needs re-auth. Feature calls are refused until it is paired again.';
+    case 'ended':
+      return "is past its plan's end. Feature calls are refused.";
+    case null:
+      return null;
+  }
+}
+
 /** The line under a choice at `now` (Unix milliseconds), null for an account that serves. A state that refuses
  * reads ahead of a pause. */
 export function featureStandingLine(account: Account, now: number): string | null {
   const { label, status } = account;
-  // In the order the router admits a feature call: it refuses an account that is not ready, then one past its end, and
-  // the pause stops model requests alone.
-  if (status === 'unpaired') return `${label} is not paired. Feature calls are refused until it is paired.`;
-  if (status === 'reauth_required') return `${label} needs re-auth. Feature calls are refused until it is paired again.`;
+  // An API-key account's state, which no selection names and the options leave out, so the line alone reads it.
   if (status === 'funding_required') return `${label}'s organization needs funding. Feature calls are refused until then.`;
-  // As the routing crate's `term::ended` reads it, an end at the instant of now has passed.
-  const passed = (at: string | null) => at !== null && Date.parse(at) <= now;
-  if (passed(canceledEndOf(account)) || passed(account.planEndedAt)) return `${label} is past its plan's end. Feature calls are refused.`;
+  const refused = featureRefusalWords(account, now);
+  if (refused !== null) return `${label} ${refused}`;
   return account.routingEnabled ? null : `${label} is paused. The pause stops its model requests, and its claude.ai features keep working.`;
 }
 

@@ -388,7 +388,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'pairing_expiring', 'certificate_expiring', 'limit_reset_ending', 'ledger_record_parked', 'keepalive_bus_gaps', 'poll_backoff', 'model_unpriced', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long', 'keepalive_cap', 'expired_between_turns'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'feature_account_unavailable', 'refresh_failed', 'pairing_expiring', 'certificate_expiring', 'limit_reset_ending', 'ledger_record_parked', 'keepalive_bus_gaps', 'poll_backoff', 'model_unpriced', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long', 'keepalive_cap', 'expired_between_turns'] as const;
 /** `unknown` stands for a kind this console does not know, which the route never answers under that name. */
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number] | 'unknown';
 

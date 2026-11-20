@@ -1,4 +1,4 @@
-//! The twenty-one conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the
+//! The twenty-two conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the
 //! clear, the router's own components among them, a deleted subject's series gone unless a parked record still names
 //! it, a refresh run read back by a second reader, a listener's pair read on the read's clock, an unpriced model the
 //! ledger's landing saw, the keepalive engine's standing, and the gauge the metrics listener scrapes from the same
@@ -20,8 +20,8 @@ use phoebis_bus::{Kind as RequestKind, Origin, Outcome, QUEUE_DEPTH};
 use phoebis_ledger::{AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord};
 use phoebis_oauth::PollOutcome;
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, AttemptOutcome, NewBundle, Secret,
-    StateCause, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, AccountUpdate, AttemptOutcome, Cancellation,
+    MemberWrite, NewBundle, PoolRow, Secret, StateCause, StorageKey, Store,
 };
 use serde_json::json;
 use tower::ServiceExt;
@@ -57,6 +57,7 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
         [
             ("destination_spent", "business".to_string(), false),
             ("expired_between_turns", "keepalive".to_string(), false),
+            ("feature_account_unavailable", "business".to_string(), false),
             ("funding_required", "direct".to_string(), false),
             ("keepalive_bus_gaps", "keepalive".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
@@ -74,7 +75,8 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
             ("writer_degraded", "routing".to_string(), false),
         ],
         "every account carries its re-auth state, an API key its funding, and an OAuth account its refresh run, \
-         its spent destinations, its walls, its slowed spans and its meter drift and, before any poll status exists, \
+         its refused feature selections, its spent destinations, its walls, its slowed spans and its meter drift and, \
+         before any poll status exists, \
          its backoff and, as an account the poll asks, its limit resets about to end, \
          while every pool carries its parked records and its rounds without runway, each writer its state, \
          and the keepalive engine its bus gaps and its expiries between turns"
@@ -99,6 +101,7 @@ async fn each_loaded_pair_has_a_series_of_both_certificate_kinds_at_zero_while_n
             ("certificate_reload_failed", "proxy.tls".to_string(), false),
             ("destination_spent", "business".to_string(), false),
             ("expired_between_turns", "keepalive".to_string(), false),
+            ("feature_account_unavailable", "business".to_string(), false),
             ("funding_required", "direct".to_string(), false),
             ("keepalive_bus_gaps", "keepalive".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
@@ -606,6 +609,105 @@ async fn the_account_states_hold_by_kind_and_date_from_the_instant_the_registry_
         !find(&conditions, Kind::FundingRequired, "direct")
             .unwrap()
             .holds
+    );
+}
+
+/// Sets the Artifacts selection of `pool` and reloads, since the feature kind reads the router's snapshot.
+async fn select_artifacts(rig: &Rig, pool: &str, account: Option<&str>) {
+    let mut row = rig.store.pool(pool).unwrap().unwrap();
+    row.feature_accounts.artifacts = account.map(Into::into);
+    rig.store
+        .update_pool_with_members_and_guardrails(&row, row.updated_at, None, None, "test")
+        .unwrap();
+    rig.router.reload().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_ended_account_raises_the_feature_kind_while_a_selection_names_it_and_none_without_one()
+{
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    rig.store
+        .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
+        .unwrap();
+    rig.store
+        .set_canceled(
+            "a",
+            Cancellation::On {
+                ends_at: Some(NOW - DAY),
+            },
+        )
+        .unwrap();
+    select_artifacts(&rig, "main", Some("a")).await;
+    assert_eq!(
+        find(&read(&attention, NOW), Kind::FeatureAccountUnavailable, "a").map(|c| c.holds),
+        Some(true),
+        "a ready account past its subscription's end refuses the pool's Artifacts calls"
+    );
+    select_artifacts(&rig, "main", None).await;
+    assert_eq!(
+        find(&read(&attention, NOW), Kind::FeatureAccountUnavailable, "a").map(|c| c.holds),
+        Some(false),
+        "an ended account no selection names refuses no feature call"
+    );
+}
+
+#[tokio::test]
+async fn an_account_a_pool_selects_without_being_its_member_joins_that_pools_card() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    rig.store
+        .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
+        .unwrap();
+    mark(&rig, "a", AccountState::ReauthRequired, NOW);
+    rig.store
+        .insert_pool_with_members(
+            &PoolRow::for_tests("home"),
+            Some(&[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            }]),
+            "test",
+        )
+        .unwrap();
+    let mut guest = PoolRow::for_tests("guest");
+    guest.feature_accounts.connectors = Some("a".into());
+    rig.store.insert_pool(&guest, "test").unwrap();
+    rig.router.reload().await.unwrap();
+    let conditions = read(&attention, NOW);
+    let item = find(&conditions, Kind::FeatureAccountUnavailable, "a").unwrap();
+    assert_eq!(
+        (item.holds, &item.pools),
+        (true, &vec!["guest".to_string()]),
+        "the card is the selecting pool's, and the pool the account is a member of selects nothing"
+    );
+}
+
+#[tokio::test]
+async fn an_ended_accounts_item_dates_from_the_end_that_has_passed() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    rig.store
+        .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
+        .unwrap();
+    rig.store
+        .set_canceled(
+            "a",
+            Cancellation::On {
+                ends_at: Some(NOW + DAY),
+            },
+        )
+        .unwrap();
+    assert!(rig.store.set_plan_ended("a", NOW - DAY).unwrap());
+    select_artifacts(&rig, "main", Some("a")).await;
+    let conditions = read(&attention, NOW);
+    let item = find(&conditions, Kind::FeatureAccountUnavailable, "a").unwrap();
+    assert_eq!(
+        (item.holds, item.since),
+        (true, Some(NOW - DAY)),
+        "the plan's end a day ago dates the item, not the cancellation's end a day ahead"
     );
 }
 

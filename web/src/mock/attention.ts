@@ -1,9 +1,10 @@
-import type { Account, AttentionItem, Reconciliation, RoutingEvent } from '@/api/types';
-import { ATTENTION_KIND_VALUES } from '@/api/types';
+import type { Account, ApiKey, AttentionItem, FeatureWord, Pool, Reconciliation, RoutingEvent } from '@/api/types';
+import { ATTENTION_KIND_VALUES, FEATURE_WORD_VALUES } from '@/api/types';
 import { MIN_RISE, ratioOff } from '@/lib/analytics';
 import { lookup } from '@/lib/counts';
-import { tokensTotal, undatedModel } from '@/lib/format';
-import { readWindows } from '@/lib/quota';
+import { byteOrder, tokensTotal, undatedModel } from '@/lib/format';
+import { featureObstacleOf } from '@/lib/forms';
+import { canceledEndOf, readWindows } from '@/lib/quota';
 import { WINDOW_KEY, hoursOfKey, windowEntry } from '@/lib/windows';
 import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
@@ -68,6 +69,61 @@ export const pairingExpiringOf = (accounts: readonly Account[], at: number): Att
       ];
     })
     .sort(bySinceThenSubject);
+
+/** One feature selection that names an account, as the reader's detail lists it. */
+interface FeatureSelection {
+  feature: FeatureWord;
+  key: string | null;
+  pool: string;
+}
+
+/** A pool's own selection, which names no key, ahead of its keys'. */
+const keyOrder = (x: string | null, y: string | null): number => (x === y ? 0 : x === null ? -1 : y === null ? 1 : byteOrder(x, y));
+
+/**
+ * The `feature_account_unavailable` items of the registry at an instant, by the reader's rule and in the route's
+ * order: one for each OAuth account that a pool's own selection or a key's own names and that `featureObstacleOf`
+ * refuses at `at`, the rule the dialogs' disabled option reads. A key that inherits its pool's account selects nothing
+ * of its own. The selections run by pool, a pool's own ahead of its keys', then by key and feature, and their pools are
+ * the cards, a member's pools or not. A signed-out account dates from the story's re-auth item of the account where one
+ * stands, since the console's row holds no instant of the change, else from the read. One past its end dates from the
+ * earliest of its ends, as the reader's `term::end_of` does.
+ */
+export const featureAccountUnavailableOf = (
+  registry: { accounts: readonly Account[]; keys: readonly Pick<ApiKey, 'featureAccounts' | 'id' | 'poolId'>[]; pools: readonly Pick<Pool, 'featureAccounts' | 'id'>[] },
+  at: number,
+): AttentionItem[] => {
+  const selections = new Map<string, FeatureSelection[]>();
+  const select = (accountId: string | null, selection: FeatureSelection) => {
+    if (accountId !== null) selections.set(accountId, [...(selections.get(accountId) ?? []), selection]);
+  };
+  for (const p of registry.pools) for (const feature of FEATURE_WORD_VALUES) select(p.featureAccounts[feature], { feature, key: null, pool: p.id });
+  for (const k of registry.keys) {
+    for (const feature of FEATURE_WORD_VALUES) {
+      const choice = k.featureAccounts[feature];
+      select(choice.mode === 'account' ? choice.accountId : null, { feature, key: k.id, pool: k.poolId });
+    }
+  }
+  return registry.accounts
+    .flatMap((a) => {
+      const named = [...(selections.get(a.id) ?? [])].sort((x, y) => byteOrder(x.pool, y.pool) || keyOrder(x.key, y.key) || byteOrder(x.feature, y.feature));
+      const obstacle = a.kind === 'oauth' ? featureObstacleOf(a, at) : null;
+      if (named.length === 0 || obstacle === null) return [];
+      const ends = [canceledEndOf(a), a.planEndedAt].flatMap((end) => (end === null ? [] : [Date.parse(end)]));
+      const signedOutSince = ATTENTION.find((i) => i.kind === 'reauth_required' && i.subject.id === a.id)?.since ?? iso(at);
+      return [
+        {
+          ...ATTENTION_ITEM_SAMPLE,
+          ...ofAccount(a.id, a.label),
+          detail: { account: a.id, label: a.label, obstacle, selections: named },
+          kind: 'feature_account_unavailable' as const,
+          pools: [...new Set(named.map((s) => s.pool))],
+          since: obstacle === 'ended' ? iso(Math.min(...ends)) : signedOutSince,
+        },
+      ];
+    })
+    .sort(bySinceThenSubject);
+};
 
 /**
  * A pool's exhaustion as the reader dates it from the rows: the first exhausted answer after the pool's last success,
@@ -339,22 +395,23 @@ const RESET_ITEMS: AttentionItem[] = ACCOUNTS.flatMap((a) => {
 }).sort(bySinceThenSubject);
 
 /**
- * One item per kind but a failed certificate reload, a refresh token near its end, which `pairingExpiringOf` reads off
- * the live accounts, a certificate near its end, which holds on the proxy listener and the feature CA, and a wall,
- * which holds on three, on the story's accounts, pools, keys, proxy listener, feature CA, models and keepalive engine,
- * in the route's order: jobs exhausted from the runner's first request after its one member spent the day's budget, a
- * client build refused on the laptop key, the routing state writer keeping its writes in memory, legacy's lapsed
- * credential, the Overflow workspace out of funding as its account reads, legacy's refreshes failing, the proxy
- * listener's certificate 12 days from its end, the feature CA in the data directory of the story's storage path 20 days
- * from its end, nightly's reset 4 days from its end, a priced record of the jobs pool's one member parked in the ledger
- * file, the keepalive engine's bus gaps, the backoff secondary's poll is in, Sonnet 4.5 priced nothing, nightly's
- * 5-hour window charged twice the table up to its 13:11 reset, nightly's wall at 12:01, secondary's after the 11:00
- * round, which secondary's reset can clear, and studio's at 14:20 after its stretch round, nightly spent after the
- * least-bad move onto it, the all pool's round that found no destination with runway, studio slowed in work for 2 h 8
- * min of the day, the engine's retained prompts at 92 percent of their cap, and the day's expiries between turns a
- * probe could have prevented. The meter drift reads the reconciled windows, the four routing conditions the routing
- * log's events, as the ledger folds them, the reset item and the wall's reset the stored blocks, the two keepalive
- * items the overview's figures, and the expiries the ledger rows of the day.
+ * One item per kind but a failed certificate reload, a refresh token near its end and a feature account that cannot
+ * serve, which `pairingExpiringOf` and `featureAccountUnavailableOf` read off the live registry, a certificate near its
+ * end, which holds on the proxy listener and the feature CA, and a wall, which holds on three, on the story's accounts,
+ * pools, keys, proxy listener, feature CA, models and keepalive engine, in the route's order: jobs exhausted from the
+ * runner's first request after its one member spent the day's budget, a client build refused on the laptop key, the
+ * routing state writer keeping its writes in memory, legacy's lapsed credential, the Overflow workspace out of funding
+ * as its account reads, legacy's refreshes failing, the proxy listener's certificate 12 days from its end, the feature
+ * CA in the data directory of the story's storage path 20 days from its end, nightly's reset 4 days from its end, a
+ * priced record of the jobs pool's one member parked in the ledger file, the keepalive engine's bus gaps, the backoff
+ * secondary's poll is in, Sonnet 4.5 priced nothing, nightly's 5-hour window charged twice the table up to its 13:11
+ * reset, nightly's wall at 12:01, secondary's after the 11:00 round, which secondary's reset can clear, and studio's at
+ * 14:20 after its stretch round, nightly spent after the least-bad move onto it, the all pool's round that found no
+ * destination with runway, studio slowed in work for 2 h 8 min of the day, the engine's retained prompts at 92 percent
+ * of their cap, and the day's expiries between turns a probe could have prevented. The meter drift reads the
+ * reconciled windows, the four routing conditions the routing log's events, as the ledger folds them, the reset item
+ * and the wall's reset the stored blocks, the two keepalive items the overview's figures, and the expiries the ledger
+ * rows of the day.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted

@@ -775,6 +775,9 @@ await forView('/', async () => {
     ['State writer degraded: routing', 'badge--serious', null, ['routing state is kept in memory until the registry file takes writes again', 'component: routing']],
     ['Re-auth required: legacy', 'badge--critical', '/accounts/legacy', ['serves nothing until its credential is renewed', 'account: legacy', 'label: legacy']],
     ['Funding required: Overflow workspace', 'badge--serious', '/accounts/overflow', ['account: overflow', 'label: Overflow workspace']],
+    // The jobs pool's key batch selects legacy for Connectors, and legacy is signed out (`featureAccountUnavailableOf`
+    // in mock/attention.ts over the pools seed), so the item sits on the jobs card and its title leads with no sentence.
+    ['Feature account unavailable: legacy', 'badge--serious', '/accounts/legacy', ['account: legacy', 'label: legacy', 'obstacle: unready', 'selections: [{"feature":"connectors","key":"batch","pool":"jobs"}]']],
     ['Credential refresh failed: legacy', 'badge--serious', '/accounts/legacy', ['5 refreshes failed in a row: refresh_token rejected: invalid_grant', 'account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
     // The refresh tokens near their end rank after the failed refreshes, oldest first: legacy's ended 2 days and 2
     // hours before the mock's load and reserve's ends 2 days after it (the two seeds in mock/accounts.ts). The smoke
@@ -882,16 +885,16 @@ await forView('/', async () => {
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's without a usable reset the routing log, a reset item's and a wall's that a reset can clear the account's Quota card, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all twenty-four, nightly's reset item among them, while no layout folds it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's without a usable reset the routing log, a reset item's and a wall's that a reset can clear the account's Quota card, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all twenty-five, nightly's reset item among them, while no layout folds it",
     ok:
-      lead() === '24 need attention' &&
+      lead() === '25 need attention' &&
       unpriced !== undefined &&
       drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
-      ages[8] === 'started 18d ago' &&
-      /^started 1h( 1m)? ago$/.test(ages[11] ?? '') &&
-      /^started 4[23]m ago$/.test(ages[13] ?? '') &&
+      ages[9] === 'started 18d ago' &&
+      /^started 1h( 1m)? ago$/.test(ages[12] ?? '') &&
+      /^started 4[23]m ago$/.test(ages[14] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
     missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],
@@ -6467,7 +6470,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   };
   const aged = ([age, titled]) => age !== null && age === titled && /^(now|\d+[dhms]( \d+[hm])? ago)$/.test(age);
   const rowAges = (name) => [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map(ageOf);
-  // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
+  // The story's items: jobs is exhausted, holds a parked record and draws legacy's refused feature calls, since its key
+  // batch selects legacy for Connectors while legacy is signed out. all draws the laptop key's client drift, the
   // Overflow workspace out of funding, nightly's reset that ends in four days, secondary's poll backoff, nightly's
   // meter drift and the three routing conditions (the walls on nightly and secondary, nightly spent within the hour of
   // a move, and all's round without a destination). work draws studio's wall after the round its stretch fired, in the
@@ -6477,10 +6481,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, each row ending with its age, and an account's slow-down as the words without the subject",
     ok:
-      rowAges('jobs').length === 2 &&
+      rowAges('jobs').length === 3 &&
       rowAges('work').length === 2 &&
       [...rowAges('jobs'), ...rowAges('all'), ...rowAges('work')].every(aged) &&
-      JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Priced record parked', 'jobs', null]]) &&
+      JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Feature account unavailable', 'legacy', '/accounts/legacy'], ['Priced record parked', 'jobs', null]]) &&
       JSON.stringify(attentionRows('all')) ===
         JSON.stringify([
           ['Client drift', '2.1.271', '/keys#laptop'],
@@ -6799,6 +6803,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       last === `Opens the Routing log: pool jobs, exhausted, since ${exhausted.since.slice(11, 16)}` &&
       JSON.stringify(others) ===
         JSON.stringify([
+          ['Feature account unavailable', '/accounts/legacy'],
           ['Priced record parked', null],
           ['Client drift', '/keys#laptop'],
           ['Funding required', '/accounts/overflow'],

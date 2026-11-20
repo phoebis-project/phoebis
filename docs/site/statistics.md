@@ -760,6 +760,7 @@ ledger's hourly rollups, holds again at the first read.
 | `certificate_reload_failed` | serious | the listener key | a reload lands or the router restarts |
 | `reauth_required` | critical | the account | the account is paired again, or an API-key account gets a new secret |
 | `funding_required` | serious | the API-key account | a retry succeeds after five minutes (or the [model rejection interval](routing.md#cooldowns-and-failover) when that is shorter), or the operator clears funding |
+| `feature_account_unavailable` | serious | the account | the account can serve again, or the last selection that names it moves |
 | `refresh_failed` | serious | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `pairing_expiring` | warning | the OAuth account | a re-pair stores an end more than 3 days away, or the account is disconnected or deleted |
 | `certificate_expiring` | warning | the listener key, or `features.ca` | a pair with more than 30 days left is loaded, or for `features.ca` a router runs that holds a new CA with more than 30 days left |
@@ -819,6 +820,18 @@ over the account's credit balance. It clears when the operator clears funding or
 five minutes, or the model rejection interval when that is shorter ([cooldowns and
 failover](routing.md#cooldowns-and-failover)). It is read from the registry and dated and detailed as `reauth_required`
 is.
+
+**`feature_account_unavailable`** holds while a feature selection of a pool or of a key names an OAuth account that the
+feature listener refuses with its `403` `feature_account_unavailable`: the account is not ready, as a signed-out account
+is, or it is past its subscription's end
+([What the account's state does](claude-ai-features.md#what-the-accounts-state-does)). The item and the listener read
+the same test, so a paused account or one in a cooldown raises nothing. Its cards are the pools whose own selection
+names the account and the pools of the keys whose own selection names it, whether or not the account is their member,
+and a key that inherits its pool's choice adds no card. The detail names the account, its label, the obstacle,
+`unready` or `ended`, and each selection with its feature, its key (null for a pool's own) and its pool. While the
+account is not ready, the item dates from the instant the registry recorded for the change to its state. Past its
+subscription's end, it dates from the earliest of the term's ends, so it never dates later than the read. The item
+opens the Accounts page on the account.
 
 **`refresh_failed`** holds while the account's newest two resolved credential refreshes both failed or went uncertain,
 a run read from the registry. A refresh that commits ends the run, and so does one a newer credential superseded, as a
