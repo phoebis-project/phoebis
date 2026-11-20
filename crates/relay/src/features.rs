@@ -108,10 +108,15 @@ async fn feature_call(State(listener): State<Listener>, request: Request) -> Res
     }
     let snapshot = relay.router().snapshot();
     let now = (relay.clock)();
-    let key = match resolve_key(&snapshot, &parts.headers, now) {
-        Ok((key, _)) => key,
+    let (key, presented) = match resolve_key(&snapshot, &parts.headers, now) {
+        Ok(resolved) => resolved,
         Err(failure) => return refusal(relay, call, &failure, UNATTRIBUTED_POOL).await,
     };
+    // A refused call presented the key too, so the stamp stands ahead of each later check, as on the model route.
+    relay
+        .router()
+        .touch_key(&key.id, presented, key.rotated_at)
+        .await;
     call.key_id = Some(key.id.clone());
     let Some((feature, row, method)) = matched(
         table,

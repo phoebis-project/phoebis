@@ -346,6 +346,31 @@ async fn a_call_without_a_key_reaches_no_upstream() {
 }
 
 #[tokio::test]
+async fn a_keyed_call_the_table_refuses_moves_the_keys_last_use() {
+    let up = upstream().await;
+    let h = feature_harness(&up).await;
+    let last_use = || h.store.api_key("desktop").unwrap().unwrap().last_used_at;
+    assert_eq!(last_use(), None);
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(API, &keyed("GET /not/on/the/table", API, "", b""))
+        .await;
+    assert_eq!(status, 403, "{headers:?}");
+    assert!(
+        headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("x-phoebis-error-code") && value == "feature_not_allowed"
+        }),
+        "{headers:?}"
+    );
+    // The router task writes the stamp on a blocking thread, so the write can land behind the answer.
+    wait_for(Duration::from_secs(5), || {
+        (last_use() == Some(NOW)).then_some(())
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_keys_none_wins_over_the_pools_account() {
     let none = fake(vec![("/api/frame/", json_200())]).await;
     let h = features_harness(
