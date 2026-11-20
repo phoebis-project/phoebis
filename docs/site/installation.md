@@ -880,8 +880,11 @@ the CA's fingerprint and its end, and `features=https://{addr}` in the `listenin
 
 A client that reaches the feature listener through a DNS redirect, with both feature hosts resolving to the router,
 connects to port 443 of that address. A client behind `phoebis-proxy` needs none of this, since the proxy's upstream
-names the listener's own port. The `phoebis` user of the service unit cannot bind a port below 1024, and the shipped
-unit stays as it is. One road is a drop-in for the unit that grants the capability, with `features.listen` on port 443:
+names the listener's own port. Neither does a client whose start on Linux takes a hosts file of its own, since a relay
+on the client's machine passes port 443 of loopback to the listener's own port ([A relay on
+loopback](claude-ai-features.md#a-relay-on-loopback)). The `phoebis` user of the service unit cannot bind a port below
+1024, and the shipped unit stays as it is. One road is a drop-in for the unit that grants the capability, with
+`features.listen` on port 443:
 
 ```ini title="A drop-in for the service unit"
 # /etc/systemd/system/phoebis.service.d/features-port.conf

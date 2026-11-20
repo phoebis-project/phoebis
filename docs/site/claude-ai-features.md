@@ -98,7 +98,9 @@ set per process, or where the machine's name resolution is not yours to change. 
 traffic to other hosts off the router: it tunnels each host apart from the two to that host itself.
 
 "Base URL and DNS redirect" fits a machine, a container or a virtual machine whose programs reach the two hosts through
-the router alone. The redirect holds for each program of the machine, and it needs no process beside the client.
+the router alone. The redirect holds for each program of the machine, or on Linux under `PRIVATE_HOSTS=yes` for the
+programs of one start alone. It needs no process beside the client, apart from the relay that a private hosts file
+takes ([A hosts file for one start](#a-hosts-file-for-one-start)).
 
 ## Base URL and proxy
 
@@ -161,6 +163,17 @@ client's Bash tool. A program that trusts the system's store alone gets a certif
 feature CA gets the router's `401`, since its credential is no router key. On Linux a private mount namespace gives one
 process tree a hosts file of its own. macOS and Windows have no such file per process.
 
+The client resolves `api.anthropic.com` itself ahead of the dial for an artifact's live updates, and it refuses the dial
+where the name leads to a carrier-NAT, link-local, private or unique-local address ([What the router refuses and what
+the client shows](#what-the-router-refuses-and-what-the-client-shows)). A router on a home or office network has such an
+address. Each feature call still works there, since the guard stands on that one dial, and a loopback address passes it.
+
+On macOS a redirect to such an address serves each feature call and leaves live updates unserved, and [Base URL and
+proxy](#base-url-and-proxy) is the road to them. On Windows the redirect does the same, and "Base URL and proxy" is
+their road there too. On a Linux machine that keeps `PRIVATE_HOSTS=no` with such an address, the redirect serves each
+feature call and leaves live updates unserved, and "Base URL and proxy" or [a hosts file for one
+start](#a-hosts-file-for-one-start) is the road to them.
+
 A machine whose lines are missing or incomplete would send the feature calls to the upstream with the router key, as the
 "Base URL" setup does. The launch script's check stops the start where one of the two names leads to another host over
 an address family the machine has a road over at that moment, so start the client through the script: the card's lines
@@ -173,13 +186,133 @@ router key.
 The script sets no proxy variable in this setup and clears the shell's proxy names for the client, since a proxy of the
 shell would resolve the two names on its own machine.
 
+### A hosts file for one start
+
+On Linux the launch script's input `PRIVATE_HOSTS=yes` gives each start a hosts file of its own, which leads both names
+to loopback for the client and its children alone, and a relay on loopback passes port 443 on to the router ([A relay
+on loopback](#a-relay-on-loopback)). The script reads the input under `SETUP=redirect` alone, and under its default,
+`no`, a start keeps the machine's own name resolution.
+
+Behind its stops for the inputs and ahead of the fetch, such a start writes two files into the script's directory and
+calls `sudo unshare --mount --propagation slave`. Inside that new mount namespace a root shell binds the private file,
+`hosts.<pid>`, over `/etc/hosts` and runs the script a second time through `setpriv`, under the user and group ids
+that `sudo` names in `SUDO_UID` and `SUDO_GID`. The second run does the fetch, the compare, the check and the client's
+start as the calling user, so root holds for the namespace and the bind alone. The machine's `/etc/hosts` stays as it
+is, and each program outside the start's process tree reads it as before. Each mount and unmount of the machine
+reaches the start's tree while the bind stays inside it (`MS_SLAVE` in `mount_namespaces(7)`), so the hosts file is
+the one thing in which the tree differs from the machine.
+
+The private file holds the machine's hosts file less the two feature names, and behind it one line per address family
+that names both hosts on loopback:
+
+```text
+127.0.0.1 api.anthropic.com mcp-proxy.anthropic.com
+::1 api.anthropic.com mcp-proxy.anthropic.com
+```
+
+A name of the machine's file that equals a feature host leaves its line, compared without case and with the line's
+comment left out, the line's other names stay, and a line with no name left goes. A machine under a redirect by hosts
+lines would otherwise keep the router's private address for both names beside loopback, and the client refuses live
+updates for one such address among those a name resolves to. The loopback lines stand last, so a reverse lookup of
+`127.0.0.1` or `::1` still reads the machine's own name. The file is the user's, at mode `0644` as the machine's file
+is, and it goes when the session ends.
+
+`sudo` empties the environment, so the second file, `shell-env.<pid>` at mode `0600`, carries the shell's exported
+variables, its umask and the arguments for the client to the second run, which reads it and removes it before anything
+else. The root shell hands that file's path over behind the marker word `phoebis-private-hosts`, and a run reads it
+only where its own inputs say `SETUP=redirect` and `PRIVATE_HOSTS=yes`, so no variable that a run inherited makes it
+read or remove a file.
+
+`sudo`'s own configuration decides where root finds `unshare`, `mount` and `setpriv`, through `secure_path` where it
+sets one, and the script fixes no `PATH` for its root part. The call suits a user who may run each command as root:
+the root shell binds a file that the user owns and can write while the session runs, and it runs a script whose path
+the user names, so the call is no line to grant by itself in `sudoers`. By `sudoers(5)`, `sudo` logs each command it
+runs under `log_allowed`, which is on by default. Here the command line holds the root shell's text and three paths of
+the script's files, and no argument of the caller's. The client's session runs below `sudo` to its end, so the
+settings of `sudo` for a session hold for it: by the same manual, `use_pty`, on by default from sudo 1.9.14, runs the
+client in a pseudo-terminal of its own, `log_output` logs what the session prints, and `command_timeout` ends the
+session at its bound.
+
+Four points of this road stand as follows.
+
+**A user namespace in place of `sudo`.** Measured on Debian 13, in a user namespace that maps the caller's id alone
+(`unshare --map-current-user --keep-caps --mount`). The user and group ids read as the caller's, a file made in the
+home belongs to the caller as read from outside, and a name of a hosts file bound there resolves to its address. But
+`/usr/bin/sudo` reads as owned by 65534, an id the namespace does not map, and a set-user-ID program whose owner has no
+mapping runs with that bit ignored (`user_namespaces(7)`). A `sudo` of the client's session would lose its rights
+there, so the script asks for root through `sudo` instead.
+
+**A resolver daemon ahead of `files`.** Not measured, since such a lookup can put a query on the network. A machine
+whose `nsswitch.conf` names `resolve` ahead of `files` asks `systemd-resolved` first. The daemon reads `/etc/hosts`
+itself (`ReadEtcHosts=` in `resolved.conf(5)`) and runs outside the start's mount namespace, so it answers from the
+machine's hosts file and from no private one. The script's probe stops a start under which a feature name leads
+elsewhere than to the router, and `SETUP=proxy` is the road for such a machine. The measured Debian 13 machine's line,
+`hosts: files myhostname resolve [!UNAVAIL=return] dns`, names `files` first, so a lookup there reads the private file
+for both names ahead of the daemon.
+
+**The caller's environment.** The script's test runs the root part against stand-ins of `sudo`, `unshare`, `setpriv`
+and `mount`, with a `sudo` that empties the environment and joins `0022` to the umask, as the tool does by default. A
+variable of the calling shell, the caller's umask and arguments with two blanks in a row, a quote, an empty one and a
+line break reach the client as the caller gave them, and no argument rides `sudo`'s command line. No start through the
+real tools stands behind this road yet, so the form with `--propagation slave` has no run behind it.
+
+**A connected watch.** Not measured: no session has held an artifact's live updates on this road yet.
+
+### A relay on loopback
+
+The private file leads both names to loopback, so a relay on the client's machine passes each connection to port 443
+of `127.0.0.1` and of `::1` on to the feature listener, byte for byte. The client's TLS ends at the router, so the
+relay reads no key and holds no certificate. It connects to the listener's own port, so the router needs no port 443
+for this road. The script runs no relay of its own: it ends in the client's start, a second session would find the
+port taken, and port 443 needs a right that the user lacks. The relay is a standing service, which the machine's
+administrator installs once, with the right to bind a low port and no other. For a feature listener at
+`192.0.2.10:8443`, two `socat` listeners as service units:
+
+```ini title="/etc/systemd/system/phoebis-relay-ipv4.service"
+[Unit]
+Description=Relay from port 443 of 127.0.0.1 to the Phoebis feature listener
+
+[Service]
+ExecStart=/usr/bin/socat TCP4-LISTEN:443,bind=127.0.0.1,reuseaddr,fork TCP:192.0.2.10:8443
+DynamicUser=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini title="/etc/systemd/system/phoebis-relay-ipv6.service"
+[Unit]
+Description=Relay from port 443 of ::1 to the Phoebis feature listener
+
+[Service]
+ExecStart=/usr/bin/socat TCP6-LISTEN:443,bind=[::1],ipv6only=1,reuseaddr,fork TCP:192.0.2.10:8443
+DynamicUser=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The administrator installs and starts the two units. No run on this page installed them, so their bind of port 443
+under `DynamicUser=yes` is unmeasured. Both `socat` lines carried a request from curl on loopback, one for each address
+family, to a TLS server under a certificate for `api.anthropic.com`, with ports of the test's own in place of 443 and
+8443, and `systemd-analyze verify` passed both units under systemd 257. At each start the script's probes go through
+the relay, and a missing one stops the start with `nothing answers at {host}:443 as this machine resolves it`.
+
+No relay runs where the router is on the client's machine and its feature listener answers on port 443 of both
+loopback addresses. A listener that answers on one loopback family takes one relay listener for the other.
+
 ## The launch script
 
-The script below starts the client in either feature setup. Save it to a file, set the seven inputs at its head, and
+The script below starts the client in either feature setup. Save it to a file, set the eight inputs at its head, and
 start the client through it in place of `claude`: each argument goes on to the client. The file then holds the key's
 secret, so keep it readable by its user alone, at mode `0700`. At each start it fetches the CA's certificate, compares
 its fingerprint, checks the road to both feature hosts, writes the env file for Bash commands, sets the client's
-variables and starts the client. It is a POSIX `sh` script, and it needs `curl` and one of `sha256sum` and `shasum`.
+variables and starts the client. It is a POSIX `sh` script, and it needs `curl` and one of `sha256sum` and `shasum`. A
+start under `PRIVATE_HOSTS=yes` also needs `mount`, `setpriv`, `sudo` and `unshare`.
 
 ```sh
 #!/bin/sh
@@ -192,8 +325,21 @@ ROUTER_KEY='<key>'
 PHOEBIS_FEATURE_CA_SHA256='<fingerprint>'
 SETUP='proxy'                      # proxy, or redirect
 PROXY_URL='http://127.0.0.1:8318'  # read under SETUP=proxy alone
+PRIVATE_HOSTS='no'                 # no, or yes: a hosts file for this start alone, read under SETUP=redirect alone
 PLAN='max'                         # max, or pro
 BASE_CA=''                         # the private CA of the base URL's certificate, where it has one
+
+# A start under PRIVATE_HOSTS=yes runs this file a second time inside its namespace, below a sudo that empties the
+# environment. The root part hands that run a marker word and the path of a file the first run wrote: the exported
+# variables, the umask and a set line with the caller's arguments. That line replaces the arguments, so the path is
+# kept ahead of the read. The two inputs above decide whether a run reads the file, so no variable it inherited does.
+entered=no
+if [ "$SETUP" = redirect ] && [ "$PRIVATE_HOSTS" = yes ] && [ "${1-}" = phoebis-private-hosts ]; then
+  handed=$2
+  . "$handed"
+  rm -f "$handed"
+  entered=yes
+fi
 
 stop() { echo "phoebis: $1" >&2; exit 1; }
 
@@ -206,6 +352,7 @@ case "$PHOEBIS_FEATURE_CA_SHA256" in
   ''|'<fingerprint>') stop "PHOEBIS_FEATURE_CA_SHA256 holds no fingerprint. Set it to the operator's" ;;
 esac
 case "$SETUP" in proxy|redirect) ;; *) stop "SETUP is neither proxy nor redirect" ;; esac
+[ "$SETUP" != redirect ] || case "$PRIVATE_HOSTS" in no|yes) ;; *) stop "PRIVATE_HOSTS is neither no nor yes" ;; esac
 case "$PLAN" in max|pro) ;; *) stop "PLAN is neither max nor pro" ;; esac
 
 state="${XDG_STATE_HOME:-$HOME/.local/state}/phoebis"
@@ -214,14 +361,85 @@ env_file="$state/claude-env.sh"
 # Each name carries the process id, so two starts at one time share neither file.
 new_ca="$ca.$$"
 head_file="$state/check-head.$$"
+# Named under PRIVATE_HOSTS=yes alone, and empty for the exit trap otherwise.
+hosts=
+saved=
 # The script's files are the user's alone. The shell's umask returns ahead of the client's start, since under 077
 # each file the session and its commands create would be made 0600.
 shell_umask=$(umask)
 umask 077
 mkdir -p "$state"
-trap 'rm -f "$new_ca" "$head_file"' EXIT
+trap 'rm -f "$new_ca" "$head_file" "$hosts" "$saved"' EXIT
 # Some shells run the exit trap for a signal only where the signal has a trap of its own.
 trap 'exit 1' HUP INT TERM
+
+# The client refuses to open an artifact's live updates where a feature host resolves to a private address. This
+# start gets a hosts file of its own that names both hosts on loopback, where a relay passes port 443 to the router.
+# Root holds for the namespace and the bind alone: the second run is the calling user's.
+if [ "$SETUP" = redirect ] && [ "$PRIVATE_HOSTS" = yes ] && [ "$entered" = no ]; then
+  for tool in setpriv sudo unshare; do
+    command -v "$tool" >/dev/null 2>&1 ||
+      stop "PRIVATE_HOSTS=yes needs $tool, which this machine lacks. SETUP=proxy needs none of the three"
+  done
+  # A file of this start alone, made new, so no start writes into a file that another start has bound.
+  hosts="$state/hosts.$$"
+  rm -f "$hosts"
+  {
+    # The machine's file less the two names. A line of a hosts redirect would keep a private address for a name
+    # beside loopback, and the client refuses live updates for one private address among a name's addresses. The
+    # loopback lines stand last, so a reverse lookup of 127.0.0.1 or ::1 still reads the machine's own name.
+    awk '
+      {
+        line = $0; note = ""
+        at = index(line, "#")
+        if (at) { note = " " substr(line, at); line = substr(line, 1, at - 1) }
+        count = split(line, word, " ")
+        if (count < 2) { print; next }
+        kept = word[1]; names = 0
+        for (i = 2; i <= count; i++) {
+          name = tolower(word[i])
+          if (name != "api.anthropic.com" && name != "mcp-proxy.anthropic.com") { kept = kept " " word[i]; names++ }
+        }
+        if (names == count - 1) print
+        else if (names > 0) print kept note
+      }
+    ' /etc/hosts
+    echo '127.0.0.1 api.anthropic.com mcp-proxy.anthropic.com'
+    echo '::1 api.anthropic.com mcp-proxy.anthropic.com'
+  } > "$hosts"
+  chmod 644 "$hosts"
+  # sudo empties the environment, joins its own umask to the caller's and logs its command line. So the second run
+  # takes the caller's variables, umask and arguments from this file, and sudo's line holds none of them.
+  saved="$state/shell-env.$$"
+  {
+    export -p
+    echo "umask $shell_umask"
+    printf 'set --'
+    for arg do
+      quoted=
+      while :; do
+        case $arg in
+          *"'"*) quoted=$quoted${arg%%"'"*}"'\\''"; arg=${arg#*"'"} ;;
+          *) break ;;
+        esac
+      done
+      printf " '%s'" "$quoted$arg"
+    done
+    echo
+  } > "$saved"
+  rc=0
+  # The caller's ids are the ones sudo names itself, so nothing this run computed says whom the client runs as.
+  sudo unshare --mount --propagation slave -- sh -c '
+    for id in "${SUDO_UID-}" "${SUDO_GID-}"; do
+      case "$id" in ""|*[!0-9]*) echo "phoebis: sudo named no calling user" >&2; exit 1 ;; esac
+    done
+    mount --bind "$1" /etc/hosts || exit $?
+    exec setpriv --reuid "$SUDO_UID" --regid "$SUDO_GID" --init-groups -- env -i sh "$3" phoebis-private-hosts "$2"
+  ' sh "$hosts" "$saved" "$0" || rc=$?
+  # The second run removes the file first, so a file that still stands means it never started.
+  [ ! -e "$saved" ] || stop "the private hosts file could not be put in place (exit $rc)"
+  exit "$rc"
+fi
 
 # A closing slash would make the fetch ask for //v0/features/ca.pem, and the router's 404 for that path reads as
 # a router without a feature listener.
@@ -356,7 +574,7 @@ the status of a refused `CONNECT`.
 ### The inputs
 
 The console's client configuration card prints the lines of a feature setup with the router's fingerprint among them.
-The script reads seven inputs and sets each line of the card by itself:
+The script reads eight inputs and sets each line of the card by itself:
 
 | Input | Holds | The card's line it stands for |
 | --- | --- | --- |
@@ -365,6 +583,7 @@ The script reads seven inputs and sets each line of the card by itself:
 | `PHOEBIS_FEATURE_CA_SHA256` | the fingerprint of the router's feature CA, from the operator | `PHOEBIS_FEATURE_CA_SHA256`, as it stands |
 | `SETUP` | `proxy` for "Base URL and proxy", `redirect` for "Base URL and DNS redirect" | none, it picks the card's block |
 | `PROXY_URL` | the address of `phoebis-proxy`, read under `SETUP=proxy` alone | `HTTPS_PROXY` |
+| `PRIVATE_HOSTS` | `no`, or `yes` for a hosts file of each start's own on Linux ([A hosts file for one start](#a-hosts-file-for-one-start)), read under `SETUP=redirect` alone | none |
 | `PLAN` | `max` or `pro` | `CLAUDE_CODE_SUBSCRIPTION_TYPE` |
 | `BASE_CA` | the file of a private CA behind the base URL's certificate, empty where it has none | none |
 
@@ -372,15 +591,19 @@ The script writes each other line of the card, with the paths the card marks, an
 inputs. A pasted proxy or trust line would reach each Bash command of the session as the shell's own value.
 
 Ahead of the fetch the script stops where `ROUTER_KEY` or `PHOEBIS_FEATURE_CA_SHA256` is empty or still reads its
-placeholder, where `SETUP` is neither `proxy` nor `redirect`, and where `PLAN` is neither `max` nor `pro`. An empty key
-would start the client with an empty token, and a client with a login of its own can then fall back to that login.
+placeholder, where `SETUP` is neither `proxy` nor `redirect`, where `PRIVATE_HOSTS` is neither `no` nor `yes` under
+`SETUP=redirect`, and where `PLAN` is neither `max` nor `pro`. Under `PRIVATE_HOSTS=yes` it also stops there where the
+machine lacks `setpriv`, `sudo` or `unshare`, and where the namespace or the bind fails. An empty key would start the
+client with an empty token, and a client with a login of its own can then fall back to that login.
 
 The script keeps its files under `${XDG_STATE_HOME:-$HOME/.local/state}/phoebis`, readable by the user alone:
 `feature-ca.pem`, `claude-env.sh`, and `ca-bundle.pem` where two CAs share one file. It works under `umask 077` and puts
 the shell's umask back ahead of the client's start, since under `077` each file the session and its commands create
-would be made `0600`. The two files of a start in progress carry the process id in their names and go at each exit, so
-two starts at one time share neither. Each curl call gives up after 10 seconds without a connection and after 30 seconds
-in all, so a name that leads to an address which drops packets does not hold the start for the system's own timeout.
+would be made `0600`. The files of a start in progress carry the process id in their names and go at each exit, so two
+starts at one time share none of them. Each start has two, and under `PRIVATE_HOSTS=yes` two more: `hosts.<pid>`, the
+private hosts file at mode `0644`, and `shell-env.<pid>`, which the second run reads and removes as it starts. Each curl
+call gives up after 10 seconds without a connection and after 30 seconds in all, so a name that leads to an address
+which drops packets does not hold the start for the system's own timeout.
 Each curl call opens with `-q`, so curl reads no configuration file of the user, and a line of a `.curlrc` leads neither
 the fetch nor a probe along another road than the client's.
 
@@ -426,7 +649,11 @@ script's order:
 | `ROUTER_KEY holds no key. Set it to the key the router's operator handed over` | The input is empty or still reads `<key>`. |
 | `PHOEBIS_FEATURE_CA_SHA256 holds no fingerprint. Set it to the operator's` | The input is empty or still reads `<fingerprint>`. |
 | `SETUP is neither proxy nor redirect` | The input holds another word. |
+| `PRIVATE_HOSTS is neither no nor yes` | Under `SETUP=redirect`, the input holds another word. |
 | `PLAN is neither max nor pro` | The input holds another word. |
+| `PRIVATE_HOSTS=yes needs {tool}, which this machine lacks. SETUP=proxy needs none of the three` | Under `SETUP=redirect`, the machine lacks a tool of the private hosts file, and the line names the first it lacks of `setpriv`, `sudo` and `unshare`. |
+| `sudo named no calling user` | The root part prints it ahead of the bind, where `sudo` set no `SUDO_UID` or `SUDO_GID`, or one that is no number. The next stop follows. |
+| `the private hosts file could not be put in place (exit {n})` | Under `PRIVATE_HOSTS=yes`, the second run never started: `sudo` refused the call, `unshare` or the bind failed, or `setpriv` failed, and `{n}` is the exit that `sudo` passed back. A home on a share that maps root to another user can stop the bind too, a cause that no run measured. |
 | `the router at {BASE_URL} does not answer (curl exit {n})` | The fetch got no HTTP answer: a wrong base URL, a router that is down, or a certificate curl does not trust, for which `BASE_CA` names the private CA. |
 | `the router at {BASE_URL} has no feature listener` | The download answered `404`, as a router without the `features` block does. Ask the operator. |
 | `the CA fetch from {BASE_URL} answered {status}` | The download answered another status, such as a redirect or a `502` of a front. The base URL has to reach the router's proxy listener as the client reaches it. |
@@ -435,7 +662,7 @@ script's order:
 | `the proxy at {PROXY_URL} does not reach the router's feature listener` | Under `SETUP=proxy`, the proxy answered the `CONNECT` with `502`: its upstream names another address than the feature listener's, or the listener is down. |
 | `{host} leads to another host than the router's feature listener` | Under `SETUP=proxy`, the peer behind the proxy gave a certificate the fetched CA did not sign or another answer than the router's `401`. The program at `PROXY_URL` is no `phoebis-proxy`, or its upstream is no feature listener of this router. |
 | `the check of the road to {host} failed (curl exit {n}, answer {codes})` | Under `SETUP=proxy`, the probe ended another way, a timeout among them. The line carries curl's exit and the two status codes, the answer's and the proxy's. |
-| `{host} leads to another host than the router's feature listener over {family}` | Under `SETUP=redirect`, the name's address of that family, `ipv4` or `ipv6`, is not the router's: the family's hosts line is missing or wrong. |
+| `{host} leads to another host than the router's feature listener over {family}` | Under `SETUP=redirect`, the name's address of that family, `ipv4` or `ipv6`, is not the router's: the family's hosts line is missing or wrong. Under `PRIVATE_HOSTS=yes` a resolver daemon that `nsswitch.conf` names ahead of `files` answers from the machine's hosts file and from no private one, a cause that no run measured. |
 | `the check of the road to {host} over {family} failed (curl exit {n}, answer {codes})` | Under `SETUP=redirect`, the probe of that family ended another way, a timeout among them. |
 | `nothing answers at {host}:443 as this machine resolves it` | Under `SETUP=redirect`, the name resolved to no address or nothing accepted the connection, over both families. The feature listener does not answer on port 443 of the address the name leads to. |
 
