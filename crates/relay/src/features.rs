@@ -442,10 +442,11 @@ fn request_host(headers: &HeaderMap) -> Option<String> {
 /// The row a keyed request falls under, with its feature and the row's own spelling of the method. A row's prefix or
 /// whole path is compared with the path as sent, which the forward sends on as it came. Its decoded forms are read
 /// too, since an upstream that decodes a path once or more would serve another call than the one the row names. Each
-/// form has to be plain, and the part of a form ahead of each `?` or `#` it holds keeps a plain form's segment rules,
-/// so neither a segment nor the part of one ahead of a `?` or `#` reads `.` or `..` by its visible ASCII characters. An
-/// excepted path holds where the visible ASCII characters of the last form's part ahead of its first `?` or `#` spell
-/// it with each empty segment left out.
+/// form has to be plain, which a path whose last form's visible ASCII characters spell an escape is not, and the part
+/// of a form ahead of each `?` or `#` it holds keeps a plain form's segment rules, so neither a segment nor the part of
+/// one ahead of a `?` or `#` reads `.` or `..` by its visible ASCII characters. The visible ASCII characters of the
+/// last form's part ahead of its first `?` or `#`, with each empty segment left out, have to go on behind a row's
+/// prefix too, and an excepted path holds where they spell it.
 fn matched(
     table: &'static FeatureTable,
     method: &str,
@@ -505,7 +506,15 @@ fn matched(
         .find_map(|(feature, row)| {
             let method = row.methods.iter().copied().find(|held| *held == method)?;
             let on_path = match row.path {
-                PathRule::Under(prefix) => path.len() > prefix.len() && path.starts_with(prefix),
+                // An upstream that drops a space or a byte outside ASCII and folds the slash this leaves would read the
+                // row's bare prefix, which has no row, so the folded part has to go on behind the prefix as the path
+                // as sent does.
+                PathRule::Under(prefix) => {
+                    let under = |path: &[u8]| {
+                        path.len() > prefix.len() && path.starts_with(prefix.as_bytes())
+                    };
+                    under(path.as_bytes()) && under(&call)
+                }
                 PathRule::Whole(whole) => path == whole,
             };
             // In any case of its letters, since an upstream that reads a path without regard to case would serve the
@@ -524,8 +533,9 @@ fn matched(
 /// segment whose visible ASCII characters read `.` or `..`, since an upstream that drops the other bytes would resolve
 /// it, no backslash, no semicolon, which opens a path parameter an upstream may drop, and no encoded slash, backslash
 /// or dot in either case. A form is not plain either where a decode gave it a control byte, since an upstream that
-/// drops such a byte or cuts the path at it would read another path. The forms are compared as bytes, so a decoded
-/// byte outside ASCII needs no text decode.
+/// drops such a byte or cuts the path at it would read another path, and the last form is not plain where its visible
+/// ASCII characters spell an escape, since an upstream that drops the other bytes and decodes once more would read a
+/// path that no check here read. The forms are compared as bytes, so a decoded byte outside ASCII needs no text decode.
 fn plain_path(path: &str) -> Option<Vec<u8>> {
     let segments = path.strip_prefix('/')?;
     let encoded = path.as_bytes().windows(3).any(|three| {
@@ -536,7 +546,7 @@ fn plain_path(path: &str) -> Option<Vec<u8>> {
             )
     });
     // Each path with an empty segment is refused here. The compare in `matched` drops empty segments only in its search
-    // for the excepted call.
+    // for the excepted call and in its read of a row's prefix.
     let plain = !encoded
         && !path.contains(['\\', ';'])
         && segments.split('/').all(|segment| !segment.is_empty());
@@ -547,7 +557,10 @@ fn plain_path(path: &str) -> Option<Vec<u8>> {
     // The last form stands in for each form: a segment that reads `.` or `..` by its visible characters holds no `%`,
     // so no decode changes it, and a form that holds such a segment holds it as the last form does.
     let dots = form.split(|byte| *byte == b'/').any(dotted);
-    (!dots).then_some(form)
+    // An escape is three visible characters, so the decode of one and the drop of a byte that is no visible ASCII
+    // character never overlap. Where the last form's visible characters spell no escape, they are the one form that
+    // each order of the two steps ends at.
+    (!dots && !escaped(&form)).then_some(form)
 }
 
 /// Whether the visible ASCII characters of `segment` spell `.` or `..`. An upstream that drops a space or a byte
@@ -558,6 +571,23 @@ fn dotted(segment: &[u8]) -> bool {
         [visible.next(), visible.next(), visible.next()],
         [Some(b'.'), None, _] | [Some(b'.'), Some(b'.'), None]
     )
+}
+
+/// Whether the visible ASCII characters of `form` spell an escape, a `%` with two hex digits behind it. The last
+/// form holds no escape, so its visible characters spell one only where a space or a byte outside ASCII parts its
+/// bytes, and an upstream that drops such a byte and decodes once more would read a path that no check here read.
+fn escaped(form: &[u8]) -> bool {
+    // How much of an escape the visible characters up to here spell: nothing, a `%`, or a `%` and one digit.
+    let mut held = 0;
+    for byte in form.iter().filter(|byte| byte.is_ascii_graphic()) {
+        held = match (held, hex(*byte)) {
+            _ if *byte == b'%' => 1,
+            (1, Some(_)) => 2,
+            (2, Some(_)) => return true,
+            _ => 0,
+        };
+    }
+    false
 }
 
 /// The last form of a path whose first form starts with a slash and holds no empty segment, no backslash, no semicolon

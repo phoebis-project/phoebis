@@ -838,12 +838,16 @@ hex digits behind it is left, so `%252e` counts as an encoded dot and `%3b` as a
 `?` or a `#`, the part of a segment ahead of each one is read for a segment `.` or `..` and an empty segment too, so
 `/api/frame/x/%3Fy` and `/api/frame/x/.%3Fy` match no row. A segment, and the part of one ahead of a decoded `?` or `#`,
 counts as `.` or `..` too where a form holds spaces or characters outside ASCII beside its dots, so `/api/frame/..%20/x`
-matches no row. An upstream that decodes or folds such a path could otherwise serve a refused call under the feature
-account's sign-in, and the client builds none of these forms. The one excepted path, `POST /api/frame/track`, is an
-event report. It is matched in each case of its letters, where a path decodes to it, where a decoded path reads it ahead
-of a `?` or a `#`, and where a decoded path reads it with each space and each character outside ASCII left out and with
-each empty segment that this leaves dropped, so `POST /api/frame/Track`, `POST /api/frame/%74rack`,
-`POST /api/frame/track%3Fx`, `POST /api/frame/track%20` and `POST /api/frame/track/%20` are refused too.
+matches no row. A path matches no row either where its part behind a row's prefix, in the last decoded form and ahead of
+its first `?` or `#`, holds no visible ASCII character but a slash, so `/api/frame/%20` matches no row, or where the
+visible ASCII characters of the last decoded form spell a `%` with two hex digits behind it, so
+`/api/frame/tr%256%201ck` matches no row. An upstream that decodes or folds such a path could otherwise serve a refused
+call under the feature account's sign-in, and the client builds none of these forms. The one excepted path,
+`POST /api/frame/track`, is an event report. It is matched in each case of its letters, where a path decodes to it,
+where a decoded path reads it ahead of a `?` or a `#`, and where a decoded path reads it with each space and each
+character outside ASCII left out and with each empty segment that this leaves dropped, so `POST /api/frame/Track`,
+`POST /api/frame/%74rack`, `POST /api/frame/track%3Fx`, `POST /api/frame/track%20` and `POST /api/frame/track/%20` are
+refused too.
 
 The two calls without a key match by their whole form. `GET` and `HEAD` on `/api/hello` answer `200` with an empty body
 and send nothing upstream, which is where the first-start check of an interactive client ends, so a start needs no

@@ -46,7 +46,11 @@ pub struct FeatureScopes {
     pub connectors: &'static str,
 }
 
-/// How a row's path matches: each path under a prefix that ends in a slash, or one whole path.
+/// How a row's path matches: each path under a prefix that ends in a slash, or one whole path. A prefix holds visible
+/// ASCII characters alone, no percent escape and no empty segment, since the listener compares it with the visible
+/// ASCII characters of the last decoded form of a request's path too, up to that form's first `?` or `#` and with each
+/// empty segment left out. A prefix with an escape, a space or a character outside ASCII would match no request,
+/// including one that sends it as written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathRule {
     Under(&'static str),
