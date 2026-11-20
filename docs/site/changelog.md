@@ -381,7 +381,7 @@ below the rows shown draws on the next auto reload read on any range whose rows 
 ([Requests](console.md#requests), [Routing log](console.md#routing-log)). On the Requests view and the Routing log the
 list's late answer replaces the page an auto reload poll stood in for it, and Next past an overrun under a preset reads
 to the router's clock ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The pressed range pill
-names its range and its end on hover, and when the tab comes back to a read at once the rows it brought keep their tint
+names its range and start on hover, and when the tab comes back to a read at once the rows it brought keep their tint
 through the read after it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and
 Routing log Time cells print the date before the time on every row, and the Routing log's columns fit their content
 ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log views filter on
