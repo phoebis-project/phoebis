@@ -3262,3 +3262,71 @@ async fn a_socket_stays_open_while_bytes_move_and_ends_once_it_is_silent_past_it
     assert_eq!(ends, (None, None));
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_socket_whose_account_no_longer_serves_is_cut_at_its_next_check_and_one_beside_it_stays()
+{
+    let secret_b = "sk-ant-oat01-PLACEHOLDER-B";
+    let sockets = Switched::default();
+    let (desktop_token, laptop_token) = (sync_token(1_600), sync_token(1_601));
+    // A token that two keys read admits no socket, so each key's read, under its own account's bearer, gets its own.
+    let up = watch_fake(json_200(), switch(&sockets)).await;
+    up.push_credential_rule(SECRET_A, "/api/frame/", page_answer(&desktop_token));
+    up.push_credential_rule(secret_b, "/api/frame/", page_answer(&laptop_token));
+    let limits = Limits {
+        socket_check_interval: Duration::from_secs(30),
+        socket_idle_timeout: Duration::from_secs(600),
+        ..default_limits()
+    };
+    let h = harness_with_limits(
+        &up,
+        &[oauth("a", SECRET_A, 0), oauth("b", secret_b, 1)],
+        both_features_at_a(),
+        limits,
+    )
+    .await;
+    add_laptop(&h).await;
+    let laptop = h.store.api_key("laptop").unwrap().unwrap();
+    h.store
+        .update_api_key(
+            &phoebis_store::ApiKeyRow {
+                feature_accounts: KeyFeatureAccounts {
+                    artifacts: FeatureOverride::Account("b".into()),
+                    connectors: FeatureOverride::Inherit,
+                },
+                ..laptop.clone()
+            },
+            laptop.updated_at,
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    read_page_as_laptop(&listener).await;
+    let (mut cut, mut cut_socket) = tunnel(&listener, &desktop_token, &sockets).await;
+    let (mut kept, mut kept_socket) = tunnel(&listener, &laptop_token, &sockets).await;
+    tokio::time::pause();
+    on_held_clock(async {
+        h.store
+            .set_canceled("a", Cancellation::On { ends_at: Some(NOW) })
+            .unwrap();
+        h.router.reload().await.unwrap();
+    })
+    .await
+    .expect("the reload never ended");
+    on_held_clock(tokio::time::advance(Duration::from_millis(30_001)))
+        .await
+        .expect("the clock never moved on");
+    let ends = on_held_clock(async { (cut.next().await, cut_socket.received().await) })
+        .await
+        .expect("the socket of the ended account stayed open past its check");
+    assert_eq!(ends, (None, None));
+    on_held_clock(async {
+        kept.write(b"x").await;
+        assert_eq!(upstream_receives(&mut kept_socket, 1).await, b"x");
+    })
+    .await
+    .expect("x never reached the upstream");
+    up.shutdown().await;
+}

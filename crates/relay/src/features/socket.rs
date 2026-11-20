@@ -22,14 +22,14 @@ use phoebis_transport::pool::Conn;
 use phoebis_transport::request::RawRequest;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::watch;
-use tokio::time::Instant;
+use tokio::time::{Instant, MissedTickBehavior};
 
 use super::forward::{answered, case_of, Call, Ending};
 use super::{no_body, plain_path, Listener};
 use crate::casing::{HeadRecorder, OriginalHead};
 use crate::errors::UPSTREAM_UNREACHABLE;
 use crate::headers::{feature_headers, Hop};
-use crate::messages::{built, copied_head, target_of};
+use crate::messages::{built, copied_head, target_of, Relay};
 use crate::serve::{stopped, Accepted};
 
 /// The most one read of either leg hands over: the payload of one TLS record.
@@ -53,6 +53,18 @@ pub(crate) enum Unheld<'a> {
     Key,
     Selection,
     SignIn,
+}
+
+impl Unheld<'_> {
+    /// The failed check's word in the tunnel's line: `account`, `key`, `selection` or `sign_in`.
+    pub(crate) fn word(&self) -> &'static str {
+        match self {
+            Unheld::Account(..) => "account",
+            Unheld::Key => "key",
+            Unheld::Selection => "selection",
+            Unheld::SignIn => "sign_in",
+        }
+    }
 }
 
 /// The checks in their order: the key, the selection, the sign-in pair, `feature_ready`.
@@ -283,6 +295,7 @@ pub(crate) async fn open(
             ending.went_back(head.status);
             ending.end(FeatureOutcome::Forwarded);
             slot.leave(Tunnel {
+                admitted,
                 client,
                 idle: relay.limits.socket_idle_timeout,
                 key: key.label.clone(),
@@ -291,6 +304,7 @@ pub(crate) async fn open(
                 opened: Instant::now(),
                 path: call.path,
                 place,
+                relay: Arc::clone(relay),
                 upstream: conn,
             });
             Ok(switched(&head))
@@ -328,9 +342,11 @@ impl Handover {
     }
 }
 
-/// The client's `OnUpgrade`, the upstream connection with the bytes that came behind its `101`, the socket's idle time
-/// and its place in the counts, and what the tunnel's line names.
+/// The client's `OnUpgrade`, the upstream connection with the bytes that came behind its `101`, the identity the socket
+/// was admitted with and the relay whose registry its checks read, the socket's idle time and its place in the counts,
+/// and what the tunnel's line names.
 pub(crate) struct Tunnel {
+    admitted: Admitted,
     client: OnUpgrade,
     idle: Duration,
     key: String,
@@ -339,16 +355,18 @@ pub(crate) struct Tunnel {
     opened: Instant,
     path: String,
     place: SocketPlace,
+    relay: Arc<Relay>,
     upstream: Conn,
 }
 
 impl Tunnel {
-    /// Runs to the tunnel's end and writes its line. A `stop` that is set, or flips, ends it at once, and so does the
-    /// idle time with no byte in either direction. The client's stream is the accepted one, taken out of hyper's
-    /// `Upgraded` and out of the head recorder, and the bytes hyper read past the request's head go to the upstream
-    /// ahead of the first copy.
+    /// Runs to the tunnel's end and writes its line. A `stop` that is set, or flips, ends it at once, and so do a check
+    /// that the admitted identity fails and the idle time with no byte in either direction. The client's stream is the
+    /// accepted one, taken out of hyper's `Upgraded` and out of the head recorder, and the bytes hyper read past the
+    /// request's head go to the upstream ahead of the first copy.
     pub(crate) async fn run(self, mut stop: watch::Receiver<bool>) {
         let Tunnel {
+            admitted,
             client,
             idle,
             key,
@@ -357,22 +375,28 @@ impl Tunnel {
             opened,
             path,
             place,
+            relay,
             upstream,
         } = self;
+        let started = Instant::now();
         // The instant of the last byte in either direction. Its first value is the run's start, so the idle bound holds
         // over the hand-over and the first writes too.
-        let last = Mutex::new(Instant::now());
+        let last = Mutex::new(started);
         // A socket need not end by itself, and its client can die without a close where no keepalive finds it. So the
-        // stop ends it at once, since a tunnel that waited out the drain would hold each stop for its bound, and the
-        // idle time ends one that went silent.
-        let cause = tokio::select! {
+        // stop ends it at once, since a tunnel that waited out the drain would hold each stop for its bound, a check
+        // ends one whose admission no longer holds, and the idle time ends one that went silent. A check that is due
+        // wins over a byte or the idle time of the same poll, so such a socket carries no more bytes and ends under
+        // the check's cause.
+        let (cause, check) = tokio::select! {
             biased;
-            () = stopped(&mut stop) => "stopped",
-            () = silent(&last, idle) => "idle",
-            cause = carry(client, upstream, leftover, place, &last) => cause,
+            () = stopped(&mut stop) => ("stopped", None),
+            word = unheld(&relay, &admitted, started) => ("check_failed", Some(word)),
+            () = silent(&last, idle) => ("idle", None),
+            cause = carry(client, upstream, leftover, place, &last) => (cause, None),
         };
         tracing::debug!(
             cause,
+            check,
             method = %method,
             path = path.as_str(),
             key = %key,
@@ -411,7 +435,8 @@ struct Legs {
 }
 
 /// The two legs of a tunnel to the first end of a direction, with its cause. The place and both legs free on the
-/// return, and no close frame is written, so the session reads a lost connection and dials again. Each copy writes
+/// return, and on the drop of this future at the tunnel's other ends, the stop, a failed check and the idle time. No
+/// close frame is written on either road, so the session reads a lost connection and dials again. Each copy writes
 /// the instant of its last byte into `last`.
 async fn carry(
     client: OnUpgrade,
@@ -474,6 +499,25 @@ async fn pass(
         *last.lock().expect("last byte's instant poisoned") = Instant::now();
         if whole(to, &buffer[..read]).await.is_err() {
             return writer.failed;
+        }
+    }
+}
+
+/// Resolves with the word of the first check that `admitted` fails. Each check reads the registry's snapshot anew, the
+/// first one interval behind `started` and each one interval behind the last, so a check that runs late moves the
+/// later ones with it and none is caught up.
+async fn unheld(relay: &Relay, admitted: &Admitted, started: Instant) -> &'static str {
+    let every = relay.limits.socket_check_interval;
+    let mut checks = tokio::time::interval_at(started + every, every);
+    checks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        checks.tick().await;
+        // The snapshot drops here, ahead of the next wait, so an open socket holds no registry of an earlier moment.
+        let failed = held(&relay.router().snapshot(), admitted, (relay.clock)())
+            .err()
+            .map(|unheld| unheld.word());
+        if let Some(word) = failed {
+            return word;
         }
     }
 }

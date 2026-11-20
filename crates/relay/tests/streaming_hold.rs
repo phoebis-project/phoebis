@@ -235,6 +235,7 @@ async fn a_stream_that_never_commits_is_relayed_as_received_after_the_hold_timeo
         key_sockets: 256,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        socket_check_interval: Duration::from_secs(30),
         socket_idle_timeout: Duration::from_secs(90),
         sockets_total: 2_048,
         upstream_gzip: phoebis_relay::UpstreamGzip::Auto,

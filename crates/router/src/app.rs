@@ -70,6 +70,9 @@ const DOMAIN_CHECKS_TOTAL: usize = 16;
 const KEY_SOCKETS: usize = 256;
 /// Half of the listener's connections, so the keyed calls keep the other half.
 const SOCKETS_TOTAL: usize = 2_048;
+/// A stop of an account's features, a deleted key, a moved selection and a new pairing each end the open sockets
+/// they reach within this time.
+const SOCKET_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 /// Past the client's own 80 s of silence, and four of the upstream's pings. It ends the sockets whose client died
 /// without a close under the DNS redirect, where no proxy's TCP keepalive finds one.
 const SOCKET_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
@@ -355,6 +358,7 @@ pub async fn run_until(
             key_sockets: KEY_SOCKETS,
             max_request_bytes: config.proxy.max_request_bytes,
             model_rejection: Duration::from_secs(config.routing.model_rejection_seconds),
+            socket_check_interval: SOCKET_CHECK_INTERVAL,
             socket_idle_timeout: SOCKET_IDLE_TIMEOUT,
             sockets_total: SOCKETS_TOTAL,
             upstream_gzip: config.proxy.upstream_gzip,

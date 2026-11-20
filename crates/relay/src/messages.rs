@@ -174,6 +174,8 @@ pub struct Limits {
     pub max_request_bytes: usize,
     /// How long an account is skipped for a model it answered 404 for.
     pub model_rejection: Duration,
+    /// How often an open socket of the feature listener is checked against the registry.
+    pub socket_check_interval: Duration,
     /// How long an open socket of the feature listener may move no byte in either direction.
     pub socket_idle_timeout: Duration,
     /// The open sockets of the feature listener, whatever their key.

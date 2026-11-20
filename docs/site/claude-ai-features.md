@@ -878,10 +878,11 @@ A socket request's head goes upstream as the client sent it, with the client's `
 credential line: the router drops each `Authorization` and `x-api-key` line and adds none, since the token in the
 subprotocol is the upstream's one credential. It leaves on a fresh connection of the inference connector, which no pool
 takes back. The upstream's `101` goes back with its `connection` and `upgrade` lines, which the router keeps out of each
-other answer, and from then on the router carries the socket's bytes both ways unread until one side ends or fails, or
-the router stops. It then closes both sides and writes no close code of its own. Each open socket holds one of the
-listener's connections. An answer other than a `101`, the upstream's own `403` for a token it refuses among them, goes
-back as each answer does, and a request that gets no answer head gets the `502`.
+other answer, and from then on the router carries the socket's bytes both ways unread until one side ends or fails, the
+socket moves no byte for the idle time, a check of its key and its account fails, or the router stops. It then closes
+both sides and writes no close code of its own. Each open socket holds one of the listener's connections. An answer
+other than a `101`, the upstream's own `403` for a token it refuses among them, goes back as each answer does, and a
+request that gets no answer head gets the `502`.
 
 ## What the account's state does
 
@@ -902,8 +903,8 @@ slow-down and a session's pin do not stop a feature call either, since the route
 window.
 
 To stop an account's features, change the selection or disconnect the account. A deletion sets each selection that names
-the account to none. A stop holds from the next call on: the feature path cancels nothing, so a call in flight runs to
-its own end, a connector's long stream among them.
+the account to none. A stop holds from the next call on: a keyed call in flight still runs to its own end, a connector's
+long stream among them, and an open socket ends at its next check, at most 30 seconds later.
 
 What a `401` of a feature host gets depends on one header. A `401` that carries `X-Mcp-Error-Code` is the connector's
 word that it wants a sign-in of its own, and it goes back at once and untouched for the client to read. A `401` without
@@ -978,11 +979,15 @@ of the dial and refuses a carrier-NAT, link-local, private or unique-local addre
 has to lead to a loopback address or a public one ([Base URL and DNS redirect](#base-url-and-dns-redirect)). The router
 counts the open sockets of each key and of the listener and refuses a socket request above either count with a `429`
 ([What the router refuses and what the client shows](#what-the-router-refuses-and-what-the-client-shows)), and it ends
-a socket that moved no byte in either direction for 90 seconds. No setting moves the two counts or the idle time. Where
-the router refuses a watch for another cause than a full count, or ends its socket after the idle time or at the
-router's stop, the session reads a lost connection and, by the client's code, dials again behind a new page read. At the
-`429` of a full count the session waits 30 seconds or more, counts no failure and dials again, by the client's code. The
-client's event report, `POST /api/frame/track`, gets the `403`, which the session shows nowhere.
+a socket that moved no byte in either direction for 90 seconds. No setting moves the two counts or the idle time. Each
+30 seconds from a socket's open the router checks the socket's key, that key's selection, the account's sign-in and the
+account's state again, as the admission checked them, and ends at once, on both sides, a socket that fails one of these
+checks. A pause ends no socket, as it stops no feature call. Where the router refuses a watch for another cause than a
+full count, or ends its socket after the idle time, at a failed check or at the router's stop, the session reads a lost
+connection and, by the client's code, dials again behind a new page read. After a failed check, that read meets the
+router's refusal for the changed state, or goes out under the account the selection names now. At the `429` of a full
+count the session waits 30 seconds or more, counts no failure and dials again, by the client's code. The client's event
+report, `POST /api/frame/track`, gets the `403`, which the session shows nowhere.
 
 **The `/usage` dialog** cannot read the account's usage. Its read gets the `403`, and the dialog's Usage tab reads
 "Couldn't load usage data" and prints the router's whole answer body below it, a `permission_error` with the message
@@ -1045,10 +1050,11 @@ The metrics listener counts the calls in two families ([Metrics](statistics.md#m
 
 Neither family carries a path, a status or an account. A refused call and a domain check each write one line at `debug`
 too, with the code or the outcome, the method, the path without its query and the key's label. A socket's tunnel writes
-one at its end, with the cause (`client_ended`, `client_failed`, `idle`, `stopped`, `upstream_ended` or
-`upstream_failed`), the method, the path, the key's label and the socket's life in milliseconds. The router writes one
-where a page read under one key returns a token that another key read, with the path and the two keys' labels, and one
-where it cannot scan a page read's answer, with the cause and the path. None of these lines holds a token or a byte of a
+one at its end, with the cause (`check_failed`, `client_ended`, `client_failed`, `idle`, `stopped`, `upstream_ended` or
+`upstream_failed`), under `check` the failed check (`account`, `key`, `selection` or `sign_in`) where the cause is
+`check_failed`, the method, the path, the key's label and the socket's life in milliseconds. The router writes one where
+a page read under one key returns a token that another key read, with the path and the two keys' labels, and one where
+it cannot scan a page read's answer, with the cause and the path. None of these lines holds a token or a byte of a
 body. Under `RUST_LOG=info,phoebis_relay::features=debug` the router writes the feature module's `debug` lines, these
 among them, and keeps each other module at `info` ([Environment variables](installation.md#environment-variables)).
 

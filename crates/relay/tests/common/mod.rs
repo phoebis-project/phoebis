@@ -1471,6 +1471,7 @@ pub fn default_limits() -> Limits {
         key_sockets: 256,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        socket_check_interval: Duration::from_secs(30),
         socket_idle_timeout: Duration::from_secs(90),
         sockets_total: 2_048,
         upstream_gzip: UpstreamGzip::Auto,
