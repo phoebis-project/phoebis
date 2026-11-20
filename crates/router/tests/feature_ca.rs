@@ -1,6 +1,7 @@
 //! The feature CA: a router started in-process with a `features` block serves the same CA at the download across a
 //! restart, refuses half of one, a key that does not match it, a file with a second certificate, a CA without a key
-//! identifier, a CA under another subject and a CA without the name constraint, and writes its key at 0600.
+//! identifier, a CA under another subject and a CA without the router's name constraint or under another one, and
+//! writes its key at 0600.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -277,6 +278,41 @@ async fn a_feature_ca_without_the_name_constraint_refuses_the_start() {
     let mut name = rcgen::DistinguishedName::new();
     name.push(rcgen::DnType::CommonName, "Phoebis feature CA");
     params.distinguished_name = name;
+    std::fs::write(&cert, params.self_signed(&key).unwrap().pem()).unwrap();
+    std::fs::write(dir.path().join("feature-ca-key.pem"), key.serialize_pem()).unwrap();
+
+    let line = refused(dir.path(), &up).await;
+    assert_eq!(
+        line,
+        format!(
+            "features.ca.cert_file {}: holds a CA without the name constraint this router writes",
+            cert.display()
+        )
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_feature_ca_under_another_name_constraint_refuses_the_start() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cert = dir.path().join("feature-ca.pem");
+    // Its key matches, its dates hold, it carries a key identifier and its subject is the router's. Its critical
+    // constraint permits the two feature hosts and excludes no address range, so a certificate named by an IP address
+    // would pass under it.
+    let key = rcgen::KeyPair::generate().unwrap();
+    let mut params = rcgen::CertificateParams::default();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+    let mut name = rcgen::DistinguishedName::new();
+    name.push(rcgen::DnType::CommonName, "Phoebis feature CA");
+    params.distinguished_name = name;
+    params.name_constraints = Some(rcgen::NameConstraints {
+        permitted_subtrees: vec![
+            rcgen::GeneralSubtree::DnsName("api.anthropic.com".to_owned()),
+            rcgen::GeneralSubtree::DnsName("mcp-proxy.anthropic.com".to_owned()),
+        ],
+        excluded_subtrees: vec![],
+    });
     std::fs::write(&cert, params.self_signed(&key).unwrap().pem()).unwrap();
     std::fs::write(dir.path().join("feature-ca-key.pem"), key.serialize_pem()).unwrap();
 
