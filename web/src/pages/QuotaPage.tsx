@@ -107,9 +107,9 @@ export function QuotaPage() {
 
         <SectionBar sections={QUOTA_SECTIONS} shown={shown} onChoose={choose} />
 
-        {shown === 'accounts' ? (
-          <section className="quota-section" {...sectionPanel('accounts')}>
-            {failure ??
+        <section className="quota-section" {...sectionPanel(shown)}>
+          {shown === 'accounts'
+            ? (failure ??
               (accounts.data !== null && total === 0 ? (
                 <EmptyState title="No accounts to list" body="The view lists a subscription account that is paired, not awaiting re-authentication and whose plan has not ended." />
               ) : (
@@ -118,13 +118,9 @@ export function QuotaPage() {
                     ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
                     : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} />)}
                 </div>
-              ))}
-          </section>
-        ) : (
-          <section className="quota-section" {...sectionPanel('quota-windows')}>
-            {failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter(onTimeline)} now={now} slotOf={slotOf} />)}
-          </section>
-        )}
+              )))
+            : (failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter(onTimeline)} now={now} slotOf={slotOf} />))}
+        </section>
       </div>
     </PopoverHost.Provider>
   );

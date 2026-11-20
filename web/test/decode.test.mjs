@@ -2459,7 +2459,7 @@ test('a recipe and a session row decode the compaction verdict and the compacted
 });
 
 test("the downstream snippet is the seven recommended lines, its base URL the proxy listener's scheme and port on a placeholder host", () => {
-  const lines = (listeners) => d.snippetFor('base', listeners, null).split('\n');
+  const lines = (listeners) => d.snippetFor('base', listeners, null).text.split('\n');
   const rest = ['CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1'];
   assert.deepEqual(lines({ proxy: '127.0.0.1:8080', proxyTls: false }), ['ANTHROPIC_BASE_URL=http://router.example.com:8080', ...rest]);
   assert.equal(lines({ proxy: '0.0.0.0:8443', proxyTls: true })[0], 'ANTHROPIC_BASE_URL=https://router.example.com:8443', 'a listener that terminates TLS reads https');
