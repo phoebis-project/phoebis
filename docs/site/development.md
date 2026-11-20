@@ -461,9 +461,15 @@ against the real one, so the checker fails on what it exists to catch.
 
 `bash scripts/tests/launch-script.sh` takes the launch script from its block on [claude.ai
 features](claude-ai-features.md#the-launch-script), which is the script's one copy, and runs it under `sh` with the
-host's curl. Loopback stubs play the router's CA download and three states of the proxy's address: a port where nothing
-listens, a proxy that answers the `CONNECT` with `403`, and a proxy whose upstream is down. In each state the script has
-to stop with the message of that state and print no other line.
+host's curl. It needs `openssl` beside `python3`, since at its start it makes a CA with the router's name constraint and
+a leaf under that CA. Loopback stubs play the router's download of that CA's certificate, three states of the proxy's
+address, a proxy that reaches a TLS stub under the CA, and a stand-in of the router's feature listener. The three states
+are a port where nothing listens, a proxy that answers the `CONNECT` with `403`, and a proxy whose upstream is down, and
+in each of them the script has to stop with the message of that state and print no other line. Four more cases show that
+a sound proxy gets the script as far as the client's start, that a fingerprint of another value stops the start at the
+compare, that an empty `ROUTER_KEY` stops it ahead of the fetch, and that a `.curlrc` in the user's home leads no probe.
+The script's curl calls read no `.curlrc`, so the test leads curl through a stand-in that adds the test's `--connect-to`
+rules, and no connection leaves loopback.
 
 ### Links to another product
 

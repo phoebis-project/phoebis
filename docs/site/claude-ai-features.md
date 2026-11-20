@@ -229,7 +229,7 @@ BASE_URL=${BASE_URL%/}
 
 # The fetch goes straight to the router, with no proxy in between.
 rc=0
-status=$(curl --silent --noproxy '*' --connect-timeout 10 --max-time 30 ${BASE_CA:+--cacert "$BASE_CA"} \
+status=$(curl -q --silent --noproxy '*' --connect-timeout 10 --max-time 30 ${BASE_CA:+--cacert "$BASE_CA"} \
   --output "$new_ca" --write-out '%{http_code}' "$BASE_URL/v0/features/ca.pem") || rc=$?
 [ "$rc" -eq 0 ] || stop "the router at $BASE_URL does not answer (curl exit $rc)"
 [ "$status" != 404 ] || stop "the router at $BASE_URL has no feature listener"
@@ -250,7 +250,7 @@ probe() {
   shift
   : > "$head_file"
   rc=0
-  codes=$(curl --silent --output /dev/null --dump-header "$head_file" --connect-timeout 10 --max-time 30 \
+  codes=$(curl -q --silent --output /dev/null --dump-header "$head_file" --connect-timeout 10 --max-time 30 \
     --write-out '%{http_code} %{http_connect}' --cacert "$new_ca" "$@" "$url") || rc=$?
   code=$(tr -d '\r' < "$head_file" | grep -i '^x-phoebis-error-code:' | tail -n 1 | sed 's/^[^:]*: *//')
   rm -f "$head_file"
@@ -381,6 +381,8 @@ the shell's umask back ahead of the client's start, since under `077` each file 
 would be made `0600`. The two files of a start in progress carry the process id in their names and go at each exit, so
 two starts at one time share neither. Each curl call gives up after 10 seconds without a connection and after 30 seconds
 in all, so a name that leads to an address which drops packets does not hold the start for the system's own timeout.
+Each curl call opens with `-q`, so curl reads no configuration file of the user, and a line of a `.curlrc` leads neither
+the fetch nor a probe along another road than the client's.
 
 ### The fetch, the compare and the check
 
