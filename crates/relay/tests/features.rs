@@ -307,7 +307,11 @@ async fn a_spelling_of_the_excepted_call_cut_at_a_decoded_mark_is_refused() {
     let h = features_harness(&up, both_features_at_a()).await;
     let listener = feature_listener(&h).await;
     let mut answers = Vec::new();
-    for request_line in ["POST /api/frame/track%3Fx", "POST /api/frame/track%23x"] {
+    for request_line in [
+        "POST /api/frame/track%3Fx",
+        "POST /api/frame/track%23x",
+        "POST /api/frame/track%3Fx%23y",
+    ] {
         let (status, headers, _) = listener.send(API, &keyed(request_line, API, "", b"")).await;
         let (status, code, _) = refusal_of(status, &headers);
         answers.push((request_line, status, code.to_owned()));
@@ -322,6 +326,11 @@ async fn a_spelling_of_the_excepted_call_cut_at_a_decoded_mark_is_refused() {
             ),
             (
                 "POST /api/frame/track%23x",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+            (
+                "POST /api/frame/track%3Fx%23y",
                 403,
                 "feature_not_allowed".to_owned()
             ),
@@ -394,6 +403,7 @@ async fn a_decoded_mark_behind_a_closing_slash_or_a_dot_segment_is_refused() {
         "POST /api/frame/track/%3Fx",
         "POST /api/frame/track/.%3Fx",
         "POST /api/frame/track/x/..%23y",
+        "POST /api/frame/track/x%253Fa/..%3Fb",
         "POST /api/frame/retitle/%3Fx",
     ] {
         let (status, headers, _) = listener.send(API, &keyed(request_line, API, "", b"")).await;
@@ -415,6 +425,11 @@ async fn a_decoded_mark_behind_a_closing_slash_or_a_dot_segment_is_refused() {
             ),
             (
                 "POST /api/frame/track/x/..%23y",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+            (
+                "POST /api/frame/track/x%253Fa/..%3Fb",
                 403,
                 "feature_not_allowed".to_owned()
             ),

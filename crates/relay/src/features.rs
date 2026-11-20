@@ -442,8 +442,9 @@ fn request_host(headers: &HeaderMap) -> Option<String> {
 /// The row a keyed request falls under, with its feature and the row's own spelling of the method. A row's prefix or
 /// whole path is compared with the path as sent, which the forward sends on as it came. Its decoded forms are read
 /// too, since an upstream that decodes a path once or more would serve another call than the one the row names: each
-/// form has to be plain, the part of the last form ahead of its first `?` or `#` keeps a plain form's segment rules,
-/// and an excepted path holds where the visible ASCII characters of that part spell it.
+/// form has to be plain, the part of a form ahead of each `?` or `#` it holds keeps a plain form's segment rules, and
+/// an excepted path holds where the visible ASCII characters of the last form's part ahead of its first `?` or `#`
+/// spell it.
 fn matched(
     table: &'static FeatureTable,
     method: &str,
@@ -454,17 +455,25 @@ fn matched(
     // A path the upstream could fold into another one would carry a refused call under the account's token.
     let mut call = plain_path(path)?;
     // An upstream that decodes a path and then cuts it at a `?` or a `#` would read the part ahead of the mark as the
-    // path, so that part keeps the segment rules, and the excepted call is looked for in it. The cut can change the
-    // last segment of the part alone: each segment ahead of it is a whole segment of the last form.
-    if let Some(mark) = call.iter().position(|byte| matches!(byte, b'?' | b'#')) {
-        call.truncate(mark);
-        let last = call.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
-        if matches!(last, b"" | b"." | b"..") {
-            return None;
+    // path, so each form's part keeps the segment rules. The cut can change the last segment of a part alone, and the
+    // marks of the last form stand in for each form's: an empty, `.` or `..` segment holds no escape and no decode
+    // yields a slash, so where a form holds one ahead of a mark, the last form holds it ahead of the same mark. One
+    // pass keeps the read linear in a path with many marks in one segment.
+    let mut segment = 0;
+    for (at, byte) in call.iter().enumerate() {
+        match byte {
+            b'/' => segment = at + 1,
+            b'?' | b'#' if matches!(&call[segment..at], b"" | b"." | b"..") => return None,
+            _ => {}
         }
     }
-    // An upstream that drops a space or a byte outside ASCII would read the excepted call in a path that holds one
-    // among its letters, so the compare reads the visible characters alone.
+    // An upstream that decodes each escape cuts the path at the last form's first mark, so the excepted call is looked
+    // for ahead of it.
+    if let Some(mark) = call.iter().position(|byte| matches!(byte, b'?' | b'#')) {
+        call.truncate(mark);
+    }
+    // An upstream that drops a space or a byte outside ASCII would read the excepted call in a part that holds one at
+    // any place, so the compare reads the visible characters alone.
     call.retain(u8::is_ascii_graphic);
     let features = [
         (Feature::Artifacts, table.artifacts),
