@@ -390,7 +390,7 @@ impl Tunnel {
         let (cause, check) = tokio::select! {
             biased;
             () = stopped(&mut stop) => ("stopped", None),
-            word = unheld(&relay, &admitted, started) => ("check_failed", Some(word)),
+            word = unheld(&relay, &admitted, opened) => ("check_failed", Some(word)),
             () = silent(&last, idle) => ("idle", None),
             cause = carry(client, upstream, leftover, place, &last) => (cause, None),
         };
@@ -503,12 +503,13 @@ async fn pass(
     }
 }
 
-/// Resolves with the word of the first check that `admitted` fails. Each check reads the registry's snapshot anew, the
-/// first one interval behind `started` and each one interval behind the last, so a check that runs late moves the
-/// later ones with it and none is caught up.
-async fn unheld(relay: &Relay, admitted: &Admitted, started: Instant) -> &'static str {
+/// Resolves with the word of the first check that `admitted` fails. Each check reads the registry's snapshot anew. The
+/// first falls one interval behind `checked`, the instant of the check at the upstream's `101`, at which the identity
+/// held, and each later one an interval behind the last, so a check that runs late moves the later ones with it and
+/// none is caught up.
+async fn unheld(relay: &Relay, admitted: &Admitted, checked: Instant) -> &'static str {
     let every = relay.limits.socket_check_interval;
-    let mut checks = tokio::time::interval_at(started + every, every);
+    let mut checks = tokio::time::interval_at(checked + every, every);
     checks.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         checks.tick().await;
