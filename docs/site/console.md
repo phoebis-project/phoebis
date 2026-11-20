@@ -969,7 +969,7 @@ The filter bar holds the range, the search, Add filter, the Columns button, the 
 split Refresh button and the count of rows shown ("25 shown, more available"), the right edge on a second line at 1280
 px whatever the count reads, since its slot keeps the width of its longest text. The range offers Last hour, Last 6
 hours, Last 24 hours (the default), Last 7 days, Last 30 days or Custom range with From and To, drawn as the pills 1h,
-6h, 24h, 7d, 30d and Custom, the pressed pill naming its range and its end on hover. Custom opens From and To in a
+6h, 24h, 7d, 30d and Custom, the pressed pill reading `{label}, from {from}` on hover. Custom opens From and To in a
 popover on the window the table shows, where Apply stays disabled under "End must be after start." while the pair is
 wrong, an end past now reads as now, and the pill prints an applied span ("13:00 to 14:30", the date before each time
 across days). The search, "Search id, session, key, account, model, error, message id", matches the request id, the
@@ -1156,12 +1156,12 @@ filter with Key, Feature, Account and Outcome (`canceled`, `failed` or `forwarde
 the bar, and the split Refresh button. Both sections read the one range. The section and the range live in the page's
 address, so a reload or a shared link keeps them, while the four filters stay with the open page, through a look at
 Model requests, and start empty on a reload. The table pages 50 calls at a time with First, Previous and Next, and a
-change of the range or of a filter returns to the first page. Under a preset each read runs up to now, past the end the
-pressed pill names, from the start the range took when the page loaded or Refresh last ran, and a custom range reads its
-own window. Refresh, titled "Reads the list again now" under a preset, takes the range again for both sections. Auto
-reload is off when the page opens and keeps its interval through a look at Model requests. The dropdown offers the
-request list's intervals: each one reads the first page again, and it waits on an older page and while a menu or popover
-under the bar is open. While Feature calls shows, the request list reads nothing on its interval.
+change of the range or of a filter returns to the first page. Under a preset each read runs up to now, from the start
+the range took when the page loaded or Refresh last ran, and a custom range reads its own window. Refresh, titled "Reads
+the list again now" under a preset, takes the range again for both sections. Auto reload is off when the page opens and
+keeps its interval through a look at Model requests. The dropdown offers the request list's intervals: each one reads
+the first page again, and it waits on an older page and while a menu or popover under the bar is open. While Feature
+calls shows, the request list reads nothing on its interval.
 
 An empty table with no filter reads "No feature calls in this range" with "A row appears once a key's pool selects an
 account for a feature and a client in a feature setup uses it." and the link "How the claude.ai features work", which

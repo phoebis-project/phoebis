@@ -12,7 +12,10 @@ export interface RangeControlProps {
   /** The window the view's reads cover, in a sentence the two titles carry after the span. */
   sentence?: string;
   value: RangeValue;
-  /** The window the view shows: the end the group's title names under a preset, and the span the Custom popover opens on. */
+  /**
+   * The window the view shows: the start the group's title names under a preset, and the span the Custom popover opens
+   * on. A preset's title names the start, since each read under a preset sends it and a poll's rows can pass the end.
+   */
   window: { from: number; to: number };
 }
 
@@ -21,7 +24,7 @@ type Side = 'from' | 'to';
 /**
  * Six pills in a 32 px group, 1h, 6h, 24h, 7d, 30d and Custom, the pressed one the address's preset or Custom while a
  * span stands, printing the span. A preset pill is named by the word it prints and carries its label on its title. The
- * group's title reads "Last 24 hours, ends {fmtAbsolute}" under a preset and "{from} to {to}" in fmtAbsolute under a
+ * group's title reads "Last 24 hours, from {fmtAbsolute}" under a preset and "{from} to {to}" in fmtAbsolute under a
  * span, and the pressed pill, whose own title covers the group's, carries the same words. Where the view passes a
  * sentence, both titles read "{span}. {sentence}". It draws `Segmented`'s markup itself, since the Custom pill anchors
  * a popover and the primitive's buttons take no ref.
@@ -36,7 +39,7 @@ export function RangeControl({ now, onChange, sentence, value, window: shown }: 
   const custom = value.preset === 'custom';
   const to = fmtAbsolute(shown.to);
   const label = RANGE_PRESETS.find((p) => p.name === value.preset)?.label ?? value.preset;
-  const span = custom ? `${fmtAbsolute(shown.from)} to ${to}` : `${label}, ends ${to}`;
+  const span = custom ? `${fmtAbsolute(shown.from)} to ${to}` : `${label}, from ${fmtAbsolute(shown.from)}`;
   const title = joinPresent([span, sentence], '. ');
 
   // A field's minute drops the window's seconds and milliseconds, so an untouched field keeps the window's own instant.

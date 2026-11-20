@@ -68,11 +68,11 @@ test('the span reads the times alone inside one day and the date before each tim
   }
 });
 
-test('six pills print the short names they are named by, each preset titled with its label, the preset the address holds pressed with its end in its title, and the group title names its label and end', () => {
+test('six pills print the short names they are named by, each preset titled with its label, the preset the address holds pressed with its start in its title, and the group title names its label and start', () => {
   const { container } = render();
   const group = container.querySelector('.segmented[role="group"]');
   assert.equal(group?.getAttribute('aria-label'), 'Range');
-  assert.equal(group?.getAttribute('title'), `Last 24 hours, ends ${fmtAbsolute(iso(NOW))}`);
+  assert.equal(group?.getAttribute('title'), `Last 24 hours, from ${fmtAbsolute(iso(DAY_WINDOW.from))}`);
   assert.deepEqual(
     pills(container).map((b) => b.textContent),
     ['1h', '6h', '24h', '7d', '30d', 'Custom'],
@@ -84,8 +84,8 @@ test('six pills print the short names they are named by, each preset titled with
   );
   assert.deepEqual(
     pills(container).map((b) => b.getAttribute('title')),
-    ['Last hour', 'Last 6 hours', `Last 24 hours, ends ${fmtAbsolute(iso(NOW))}`, 'Last 7 days', 'Last 30 days', null],
-    "the pressed pill covers the group's title, so it carries the end too",
+    ['Last hour', 'Last 6 hours', `Last 24 hours, from ${fmtAbsolute(iso(DAY_WINDOW.from))}`, 'Last 7 days', 'Last 30 days', null],
+    "the pressed pill covers the group's title, so it carries the start too",
   );
   assert.deepEqual(
     pills(container).map((b) => b.getAttribute('aria-pressed')),
