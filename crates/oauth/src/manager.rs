@@ -1268,6 +1268,8 @@ fn account_uuid(account: &AccountRow) -> String {
 /// `Handshake` can only arise while the connection is being set up, so both join it. What is left,
 /// `ClosedBeforeHead`, `Decode`, `Io`, `Response`, `Stalled`, and `TooLarge`, can all happen after the request
 /// reached the upstream intact, which makes the response, not the request, the part that went missing.
+/// `Unresolved` never reaches this function, since `ControlClient::send` answers `Unreachable` where no address
+/// comes.
 fn transport_before_write(error: &TransportError) -> bool {
     matches!(
         error,

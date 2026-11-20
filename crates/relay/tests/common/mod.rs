@@ -4,7 +4,7 @@
 //! the other.
 #![allow(dead_code)]
 
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -248,6 +248,8 @@ pub struct Harness {
     pub clock: Arc<AtomicI64>,
     /// The client the feature listener's control-plane calls leave through.
     pub control: Arc<phoebis_transport::control::ControlClient>,
+    /// How many of the next lookups answer no address. The harness's resolver counts it down.
+    pub failing_lookups: Arc<AtomicUsize>,
     /// The manager the relay was built with, so a test reads `backoff_until` before it steps the clock.
     pub manager: Arc<phoebis_oauth::CredentialManager>,
     /// The relay behind `app`, for the suites that serve it on a real socket instead of calling it in process.
@@ -987,14 +989,23 @@ async fn build(
     let addr = up.addr();
     let connector_addr = connector_host.map(FakeUpstream::addr);
     // An authority with an explicit port names another loopback fake on that port, the connectors' host names
-    // `connector_host` where there is one, and everything else is `up`.
+    // `connector_host` where there is one, and everything else is `up`, apart from the lookups that
+    // `failing_lookups` still holds, which answer no address.
+    let failing_lookups = Arc::new(AtomicUsize::new(0));
+    let failing = failing_lookups.clone();
     let resolver: phoebis_transport::control::Resolver = Arc::new(move |authority: &str| {
+        let fails = failing
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok();
         let resolved = authority
             .rsplit_once(':')
             .and_then(|(_, p)| p.parse::<u16>().ok())
             .map(|p| std::net::SocketAddr::from(([127, 0, 0, 1], p)))
             .or(connector_addr.filter(|_| authority == CONNECTOR_HOST))
-            .or(Some(addr));
+            .or(Some(addr))
+            .filter(|_| !fails);
         Box::pin(async move { resolved }) as phoebis_transport::control::ResolveFuture
     });
     let mut cb =
@@ -1094,6 +1105,7 @@ async fn build(
         catalog_up,
         clock: clock_cell,
         control,
+        failing_lookups,
         manager,
         relay,
         router: router_handle,

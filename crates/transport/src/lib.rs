@@ -40,4 +40,7 @@ pub enum TransportError {
     /// repeat a side effect rely on this distinction.
     #[error("upstream unreachable: {0}")]
     Unreachable(String),
+    /// No address came for the host a new connection was to open to, so nothing was sent.
+    #[error("no address for {0}")]
+    Unresolved(String),
 }

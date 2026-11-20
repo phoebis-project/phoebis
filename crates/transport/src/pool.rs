@@ -3,11 +3,11 @@
 use boring::ssl::SslConnector;
 use std::collections::HashMap;
 use std::io::ErrorKind;
-use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 
+use crate::control::Resolver;
 use crate::{connect_tls, TransportError};
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -37,11 +37,12 @@ impl Pool {
     /// Hands out a connection for the key, and reports whether it came from the idle list. An idle entry is
     /// probed before it is handed out and dropped unless the socket is open and quiet, because a request
     /// written into a connection the upstream closed while it sat idle looks exactly like a lost response and
-    /// so has to be failed rather than sent again.
+    /// so has to be failed rather than sent again. The lookup runs on a miss alone, with the key's host as the
+    /// resolver's input.
     pub async fn checkout(
         &self,
         key: &PoolKey,
-        addr: SocketAddr,
+        resolver: &Resolver,
     ) -> Result<(Conn, bool), TransportError> {
         let reused = {
             let mut idle = self.idle.lock().unwrap();
@@ -57,6 +58,9 @@ impl Pool {
         if let Some(c) = reused {
             return Ok((c, true));
         }
+        let addr = resolver(&key.host)
+            .await
+            .ok_or_else(|| TransportError::Unresolved(key.host.clone()))?;
         connect_tls(&self.connector, &key.host, addr)
             .await
             .map(|c| (c, false))

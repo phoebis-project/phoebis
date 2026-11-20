@@ -822,16 +822,13 @@ impl CatalogService {
             headers,
             body: Bytes::new(),
         };
-        let addr = (self.resolver)(UPSTREAM_AUTHORITY).await.ok_or_else(|| {
-            DiscoveryError::Unreachable(format!("no address for {UPSTREAM_AUTHORITY}"))
-        })?;
         let key = PoolKey {
             account_id: account.id.clone(),
             host: UPSTREAM_AUTHORITY.to_string(),
         };
         let (mut conn, _) = self
             .pool
-            .checkout(&key, addr)
+            .checkout(&key, &self.resolver)
             .await
             .map_err(|e| DiscoveryError::Unreachable(e.to_string()))?;
         let (status, body, reusable) = exchange(&mut conn, &request).await?;

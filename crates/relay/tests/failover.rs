@@ -540,6 +540,33 @@ async fn the_wire_submission_index_ends_the_request_at_255_with_the_exhaustion_a
 }
 
 #[tokio::test]
+async fn a_lookup_that_fails_at_a_pool_miss_fails_over_to_the_next_account() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("first", "tok-1", 1), oauth("second", "tok-2", 2)],
+        PoolSpec::default(),
+    )
+    .await;
+    // No connection of either account stands in the pool yet, so the first account's checkout looks the host up.
+    h.failing_lookups
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(credentials_seen(&up), ["tok-2"]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_model_outside_the_rules_is_refused_and_any_other_reaches_the_upstream() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

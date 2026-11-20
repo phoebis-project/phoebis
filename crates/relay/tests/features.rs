@@ -1261,6 +1261,24 @@ async fn a_host_line_in_capitals_with_a_trailing_dot_and_a_port_names_its_host()
     up.shutdown().await;
 }
 
+#[tokio::test]
+async fn a_feature_call_answers_502_for_a_lookup_that_fails_at_a_pool_miss() {
+    let up = fake(vec![("/api/artifacts/mcp", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    // The row leaves over the account's pooled connections, and the pool holds none yet, so the call's checkout
+    // looks the host up.
+    h.failing_lookups.store(1, Ordering::SeqCst);
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/artifacts/mcp", API, "", b""))
+        .await;
+    assert_eq!(
+        refusal_of(status, &headers),
+        (502, "upstream_unreachable", "")
+    );
+    up.shutdown().await;
+}
+
 /// A body of nineteen bytes, which a resend carries whole.
 const TITLE: &[u8] = br#"{"title":"example"}"#;
 

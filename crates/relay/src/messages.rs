@@ -2757,10 +2757,6 @@ impl Relay {
         let mut edited = Bytes::from(edited);
         let mut wire_body = on_the_wire(&edited);
         let authority = dispatch::UPSTREAM_AUTHORITY;
-        let Some(addr) = (self.resolver)(authority).await else {
-            tracing::warn!(host = %authority, "the upstream host does not resolve");
-            return Leg::FailOver { auth_marked: false };
-        };
         let pool_key = PoolKey {
             account_id: account.id.clone(),
             host: authority.to_string(),
@@ -2917,20 +2913,20 @@ impl Relay {
                 headers: head.headers,
                 body: wire_body.clone(),
             };
-            let dispatched =
-                match dispatch::attempt(self, &request, &pool_key, addr, fresh, cancel).await {
-                    Err(failure) => Err(failure),
-                    Ok(sent) => Ok(self
-                        .respond(
-                            responding,
-                            sent,
-                            Checkin {
-                                pool: self.pool.clone(),
-                                key: pool_key.clone(),
-                            },
-                        )
-                        .await),
-                };
+            let dispatched = match dispatch::attempt(self, &request, &pool_key, fresh, cancel).await
+            {
+                Err(failure) => Err(failure),
+                Ok(sent) => Ok(self
+                    .respond(
+                        responding,
+                        sent,
+                        Checkin {
+                            pool: self.pool.clone(),
+                            key: pool_key.clone(),
+                        },
+                    )
+                    .await),
+            };
             let dispatched = match dispatched {
                 Err(AttemptFailure::Unsent { detail, connect }) if !retried => {
                     tracing::debug!(
@@ -2969,6 +2965,13 @@ impl Relay {
                         self.answer_failure(admitted.trace, ACCOUNT_CANCELED, outcome)
                             .await,
                     );
+                }
+                Err(AttemptFailure::Unresolved) => {
+                    tracing::warn!(host = %authority, "the upstream host does not resolve");
+                    if let Some(leg_head) = leg_head.as_mut() {
+                        leg_head.goes_on();
+                    }
+                    return Leg::FailOver { auth_marked: false };
                 }
                 Err(failure) => {
                     let written = matches!(failure, AttemptFailure::Lost(_));

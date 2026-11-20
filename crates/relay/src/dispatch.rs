@@ -1,16 +1,17 @@
-//! One upstream attempt: the connection, the write, the response head, and the two ways it can fail without
+//! One upstream attempt: the connection, the write, the response head, and the three ways it can fail without
 //! an answer. Every wait here races the selected account's cancellation token.
 
 use std::future::Future;
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytes::BytesMut;
 use phoebis_oauth::Clock;
+use phoebis_transport::control::Resolver;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::request::{write_request, RawRequest, WriteProgress};
 use phoebis_transport::response::{read_head, ResponseHead};
+use phoebis_transport::TransportError;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 
@@ -41,6 +42,9 @@ pub(crate) enum AttemptFailure {
     /// The upstream may have received the whole request and acted on it, so it must not be sent again.
     #[error("the response was lost: {0}")]
     Lost(String),
+    /// No address came for the upstream's host at a pool miss, so no connection was tried.
+    #[error("the upstream host does not resolve")]
+    Unresolved,
     /// The request was never written whole into a live connection, so nothing upstream can have acted on it.
     /// `connect` says no connection was opened at all (the checkout's error, the handshake's error or the connect
     /// bound's expiry), as against a checked-out connection that died on the write.
@@ -67,7 +71,6 @@ pub(crate) async fn attempt(
     relay: &Relay,
     request: &RawRequest,
     key: &PoolKey,
-    addr: SocketAddr,
     fresh: bool,
     cancel: &CancellationToken,
 ) -> Result<Sent<Conn>, AttemptFailure> {
@@ -78,9 +81,16 @@ pub(crate) async fn attempt(
     let once = async {
         let checkout = async {
             let (conn, reused) = if fresh {
-                (checkout_fresh(&relay.pool, key, addr).await?, false)
+                (
+                    checkout_fresh(&relay.pool, key, &relay.resolver).await?,
+                    false,
+                )
             } else {
-                relay.pool.checkout(key, addr).await.map_err(unsent)?
+                relay
+                    .pool
+                    .checkout(key, &relay.resolver)
+                    .await
+                    .map_err(not_checked_out)?
             };
             if !reused {
                 relay.note_opened();
@@ -152,14 +162,25 @@ async fn send_and_read<C: AsyncRead + AsyncWrite + Unpin>(
 async fn checkout_fresh(
     pool: &Pool,
     key: &PoolKey,
-    addr: SocketAddr,
+    resolver: &Resolver,
 ) -> Result<Conn, AttemptFailure> {
     loop {
-        let (conn, reused) = pool.checkout(key, addr).await.map_err(unsent)?;
+        let (conn, reused) = pool
+            .checkout(key, resolver)
+            .await
+            .map_err(not_checked_out)?;
         if !reused {
             return Ok(conn);
         }
         drop(conn);
+    }
+}
+
+/// One mapping for both checkouts, so a retry's lookup that gives no address fails as the first attempt's does.
+fn not_checked_out(error: TransportError) -> AttemptFailure {
+    match error {
+        TransportError::Unresolved(_) => AttemptFailure::Unresolved,
+        other => unsent(other),
     }
 }
 

@@ -372,9 +372,6 @@ async fn pooled(
     host: &'static str,
     request: &RawRequest,
 ) -> Result<Held, Unanswered> {
-    let Some(addr) = (relay.resolver)(host).await else {
-        return Err(Unanswered::Failed("unreachable", None));
-    };
     let key = PoolKey {
         account_id: account.id.clone(),
         host: host.to_owned(),
@@ -384,7 +381,7 @@ async fn pooled(
     let never = CancellationToken::new();
     let mut fresh = false;
     loop {
-        match attempt(relay, request, &key, addr, fresh, &never).await {
+        match attempt(relay, request, &key, fresh, &never).await {
             Ok(sent) => {
                 let checkin = Checkin {
                     pool: relay.pool.clone(),
@@ -392,6 +389,7 @@ async fn pooled(
                 };
                 return Ok(Held::Pooled(sent, checkin));
             }
+            Err(AttemptFailure::Unresolved) => return Err(Unanswered::Failed("unreachable", None)),
             Err(AttemptFailure::Unsent { connect: false, .. }) if !fresh => fresh = true,
             Err(AttemptFailure::Unsent { .. }) => {
                 return Err(Unanswered::Failed("unreachable", None));
