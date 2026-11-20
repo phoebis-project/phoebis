@@ -568,8 +568,9 @@ which a semicolon opens. The router looks for these forms in the path as sent an
 gives, decoded once more until no `%` with two hex digits behind it is left, so `%252e` counts as an encoded dot and
 `%3b` as a semicolon. An upstream that decodes or folds such a path could otherwise serve a refused call under the
 feature account's sign-in, and the client builds none of these forms. The one excepted path, `POST /api/frame/track`,
-is an event report. It is matched in each case of its letters and where a path decodes to it, so `POST
-/api/frame/Track` and `POST /api/frame/%74rack` are refused too.
+is an event report. It is matched in each case of its letters, where a path decodes to it, and where a decoded path
+reads it ahead of a `?` or a `#`, so `POST /api/frame/Track`, `POST /api/frame/%74rack` and `POST /api/frame/track%3Fx`
+are refused too.
 
 The two calls without a key match by their whole form. `GET` and `HEAD` on `/api/hello` answer `200` with an empty body
 and send nothing upstream, which is where the first-start check of an interactive client ends, so a start needs no

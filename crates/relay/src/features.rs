@@ -313,7 +313,8 @@ fn request_host(headers: &HeaderMap) -> Option<String> {
 /// The row a keyed request falls under, with its feature and the row's own spelling of the method. A row's prefix or
 /// whole path is compared with the path as sent, which the forward sends on as it came. Its decoded forms are read
 /// too, since an upstream that decodes a path once or more would serve another call than the one the row names: each
-/// form has to be plain, and an excepted path holds where the path decodes to it.
+/// form has to be plain, and an excepted path holds where the path decodes to it, the last form read up to its first
+/// `?` or `#`.
 fn matched(
     table: &'static FeatureTable,
     method: &str,
@@ -323,6 +324,12 @@ fn matched(
     let host = host?;
     // A path the upstream could fold into another one would carry a refused call under the account's token.
     let decoded = plain_path(path)?;
+    // An upstream that decodes a path and then cuts it at a `?` or a `#` would read the excepted call in a path that
+    // goes on behind one, so the compare ends where such an upstream's would.
+    let call = decoded
+        .split(|byte| matches!(byte, b'?' | b'#'))
+        .next()
+        .unwrap_or(&decoded);
     let features = [
         (Feature::Artifacts, table.artifacts),
         (Feature::Connectors, table.connectors),
@@ -340,7 +347,7 @@ fn matched(
             // excepted call under another spelling. An excepted path holds no `%`, so of the path's forms the last,
             // which holds no escape, is the one that can be it.
             let excepted = row.except.iter().any(|(held, whole)| {
-                *held == method && whole.as_bytes().eq_ignore_ascii_case(&decoded)
+                *held == method && whole.as_bytes().eq_ignore_ascii_case(call)
             });
             (row.host == host && on_path && !excepted).then_some((feature, row, method))
         })

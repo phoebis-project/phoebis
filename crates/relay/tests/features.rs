@@ -330,6 +330,52 @@ async fn a_path_that_ends_in_a_slash_is_refused() {
 }
 
 #[tokio::test]
+async fn a_spelling_of_the_excepted_call_cut_at_a_decoded_mark_is_refused() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let mut answers = Vec::new();
+    for request_line in ["POST /api/frame/track%3Fx", "POST /api/frame/track%23x"] {
+        let (status, headers, _) = listener.send(API, &keyed(request_line, API, "", b"")).await;
+        let (status, code, _) = refusal_of(status, &headers);
+        answers.push((request_line, status, code.to_owned()));
+    }
+    assert_eq!(
+        answers,
+        [
+            (
+                "POST /api/frame/track%3Fx",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+            (
+                "POST /api/frame/track%23x",
+                403,
+                "feature_not_allowed".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_decoded_mark_beside_no_exception_goes_upstream_as_sent() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(API, &keyed("POST /api/frame/retitle/a%3Fb", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    assert_eq!(
+        feature_lines(&up),
+        ["POST /api/frame/retitle/a%3Fb HTTP/1.1"]
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_call_without_a_key_reaches_no_upstream() {
     let up = fake(vec![("/api/frame/", json_200())]).await;
     let h = features_harness(&up, both_features_at_a()).await;

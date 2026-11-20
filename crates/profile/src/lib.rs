@@ -57,9 +57,9 @@ pub enum PathRule {
 #[derive(Clone, Copy, Debug)]
 pub struct FeatureRow {
     /// A method and a whole path the row leaves out. The path holds no percent escape, since the listener compares it
-    /// with the last decoded form of a request's path, which holds none. A path with an escape would match no request,
-    /// including one that sends it as written, and the call it names would go upstream under the feature account's
-    /// token.
+    /// with the last decoded form of a request's path, which holds none, up to that form's first `?` or `#`. A path
+    /// with an escape would match no request, including one that sends it as written, and the call it names would go
+    /// upstream under the feature account's token.
     pub except: &'static [(&'static str, &'static str)],
     pub host: &'static str,
     pub methods: &'static [&'static str],
