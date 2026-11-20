@@ -20,7 +20,7 @@ import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Card, ErrorState, Meter, Segmented, Skeleton, StateRow } from '@/components/ui/primitives';
 import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
-import { SectionBar } from '@/components/SectionBar';
+import { SectionBar, sectionPanel } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { NO_RESET_IN_RANGE, allowanceRows, fleetFigures, rangeAllowanceSpan, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure, type AllowanceRow, type FleetFigure } from '@/lib/allowance';
@@ -1259,7 +1259,7 @@ const GROUP_BY_TITLES: Record<SectionId, { disabledTitle: string } | { title: st
 function Section({ id, title, meta, metaTitle, shown = true, children }: { children: ReactNode; id: SectionId; meta?: string; metaTitle?: string; shown?: boolean; title: string }) {
   if (!shown) return null;
   return (
-    <section className="analytics-section" id={id} role="tabpanel" aria-labelledby={`tab-${id}`}>
+    <section className="analytics-section" {...sectionPanel(id)}>
       <header className="analytics-section__head">
         <h2 className="analytics-section__title">{title}</h2>
         {meta && (

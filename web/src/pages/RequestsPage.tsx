@@ -11,7 +11,7 @@ import { Chips } from '@/components/ChipView';
 import { type FeatureCallFilters, FeatureCallsTable, NO_FEATURE_CALL_FILTERS } from '@/components/FeatureCallsTable';
 import { FilterBar } from '@/components/FilterBar';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
-import { SectionBar } from '@/components/SectionBar';
+import { SectionBar, sectionPanel } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { TokenBar } from '@/components/TokenBar';
 import { AttemptCount, cooldownLine, OUTCOME_LABEL, StatusBadge } from '@/components/ui/AttemptTrail';
@@ -393,7 +393,7 @@ export function RequestsPage() {
       <div className="stack">
         <SectionBar sections={REQUEST_SECTIONS} shown={section} onChoose={chooseSection} />
         {section === 'requests' ? (
-          <div className={`requests ${requestId ? 'has-drawer' : ''}`} id="requests" role="tabpanel" aria-labelledby="tab-requests">
+          <div className={`requests ${requestId ? 'has-drawer' : ''}`} {...sectionPanel('requests')}>
             <FilterBar
               address={address}
               count={shownCount(rows, nextCursor, requests.data !== null)}
@@ -581,7 +581,7 @@ export function RequestsPage() {
             )}
           </div>
         ) : (
-          <section className="stack" id="feature-calls" role="tabpanel" aria-labelledby="tab-feature-calls">
+          <section className="stack" {...sectionPanel('feature-calls')}>
             <FeatureCallsTable
               accounts={accounts.data ?? []}
               disabled={disabled}

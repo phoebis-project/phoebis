@@ -6,7 +6,7 @@ import { useHashLanding } from '@/app/useHashLanding';
 import { accountColor, accountSlots } from '@/components/charts/theme';
 import { FilterBar } from '@/components/FilterBar';
 import { ResetDialog } from '@/components/ResetDialog';
-import { SectionBar } from '@/components/SectionBar';
+import { SectionBar, sectionPanel } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { SpeedChip } from '@/components/ui/SpeedChip';
@@ -108,7 +108,7 @@ export function QuotaPage() {
         <SectionBar sections={QUOTA_SECTIONS} shown={shown} onChoose={choose} />
 
         {shown === 'accounts' ? (
-          <section className="quota-section" id="accounts" role="tabpanel" aria-labelledby="tab-accounts">
+          <section className="quota-section" {...sectionPanel('accounts')}>
             {failure ??
               (accounts.data !== null && total === 0 ? (
                 <EmptyState title="No accounts to list" body="The view lists a subscription account that is paired, not awaiting re-authentication and whose plan has not ended." />
@@ -121,7 +121,7 @@ export function QuotaPage() {
               ))}
           </section>
         ) : (
-          <section className="quota-section" id="quota-windows" role="tabpanel" aria-labelledby="tab-quota-windows">
+          <section className="quota-section" {...sectionPanel('quota-windows')}>
             {failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter(onTimeline)} now={now} slotOf={slotOf} />)}
           </section>
         )}
