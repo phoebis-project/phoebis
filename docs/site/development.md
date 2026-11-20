@@ -475,12 +475,13 @@ keeps a connection on loopback, and no connection leaves loopback.
 
 Under `PRIVATE_HOSTS=yes` the script meets stand-ins of `sudo`, `unshare`, `setpriv` and `mount`. The test stops ahead
 of its first case where the `PATH` it hands the script finds one of the four tools ahead of its stand-in, since a `sudo`
-that asks for no password would then run the script's root part as root. Six cases there show that the client gets the
+that asks for no password would then run the script's root part as root. Seven cases there show that the client gets the
 caller's variables, umask and arguments, with none of the arguments on `sudo`'s command line, that `SETUP=proxy` reads
-no word of the input, that the private hosts file holds the machine's lines less the two feature names, and that a
-caller's marker word outside that road reads no file. The case of the other peer needs `::1` on the loopback interface,
-and the case of the private file needs a user namespace that the host grants to a user without privileges. On a host
-that lacks what it needs, each of the two prints one line and does not run.
+no word of the input, that the private hosts file holds the machine's lines less the two feature names, that a caller's
+marker word outside that road reads no file, and that no variable of the calling shell makes the second run remove a
+file. The case of the other peer needs `::1` on the loopback interface, and the case of the private file needs a user
+namespace that the host grants to a user without privileges. On a host that lacks what it needs, each of the two prints
+one line and does not run.
 
 ### Links to another product
 

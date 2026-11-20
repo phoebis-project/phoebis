@@ -195,12 +195,13 @@ on loopback](#a-relay-on-loopback)). The script reads the input under `SETUP=red
 
 Behind its stops for the inputs and ahead of the fetch, such a start writes two files into the script's directory and
 calls `sudo unshare --mount --propagation slave`. Inside that new mount namespace a root shell binds the private file,
-`hosts.<pid>`, over `/etc/hosts` and runs the script a second time through `setpriv`, under the user and group ids
-that `sudo` names in `SUDO_UID` and `SUDO_GID`. The second run does the fetch, the compare, the check and the client's
-start as the calling user, so root holds for the namespace and the bind alone. The machine's `/etc/hosts` stays as it
-is, and each program outside the start's process tree reads it as before. Each mount and unmount of the machine
-reaches the start's tree while the bind stays inside it (`MS_SLAVE` in `mount_namespaces(7)`), so the hosts file is
-the one thing in which the tree differs from the machine.
+`hosts.<pid>`, over `/etc/hosts` and runs the script a second time through `setpriv`, under the user and group ids that
+`sudo` names in `SUDO_UID` and `SUDO_GID`. The second run does the fetch, the compare, the check and the client's start
+as the calling user, so root holds for the namespace and the bind alone. The machine's `/etc/hosts` stays as it is, and
+each program outside the start's process tree reads it as before. Where the machine's mounts are shared, as `systemd`
+makes them at its start, each mount and unmount of the machine reaches the start's tree while the bind stays inside it
+(`MS_SLAVE` in `mount_namespaces(7)`). So while the bind holds, the hosts file is the one thing in which the tree
+differs from the machine.
 
 The private file holds the machine's hosts file less the two feature names, and behind it one line per address family
 that names both hosts on loopback:
@@ -215,13 +216,22 @@ comment left out, the line's other names stay, and a line with no name left goes
 lines would otherwise keep the router's private address for both names beside loopback, and the client refuses live
 updates for one such address among those a name resolves to. The loopback lines stand last, so a reverse lookup of
 `127.0.0.1` or `::1` still reads the machine's own name. The file is the user's, at mode `0644` as the machine's file
-is, and it goes when the session ends.
+is. It stands for `/etc/hosts` in the start's tree until the session ends, when it goes, unless the machine puts another
+file in that place first.
+
+A program of the machine that puts a new file in the place of `/etc/hosts` by a rename, as `sed -i` does, or that
+removes the file while a session runs takes the private file out of the start's tree, and a write in place leaves it
+(`mount_namespaces(7)`, measured in a user namespace on Debian 13 under Linux 7.0.12). From then on each new connection
+of the session follows the machine's file: where that file holds no line for the two names, the connection leaves to the
+upstream with the router key, and where it holds a redirect's lines, the calls reach the router and the client refuses
+live updates again. The script's check runs once, at the start, and sees neither, and `SETUP=proxy` is the setup that
+rests on no hosts file.
 
 `sudo` empties the environment, so the second file, `shell-env.<pid>` at mode `0600`, carries the shell's exported
 variables, its umask and the arguments for the client to the second run, which reads it and removes it before anything
-else. The root shell hands that file's path over behind the marker word `phoebis-private-hosts`, and a run reads it
-only where its own inputs say `SETUP=redirect` and `PRIVATE_HOSTS=yes`, so no variable that a run inherited makes it
-read or remove a file.
+else. The root shell hands that file's path over behind the marker word `phoebis-private-hosts`, and a run reads it only
+where its own inputs say `SETUP=redirect` and `PRIVATE_HOSTS=yes`. The file's `set --` line puts its own path ahead of
+the arguments, and the run removes the file by that word, so no inherited variable makes a run read or remove a file.
 
 `sudo`'s own configuration decides where root finds `unshare`, `mount` and `setpriv`, through `secure_path` where it
 sets one, and the script fixes no `PATH` for its root part. The call suits a user who may run each command as root:
@@ -331,13 +341,14 @@ BASE_CA=''                         # the private CA of the base URL's certificat
 
 # A start under PRIVATE_HOSTS=yes runs this file a second time inside its namespace, below a sudo that empties the
 # environment. The root part hands that run a marker word and the path of a file the first run wrote: the exported
-# variables, the umask and a set line with the caller's arguments. That line replaces the arguments, so the path is
-# kept ahead of the read. The two inputs above decide whether a run reads the file, so no variable it inherited does.
+# variables, the umask and a set line with the file's own path and then the caller's arguments. The run removes the
+# file by that word and by no variable, since a variable the file restores could name another file. The two inputs
+# above decide whether a run reads the file, so no variable it inherited does.
 entered=no
 if [ "$SETUP" = redirect ] && [ "$PRIVATE_HOSTS" = yes ] && [ "${1-}" = phoebis-private-hosts ]; then
-  handed=$2
-  . "$handed"
-  rm -f "$handed"
+  . "$2"
+  rm -f "$1"
+  shift
   entered=yes
 fi
 
@@ -409,13 +420,14 @@ if [ "$SETUP" = redirect ] && [ "$PRIVATE_HOSTS" = yes ] && [ "$entered" = no ];
   } > "$hosts"
   chmod 644 "$hosts"
   # sudo empties the environment, joins its own umask to the caller's and logs its command line. So the second run
-  # takes the caller's variables, umask and arguments from this file, and sudo's line holds none of them.
+  # takes the caller's variables, umask and arguments from this file, and sudo's line holds none of them. The set line
+  # opens with the file's own path, by which the second run removes it.
   saved="$state/shell-env.$$"
   {
     export -p
     echo "umask $shell_umask"
     printf 'set --'
-    for arg do
+    for arg in "$saved" ${1+"$@"}; do
       quoted=
       while :; do
         case $arg in

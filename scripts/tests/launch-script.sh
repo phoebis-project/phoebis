@@ -262,12 +262,12 @@ exit 1
 SH
 chmod +x "$tmp/bin/claude"
 
-# A LAUNCH_MARK of the caller joins the script's environment, so a case can follow one variable of the calling shell
-# to the client.
+# A LAUNCH_MARK or a handed of the caller joins the script's environment, so a case can follow a variable of the
+# calling shell into the script.
 launch() {
   status=0
   out=$(env -i HOME="$tmp/home" PATH="$tmp/bin:$PATH" ${LAUNCH_MARK+"LAUNCH_MARK=$LAUNCH_MARK"} \
-    sh "$tmp/launch.sh" "$@" 2>&1) || status=$?
+    ${handed+"handed=$handed"} sh "$tmp/launch.sh" "$@" 2>&1) || status=$?
 }
 
 launch
@@ -436,5 +436,15 @@ launch
 umask "$harness_umask"
 [[ "$(cat "$tmp/client-umask" 2>/dev/null)" == 0002 ]] \
   || fail "the client did not start under the caller's umask 0002 (exit $status): $(cat "$tmp/client-umask" 2>&1) $out"
+
+# The second run reads the first run's exported variables, so a block that held the saved file's path in a variable
+# would let a variable of that name in the calling shell pick the file that the second run removes.
+fill SETUP redirect
+fill PRIVATE_HOSTS yes
+echo 'a file of the caller' > "$tmp/callers-file"
+handed="$tmp/callers-file" launch
+[[ -e "$tmp/callers-file" ]] || fail "a variable of the calling shell made the second run remove the file it names: $out"
+[[ "$out" == "the launch script started the client" ]] \
+  || fail "a start under the caller's handed did not end at the client's start alone (exit $status): $out"
 
 echo "launch-script: ok"
