@@ -762,8 +762,16 @@ The router serves two claude.ai features of Claude Code, Artifacts and the claud
 sends to `api.anthropic.com` and `mcp-proxy.anthropic.com` whatever its base URL names. With the `features` block the
 router binds a feature listener, creates a CA for the two host names and forwards the calls of the two features under
 the sign-in of an account the operator selects per pool, with an override per key, so the router key reaches no upstream
-host ([features](installation.md#features)). A client reaches the listener through `phoebis-proxy`, a tunnel proxy in a
-repository of its own, or through a DNS redirect, and starts through a launch script that fetches the CA, compares its
-fingerprint and checks the road to both hosts. The console gains the selection in the pool and key dialogs, the Feature
-calls section of the Requests view and the two feature blocks of the client configuration card, and the router counts
-the calls in two metric families ([claude.ai features](claude-ai-features.md)).
+host ([features](installation.md#features)). The listener carries an artifact's live updates as a WebSocket, which it
+admits by the token that a read of that artifact under the router key handed out ([What the router
+forwards](claude-ai-features.md#what-the-router-forwards)). A client reaches the listener through `phoebis-proxy`, a
+tunnel proxy in a repository of its own, or through a DNS redirect, and starts through a launch script that fetches the
+CA, compares its fingerprint and checks the road to both hosts, and that on Linux can give one start a hosts file of its
+own, the redirect's road to live updates for a router on a private address: the file leads both host names to loopback,
+where a relay that the administrator of the client's machine sets up passes the client's connections on to the router
+([A hosts file for one start](claude-ai-features.md#a-hosts-file-for-one-start)). The console gains the selection in the
+pool and key dialogs, the attention item `feature_account_unavailable` on the Dashboard's attention line and the
+selecting pools' cards for a selected account that cannot serve, the Feature calls section of the Requests view and the
+two feature blocks of the client configuration card, which print the launch script's input lines, and the router counts
+the calls in two metric families ([claude.ai features](claude-ai-features.md), [Conditions and
+gauges](statistics.md#conditions-and-gauges)).
