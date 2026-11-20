@@ -38,6 +38,25 @@ pub async fn read_head<R: AsyncRead + Unpin>(
     r: &mut R,
     buf: &mut BytesMut,
 ) -> Result<ResponseHead, TransportError> {
+    read_final_head(r, buf, false).await
+}
+
+/// `read_head` for a request that asked for an upgrade: a `101` is the final head, and what `buf` holds behind it are
+/// the peer's first bytes on the switched connection. Each other head from 100 to 199 is skipped as `read_head` skips
+/// it.
+pub async fn read_upgrade_head<R: AsyncRead + Unpin>(
+    r: &mut R,
+    buf: &mut BytesMut,
+) -> Result<ResponseHead, TransportError> {
+    read_final_head(r, buf, true).await
+}
+
+/// The one head read behind `read_head` and `read_upgrade_head`, with `upgrade` for whether a `101` ends it.
+async fn read_final_head<R: AsyncRead + Unpin>(
+    r: &mut R,
+    buf: &mut BytesMut,
+    upgrade: bool,
+) -> Result<ResponseHead, TransportError> {
     let mut interim = 0u32;
     loop {
         let mut headers = [httparse::EMPTY_HEADER; 128];
@@ -61,8 +80,9 @@ pub async fn read_head<R: AsyncRead + Unpin>(
                         .collect(),
                 };
                 buf.advance(n);
-                // 1xx responses precede the real head (e.g. 100 Continue, 103 Early Hints); skip past them.
-                if (100..200).contains(&head.status) {
+                // Interim heads such as 100 Continue and 103 Early Hints precede the final one. A 101 to a request
+                // that asked for an upgrade is final, since the bytes behind it belong to the switched protocol.
+                if (100..200).contains(&head.status) && !(upgrade && head.status == 101) {
                     interim += 1;
                     if interim > MAX_INTERIM {
                         return Err(TransportError::Response(
@@ -291,6 +311,36 @@ mod tests {
             all.extend_from_slice(&c);
         }
         assert_eq!(all, b"hello");
+    }
+
+    #[tokio::test]
+    async fn a_101_to_an_upgrade_request_is_the_final_head_and_keeps_what_came_with_it() {
+        let (mut tx, mut rx) = duplex(256);
+        tx.write_all(
+            b"HTTP/1.1 103 Early Hints\r\n\r\n\
+              HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n\
+              \x81\x02hi",
+        )
+        .await
+        .unwrap();
+        let mut buf = BytesMut::new();
+        let head = read_upgrade_head(&mut rx, &mut buf).await.unwrap();
+        assert_eq!(head.status, 101);
+        assert_eq!(&buf[..], b"\x81\x02hi");
+    }
+
+    #[tokio::test]
+    async fn a_101_without_an_upgrade_request_is_skipped_for_the_real_head() {
+        let (mut tx, mut rx) = duplex(256);
+        tx.write_all(
+            b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n\
+              HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        let mut buf = BytesMut::new();
+        let head = read_head(&mut rx, &mut buf).await.unwrap();
+        assert_eq!(head.status, 200);
     }
 
     #[tokio::test]

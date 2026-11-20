@@ -1,4 +1,5 @@
-//! Control-plane client: one TCP connection per request, used once and dropped.
+//! The control plane's client, with one connection per request that is used once and dropped, and the send of an
+//! upgrade request, which serves both planes and hands the connection to its caller at a `101`.
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -13,7 +14,7 @@ use phoebis_profile::Profile;
 use crate::decode::{decoder, encoding};
 use crate::pool::Conn;
 use crate::request::{write_request, ProgressCell, RawRequest, WriteProgress};
-use crate::response::{framing, read_head, BodyReader, ResponseHead};
+use crate::response::{framing, read_head, read_upgrade_head, BodyReader, ResponseHead};
 use crate::{connect_tls, TransportError};
 
 /// Maps a host name to an address; production resolves DNS with a bound, tests map both control hosts to a
@@ -50,6 +51,18 @@ pub struct ControlAnswer {
     pub body: BodyReader<Conn>,
 }
 
+/// What the send of an upgrade request hands back.
+pub enum UpgradeAnswer {
+    /// Another final head than a `101`, with a reader over its body, as `send_streaming` hands an answer back.
+    Answered(ControlAnswer),
+    /// A `101`: its head, the connection, and the bytes that arrived behind the head.
+    Switched {
+        conn: Conn,
+        head: ResponseHead,
+        leftover: BytesMut,
+    },
+}
+
 pub struct ControlClient {
     // Kept for the constructor's stable shape across its call sites; `send` forwards the caller-built `RawRequest`
     // verbatim and needs no profile fields of its own.
@@ -73,8 +86,7 @@ impl ControlClient {
         host: &str,
         timeout: Duration,
     ) -> Result<(ResponseHead, Bytes), TransportError> {
-        let addr = self
-            .address(host)
+        let addr = address(&self.resolver, host)
             .await
             .map_err(TransportError::Unreachable)?;
         // Read by the timeout arm below, which cannot see how far `send_once` got on its own.
@@ -147,46 +159,16 @@ impl ControlClient {
         connect_timeout: Duration,
         head_timeout: Duration,
     ) -> Result<ControlAnswer, StreamFailure> {
-        let connecting = async {
-            let addr = self
-                .address(host)
-                .await
-                .map_err(StreamFailure::Unreachable)?;
-            connect_tls(&self.connector, host, addr)
-                .await
-                .map_err(|error| StreamFailure::Unreachable(error.to_string()))
-        };
-        let mut conn = match tokio::time::timeout(connect_timeout, connecting).await {
-            Ok(connected) => connected?,
-            Err(_) => {
-                return Err(StreamFailure::Unreachable(format!(
-                    "no connection to {host} in time"
-                )))
-            }
-        };
-        let mut buf = BytesMut::new();
-        let exchange = async {
-            write_request(&mut conn, &req, None)
-                .await
-                .map_err(|failure| match failure.progress {
-                    WriteProgress::Unsent => {
-                        StreamFailure::Unreachable(unsent(host, &failure.error))
-                    }
-                    WriteProgress::Written => StreamFailure::Cut(failure.error.to_string()),
-                })?;
-            read_head(&mut conn, &mut buf)
-                .await
-                .map_err(|error| match error {
-                    TransportError::ClosedBeforeHead | TransportError::Io(_) => {
-                        StreamFailure::Cut(error.to_string())
-                    }
-                    _ => StreamFailure::Undecodable(error.to_string()),
-                })
-        };
-        let head = match tokio::time::timeout(head_timeout, exchange).await {
-            Ok(read) => read?,
-            Err(_) => return Err(StreamFailure::Stalled),
-        };
+        let (conn, head, buf) = exchange(
+            &self.connector,
+            &self.resolver,
+            req,
+            host,
+            connect_timeout,
+            head_timeout,
+            false,
+        )
+        .await?;
         let f = framing(&head);
         Ok(ControlAnswer {
             head,
@@ -194,11 +176,118 @@ impl ControlClient {
         })
     }
 
-    async fn address(&self, host: &str) -> Result<SocketAddr, String> {
-        (self.resolver)(host)
-            .await
-            .ok_or_else(|| format!("no address for {host}"))
+    /// `send_upgrade` over this client's connector and resolver.
+    pub async fn send_upgrade(
+        &self,
+        req: RawRequest,
+        host: &str,
+        connect_timeout: Duration,
+        head_timeout: Duration,
+    ) -> Result<UpgradeAnswer, StreamFailure> {
+        send_upgrade(
+            &self.connector,
+            &self.resolver,
+            req,
+            host,
+            connect_timeout,
+            head_timeout,
+        )
+        .await
     }
+}
+
+/// One fresh connection through `connector`, the head as the caller built it, and the answer with a `101` as a final
+/// head. `connect_timeout` and `head_timeout` bound what they bound in `ControlClient::send_streaming`.
+pub(crate) async fn send_upgrade(
+    connector: &SslConnector,
+    resolver: &Resolver,
+    req: RawRequest,
+    host: &str,
+    connect_timeout: Duration,
+    head_timeout: Duration,
+) -> Result<UpgradeAnswer, StreamFailure> {
+    let (conn, head, leftover) = exchange(
+        connector,
+        resolver,
+        req,
+        host,
+        connect_timeout,
+        head_timeout,
+        true,
+    )
+    .await?;
+    if head.status == 101 {
+        return Ok(UpgradeAnswer::Switched {
+            conn,
+            head,
+            leftover,
+        });
+    }
+    let f = framing(&head);
+    Ok(UpgradeAnswer::Answered(ControlAnswer {
+        head,
+        body: BodyReader::new(conn, leftover, f),
+    }))
+}
+
+/// The connect, the write and the head read that both streaming sends share, with `upgrade` for whether the request
+/// asked for an upgrade, so that a `101` is the final head.
+async fn exchange(
+    connector: &SslConnector,
+    resolver: &Resolver,
+    req: RawRequest,
+    host: &str,
+    connect_timeout: Duration,
+    head_timeout: Duration,
+    upgrade: bool,
+) -> Result<(Conn, ResponseHead, BytesMut), StreamFailure> {
+    let connecting = async {
+        let addr = address(resolver, host)
+            .await
+            .map_err(StreamFailure::Unreachable)?;
+        connect_tls(connector, host, addr)
+            .await
+            .map_err(|error| StreamFailure::Unreachable(error.to_string()))
+    };
+    let mut conn = match tokio::time::timeout(connect_timeout, connecting).await {
+        Ok(connected) => connected?,
+        Err(_) => {
+            return Err(StreamFailure::Unreachable(format!(
+                "no connection to {host} in time"
+            )))
+        }
+    };
+    let mut buf = BytesMut::new();
+    let round_trip = async {
+        write_request(&mut conn, &req, None)
+            .await
+            .map_err(|failure| match failure.progress {
+                WriteProgress::Unsent => StreamFailure::Unreachable(unsent(host, &failure.error)),
+                WriteProgress::Written => StreamFailure::Cut(failure.error.to_string()),
+            })?;
+        let read = if upgrade {
+            read_upgrade_head(&mut conn, &mut buf).await
+        } else {
+            read_head(&mut conn, &mut buf).await
+        };
+        read.map_err(|error| match error {
+            TransportError::ClosedBeforeHead | TransportError::Io(_) => {
+                StreamFailure::Cut(error.to_string())
+            }
+            _ => StreamFailure::Undecodable(error.to_string()),
+        })
+    };
+    let head = match tokio::time::timeout(head_timeout, round_trip).await {
+        Ok(read) => read?,
+        Err(_) => return Err(StreamFailure::Stalled),
+    };
+    Ok((conn, head, buf))
+}
+
+async fn address(resolver: &Resolver, host: &str) -> Result<SocketAddr, String> {
+    resolver(host)
+        .await
+        .ok_or_else(|| format!("no address for {host}"))
 }
 
 fn unsent(host: &str, error: &std::io::Error) -> String {

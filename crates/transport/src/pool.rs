@@ -7,7 +7,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 
-use crate::control::Resolver;
+use crate::control::{send_upgrade, Resolver, StreamFailure, UpgradeAnswer};
+use crate::request::RawRequest;
 use crate::{connect_tls, TransportError};
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -72,6 +73,26 @@ impl Pool {
         if v.len() < self.max_idle {
             v.push((conn, Instant::now()));
         }
+    }
+
+    /// `send_upgrade` over the pool's connector. The connection enters no idle list.
+    pub async fn send_upgrade(
+        &self,
+        resolver: &Resolver,
+        req: RawRequest,
+        host: &str,
+        connect_timeout: Duration,
+        head_timeout: Duration,
+    ) -> Result<UpgradeAnswer, StreamFailure> {
+        send_upgrade(
+            &self.connector,
+            resolver,
+            req,
+            host,
+            connect_timeout,
+            head_timeout,
+        )
+        .await
     }
 }
 
