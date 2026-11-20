@@ -474,8 +474,9 @@ repository at a time under two rules:
 - A page or an anchor that is renamed or removed goes in three steps: the new target beside the old one, then the links
   in the other repository, then the removal of the old one.
 
-Each step waits for the green `Documentation` run of the step before it, since a build reads the other products at their
-newest green commits.
+Each step waits for the green `Documentation` run on `main` of the step before it, since a build reads the other
+products at their newest green commits. The green run of that step's pull request does not count, since the build reads
+the runs that a push to `main` started.
 
 The site's mark and favicon belong to the same contract. They are this repository's `docs/site/assets/favicon.svg`,
 `docs/site/assets/phoebis-router-light.svg` and `docs/site/assets/phoebis-router.svg`, which the site's configuration
@@ -525,9 +526,9 @@ with a line that says which.
 The site deploys from `phoebis-docs` alone. Its `Deploy` workflow runs on a push to its `main`, on a manual start and on
 the start a product's push sends. It builds `phoebis-docs` at `main` and each product at its newest commit on `main`
 whose `Documentation` run ended green, and deploys to Pages. A commit of this repository that fails a job of
-`Documentation` is therefore not published: the site keeps these pages from the last commit that passed. No build of the
-companion or the proxy reads the failed commit either, with one exception: a product with no green run, the case later
-in this paragraph. A run that is still in progress when a deploy starts gets about five minutes to end. A run that
+`Documentation` is therefore not published: a deploy builds these pages from the last commit that passed. No build of
+the companion or the proxy reads the failed commit either, with one exception: a product with no green run, the case
+later in this paragraph. A run that is still in progress when a deploy starts gets about five minutes to end. A run that
 failed for a reason outside its commit, such as a link to a page that the other product's newest green commit does not
 hold yet, stays red until someone starts it again, and its last job then starts the deploy. Where a product has no green
 run on `main` among its 100 newest, the deploy stops and the site keeps its last state, and the `Documentation` runs of
