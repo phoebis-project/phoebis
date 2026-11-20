@@ -9,8 +9,12 @@ export type FeatureWord = (typeof FEATURE_WORD_VALUES)[number];
 export type FeatureAccountIds = Record<FeatureWord, string | null>;
 export const KEY_FEATURE_MODE_VALUES = ['account', 'inherit', 'none'] as const;
 export type KeyFeatureMode = (typeof KEY_FEATURE_MODE_VALUES)[number];
-/** A key's value for one feature. `accountId` is set under `account` alone. */
-export interface KeyFeatureAccount { accountId: string | null; mode: KeyFeatureMode }
+/** A key's value for one feature: an account by its id, the pool's account, or none. Each arm holds `accountId`, as
+ * the wire does, so each row has one set of members. */
+export type KeyFeatureAccount =
+  | { accountId: string; mode: 'account' }
+  | { accountId: null; mode: 'inherit' }
+  | { accountId: null; mode: 'none' };
 export type AccountStatus = 'cooldown' | 'funding_required' | 'paused' | 'reauth_required' | 'ready' | 'unpaired';
 /** The three windows the pages know: the two shared ones and the model-scoped week. */
 export type KnownWindowId = '5h' | '7d' | '7d_fable';
@@ -695,9 +699,6 @@ export interface ApiKey {
   /** The companion routes the key permits, in the order `allowance`, `keepalive`: both for a new key. */
   companionPermissions: CompanionPermission[];
   createdAt: string;
-  /** The account each feature of the key acts under, null for none: the key's own where it names an account or none,
-   * else the pool's. */
-  effectiveFeatureAccounts: FeatureAccountIds;
   /** The stored switch, which `status` folds expiry and revocation over; an edit sends it back as it stands. */
   enabled: boolean;
   expiresAt: string | null;
@@ -2423,15 +2424,12 @@ export interface CostRevision {
   effectiveDate: string | null;
 }
 
-/** The feature listener's address and its CA. */
+/** The feature listener's CA, as the client card prints it. */
 export interface FeatureSettings {
-  /** The CA's end, as an ISO instant. */
-  caExpires: string;
   /** The SHA-256 of the bytes the CA download serves, as 64 lowercase hex characters, which each launcher compares. */
   caFingerprint: string;
   /** The CA's certificate as PEM text. */
   caPem: string;
-  listen: string;
 }
 
 export interface Settings {

@@ -14,10 +14,9 @@ export const ANALYTICS_GROUP_SAMPLE = decodeAnalyticsGroup(first('analytics_brea
 export const ATTENTION_ITEM_SAMPLE = decodeAttention(first('attention', 'items'));
 export const INHERITED_FEATURE_ACCOUNTS: Record<FeatureWord, KeyFeatureAccount> = perFeature(() => INHERITED_FEATURE);
 export const KEEPALIVE_OVERVIEW_SAMPLE = decodeKeepaliveOverview(body('keepalive_overview'));
-/** With no feature account of its own or its pool's, since the captured selections name accounts the mock lacks. */
+/** With no feature account of its own, since the captured selections name accounts the mock lacks. */
 export const KEY_SAMPLE: ApiKey = {
   ...decodeKey(first('keys', 'keys')),
-  effectiveFeatureAccounts: perFeature(() => null),
   featureAccounts: INHERITED_FEATURE_ACCOUNTS,
 };
 export const NO_FEATURE_ACCOUNTS: FeatureAccountIds = perFeature(() => null);

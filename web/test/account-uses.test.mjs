@@ -6,15 +6,14 @@ const inherit = { accountId: null, mode: 'inherit' };
 
 test("the deletion's warning names each use", () => {
   // `a` serves model requests in `main`, which also selects it for connectors, and `spare` selects it for both
-  // features. Each key carries its resolved values as the router answers them: `k2` inherits `spare`'s choice for
-  // both features, which is no use of the key's own.
+  // features. `k2` inherits `spare`'s choice for both features, which is no use of the key's own.
   const pools = [
     { featureAccounts: { artifacts: null, connectors: 'a' }, id: 'main', members: [{ accountId: 'a' }], name: 'Main' },
     { featureAccounts: { artifacts: 'a', connectors: 'a' }, id: 'spare', members: [], name: 'Spare' },
   ];
   const keys = [
-    { effectiveFeatureAccounts: { artifacts: null, connectors: 'a' }, featureAccounts: { artifacts: inherit, connectors: { accountId: 'a', mode: 'account' } }, id: 'k1', name: 'Desk', poolId: 'main' },
-    { effectiveFeatureAccounts: { artifacts: 'a', connectors: 'a' }, featureAccounts: { artifacts: inherit, connectors: inherit }, id: 'k2', name: 'Runner', poolId: 'spare' },
+    { featureAccounts: { artifacts: inherit, connectors: { accountId: 'a', mode: 'account' } }, id: 'k1', name: 'Desk', poolId: 'main' },
+    { featureAccounts: { artifacts: inherit, connectors: inherit }, id: 'k2', name: 'Runner', poolId: 'spare' },
   ];
   assert.deepEqual(
     d.accountUses('a', pools, keys),

@@ -184,18 +184,6 @@ const subjectsTwice = (input: Pick<Partial<GuardrailInput>, 'keys' | 'pools'>): 
   return key === null ? null : `keys lists ${key} twice`;
 };
 
-/**
- * The key routes' refusal of a word whose id does not go with its mode, which they read with the body, ahead of the
- * stamp. A word the body leaves out is not read.
- */
-const keyFeatureRefusal = (words: Partial<Record<FeatureWord, KeyFeatureAccount>> | undefined): string | null => {
-  for (const feature of FEATURE_WORD_VALUES) {
-    const word = words?.[feature];
-    if (word !== undefined && (word.mode === 'account') !== (word.accountId !== null)) return `feature_accounts.${feature}.account_id is an account id under the mode account and null under each other`;
-  }
-  return null;
-};
-
 /** The accounts a key's choices name, in the shape the routes' check of a selection reads. */
 const namedFeatureAccounts = (words: Record<FeatureWord, KeyFeatureAccount>): FeatureAccountIds => perFeature((f) => (words[f].mode === 'account' ? words[f].accountId : null));
 
@@ -692,18 +680,11 @@ export class MockApi implements Api {
 
   /**
    * The key as the route answers it, its own guardrails and its pool's read from the attachments at the time of the
-   * read, and its feature accounts resolved from its pool's selection at that time, since a pool write and a move of
-   * the key change them.
+   * read.
    */
   private keyView(k: KeyRow): ApiKey {
-    const pool = this.pools.find((p) => p.id === k.poolId);
     return {
       ...k,
-      // The router's rule: the key's own account or none, else its pool's selection, and none for a pool it lacks.
-      effectiveFeatureAccounts: perFeature((f) => {
-        const own = k.featureAccounts[f];
-        return own.mode === 'inherit' ? (pool?.featureAccounts[f] ?? null) : own.accountId;
-      }),
       guardrails: this.guardrailRefs('keys', k.id),
       poolGuardrails: this.guardrailRefs('pools', k.poolId),
     };
@@ -1021,7 +1002,7 @@ export class MockApi implements Api {
     const id = slug(input.name);
     if (this.keys.some((k) => k.id === id)) throw new ApiError(409, KEY_TAKEN, null);
     if (!this.pools.some((p) => p.id === input.poolId)) throw new ApiError(404, 'pool not found', null);
-    const refusal = keyRulesRefusal(input) ?? keyFeatureRefusal(input.featureAccounts);
+    const refusal = keyRulesRefusal(input);
     if (refusal) throw new ApiError(400, refusal, null);
     // A new key starts at inherit for each word the body leaves out.
     const featureAccounts = { ...INHERITED_FEATURE_ACCOUNTS, ...input.featureAccounts };
@@ -1685,7 +1666,7 @@ export class MockApi implements Api {
     // The route reads the pool before the rule list and the guardrail list, and before it compares the edit's stamp, so
     // an edit onto a missing pool answers 404 ahead of their refusals.
     if (!this.pools.some((p) => p.id === rest.poolId)) return Promise.reject(new ApiError(404, 'pool not found', null));
-    const refusal = keyRulesRefusal(input) ?? keyFeatureRefusal(input.featureAccounts);
+    const refusal = keyRulesRefusal(input);
     if (refusal) return Promise.reject(new ApiError(400, refusal, null));
     const twice = repeatedId(ownIds);
     if (twice !== null) return Promise.reject(new ApiError(400, `guardrails lists ${twice} twice`, null));

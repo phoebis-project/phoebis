@@ -1,6 +1,6 @@
 import type {
   Account, AccountCatalog, AccountKind, AccountRollup, AgentRequests, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FeatureAccountIds, FeatureCall, FeatureCallPage, FeatureSettings, FeatureWord, FundedSum, GuardVerdict, InputTransformations, KeepaliveOverview, KeepaliveRecipe, KeyFeatureAccount, KeyFigures, KeyModels, Lifecycle, LimitResets, LimitResetsRead, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FeatureAccountIds, FeatureCall, FeatureCallPage, FeatureWord, FundedSum, GuardVerdict, InputTransformations, KeepaliveOverview, KeepaliveRecipe, KeyFeatureAccount, KeyFigures, KeyModels, Lifecycle, LimitResets, LimitResetsRead, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, ResetUse, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionDay, SessionInfo, SessionSpend, SessionSpendPart, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
@@ -38,10 +38,13 @@ const featureAccountIds = (v: unknown): FeatureAccountIds => {
   const r = rec(v);
   return perFeature((f) => strOrNull(r[f]));
 };
-/** A mode this build does not know reads as the store's default for a key, the pool's account. */
+/** A mode this build does not know, and an `account` without an id, read as the store's default, the pool's account. */
 const keyFeatureAccount = (v: unknown): KeyFeatureAccount => {
   const r = rec(v);
-  return { accountId: strOrNull(r.account_id), mode: oneOf(KEY_FEATURE_MODE_VALUES, r.mode) ?? 'inherit' };
+  const mode = oneOf(KEY_FEATURE_MODE_VALUES, r.mode);
+  const accountId = strOrNull(r.account_id);
+  if (mode === 'account' && accountId !== null) return { accountId, mode };
+  return { accountId: null, mode: mode === 'none' ? 'none' : 'inherit' };
 };
 /** A map the route keys by data (a move reason, a model id), with every entry that is not a number dropped. */
 const numberMap = (v: unknown): Record<string, number> => Object.fromEntries(Object.entries(rec(v)).filter((e): e is [string, number] => numOrNull(e[1]) !== null));
@@ -313,7 +316,6 @@ export function decodeKey(v: unknown): ApiKey {
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     companionPermissions: COMPANION_PERMISSION_VALUES.filter((p) => list(k.companion_permissions).includes(p)),
     createdAt: isoOr(k.created_at, epoch),
-    effectiveFeatureAccounts: featureAccountIds(k.effective_feature_accounts),
     enabled,
     expiresAt: expires,
     featureAccounts: perFeature((f) => keyFeatureAccount(features[f])),
@@ -1135,11 +1137,6 @@ export const decodeSessionInfo = (v: unknown): SessionInfo => {
   return { persistent: r.persistent === true, sessionId: r.session_id };
 };
 
-const featureSettingsOf = (v: unknown): FeatureSettings | null => {
-  if (!isMap(v)) return null;
-  return { caExpires: isoOr(v.ca_expires, epoch), caFingerprint: str(v.ca_fingerprint), caPem: str(v.ca_pem), listen: str(v.listen) };
-};
-
 export function decodeSettings(v: unknown): Settings {
   const s = rec(v);
   const l = rec(s.listeners);
@@ -1149,7 +1146,7 @@ export function decodeSettings(v: unknown): Settings {
     about: { build: str(rec(s.about).build, 'unknown'), profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
     apiPrices: decodePricing(s.api_prices),
-    features: featureSettingsOf(s.features),
+    features: orNull(s.features, (f) => ({ caFingerprint: str(f.ca_fingerprint), caPem: str(f.ca_pem) })),
     listeners: { metrics: str(l.metrics), proxy: str(l.proxy), proxyTls: bool(l.proxy_tls) },
     retention: { bodyCaptureMaxHours: num(kept.body_capture_max_hours), retentionDays: num(kept.retention_days), rollupRetentionDays: num(kept.rollup_retention_days) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds), nonCompanionIdleSeconds: num(rec(s.sessions).non_companion_idle_seconds) },

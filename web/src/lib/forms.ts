@@ -463,7 +463,7 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput & { guardrails?
 }
 
 /** A select's value for a key's choice: `inherit`, `none`, or `account:<id>` for an account. */
-export const keyFeatureValue = (choice: KeyFeatureAccount): string => (choice.mode === 'account' ? featureAccountValue(choice.accountId ?? '') : choice.mode);
+export const keyFeatureValue = (choice: KeyFeatureAccount): string => (choice.mode === 'account' ? featureAccountValue(choice.accountId) : choice.mode);
 
 /** The key's choice a select's value names, read back through the account namespace before the two control words. */
 export const keyFeatureChoice = (value: string): KeyFeatureAccount => {
