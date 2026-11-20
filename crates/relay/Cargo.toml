@@ -40,6 +40,10 @@ tokio-boring = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 
+# The bound on a socket's unacknowledged bytes is the Linux kernel's `TCP_USER_TIMEOUT`, so no other build sets it.
+[target.'cfg(target_os = "linux")'.dependencies]
+socket2 = { workspace = true }
+
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
 flate2 = { workspace = true }

@@ -988,15 +988,18 @@ of the dial and refuses a carrier-NAT, link-local, private or unique-local addre
 has to lead to a loopback address or a public one ([Base URL and DNS redirect](#base-url-and-dns-redirect)). The router
 counts the open sockets of each key and of the listener and refuses a socket request above either count with a `429`
 ([What the router refuses and what the client shows](#what-the-router-refuses-and-what-the-client-shows)), and it ends
-a socket that moved no byte in either direction for 90 seconds. No setting moves the two counts or the idle time. Each
-30 seconds from a socket's open the router checks the socket's key, that key's selection, the account's sign-in and the
-account's state again, as the admission checked them, and ends at once, on both sides, a socket that fails one of these
-checks. A pause ends no socket, as it stops no feature call. Where the router refuses a watch for another cause than a
-full count, or ends its socket after the idle time, at a failed check or at the router's stop, the session reads a lost
-connection and, by the client's code, dials again behind a new page read. After a failed check, that read meets the
-router's refusal for the changed state, or goes out under the account the selection names now. At the `429` of a full
-count the session waits 30 seconds or more, counts no failure and dials again, by the client's code. The client's event
-report, `POST /api/frame/track`, gets the `403`, which the session shows nowhere.
+a socket that moved no byte in either direction for 90 seconds. On Linux the router also lets the kernel end a socket's
+client connection where bytes the router sent stay unacknowledged for the same 90 seconds, so the socket of a client
+that died without a close ends about that long after the first byte the client did not acknowledge, even while the
+upstream still sends. No setting moves the two counts or the idle time. Each 30 seconds from a socket's open the router
+checks the socket's key, that key's selection, the account's sign-in and the account's state again, as the admission
+checked them, and ends at once, on both sides, a socket that fails one of these checks. A pause ends no socket, as it
+stops no feature call. Where the router refuses a watch for another cause than a full count, or ends its socket after
+the idle time, at a failed check or at the router's stop, the session reads a lost connection and, by the client's code,
+dials again behind a new page read. After a failed check, that read meets the router's refusal for the changed state, or
+goes out under the account the selection names now. At the `429` of a full count the session waits 30 seconds or more,
+counts no failure and dials again, by the client's code. The client's event report, `POST /api/frame/track`, gets the
+`403`, which the session shows nowhere.
 
 **The `/usage` dialog** cannot read the account's usage. Its read gets the `403`, and the dialog's Usage tab reads
 "Couldn't load usage data" and prints the router's whole answer body below it, a `permission_error` with the message

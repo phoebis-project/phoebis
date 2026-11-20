@@ -59,6 +59,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 serde_norway = "0.9.42"
 sha2 = "0.10"
+socket2 = { version = "0.6.5", features = ["all"] }
 subtle = "2"
 tempfile = "3"
 thiserror = "2"

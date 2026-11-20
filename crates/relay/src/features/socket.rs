@@ -343,17 +343,19 @@ impl Tunnel {
         // The instant of the last byte in either direction. Its first value is the run's start, so the idle bound holds
         // over the hand-over and the first writes too.
         let last = Mutex::new(started);
+        let idle = relay.limits.socket_idle_timeout;
         // A socket need not end by itself, and its client can die without a close where no keepalive finds it. So the
         // stop ends it at once, since a tunnel that waited out the drain would hold each stop for its bound, a check
-        // ends one whose admission no longer holds, and the idle time ends one that went silent. A check that is due
-        // wins over a byte or the idle time of the same poll, so such a socket carries no more bytes and ends under
-        // the check's cause.
+        // ends one whose admission no longer holds, the idle time ends one whose two sides went silent, and the bound
+        // on the client's unacknowledged bytes ends one whose client died while the upstream still sends. A check
+        // that is due wins over a byte or the idle time of the same poll, so such a socket carries no more bytes and
+        // ends under the check's cause.
         let (cause, check) = tokio::select! {
             biased;
             () = stopped(&mut stop) => ("stopped", None),
             word = unheld(&relay, &admitted, opened) => ("check_failed", Some(word)),
-            () = silent(&last, relay.limits.socket_idle_timeout) => ("idle", None),
-            cause = carry(client, upstream, leftover, place, &last) => (cause, None),
+            () = silent(&last, idle) => ("idle", None),
+            cause = carry(client, upstream, leftover, place, &last, idle) => (cause, None),
         };
         tracing::debug!(
             cause,
@@ -398,13 +400,15 @@ struct Legs {
 /// The two legs of a tunnel to the first end of a direction, with its cause. The place and both legs free on the
 /// return, and on the drop of this future at the tunnel's other ends, the stop, a failed check and the idle time. No
 /// close frame is written on either road, so the session reads a lost connection and dials again. Each copy writes
-/// the instant of its last byte into `last`.
+/// the instant of its last byte into `last`, and the client's connection takes `idle` as its bound on unacknowledged
+/// bytes.
 async fn carry(
     client: OnUpgrade,
     upstream: Conn,
     leftover: BytesMut,
     place: SocketPlace,
     last: &Mutex<Instant>,
+    idle: Duration,
 ) -> &'static str {
     let Ok(upgraded) = client.await else {
         return CLIENT.failed;
@@ -415,7 +419,9 @@ async fn carry(
     };
     // Out of the recorder too: its parse would meet each byte of the socket's life, and nothing reads its queue
     // behind the upgrade.
-    let (client_read, client_write) = tokio::io::split(parts.io.into_inner().into_inner());
+    let accepted = parts.io.into_inner().into_inner();
+    bound_unacknowledged(&accepted, idle);
+    let (client_read, client_write) = tokio::io::split(accepted);
     let (upstream_read, upstream_write) = tokio::io::split(upstream);
     let mut legs = Legs {
         _place: place,
@@ -440,6 +446,26 @@ async fn carry(
         cause = pass(&mut legs.upstream_read, &mut legs.client_write, UPSTREAM, CLIENT, last) => cause,
     }
 }
+
+/// Bounds at `idle` how long bytes sent to a socket's client may stay unacknowledged. The idle time cannot end a
+/// socket whose client died without a close while the upstream still sends: each byte of the upstream starts that
+/// time again, and the write toward the client lands in the kernel's buffer. Under this bound the kernel ends the
+/// connection, and the tunnel's next read or write on the client's leg fails. A set that fails leaves the socket
+/// under the idle time alone.
+#[cfg(target_os = "linux")]
+fn bound_unacknowledged(client: &Accepted, idle: Duration) {
+    use tokio_util::either::Either;
+
+    let stream = match client {
+        Either::Left(plain) => plain,
+        Either::Right(tls) => tls.get_ref(),
+    };
+    let _ = socket2::SockRef::from(stream).set_tcp_user_timeout(Some(idle));
+}
+
+/// The bound is the Linux kernel's.
+#[cfg(not(target_os = "linux"))]
+fn bound_unacknowledged(_client: &Accepted, _idle: Duration) {}
 
 /// One direction's copy, to the end or the failure of its read, or the failure of its write. Each read that brings
 /// bytes writes its instant into `last`.
