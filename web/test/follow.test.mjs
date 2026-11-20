@@ -853,6 +853,9 @@ test("a list with no stamp walks Next past an overrun under the end its poll rea
   assert.deepEqual([f.last().overrun, f.last().nextCursor], [{ cursor: '200', to: ORIGIN + 5_000 }, '200'], 'eight pages leave rows 200 to 209 unread');
   act(() => f.last().goNext());
   assert.deepEqual([f.last().paging.cursor, f.last().paging.pagedTo], ['200', ORIGIN + 5_000], "Next walks from the poll's cursor under the poll's end");
+  f.render({ list: { nextCursor: '225', rows: r.rows.slice(200, 225) } });
+  act(() => f.last().goNext());
+  assert.deepEqual([f.last().paging.cursor, f.last().paging.pagedTo], ['225', ORIGIN + 5_000], 'the second Next keeps the end the walk holds');
 });
 
 test("Next from a poll's stand-in walks on under the end its page was read to", async () => {
