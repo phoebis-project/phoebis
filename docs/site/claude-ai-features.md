@@ -181,7 +181,9 @@ alone run no check. The check cannot tell one case from a sound machine: the lin
 machine has no road over that family while the script runs ([The fetch, the compare and the
 check](#the-fetch-the-compare-and-the-check)). Where the machine gains such a road inside the session, through a changed
 network or a tunnel that comes up, a new connection of the client to a feature host can leave to the upstream with the
-router key.
+router key. So under `PRIVATE_HOSTS=no` the script names each address family it could not prove at each start, in a
+notice behind `phoebis:` that stops nothing ([The stops](#the-stops)). A start under `PRIVATE_HOSTS=yes` wrote both
+lines itself and prints no notice.
 
 The script sets no proxy variable in this setup and clears the shell's proxy names for the client, since a proxy of the
 shell would resolve the two names on its own machine.
@@ -486,6 +488,8 @@ probe() {
   rm -f "$head_file"
 }
 
+unproven_ipv4=
+unproven_ipv6=
 # Both hosts, since a redirect that leaves out the second would pass a check of the first, and each connector call
 # would then carry the router key to the upstream.
 for host in api.anthropic.com mcp-proxy.anthropic.com; do
@@ -508,13 +512,20 @@ for host in api.anthropic.com mcp-proxy.anthropic.com; do
       probe "$host" "--$family" --noproxy '*'
       case "$rc:$codes:$code" in
         0:401\ *:auth_missing) routers=$((routers + 1)) ;;
-        6:*|7:*) ;;
+        6:*|7:*) [ "$PRIVATE_HOSTS" = yes ] || eval "unproven_$family=\"\$unproven_$family $host\"" ;;
         0:*|35:*|51:*|60:*) stop "$host leads to another host than the router's feature listener over $family" ;;
         *) stop "the check of the road to $host over $family failed (curl exit $rc, answer $codes)" ;;
       esac
     done
     [ "$routers" -gt 0 ] || stop "nothing answers at $host:443 as this machine resolves it"
   fi
+done
+# A family over which nothing answered proves nothing of its hosts line. A road over it that comes up inside the
+# session would carry a new connection to the upstream with the router key where that line is missing.
+for family in ipv4 ipv6; do
+  eval "left=\$unproven_$family"
+  [ -z "$left" ] ||
+    echo "phoebis: nothing answered over $family, so its hosts line is not proved for$left. Keep both lines" >&2
 done
 mv "$new_ca" "$ca"
 
@@ -648,8 +659,11 @@ probes per host go out, one per address family, since a name with one family's l
 the other. A host passes there where at least one probe reaches the router and none reaches another host or fails
 otherwise, and a family over which nothing answers stops nothing while the other reaches the router. The check has then
 not proved that family's line: without a road over a family, curl ends the same way for a line that holds and for a line
-that is missing. Keep both lines in the hosts file whatever families the machine reaches at the start. A resolver of the
-network that answers both names for both families serves the same end.
+that is missing. Under `PRIVATE_HOSTS=no` the script names each such family at each start, with the hosts whose probe
+over it reached nothing, in a notice behind `phoebis:` that stops nothing. Keep both lines in the hosts file whatever
+families the machine reaches at the start. A resolver of the network that answers both names for both families serves
+the same end. A start under `PRIVATE_HOSTS=yes` wrote both lines itself, into the start's own hosts file, and prints no
+notice.
 
 ### The stops
 
@@ -677,6 +691,11 @@ script's order:
 | `{host} leads to another host than the router's feature listener over {family}` | Under `SETUP=redirect`, the name's address of that family, `ipv4` or `ipv6`, is not the router's: the family's hosts line is missing or wrong. Under `PRIVATE_HOSTS=yes` a resolver daemon that `nsswitch.conf` names ahead of `files` answers from the machine's hosts file and from no private one, a cause that no run measured. |
 | `the check of the road to {host} over {family} failed (curl exit {n}, answer {codes})` | Under `SETUP=redirect`, the probe of that family ended another way, a timeout among them. |
 | `nothing answers at {host}:443 as this machine resolves it` | Under `SETUP=redirect`, the name resolved to no address or nothing accepted the connection, over both families. The feature listener does not answer on port 443 of the address the name leads to. |
+
+A notice prints one line behind `phoebis:` too and stops nothing: under `PRIVATE_HOSTS=no` a redirect start that passes
+the check prints `nothing answered over {family}, so its hosts line is not proved for {hosts}. Keep both lines` for each
+address family over which nothing answered, where `{hosts}` names the feature hosts whose probe over that family reached
+nothing. A start under `PRIVATE_HOSTS=yes` wrote both lines itself and prints no notice.
 
 ### The variables
 

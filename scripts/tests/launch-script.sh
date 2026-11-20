@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The launch script stands in a fenced block of the claude.ai features page and in no file of its own, so this test is
 # what runs it. It takes the script from the page, which stays the one source, and runs it under sh with the real curl
-# against loopback stubs, three of which speak TLS under a CA the test makes with openssl. A proxy's 502 to the CONNECT
+# against loopback stubs, four of which speak TLS under a CA the test makes with openssl. A proxy's 502 to the CONNECT
 # has a stop of its own, which the script reaches only where curl knows each --write-out name of the probe. The script
 # runs in an empty environment under a throwaway home and reaches no host off loopback. Under PRIVATE_HOSTS=yes it
 # meets stand-ins of sudo, unshare, setpriv and mount, so no run gets root or binds a file over the machine's hosts
@@ -45,12 +45,14 @@ command -v openssl > /dev/null || fail "openssl is missing"
 # process can take that port while the test runs. A fourth listener plays a sound proxy: it answers the CONNECT with 200
 # and speaks TLS under the test's leaf on that connection. A fifth plays the router's feature listener, with TLS under
 # the leaf from the first byte, and a sixth plays it too, on ::1 at the first listener's port. So a rule toward
-# localhost at that port leads a probe over IPv4 to a peer that speaks no TLS and a probe over IPv6 to the router. Each
-# TLS listener answers a request the way the router answers a call without a key. The stub prints the first listener's
-# port, the download's SHA-256, the four other ports and yes or no for the listener on ::1 once it listens, since a
-# host without ::1, or another process on that port there, leaves the sixth out. A thread per connection and the read
-# timeout keep a listener serving past a connection that sends nothing, so each TLS handshake runs in its connection's
-# thread under that timeout and never in the thread that accepts.
+# localhost at that port leads a probe over IPv4 to a peer that speaks no TLS and a probe over IPv6 to the router. A
+# seventh plays it as well, on ::1 at the fifth's port, since a rule names one port, and a start that proves both
+# families needs the router to answer at that port over each. Each TLS listener answers a request the way the router
+# answers a call without a key. The stub prints the first listener's port, the download's SHA-256, the four other ports
+# and yes or no for the two listeners on ::1 once it listens, yes where both stand, since a host without ::1, or another
+# process on one of their ports there, leaves one out. A thread per connection and the read timeout keep a listener
+# serving past a connection that sends nothing, so each TLS handshake runs in its connection's thread under that timeout
+# and never in the thread that accepts.
 cat > "$tmp/stub.py" <<'PY'
 import hashlib
 import http.server
@@ -145,6 +147,7 @@ direct = socketserver.ThreadingTCPServer(("127.0.0.1", 0), FeatureListener)
 listeners = [refusing, sound, direct]
 try:
     listeners.append(IPv6Server(("::1", server.server_address[1]), FeatureListener))
+    listeners.append(IPv6Server(("::1", direct.server_address[1]), FeatureListener))
     v6 = "yes"
 except OSError:
     v6 = "no"
@@ -446,5 +449,27 @@ handed="$tmp/callers-file" launch
 [[ -e "$tmp/callers-file" ]] || fail "a variable of the calling shell made the second run remove the file it names: $out"
 [[ "$out" == "the launch script started the client" ]] \
   || fail "a start under the caller's handed did not end at the client's start alone (exit $status): $out"
+
+# A family over which nothing answered leaves its hosts line unproved, and a road over it that comes up inside the
+# session would carry the router key to the upstream, so a start that said nothing would read as one that proved both.
+# Under the standing rules each probe over IPv4 reaches the router and each probe over IPv6 reaches nothing.
+fill SETUP redirect
+fill PRIVATE_HOSTS no
+launch
+grep -qx 'the launch script started the client' <<< "$out" \
+  || fail "a start with a family that nothing answered over did not reach the client's start (exit $status): $out"
+[[ "$(grep -c '^phoebis: .*ipv6' <<< "$out")" == 1 && "$out" != *ipv4* ]] \
+  || fail "a start that proved ipv4 alone did not name ipv6 in one line and ipv4 nowhere (exit $status): $out"
+# No other case starts the client with both families at the router, so a start that stopped or named a family there
+# would go unseen. localhost at the fifth listener's port leads each family to the router.
+if [[ "$v6" == yes ]]; then
+  rules "api.anthropic.com:443:localhost:$direct" "mcp-proxy.anthropic.com:443:localhost:$direct"
+  launch
+  [[ "$out" == "the launch script started the client" ]] \
+    || fail "a start that proved both families did not end at the client's start alone (exit $status): $out"
+  standing_rules
+else
+  echo "launch-script: no listener on ::1, the side with both families proved did not run"
+fi
 
 echo "launch-script: ok"

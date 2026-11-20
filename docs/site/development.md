@@ -464,14 +464,16 @@ features](claude-ai-features.md#the-launch-script), which is the script's one co
 host's curl. It needs `openssl` beside `python3`, since at its start it makes a CA with the router's name constraint and
 a leaf under that CA. Loopback stubs play the router's download of that CA's certificate, three states of the proxy's
 address, a proxy that reaches a TLS stub under the CA, and a stand-in of the router's feature listener, which also
-answers on `::1` at the download's port. The three states are a port where nothing listens, a proxy that answers the
-`CONNECT` with `403`, and a proxy whose upstream is down, and in each of them the script has to stop with the message of
-that state and print no other line. Four more cases show that a sound proxy gets the script as far as the client's
-start, that a fingerprint of another value stops the start at the compare, that an empty `ROUTER_KEY` stops it ahead of
-the fetch, and that a `.curlrc` in the user's home leads no probe. One more shows that a redirect stops the start where
-one address family reaches the router and the other reaches another peer. The script's curl calls read no `.curlrc`, so
-the test leads curl through a stand-in that adds the test's `--connect-to` rules and stops where they lack the rule that
-keeps a connection on loopback, and no connection leaves loopback.
+answers on `::1`, at the download's port and at its own. The three states are a port where nothing listens, a proxy that
+answers the `CONNECT` with `403`, and a proxy whose upstream is down, and in each of them the script has to stop with
+the message of that state and print no other line. Four more cases show that a sound proxy gets the script as far as the
+client's start, that a fingerprint of another value stops the start at the compare, that an empty `ROUTER_KEY` stops it
+ahead of the fetch, and that a `.curlrc` in the user's home leads no probe. One more shows that a redirect stops the
+start where one address family reaches the router and the other reaches another peer. Another shows that a redirect
+under `PRIVATE_HOSTS=no` names the family over which nothing answered in a notice and still starts the client, and that
+a start whose two families reach the router prints the client's line alone. The script's curl calls read no `.curlrc`,
+so the test leads curl through a stand-in that adds the test's `--connect-to` rules and stops where they lack the rule
+that keeps a connection on loopback, and no connection leaves loopback.
 
 Under `PRIVATE_HOSTS=yes` the script meets stand-ins of `sudo`, `unshare`, `setpriv` and `mount`. The test stops ahead
 of its first case where the `PATH` it hands the script finds one of the four tools ahead of its stand-in, since a `sudo`
@@ -479,9 +481,9 @@ that asks for no password would then run the script's root part as root. Seven c
 caller's variables, umask and arguments, with none of the arguments on `sudo`'s command line, that `SETUP=proxy` reads
 no word of the input, that the private hosts file holds the machine's lines less the two feature names, that a caller's
 marker word outside that road reads no file, and that no variable of the calling shell makes the second run remove a
-file. The case of the other peer needs `::1` on the loopback interface, and the case of the private file needs a user
-namespace that the host grants to a user without privileges. On a host that lacks what it needs, each of the two prints
-one line and does not run.
+file. The case of the other peer, and the side of the notice's case where both families reach the router, need `::1` on
+the loopback interface, and the case of the private file needs a user namespace that the host grants to a user without
+privileges. On a host that lacks what it needs, each of the three prints one line and does not run.
 
 ### Links to another product
 
