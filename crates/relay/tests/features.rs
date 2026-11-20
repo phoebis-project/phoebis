@@ -2999,6 +2999,26 @@ async fn a_token_read_before_a_new_pairing_is_refused() {
 }
 
 #[tokio::test]
+async fn a_socket_request_whose_account_no_longer_serves_gets_the_403_of_a_keyed_call() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    h.store
+        .set_canceled("a", Cancellation::On { ends_at: Some(NOW) })
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&token)).await;
+    assert_eq!(
+        refusal_of(status, &headers),
+        (403, "feature_account_unavailable", "")
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn an_admitted_socket_gets_the_503_while_the_ledger_stands_behind() {
     let sockets = Switched::default();
     let token = sync_token(1_600);
