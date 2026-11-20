@@ -494,7 +494,9 @@ unproven_ipv6=
 # would then carry the router key to the upstream.
 for host in api.anthropic.com mcp-proxy.anthropic.com; do
   if [ "$SETUP" = proxy ]; then
-    probe "$host" --proxy "$PROXY_URL" --noproxy ''
+    # The proxy answers the CONNECT with its 502 once its own connect has taken ten seconds, so this probe waits
+    # past that for its connection.
+    probe "$host" --proxy "$PROXY_URL" --noproxy '' --connect-timeout 15
     # The proxy's status for the CONNECT picks the stop, since the exit of curl cannot: where a proxy refuses the
     # CONNECT, curl 8.14.1 exits 56 and curl 8.18.0 exits 7, which is the exit of both where no proxy listens.
     case "$rc:$codes:$code" in
@@ -625,8 +627,9 @@ the shell's umask back ahead of the client's start, since under `077` each file 
 would be made `0600`. The files of a start in progress carry the process id in their names and go at each exit, so two
 starts at one time share none of them. Each start has two, and under `PRIVATE_HOSTS=yes` two more: `hosts.<pid>`, the
 private hosts file at mode `0644`, and `shell-env.<pid>`, which the second run reads and removes as it starts. Each curl
-call gives up after 10 seconds without a connection and after 30 seconds in all, so a name that leads to an address
-which drops packets does not hold the start for the system's own timeout.
+call gives up after 10 seconds without a connection and after 30 seconds in all, apart from the probe through the proxy,
+which waits up to 15 seconds for its connection, past the proxy's ten seconds for its own, so a name that leads to an
+address which drops packets does not hold the start for the system's own timeout.
 Each curl call opens with `-q`, so curl reads no configuration file of the user, and a line of a `.curlrc` leads neither
 the fetch nor a probe along another road than the client's.
 
@@ -685,7 +688,7 @@ script's order:
 | `the CA fetch from {BASE_URL} answered {status}` | The download answered another status, such as a redirect or a `502` of a front. The base URL has to reach the router's proxy listener as the client reaches it. |
 | `the fetched CA does not have the operator's fingerprint. Get the fingerprint from the router's operator` | The fetched bytes are not the CA the operator named: the input is mistyped, the operator replaced the CA, or the fetch reached another server. |
 | `no proxy runs at {PROXY_URL}` | Under `SETUP=proxy`, curl could not connect to the proxy's address. |
-| `the proxy at {PROXY_URL} does not reach the router's feature listener` | Under `SETUP=proxy`, the proxy answered the `CONNECT` with `502`: its upstream names another address than the feature listener's, or the listener is down. |
+| `the proxy at {PROXY_URL} does not reach the router's feature listener` | Under `SETUP=proxy`, the proxy answered the `CONNECT` with `502`: its upstream names another address than the feature listener's, or the listener is down. A router address that drops packets can lead to this `502` too, a cause that no run measured. |
 | `{host} leads to another host than the router's feature listener` | Under `SETUP=proxy`, the peer behind the proxy gave a certificate the fetched CA did not sign or another answer than the router's `401`. The program at `PROXY_URL` is no `phoebis-proxy`, or its upstream is no feature listener of this router. |
 | `the check of the road to {host} failed (curl exit {n}, answer {codes})` | Under `SETUP=proxy`, the probe ended another way, a timeout among them. The line carries curl's exit and the two status codes, the answer's and the proxy's. |
 | `{host} leads to another host than the router's feature listener over {family}` | Under `SETUP=redirect`, the name's address of that family, `ipv4` or `ipv6`, is not the router's: the family's hosts line is missing or wrong. Under `PRIVATE_HOSTS=yes` a resolver daemon that `nsswitch.conf` names ahead of `files` answers from the machine's hosts file and from no private one, a cause that no run measured. |
