@@ -2530,7 +2530,6 @@ export function PoolDialog({
       />
       <KeyDialog
         open={keyOpen}
-        accounts={accountsRead}
         captureMaxHours={captureMaxHours}
         onClose={() => setKeyOpen(false)}
         pools={keyDialogPools}

@@ -32,14 +32,16 @@ const { MockApi } = await import('./dist/api.js');
 const LIMIT = 72;
 
 const roots = [];
-const reads = { getKeepaliveOverview: api.getKeepaliveOverview, getKeyModels: api.getKeyModels, listCatalogOf: api.listCatalogOf, listSessions: api.listSessions, updateKey: api.updateKey, updatePool: api.updatePool };
+const reads = { getKeepaliveOverview: api.getKeepaliveOverview, getKeyModels: api.getKeyModels, listAccounts: api.listAccounts, listCatalogOf: api.listCatalogOf, listSessions: api.listSessions, updateKey: api.updateKey, updatePool: api.updatePool };
 beforeEach(() => {
   // A frozen clock, so the dialog's ticking instant arms no window timer.
   const clock = fakeClock();
   clock.freeze(Date.UTC(2026, 9, 14, 12));
   installClock(clock);
-  // The test build's api is the HTTP client, so the dialogs' other reads answer here: the members' catalogs after the
-  // suggestions' pause and an open edit's model list empty, a saved pool's sessions and return rate as the mock does.
+  // The test build's api is the HTTP client, so the dialogs' other reads answer here: the account list the key dialog
+  // reads at each opening and a saved pool's sessions and return rate as the mock does, the members' catalogs after the
+  // suggestions' pause and an open edit's model list empty.
+  api.listAccounts = async () => accounts;
   api.listCatalogOf = async () => [];
   api.getKeyModels = async (keyId) => ({ keyId, longContextTwins: true, modelRulesMode: 'extend', poolId: '', rules: [] });
   api.getKeepaliveOverview = async ({ range }) => overviews[range];
@@ -167,7 +169,7 @@ test("a key's named feature account the list lacks stays shown and marked", asyn
   assert.ok(desktop, 'the mock holds the desktop key');
   const key = { ...desktop, featureAccounts: { ...desktop.featureAccounts, artifacts: { accountId: 'retired', mode: 'account' } } };
   const { container, draw } = mount();
-  await draw(h(KeyDialog, { accounts: accountsRead(accounts), existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools }));
+  await draw(h(KeyDialog, { existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools }));
   const select = fieldIn(container, 'Artifacts')?.querySelector('select');
   assert.equal(select?.value, 'account:retired', 'the named choice, never Inherit');
   const option = [...(select?.options ?? [])].find((o) => o.value === 'account:retired');
@@ -184,8 +186,9 @@ test('a key that inherits an account that cannot serve draws the line under Inhe
   assert.ok(desktop, 'the mock holds the desktop key');
   const inherit = { accountId: null, mode: 'inherit' };
   const key = { ...desktop, featureAccounts: { artifacts: inherit, connectors: inherit }, poolId: pool.id };
+  api.listAccounts = async () => [serving, signedOut];
   const { container, draw } = mount();
-  await draw(h(KeyDialog, { accounts: accountsRead([serving, signedOut]), existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools: [pool] }));
+  await draw(h(KeyDialog, { existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools: [pool] }));
   const connectors = fieldIn(container, 'Connectors')?.querySelector('.field__hint')?.textContent ?? null;
   assert.ok(connectors?.includes('Signed out'), `the line under Connectors reads ${JSON.stringify(connectors)}`);
   const artifacts = fieldIn(container, 'Artifacts');
@@ -212,7 +215,7 @@ test("the key override is unbounded with the floor's sentence until the page han
   assert.ok(key, 'the mock holds the desktop key');
   const keyPools = pools.map((p) => ({ autoModeServer: p.autoModeServer, bodyCaptureHours: p.bodyCaptureHours, featureAccounts: p.featureAccounts, id: p.id, members: p.members.map((m) => ({ accountId: m.accountId })), modelRules: p.modelRules, name: p.name }));
   const { container, draw } = mount();
-  const keyDialog = (captureMaxHours) => h(KeyDialog, { accounts: accountsRead(accounts), captureMaxHours, existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools: keyPools });
+  const keyDialog = (captureMaxHours) => h(KeyDialog, { captureMaxHours, existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools: keyPools });
   await draw(keyDialog(undefined));
   const capture = () => [...container.querySelectorAll('dialog[open] section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Capture');
   const field = () => capture()?.querySelector('input[aria-label="Capture hours for this key"]');
@@ -234,7 +237,7 @@ test("a key dialog keeps a failed save's words while a field is written again un
     throw new ApiError(422, 'The pool refused the key', null);
   };
   const { container, draw } = mount();
-  await draw(h(KeyDialog, { accounts: accountsRead(accounts), captureMaxHours: LIMIT, existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools }));
+  await draw(h(KeyDialog, { captureMaxHours: LIMIT, existing: key, existingIds: new Set(), onClose() {}, onCreated() {}, open: true, pools }));
   act(() => [...container.querySelectorAll('dialog[open] .dialog__actions button')].find((b) => b.textContent?.trim() === 'Save')?.click());
   await settled();
   assert.equal(statusOf(container), 'The pool refused the key');

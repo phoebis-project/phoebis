@@ -11559,6 +11559,43 @@ await forView('/keys', async () => {
   page.unmount();
 });
 await forView('/keys', async () => {
+  // The hold is armed once the page has settled, so it meets the read of the dialog's opening and no read the page
+  // made before it.
+  const page = await mount('/keys', { now: CLOCK_ORIGIN });
+  const held = deferNextCall('listAccounts');
+  const read = { landed: null, waiting: null };
+  try {
+    [...page.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop')?.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+    [...page.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+    await page.settle(400);
+    const dlg = openDialogs(page).pop() ?? null;
+    rail(dlg, 'features')?.click();
+    await page.settle(100);
+    const selects = () => ['Artifacts', 'Connectors'].map((label) => group(dlg, 'claude.ai features')?.querySelector(`select[aria-label="${label}"]`) ?? null);
+    const state = () => selects().map((s) => (s === null ? null : { disabled: s.disabled, third: s.options[2]?.textContent ?? null }));
+    read.waiting = state();
+    held.release();
+    await page.settle(400);
+    read.landed = state();
+    [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+    await page.settle(200);
+  } finally {
+    // A read that throws still frees the held call, so no later case waits on it.
+    held.release();
+    held.restore();
+  }
+  results.push({
+    name: "/keys the key dialog's feature selects wait for the account list at each opening",
+    ok:
+      held.calls.length > 0 &&
+      JSON.stringify(read.waiting?.map((s) => s?.disabled ?? null)) === JSON.stringify([true, true]) &&
+      JSON.stringify(read.landed) === JSON.stringify([{ disabled: false, third: 'contract (contract)' }, { disabled: false, third: 'contract (contract)' }]),
+    missing: [`listAccounts held ${held.calls.length}`, `waiting ${JSON.stringify(read.waiting)}`, `landed ${JSON.stringify(read.landed)}, where the third option of each is the seed contract in the pool contract`],
+  });
+  page.unmount();
+});
+await forView('/keys', async () => {
   const page = await mount('/keys', { now: CLOCK_ORIGIN });
   const spy = countCalls('listKeys');
   const trigger = page.container.querySelector('tbody .menu__trigger');

@@ -154,7 +154,7 @@ export function GuardrailList({ inherited = [], onChange, pending, refs, registr
  * the dialog is opened from inside a pool's own dialog. `existingIds` are the listed keys' ids, which a new key's
  * derived id is checked against before the create.
  */
-export function KeyDialog({ accounts: accountsRead, open, onClose, onCreated, onReload, onUpdated, pools, captureMaxHours, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { /** The host page's account read, which the claude.ai features group's options come from. */ accounts: Pick<Loaded<Account[]>, 'data' | 'error' | 'reload'>; /** The bootstrap's body capture limit from the host page's settings read, undefined while that read is out. */ captureMaxHours?: number; existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; /** The stale save's Reload: closes the dialog and reads the keys again. */ onReload?: () => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
+export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools, captureMaxHours, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { /** The bootstrap's body capture limit from the host page's settings read, undefined while that read is out. */ captureMaxHours?: number; existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; /** The stale save's Reload: closes the dialog and reads the keys again. */ onReload?: () => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
   const [chosen, setChosen] = useState<KeyGroup>('key');
   const [form, setForm] = useState<KeyForm>(() => keyFormOf(null, ''));
   // A field written again unchanged, as the override's focus writes its mode, keeps the form, so it keeps the server's
@@ -165,7 +165,9 @@ export function KeyDialog({ accounts: accountsRead, open, onClose, onCreated, on
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState<string | null>(null);
   const now = useNow(undefined, open);
-  const accounts = accountsRead.data ?? [];
+  // Once per opening, a closed dialog answering null with no request, so a reopening reads the list anew.
+  const accountsRead = useAsync(() => (open ? api.listAccounts() : Promise.resolve(null)), [open]);
+  const accounts = accountsRead.current ?? [];
   const accountsFailed = failedFirst(accountsRead) ? accountsRead.error : null;
   const pool = pools.find((p) => p.id === poolId) ?? null;
   const poolName = pool?.name ?? poolId;
@@ -388,7 +390,7 @@ export function KeyDialog({ accounts: accountsRead, open, onClose, onCreated, on
                 value={keyFeatureValue(choice)}
                 // Without the pool the first option cannot name its account, so a choice made then would rest on a
                 // value the dialog does not know.
-                disabled={accountsRead.data === null || pool === null}
+                disabled={accountsRead.current === null || pool === null}
                 onChange={(e) => {
                   const next = keyFeatureChoice(e.target.value);
                   setForm((f) => ({ ...f, featureAccounts: { ...f.featureAccounts, [feature]: next } }));

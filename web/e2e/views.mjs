@@ -11583,6 +11583,9 @@ async function keyDialogGeometry(theme) {
   const openBy = async (click) => {
     await click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    // The dialog reads the account list on opening, which the mock answers on the page's clock, and that clock stands
+    // still between steps.
+    await advance(LOAD_MS);
     await settle();
   };
   const editOf = (row) => async () => {
@@ -11791,6 +11794,9 @@ async function keyFeatures(theme) {
     await laptop.locator('.menu__trigger').click();
     await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    // The dialog reads the account list on opening, which the mock answers on the page's clock, and that clock stands
+    // still between steps.
+    await advance(LOAD_MS);
     await settle();
     // A hidden group measures no box, so each select is read while its group shows, and a field under the pointer draws
     // the hover border, so the pointer leaves the dialog first.
