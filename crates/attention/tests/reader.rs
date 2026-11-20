@@ -711,6 +711,17 @@ async fn an_ended_accounts_item_dates_from_the_end_that_has_passed() {
     );
 }
 
+#[tokio::test]
+async fn an_unready_accounts_feature_item_dates_from_the_change_to_its_state() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    mark(&rig, "business", AccountState::ReauthRequired, NOW + 1_000);
+    select_artifacts(&rig, "main", Some("business")).await;
+    let conditions = read(&attention, NOW + 5_000);
+    let item = find(&conditions, Kind::FeatureAccountUnavailable, "business").unwrap();
+    assert_eq!((item.holds, item.since), (true, Some(NOW + 1_000)));
+}
+
 fn resolve(rig: &Rig, outcome: AttemptOutcome) -> u64 {
     let id = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
     rig.store.resolve_refresh_attempt(id, 1, outcome).unwrap();
