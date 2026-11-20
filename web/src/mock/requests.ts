@@ -3671,10 +3671,10 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
  * the request rows. Each pairs a key with the account its pool's or its own selection resolves for the feature: desktop
  * with studio for artifacts, laptop with contract for artifacts and with reserve for connectors, ci with reserve for
  * artifacts before its revocation, and notebook with reserve for connectors. A key whose calls are refused (batch's
- * signed-out legacy) leaves no row. The 64 rows run past the page of 50, and the newest 50 hold both shapes of a
- * failed call, canceled calls, the statuses 200, 204, 304, 401, 404 and 429, which a status badge draws in each of its
- * tones, and a path of 48 characters beside one of 49, which the list cuts. Every row lies inside the default day and
- * after the desktop key's creation.
+ * signed-out legacy) leaves no row. The 65 rows run past the page of 50, and the newest 50 hold both shapes of a
+ * failed call, canceled calls, the statuses 101, 200, 204, 304, 401, 404 and 429, which a status badge draws in each
+ * of its tones, and a path of 48 characters beside one of 49, which the list cuts. Every row lies inside the default
+ * day and after the desktop key's creation.
  */
 export const FEATURE_CALLS: FeatureCall[] = [
   { accountId: 'studio', durationMs: 1_284, errorCode: null, feature: 'artifacts', id: 'req_phoebis_73605ad9e70226ee8098aaa84904e49e', keyId: 'desktop', method: 'POST', outcome: 'forwarded', path: '/api/frame/upload', receivedAt: iso(clock(14, 26, 5)), status: 200 },
@@ -3686,6 +3686,8 @@ export const FEATURE_CALLS: FeatureCall[] = [
   // No upstream head arrived, so the router answered the 502 itself.
   { accountId: 'reserve', durationMs: 10_004, errorCode: 'upstream_unreachable', feature: 'connectors', id: 'req_phoebis_9073a3408c08f2dbb0f9bd0c0c1d6aa7', keyId: 'notebook', method: 'GET', outcome: 'failed', path: '/v1/mcp_servers', receivedAt: iso(clock(14, 21, 3)), status: null },
   { accountId: 'studio', durationMs: 1_903, errorCode: null, feature: 'artifacts', id: 'req_phoebis_b7d2004350f7794871dac7ab2f303f1e', keyId: 'desktop', method: 'POST', outcome: 'forwarded', path: '/api/artifacts/mcp', receivedAt: iso(clock(14, 20, 22)), status: 200 },
+  // A watch's socket, whose row ends at the 101, so its duration holds none of the time the socket stays open.
+  { accountId: 'studio', durationMs: 142, errorCode: null, feature: 'artifacts', id: 'req_phoebis_3f9d2c71e6a84b05c8e1a7d4b2f60e93', keyId: 'desktop', method: 'GET', outcome: 'forwarded', path: '/api/frame/sync', receivedAt: iso(clock(14, 19, 36) + 200), status: 101 },
   { accountId: 'studio', durationMs: 318, errorCode: null, feature: 'artifacts', id: 'req_phoebis_a748d522f0c028b6bd857780f83db477', keyId: 'desktop', method: 'GET', outcome: 'forwarded', path: '/api/frame/content/onboarding-checklist-for-teams', receivedAt: iso(clock(14, 19, 36)), status: 200 },
   { accountId: 'reserve', durationMs: 96, errorCode: null, feature: 'connectors', id: 'req_phoebis_c2d0cfefc1cd4ffb982d93fde0ddee67', keyId: 'notebook', method: 'GET', outcome: 'forwarded', path: '/v1/mcp_servers', receivedAt: iso(clock(14, 18, 10)), status: 429 },
   { accountId: 'reserve', durationMs: 1_122, errorCode: null, feature: 'artifacts', id: 'req_phoebis_c92f33ee3b33a5eac5fbe885a2b79724', keyId: 'ci', method: 'POST', outcome: 'forwarded', path: '/api/frame/upload', receivedAt: iso(clock(14, 16, 12)), status: 200 },

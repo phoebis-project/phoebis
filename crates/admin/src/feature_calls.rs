@@ -31,6 +31,7 @@ pub(crate) struct FeatureCallList {
 #[serde(deny_unknown_fields)]
 pub(crate) struct FeatureCallEntry {
     pub account_id: String,
+    /// The time in milliseconds from the call's arrival to the answer's end, or to the upstream's `101` for a socket.
     pub duration_ms: i64,
     /// The router's code where it answered a forward that could not complete.
     pub error_code: Option<String>,
@@ -44,7 +45,7 @@ pub(crate) struct FeatureCallEntry {
     /// The path without its query.
     pub path: String,
     pub received_at: i64,
-    /// Null where no upstream head arrived.
+    /// Null where no upstream head arrived. A socket's row holds 101 while the socket is open and after it closed.
     pub status: Option<u16>,
 }
 

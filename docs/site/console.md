@@ -1145,8 +1145,9 @@ query in the monospace face, cut in the middle past 48 characters and whole on h
 call's arrival to the answer's end. Status reads the status for a forwarded call and `canceled` for a call whose client
 left before the answer's end. A failed call reads its code, `upstream_unreachable`, where no upstream head arrived and
 the router answered with a 502, and its status with `ended early` behind it, such as `200 ended early`, where the answer
-stopped after its head went back. A call the router refused leaves no row, and a row opens no drawer, since the table
-shows all the row holds.
+stopped after its head went back. A session's watch of an artifact reads as one row with the status 101, written when
+the socket opens, and Duration is then the time to the `101`. A call the router refused leaves no row, and a row opens
+no drawer, since the table shows all the row holds.
 
 ![The Requests view: the Feature calls section on its first page](assets/requests-feature-calls-light.png#only-light)
 ![The Requests view: the Feature calls section on its first page](assets/requests-feature-calls-dark.png#only-dark)

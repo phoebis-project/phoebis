@@ -16513,8 +16513,8 @@ await forView('/requests', async () => {
   }
 });
 
-// The Feature calls section over the 64 feature calls of `FEATURE_CALLS` in `web/src/mock/requests.ts`, all inside the
-// default day: the route's page of 50, then the 14 behind it.
+// The Feature calls section over the 65 feature calls of `FEATURE_CALLS` in `web/src/mock/requests.ts`, all inside the
+// default day: the route's page of 50, then the 15 behind it.
 await forView('/requests', async () => {
   const section = (page) => page.container.querySelector('#feature-calls');
   /** The drawn rows, each its id off the Time cell's id line and its cells' texts by their headers. */
@@ -16578,8 +16578,8 @@ await forView('/requests', async () => {
     const filtered = callRows(page).map((r) => r.id);
     const pager = { first: button(page, 'First page')?.disabled ?? null, previous: button(page, 'Previous page')?.disabled ?? null };
     results.push({
-      name: '/requests the feature calls page by the cursor, 50 then 14, and a filter changed on the second page opens on its first',
-      ok: first.length === 50 && second.length === 14 && second.every((id) => !first.includes(id)) && filtered[0] === NEWEST_CONNECTORS && pager.first === true && pager.previous === true,
+      name: '/requests the feature calls page by the cursor, 50 then 15, and a filter changed on the second page opens on its first',
+      ok: first.length === 50 && second.length === 15 && second.every((id) => !first.includes(id)) && filtered[0] === NEWEST_CONNECTORS && pager.first === true && pager.previous === true,
       missing: [`${first.length} rows, then ${second.length} with ${second.filter((id) => first.includes(id)).length} of the first`, `the filtered list opens on ${filtered[0] ?? 'nothing'}`, JSON.stringify(pager)],
     });
     page.unmount();
@@ -16689,6 +16689,14 @@ await forView('/requests', async () => {
         JSON.stringify(read[NOT_MODIFIED]) === JSON.stringify({ text: '304', tone: 'badge--neutral' }) &&
         JSON.stringify(read[NOT_FOUND]) === JSON.stringify({ text: '404', tone: 'badge--critical' }),
       missing: [JSON.stringify(read)],
+    });
+    // The socket of the seed's watch, at 14:19:36.200 on the story's clock, whose row ends at the 101.
+    const WATCH = 'req_phoebis_3f9d2c71e6a84b05c8e1a7d4b2f60e93';
+    const watch = toneOf(WATCH);
+    results.push({
+      name: "/requests a socket's row reads 101 in the good tone",
+      ok: JSON.stringify(watch) === JSON.stringify({ text: '101', tone: 'badge--good' }),
+      missing: [`the watch's socket ${WATCH}: ${JSON.stringify(watch)}`],
     });
     page.unmount();
   }
