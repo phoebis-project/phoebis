@@ -443,9 +443,9 @@ fn request_host(headers: &HeaderMap) -> Option<String> {
 /// whole path is compared with the path as sent, which the forward sends on as it came. Its decoded forms are read
 /// too, since an upstream that decodes a path once or more would serve another call than the one the row names. Each
 /// form has to be plain, and the part of a form ahead of each `?` or `#` it holds keeps a plain form's segment rules,
-/// so neither a segment nor such a part reads `.` or `..` by its visible ASCII characters. An excepted path holds where
-/// the visible ASCII characters of the last form's part ahead of its first `?` or `#` spell it with each empty segment
-/// left out.
+/// so neither a segment nor the part of one ahead of a `?` or `#` reads `.` or `..` by its visible ASCII characters. An
+/// excepted path holds where the visible ASCII characters of the last form's part ahead of its first `?` or `#` spell
+/// it with each empty segment left out.
 fn matched(
     table: &'static FeatureTable,
     method: &str,
@@ -459,14 +459,23 @@ fn matched(
     // path, so each form's part keeps the segment rules. The cut can change the last segment of a part alone, and the
     // marks of the last form stand in for each form's: an empty segment or a dot segment by its visible characters
     // holds no `%`, so no decode changes it, and no decode yields a slash, so where a form holds one ahead of a mark,
-    // the last form holds it ahead of the same mark. One pass keeps the read linear in a path with many marks in one
-    // segment.
+    // the last form holds it ahead of the same mark. A segment's first mark stands in for its later ones, since the
+    // part ahead of a later mark holds the first mark, a visible character that is no dot. So one pass reads each
+    // segment once, which keeps the read linear in a path with many marks in one segment.
     let mut segment = 0;
+    let mut marked = false;
     for (at, byte) in call.iter().enumerate() {
         match byte {
-            b'/' => segment = at + 1,
-            b'?' | b'#' if call[segment..at].is_empty() || dotted(&call[segment..at]) => {
-                return None
+            b'/' => {
+                segment = at + 1;
+                marked = false;
+            }
+            b'?' | b'#' if !marked => {
+                marked = true;
+                let part = &call[segment..at];
+                if part.is_empty() || dotted(part) {
+                    return None;
+                }
             }
             _ => {}
         }
@@ -526,6 +535,8 @@ fn plain_path(path: &str) -> Option<Vec<u8>> {
                 (b'2', b'f') | (b'5', b'c') | (b'2', b'e')
             )
     });
+    // Each path with an empty segment is refused here. The compare in `matched` drops empty segments only in its search
+    // for the excepted call.
     let plain = !encoded
         && !path.contains(['\\', ';'])
         && segments.split('/').all(|segment| !segment.is_empty());
@@ -549,15 +560,17 @@ fn dotted(segment: &[u8]) -> bool {
     )
 }
 
-/// The last form of a path whose first form is plain, `None` where a decode on the way yields a slash, a backslash, a
-/// dot, a semicolon or a control byte: the form that holds such an escape, or the form after it, is not plain.
+/// The last form of a path whose first form starts with a slash and holds no empty segment, no backslash, no semicolon
+/// and no encoded slash, backslash or dot, `None` where a decode on the way yields a slash, a backslash, a dot, a
+/// semicolon or a control byte: the form that holds such an escape, or the form after it, is not plain.
 ///
 /// Two escapes never overlap, since `%` is no hex digit, so the order of the decodes changes neither the last form nor
 /// the bytes the decodes yield. One pass that decodes an escape as soon as its last byte stands therefore reaches the
 /// last form and sees each byte a decode of a form yields. A decode of one form after another would read the path once
 /// per form, and nested escapes give a path about half as many forms as it has bytes. A decode that yields no slash,
-/// dot or backslash leaves each later form the segments of the first, so the first form's segment rules hold for each,
-/// and a semicolon or a control byte a decode yields stays in each later form.
+/// dot or backslash leaves each later form the segments of the first, so the first form's test for an empty segment
+/// holds for each, and a semicolon or a control byte a decode yields stays in each later form. A decoded space can
+/// change what reads as a dot segment, so the dot segments are read in the last form.
 fn last_form(path: &[u8]) -> Option<Vec<u8>> {
     let mut form = Vec::with_capacity(path.len());
     for &byte in path {

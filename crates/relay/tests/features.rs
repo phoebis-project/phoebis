@@ -294,6 +294,10 @@ async fn a_path_that_ends_in_a_slash_is_refused() {
         .await;
     assert_eq!(status, 403, "{headers:?}");
     let (status, headers, _) = listener
+        .send(API, &keyed("POST /api/frame/retitle/", API, "", b""))
+        .await;
+    assert_eq!(status, 403, "{headers:?}");
+    let (status, headers, _) = listener
         .send(API, &keyed("POST /api/frame/x", API, "", b""))
         .await;
     assert_eq!(status, 200, "{headers:?}");
