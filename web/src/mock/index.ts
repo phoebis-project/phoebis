@@ -34,7 +34,7 @@ import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
-import { ROUTING_LOG_KINDS, WINDOW_DROP_MARGIN, claimDetail, cursorInteger, dropDetail, getDecision, listRoutingLog, routingCursorOf, subscriptionPair, wholePoints } from './routingLog';
+import { ROUTING_LOG_KINDS, WINDOW_DROP_MARGIN, claimDetail, cursorInteger, dropDetail, getDecision, inList, listRoutingLog, routingCursorOf, subscriptionPair, wholePoints } from './routingLog';
 import { ROUTING_EVENTS, SUMMARIES } from './routingLog';
 import { INHERITED_FEATURE_ACCOUNTS, KEY_SAMPLE, NO_FEATURE_ACCOUNTS, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, hourCeil, iso, startOfHour } from './time';
@@ -533,10 +533,10 @@ const featureCallKey = (c: FeatureCall): OrderKey => ({ figure: Date.parse(c.rec
 
 /** As the route reads its query: an absent or empty list narrows nothing, and each end of the range holds its instant. */
 const matchesFeatureCall = (c: FeatureCall, q: FeatureCallQuery): boolean =>
-  (!q.accounts?.length || q.accounts.includes(c.accountId)) &&
-  (!q.features?.length || q.features.includes(c.feature)) &&
-  (!q.keys?.length || q.keys.includes(c.keyId)) &&
-  (!q.outcomes?.length || q.outcomes.includes(c.outcome)) &&
+  inList(q.accounts, c.accountId) &&
+  inList(q.features, c.feature) &&
+  inList(q.keys, c.keyId) &&
+  inList(q.outcomes, c.outcome) &&
   (q.from === undefined || Date.parse(c.receivedAt) >= q.from) &&
   (q.to === undefined || Date.parse(c.receivedAt) <= q.to);
 

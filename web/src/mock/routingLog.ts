@@ -3363,6 +3363,11 @@ export const routingCursorOf = (cursor: string) => {
   return { at: iso(ms), requestId: id.slice(0, slash), seq: Number(seq), type: 'decision' as const };
 };
 
+/** As the routes read a list filter: an absent or empty list narrows nothing, and a row without the value matches
+ * no list that narrows. */
+export const inList = (list: string[] | undefined, value: string | null): boolean =>
+  !list?.length || (value !== null && list.includes(value));
+
 /**
  * The merged page by the route's rules, newest first and oldest first under `dir: 'asc'`. The range runs from an hour
  * back by default. An absent `kinds` is every decision and event, the probe decisions among them, and `kinds` names
@@ -3377,7 +3382,6 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, rows: { even
   // An empty list is no filter, as the client omits it from the query.
   const kinds = query.kinds?.length ? query.kinds : undefined;
   const within = (at: string) => Date.parse(at) >= from && Date.parse(at) <= to;
-  const inList = (list: string[] | undefined, value: string | null) => !list?.length || (value !== null && list.includes(value));
   const session = (value: string | null) => !query.session || (value !== null && value.startsWith(query.session));
   // An event that names no agent matches none, as the route leaves a session-level event out.
   const agent = (value: string | null) => !query.agentId || value === query.agentId;
