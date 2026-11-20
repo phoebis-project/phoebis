@@ -79,7 +79,7 @@ pub(crate) struct FeatureCallsQuery {
     params(FeatureCallsQuery),
     responses(
         (status = 200, description = "The page, newest first by `received_at` and, inside one `received_at`, by `id` descending.", body = FeatureCallList),
-        (status = 400, description = "- `cursor is <received_at>:<id>`", body = ErrorBody, example = json!({"error": "limit: invalid digit found in string"})),
+        (status = 400, description = "`cursor is <received_at>:<id>`", body = ErrorBody, example = json!({"error": "limit: invalid digit found in string"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
