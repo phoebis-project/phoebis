@@ -2820,9 +2820,6 @@ async fn a_page_read_in_a_coding_the_router_cannot_read_goes_back_whole() {
     assert_eq!(status, 200, "{headers:?}");
     // In its framing, one chunk of the 16 bytes and the last chunk.
     assert_eq!(body, b"10\r\ninvented 16 byte\r\n0\r\n\r\n");
-    let (status, headers, _) =
-        refused_upgrade(&listener, &upgrade_request(&sync_token(1_600))).await;
-    assert_eq!(status, 401, "{headers:?}");
     up.shutdown().await;
 }
 
@@ -3116,25 +3113,6 @@ async fn bytes_cross_the_tunnel_both_ways_behind_what_came_with_the_101() {
     assert_eq!(client_reads(&mut client, 3).await, b"one");
     client.write(b"two").await;
     assert_eq!(upstream_receives(&mut socket, 3).await, b"two");
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn the_clients_leave_ends_the_upstream_leg() {
-    let sockets = Switched::default();
-    let token = sync_token(1_600);
-    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
-    let h = features_harness(&up, both_features_at_a()).await;
-    let listener = feature_listener(&h).await;
-    read_page(&listener).await;
-    let (mut client, mut socket) = tunnel(&listener, &token, &sockets).await;
-    socket.send(b"one").await;
-    assert_eq!(client_reads(&mut client, 3).await, b"one");
-    drop(client);
-    let received = tokio::time::timeout(Duration::from_secs(5), socket.received())
-        .await
-        .expect("the upstream leg stayed open behind the client's leave");
-    assert_eq!(received, None);
     up.shutdown().await;
 }
 

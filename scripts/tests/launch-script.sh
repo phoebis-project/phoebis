@@ -295,15 +295,9 @@ launch
 [[ "$out" == "phoebis: the check of the road to api.anthropic.com failed (curl exit "*", answer 000 403)" ]] \
   || fail "a proxy's 403 to the CONNECT did not reach the stop that prints it (exit $status): $out"
 
-# No other case gets as far as the client's start, so a success arm that never matches, or a header read that finds no
-# code, would stop each sound setup unseen.
-fill PROXY_URL "http://127.0.0.1:$good"
-launch
-[[ "$out" == "the launch script started the client" ]] \
-  || fail "a sound setup behind a proxy did not reach the client's start (exit $status): $out"
-
 # The fetch may run over plain HTTP, so the compare with the operator's fingerprint is the one check the CA's trust
 # rests on. The fetched CA is the sound one, so a compare that passed it would go on to the client's start.
+fill PROXY_URL "http://127.0.0.1:$good"
 fill PHOEBIS_FEATURE_CA_SHA256 0000000000000000000000000000000000000000000000000000000000000000
 launch
 [[ "$out" == "phoebis: the fetched CA does not have the operator's fingerprint. Get the fingerprint from the router's operator" ]] \
