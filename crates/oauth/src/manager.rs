@@ -56,6 +56,8 @@ pub struct AccessToken {
     pub secret: Secret,
     pub generation: u64,
     pub account_uuid: String,
+    /// The `(incarnation, lifecycle_generation)` of the account row the token was built from.
+    pub sign_in: (u64, u64),
 }
 
 // `Secret` is deliberately not `Clone`, so the copy is spelled out here: every caller joined to one shared
@@ -66,6 +68,7 @@ impl Clone for AccessToken {
             secret: Secret::new(self.secret.expose()),
             generation: self.generation,
             account_uuid: self.account_uuid.clone(),
+            sign_in: self.sign_in,
         }
     }
 }
@@ -94,6 +97,9 @@ pub enum AcquireError {
     /// routing snapshot only learns of it from a report, so the caller that got the mark sends it.
     #[error("account has to be paired again")]
     ReauthRequired(Option<LandedMark>),
+    /// The stored account is of another sign-in than the row the caller holds, so nothing of it was rotated.
+    #[error("the account signed in again since the call was admitted")]
+    Stale,
     #[error("account has no credentials")]
     Unpaired,
     /// The manager is draining for shutdown, so no refresh starts.
@@ -123,6 +129,7 @@ enum RefreshFailure {
     Disconnected,
     Quarantined,
     ReauthRequired(Option<LandedMark>),
+    Stale,
     Unavailable(String),
     Unpaired,
 }
@@ -133,6 +140,7 @@ impl From<RefreshFailure> for AcquireError {
             RefreshFailure::Disconnected => AcquireError::Disconnected,
             RefreshFailure::Quarantined => AcquireError::Quarantined,
             RefreshFailure::ReauthRequired(mark) => AcquireError::ReauthRequired(mark),
+            RefreshFailure::Stale => AcquireError::Stale,
             RefreshFailure::Unavailable(detail) => AcquireError::Unavailable(detail),
             RefreshFailure::Unpaired => AcquireError::Unpaired,
         }
@@ -383,7 +391,17 @@ impl CredentialManager {
         if bundle.expires_at - now > refresh_margin(&bundle) {
             return Ok(access_token(account, &bundle));
         }
-        match self.join_or_start(account_id, bundle.generation).await {
+        let joined = loop {
+            match self
+                .join_or_start(account_id, bundle.generation, None)
+                .await
+            {
+                // The refusal of a forced refresh that a call of another sign-in started says nothing of this row.
+                Err(AcquireError::Stale) => {}
+                joined => break joined,
+            }
+        };
+        match joined {
             Ok(token) => Ok(token),
             // Says nothing about the account, and a recorded message would outlive the process it was true of.
             Err(AcquireError::ShuttingDown) => Err(AcquireError::ShuttingDown),
@@ -471,20 +489,38 @@ impl CredentialManager {
     /// must not be lost to a token endpoint having a bad minute. That token is the one the upstream just
     /// rejected, so `NotRefreshed` says so rather than letting the caller replay it into a second 401 and
     /// the operator-cleared lockout that follows.
+    ///
+    /// `account` is the row the caller's call went out under.
     pub async fn refresh_now(
         &self,
-        account_id: &str,
+        account: &AccountRow,
         rejected_generation: u64,
     ) -> Result<AccessToken, AcquireError> {
-        let (account, bundle) = self.inner.ready_account(account_id)?;
-        if bundle.generation > rejected_generation {
-            return Ok(access_token(&account, &bundle));
+        let held = sign_in(account);
+        // A refresh is shared under the account's id, so one that a call of another sign-in started answers that
+        // sign-in's token or refusal, which is not this call's own. The next round reads the row again: it refuses a
+        // call of an earlier sign-in, and a call of the current one joins or starts anew, since the finished refresh
+        // has left the in-flight map by then.
+        loop {
+            let (stored, bundle) = self.inner.ready_account(account)?;
+            if bundle.generation > rejected_generation {
+                self.inner.still_signed_in(&account.id, held)?;
+                return Ok(access_token(&stored, &bundle));
+            }
+            let token = match self
+                .join_or_start(&account.id, bundle.generation, Some(held))
+                .await
+            {
+                Ok(token) if token.sign_in == held => token,
+                Ok(_) | Err(AcquireError::Stale) => continue,
+                Err(error) => return Err(error),
+            };
+            self.inner.still_signed_in(&account.id, held)?;
+            if token.generation <= rejected_generation {
+                return Err(AcquireError::NotRefreshed);
+            }
+            return Ok(token);
         }
-        let token = self.join_or_start(account_id, bundle.generation).await?;
-        if token.generation <= rejected_generation {
-            return Err(AcquireError::NotRefreshed);
-        }
-        Ok(token)
     }
 
     /// Quarantines every account whose last refresh never resolved: the process died between sending a
@@ -627,11 +663,14 @@ impl CredentialManager {
 
     /// Joins the account's refresh, or starts one. `observed_generation` is the generation the caller read
     /// before it got here, which the job rechecks once it holds the slot: the two are not one atomic step, so
-    /// another caller can commit a rotation in between and this one must not rotate on top of it.
+    /// another caller can commit a rotation in between and this one must not rotate on top of it. `held` is the
+    /// `(incarnation, lifecycle_generation)` of the row a forced refresh holds, which the job compares with the row
+    /// it reads, and `None` for an acquisition, whose refresh at the margin no upstream 401 started.
     async fn join_or_start(
         &self,
         account_id: &str,
         observed_generation: u64,
+        held: Option<(u64, u64)>,
     ) -> Result<AccessToken, AcquireError> {
         let shared = {
             let mut inflight = self.inner.inflight.lock().expect(LOCK_POISONED);
@@ -647,7 +686,7 @@ impl CredentialManager {
                     account_id,
                     // A panicked refresh leaves its attempt row pending, and `recover_on_start` settles it.
                     || Err(RefreshFailure::Unavailable("refresh panicked".into())),
-                    move |inner, id| async move { inner.refresh(&id, observed_generation).await },
+                    move |inner, id| async move { inner.refresh(&id, observed_generation, held).await },
                 ),
             }
         };
@@ -793,12 +832,29 @@ impl Inner {
             .ok_or_else(|| AcquireError::Store(StoreError::AccountNotFound(account_id.to_string())))
     }
 
-    /// Loads an account that is allowed to hand out a credential, with its current bundle.
+    /// Answers `Stale` where the account's row is no longer of the sign-in `held` names. A forced refresh reads it
+    /// ahead of each token it answers, since the row and the bundle behind that token were two reads, and a sign-in
+    /// between them puts its bundle beside the earlier row. Under one id a row never returns to a pair it has left, so
+    /// a row of the held pair now was of it at both reads.
+    fn still_signed_in(&self, account_id: &str, held: (u64, u64)) -> Result<(), AcquireError> {
+        if sign_in(&self.stored_account(account_id)?) != held {
+            return Err(AcquireError::Stale);
+        }
+        Ok(())
+    }
+
+    /// Loads an account that is allowed to hand out a credential, with its current bundle. A stored row of another
+    /// sign-in than `held` answers `Stale` ahead of its state, so a call of an earlier sign-in reads nothing of the
+    /// current one.
     fn ready_account(
         &self,
-        account_id: &str,
+        held: &AccountRow,
     ) -> Result<(AccountRow, CredentialBundle), AcquireError> {
+        let account_id = held.id.as_str();
         let account = self.stored_account(account_id)?;
+        if sign_in(&account) != sign_in(held) {
+            return Err(AcquireError::Stale);
+        }
         refuse_unusable(&account)?;
         let bundle = self
             .store
@@ -813,8 +869,9 @@ impl Inner {
         &self,
         account_id: &str,
         observed_generation: u64,
+        held: Option<(u64, u64)>,
     ) -> Result<AccessToken, RefreshFailure> {
-        self.refresh_inner(account_id, observed_generation)
+        self.refresh_inner(account_id, observed_generation, held)
             .instrument(tracing::debug_span!("refresh", account = %account_id))
             .await
     }
@@ -823,6 +880,7 @@ impl Inner {
         &self,
         account_id: &str,
         observed_generation: u64,
+        held: Option<(u64, u64)>,
     ) -> Result<AccessToken, RefreshFailure> {
         // Test seam, see `debug_panic_on_next_refresh`. Checked before anything durable happens, so the
         // panicking refresh leaves no attempt row behind.
@@ -838,6 +896,10 @@ impl Inner {
             .account(account_id)
             .map_err(store_failure)?
             .ok_or(RefreshFailure::Unpaired)?;
+        // A sign-in that landed since the caller's read is not rotated on the word of the earlier one's 401.
+        if held.is_some_and(|held| sign_in(&account) != held) {
+            return Err(RefreshFailure::Stale);
+        }
         match account.state {
             AccountState::Disconnected => return Err(RefreshFailure::Disconnected),
             AccountState::ReauthRequired => return Err(RefreshFailure::ReauthRequired(None)),
@@ -848,6 +910,11 @@ impl Inner {
             .credentials(account_id)
             .map_err(store_failure)?
             .ok_or(RefreshFailure::Unpaired)?;
+        // A disconnect and a new pairing between the two reads put the next sign-in's bundle beside the held row. Its
+        // refresh token is not the call's to spend, and the commit's fence would refuse what the upstream rotated.
+        if held.is_some_and(|(_, lifecycle)| bundle.lifecycle_generation != lifecycle) {
+            return Err(RefreshFailure::Stale);
+        }
 
         // Someone else finished a refresh between the caller's read and this job winning the slot, so the
         // stored bundle is already the answer; rotating again would spend a refresh token that has just
@@ -1248,7 +1315,13 @@ fn access_token(account: &AccountRow, bundle: &CredentialBundle) -> AccessToken 
         secret: Secret::new(bundle.access_token.expose()),
         generation: bundle.generation,
         account_uuid: account_uuid(account),
+        sign_in: sign_in(account),
     }
+}
+
+/// The pair that tells one sign-in of an account id from another, since each sign-in starts its tokens' count at 1.
+fn sign_in(account: &AccountRow) -> (u64, u64) {
+    (account.incarnation, account.lifecycle_generation)
 }
 
 fn account_uuid(account: &AccountRow) -> String {
@@ -1433,7 +1506,7 @@ mod tests {
                 &bundle_at("committed", now, now + 3_600_000),
             )
             .unwrap();
-        let token = manager.join_or_start("a", observed).await.unwrap();
+        let token = manager.join_or_start("a", observed, None).await.unwrap();
         assert_eq!(
             token.secret.expose(),
             "committed",

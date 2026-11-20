@@ -611,7 +611,8 @@ its own end, a connector's long stream among them.
 What a `401` of a feature host gets depends on one header. A `401` that carries `X-Mcp-Error-Code` is the connector's
 word that it wants a sign-in of its own, and it goes back at once and untouched for the client to read. A `401` without
 that header gets one forced refresh of the account's token and one resend of the same call under the new token, and the
-second answer goes back whatever it is. Where the refresh gives no newer token, the upstream's `401` goes back.
+second answer goes back whatever it is. Where the refresh gives no newer token, the upstream's `401` goes back. The
+`401` of a call that went out under an earlier sign-in of the account goes back too, with no refresh.
 
 After a second `401`, behind the resend, the router remembers the rejected token. Each later call under that token that
 gets such a `401` gets it back at once with no further refresh, and the first call under the account's next token gets

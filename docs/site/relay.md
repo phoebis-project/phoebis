@@ -372,7 +372,7 @@ sent at the reset is not refused by a clock a hair behind.
 | API-key `429`, or a `200` whose first event is `rate_limit_error`, naming the spend limit | `FailOver` | Another account, this one cooled until 00:00 UTC on the first day of the next month, reason `spend_cap` |
 | API-key `429`, or a `200` whose first event is `rate_limit_error` | `FailOver` | Another account, the model cooled from `Retry-After`, or the account for `routing.cooldown_fallback_seconds` without one |
 | API-key `400` naming the credit balance | `FailOver` | Another account, this one marked `funding_required` |
-| `401`, or `403` `authentication_error` | `Refresh` for OAuth, `FailOver` for an API key | OAuth: the token is refreshed and the request tried again on the same account. API key: another account, this one marked `reauth_required` |
+| `401`, or `403` `authentication_error` | `Refresh` for OAuth, `FailOver` for an API key | OAuth: the token is refreshed and the request tried again on the same account. A `401` that came under an earlier sign-in of the account is not refreshed, and the request goes to another account. API key: another account, this one marked `reauth_required` |
 | `403` `permission_error` | `FailOver` | Another account, the model cooled on this one for an hour, reason `permission` |
 | Anything else (a `2xx`, any other `4xx` or `5xx`) | `Commit` | The upstream's answer reaches the client, decoded where the upstream coded it |
 

@@ -140,6 +140,7 @@ async fn answer_of(
                 AcquireError::Disconnected
                 | AcquireError::Quarantined
                 | AcquireError::ReauthRequired(_)
+                | AcquireError::Stale
                 | AcquireError::Unpaired => {
                     Unanswered::Refused(feature_account_unavailable(&Obstacle::Unready))
                 }
@@ -183,7 +184,8 @@ async fn answer_of(
     .await?;
     // A token the upstream rejected behind its own refresh gets no second one. The call went out once, since the
     // upstream can accept the token on another path, and its 401 goes back as it came. So does the 401 of a sign-in
-    // that moved while the send waited, since the refresh would rotate the new sign-in's token.
+    // that moved while the send waited. The refresh refuses a row of an earlier sign-in, and the snapshot names one
+    // here with no store read.
     if !wants_refresh(first.head())
         || holds.holds(&account.id, Rejected::of(account, token.generation))
         || !signed_in(relay, account)
@@ -191,11 +193,7 @@ async fn answer_of(
         return Ok(first);
     }
     // The first answer stays unread while the refresh runs, so where no newer token comes it goes back as it came.
-    match relay
-        .manager
-        .refresh_now(&account.id, token.generation)
-        .await
-    {
+    match relay.manager.refresh_now(account, token.generation).await {
         Ok(fresh) => {
             // Dropped ahead of the resend, its connection with it, since a connection whose body went unread serves no
             // later call.

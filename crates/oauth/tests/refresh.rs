@@ -861,11 +861,53 @@ async fn refresh_now_serves_the_stored_token_when_the_generation_already_moved()
         )
         .unwrap();
     // The 401 that triggered this carried the rejected generation, which another caller has already replaced.
+    let row = store.account("a").unwrap().unwrap();
     assert_eq!(
-        mgr.refresh_now("a", stale).await.unwrap().secret.expose(),
+        mgr.refresh_now(&row, stale).await.unwrap().secret.expose(),
         "fresh"
     );
     assert!(up.requests().is_empty());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn refresh_now_for_a_row_of_an_earlier_sign_in_rotates_nothing() {
+    // The call went out under the first sign-in's token at generation 2.
+    let (mgr, store, up, held) = refreshed_once().await;
+    // The account signs in again, and the new sign-in's token count starts at 1.
+    let lifecycle = store.bump_lifecycle("a", StateCause::Operator).unwrap();
+    store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
+    store
+        .commit_credentials(
+            "a",
+            1,
+            lifecycle,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("again"),
+                refresh_token: Some(Secret::new("rt-again")),
+                issued_at: 1_000_000,
+                expires_at: 1_000_000 + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let answer = mgr.refresh_now(&held, 2).await;
+    assert_eq!(
+        token_posts(&up),
+        1,
+        "the first sign-in's refresh is the one token request, so the new sign-in's refresh token is not spent"
+    );
+    assert!(matches!(answer, Err(AcquireError::Stale)), "{answer:?}");
+    assert_eq!(
+        store.credentials("a").unwrap().unwrap().generation,
+        1,
+        "the new sign-in's token is not rotated"
+    );
     up.shutdown().await;
 }
 
@@ -1645,9 +1687,10 @@ async fn a_refresh_that_rotates_nothing_answers_that_no_newer_token_exists() {
             },
         )
         .unwrap();
+    let row = store.account("a").unwrap().unwrap();
     assert!(
         matches!(
-            mgr.refresh_now("a", 1).await,
+            mgr.refresh_now(&row, 1).await,
             Err(AcquireError::NotRefreshed)
         ),
         "the token endpoint rotated nothing, so the rejected generation is still all there is"

@@ -1569,7 +1569,8 @@ async fn a_later_token_is_refreshed_and_resent_again() {
     assert_eq!(status, 401, "{headers:?}");
     // A forced refresh outside the feature path, as the model path runs one, moves the account past the held
     // generation 2.
-    h.manager.refresh_now("a", 2).await.unwrap();
+    let row = h.store.account("a").unwrap().unwrap();
+    h.manager.refresh_now(&row, 2).await.unwrap();
     // Generation 3 gets its refresh and its resend again, and the resend's 401 holds generation 4 in place of 2, so
     // the third call goes out once with no refresh.
     let (status, headers, _) = listener
@@ -1654,7 +1655,8 @@ async fn a_new_sign_in_starts_without_the_hold() {
     assert_eq!(status, 401, "{headers:?}");
     signed_in_again(&h, "a", "sk-ant-oat01-PLACEHOLDER-AGAIN").await;
     // The new sign-in's token reaches generation 2, the number the first sign-in's hold names.
-    h.manager.refresh_now("a", 1).await.unwrap();
+    let row = h.store.account("a").unwrap().unwrap();
+    h.manager.refresh_now(&row, 1).await.unwrap();
     let (status, headers, _) = listener
         .send(API, &keyed_title("/api/frame/artifacts", API))
         .await;
@@ -1822,7 +1824,8 @@ async fn an_earlier_sign_ins_401_leaves_the_hold_on_the_current_sign_in() {
     let h = harness(&up, &[paired("a", SECRET_A)], both_features_at_a()).await;
     let listener = feature_listener(&h).await;
     // The first sign-in's token reaches generation 2, and the call's resend under generation 3 waits for its 401.
-    h.manager.refresh_now("a", 1).await.unwrap();
+    let row = h.store.account("a").unwrap().unwrap();
+    h.manager.refresh_now(&row, 1).await.unwrap();
     let first = listener
         .hold(API, &keyed_title("/api/frame/artifacts", API))
         .await;

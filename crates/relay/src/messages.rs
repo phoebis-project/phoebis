@@ -1411,6 +1411,7 @@ impl From<AccessToken> for Credential {
             secret,
             generation,
             account_uuid,
+            ..
         } = token;
         Credential {
             account_uuid: (!account_uuid.is_empty()).then_some(account_uuid),
@@ -3266,10 +3267,14 @@ impl Relay {
                     tries += 1;
                     match self
                         .manager
-                        .refresh_now(&ctx.account.id, ctx.credential_generation)
+                        .refresh_now(ctx.account, ctx.credential_generation)
                         .await
                     {
                         Ok(token) => return Next::Replay(Credential::from(token)),
+                        // A 401 that an earlier sign-in earned says nothing of the account's current sign-in, so the
+                        // leg waits for nothing and reports nothing, and the request fails over as it does for a stale
+                        // credential.
+                        Err(AcquireError::Stale) => break (None, None, false),
                         // Once the ladder ends nothing was replaced, so the account is finished for this request
                         // and nothing of the upstream's 401 goes back: the request fails over, and a request with
                         // no account left, or one bound to this account, is answered the router's own exhaustion.
