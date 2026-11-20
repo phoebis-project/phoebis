@@ -1074,7 +1074,21 @@ export function GroupedDialog({
   );
 }
 
-export function ConfirmDialog({ open, onClose, onConfirm, title, body, cancelLabel = 'Cancel', confirmLabel = 'Confirm', danger = false, initialFocus }: { body: ReactNode; cancelLabel?: string; confirmLabel?: string; danger?: boolean; initialFocus?: 'cancel'; onClose: () => void; onConfirm: () => void; open: boolean; title: string }) {
+export function ConfirmDialog({ open, onClose, onConfirm, title, body, children, cancelLabel = 'Cancel', confirmLabel = 'Confirm', confirmDisabled = false, danger = false, initialFocus }: {
+  body: ReactNode;
+  cancelLabel?: string;
+  /** Blocks drawn above `body`, which stays the dialog's closing paragraph. */
+  children?: ReactNode;
+  /** Holds the confirm button, for a confirmation that waits on a read. */
+  confirmDisabled?: boolean;
+  confirmLabel?: string;
+  danger?: boolean;
+  initialFocus?: 'cancel';
+  onClose: () => void;
+  onConfirm: () => void;
+  open: boolean;
+  title: string;
+}) {
   const cancelId = useId();
   // After the dialog's own showModal effect (a child's effect runs first), so the browser's dialog focusing does not
   // take the focus back to the first button.
@@ -1094,6 +1108,7 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, body, cancelLab
           </Button>
           <Button
             variant={danger ? 'danger' : 'primary'}
+            disabled={confirmDisabled}
             onClick={() => {
               onConfirm();
               onClose();
@@ -1104,6 +1119,7 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, body, cancelLab
         </>
       }
     >
+      {children}
       <p className="secondary">{body}</p>
     </Dialog>
   );

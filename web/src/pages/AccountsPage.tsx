@@ -813,28 +813,15 @@ function DeleteAccountDialog({ account, onClose, onDelete, open }: { account: Ac
     if (keys.error !== null) keys.reload();
   };
   return (
-    <Dialog
+    <ConfirmDialog
       open={open}
       onClose={onClose}
+      onConfirm={onDelete}
       title="Delete account"
-      width={440}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            disabled={uses === null}
-            onClick={() => {
-              onDelete();
-              onClose();
-            }}
-          >
-            Delete
-          </Button>
-        </>
-      }
+      body={`Removes ${account.label} from its pool and deletes it. Request history stays in the ledger.`}
+      confirmLabel="Delete"
+      confirmDisabled={uses === null}
+      danger
     >
       {error !== null ? (
         <ErrorState title="Could not load where this account is in use" body={error} retry={retry} />
@@ -854,8 +841,7 @@ function DeleteAccountDialog({ account, onClose, onDelete, open }: { account: Ac
           </>
         )
       )}
-      <p className="secondary">{`Removes ${account.label} from its pool and deletes it. Request history stays in the ledger.`}</p>
-    </Dialog>
+    </ConfirmDialog>
   );
 }
 
