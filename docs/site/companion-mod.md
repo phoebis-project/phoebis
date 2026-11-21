@@ -38,4 +38,10 @@ header](../companion/reports.md#the-owner-header) states, which replaces the age
 ## The Sessions view
 
 On the router's side, a session the mod reports shows `reporting` under Companion in the console's Sessions view
-([The mod](keepalive.md#the-mod)).
+([The mod](keepalive.md#the-mod)). Where the mod also reports facts of the session, the view leads the session's row
+with its custom title or its project's folder name, shows its project, its repository and its branch in the open row and
+in two columns that are hidden by default, and, where the mod reports a subagent's facts, leads that subagent's line
+with its name, else its description ([Sessions](console.md#sessions)). Which facts a session reports is set in the mod
+alone, by settings that are off by default ([Configure](../companion/install.md#configure)), and the router has no
+setting for them. The router cleans each reported value before it keeps or shows it ([The keepalive
+protocol](relay.md#the-keepalive-protocol)).
