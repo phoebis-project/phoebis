@@ -752,7 +752,7 @@ test("decodeSession reads the facts a companion reported and its agents' facts",
   const row = d.decodeSession(fixture('sessions').sessions.find((s) => s.session_id === 's1'));
   assert.equal(row.facts.title, 'Checkout retry rework');
   assert.equal(row.facts.repositoryRoot, '/home/dev/work/storefront');
-  assert.equal(row.agentFacts.find((a) => a.agentId === 'worker-1')?.description, 'Review the retry loop');
+  assert.deepEqual(row.agentFacts.find((a) => a.agentId === 'worker-1'), { agentId: 'worker-1', agentType: 'code-reviewer', description: 'Review the retry loop', name: 'reviewer' });
 });
 
 test('a session decodes its runway and whether it is bounded', () => {

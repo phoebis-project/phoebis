@@ -2782,10 +2782,9 @@
   display: block;
 }
 
-/* The label leads the Session cell in the sans face, cut by the fill column, and the id keeps the mono face under it. */
+/* The label leads the Session cell on a line of its own over the mono id line, and the fill column cuts it. */
 .srow__label {
   display: block;
-  font-family: var(--font-sans);
 }
 
 /* The fork badge reads `fork` alone at the head of the client line under the id, never wider than the column, so a cut
@@ -2966,10 +2965,6 @@
 .agents__id {
   display: block;
   max-width: 32ch;
-}
-
-.agent-cell__id {
-  display: block;
 }
 
 /* A badge keeps its text on one line, so the cause badge after the state badge carries the wrap itself: a long cause

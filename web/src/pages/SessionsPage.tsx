@@ -808,10 +808,9 @@ function SessionRows({
   // draws on another model or account, recipe or not, whatever the Agents filters match, and its hover reads them in
   // the order the expanded row draws them. It takes the accent where its column's filter stands and one of its lines
   // matches the filters, a line `shownLines` holds.
-  const reported = new Map(session.agentFacts.map((entry) => [entry.agentId, entry]));
   const placed = drawnLines.flatMap((l) => {
     const accountId = lineAccountOf(l);
-    return accountId !== null && l.model !== null ? [{ accountId, label: agentLabel(l.agentId, reported.get(l.agentId) ?? null), matched: shownLines.includes(l), model: l.model }] : [];
+    return accountId !== null && l.model !== null ? [{ accountId, label: agentLabel(l.agentId, l.facts), matched: shownLines.includes(l), model: l.model }] : [];
   });
   const otherModels = placed.filter((l) => l.model !== session.model);
   const otherAccounts = placed.filter((l) => l.accountId !== session.accountId);
@@ -880,9 +879,9 @@ function SessionRows({
             <IconChevron size={14} />
           </span>
         </td>
-        <td className="mono col-fill" title={joinPresent([label === session.sessionId ? null : label, session.sessionId], '\n')}>
+        <td className="col-fill" title={joinPresent([label === session.sessionId ? null : label, session.sessionId], '\n')}>
           {label !== session.sessionId && <span className="srow__label ellipsis">{label}</span>}
-          <span className="srow__id ellipsis">{session.sessionId}</span>
+          <span className="mono srow__id ellipsis">{session.sessionId}</span>
           {(forkBase !== null || client !== '') && (
             <span className="sub srow__client" title={clientTitle === '' ? undefined : clientTitle}>
               {forkBase !== null && (
@@ -1201,7 +1200,6 @@ function SessionRows({
  * joins the Agents table the line controls.
  */
 function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agents: (AgentFigures & { agentId: string })[]; controls: string; cost: CostContext; onToggle: () => void; open: boolean; session: Session }) {
-  const reported = new Map(session.agentFacts.map((entry) => [entry.agentId, entry]));
   const { spend } = figuresOf(agents);
   const reading = spendUnitOf(spend, cost.unit, session.accountId, null);
   const cell = costCellOf(reading.unit, cost.week, cost.scale);
@@ -1223,7 +1221,7 @@ function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agen
       label={plural(agents.length, 'earlier agent')}
       onToggle={onToggle}
       open={open}
-      title={agents.map((a) => agentLabel(a.agentId, reported.get(a.agentId) ?? null)).join(', ')}
+      title={agents.map((a) => a.agentId).join(', ')}
     />
   );
 }
@@ -1324,7 +1322,7 @@ function AgentLine({ line, now, requestsTo }: { line: SessionLine; now: number; 
   const label = agentLabel(line.agentId, line.facts);
   return (
     <div className="agents__row">
-      <span className="mono agents__id ellipsis" title={line.agentId}>
+      <span className={label === line.agentId ? 'mono agents__id ellipsis' : 'agents__id ellipsis'} title={line.agentId}>
         {requestsTo === null ? label : <Link to={requestsTo}>{label}</Link>}
       </span>
       {ttlMs === null ? <span className="muted">-</span> : <span className="num">{fmtDuration(ttlMs)}</span>}

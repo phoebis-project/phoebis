@@ -28147,12 +28147,12 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         agentHref: at('Agent')?.querySelector('a')?.getAttribute('href') ?? null,
         agentTitle: at('Agent')?.getAttribute('title') ?? null,
         burn: textOf(at('Burn')),
-        label: textOf(at('Agent')?.querySelector('.agent-cell__label')),
         cache: { badge: cache?.querySelector('.badge')?.textContent?.trim() ?? null, muted: textOf(cache?.querySelector(':scope > .muted')), sub: textOf(cache?.querySelector('.sub')) },
         context: textOf(at('Context')),
         cost: textOf(at('Cost')?.querySelector('.srow__pin') ?? at('Cost')),
         costSub: textOf(at('Cost')?.querySelector('.sub')),
         effort: textOf(model?.querySelector('.sub')),
+        label: textOf(at('Agent')?.querySelector('.agent-cell__label')),
         menu: tr.lastElementChild?.querySelector('.menu__trigger')?.getAttribute('aria-label') ?? null,
         model: textOf(model?.querySelector(':scope > :not(.sub)')),
         modelTitle: model?.getAttribute('title') ?? null,
@@ -29128,8 +29128,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       });
     }
     const listed = await api.listSessions();
-    // The cell's id line, while the whole id rides the cell's title.
-    const cellOf = (r) => ({ label: r.children[sessionAt]?.querySelector('.srow__id')?.textContent ?? '', title: r.children[sessionAt]?.getAttribute('title') ?? '' });
+    // The Session cell's id line, which holds the whole id under a label or alone.
+    const cellOf = (r) => ({ id: r.children[sessionAt]?.querySelector('.srow__id')?.textContent ?? '' });
     // A row is its key, its holder and its session id, the three the route keys a session by and its element id names.
     const sessionOf = (r) => sessionOfRow(r, listed);
     // Two pinned forks stand beside their bases: 0d588de5 on its base's account and 229bf72c on another, each as the
@@ -29162,11 +29162,11 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // A fork whose row holds no pin claims no relation, so the two pinned ones carry the words read here.
     const related = forks.filter((f) => f.session.pinned);
     const wrongFork = related.filter((f) => f.relation === null || f.link?.textContent?.trim() !== 'fork' || !f.link.classList.contains('badge--accent') || f.title !== titleOf(f) || f.description !== f.title);
-    const wrongTarget = related.filter((f) => f.target?.tagName !== 'TR' || f.target !== f.baseRow || cellOf(f.target).label !== f.session.forkedFrom);
+    const wrongTarget = related.filter((f) => f.target?.tagName !== 'TR' || f.target !== f.baseRow || cellOf(f.target).id !== f.session.forkedFrom);
     results.push({
       name: "/sessions each pinned fork's badge reads fork, its title the base's whole id, the depth, whether the base is on the same account and its account label, in its description too (both story bases sit on primary, whose label is its id), and links to the base's row",
       ok: forks.length === 3 && related.length === 2 && related.map((f) => f.relation).sort().join('|') === 'on another account|same account' && wrongFork.length === 0 && wrongTarget.length === 0,
-      missing: forks.map((f) => `${f.session.sessionId.slice(0, 8)}: ${f.link?.outerHTML ?? 'no link'} described ${JSON.stringify(f.description)} target ${f.target ? cellOf(f.target).label.slice(0, 8) : 'none'}`),
+      missing: forks.map((f) => `${f.session.sessionId.slice(0, 8)}: ${f.link?.outerHTML ?? 'no link'} described ${JSON.stringify(f.description)} target ${f.target ? cellOf(f.target).id.slice(0, 8) : 'none'}`),
     });
     // The story's fork with no pin of its own claims no relation, so its title names the depth where the two part.
     const unpinned = forks.filter((f) => !f.session.pinned);

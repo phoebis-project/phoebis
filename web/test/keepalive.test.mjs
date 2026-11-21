@@ -257,6 +257,7 @@ test("sessionLines reads each line's type from its companion's report, else from
 test("sessionLabel reads the title, else the project's base name, else the id", () => {
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: '/home/u/app/' }, sessionId: 'b2c4' }), 'app', 'a trailing separator');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: 'C:\\work\\app' }, sessionId: 'b2c4' }), 'app', 'a Windows path');
+  assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: 'C:\\work\\app\\' }, sessionId: 'b2c4' }), 'app', 'a Windows path with a trailing separator');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: '/' }, sessionId: 'b2c4' }), 'b2c4', 'a root has no segment, so the id stands');
 });
 
