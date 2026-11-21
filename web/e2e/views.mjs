@@ -12371,8 +12371,8 @@ const GROUPED_SESSIONS = '/sessions?by=repository';
  * Under a grouping the session rows alternate by their place among the session rows and a group's header row carries
  * no stripe: the first four session rows read plain, --stripe, plain and --stripe, each header row's cell reads plain,
  * and the first session row, opened from its chevron and read with the pointer away, has its detail row read plain as
- * its session does before it shuts again. The cut readers then read the grouped view, a group's name among them. The
- * bare view loads again after.
+ * its session does before it shuts again. Each group's name starts at the left of a session row's chevron, the card's
+ * 12 px edge. The cut readers then read the grouped view, a group's name among them. The bare view loads again after.
  */
 async function sessionGroupStripes(theme, tones) {
   const say = (what) => failures.push(`${theme} ${GROUPED_SESSIONS}: ${what}`);
@@ -12390,6 +12390,11 @@ async function sessionGroupStripes(theme, tones) {
     const { tables } = await page.evaluate(stripeTables);
     const sessions = tables.find((t) => t.name.split(' ').includes('sessions-table')) ?? null;
     const headers = await page.evaluate(() => [...document.querySelectorAll('.sessions-table > tbody > tr.table__group > td')].map((td) => getComputedStyle(td).backgroundColor));
+    // A session row's first cell is the gutter, so its chevron starts at the card's 12 px edge.
+    const edges = await page.evaluate(() => {
+      const left = (el) => (el ? Math.round(el.getBoundingClientRect().left) : null);
+      return { chevron: left(document.querySelector('.sessions-table > tbody > tr.srow .srow__chevron')), names: [...document.querySelectorAll('.sessions-table > tbody > tr.table__group .table__group-label')].map((el) => ({ left: left(el), name: el.textContent ?? '' })) };
+    });
     const first = rows.first();
     await first.locator('.srow__chevron').click();
     await settle();
@@ -12402,7 +12407,7 @@ async function sessionGroupStripes(theme, tones) {
     await first.locator('.srow__chevron').click();
     await settle();
     await atRest();
-    measurements.push(`${theme} ${GROUPED_SESSIONS} grouped stripes ${JSON.stringify({ detail, headers, rows: sessions?.rows ?? null })}`);
+    measurements.push(`${theme} ${GROUPED_SESSIONS} grouped stripes ${JSON.stringify({ detail, edges, headers, rows: sessions?.rows ?? null })}`);
     if (sessions === null || sessions.rows.length < 4) say(`the Sessions table reads ${sessions?.rows.length ?? 0} session rows at rest, short of four`);
     for (const [n, fill] of sessions?.rows ?? []) {
       const want = n % 2 === 1 ? CLEAR : tones.stripe;
@@ -12412,6 +12417,9 @@ async function sessionGroupStripes(theme, tones) {
     headers.forEach((fill, i) => {
       if (fill !== CLEAR) say(`header row ${i + 1} reads ${fill}, not plain`);
     });
+    for (const { left, name } of edges.names) {
+      if (left !== edges.chevron) say(`the header ${JSON.stringify(name)} starts its name at ${left} px, not at a session row's chevron at ${edges.chevron} px`);
+    }
     if (detail === null) say('the first session row opened to no detail row');
     else if (detail !== CLEAR) say(`the first session row's detail row reads ${detail}, not plain as its session row`);
     await cutReaders(theme, GROUPED_SESSIONS);

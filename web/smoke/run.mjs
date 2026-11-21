@@ -506,8 +506,8 @@ const chooseInterval = async (page, word) => {
   await page.settle(100);
 };
 /**
- * The Analytics bar's Group by select and its "Groups (N)" button, which stands beside it while the page groups by user
- * agent.
+ * The Group by select of the bar that draws one, Analytics' or Sessions', and the Analytics bar's "Groups (N)" button,
+ * which stands beside its select while the page groups by user agent.
  */
 const groupBySelect = (page) => page.container.querySelector('.filter-bar select[aria-label="Group by"]');
 const groupsButton = (page) => [...page.container.querySelectorAll('.filter-bar__row button')].find((b) => /^Groups \(\d+\)$/.test(b.textContent?.trim() ?? ''));
