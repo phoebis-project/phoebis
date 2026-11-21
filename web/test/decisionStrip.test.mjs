@@ -966,8 +966,9 @@ test("the pin's three groups hold their keys and the fired shed line reads its t
   const ran = stationPlan(round, 'move:shed');
   const marks = ran.block.groups.find((g) => g.label === 'Round').rows.find((r) => r.label === 'marks');
   assert.equal(marks.chips.length, round.outcome.shedMarks.length);
-  // The Sessions page reads no session key, so a mark links the view and its title names the session.
-  assert.deepEqual(marks.chips.map((c) => [c.label, c.href, c.title.split('/')[1]]), round.outcome.shedMarks.map((mk) => ['mark', '/sessions', mk.sessionId]));
+  // A mark's link opens the Sessions view on the mark's own session with Finished sessions on, and its title names that
+  // session.
+  assert.deepEqual(marks.chips.map((c) => [c.label, c.href, c.title.split('/')[1]]), round.outcome.shedMarks.map((mk) => ['mark', `/sessions?search=${mk.sessionId}&finished=1`, mk.sessionId]));
   // A pool with the slow-down off says so on every shed line, and a line that names a trigger names its source.
   for (const record of [shedMove, round]) {
     const keys = record.walk.find((s) => s.step === 'move:shed').facts.map((f) => [f.key, f.value]);
@@ -977,7 +978,10 @@ test("the pin's three groups hold their keys and the fired shed line reads its t
   const skipped = (await recordOf('req_6e1f3b98-a24/1'));
   const rows = stationPlan(skipped, 'move:shed').block.groups.find((g) => g.label === 'Round').rows.find((r) => r.label === 'skipped');
   assert.deepEqual(rows.chips.map((c) => [c.value, c.href]), [
-    ['bcc805b6: unpriced', '/sessions'], ['d7167642: no runway', '/sessions'], ['d7167642: fast lane', '/sessions'], ['3c36d663: ended', '/sessions'],
+    ['bcc805b6: unpriced', '/sessions?search=bcc805b6-0588-4fe4-ac9e-62a13a0f6e99&finished=1'],
+    ['d7167642: no runway', '/sessions?search=d7167642-751d-475e-b0bf-2f24fe70245e&finished=1'],
+    ['d7167642: fast lane', '/sessions?search=d7167642-751d-475e-b0bf-2f24fe70245e&finished=1'],
+    ['3c36d663: ended', '/sessions?search=3c36d663-d074-42f6-8738-f54da7c9f026&finished=1'],
   ]);
 });
 

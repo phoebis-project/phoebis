@@ -384,8 +384,10 @@ test('releaseLabel words a known reason and keeps an unknown one as sent', () =>
 test('each entity links to the route of its kind', () => {
   assert.equal(d.entityHref('account', 'primary'), '/accounts/primary');
   assert.equal(d.entityHref('request', 'req_1d9c3e55-0b2'), '/requests/req_1d9c3e55-0b2');
-  // The Sessions page reads no key for the entity, so the link opens the view itself.
-  assert.equal(d.entityHref('session', '407dd39b-dd60'), '/sessions');
+  // The link opens the Sessions view on the one session, with Finished sessions on, so a finished row is not hidden.
+  const session = new URL(d.entityHref('session', '407dd39b-dd60'), 'http://console.invalid');
+  const address = d.SESSIONS_CODEC.fromParams(session.searchParams);
+  assert.deepEqual([session.pathname, address.search, address.finished], ['/sessions', '407dd39b-dd60', true]);
   assert.equal(d.entityHref('pool', 'all'), '/pools#all');
   assert.equal(d.entityHref('key', 'laptop'), '/keys#laptop');
   assert.equal(d.entityHref('key', 'ci key/2'), '/keys#ci%20key%2F2');

@@ -1,7 +1,7 @@
 import { iso, list, numOrNull as num, oneOf, strings, strOrNull as str } from '@/api/decode';
 import { FACT_UNIT_VALUES, RESET_OUTCOME_VALUES } from '@/api/types';
 import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, Placement, PrefixEntry, RecordCandidate, RecordCompletion, RecordOutcome, RecordSettings, Refusal, ResetOutcome, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
-import { accountHref, type LogFilters, requestHref, ROUTING_LOG_CODEC, type RangeValue } from './address';
+import { accountHref, type LogFilters, requestHref, ROUTING_LOG_CODEC, type RangeValue, SESSIONS_CODEC } from './address';
 import { FAILOVER_MOVE_REASONS, moveLabel, releaseLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';
 import { tierOrder } from './costs';
 import { has, lookup } from './counts';
@@ -785,9 +785,9 @@ export function entityHref(kind: FactEntity['kind'] | 'request' | 'session', id:
     // A model has no view of its own, so its link opens the log on the model's rows over the last day.
     case 'model':
       return logHref({ models: [id], range: '24h' });
-    // The Sessions page has no filter for the entity, so the link opens the view.
+    // Finished sessions is on so a finished session's row is not hidden behind its own link.
     case 'session':
-      return '/sessions';
+      return `/sessions?${SESSIONS_CODEC.toParams({ ...SESSIONS_CODEC.defaults, finished: true, search: id })}`;
   }
 }
 
