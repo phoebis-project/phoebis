@@ -14,10 +14,10 @@ refuses, the records, and the CA over time.
 Two features work behind the router. With Artifacts, the client's Artifact tool publishes a page to claude.ai, updates
 it in place, lists the pages and reads one back. The client's build also holds an action that deletes a page and one
 that changes who sees it, each behind a switch of the client, and neither was on in a session measured for this page.
-The line in which the client names the state of its artifact switches read `delete=false` and `share=false` in each
-session, one that set the client's variable for sharing among them, and the tool offered no action that reads or changes
-who sees a page. With the claude.ai connectors, the client reads an account's connector list and opens an MCP session
-with a connector.
+The line in which the client names the state of its artifact switches read `delete=false` and `share=false` each time a
+session printed it, in a session that set the client's variable for sharing too, and the tool offered no action that
+reads or changes who sees a page. With the claude.ai connectors, the client reads an account's connector list and opens
+an MCP session with a connector.
 
 Both take three things:
 
@@ -280,8 +280,8 @@ under the caller's umask `0002` has mode `0664`, so the caller's umask crossed a
 of `sudo` for the call held the root shell's text and three paths of the script's files, and none of the client's
 arguments.
 
-**A connected watch.** Measured with Claude Code 2.1.327 on Debian 13 under Linux 7.0.12, with `dash` 0.5.12 as `sh`,
-curl 8.14.1, sudo 1.9.16p2, util-linux 2.41.5, socat 1.8.0.3 and systemd 257.13. For the measurement the start read a
+**A connected watch.** Measured with Claude Code 2.1.327 on Debian 13 under Linux 7.0.12, with curl 8.14.1, `dash`
+0.5.12 as `sh`, socat 1.8.0.3, sudo 1.9.16p2, systemd 257.13 and util-linux 2.41.5. For the measurement the start read a
 hosts file that led both feature names to a private address, bound inside a mount namespace of the measurement's own, so
 the machine's file held no redirect. Both probes passed through the relay, for both hosts and both address families. The
 hosts file of the client's namespace held the machine's lines and then the two loopback lines, with the redirect's line
@@ -894,12 +894,12 @@ A socket request matches by its whole form too: an HTTP/1.1 `GET` on `api.anthro
 one entry of the client's token shape in its `Sec-WebSocket-Protocol` list. A keyed `GET` of `/api/frame/{id}` that the
 upstream answers `200` can hand out such a token in its JSON member `syncToken`. Measured in five query forms, the
 upstream puts the member into the answer of a read whose query carries `peer=agent` and into no other, so the read ahead
-of a watch and the read ahead of a presence connection each hand one out. The router looks for the member in the `200`
-of each keyed read of that path form, whatever its query. It reads beside the answer's stream, in each content coding it
-decodes, and at the body's clean end it keeps the token's SHA-256 in memory with the key that read it and the account
-the read went out under, until the token's own end, held between 300 and 900 seconds behind the read. It keeps 1,024
-tokens for each key and drops a key's oldest at one more, a read whose body fails behind its token keeps nothing, and a
-restart starts with none.
+of a watch hands one out, and so does the read that the client's code sends ahead of a presence connection. The router
+looks for the member in the `200` of each keyed read of that path form, whatever its query. It reads beside the answer's
+stream, in each content coding it decodes, and at the body's clean end it keeps the token's SHA-256 in memory with the
+key that read it and the account the read went out under, until the token's own end, held between 300 and 900 seconds
+behind the read. It keeps 1,024 tokens for each key and drops a key's oldest at one more, a read whose body fails behind
+its token keeps nothing, and a restart starts with none.
 
 Behind the token the router checks what a keyed call meets: the key that read the token still stands, its selection for
 Artifacts still names the account, the account still holds the sign-in the read went out under, the account's state lets
@@ -918,7 +918,7 @@ since an MCP session answers with an event stream that can idle between two even
 and keeps these head lines of the upstream to itself: `anthropic-organization-id`, `connection`, `content-length`,
 `keep-alive`, `proxy-authenticate`, `proxy-authorization`, `set-cookie`, `te`, `trailer`, `transfer-encoding` and
 `upgrade`. Each other line passes, a rate-limit line of the upstream among them, which a model answer hides. Measured,
-the head of a keyed page read's answer and of a socket request's `101` and `403` hold none: no `anthropic-ratelimit-*`
+the head of a keyed page read's answer and of a socket request's `101` and `403` holds none: no `anthropic-ratelimit-*`
 line, no `ratelimit-*` line and no `retry-after`. The head of a connector's answer is unmeasured, and a rate-limit line
 there would show a key holder the feature account's plan standing.
 
@@ -1012,9 +1012,9 @@ within 600 seconds, a head the router cannot read, a connection cut before the h
 the way. A failure behind the head ends the client's connection, as it ends a model stream.
 
 A client in a feature setup sends more calls to the two hosts than the table holds, and each of them ends at the router.
-The next four paragraphs say what interactive sessions of Claude Code 2.1.327 on Linux showed, started through the
-launch script in both feature setups. Which calls the client sends, and what it does with an answer no session got, is
-read from its code at Claude Code 2.1.325.
+The next five paragraphs say what sessions of Claude Code 2.1.327 on Linux showed, interactive unless a sentence says
+otherwise, started through the launch script in both feature setups. Which calls the client sends, and what it does with
+an answer no session got, is read from its code at Claude Code 2.1.325.
 
 **At a start** the client sends several reads that get the `403`, its bootstrap read and its profile read among them,
 and under `max` and `pro` the reads [`CLAUDE_CODE_SUBSCRIPTION_TYPE`](client.md#claude_code_subscription_type) names. A
@@ -1044,23 +1044,25 @@ bound ended the socket of a client that kept sending while it took no byte, 90.6
 acknowledge. No setting moves the two counts, the idle time or the check's interval. Each 30 seconds from a socket's
 open the router checks the socket's key, that key's selection, the account's sign-in and the account's state again, as
 the admission checked them, and ends at once, on both sides, a socket that fails one of these checks. A pause ends no
-socket, as it stops no feature call. Where the router ended a watch's socket at a failed check or at its own stop, the
-session showed no line for it and started no turn, and it dialed again behind a new page read with no act of the user.
-After a key's selection moved to none, those reads met the `403` `feature_account_unset`, four of them in the first 32
-seconds with a growing pause. The Artifact tool's status action then read the watch as not connected, with the count of
-its failed attempts, the time of its next one and the note that it gives up after more than 10 failed attempts in a row.
-The watch connected again 9.5 seconds after the selection returned. After a stop and a new start of the router, it
-connected again 12 seconds behind the stop. By the client's code the session dials again the same way where the router
-refuses a watch for another cause than a full count or a ledger that stands behind, and where it ends a socket after the
-idle time. After a failed check, the new page read meets the router's refusal for the changed state, or goes out under
-the account the selection names now. At the `429` of a full count and at the `503` `ledger_behind` the session waits 30
-seconds or more, counts no failure and dials again, by the client's code. One watch stood open for 3 hours and 7 minutes
-and a socket opened by hand beside it for 3 hours and 5 minutes, and neither the router nor the upstream ended one in
-that time. About each 13 minutes the upstream sent a frame of the kind `ctrl:token_refresh` on such a socket, 14 in all,
-which the router carries unread, as it carries each frame. So a socket stays open past the 300 to 900 seconds for which
-the router keeps the token that admitted it. When the router then cut the watch at a failed check, the session that had
-received those frames dialed again behind a new page read. The client's event report, `POST /api/frame/track`, gets the
-`403`, which the session shows nowhere.
+socket, as it stops no feature call.
+
+Where the router ended a watch's socket at a failed check or at its own stop, the session showed no line for it and
+started no turn, and it dialed again behind a new page read with no act of the user. After a key's selection moved to
+none, those reads met the `403` `feature_account_unset`, four of them in the first 32 seconds with a growing pause. The
+Artifact tool's status action then read the watch as not connected, with the count of its failed attempts, the time of
+its next one and the note that it gives up after more than 10 failed attempts in a row. The watch connected again 9.5
+seconds after the selection returned. After a stop and a new start of the router, it connected again 12 seconds behind
+the stop. By the client's code the session dials again the same way where the router refuses a watch for another cause
+than a full count or a ledger that stands behind, and where it ends a socket after the idle time. After a failed check,
+the new page read meets the router's refusal for the changed state, or goes out under the account the selection names
+now. At the `429` of a full count and at the `503` `ledger_behind` the session waits 30 seconds or more, counts no
+failure and dials again, by the client's code. One watch stood open for 3 hours and 7 minutes and a socket opened by
+hand beside it for 3 hours and 5 minutes, and neither the router nor the upstream ended one in that time. About each 13
+minutes the upstream sent a frame of the kind `ctrl:token_refresh` on such a socket, 14 in all, which the router carries
+unread, as it carries each frame. So a socket stays open past the 300 to 900 seconds for which the router keeps the
+token that admitted it. When the router then cut the watch at a failed check, the session that had received those frames
+dialed again behind a new page read. The client's event report, `POST /api/frame/track`, gets the `403`, which the
+session shows nowhere.
 
 **The `/usage` dialog** cannot read the account's usage. Its read gets the `403`, and the dialog's Usage tab reads
 "Couldn't load usage data" and prints the router's whole answer body below it, a `permission_error` with the message

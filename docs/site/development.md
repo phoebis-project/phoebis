@@ -318,9 +318,9 @@ the table after any accepted re-pin.
   `POST /api/frame/db/agent` for the database, `GET /api/frame/versions/{id}` for a page's versions and
   `GET /api/frame/contract/latest` ahead of its reads, and the feature listener's path rules passed each. The upstream
   answered the assets call with `403` and the database call with `404`, since the page's published version declares
-  neither capability. Unsent, and so unmeasured, are an asset call and a database call past that check, the comment
-  calls, since the page held no comment, and the sharing calls, since the tool offered no action that reads or changes a
-  page's sharing.
+  neither capability. Unmeasured are an asset call and a database call past that check. Unsent, and so unmeasured too,
+  are the comment calls, since the page held no comment, and the sharing calls, since the tool offered no action that
+  reads or changes a page's sharing.
 - The quota-wall usage variant of token counting on the wire. The Read tool's pre-turn count is the measured one
   (`count.json` and the three `count_*.http` heads under the fixtures).
 - The usage read under `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. With the switch set the `/usage` dialog opens on
