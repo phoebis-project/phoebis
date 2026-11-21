@@ -1,8 +1,8 @@
 import type { AgentContext, AgentRequests, KeepaliveRecipe, Lifecycle, RecipeCause, Session, SessionAgentFacts, SessionSpend, SessionSpendPart } from '@/api/types';
-import { ACTIVE_WITHIN, RANGE_PRESETS, type SessionsAddress, type SortDir } from '@/lib/address';
+import { ACTIVE_WITHIN, RANGE_PRESETS, type SessionGroupBy, type SessionsAddress, type SortDir } from '@/lib/address';
 import { clientVersion } from '@/lib/client';
 import { countOf, groupInto, lookup } from '@/lib/counts';
-import { fmtCompact, fmtDuration, keyLifetime } from '@/lib/format';
+import { byteOrder, fmtCompact, fmtDuration, keyLifetime } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
 import { compareFigures, orderRows, type SortFigure } from '@/lib/sort';
 
@@ -341,6 +341,9 @@ export function baseName(path: string): string | null {
   return segment === '' ? null : segment;
 }
 
+/** The short form of a path or of a `host/path`: its last segment, or the whole value where it has none. */
+export const shortPlace = (value: string): string => baseName(value) ?? value;
+
 /** A session's label: its title, else its project's base name, else its id. */
 export function sessionLabel(session: Pick<Session, 'facts' | 'sessionId'>): string {
   const { facts } = session;
@@ -351,6 +354,28 @@ export function sessionLabel(session: Pick<Session, 'facts' | 'sessionId'>): str
 export function agentLabel(agentId: string, facts: Pick<SessionAgentFacts, 'description' | 'name'> | null): string {
   if (agentId === MAIN_AGENT) return MAIN_AGENT;
   return facts?.name ?? facts?.description ?? agentId;
+}
+
+export interface SessionGroup<R> {
+  /** The project path, the `host/path` or the repository's root. Null for the rows without the fact. */
+  key: string | null;
+  rows: R[];
+  /** The key's short form, or `No project` or `No repository` where the key is null. */
+  short: string;
+}
+
+const NO_FACT_GROUP: Record<Exclude<SessionGroupBy, 'none'>, string> = { project: 'No project', repository: 'No repository' };
+
+/** The rows in groups by their session's project or repository, the groups in name order and the rows as handed. */
+export function groupSessions<R extends { session: Pick<Session, 'facts'> }>(rows: readonly R[], by: Exclude<SessionGroupBy, 'none'>): SessionGroup<R>[] {
+  // A worktree's remote and root are its checkout's, so by repository the two share a group with or without a remote.
+  const keyOf = ({ facts }: Pick<Session, 'facts'>): string | null => (by === 'project' ? facts.project : (facts.repository ?? facts.repositoryRoot));
+  // Code-unit compares, so the five-second re-read and a second browser order the groups alike.
+  const named = [...groupInto(rows, (row) => keyOf(row.session))]
+    .map(([key, held]) => ({ key, rows: held, short: shortPlace(key) }))
+    .sort((a, b) => byteOrder(a.short.toLowerCase(), b.short.toLowerCase()) || byteOrder(a.key, b.key));
+  const without = rows.filter((row) => keyOf(row.session) === null);
+  return without.length === 0 ? named : [...named, { key: null, rows: without, short: NO_FACT_GROUP[by] }];
 }
 
 /**
@@ -468,7 +493,7 @@ export function earlierAgents(session: Pick<Session, 'agentRequests'>, lines: re
   return earlierEntries(session, lines).sort((a, b) => (a.agentId < b.agentId ? -1 : 1));
 }
 
-/** The filters the Sessions view matches a row against, the address's values less its sort. */
+/** The filters the Sessions view matches a row against, the address's values less its sort and its grouping. */
 export interface SessionFilters {
   account: string[];
   /** `15m`, `1h`, `6h`, `24h` or empty. */

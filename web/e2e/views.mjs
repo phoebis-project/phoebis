@@ -7730,7 +7730,10 @@ const MIDNIGHT = (origin) => {
  * reads: the slots take 1283 px in the 992 px row and the edge wraps alone onto the second line, the row 72 px
  * and the bar 72 at rest, across midnight and under the sort and 106 with its chips. At 1440 by 900 it holds
  * one line at rest, with its chips and under the sort (the slots 1152 px in the 1152 px row), and two across
- * midnight, whose Custom pill takes the slots to 1443 px in the 1152 px row (the row and the bar 72 px).
+ * midnight, whose Custom pill takes the slots to 1443 px in the 1152 px row (the row and the bar 72 px). The
+ * Sessions row at 1280 by 800 holds two lines too, since its controls leave the search 184.5 px of the 992 px row,
+ * under its content width, and the edge wraps alone onto the second line (the row and the bar 72 px). At 1440 by 900
+ * it holds one line (the slots 1152 px in the 1152 px row).
  * Against another story the row holds two lines where its slots run past it and one otherwise. On a
  * card view the element after the bar and the tiles stand under the bar's bottom. The row's `width`, its slots' widths
  * and the gaps between them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads the Add
@@ -7829,8 +7832,9 @@ async function barRow(theme, view) {
         // Under the mock the Requests bar's slots outrun the 1280 px content column whatever the count reads, since a
         // hidden sizer with the widest count of a freshly read page holds the count's slot at that width, so the edge
         // wraps to a second line there. At 1440 px the Custom pill's span across midnight takes them past the row too.
+        // The Sessions bar's controls leave its search less than its content width at 1280 px, so its edge wraps there.
         // Against another story the line count follows the slots the row measured.
-        const lines = mock ? (view === '/requests' && (width === 1280 || label === 'with a span across midnight') ? 2 : 1) : got !== null && got.width > got.row.client ? 2 : 1;
+        const lines = mock ? (((view === '/requests' || view === '/sessions') && width === 1280) || (view === '/requests' && label === 'with a span across midnight') ? 2 : 1) : got !== null && got.width > got.row.client ? 2 : 1;
         measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
         check(`${width} by ${height} ${label}`, got, chipped, lines);
         // An address that dropped the pick would measure the bare row's shorter button.
@@ -7873,8 +7877,9 @@ async function barRow(theme, view) {
         }
       }
     }
-    // At 400 px the shell drops its sidebar and leaves the row 368 px. A short row (Pools', Sessions') fits on one line
-    // there, so the read asserts no second line, only that nothing runs past its box or the window.
+    // At 400 px the shell drops its sidebar and leaves the row 368 px. A short row (Pools') fits on one line there and
+    // the Sessions row wraps onto four, so the read asserts no line count, only that nothing runs past its box or the
+    // window.
     await page.setViewportSize({ height: 800, width: 400 });
     await page.goto(`${base}${view}`);
     await booted();
@@ -12021,9 +12026,9 @@ const STRIPE_TRIES = 10;
 /**
  * In the page: the tones the stripes read against, off a probe, and every drawn `.table` with the first four of its
  * data rows that no state of their own paints. A row is placed by its index among the data rows of its `tbody`, which
- * the stripe counts with every row but a detail row, so a passed-by row still moves the parity of the rows after it.
- * The states are a chosen candidate, a new row, the pool card's next member, an open row, a selected row and the
- * session the address names.
+ * the stripe counts with every row but a detail row and a group's header row, so a passed-by row still moves the
+ * parity of the rows after it. The states are a chosen candidate, a new row, the pool card's next member, an open row,
+ * a selected row and the session the address names.
  */
 function stripeTables() {
   const tone = (name) => {
@@ -12046,7 +12051,7 @@ function stripeTables() {
       name: [...table.classList].filter((c) => c !== 'table').join(' ') || 'table',
       plain: table.classList.contains('table--plain'),
       rows: [...table.tBodies]
-        .flatMap((body) => [...body.rows].filter((tr) => !tr.classList.contains('table__detail')).map((tr, i) => [i + 1, tr]))
+        .flatMap((body) => [...body.rows].filter((tr) => !tr.classList.contains('table__detail') && !tr.classList.contains('table__group')).map((tr, i) => [i + 1, tr]))
         .filter(([, tr]) => !stated(tr))
         .slice(0, 4)
         .map(([n, tr]) => [n, fill(tr)]),
@@ -12107,6 +12112,7 @@ async function tableStripes(theme, path) {
     }
   }
   if (path === '/sessions') await sessionDetailStripes(theme, tones);
+  if (path === '/sessions') await sessionGroupStripes(theme, tones);
   if (path === '/routing-log') await routingLogStripes(theme, tones);
   if (path === '/requests') await requestRowStripes(theme, tones);
   if (path === '/pools') await poolFormTables(theme);
@@ -12148,6 +12154,7 @@ const CUT_READERS = [
   '.routing-log__cut',
   '.srow__id',
   '.srow__label',
+  '.table__group-label',
 ];
 
 /**
@@ -12338,6 +12345,63 @@ async function sessionDetailStripes(theme, tones) {
       }
     }
     if (places.length === 2 && places[0] % 2 === places[1] % 2) say(`the written session stands on rows ${places.join(' and ')} under ${WRITTEN_PLACES.join(' and ')}, not on a plain and a striped row`);
+  } finally {
+    await loadAtOrigin('/sessions', '.sessions-table');
+    await atRest();
+  }
+}
+
+/** The grouped address the stripes and the cut readers are read on, which draws a header row ahead of each group. */
+const GROUPED_SESSIONS = '/sessions?by=repository';
+
+/**
+ * Under a grouping the session rows alternate by their place among the session rows and a group's header row carries
+ * no stripe: the first four session rows read plain, --stripe, plain and --stripe, each header row's cell reads plain,
+ * and the first session row, opened from its chevron and read with the pointer away, has its detail row read plain as
+ * its session does before it shuts again. The cut readers then read the grouped view, a group's name among them. The
+ * bare view loads again after.
+ */
+async function sessionGroupStripes(theme, tones) {
+  const say = (what) => failures.push(`${theme} ${GROUPED_SESSIONS}: ${what}`);
+  try {
+    await loadAtOrigin(GROUPED_SESSIONS, '.sessions-table');
+    const rows = page.locator('.sessions-table > tbody > tr.srow');
+    const count = await rows.count();
+    if (count < 4) {
+      if (mock) say(`the table draws ${count} session rows, short of the four the grouped stripes are read on`);
+      else measurements.push(`${theme} ${GROUPED_SESSIONS} grouped stripes skipped: the seed draws ${count} session rows, short of the four the read holds`);
+      return;
+    }
+    await atRest();
+    await settle();
+    const { tables } = await page.evaluate(stripeTables);
+    const sessions = tables.find((t) => t.name.split(' ').includes('sessions-table')) ?? null;
+    const headers = await page.evaluate(() => [...document.querySelectorAll('.sessions-table > tbody > tr.table__group > td')].map((td) => getComputedStyle(td).backgroundColor));
+    const first = rows.first();
+    await first.locator('.srow__chevron').click();
+    await settle();
+    await page.mouse.move(0, 0);
+    await settle();
+    const detail = await first.evaluate((tr) => {
+      const cell = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling.querySelector(':scope > td') : null;
+      return cell ? getComputedStyle(cell).backgroundColor : null;
+    });
+    await first.locator('.srow__chevron').click();
+    await settle();
+    await atRest();
+    measurements.push(`${theme} ${GROUPED_SESSIONS} grouped stripes ${JSON.stringify({ detail, headers, rows: sessions?.rows ?? null })}`);
+    if (sessions === null || sessions.rows.length < 4) say(`the Sessions table reads ${sessions?.rows.length ?? 0} session rows at rest, short of four`);
+    for (const [n, fill] of sessions?.rows ?? []) {
+      const want = n % 2 === 1 ? CLEAR : tones.stripe;
+      if (fill !== want) say(`the ${sessions.name} table's data row ${n} reads ${fill}, not ${want === CLEAR ? 'plain' : `--stripe (${want})`}`);
+    }
+    if (headers.length === 0) say('the table draws no group header row');
+    headers.forEach((fill, i) => {
+      if (fill !== CLEAR) say(`header row ${i + 1} reads ${fill}, not plain`);
+    });
+    if (detail === null) say('the first session row opened to no detail row');
+    else if (detail !== CLEAR) say(`the first session row's detail row reads ${detail}, not plain as its session row`);
+    await cutReaders(theme, GROUPED_SESSIONS);
   } finally {
     await loadAtOrigin('/sessions', '.sessions-table');
     await atRest();
@@ -13582,7 +13646,7 @@ async function sessionDetailSticky(theme) {
 
 /**
  * The Sessions bar's sort control and the order it gives the rows: the Sort button in the height, top edge, type size
- * and weight of the Columns control beside it, its text "Sort: Created" on the bare address and "Sort: Last activity"
+ * and weight of the bar's Columns control, its text "Sort: Created" on the bare address and "Sort: Last activity"
  * under `?sort=activity`, and the session ids of the first five rows under each recorded. The bare view loads again
  * after, so the shot and the measures after it read the view as it first drew.
  */

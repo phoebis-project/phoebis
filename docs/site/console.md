@@ -1442,35 +1442,36 @@ the cost model, so a failed settings read draws its error state in place of the 
 ![The Sessions view: the session table with a fork badge](assets/sessions-light.png#only-light)
 ![The Sessions view: the session table with a fork badge](assets/sessions-dark.png#only-dark)
 
-The view opens on its bar: the search field "Session id", Add filter, the Columns control, the Sort control (Created,
-newest first by default, Last activity, Cost or Requests, each with Ascending or Descending, carried in the address) and
-at the right edge the split Refresh button and the count, `{n} sessions · {k} agents`, its agents counted as the Agents
-cell counts them over the rows the filters keep. While an Agents filter stands the count reads `{k} matching agents`,
-and while the filters hide rows its hover reads `{h} sessions hidden by the filters`. The search field matches the start
-of a session id. Add filter opens a "Filter by" field over two groups: Session, which reads the row (Active within,
-Client, Companion, Finished sessions, Forked sessions, Key, Pool and Slowed), and Agents, which reads each agent line,
-main's among them (Account, Agent type, Cache, Effort, Model, Released agents and Status). Filters are AND: a session is
-listed when it passes every Session filter and, while Agents filters stand, when one of its lines passes every Agents
-filter together. A finished session, one whose main agent ended with the session or whose every agent the mod released,
-stays out unless Finished sessions stands, and Released agents draws a live session's released agents, which stay hidden
-without it. Status reads each line's word as the Agents table draws it, so main's line of a session no mod reports
-matches `unreported`. The router lists a companion session within the session expiry, which for such a session counts
-from the later of its last request and its mod's last report, so its row stays while the mod reports, and a session no
-mod reports while the latest of its last use, its last request and, where its companion ended the session, that end is
-within the lesser of the non-companion timeout of the Settings page (`sessions.non_companion_idle_seconds`, 1h by
-default) and the session expiry, and the view reads that list as it is. Each filter off its default stands as a chip on
-a line under the bar: a click on the chip opens its values again, its x removes it, and from two chips on "Clear all"
-returns every filter to its default. An Agents filter's chip reads `(any agent)` after its values in the secondary ink,
-its hover ending "matched by any one agent". The filters live in the page's address, so a reload or a shared link keeps
-them, and a bare `/sessions` reads the defaults. Where a read the rows wait on failed before it answered, the sessions,
-the recipes or the keys, a line under the bar names it, `Could not load the {read}: {reason}`, with Try again, and a
-failed accounts read draws a line of its own. The head under the bar reads "Every session the router lists: what it
-runs, where it is pinned, what it has spent and whether its prompt cache is warm." with the disclosure "How pins and
-recipes work", whose paragraph says what a pin and a recipe are, and a "Cost reference" link that opens the dialog on
-Plan rates. Auto reload starts at 5 s and reads the accounts, the recipes and the sessions at that one interval, and it
-waits while the Cost reference dialog, a row's menu or a popover of the bar is open. The probes and the recipe are
-explained on [Keepalive](keepalive.md), the mod's words under [The mod](keepalive.md#the-mod) and the recipe's states
-under [The five states](keepalive.md#the-five-states).
+The view opens on its bar: the search field "Session id", Add filter, the Columns control, the "Group by" control (None
+by default, Project or Repository, carried in the address as `by`), the Sort control (Created, newest first by default,
+Last activity, Cost or Requests, each with Ascending or Descending, carried in the address) and at the right edge the
+split Refresh button and the count, `{n} sessions · {k} agents`, its agents counted as the Agents cell counts them over
+the rows the filters keep. While an Agents filter stands the count reads `{k} matching agents`, and while the filters
+hide rows its hover reads `{h} sessions hidden by the filters`. At 1280 px the right edge stands on a second line, as on
+Requests. The search field matches the start of a session id. Add filter opens a "Filter by" field over two groups:
+Session, which reads the row (Active within, Client, Companion, Finished sessions, Forked sessions, Key, Pool and
+Slowed), and Agents, which reads each agent line, main's among them (Account, Agent type, Cache, Effort, Model, Released
+agents and Status). Filters are AND: a session is listed when it passes every Session filter and, while Agents filters
+stand, when one of its lines passes every Agents filter together. A finished session, one whose main agent ended with
+the session or whose every agent the mod released, stays out unless Finished sessions stands, and Released agents draws
+a live session's released agents, which stay hidden without it. Status reads each line's word as the Agents table draws
+it, so main's line of a session no mod reports matches `unreported`. The router lists a companion session within the
+session expiry, which for such a session counts from the later of its last request and its mod's last report, so its row
+stays while the mod reports, and a session no mod reports while the latest of its last use, its last request and, where
+its companion ended the session, that end is within the lesser of the non-companion timeout of the Settings page
+(`sessions.non_companion_idle_seconds`, 1h by default) and the session expiry, and the view reads that list as it is.
+Each filter off its default stands as a chip on a line under the bar: a click on the chip opens its values again, its x
+removes it, and from two chips on "Clear all" returns every filter to its default. An Agents filter's chip reads `(any
+agent)` after its values in the secondary ink, its hover ending "matched by any one agent". The filters live in the
+page's address, so a reload or a shared link keeps them, and a bare `/sessions` reads the defaults. Where a read the
+rows wait on failed before it answered, the sessions, the recipes or the keys, a line under the bar names it, `Could not
+load the {read}: {reason}`, with Try again, and a failed accounts read draws a line of its own. The head under the bar
+reads "Every session the router lists: what it runs, where it is pinned, what it has spent and whether its prompt cache
+is warm." with the disclosure "How pins and recipes work", whose paragraph says what a pin and a recipe are, and a "Cost
+reference" link that opens the dialog on Plan rates. Auto reload starts at 5 s and reads the accounts, the recipes and
+the sessions at that one interval, and it waits while the Cost reference dialog, a row's menu or a popover of the bar is
+open. The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The
+mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepalive.md#the-five-states).
 
 The card "Sessions", its title carrying "One row per session. Open a row for its agents, its routing and its cache
 warming." on hover, offers "Expand all" or "Collapse all", and its summary line reads the rows the filters keep: `{k}
@@ -1491,6 +1492,15 @@ count, or its last use where the ledger holds no such request yet, by the list d
 units, or by its requests, newest or largest first by default, ties by session id and a row without the value last, and
 the five-second re-read keeps a row's place under Created. Session takes the card's free width and keeps at least 74 px,
 and a set of columns wider than the card scrolls inside it.
+
+Group by files the rows the filters keep under their project or their repository. Grouped by Project, the rows stand
+under their project's path. Grouped by Repository, they stand under the repository's `host/path`, or under its root
+where it has no remote, so a checkout and its linked working trees share a group. Each group opens with a row across the
+table that reads the last segment of that value, cut with an ellipsis where it is long, and the count `{n} sessions`,
+with the whole value on hover. The groups stand in alphabetical order of that segment, ignoring case, two groups that
+share a segment in the order of their whole values, and the sessions that report no project or no repository stand last
+under "No project" or "No repository". Inside a group the rows keep the Sort control's order. A group none of whose rows
+pass the filters is not drawn, and a group's row opens nothing and does not fold.
 
 The Session cell leads with the session's label, which is the custom title its companion reports, else the folder name
 of its project, else its id. A label that is not the id stands over the id, each cut with an ellipsis, and the hover

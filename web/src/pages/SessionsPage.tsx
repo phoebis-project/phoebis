@@ -6,6 +6,7 @@ import type { Account, ApiKey, BurnFigures, CompanionState, KeepaliveRecipe, Mod
 import { LIFECYCLE_VALUES } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { FilterBar } from '@/components/FilterBar';
+import { GroupBy } from '@/components/GroupBy';
 import { SortControl } from '@/components/SortControl';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostReferenceLink } from '@/components/ui/CostReference';
@@ -14,7 +15,7 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, EmptyState, ErrorState, KeyValue, Menu, ReadNotice, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
-import { accountHref, ACTIVE_WITHIN, ANALYTICS_CODEC, keyHref, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortDirOf, type SortDir } from '@/lib/address';
+import { accountHref, ACTIVE_WITHIN, ANALYTICS_CODEC, keyHref, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionGroupBy, type SessionsAddress, sortDirOf, type SortDir } from '@/lib/address';
 import { UNPRICED_TITLE, sentences, type WeekReading } from '@/lib/analytics';
 import { AGENT_TYPES, clientVersion } from '@/lib/client';
 import { clock } from '@/lib/clock';
@@ -22,7 +23,7 @@ import { tierOrder } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
-import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, agentLabel, baseName, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, requestCount, requestsSpan, sessionLabel, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, agentLabel, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, groupSessions, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, requestCount, requestsSpan, sessionLabel, sessionLines, type SessionLine, shortPlace, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
@@ -58,9 +59,12 @@ type SessionColumnId = (typeof SESSION_COLUMNS)[number]['id'];
 // carries the pin's figures, the key, the probes, the project and the repository, the label reads the project's folder
 // where no title stands, and the Columns control brings each back.
 const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['companion', 'context', 'created', 'effort', 'key', 'lastRequest', 'nextProbe', 'project', 'repository', 'runway'];
-
-/** The short form of a path or of a `host/path`: its last segment, or the whole value where it has none. */
-const shortPlace = (value: string): string => baseName(value) ?? value;
+// None leads as the default, and the two keys follow in name order.
+const GROUP_OPTIONS: { label: string; value: SessionGroupBy }[] = [
+  { label: 'None', value: 'none' },
+  { label: 'Project', value: 'project' },
+  { label: 'Repository', value: 'repository' },
+];
 
 /**
  * The pin's runway on its account as the route answers it: a span, `none` at zero, `unbounded` where no window binds.
@@ -407,6 +411,31 @@ export function SessionsPage() {
   const unfold = (id: string) => setUnfolded((prev) => toggled(prev, id));
   // The expand gutter, the Session column and the menu are drawn whatever the control hides.
   const columns = visible.size + 3;
+  const sessionRows = (list: readonly Row[]) =>
+    list.map((row) => {
+      const id = rowKey(row.session);
+      const lines = drawn.get(id);
+      return (
+        <SessionRows
+          key={id}
+          row={row}
+          open={expanded.has(id)}
+          onToggle={() => toggle(id)}
+          now={now}
+          columns={columns}
+          cost={cost}
+          current={current === rowDomId(row.session)}
+          filtered={{ account: filters.account.length > 0, model: filters.model.length > 0 }}
+          fold={matching ? (lines?.hidden ?? 0) : null}
+          lines={lines ?? { drawn: [], hidden: 0, shown: [] }}
+          listedRows={listedRows}
+          onFollowFork={followFork}
+          onUnfold={() => unfold(id)}
+          unfolded={unfolded.has(id)}
+          visible={visible}
+        />
+      );
+    });
 
   return (
     <PopoverHost.Provider value={host}>
@@ -432,6 +461,7 @@ export function SessionsPage() {
           update={update}
         >
           <ColumnsControl columns={SESSION_COLUMNS} visible={visible} onChange={setVisible} />
+          <GroupBy onChange={(by) => update({ by })} options={GROUP_OPTIONS} value={filters.by} />
           <SortControl keys={SESSION_SORT_KEYS} onChange={update} value={filters} />
         </FilterBar>
         {firstFailed !== null && <ReadNotice className="sessions__notice" error={reads[firstFailed].error} name={firstFailed} retry={reads[firstFailed].reload} />}
@@ -493,30 +523,19 @@ export function SessionsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => {
-                    const id = rowKey(row.session);
-                    const lines = drawn.get(id);
-                    return (
-                      <SessionRows
-                        key={id}
-                        row={row}
-                        open={expanded.has(id)}
-                        onToggle={() => toggle(id)}
-                        now={now}
-                        columns={columns}
-                        cost={cost}
-                        current={current === rowDomId(row.session)}
-                        filtered={{ account: filters.account.length > 0, model: filters.model.length > 0 }}
-                        fold={matching ? (lines?.hidden ?? 0) : null}
-                        lines={lines ?? { drawn: [], hidden: 0, shown: [] }}
-                        listedRows={listedRows}
-                        onFollowFork={followFork}
-                        onUnfold={() => unfold(id)}
-                        unfolded={unfolded.has(id)}
-                        visible={visible}
-                      />
-                    );
-                  })}
+                  {filters.by === 'none'
+                    ? sessionRows(rows)
+                    : groupSessions(rows, filters.by).map((group) => (
+                        <Fragment key={group.key ?? ''}>
+                          <tr className="table__group">
+                            <td colSpan={columns} title={group.key ?? undefined}>
+                              <span className="table__group-label ellipsis">{group.short}</span>
+                              <span className="muted table__group-count">{plural(group.rows.length, 'session')}</span>
+                            </td>
+                          </tr>
+                          {sessionRows(group.rows)}
+                        </Fragment>
+                      ))}
                 </tbody>
               </table>
             </div>

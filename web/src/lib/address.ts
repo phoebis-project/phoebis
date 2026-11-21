@@ -583,7 +583,11 @@ export const ACCOUNTS_CODEC = codecOf<AccountsAddress>({
   status: { default: 'all', kind: 'choice', name: 'status', values: ['all', ...ACCOUNT_STATUSES] },
 });
 
+export type SessionGroupBy = 'none' | 'project' | 'repository';
+
 export interface SessionsAddress extends SessionFilters, SortFields<(typeof SESSION_SORT_KEYS)[number]['id']> {
+  /** How the rows are grouped: `none` the default, `project` or `repository`. */
+  by: SessionGroupBy;
   /** `created` the default, `activity`, `cost` (the dollars of the session's requests) or `requests`. */
   sort: (typeof SESSION_SORT_KEYS)[number]['id'];
 }
@@ -614,5 +618,6 @@ export const SESSIONS_CODEC = codecOf<SessionsAddress>({
   model: list('model'),
   released: { kind: 'flag', name: 'released' },
   status: list('status'),
+  by: { default: 'none', kind: 'choice', name: 'by', values: ['none', 'project', 'repository'] },
   ...sortSpecs(SESSION_SORT_KEYS, 'created'),
 });

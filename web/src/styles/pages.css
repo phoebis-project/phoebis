@@ -2709,13 +2709,14 @@
 /* The cells take 5 px each side, one step wider than 4. Each pixel of padding widens the fit columns by 17 px and the
    Session column's floor by 2, so in the 990 px card at 1280 px the default columns leave Session's content 152 px at
    5 px, twenty-one characters of its id, and each pixel more takes two or three of them. The row's first and last
-   cells keep the card's 12 px edge, and an expanded row's detail cell keeps its own inset. */
+   cells and a group's header cell keep the card's 12 px edge, and an expanded row's detail cell keeps its own inset. */
 .sessions-table th,
 .sessions-table td {
   padding-left: 5px;
   padding-right: 5px;
 }
 
+.sessions-table .table__group > td,
 .sessions-table th:first-child,
 .srow > td:first-child {
   padding-left: 12px;
@@ -2729,6 +2730,7 @@
   min-width: 74px;
 }
 
+.sessions-table .table__group > td,
 .sessions-table th:last-child,
 .srow > td:last-child {
   padding-right: 12px;

@@ -1711,20 +1711,42 @@ textarea.input {
 }
 
 /* Every data table alternates its rows on --stripe, a half step between the surfaces, so a hovered row (--surface-2)
-   and a selected one (--accent-soft) still read over it. A row under one of the rows (table__detail) is not counted
-   and takes its parent's tone, and a form table opts out with table--plain. The child combinators make a table nested
-   in a cell its own striping scope. The rule is wrapped in :where() so it stays under the hover, the selected and the
-   open-row rules, which keep their specificity. */
-.table:where(:not(.table--plain)) > tbody > :where(tr:nth-child(even of :not(.table__detail))) > td,
-.table:where(:not(.table--plain)) > tbody > :where(tr:nth-child(even of :not(.table__detail))) + :where(tr.table__detail) > td {
+   and a selected one (--accent-soft) still read over it. A row under one of the rows (table__detail) and a group's
+   header row (table__group) are not counted, the first taking its parent's tone and the second none, and a form table
+   opts out with table--plain. The child combinators make a table nested in a cell its own striping scope. The rule is
+   wrapped in :where() so it stays under the hover, the selected and the open-row rules, which keep their
+   specificity. */
+.table:where(:not(.table--plain)) > tbody > :where(tr:nth-child(even of :not(.table__detail, .table__group))) > td,
+.table:where(:not(.table--plain)) > tbody > :where(tr:nth-child(even of :not(.table__detail, .table__group))) + :where(tr.table__detail) > td {
   background: var(--stripe);
 }
 
-.table--hover tbody tr {
+/* A group's header row: one cell across the table with the group's name in the strong weight and its count in the
+   muted ink. The name is cut at one width, whole on the cell's title, so a folder's name of 255 bytes neither widens
+   the table nor pushes the count out of it. */
+.table__group > td {
+  font-weight: 600;
+  padding-top: 14px;
+}
+
+.table__group-label {
+  display: inline-block;
+  max-width: 48ch;
+  vertical-align: bottom;
+}
+
+.table__group-count {
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+/* A group's header row is no row to act on, so it keeps the default cursor and takes no hover fill. The clause stands
+   inside :where() so each selector keeps its specificity and a selected row still reads over a hovered one. */
+.table--hover tbody tr:where(:not(.table__group)) {
   cursor: pointer;
 }
 
-.table--hover > tbody > tr:hover > td {
+.table--hover > tbody > tr:where(:not(.table__group)):hover > td {
   background: var(--surface-2);
 }
 

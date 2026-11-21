@@ -268,6 +268,36 @@ test('agentLabel reads main, else the name, else the description, else the id', 
   assert.equal(d.agentLabel('main', { description: 'Lead', name: 'lead' }), 'main', 'main whatever its entry holds');
 });
 
+test("groupSessions keeps a checkout and its worktrees in one repository group, the groups in name order and each group's rows as handed", () => {
+  const row = (id, facts) => ({ id, session: { facts: { ...NO_FACTS, ...facts } } });
+  const rows = [
+    row('b', { project: '/home/u/work/beta-shop', repository: 'git.example/beta/shop', repositoryRoot: '/home/u/work/beta-shop' }),
+    row('w', { project: '/home/u/work/shop-worktrees/tax', repository: 'git.example/acme/shop', repositoryRoot: '/home/u/work/shop' }),
+    row('n', {}),
+    row('z', { project: '/home/u/work/Zeta', repositoryRoot: '/home/u/work/Zeta' }),
+    row('c', { project: '/home/u/work/shop', repository: 'git.example/acme/shop', repositoryRoot: '/home/u/work/shop' }),
+    row('y', { project: '/home/u/work/Zeta-worktrees/fix', repositoryRoot: '/home/u/work/Zeta' }),
+    row('a', { project: '/home/u/work/alpha', repository: 'git.example/acme/alpha', repositoryRoot: '/home/u/work/alpha' }),
+  ];
+  const read = (by) => d.groupSessions(rows, by).map((g) => [g.key, g.short, g.rows.map((r) => r.id)]);
+  assert.deepEqual(read('repository'), [
+    ['git.example/acme/alpha', 'alpha', ['a']],
+    ['git.example/acme/shop', 'shop', ['w', 'c']],
+    ['git.example/beta/shop', 'shop', ['b']],
+    ['/home/u/work/Zeta', 'Zeta', ['z', 'y']],
+    [null, 'No repository', ['n']],
+  ]);
+  assert.deepEqual(read('project'), [
+    ['/home/u/work/alpha', 'alpha', ['a']],
+    ['/home/u/work/beta-shop', 'beta-shop', ['b']],
+    ['/home/u/work/Zeta-worktrees/fix', 'fix', ['y']],
+    ['/home/u/work/shop', 'shop', ['c']],
+    ['/home/u/work/shop-worktrees/tax', 'tax', ['w']],
+    ['/home/u/work/Zeta', 'Zeta', ['z']],
+    [null, 'No project', ['n']],
+  ]);
+});
+
 test("statusOf reads finished before the lifecycle word, unreported where no word stands, and the engine's unknown as unknown", () => {
   const session = (lifecycle) => ({ companion: 'reporting', lifecycle });
   assert.deepEqual(d.statusOf(session('busy'), true), { tone: 'neutral', word: 'finished' }, 'main busy when the session ended');

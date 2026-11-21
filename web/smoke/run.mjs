@@ -26462,6 +26462,8 @@ await forView(CARD_VIEWS.map(([path]) => path), async () => {
   const slotOf = (el) => {
     if (el.classList.contains('search')) return `search: ${el.querySelector('input')?.getAttribute('placeholder') ?? 'no placeholder'}`;
     if (el.classList.contains('filter-bar__edge')) return `edge: ${[...el.children].map((c) => (c.classList.contains('refresh-control') ? 'Refresh' : c.classList.contains('filter-bar__count') && (c.textContent ?? '') !== '' ? 'count' : c.className)).join(', ')}`;
+    // A labeled select's root carries no name of its own, and its text runs on into its options' labels.
+    if (el.matches('label.row')) return el.querySelector(':scope > span')?.textContent?.trim() ?? 'an empty slot';
     return el.getAttribute('aria-label') ?? (el.textContent?.trim() || 'an empty slot');
   };
   const SLOTS = {
@@ -26469,7 +26471,7 @@ await forView(CARD_VIEWS.map(([path]) => path), async () => {
     '/keys': ['search: Search keys', 'Add filter', 'Sort', 'Create key', 'edge: Refresh, count'],
     '/pools': ['Sort', 'Create pool', 'edge: Refresh, count'],
     '/quota': ['Sort', 'Refresh all', 'edge: Refresh, count'],
-    '/sessions': ['search: Session id', 'Add filter', 'Columns', 'Sort', 'edge: Refresh, count'],
+    '/sessions': ['search: Session id', 'Add filter', 'Columns', 'Group by', 'Sort', 'edge: Refresh, count'],
   };
   const read = {};
   for (const [path] of CARD_VIEWS) {
@@ -28764,6 +28766,104 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       name: "/sessions an open row's Session facts read Project, Repository and Branch behind Client",
       ok: Object.values(placed).every((s) => s !== undefined) && JSON.stringify(read) === JSON.stringify(want),
       missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
+    });
+  }
+}
+{
+  // The grouping on the mock's rows (`sessionSpec` in mock/operations.ts): the story's first session and story 1, its
+  // worktree, share the remote git.example/acme/storefront under two projects, story 3 reports a root with no remote,
+  // story 4 a remote of its own, and each other row the bare view keeps reports neither a project nor a repository.
+  const listed = await api.listSessions();
+  const byProject = (path) => listed.find((s) => !s.historical && s.facts.project === path);
+  const subjects = { billing: byProject('/home/dev/work/billing-service'), notes: byProject('/home/dev/work/notes'), story: byProject('/home/dev/work/storefront'), worktree: byProject('/home/dev/work/storefront-worktrees/tax-rules') };
+  const ids = Object.fromEntries(Object.entries(subjects).map(([key, s]) => [key, s === undefined ? null : sessionRowId(s)]));
+  const textOf = (el) => el?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
+  /** The body as groups: each header row read whole with the ids of the session rows under it. */
+  const groupsOf = (page) => {
+    const span = page.container.querySelectorAll('.sessions-table > thead th').length;
+    const groups = [];
+    for (const tr of page.container.querySelectorAll('.sessions-table > tbody > tr')) {
+      if (tr.classList.contains('table__group')) {
+        const td = tr.firstElementChild;
+        groups.push({
+          across: tr.children.length === 1 && td?.colSpan === span,
+          count: textOf(td?.querySelector('.table__group-count')),
+          label: textOf(td?.querySelector('.table__group-label')),
+          parts: [...(td?.children ?? [])].map((el) => (el.classList.contains('table__group-label') ? 'label' : el.classList.contains('table__group-count') ? 'count' : el.className)),
+          rows: [],
+          title: td?.getAttribute('title') ?? null,
+        });
+      } else if (tr.classList.contains('srow')) {
+        if (groups.length === 0) groups.push({ label: 'no header', rows: [] });
+        groups[groups.length - 1].rows.push(tr.id);
+      }
+    }
+    return groups;
+  };
+  // The Sort control's order over the bare view's rows, which each group keeps.
+  const bare = await mount('/sessions', { now: CLOCK_ORIGIN });
+  const order = [...bare.container.querySelectorAll('.sessions-table > tbody > tr.srow')].map((tr) => tr.id);
+  bare.unmount();
+  const inOrder = (...keys) => order.filter((id) => keys.some((key) => ids[key] === id));
+  const others = order.filter((id) => !Object.values(ids).includes(id));
+  const found = Object.values(ids).every((id) => id !== null) && others.length > 1;
+  {
+    const page = await mount('/sessions?by=repository', { now: CLOCK_ORIGIN });
+    const select = groupBySelect(page);
+    const read = { control: select === null ? null : textOf(select.options[select.selectedIndex]), groups: groupsOf(page) };
+    page.unmount();
+    const header = (label, title, count, rows) => ({ across: true, count, label, parts: ['label', 'count'], rows, title });
+    const want = {
+      control: 'Repository',
+      groups: [
+        header('billing-service', 'git.example/acme/billing-service', '1 session', inOrder('billing')),
+        header('notes', '/home/dev/work/notes', '1 session', inOrder('notes')),
+        header('storefront', 'git.example/acme/storefront', '2 sessions', inOrder('story', 'worktree')),
+        header('No repository', null, `${others.length} sessions`, others),
+      ],
+    };
+    results.push({
+      name: '/sessions ?by=repository draws a header row per repository in name order, the sessions without one last',
+      ok: found && JSON.stringify(read) === JSON.stringify(want),
+      missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
+    });
+  }
+  {
+    // A search for story 3's id prefix keeps its row alone, so each other group's header goes with its rows.
+    const page = await mount('/sessions?by=project', { now: CLOCK_ORIGIN });
+    const grouped = groupsOf(page).map((g) => [g.label, g.rows]);
+    page.unmount();
+    const searched = await mount(`/sessions?by=project&search=${subjects.notes?.sessionId.slice(0, 8) ?? ''}`, { now: CLOCK_ORIGIN });
+    const narrowed = groupsOf(searched).map((g) => [g.label, g.rows]);
+    searched.unmount();
+    const want = {
+      grouped: [
+        ['billing-service', inOrder('billing')],
+        ['notes', inOrder('notes')],
+        ['storefront', inOrder('story')],
+        ['tax-rules', inOrder('worktree')],
+        ['No project', others],
+      ],
+      narrowed: [['notes', inOrder('notes')]],
+    };
+    results.push({
+      name: "/sessions ?by=project splits a checkout from its worktree, and a filter that drops a group's rows drops its header",
+      ok: found && JSON.stringify({ grouped, narrowed }) === JSON.stringify(want),
+      missing: [JSON.stringify({ grouped, narrowed }), `want ${JSON.stringify(want)}`],
+    });
+  }
+  {
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const read = { bare: page.location().search };
+    await changeSelect(page, groupBySelect(page), 'project');
+    read.project = page.location().search;
+    await changeSelect(page, groupBySelect(page), 'none');
+    read.none = page.location().search;
+    page.unmount();
+    results.push({
+      name: '/sessions the Group by control writes by into the address and None takes it out',
+      ok: JSON.stringify(read) === JSON.stringify({ bare: '', project: '?by=project', none: '' }),
+      missing: [JSON.stringify(read)],
     });
   }
 }
