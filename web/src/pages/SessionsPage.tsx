@@ -531,19 +531,20 @@ export function SessionsPage() {
                   </tr>
                 </thead>
                 <tbody>
+                  {/* The headers and the rows share one keyed list, so a row that changes group keeps its instance
+                      and its open disclosures. A row's key leads with its key id, a slug, so none starts with the
+                      `[` of a header's key. */}
                   {groups === null
                     ? sessionRows(rows)
-                    : groups.map((group) => (
-                        <Fragment key={group.key ?? ''}>
-                          <tr className="table__group">
-                            <td colSpan={columns} title={group.key ?? undefined}>
-                              <span className="table__group-label ellipsis">{group.short}</span>
-                              <span className="muted table__group-count">{plural(group.rows.length, 'session')}</span>
-                            </td>
-                          </tr>
-                          {sessionRows(group.rows)}
-                        </Fragment>
-                      ))}
+                    : groups.flatMap((group) => [
+                        <tr key={JSON.stringify(['group', group.key])} className="table__group">
+                          <td colSpan={columns} title={group.key ?? undefined}>
+                            <span className="table__group-label ellipsis">{group.short}</span>
+                            <span className="muted table__group-count">{plural(group.rows.length, 'session')}</span>
+                          </td>
+                        </tr>,
+                        ...sessionRows(group.rows),
+                      ])}
                 </tbody>
               </table>
             </div>

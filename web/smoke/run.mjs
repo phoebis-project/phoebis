@@ -28513,6 +28513,24 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
+    // The open row's disclosures live in the row's own state, so a change of Group by that moves the row under a group's
+    // header keeps the story's opened Cache warming details open.
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    disclosureOf(await openRow(page, story), 'srow__warming').button?.click();
+    await page.settle(150);
+    await changeSelect(page, groupBySelect(page), 'repository');
+    const tr = story === undefined ? null : page.container.querySelector(`[id="${sessionRowId(story)}"]`);
+    const detail = tr?.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+    const line = disclosureOf(detail, 'srow__warming');
+    const read = { expanded: line.expanded, grouped: page.location().search, hidden: line.controls === null ? null : (detail?.querySelector(`[id="${line.controls}"]`)?.hidden ?? null) };
+    page.unmount();
+    results.push({
+      name: "/sessions a change of Group by keeps an open row's Cache warming details open",
+      ok: story !== undefined && JSON.stringify(read) === JSON.stringify({ expanded: 'true', grouped: '?by=repository', hidden: false }),
+      missing: [JSON.stringify(read)],
+    });
+  }
+  {
     // An agent's menu offers the row's three views narrowed to the agent: the analytics session view and the request
     // log with its id, and the routing log on the session and the agent an hour either side of its last request. The
     // story's first session's c21e last sent a request at the newest of its seed rows.
