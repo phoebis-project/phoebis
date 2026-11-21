@@ -197,8 +197,8 @@ fn reduce(remote: &str) -> Option<String> {
         joined(host, path)?
     } else if let Some(colon) = host_colon(remote) {
         let (side, path) = (&remote[..colon], &remote[colon + 1..]);
-        // One letter ahead of the colon is a Windows drive, so the value is a local path. A second colon makes the value
-        // a git helper address, `transport::address`, whose address can be a local path.
+        // One letter ahead of the colon is a Windows drive, so the value is a local path. A second colon makes the
+        // value a git helper address, `transport::address`, whose address can be a local path.
         let drive = matches!(side.as_bytes(), [letter] if letter.is_ascii_alphabetic());
         if drive || path.starts_with(':') || path.contains('@') {
             return None;

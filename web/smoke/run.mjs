@@ -28513,8 +28513,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
-    // The open row's disclosures live in the row's own state, so a change of Group by that moves the row under a group's
-    // header keeps the story's opened Cache warming details open.
+    // The open row's disclosures live in the row's own state, so a change of Group by that moves the row under a
+    // group's header keeps the story's opened Cache warming details open.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     disclosureOf(await openRow(page, story), 'srow__warming').button?.click();
     await page.settle(150);
