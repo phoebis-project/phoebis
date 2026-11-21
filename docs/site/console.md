@@ -1479,32 +1479,35 @@ popover of the bar is open. The probes and the recipe are explained on [Keepaliv
 
 The card "Sessions", its title carrying "One row per session. Open a row for its agents, its routing and its cache
 warming." on hover, offers "Expand all" or "Collapse all", and its summary line reads the rows the filters keep: `{k}
-agents: {b} busy, {i} idle, {p} parked · {r} requests and {spend} in 24 h`, the agents counted as the Agents cell
-counts them, the busy, idle and parked ones by their lifecycle word, the client requests of the last 24 hours, and
-their spend as a share of the chosen week, or a dash where a kept row's day holds a request the cost model priced
-nothing for, since a partial sum would read as the whole, with `+ {dollars}` after it where the day billed dollars, the
-probes left out. The Session column is always drawn, and the eighteen others, which the bar's Columns control shows or
-hides, are Status, Agents, Model, Account, Requests, Cost, Last used and Cache, shown by default, then Companion,
-Context, Created, Effort, Key, Last request, Next probe, Project, Repository and Runway, hidden by default. Project
-reads the folder name of the session's project, or of its working directory where the companion reports a working
-directory and no project, with the whole path and a working directory that differs on hover. Repository reads the last
-segment of the repository, or of the repository's root where it has no remote, with the branch under it and the whole
-`host/path`, the branch and the root on hover. Both columns cut a name or a branch past 24 characters with an ellipsis,
-and each reads a dash on a session whose companion reports neither. The rows follow the sort control: by the session's
-creation time, its first request, by its last activity, its newest request that is neither a keepalive probe nor a token
-count, or its last use where the ledger holds no such request yet, by the list dollars of its requests, which add across
-units, or by its requests, newest or largest first by default, ties by session id and a row without the value last, and
-the five-second re-read keeps a row's place under Created. Session takes the card's free width and keeps at least 74 px,
-and a set of columns wider than the card scrolls inside it.
+agents: {b} busy, {i} idle, {p} parked · {r} requests and {spend} in 24 h`, the agents counted as the Agents cell counts
+them, the busy, idle and parked ones by their lifecycle word, the client requests of the last 24 hours, and their spend
+as a share of the chosen week, or a dash where a kept row's day holds a request the cost model priced nothing for, since
+a partial sum would read as the whole, with `+ {dollars}` after it where the day billed dollars, the probes left out.
+The Session column is always drawn, and the eighteen others, which the bar's Columns control shows or hides, are Status,
+Agents, Model, Account, Requests, Cost, Last used and Cache, shown by default, then Companion, Context, Created, Effort,
+Key, Last request, Next probe, Project, Repository and Runway, hidden by default. Project reads the folder name of the
+session's project, or of its working directory where the companion reports a working directory and no project, with the
+whole path and a working directory that differs on hover. Repository reads the last segment of the repository, or of the
+repository's root where it has no remote, with the branch under it and the whole `host/path`, the branch and the root on
+hover. A path at a root, `/` or a drive root such as `C:\`, has no folder name or last segment, so either column reads
+it whole, and a session with such a project and no title leads its Session cell with its id. Both columns cut a name or
+a branch past 24 characters with an ellipsis, and each reads a dash on a session whose companion reports neither. The
+rows follow the sort control: by the session's creation time, its first request, by its last activity, its newest
+request that is neither a keepalive probe nor a token count, or its last use where the ledger holds no such request yet,
+by the list dollars of its requests, which add across units, or by its requests, newest or largest first by default,
+ties by session id and a row without the value last, and the five-second re-read keeps a row's place under Created.
+Session takes the card's free width and keeps at least 74 px, and a set of columns wider than the card scrolls inside
+it.
 
 Group by files the rows the filters keep under their project or their repository. Grouped by Project, the rows stand
 under their project's path. Grouped by Repository, they stand under the repository's `host/path`, or under its root
 where it has no remote, so a checkout and its linked working trees share a group. Each group opens with a row across the
-table that reads the last segment of that value, cut with an ellipsis where it is long, and the count `{n} sessions`,
-with the whole value on hover. The groups stand in alphabetical order of that segment, ignoring case, two groups that
-share a segment in the order of their whole values, and the sessions that report no project or no repository stand last
-under "No project" or "No repository". Inside a group the rows keep the Sort control's order. A group none of whose rows
-pass the filters is not drawn, and a group's row opens nothing and does not fold.
+table that reads the last segment of that value, or the whole value at a root such as `/` or `C:\`, cut with an ellipsis
+where it is long, and the count `{n} sessions`, with the whole value on hover. The groups stand in alphabetical order of
+what that row reads, ignoring case, two groups that read alike in the order of their whole values, and the sessions that
+report no project or no repository stand last under "No project" or "No repository". Inside a group the rows keep the
+Sort control's order. A group none of whose rows pass the filters is not drawn, and a group's row opens nothing and does
+not fold.
 
 The Session cell leads with the session's label, which is the custom title its companion reports, else the folder name
 of its project, else its id. A label that is not the id stands over the id, each cut with an ellipsis, and the hover
