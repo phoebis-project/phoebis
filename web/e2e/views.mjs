@@ -13303,9 +13303,9 @@ async function agentLines(theme, width) {
     // is not the id, else the label, which is then the id.
     const namesOf = (grid) =>
       new Map(
-        [...(grid.closest('tr.srow__detail')?.querySelectorAll('table.agents-table > tbody > tr > td.agent-cell') ?? [])].map((td) => {
-          const label = td.querySelector('.agent-cell__label')?.textContent?.trim() ?? '';
-          return [td.querySelector('.sub')?.textContent?.trim() ?? label, label];
+        [...(grid.closest('tr.srow__detail')?.querySelectorAll('table.agents-table > tbody > tr > td > .agent-cell__label') ?? [])].map((span) => {
+          const label = span.textContent?.trim() ?? '';
+          return [span.parentElement?.querySelector('.sub')?.textContent?.trim() ?? label, label];
         }),
       );
     const grids = [...document.querySelectorAll('.agents')].map((grid) => {

@@ -1498,7 +1498,7 @@ function AgentRow({
   const label = agentLabel(agentId, line?.facts ?? null);
   return (
     <tr>
-      <td className="agent-cell" title={joinPresent([line?.facts?.name, line?.facts?.description, agentId, title], '\n')}>
+      <td title={joinPresent([line?.facts?.name, line?.facts?.description, agentId, title], '\n')}>
         <span className={label === null ? 'mono agent-cell__label ellipsis' : 'agent-cell__label ellipsis'}>
           {hasTraffic ? <Link to={requestsHref(session, linked)}>{label ?? agentId}</Link> : (label ?? agentId)}
         </span>
