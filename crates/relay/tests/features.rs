@@ -2761,12 +2761,19 @@ async fn a_read_past_a_keys_bound_drops_its_oldest_token() {
     let h = features_harness(&up, both_features_at_a()).await;
     let listener = Arc::new(feature_listener(&h).await);
     // The first read stores the oldest token and the last read the newest. The reads between them run side by side,
-    // since one by one they take a minute.
+    // since one by one they take a minute, and 64 at a time, so that the listener's accept queue of 129 never fills.
+    // The kernel ignores the last ACK of a handshake that meets a full queue and resets the client if it lets the
+    // half-open request go before the queue has room.
     read_page(&listener).await;
+    let slots = Arc::new(tokio::sync::Semaphore::new(64));
     let between: Vec<_> = (0..1_023)
         .map(|_| {
             let listener = Arc::clone(&listener);
-            tokio::spawn(async move { read_page(&listener).await })
+            let slots = Arc::clone(&slots);
+            tokio::spawn(async move {
+                let _slot = slots.acquire().await.unwrap();
+                read_page(&listener).await
+            })
         })
         .collect();
     for read in between {
