@@ -55,8 +55,8 @@ const SESSION_COLUMNS = [
 ] as const;
 type SessionColumnId = (typeof SESSION_COLUMNS)[number]['id'];
 // The default set fits the card at 1280 by 800 without these: the Status cell carries the presence, the expanded row
-// carries the pin's figures, the key, the probes, the project and the repository, the label leads with the project's
-// folder, and the Columns control brings each back.
+// carries the pin's figures, the key, the probes, the project and the repository, the label reads the project's folder
+// where no title stands, and the Columns control brings each back.
 const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['companion', 'context', 'created', 'effort', 'key', 'lastRequest', 'nextProbe', 'project', 'repository', 'runway'];
 
 /** The short form of a path or of a `host/path`: its last segment, or the whole value where it has none. */
@@ -1019,12 +1019,12 @@ function SessionRows({
           <td className="col-fit" {...timeCell(session.keepalive.nextProbeAt, now, pendingProbe ? 'pending' : 'not scheduled')} />
         )}
         {visible.has('project') && (
-          <td className="col-fit" title={folder === null ? undefined : joinPresent([facts.project, facts.cwd === facts.project ? null : facts.cwd], '\n')}>
+          <td className="col-fit" title={joinPresent([facts.project, facts.cwd === facts.project ? null : facts.cwd], '\n') || undefined}>
             {folder === null ? <span className="muted">-</span> : <span className="srow__place ellipsis">{shortPlace(folder)}</span>}
           </td>
         )}
         {visible.has('repository') && (
-          <td className="col-fit" title={place === null ? undefined : joinPresent([facts.repository, facts.branch, facts.repositoryRoot], '\n')}>
+          <td className="col-fit" title={joinPresent([facts.repository, facts.branch, facts.repositoryRoot], '\n') || undefined}>
             {place === null ? <span className="muted">-</span> : <span className="srow__place ellipsis">{shortPlace(place)}</span>}
             {facts.branch !== null && <span className="sub srow__place ellipsis">{facts.branch}</span>}
           </td>

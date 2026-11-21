@@ -1484,12 +1484,13 @@ Context, Created, Effort, Key, Last request, Next probe, Project, Repository and
 reads the folder name of the session's project, or of its working directory where the companion reports a working
 directory and no project, with the whole path and a working directory that differs on hover. Repository reads the last
 segment of the repository, or of the repository's root where it has no remote, with the branch under it and the whole
-`host/path`, the branch and the root on hover. Each reads a dash on a session whose companion reports neither. The rows
-follow the sort control: by the session's creation time, its first request, by its last activity, its newest request
-that is neither a keepalive probe nor a token count, or its last use where the ledger holds no such request yet, by the
-list dollars of its requests, which add across units, or by its requests, newest or largest first by default, ties by
-session id and a row without the value last, and the five-second re-read keeps a row's place under Created. Session
-takes the card's free width and keeps at least 74 px, and a set of columns wider than the card scrolls inside it.
+`host/path`, the branch and the root on hover. Both columns cut a name or a branch past 24 characters with an ellipsis,
+and each reads a dash on a session whose companion reports neither. The rows follow the sort control: by the session's
+creation time, its first request, by its last activity, its newest request that is neither a keepalive probe nor a token
+count, or its last use where the ledger holds no such request yet, by the list dollars of its requests, which add across
+units, or by its requests, newest or largest first by default, ties by session id and a row without the value last, and
+the five-second re-read keeps a row's place under Created. Session takes the card's free width and keeps at least 74 px,
+and a set of columns wider than the card scrolls inside it.
 
 The Session cell leads with the session's label, which is the custom title its companion reports, else the folder name
 of its project, else its id. A label that is not the id stands over the id, each cut with an ellipsis, and the hover

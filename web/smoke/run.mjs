@@ -28241,7 +28241,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     };
     const off = Object.keys(want).filter((k) => JSON.stringify(read[k]) !== JSON.stringify(want[k]));
     results.push({
-      name: "/sessions an open row's Session and Routing facts read its first request, key and pool, client, fork, placements and Companion chip, then its account, pin, shed mark, move, runway, speed and cycle with the routing log's link",
+      name: "/sessions an open row's Session and Routing facts read its first request, key and pool, client, project, repository and branch, fork, placements and Companion chip, then its account, pin, shed mark, move, runway, speed and cycle with the routing log's link",
       ok: absent.length === 0 && off.length === 0,
       missing: [`absent ${absent.join(',')}`, ...off.flatMap((k) => [`${k} ${JSON.stringify(read[k])}`, `want ${JSON.stringify(want[k])}`])],
     });
