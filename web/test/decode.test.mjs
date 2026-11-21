@@ -749,9 +749,10 @@ test('a session reads its placements, its first request, its last turn and its l
 });
 
 test("decodeSession reads the facts a companion reported and its agents' facts", () => {
-  const row = d.decodeSession(fixture('sessions').sessions.find((s) => s.session_id === 's1'));
-  assert.equal(row.facts.title, 'Checkout retry rework');
-  assert.equal(row.facts.repositoryRoot, '/home/dev/work/storefront');
+  const wire = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  // The fixture's root is its project's path, so the root moves off it and a read that crosses the two fails.
+  const row = d.decodeSession({ ...wire, facts: { ...wire.facts, repository_root: '/home/dev/work' } });
+  assert.deepEqual(row.facts, { branch: 'fix/checkout-retry', cwd: '/home/dev/work/storefront/api', project: '/home/dev/work/storefront', repository: 'git.example/acme/storefront', repositoryRoot: '/home/dev/work', title: 'Checkout retry rework' });
   assert.deepEqual(row.agentFacts.find((a) => a.agentId === 'worker-1'), { agentId: 'worker-1', agentType: 'code-reviewer', description: 'Review the retry loop', name: 'reviewer' });
 });
 
