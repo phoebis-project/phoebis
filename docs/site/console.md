@@ -1504,10 +1504,10 @@ under their project's path. Grouped by Repository, they stand under the reposito
 where it has no remote, so a checkout and its linked working trees share a group. Each group opens with a row across the
 table that reads the last segment of that value, or the whole value at a root such as `/` or `C:\`, cut with an ellipsis
 where it is long, and the count `{n} sessions`, with the whole value on hover. The groups stand in alphabetical order of
-what that row reads, ignoring case, two groups that read alike in the order of their whole values, and the sessions that
-report no project or no repository stand last under "No project" or "No repository". Inside a group the rows keep the
-Sort control's order. A group none of whose rows pass the filters is not drawn, and a group's row opens nothing and does
-not fold.
+that segment or whole value, ignoring case, two groups that share it in the order of their whole values, and the
+sessions that report no project or no repository stand last under "No project" or "No repository". Inside a group the
+rows keep the Sort control's order. A group none of whose rows pass the filters is not drawn, and a group's row opens
+nothing and does not fold.
 
 The Session cell leads with the session's label, which is the custom title its companion reports, else the folder name
 of its project, else its id. A label that is not the id stands over the id, each cut with an ellipsis, and the hover
