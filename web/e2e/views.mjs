@@ -7701,7 +7701,8 @@ const BAR_CHIPS = {
 /**
  * The address `barRow` reads a row on with a sort key picked, and the words the picks give the Sort button and the
  * count: the Requests row under the Output tokens key, its Sort button the longer, and the Sessions row under Cost,
- * its shortest Sort label, with a search that keeps one row, a short count.
+ * its shortest Sort label, with a search that keeps one row, a short count. The count is the mock story's, so a pass
+ * against a running router reads the Sort button alone.
  */
 const BAR_SORT = {
   '/requests': { count: null, search: '?sort=output', sort: 'Sort: Output tokens' },
@@ -7732,7 +7733,8 @@ const MIDNIGHT = (origin) => {
  * top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the values in --ink, one
  * line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's chips, on a ranged
  * view with a span across midnight, on Requests under "Sort: Output tokens" and on Sessions under "Sort: Cost" with a
- * search that keeps one row, and the row against the first card's head. Under the mock's story the Requests row at 1280 by 800 holds two lines in every case, since a hidden
+ * search that keeps one row, and the row against the first card's head. Under the mock's story the Requests row at 1280
+ * by 800 holds two lines in every case, since a hidden
  * sizer with the widest count of a freshly read page holds the count's slot at that width whatever the count
  * reads: the slots take 1283 px in the 992 px row and the edge wraps alone onto the second line, the row 72 px
  * and the bar 72 at rest, across midnight and under the sort and 106 with its chips. At 1440 by 900 it holds
@@ -7841,8 +7843,8 @@ async function barRow(theme, view) {
         // Under the mock the Requests bar's slots outrun the 1280 px content column whatever the count reads, since a
         // hidden sizer with the widest count of a freshly read page holds the count's slot at that width, so the edge
         // wraps to a second line there. At 1440 px the Custom pill's span across midnight takes them past the row too.
-        // The Sessions edge wraps at 1280 px in every case too, since a hidden sizer with three digits in each figure of
-        // its count holds the count's slot at that width whatever the count and the Sort button read.
+        // The Sessions edge wraps at 1280 px in every case too, since a hidden sizer with three digits in each figure
+        // of its count holds the count's slot at that width whatever the count and the Sort button read.
         // Against another story the line count follows the slots the row measured.
         const lines = mock ? (((view === '/requests' || view === '/sessions') && width === 1280) || (view === '/requests' && label === 'with a span across midnight') ? 2 : 1) : got !== null && got.width > got.row.client ? 2 : 1;
         measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
@@ -7852,8 +7854,10 @@ async function barRow(theme, view) {
           const { count, sort } = BAR_SORT[view];
           const sortText = (await page.locator('.filter-bar button[aria-label="Sort"]').textContent())?.trim() ?? null;
           if (sortText !== sort) say(`${width} by ${height} ${label}: the Sort button reads ${JSON.stringify(sortText)}, not ${JSON.stringify(sort)}`);
-          const countText = count === null ? null : ((await page.locator('.filter-bar .filter-bar__count').textContent())?.trim() ?? null);
-          if (countText !== count) say(`${width} by ${height} ${label}: the count reads ${JSON.stringify(countText)}, not ${JSON.stringify(count)}`);
+          if (mock && count !== null) {
+            const countText = (await page.locator('.filter-bar .filter-bar__count').textContent())?.trim() ?? null;
+            if (countText !== count) say(`${width} by ${height} ${label}: the count reads ${JSON.stringify(countText)}, not ${JSON.stringify(count)}`);
+          }
         }
         if (chipped) {
           await cutReaders(theme, `${view} at ${width} by ${height} ${label}`);

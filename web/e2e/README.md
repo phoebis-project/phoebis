@@ -289,15 +289,21 @@ cache miss reason, effort and request class chips (each against the turn origin 
 them), the Cost split's rings under native (each center figure inside its ring, the billed ring alone in the mock pass,
 whose range prices its plan rows nothing), the native Cost by table (its width recorded, every column inside its wrap at
 1280 by 800), the filter bar of every list view at 1280 by 800 and 1440 by 900, at rest, with the view's chips, on a
-ranged view with a span across midnight and on Requests under "Sort: Output tokens" (the row 32 px on one line with
+ranged view with a span across midnight, on Requests under "Sort: Output tokens" and on Sessions under "Sort: Cost" with
+a search that keeps one row (the row 32 px on one line with
 every control 32 px at one top and a segmented's pills 28 px, the bar 32 px at rest and 66 px with a chip line, 49 and
 83 px as the Analytics sticky bar, the Requests row under the mock on two lines at 1280 by 800 in every case,
 since a hidden sizer with the widest count of a freshly read page holds the count's slot at that width
 whatever the count reads (the slots 1283 px in the 992 px row, so the edge wraps alone onto the second line,
 the row 72 px, the bar 72 px at rest, across midnight and under the sort and 106 px with its chips), and at
 1440 by 900 on one line at rest, with its chips and under the sort (the slots 1152 px in the 1152 px row) and
-on two across midnight (the Custom pill's span taking the slots to 1443 px in the 1152 px row, the row and
-the bar 72 px), under another story on two lines where its slots run past the row and on one line otherwise, each
+on two across midnight (the Custom pill's span taking the slots to 1443 px in the 1152 px row, the row and the bar 72
+px), the Sessions row under the mock on two lines at 1280 by 800 in every case too, since a hidden sizer with three
+digits in each figure of its count holds the count's slot at that width whatever the count and the Sort button read (the
+slots 1278 px in the 992 px row, so the edge wraps alone onto the second line, the row and the bar 72 px at rest and
+under the sort), and at 1440 by 900 on one line at rest and under the sort (the slots 1152 px in the 1152 px row), the
+Sort button reading its pick under the sort and, in the mock pass, the Sessions count reading `1 session · 2 agents`
+there, under another story on two lines where its slots run past the row and on one line otherwise, each
 chip 26 px with its word in `--ink-2` and its values in `--ink`, the chip line on one line, the first card's head below
 the bar, on a card view the next element and the tiles below it, on Analytics the Group by select against Add filter,
 and on the routing log and Analytics the width of the row's slots and gaps at rest under the view's bound, and at 950 by
@@ -414,7 +420,11 @@ log's open panel on their parent's tone, the open row itself on `--surface-3`, i
 Agents table opened under a plain and under a striped session row (its first four rows showing the table's own
 `--surface`, then `--stripe`, `--surface` and `--stripe` behind every cell, its eleven heads closing on the menu's, and
 a type with a hyphen breaking after it in the table's narrowest layout), a striped Requests row on `--surface-2` under
-the pointer and on `--accent-soft` once selected on every cell, and the pool dialog's form tables plain), the scroll
+the pointer and on `--accent-soft` once selected on every cell, the grouped Sessions table under `?by=repository` (its
+header rows out of the count and plain, its first four session rows plain, `--stripe`, plain and `--stripe`, its first
+row's detail plain once opened, each group's name at the left of a session row's chevron, the card's 12 px edge, and
+every value the grouped view cuts, a group's name among them, cut with the ellipsis, recorded as skipped in the router
+pass where the seed draws fewer than four session rows), and the pool dialog's form tables plain), the scroll
 lock behind a modal dialog (in the mock pass, on the Pools page in a browser that shows scrollbars: a wheel over the
 page moves it, a wheel over the open dialog's backdrop leaves the page's scroll and its content box where they stood,
 and the close returns the page to the scroll it had), the cost reference, its headline words (mock pass, at 1280 by 800:
@@ -430,15 +440,19 @@ wrap's widths recorded, and after a load that draws the defaults again, at 375 b
 Session at its 74 px floor and the page as wide as the window) and its columns (each fit column as wide as its content,
 the Model and Cost cells' badges wrapping under their figure and the Account cell's chips under the account's name, the
 Session column the fill), the session id's width, the session row menu, the agent lines of the Cache warming details
-(each opened on every row Expand all opens, at 1280 by 800 and 1440 by 900: the head's, main's and the longest subagent
-id's cells on one left edge per column within 1 px on the companion session that holds that id, seven columns closing on
-State, every id whole on one line, each state badge inside its grid's scroll width at 1280 px and inside its visible box
+(each opened on every row Expand all opens, at 1280 by 800 and 1440 by 900: the head's, main's and the widest agent
+label's cells on one left edge per column within 1 px on the session whose grid holds that label, seven columns closing
+on State, every Agent cell reading on one line the label the Agents table of its row gives that agent, with the agent's
+id on its title, the widest label as wide as the Agent track at its shown width, a cut label counted at its bound, each
+state badge inside its grid's scroll width at 1280 px and inside its visible box
 at 1440 px, where no grid scrolls, the widest grid's scroll and client widths recorded, the expanded table inside its
 wrap at both widths, the wrap's scroll and client widths recorded, and the first text line of the Model, Requests and
 Last used cells of the first row whose Status reads unreported on its session id's line, its top and its height), the
 Agents tables (on every row Expand all opens at 1280 by 800, each earlier agents line opened: each table inside its
 detail panel's client width with its eleven heads closing on the menu's, its head cells in the type size, weight and ink
-of the session table's, the table whose narrowest layout is widest recorded with that width), the agent menu (mock pass,
+of the session table's, the table whose narrowest layout is widest recorded with that width, and every value the
+expanded view cuts, the Agent labels of its tables and of its agent lines among them, cut with the ellipsis), the agent
+menu (mock pass,
 at 1280 by 800 on the open row of a session whose Agents table lists main alone: the open list's last item takes the
 pointer at its center, so the table's wrap clips none of the list), the open row's facts (the written session's row in
 the mock pass and the first row in the router's: the Session and Routing grids on one row of tops at 1280 by 800, and
@@ -446,8 +460,8 @@ one above the other on one left edge at 599 by 800), the open row at a phone's 3
 view: its panel as wide as the session table's wrap and at the wrap's left edge before and after the wrap scrolls 200
 px, the Session facts above the Routing facts, and the Agents table scrolling in a wrap of its own under a sideways
 wheel that leaves the session table's wrap where it stood), the Sessions bar's sort control and its order (on loads of
-its own that end on the bare view: the Sort button in the height, top edge, type size and weight of the Columns control
-beside it, reading "Sort: Created" on the bare address and "Sort: Last activity" under `?sort=activity`, the first five
+its own that end on the bare view: the Sort button in the height, top edge, type size and weight of the bar's Columns
+control, reading "Sort: Created" on the bare address and "Sort: Last activity" under `?sort=activity`, the first five
 rows' session ids recorded under each), the Sessions fold line (on a load of its own under `?model=claude-sonnet-5` that
 ends on the bare view: every row Expand all opens listing the lines on that model alone, a row whose other agents the
 filter hides reading the fold line's count, its toggle in the type size, weight and ink of the Cache warming line's, and
