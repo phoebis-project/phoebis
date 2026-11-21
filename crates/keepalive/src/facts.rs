@@ -116,7 +116,7 @@ impl AgentFacts {
     }
 
     /// No member stands, so the view lists no entry for the agent.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.0.agent_type.is_none() && self.0.description.is_none() && self.0.name.is_none()
     }
 }
