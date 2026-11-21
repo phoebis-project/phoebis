@@ -334,9 +334,13 @@ const pinModel = (model: string): string => model.toLowerCase().replace(/\[1m\]$
 export const lineFigures = (s: Pick<Session, 'agentContexts'>, agentId: string, model: string): AgentContext | null =>
   s.agentContexts.find((c) => c.agentId === agentId && pinModel(c.model) === pinModel(model)) ?? null;
 
-/** The last segment of a path behind its trailing separators, `/` and `\` alike. Null where the path has none. */
+/**
+ * The last segment of a path behind its trailing separators, `/` and `\` alike. Null where the path has none, a drive
+ * root such as `C:\` among them, which is the Windows form of `/`.
+ */
 function baseName(path: string): string | null {
   const trimmed = path.replace(/[/\\]+$/, '');
+  if (/^[A-Za-z]:$/.test(trimmed)) return null;
   const segment = trimmed.slice(Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) + 1);
   return segment === '' ? null : segment;
 }

@@ -259,6 +259,7 @@ test("sessionLabel reads the title, else the project's base name, else null", ()
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: 'C:\\work\\app' }, sessionId: 'b2c4' }), 'app', 'a Windows path');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: 'C:\\work\\app\\' }, sessionId: 'b2c4' }), 'app', 'a Windows path with a trailing separator');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: '/' }, sessionId: 'b2c4' }), null, 'a root has no segment, so the id stands');
+  assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: 'C:\\' }, sessionId: 'b2c4' }), null, 'a drive root has no segment either');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, title: 'b2c4' }, sessionId: 'b2c4' }), null, 'a title that is the id');
 });
 
