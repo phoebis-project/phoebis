@@ -2195,6 +2195,25 @@ export interface AgentRequests {
   spend: SessionSpend;
 }
 
+/** What a session's companion reports of it, each member null where it reports none. */
+export interface SessionFacts {
+  branch: string | null;
+  cwd: string | null;
+  project: string | null;
+  /** The origin remote as `host/path`. */
+  repository: string | null;
+  repositoryRoot: string | null;
+  title: string | null;
+}
+
+/** What a session's companion reports of one agent. */
+export interface SessionAgentFacts {
+  agentId: string;
+  agentType: string | null;
+  description: string | null;
+  name: string | null;
+}
+
 /**
  * On a row with no pin, `burnAt`, `moveCost` and `moveSize` read null, and a reader takes a null `moveCost` as 0. The
  * row's `moveSize` is the rewrite at the pin's destination plus the dropped thinking at the output's weight.
@@ -2203,6 +2222,8 @@ export interface Session extends BurnFigures, MoveFigures {
   accountId: string | null;
   /** One entry per conversation pin that draws a line, main's among them, and empty where none does. */
   agentContexts: AgentContext[];
+  /** One entry per agent whose companion reported a fact, in agent id order. Empty where none did. */
+  agentFacts: SessionAgentFacts[];
   /** The pin's own agent: `main`, or a subagent's id, and `null` for a session with no pin. */
   agentId: string | null;
   /** The session's requests per agent, main's among them, each with its type, its newest request's account and
@@ -2226,6 +2247,7 @@ export interface Session extends BurnFigures, MoveFigures {
   /** The factor of the slow-down entry in force on the pin's account, null on a row with no pin and where no entry is
    *  in force. */
   factor: number | null;
+  facts: SessionFacts;
   /** Whether the display pin's lane is the fast lane, null on a row with no pin. */
   fast: boolean | null;
   /** The session's first request under its key that is no probe, refused ones included, null where the ledger holds

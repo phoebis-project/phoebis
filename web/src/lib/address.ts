@@ -607,7 +607,8 @@ export const SESSIONS_CODEC = codecOf<SessionsAddress>({
   pool: list('pool'),
   slowed: { kind: 'flag', name: 'slowed' },
   account: list('account'),
-  agentType: list('agent_type'),
+  // A type the companion reports is free text and can hold a comma, which a comma-joined list would split.
+  agentType: { kind: 'patterns', name: 'agent_type' },
   cache: list('cache'),
   effort: list('effort'),
   model: list('model'),

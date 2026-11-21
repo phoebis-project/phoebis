@@ -185,6 +185,8 @@ test("an agent line reads the route's entry for its agent on its recipe's model,
 
 /** A spend part with no request in it. */
 const NO_SPEND = { billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 };
+/** A session that reports no fact, which a case spreads under the one member it sets. */
+const NO_FACTS = { branch: null, cwd: null, project: null, repository: null, repositoryRoot: null, title: null };
 /** An agent's ledger entry as the decoder answers it, with no spend unless the members hand one. */
 const ledgerEntry = (agentId, model, lastRequestAt, members = {}) => ({ accountId: 'business', agentId, agentType: null, firstRequestAt: null, lastRequestAt: iso(lastRequestAt), model, spend: { ...NO_SPEND, probes: NO_SPEND }, ...members });
 
@@ -200,7 +202,7 @@ test("sessionLines reads the recipes first with their pins, then every pin no re
   ];
   // Every recipe runs on the helper's model, so 7b2e's Haiku pin is one no recipe claims, and 4f0c's release left none.
   const recipes = [recipe('main', 'busy', at), recipe('7b2e', 'idle', at), { ...recipe('4f0c', 'released', at), cause: 'agent_released' }];
-  const lines = d.sessionLines({ agentContexts: entries, agentId: 'main', agentRequests: [], lifecycle: 'busy', model: 'claude-sonnet-5' }, recipes);
+  const lines = d.sessionLines({ agentContexts: entries, agentFacts: [], agentId: 'main', agentRequests: [], lifecycle: 'busy', model: 'claude-sonnet-5' }, recipes);
   assert.deepEqual(
     lines.map((l) => [l.agentId, l.model, l.recipe?.agentId ?? null, l.pin?.lastInputTokens ?? null, l.lifecycle]),
     [
@@ -213,28 +215,56 @@ test("sessionLines reads the recipes first with their pins, then every pin no re
   );
   assert.ok(lines[0].recipe === recipes[0] && lines[0].pin === entries[0] && lines[3].pin === entries[1], 'each line carries the recipe and the entry it was handed');
   assert.deepEqual(
-    d.sessionLines({ agentContexts: [], agentId: null, agentRequests: [], lifecycle: 'registered', model: null }, []),
-    [{ agentId: 'main', agentType: null, firstRequestAt: null, lifecycle: 'registered', model: null, pin: null, recipe: null }],
+    d.sessionLines({ agentContexts: [], agentFacts: [], agentId: null, agentRequests: [], lifecycle: 'registered', model: null }, []),
+    [{ agentId: 'main', agentType: null, facts: null, firstRequestAt: null, lifecycle: 'registered', model: null, pin: null, recipe: null }],
     "a session with neither draws main's line from the row",
   );
 });
 
-test("sessionLines reads each line's type and first request from its own agent's ledger entry, and main's model off the ledger where the row's pin is another agent's", () => {
-  // Main sent auxiliary calls alone, so the row reads d41c's pin and d41c's model, which are not main's.
+test("sessionLines reads each line's type from its companion's report, else from its own agent's ledger entry, its first request from that entry, and main's model off the ledger where the row's pin is another agent's", () => {
+  // Main sent auxiliary calls alone, so the row reads d41c's pin and d41c's model, which are not main's. The companion
+  // reports a type for e52f and one for main, and none for d41c.
   const row = {
-    agentContexts: [{ ...pinEntry('d41c', 'claude-sonnet-4-5', 23_400), lifecycle: 'busy' }],
+    agentContexts: [
+      { ...pinEntry('d41c', 'claude-sonnet-4-5', 23_400), lifecycle: 'busy' },
+      { ...pinEntry('e52f', 'claude-sonnet-4-5', 11_200), lifecycle: 'idle' },
+    ],
+    agentFacts: [
+      { agentId: 'e52f', agentType: 'code-reviewer', description: null, name: null },
+      { agentId: 'main', agentType: 'orchestrator', description: null, name: 'lead' },
+    ],
     agentId: 'd41c',
-    agentRequests: [ledgerEntry('main', 'claude-haiku-4-5', ms(14, 0), { firstRequestAt: iso(ms(13, 0)) }), ledgerEntry('d41c', 'claude-sonnet-4-5', ms(14, 10), { agentType: 'Explore', firstRequestAt: iso(ms(13, 30)) })],
+    agentRequests: [
+      ledgerEntry('main', 'claude-haiku-4-5', ms(14, 0), { firstRequestAt: iso(ms(13, 0)) }),
+      ledgerEntry('d41c', 'claude-sonnet-4-5', ms(14, 10), { agentType: 'Explore', firstRequestAt: iso(ms(13, 30)) }),
+      ledgerEntry('e52f', 'claude-sonnet-4-5', ms(14, 5), { agentType: 'custom', firstRequestAt: iso(ms(13, 45)) }),
+    ],
     lifecycle: 'busy',
     model: 'claude-sonnet-4-5',
   };
+  const lines = d.sessionLines(row, []);
   assert.deepEqual(
-    d.sessionLines(row, []).map((l) => [l.agentId, l.model, l.agentType, l.firstRequestAt, l.lifecycle]),
+    lines.map((l) => [l.agentId, l.model, l.agentType, l.firstRequestAt, l.lifecycle]),
     [
       ['main', 'claude-haiku-4-5', null, iso(ms(13, 0)), 'busy'],
       ['d41c', 'claude-sonnet-4-5', 'Explore', iso(ms(13, 30)), 'busy'],
+      ['e52f', 'claude-sonnet-4-5', 'code-reviewer', iso(ms(13, 45)), 'idle'],
     ],
   );
+  assert.equal(lines[0].facts, null, "main's line reads no fact its companion reported");
+});
+
+test("sessionLabel reads the title, else the project's base name, else the id", () => {
+  assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: '/home/u/app/' }, sessionId: 'b2c4' }), 'app', 'a trailing separator');
+  assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: 'C:\\work\\app' }, sessionId: 'b2c4' }), 'app', 'a Windows path');
+  assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: '/' }, sessionId: 'b2c4' }), 'b2c4', 'a root has no segment, so the id stands');
+});
+
+test('agentLabel reads main, else the name, else the description, else the id', () => {
+  assert.equal(d.agentLabel('7b2e', { description: 'Review the retry loop', name: null }), 'Review the retry loop', 'no name');
+  assert.equal(d.agentLabel('7b2e', null), '7b2e', 'no report');
+  assert.equal(d.agentLabel('7b2e', { description: null, name: null }), '7b2e', 'a report with neither');
+  assert.equal(d.agentLabel('main', { description: 'Lead', name: 'lead' }), 'main', 'main whatever its entry holds');
 });
 
 test("statusOf reads finished before the lifecycle word, unreported where no word stands, and the engine's unknown as unknown", () => {

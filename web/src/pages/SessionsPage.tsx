@@ -22,7 +22,7 @@ import { tierOrder } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
-import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, requestCount, requestsSpan, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, agentLabel, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, requestCount, requestsSpan, sessionLabel, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
@@ -648,7 +648,7 @@ function AccountLink({ account, id }: { account: Account | null; id: string }) {
  * The row's account: a link to its page with the kind on its title, described to a reader that never hovers, the
  * slow-down chip on a slowed pin, the shed mark, and the agents pinned on another account. A dash with no account.
  */
-function RowAccount({ accent, account, others, session, speed }: { accent: boolean; account: Account | null; others: { accountId: string; agentId: string; model: string }[]; session: Session; speed: ReturnType<typeof memberSpeed> }) {
+function RowAccount({ accent, account, others, session, speed }: { accent: boolean; account: Account | null; others: { accountId: string; label: string; model: string }[]; session: Session; speed: ReturnType<typeof memberSpeed> }) {
   if (session.accountId === null) return <span className="muted">-</span>;
   return (
     <span className="srow__pin">
@@ -808,9 +808,10 @@ function SessionRows({
   // draws on another model or account, recipe or not, whatever the Agents filters match, and its hover reads them in
   // the order the expanded row draws them. It takes the accent where its column's filter stands and one of its lines
   // matches the filters, a line `shownLines` holds.
+  const reported = new Map(session.agentFacts.map((entry) => [entry.agentId, entry]));
   const placed = drawnLines.flatMap((l) => {
     const accountId = lineAccountOf(l);
-    return accountId !== null && l.model !== null ? [{ accountId, agentId: l.agentId, matched: shownLines.includes(l), model: l.model }] : [];
+    return accountId !== null && l.model !== null ? [{ accountId, label: agentLabel(l.agentId, reported.get(l.agentId) ?? null), matched: shownLines.includes(l), model: l.model }] : [];
   });
   const otherModels = placed.filter((l) => l.model !== session.model);
   const otherAccounts = placed.filter((l) => l.accountId !== session.accountId);
@@ -831,6 +832,7 @@ function SessionRows({
   const baseAccountId = baseRow !== null && baseRow.session.pinned ? baseRow.session.accountId : null;
   // The row's figures are main's conversation pin's, so a row with no pin reads a dash.
   const context = contextCell(session.pinned ? session.lastInputTokens : null);
+  const label = sessionLabel(session);
   const client = joinPresent([clientVersion(session.userAgent), session.placements > 1 ? `${session.placements} placements` : null], ' · ');
   const clientTitle = sentences([session.userAgent, session.placements > 1 ? PLACEMENTS_HINT : null]);
   const mainRecipe = row.agents.find((a) => a.agentId === MAIN_AGENT) ?? null;
@@ -878,7 +880,8 @@ function SessionRows({
             <IconChevron size={14} />
           </span>
         </td>
-        <td className="mono col-fill" title={session.sessionId}>
+        <td className="mono col-fill" title={joinPresent([label === session.sessionId ? null : label, session.sessionId], '\n')}>
+          {label !== session.sessionId && <span className="srow__label ellipsis">{label}</span>}
           <span className="srow__id ellipsis">{session.sessionId}</span>
           {(forkBase !== null || client !== '') && (
             <span className="sub srow__client" title={clientTitle === '' ? undefined : clientTitle}>
@@ -1009,11 +1012,12 @@ function SessionRows({
             {runwayWord(session) ?? <span className="muted">-</span>}
           </td>
         )}
-        {/* The actions sit in a menu, a fraction of spelled-out buttons' width, and close the row: the id leads it, so a
-            reader scans ids down the first column, and the actions stay reachable at the row's end at 1280 px. */}
+        {/* The actions sit in a menu, a fraction of spelled-out buttons' width, and close the row: the session's label
+            leads it, so a reader scans the labels down the first column, and the actions stay reachable at the row's
+            end at 1280 px. */}
         <td className="col-fit" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           <Menu
-            label={`Actions for session ${shortId(session.sessionId, SESSION_CHARS)}${session.historical ? ', deleted holder' : ''}`}
+            label={`Actions for session ${label === session.sessionId ? shortId(session.sessionId, SESSION_CHARS) : `${label} (${shortId(session.sessionId, SESSION_CHARS)})`}${session.historical ? ', deleted holder' : ''}`}
             items={[
               ...ledgerItems(session, navigate),
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request and
@@ -1197,6 +1201,7 @@ function SessionRows({
  * joins the Agents table the line controls.
  */
 function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agents: (AgentFigures & { agentId: string })[]; controls: string; cost: CostContext; onToggle: () => void; open: boolean; session: Session }) {
+  const reported = new Map(session.agentFacts.map((entry) => [entry.agentId, entry]));
   const { spend } = figuresOf(agents);
   const reading = spendUnitOf(spend, cost.unit, session.accountId, null);
   const cell = costCellOf(reading.unit, cost.week, cost.scale);
@@ -1218,7 +1223,7 @@ function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agen
       label={plural(agents.length, 'earlier agent')}
       onToggle={onToggle}
       open={open}
-      title={agents.map((a) => a.agentId).join(', ')}
+      title={agents.map((a) => agentLabel(a.agentId, reported.get(a.agentId) ?? null)).join(', ')}
     />
   );
 }
@@ -1316,10 +1321,11 @@ function AgentLine({ line, now, requestsTo }: { line: SessionLine; now: number; 
   const lastRequestAt = lineLastRequestAt(line);
   const cache = pin?.warm ? 'warm' : 'cold';
   const park = a === null ? '' : parkDetail(a, now);
+  const label = agentLabel(line.agentId, line.facts);
   return (
     <div className="agents__row">
-      <span className="mono agents__id" title={line.agentId}>
-        {requestsTo === null ? line.agentId : <Link to={requestsTo}>{line.agentId}</Link>}
+      <span className="mono agents__id ellipsis" title={line.agentId}>
+        {requestsTo === null ? label : <Link to={requestsTo}>{label}</Link>}
       </span>
       {ttlMs === null ? <span className="muted">-</span> : <span className="num">{fmtDuration(ttlMs)}</span>}
       <span {...timeCell(lastRequestAt, now, 'none')} />
@@ -1424,10 +1430,14 @@ function AgentRow({
   const word = line === null ? null : lineWordOf(line);
   const park = word === 'parked' && recipe !== null ? parkDetail(recipe, now) : '';
   const hint = LIFECYCLE_HINT[word ?? 'unreported'];
+  const label = agentLabel(agentId, line?.facts ?? null);
   return (
     <tr>
-      <td className="mono" title={title === '' ? undefined : title}>
-        {hasTraffic ? <Link to={requestsHref(session, linked)}>{agentId}</Link> : agentId}
+      <td className="agent-cell" title={joinPresent([line?.facts?.name ?? null, line?.facts?.description ?? null, agentId, title === '' ? null : title], '\n')}>
+        <span className={label === agentId ? 'mono agent-cell__label ellipsis' : 'agent-cell__label ellipsis'}>
+          {hasTraffic ? <Link to={requestsHref(session, linked)}>{label}</Link> : label}
+        </span>
+        {label !== agentId && <span className="mono sub agent-cell__id">{agentId}</span>}
       </td>
       <td>{type ?? <span className="muted">-</span>}</td>
       <td title={model === null ? undefined : modelTitle(model)}>
@@ -1468,7 +1478,7 @@ function AgentRow({
       </td>
       <td>
         <Menu
-          label={`Actions for agent ${agentId}`}
+          label={`Actions for agent ${label}`}
           items={[
             ...ledgerItems(session, navigate, linked),
             // An hour either side of the agent's last request, read when the item is chosen.
@@ -1484,10 +1494,10 @@ function AgentRow({
  * "+2" beside a row's figure, hovering into `lead` and one line per agent that sits on another model or account, in the
  * accent tone where one of those agents matches the filter standing on its column.
  */
-function OtherPins({ accent, agents, lead }: { accent: boolean; agents: { accountId: string; agentId: string; model: string }[]; lead: string }) {
+function OtherPins({ accent, agents, lead }: { accent: boolean; agents: { accountId: string; label: string; model: string }[]; lead: string }) {
   if (agents.length === 0) return null;
   return (
-    <Badge tone={accent ? 'accent' : 'neutral'} title={`${lead}\n${agents.map((a) => `${a.agentId}: ${a.model} on ${a.accountId}`).join('\n')}`}>
+    <Badge tone={accent ? 'accent' : 'neutral'} title={`${lead}\n${agents.map((a) => `${a.label}: ${a.model} on ${a.accountId}`).join('\n')}`}>
       +{agents.length}
     </Badge>
   );

@@ -1,4 +1,4 @@
-import type { AgentContext, AgentRequests, KeepaliveRecipe, Lifecycle, RecipeCause, Session, SessionSpend, SessionSpendPart } from '@/api/types';
+import type { AgentContext, AgentRequests, KeepaliveRecipe, Lifecycle, RecipeCause, Session, SessionAgentFacts, SessionSpend, SessionSpendPart } from '@/api/types';
 import { ACTIVE_WITHIN, RANGE_PRESETS, type SessionsAddress, type SortDir } from '@/lib/address';
 import { clientVersion } from '@/lib/client';
 import { countOf, groupInto, lookup } from '@/lib/counts';
@@ -334,14 +334,36 @@ const pinModel = (model: string): string => model.toLowerCase().replace(/\[1m\]$
 export const lineFigures = (s: Pick<Session, 'agentContexts'>, agentId: string, model: string): AgentContext | null =>
   s.agentContexts.find((c) => c.agentId === agentId && pinModel(c.model) === pinModel(model)) ?? null;
 
+/** The last segment of a path behind its trailing separators, `/` and `\` alike. Null where the path has none. */
+export function baseName(path: string): string | null {
+  const trimmed = path.replace(/[/\\]+$/, '');
+  const segment = trimmed.slice(Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) + 1);
+  return segment === '' ? null : segment;
+}
+
+/** A session's label: its title, else its project's base name, else its id. */
+export function sessionLabel(session: Pick<Session, 'facts' | 'sessionId'>): string {
+  const { facts } = session;
+  return facts.title ?? (facts.project === null ? null : baseName(facts.project)) ?? session.sessionId;
+}
+
+/** An agent's label: `main` for main, else its name, else its description, else its id. */
+export function agentLabel(agentId: string, facts: Pick<SessionAgentFacts, 'description' | 'name'> | null): string {
+  if (agentId === MAIN_AGENT) return MAIN_AGENT;
+  return facts?.name ?? facts?.description ?? agentId;
+}
+
 /**
  * One drawn line: a recipe with its pin, a recipe without one, a pin without a recipe, or main's drawn from the row
  * where no line names it, with `registered` among its words.
  */
 export interface SessionLine {
   agentId: string;
-  /** The agent's type from its ledger entry, null on an agent without one. */
+  /** The agent's type its companion reports, else its ledger entry's, null where neither names one. Main's line reads
+   *  the ledger's alone. */
   agentType: string | null;
+  /** What the companion reports of the line's agent, null where it reports none. */
+  facts: SessionAgentFacts | null;
   /** The agent's first request from its ledger entry, null on an agent without one. */
   firstRequestAt: string | null;
   /** The pin's word where a pin stands, the engine's record, else the recipe's, and on main's drawn line the row's. */
@@ -360,11 +382,17 @@ export const lineAccountOf = (line: Pick<SessionLine, 'pin' | 'recipe'>): string
  * where no line names main, then the recipes in the order handed, then the pins no recipe claims in the route's order,
  * which `orderLines` sorts into the view's.
  */
-export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentId' | 'agentRequests' | 'lifecycle' | 'model'>, recipes: readonly KeepaliveRecipe[]): SessionLine[] {
+export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentFacts' | 'agentId' | 'agentRequests' | 'lifecycle' | 'model'>, recipes: readonly KeepaliveRecipe[]): SessionLine[] {
   // The route answers one entry per agent, which carries its newest client request's type and model and its first
   // request.
   const newest = new Map(s.agentRequests.map((entry) => [entry.agentId, entry]));
-  const entryOf = (agentId: string) => ({ agentType: newest.get(agentId)?.agentType ?? null, firstRequestAt: newest.get(agentId)?.firstRequestAt ?? null });
+  // Main reads no reported fact: its label is fixed and its type is the ledger's.
+  const reported = new Map(s.agentFacts.filter((entry) => entry.agentId !== MAIN_AGENT).map((entry) => [entry.agentId, entry]));
+  const entryOf = (agentId: string) => ({
+    agentType: reported.get(agentId)?.agentType ?? newest.get(agentId)?.agentType ?? null,
+    facts: reported.get(agentId) ?? null,
+    firstRequestAt: newest.get(agentId)?.firstRequestAt ?? null,
+  });
   const claimed = new Set<AgentContext>();
   const lines: SessionLine[] = recipes.map((recipe) => {
     const pin = lineFigures(s, recipe.agentId, recipe.model);

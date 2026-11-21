@@ -1,4 +1,4 @@
-import type { AgentContext, AgentRequests, BurnFigures, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, Lifecycle, MoveFigures, RecipeCause, RecipeState, RequestLog, RoutingEvent, Session, SessionDay, SessionSpendPart } from '@/api/types';
+import type { AgentContext, AgentRequests, BurnFigures, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, Lifecycle, MoveFigures, RecipeCause, RecipeState, RequestLog, RoutingEvent, Session, SessionAgentFacts, SessionDay, SessionFacts, SessionSpendPart } from '@/api/types';
 import { anchorTier, fundingOf, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { expiredBetweenTurns, servingAttempt } from '@/lib/dimensions';
@@ -92,6 +92,11 @@ const sessionSpec: ({
   compactedAgent?: number;
   companion: CompanionState;
   /**
+   * What the row's companion reports: the session's facts, and its subagents' by their place among the row's agents,
+   * as `compactedAgent` names one. Absent on a row whose companion reports none.
+   */
+  facts?: { agents?: (Omit<SessionAgentFacts, 'agentId'> | null)[]; session: Partial<SessionFacts> };
+  /**
    * The row is finished: the builder writes main's cause `session_ended`, every subagent's `agent_released` and every
    * agent in `released` state.
    */
@@ -132,23 +137,45 @@ const sessionSpec: ({
       sessionId: string;
     }
 ))[] = [
-  // Its second subagent compacted, while its first stays paused on its cold probes.
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', lastUseFromRows: true, subagents: { model: 'claude-sonnet-5', accountId: 'nightly' }, cause: 'awaiting_cache_evidence', compactedAgent: 2, subagentHold: 'repeated_cold_probe' },
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting', cause: 'expired' },
+  // Its second subagent compacted, while its first stays paused on its cold probes. Its title runs past the Session
+  // column at 1280 px and its second subagent's description past the Agent cell, so each label reads cut.
+  {
+    keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', lastUseFromRows: true, subagents: { model: 'claude-sonnet-5', accountId: 'nightly' }, cause: 'awaiting_cache_evidence', compactedAgent: 2, subagentHold: 'repeated_cold_probe',
+    facts: {
+      agents: [null, { agentType: 'code-reviewer', description: 'Review the retry loop', name: 'reviewer' }, { agentType: null, description: 'Trace the export job timeouts across the invoice and payout batch runs', name: null }],
+      session: { branch: 'fix/checkout-retry', cwd: '/home/dev/work/storefront', project: '/home/dev/work/storefront', repository: 'git.example/acme/storefront', repositoryRoot: '/home/dev/work/storefront', title: 'Checkout retry rework for the storefront payment adapters and the order export job' },
+    },
+  },
+  // A worktree of the first row's checkout: one repository and one root, another project.
+  {
+    keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting', cause: 'expired',
+    facts: { session: { branch: 'feature/tax-rules', cwd: '/home/dev/work/storefront-worktrees/tax-rules', project: '/home/dev/work/storefront-worktrees/tax-rules', repository: 'git.example/acme/storefront', repositoryRoot: '/home/dev/work/storefront' } },
+  },
   // Its keepalive probe renewed the pin on secondary and met a 429 there, and secondary cools until 14:55, so the
   // router answers each later probe of main and of its subagent the cooldown, and both wait on the retry ladder.
   { keyId: 'desktop', accountId: 'secondary', model: 'claude-sonnet-4-5', state: 'idle', agents: 2, companion: 'silent', lastUseFromRows: true, cause: 'probe_quota_exhausted', subagentHold: 'probe_quota_exhausted', placedBy: { renewedBy: 'req_c41d0311-200', requestId: 'req_d4e8a7b2-916' } },
   // A parked main agent on a wakeup further away than the pool's horizon, held with its prompt kept. The other parked
-  // session's agent stays retained, parked on a background command with its deadline.
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting', cause: 'horizon' },
-  // A subagent whose park ran past the pool's parked ceiling.
-  { keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' }, cause: 'overage', subagentHold: 'parked_limit' },
+  // session's agent stays retained, parked on a background command with its deadline. Its repository has no remote.
+  {
+    keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting', cause: 'horizon',
+    facts: { session: { branch: 'main', cwd: '/home/dev/work/notes', project: '/home/dev/work/notes', repositoryRoot: '/home/dev/work/notes' } },
+  },
+  // A subagent whose park ran past the pool's parked ceiling. Its companion reports no fact of the subagent and no
+  // branch, and the session works in a folder below its project.
+  {
+    keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' }, cause: 'overage', subagentHold: 'parked_limit',
+    facts: { session: { cwd: '/home/dev/work/billing-service/api', project: '/home/dev/work/billing-service', repository: 'git.example/acme/billing-service', repositoryRoot: '/home/dev/work/billing-service' } },
+  },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting', pinnedBy: { requestId: 'req_da52d141-a5a' } },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95, cause: 'idle_limit' },
   // Its subagents run Haiku 4.5, which the laptop key's list allows beside the main agent's Sonnet 4.5.
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' }, cause: 'unsupported_shape', subagentHold: 'affinity_too_short' },
-  { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting', noEffort: true },
+  // A client whose project read failed while its working directory read answered.
+  {
+    keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting', noEffort: true,
+    facts: { session: { cwd: '/home/dev/work/scratch' } },
+  },
   // Five of its agents are written, so it holds an agent in each lifecycle word, three of them released. Holding its
   // first subagent moves no value a reader sees: the agents drawn after it take their fields from the written rows.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 7, companion: 'reporting', subagentHold: 'probe_pool_exhausted', writtenSubagents: WRITTEN_SUBAGENTS },
@@ -484,6 +511,8 @@ const datedLines = (firstSeen: string | null, session: string, lines: readonly U
 const noRecipe = (): Session['keepalive'] => ({ cause: null, nextProbeAt: null });
 /** A pin no round marked, and a row with no pin. */
 const NO_MARK: Pick<Session, 'mark'> = { mark: null };
+/** A session whose companion reports no fact of it, or that no companion reports. */
+const NO_FACTS: SessionFacts = { branch: null, cwd: null, project: null, repository: null, repositoryRoot: null, title: null };
 /**
  * A pin with no no-return stamp, and a row with no pin. A row whose pin a failover of the story wrote reads that
  * failover's stamp instead (`pinnedBy`).
@@ -601,8 +630,10 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     ...NO_MARK,
     shed: pinWrite?.shed ?? null,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
-    // A row's lines are written once the recipes exist, so every row starts with none.
+    // A row's lines are written once the recipes exist, so every row starts with none, and its agents' facts with them.
     agentContexts: [],
+    agentFacts: [],
+    facts: { ...NO_FACTS, ...spec.facts?.session },
     companion: spec.companion,
     // The companion's last report, as the engine dates one that stopped: a silent one's lapse, the session's end. A
     // fixed row writes its own, so it draws nothing.
@@ -636,11 +667,13 @@ SESSIONS.push({
   ...SESSION_SAMPLE,
   accountId: null,
   agentContexts: [],
+  agentFacts: [],
   burnUsd: null,
   companion: 'reporting',
   companionSince: null,
   effort: null,
   ended: null,
+  facts: NO_FACTS,
   fast: null,
   forkDepth: null,
   forkedFrom: null,
@@ -861,6 +894,18 @@ SESSIONS.forEach((pin, i) => {
       return [pinLine(line, pin.keyId, pin.sessionId, servedBeside(display, line, firstSeen), line.lastUsedAt)];
     }),
   );
+  // The spec names a subagent's facts by its place, so they take the id the recipes drew for that place, and the route
+  // answers them in agent id order.
+  const reported = i < sessionSpec.length ? sessionSpec[i].facts?.agents : undefined;
+  if (reported !== undefined) {
+    const own = RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId);
+    pin.agentFacts = own
+      .flatMap((r, j) => {
+        const facts = reported[j];
+        return facts ? [{ agentId: r.agentId, ...facts }] : [];
+      })
+      .sort((a, b) => byteOrder(a.agentId, b.agentId));
+  }
   pin.warm = pin.pinned ? warmAt(warmUntilOf(pin.lastRefreshAt, pin.cacheTtlMs)) : null;
   // The row's ended mark is its display pin's line's. A row the mod released whole lists no line, and the router holds
   // a released agent's pin as ended.
@@ -893,6 +938,7 @@ const writtenRow = (
     ...SESSION_SAMPLE,
     ...row,
     agentContexts,
+    agentFacts: [],
     burn: line.burn,
     burnAt: line.burnAt,
     burnEquivalent: line.burnEquivalent,
@@ -906,6 +952,7 @@ const writtenRow = (
     effort: line.effort,
     ended: line.ended,
     factor: null,
+    facts: NO_FACTS,
     fast: line.fast,
     forkDepth: null,
     forkedFrom: null,
@@ -943,6 +990,7 @@ const writtenRow = (
 const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGeneration' | 'keyId' | 'lastRequestAt' | 'model' | 'sessionId'>): Session => ({
   ...SESSION_SAMPLE,
   agentContexts: [],
+  agentFacts: [],
   agentId: null,
   burn: null,
   burnAt: null,
@@ -955,6 +1003,7 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   companionSince: null,
   effort: null,
   ended: null,
+  facts: NO_FACTS,
   fast: null,
   forkDepth: null,
   forkedFrom: null,

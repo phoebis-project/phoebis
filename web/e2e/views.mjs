@@ -12132,6 +12132,8 @@ const openRowTarget = () => (mock ? page.locator('.sessions-table > tbody > tr.s
 const CUT_READERS = [
   '.account-mini__sub',
   '.add-filter__value',
+  '.agent-cell__label',
+  '.agents__id',
   '.attention__detail',
   '.catalog__id',
   '.chip--filter .chip__values',
@@ -12145,6 +12147,7 @@ const CUT_READERS = [
   '.routing-log__chip',
   '.routing-log__cut',
   '.srow__id',
+  '.srow__label',
 ];
 
 /**
@@ -13147,15 +13150,16 @@ async function sessionRowMenu(theme) {
 /**
  * The agent lines of the Cache warming details on every row Expand all opens on Sessions, each details opened, read at
  * the width the pass sets (1280 by 800, then 1440 by 900). Each session's `.agents` is one grid of seven tracks whose
- * head and lines are subgrid rows, so on the story's companion session with the longest subagent id the head's, main's
- * and that id's cells share one left edge per column within 1 px, the edges recorded. Every id reads whole on one line
- * (its laid-out width inside its cell, the widest as wide as the Agent track, and no title but the id), and State
- * closes the line's columns. A grid may scroll inside the card at 1280 px, so each line's state badge ends inside
- * its grid's scroll width there and inside its visible box at 1440 px, where no grid scrolls: the widest grid's scroll
- * and client widths are recorded at both. At both widths the expanded table stays inside its wrap, whose scroll and
- * client widths are recorded. A cause badge wraps inside its own State cell, its edges recorded against the table's
- * visible edge. The plain session's collapsed row, the first row whose Status reads unreported, draws the first text
- * line of its Model, Requests and Last used cells on the session id's line, its top and its height.
+ * head and lines are subgrid rows, so on the session whose grid holds the widest agent label the head's, main's and
+ * that label's cells share one left edge per column within 1 px, the edges recorded. Every Agent cell reads its agent's
+ * label on one line with the agent's id on its title, as the Agents table of the same row names that agent, and the
+ * widest is as wide as the Agent track at its shown width, a cut label counted at its bound, while State closes the
+ * line's columns. A grid may scroll inside the card at 1280 px, so each line's state badge ends inside its grid's
+ * scroll width there and inside its visible box at 1440 px, where no grid scrolls: the widest grid's scroll and client
+ * widths are recorded at both. At both widths the expanded table stays inside its wrap, whose scroll and client widths
+ * are recorded. A cause badge wraps inside its own State cell, its edges recorded against the table's visible edge. The
+ * plain session's collapsed row, the first row whose Status reads unreported, draws the first text line of its Model,
+ * Requests and Last used cells on the session id's line, its top and its height.
  */
 async function agentLines(theme, width) {
   const where = width === 1280 ? '' : ` at ${width} px`;
@@ -13206,10 +13210,20 @@ async function agentLines(theme, width) {
     const wrap = document.querySelector('.sessions-table')?.closest('.table-wrap') ?? null;
     const edge = wrap?.getBoundingClientRect().right ?? null;
     const cellsOf = (row) => [...row.children].filter((c) => !c.classList.contains('agents__more'));
+    // Each agent's label by its id, as the Agents table of the same open row draws them: the id line under a label that
+    // is not the id, else the label, which is then the id.
+    const namesOf = (grid) =>
+      new Map(
+        [...(grid.closest('tr.srow__detail')?.querySelectorAll('table.agents-table > tbody > tr > td.agent-cell') ?? [])].map((td) => {
+          const label = td.querySelector('.agent-cell__label')?.textContent?.trim() ?? '';
+          return [td.querySelector('.agent-cell__id')?.textContent?.trim() ?? label, label];
+        }),
+      );
     const grids = [...document.querySelectorAll('.agents')].map((grid) => {
       const box = grid.getBoundingClientRect();
       const left = box.left + grid.clientLeft;
       const head = grid.querySelector('.agents__row--head');
+      const names = namesOf(grid);
       const lines = [...grid.querySelectorAll('.agents__row:not(.agents__row--head)')].map((row) => {
         const id = row.children[0];
         const idRange = document.createRange();
@@ -13220,12 +13234,21 @@ async function agentLines(theme, width) {
         const [badge, cause] = [...(state?.querySelectorAll('.badge') ?? [])].map((b) => b.getBoundingClientRect());
         const stateBox = state?.getBoundingClientRect() ?? null;
         return {
-          agent: id.textContent?.trim() ?? '',
+          agent: id.getAttribute('title') ?? id.textContent?.trim() ?? '',
           cell: stateBox === null ? null : { left: Math.round(stateBox.left), right: Math.round(stateBox.right) },
           edges: cellsOf(row).map((c) => round(c.getBoundingClientRect().left)),
-          id: { cell: round(id.getBoundingClientRect().width), oneLine: oneLine([...idRange.getClientRects()]), text: id.textContent?.trim() ?? '', title: id.getAttribute('title'), width: round(idRange.getBoundingClientRect().width) },
-          // A line that cannot wrap runs past its box rather than widening it, which the box's own edge never shows.
-          overflows: [...cellsOf(row), ...row.querySelectorAll('.agents__more > *')].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.className || el.textContent?.trim().slice(0, 24)),
+          id: {
+            bound: parseFloat(getComputedStyle(id).maxWidth),
+            cell: round(id.getBoundingClientRect().width),
+            named: names.get(id.getAttribute('title') ?? '') ?? null,
+            oneLine: oneLine([...idRange.getClientRects()]),
+            text: id.textContent?.trim() ?? '',
+            title: id.getAttribute('title'),
+            width: round(idRange.getBoundingClientRect().width),
+          },
+          // A line that cannot wrap runs past its box rather than widening it, which the box's own edge never shows. The
+          // Agent cell's label runs past its box by its cut, which the cut readers hold.
+          overflows: [...cellsOf(row).slice(1), ...row.querySelectorAll('.agents__more > *')].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.className || el.textContent?.trim().slice(0, 24)),
           reason: cause && badge ? { left: Math.round(cause.left), lines: Math.round(cause.height / badge.height), right: Math.round(cause.right), text: state.querySelectorAll('.badge')[1].textContent?.trim() } : null,
           stateRight: badge ? round(badge.right) : null,
         };
@@ -13244,8 +13267,10 @@ async function agentLines(theme, width) {
     return { edge: edge === null ? null : Math.round(edge), grids, wrap: wrap === null ? null : { client: wrap.clientWidth, scroll: wrap.scrollWidth } };
   });
   const lines = read.grids.flatMap((g) => g.lines.map((l) => ({ ...l, grid: g })));
-  // The companion session with the longest subagent id, whose Agent track is the widest a line sets.
-  const longest = lines.filter((l) => l.agent !== 'main').reduce((w, l) => (w === null || l.id.width > w.id.width ? l : w), null);
+  // A label wider than its bound ends behind the ellipsis inside it, so it shows the bound's width.
+  const shownOf = (l) => (Number.isNaN(l.id.bound) ? l.id.width : Math.min(l.id.width, l.id.bound));
+  // The line with the widest shown label, a cut label counted at its bound, whose Agent track is the widest a line sets.
+  const longest = lines.filter((l) => l.agent !== 'main').reduce((w, l) => (w === null || shownOf(l) > shownOf(w) ? l : w), null);
   const columns = longest === null ? null : longest.grid;
   const mainLine = columns?.lines.find((l) => l.agent === 'main') ?? null;
   const edges = columns === null ? null : { head: columns.edges, long: longest.edges, main: mainLine?.edges ?? null };
@@ -13257,7 +13282,7 @@ async function agentLines(theme, width) {
       edges,
       grids: read.grids.length,
       head: read.grids[0]?.head ?? [],
-      id: longest === null ? null : { agent: longest.agent, cell: longest.id.cell, width: longest.id.width },
+      id: longest === null ? null : { agent: longest.agent, cell: longest.id.cell, label: longest.id.text, shown: shownOf(longest), width: longest.id.width },
       scroll: widest === null ? null : { client: widest.client, scroll: widest.scroll },
       stateRight: lines.reduce((r, l) => (l.stateRight !== null && (r === null || l.stateRight > r) ? l.stateRight : r), null),
       wrap: read.wrap,
@@ -13270,7 +13295,7 @@ async function agentLines(theme, width) {
   if (read.wrap === null) say('Expand all left no session table to bound');
   else if (read.wrap.scroll > read.wrap.client + 1) say(`the expanded lines widen the session table to ${read.wrap.scroll}px of its ${read.wrap.client}px wrap at ${width} px, so the table scrolls sideways where a grid should scroll inside the card`);
   for (const g of read.grids.filter((x) => x.head.length !== 7 || x.head[x.head.length - 1] !== 'State')) say(`an agent grid's head reads ${JSON.stringify(g.head)}, not seven columns closing on State`);
-  if (mock && (edges === null || edges.main === null)) say("the story's companion session with the longest subagent id draws no main line to read its column edges against");
+  if (mock && (edges === null || edges.main === null)) say(`the session whose grid holds the widest agent label ${longest === null ? '' : `(${JSON.stringify(longest.id.text)} of ${longest.agent}) `}draws no main line to read its column edges against`);
   if (edges !== null && edges.main !== null) {
     const names = columns.head;
     for (let i = 0; i < edges.head.length; i += 1) {
@@ -13283,8 +13308,11 @@ async function agentLines(theme, width) {
     say(`agent ${line.agent}'s state badge ends at ${line.stateRight}px, past its grid's ${width >= 1440 ? 'visible box' : 'scroll width'} at ${width >= 1440 ? line.grid.visibleRight : line.grid.scrollRight}px`);
   }
   for (const line of lines.filter((l) => l.overflows.length > 0)) say(`agent ${line.agent}'s line runs past its cells: ${JSON.stringify(line.overflows)}`);
-  for (const line of lines.filter((l) => (l.id.title !== null && l.id.title !== l.id.text) || l.id.width > l.id.cell + 0.5 || !l.id.oneLine)) say(`agent ${line.agent}'s id is not whole on one line: ${JSON.stringify(line.id)}`);
-  if (longest !== null && Math.abs(longest.id.width - longest.id.cell) > 1) say(`the widest id ${longest.agent} takes ${longest.id.width}px of its ${longest.id.cell}px Agent track, which is not sized to it`);
+  for (const line of lines.filter((l) => l.id.named === null || l.id.named !== l.id.text || !l.id.oneLine)) {
+    const table = line.id.named === null ? 'holds no agent of its title' : `reads the label ${JSON.stringify(line.id.named)}`;
+    say(`agent ${line.agent}'s Agent cell reads ${JSON.stringify(line.id.text)}${line.id.oneLine ? '' : ' on more than one line'}, where the Agents table of its row ${table}`);
+  }
+  if (longest !== null && Math.abs(shownOf(longest) - longest.id.cell) > 1) say(`the widest label ${JSON.stringify(longest.id.text)} of ${longest.agent} shows ${shownOf(longest)}px in its ${longest.id.cell}px Agent track, which is not sized to it`);
   for (const g of read.grids.filter((x) => x.headOver.length > 0)) say(`the agent lines' head runs past its cells: ${JSON.stringify(g.headOver)}`);
   for (const line of reasons.filter((l) => l.reason.left < l.cell.left || l.reason.right > l.cell.right)) {
     say(`agent ${line.agent}'s cause "${line.reason.text}" runs from ${line.reason.left}px to ${line.reason.right}px, outside its State cell's ${line.cell.left}px to ${line.cell.right}px`);
@@ -13347,6 +13375,8 @@ async function agentsTableFits(theme) {
     if (t.heads.length !== 11 || t.heads[10] !== '') say(`the table of ${t.session} reads the heads ${JSON.stringify(t.heads)}, not eleven closing on the menu's`);
   }
   failures.push(...compare(read.head, read.outer, ['fontSize', 'fontWeight', 'color'], `${theme} /sessions agents table: its head against the session table's`));
+  // The bare view's rows are shut, so its cut read meets no Agent cell and no line of a Cache warming grid.
+  await cutReaders(theme, '/sessions with every row expanded');
   for (let i = 0; i < opened; i += 1) await earlier.nth(i).click();
   await page.getByRole('button', { name: 'Collapse all', exact: true }).click();
   await atRest();

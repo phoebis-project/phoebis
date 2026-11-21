@@ -27370,8 +27370,9 @@ await forView('/sessions', async () => {
     const grid = [...(detail?.querySelector('.agents__row--head')?.children ?? [])].map((c) => c.textContent?.trim() ?? '');
     const gridLines = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])];
     const lines = [...(table?.querySelectorAll(':scope > tbody > tr') ?? [])].map((r, i) => {
-      const agent = r.children[0]?.textContent?.trim() ?? '';
-      const l = gridLines[i]?.children[0]?.textContent?.trim() === agent ? gridLines[i] : null;
+      // The id line under a label that is not the id, else the label, and the grid's line carries the id on its title.
+      const agent = r.children[0]?.querySelector('.agent-cell__id')?.textContent?.trim() ?? r.children[0]?.querySelector('.agent-cell__label')?.textContent?.trim() ?? '';
+      const l = gridLines[i]?.children[0]?.getAttribute('title') === agent ? gridLines[i] : null;
       const at = (name) => (head.includes(name) ? r.children[head.indexOf(name)] : null);
       const on = (name) => (l !== null && grid.includes(name) ? l.children[grid.indexOf(name)] : null);
       const model = at('Model');
@@ -27802,7 +27803,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       ok:
         absent.length === 0 &&
         JSON.stringify({ ...story, plus: story.plus === null ? null : { ...story.plus, lines: [story.plus.lines[0], ...story.plus.lines.slice(1).sort()] } }) ===
-          JSON.stringify({ dash: null, href: '/accounts/primary', link: 'primary', plus: { cls: 'badge badge--neutral', lines: ['Agents on another account:', 'c21e: claude-sonnet-5 on nightly', 'e4b7: claude-sonnet-5 on nightly'], text: '+2' }, title: 'Subscription account: quota windows apply' }) &&
+          JSON.stringify({ dash: null, href: '/accounts/primary', link: 'primary', plus: { cls: 'badge badge--neutral', lines: ['Agents on another account:', 'Trace the export job timeouts across the invoice and payout batch runs: claude-sonnet-5 on nightly', 'reviewer: claude-sonnet-5 on nightly'], text: '+2' }, title: 'Subscription account: quota windows apply' }) &&
         JSON.stringify(registered) === JSON.stringify({ dash: '-', href: null, link: null, plus: null, title: null }),
       missing: [JSON.stringify(story), JSON.stringify(registered)],
     });
@@ -28063,7 +28064,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const read = { account: plusOf('Account'), model: plusOf('Model') };
     const count = filtered.container.querySelector('.filter-bar__count')?.textContent ?? null;
     filtered.unmount();
-    const OTHERS = ['c21e: claude-sonnet-5 on nightly', 'e4b7: claude-sonnet-5 on nightly'];
+    const OTHERS = ['Trace the export job timeouts across the invoice and payout batch runs: claude-sonnet-5 on nightly', 'reviewer: claude-sonnet-5 on nightly'];
     const want = { account: { lines: ['Agents on another account:', ...OTHERS], text: '+2' }, model: { lines: ['Agents on another model:', ...OTHERS], text: '+2' } };
     results.push({
       name: '/sessions an Agents filter leaves the Model and Account +N counting every line on another model or account, and the count names the matching agents',
@@ -28141,10 +28142,12 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       const cache = at('Cache');
       return {
         account: textOf(at('Account')),
-        agent: textOf(at('Agent')),
+        // The agent's id: the line under a label that is not the id, else the label, which is then the id.
+        agent: textOf(at('Agent')?.querySelector('.agent-cell__id')) ?? textOf(at('Agent')?.querySelector('.agent-cell__label')),
         agentHref: at('Agent')?.querySelector('a')?.getAttribute('href') ?? null,
         agentTitle: at('Agent')?.getAttribute('title') ?? null,
         burn: textOf(at('Burn')),
+        label: textOf(at('Agent')?.querySelector('.agent-cell__label')),
         cache: { badge: cache?.querySelector('.badge')?.textContent?.trim() ?? null, muted: textOf(cache?.querySelector(':scope > .muted')), sub: textOf(cache?.querySelector('.sub')) },
         context: textOf(at('Context')),
         cost: textOf(at('Cost')?.querySelector('.srow__pin') ?? at('Cost')),
@@ -28347,7 +28350,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       main: {
         account: 'primary',
         agent: 'main',
-        agentTitle: titleOf(newest('main'), mainPin?.pinnedAt ?? null),
+        agentTitle: `main\n${titleOf(newest('main'), mainPin?.pinnedAt ?? null)}`,
         burn: `${weekCell(mainPin?.burnEquivalent ?? 0)}/h`,
         cache: { badge: 'cold', muted: null, sub: 'retained' },
         context: '16.2K',
@@ -28362,7 +28365,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       busy: {
         account: 'primary',
         agent: '4d1a',
-        agentTitle: titleOf(newest('4d1a'), busyPin?.pinnedAt ?? null),
+        agentTitle: `4d1a\n${titleOf(newest('4d1a'), busyPin?.pinnedAt ?? null)}`,
         burn: `${weekCell(busyPin?.burnEquivalent ?? 0)}/h`,
         cache: { badge: 'cold', muted: null, sub: 'held' },
         context: '22K',
@@ -28470,7 +28473,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         opened: { expanded: opened.expanded, hidden: body?.hidden ?? null },
         head: [...(body?.querySelectorAll('.agents__row--head > span') ?? [])].map((c) => c.textContent?.trim() ?? ''),
         lines: [...(body?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])].map((l) => l.firstElementChild?.textContent?.trim() ?? ''),
-        agents: agentsOf(detail).rows.map((r) => r.agent),
+        agents: agentsOf(detail).rows.map((r) => r.label),
         none: textOf(body?.querySelector('.agents__none > span:not(.badge)')),
         noneBadge: textOf(body?.querySelector('.agents__none > .badge')),
       };
@@ -28602,6 +28605,85 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       name: "/sessions the fold line opens its row's hidden lines and earlier agents under the matching lines, and shuts them again",
       ok: absent.length === 0 && JSON.stringify(read) === JSON.stringify(want),
       missing: [JSON.stringify(read)],
+    });
+  }
+  // The story's first session reports its title and its project, and stories 1, 3 and 4 a project alone (`sessionSpec`
+  // in mock/operations.ts).
+  const TITLE = 'Checkout retry rework for the storefront payment adapters and the order export job';
+  const byProject = (path) => listed.find((s) => !s.historical && s.facts.project === path);
+  {
+    // A row leads with its title, else its project's folder name, else its id. A label that is not the id stands over
+    // the id line, and the cell's title holds both whole. Story 5 (`0d588de5`) reports nothing, so its cell leads with
+    // the id alone.
+    const subjectsHere = { billing: byProject('/home/dev/work/billing-service'), notes: byProject('/home/dev/work/notes'), story, unreported: listed.find((s) => !s.historical && s.sessionId.startsWith('0d588de5')), worktree: byProject('/home/dev/work/storefront-worktrees/tax-rules') };
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const read = Object.fromEntries(
+      Object.entries(subjectsHere).map(([key, s]) => {
+        const td = s === undefined ? null : sessionCell(page, page.container.querySelector(`[id="${sessionRowId(s)}"]`), 'Session');
+        const lead = td?.firstElementChild ?? null;
+        return [key, { id: td?.querySelector('.srow__id')?.textContent ?? null, label: td?.querySelector('.srow__label')?.textContent ?? null, lead: lead?.classList.contains('srow__label') ? 'label' : lead?.classList.contains('srow__id') ? 'id' : null, title: td?.getAttribute('title') ?? null }];
+      }),
+    );
+    page.unmount();
+    const { billing, notes, unreported, worktree } = subjectsHere;
+    const want = {
+      billing: { id: billing?.sessionId ?? null, label: 'billing-service', lead: 'label', title: `billing-service\n${billing?.sessionId}` },
+      notes: { id: notes?.sessionId ?? null, label: 'notes', lead: 'label', title: `notes\n${notes?.sessionId}` },
+      story: { id: story?.sessionId ?? null, label: TITLE, lead: 'label', title: `${TITLE}\n${story?.sessionId}` },
+      unreported: { id: unreported?.sessionId ?? null, label: null, lead: 'id', title: unreported?.sessionId ?? null },
+      worktree: { id: worktree?.sessionId ?? null, label: 'tax-rules', lead: 'label', title: `tax-rules\n${worktree?.sessionId}` },
+    };
+    results.push({
+      name: "/sessions a row leads with its title, else its project's folder, else its id, the id under a label that is not the id",
+      ok: Object.values(subjectsHere).every((s) => s !== undefined) && JSON.stringify(read) === JSON.stringify(want),
+      missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
+    });
+  }
+  {
+    // An agent's line leads with its name, else its description, else its id, and main reads main. A label that is not
+    // the id stands over the id line, and a label that is the id reads in mono. The cell's title holds the name, the
+    // description and the id ahead of the line's sentences. The story's first session reports c21e's name, description
+    // and type over its ledger type `fork`, and e4b7's description alone, and story 4 nothing of e90b.
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const lineOf = ({ heads, rows }, agent, titleLines) => {
+      const r = rows.find((x) => x.agent === agent);
+      const td = r?.tr.children[heads.indexOf('Agent')];
+      return r === undefined ? null : { id: textOf(td?.querySelector('.agent-cell__id')), label: r.label, mono: td?.querySelector('.agent-cell__label')?.classList.contains('mono') ?? null, title: (r.agentTitle ?? '').split('\n').slice(0, titleLines), type: r.type };
+    };
+    const storyTable = agentsOf(await openRow(page, story));
+    const billingTable = agentsOf(await openRow(page, explored));
+    page.unmount();
+    const read = { described: lineOf(storyTable, 'e4b7', 2), main: lineOf(storyTable, 'main', 1), named: lineOf(storyTable, 'c21e', 3), unnamed: lineOf(billingTable, 'e90b', 1) };
+    const DESCRIBED = 'Trace the export job timeouts across the invoice and payout batch runs';
+    const want = {
+      described: { id: 'e4b7', label: DESCRIBED, mono: false, title: [DESCRIBED, 'e4b7'], type: 'general-purpose' },
+      main: { id: null, label: 'main', mono: true, title: ['main'], type: '-' },
+      named: { id: 'c21e', label: 'reviewer', mono: false, title: ['reviewer', 'Review the retry loop', 'c21e'], type: 'code-reviewer' },
+      unnamed: { id: null, label: 'e90b', mono: true, title: ['e90b'], type: 'general-purpose' },
+    };
+    results.push({
+      name: "/sessions an agent's line leads with its name, else its description, else its id, and its Type reads the reported type",
+      ok: absent.length === 0 && JSON.stringify(read) === JSON.stringify(want),
+      missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
+    });
+  }
+  {
+    // The session menu names the story's first session by its title with its short id behind it, since two rows can
+    // share a label, the agent menu names c21e by its reported name, and the Cache warming grid's line reads that name
+    // with the id on its title.
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const tr = story === undefined ? null : page.container.querySelector(`[id="${sessionRowId(story)}"]`);
+    const sessionMenu = tr?.lastElementChild?.querySelector('.menu__trigger')?.getAttribute('aria-label') ?? null;
+    const detail = await openRow(page, story);
+    const agentMenu = agentsOf(detail).rows.find((r) => r.agent === 'c21e')?.menu ?? null;
+    const gridCell = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head) > .agents__id') ?? [])].find((c) => c.getAttribute('title') === 'c21e');
+    page.unmount();
+    const read = { agentMenu, grid: gridCell === undefined ? null : { text: textOf(gridCell), title: gridCell.getAttribute('title') }, sessionMenu };
+    const want = { agentMenu: 'Actions for agent reviewer', grid: { text: 'reviewer', title: 'c21e' }, sessionMenu: `Actions for session ${TITLE} (${story?.sessionId.slice(0, 13)}…)` };
+    results.push({
+      name: '/sessions the menus and the Cache warming grid name a session and an agent by their labels',
+      ok: story !== undefined && JSON.stringify(read) === JSON.stringify(want),
+      missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
     });
   }
 }
@@ -28908,7 +28990,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     await byActivity.settle(150);
     const detail = twice?.nextElementSibling?.classList.contains('srow__detail') ? twice.nextElementSibling : null;
     const lined = [...(detail?.querySelectorAll('table.agents-table > tbody > tr') ?? [])]
-      .map((l) => `${l.children[0]?.textContent?.trim()}: ${l.children[2]?.getAttribute('title') ?? l.children[2]?.querySelector(':scope > :not(.sub)')?.textContent?.trim()}`)
+      .map((l) => `${l.children[0]?.querySelector('.agent-cell__label')?.textContent?.trim()}: ${l.children[2]?.getAttribute('title') ?? l.children[2]?.querySelector(':scope > :not(.sub)')?.textContent?.trim()}`)
       .filter((line) => hovered.includes(line));
     byActivity.unmount();
     results.push({ name: "/sessions the +N hover lists the agents pinned elsewhere in the expanded lines' order", ok: twiceSession !== undefined && hovered.length === 2 && JSON.stringify(lined) === JSON.stringify(hovered), missing: [JSON.stringify(hovered), JSON.stringify(lined)] });
@@ -29080,11 +29162,11 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // A fork whose row holds no pin claims no relation, so the two pinned ones carry the words read here.
     const related = forks.filter((f) => f.session.pinned);
     const wrongFork = related.filter((f) => f.relation === null || f.link?.textContent?.trim() !== 'fork' || !f.link.classList.contains('badge--accent') || f.title !== titleOf(f) || f.description !== f.title);
-    const wrongTarget = related.filter((f) => f.target?.tagName !== 'TR' || f.target !== f.baseRow || cellOf(f.target).title !== f.session.forkedFrom);
+    const wrongTarget = related.filter((f) => f.target?.tagName !== 'TR' || f.target !== f.baseRow || cellOf(f.target).label !== f.session.forkedFrom);
     results.push({
       name: "/sessions each pinned fork's badge reads fork, its title the base's whole id, the depth, whether the base is on the same account and its account label, in its description too (both story bases sit on primary, whose label is its id), and links to the base's row",
       ok: forks.length === 3 && related.length === 2 && related.map((f) => f.relation).sort().join('|') === 'on another account|same account' && wrongFork.length === 0 && wrongTarget.length === 0,
-      missing: forks.map((f) => `${f.session.sessionId.slice(0, 8)}: ${f.link?.outerHTML ?? 'no link'} described ${JSON.stringify(f.description)} target ${f.target ? cellOf(f.target).title.slice(0, 8) : 'none'}`),
+      missing: forks.map((f) => `${f.session.sessionId.slice(0, 8)}: ${f.link?.outerHTML ?? 'no link'} described ${JSON.stringify(f.description)} target ${f.target ? cellOf(f.target).label.slice(0, 8) : 'none'}`),
     });
     // The story's fork with no pin of its own claims no relation, so its title names the depth where the two part.
     const unpinned = forks.filter((f) => !f.session.pinned);
@@ -29250,7 +29332,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     await m.navigate('/sessions?finished=1');
     await until(m, () => rows().length > 0);
     await showColumn(m, 'Key');
-    const idOf = (r) => cell(r, 'Session')?.getAttribute('title') ?? '';
+    const idOf = (r) => cell(r, 'Session')?.querySelector('.srow__id')?.textContent ?? '';
     // The id the earlier holder shares with the live session, read off its seed since the view orders the rows by their
     // creation.
     const sharedId = (await api.listSessions()).find((s) => s.historical)?.sessionId;
@@ -29488,7 +29570,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   await m.settle(200);
   results.push({ name: '/sessions Collapse all closes every row', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
 
-  const sessionId = cell(busyRow(), 'Session')?.getAttribute('title') ?? '';
+  const sessionId = cell(busyRow(), 'Session')?.querySelector('.srow__id')?.textContent ?? '';
   const jump = async (label) => (await openMenu(busyRow())).find((b) => b.textContent?.trim() === label);
   const chipText = () => [...m.container.querySelectorAll('.chip--filter')].map((c) => c.textContent?.trim() ?? '');
 

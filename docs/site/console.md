@@ -1487,26 +1487,29 @@ its requests, which add across units, or by its requests, newest or largest firs
 row without the value last, and the five-second re-read keeps a row's place under Created. Session takes the card's free
 width and keeps at least 74 px, and a set of columns wider than the card scrolls inside it.
 
-The Session cell cuts a long id with an ellipsis, whole on hover, and a line under it reads a `fork` badge on a session
-that branched from another conversation at depth 2 or deeper, then the client version and the placements count from 2
-on, `Claude Code 2.1.310 · 2 placements`, with the user agent as the client sent it and the count's sentence on hover:
-how often the session's main was placed or moved. The fork badge's hover names the base and the depth, and where the
-list holds the base with both pins live, whether the base is on the same account or another and the base's account. A
-click on the badge scrolls to the base's row where the list holds it. Status reads main's lifecycle word as a badge with
-its sentence on hover: `busy`, `idle`, `parked` with the park's kind and its deadline or wake time on hover,
-`registered` for a session whose main the mod registered or started again with no real request of it reaching the router
-since, `released` or `unknown`. A finished session reads `finished`, and a session no mod reports, or one whose main the
-engine holds no record of, reads `unreported` in the muted ink. Under the word, a companion session reads `seen 9s ago`
-while the mod reports, or `silent 2h 18m` in the warning ink once it went silent, with the companion's sentence and the
-instant on hover. Agents counts the session's agents less the ones the mod released, main counted where no line names
-it, over the agents by word (`1 busy, 2 idle, 1 parked`). Model reads main's model, short with the id on hover, and a
-"+N" badge where N agents of the session are pinned on another model, its hover naming each agent with its model and
-account in the lines' order. Account links to the pinned account's page with its kind on hover, then the speed chip on a
-slowed session with the Quota view's hover, the warning badge `leaving` while a shedding round's mark stands on the
-session's pin, its hover naming the account the mark was made on and its window, and a "+N" for the agents pinned on
-another account. A session that a round's move or a failover's landing already took off an account reads no badge. While
-a Model or an Account filter stands, that column's "+N" takes the accent tone where one of the agents it names matches
-every Agents filter. A row with no account reads a dash.
+The Session cell leads with the session's label, which is the custom title its companion reports, else the folder name
+of its project, else its id. A label that is not the id stands over the id, each cut with an ellipsis, and the hover
+reads both whole. A session whose companion reports neither reads its id alone, cut with an ellipsis and whole on hover,
+as each session without the mod does. A line under the id reads a `fork` badge on a session that branched from another
+conversation at depth 2 or deeper, then the client version and the placements count from 2 on, `Claude Code 2.1.310 · 2
+placements`, with the user agent as the client sent it and the count's sentence on hover: how often the session's main
+was placed or moved. The fork badge's hover names the base and the depth, and where the list holds the base with both
+pins live, whether the base is on the same account or another and the base's account. A click on the badge scrolls to
+the base's row where the list holds it. Status reads main's lifecycle word as a badge with its sentence on hover:
+`busy`, `idle`, `parked` with the park's kind and its deadline or wake time on hover, `registered` for a session whose
+main the mod registered or started again with no real request of it reaching the router since, `released` or `unknown`.
+A finished session reads `finished`, and a session no mod reports, or one whose main the engine holds no record of,
+reads `unreported` in the muted ink. Under the word, a companion session reads `seen 9s ago` while the mod reports, or
+`silent 2h 18m` in the warning ink once it went silent, with the companion's sentence and the instant on hover. Agents
+counts the session's agents less the ones the mod released, main counted where no line names it, over the agents by word
+(`1 busy, 2 idle, 1 parked`). Model reads main's model, short with the id on hover, and a "+N" badge where N agents of
+the session are pinned on another model, its hover naming each agent with its model and account in the lines' order.
+Account links to the pinned account's page with its kind on hover, then the speed chip on a slowed session with the
+Quota view's hover, the warning badge `leaving` while a shedding round's mark stands on the session's pin, its hover
+naming the account the mark was made on and its window, and a "+N" for the agents pinned on another account. A session
+that a round's move or a failover's landing already took off an account reads no badge. While a Model or an Account
+filter stands, that column's "+N" takes the accent tone where one of the agents it names matches every Agents filter. A
+row with no account reads a dash.
 
 Requests counts the session's client requests the retention keeps under its key, the ones the router refused before any
 account was asked left out, with its last request's age under it and the instant on hover, and "View in requests" lists
@@ -1573,9 +1576,12 @@ its title carries "View in routing log", the row menu's link.
 The Agents table under the facts lists one line per agent, main first (from its conversation pin or its recipe, or from
 the row where neither names main), then the lines with a lifecycle word grouped by that word (`busy` with `registered`,
 `idle`, `parked` with `unknown`, `released`), then the pins whose agent the mod does not report, inside each by the
-agent's first request or the last activity as the control orders the rows. Agent links to the request log on the session
-and the agent once the session has ledgered traffic, with the agent's last request and its pin's creation on hover. Type
-reads the agent's type from the ledger, breaking at its hyphen (`general-purpose`) where room runs out, and a dash on
+agent's first request or the last activity as the control orders the rows. Agent reads the agent's label, which is
+`main` for main, else the name its companion reports, else its description, else its id, cut with an ellipsis at about
+32 characters, with the id under a label that is not the id. The label links to the request log on the session and the
+agent once the session has ledgered traffic, and the hover reads the name, the description and the id, each on a line of
+its own, ahead of the agent's last request and its pin's creation. Type reads the type the companion reports where it
+reports one and the ledger's otherwise, breaking at its hyphen (`general-purpose`) where room runs out, and a dash on
 main. Model reads the line's model, short with the id on hover, and the effort of its pin's last turn under it. Account
 links to the line's account, its pin's or, where no pin stands, its recipe's, with its kind on hover, then the row's
 speed chip and `leaving` badge where the line sits on the row's account and the account's speed chip elsewhere while it
@@ -1592,20 +1598,22 @@ filters`, which counts the row's other lines and its earlier agents and opens th
 
 The earlier agents, the ones the ledger holds requests of that draw no line, such as a subagent whose pin and recipe are
 gone, share one line under the table, `{n} earlier agents · {k} requests · {cost}`, with a `+$` badge where they
-billed dollars beside a plan figure and their ids on hover. The line opens to one row per earlier agent in the table:
-its type, the model and account of its newest request, its requests and its cost, `no pin` in Status and dashes for a
-pin's figures, with the same menu. The Cache warming details end the open row, shut by default with the recipes' states
-on their line (`1 retained, 1 paused, 1 ended`) or `no recipe`. Open, they read one line per agent as Agent, TTL, Last
-request, Last probe, Next probe ("on first stream event" or "not scheduled"), Probes / credited and State. A pin no
-recipe stands on reads its TTL as the time left on its cache, counted from the pin's last refresh, its last use as Last
-request, dashes in the probe cells and a State of `warm` or `cold` by its cache TTL from that refresh, the word carrying
-its own sentence on hover. On a recipe's line State reads the recipe's state word (`ended`, `held`, `not retained`,
-`paused` or `retained`) with the cause beside it, the state word and the cause each carrying the cause's sentence on
-hover, and the line under them reads the mod's lifecycle word for the agent with a parked agent's park kind and its
-deadline or wake time (`parked · background · deadline in 1h 12m`), then the state's sentence with the cause's. A
-finished session, listed under Finished sessions, keeps its lines in their ended state with the TTL, Last request, Last
-probe, Next probe and Probes / credited the engine last read, and its Status reads `finished`. A session without a
-recipe reads "no recipe" and `Nothing is scheduled because {reason}.` inside the details.
+billed dollars beside a plan figure and their ids on hover, since an agent without a line has no record that holds a
+reported fact. The line opens to one row per earlier agent in the table: its type, the model and account of its newest
+request, its requests and its cost, `no pin` in Status and dashes for a pin's figures, with the same menu. The Cache
+warming details end the open row, shut by default with the recipes' states on their line (`1 retained, 1 paused, 1
+ended`) or `no recipe`. Open, they read one line per agent as Agent, TTL, Last request, Last probe, Next probe ("on
+first stream event" or "not scheduled"), Probes / credited and State, Agent reading the agent's label as the Agents
+table names it, with its id on hover. A pin no recipe stands on reads its TTL as the time left on its cache, counted
+from the pin's last refresh, its last use as Last request, dashes in the probe cells and a State of `warm` or `cold` by
+its cache TTL from that refresh, the word carrying its own sentence on hover. On a recipe's line State reads the
+recipe's state word (`ended`, `held`, `not retained`, `paused` or `retained`) with the cause beside it, the state word
+and the cause each carrying the cause's sentence on hover, and the line under them reads the mod's lifecycle word for
+the agent with a parked agent's park kind and its deadline or wake time (`parked · background · deadline in 1h 12m`),
+then the state's sentence with the cause's. A finished session, listed under Finished sessions, keeps its lines in their
+ended state with the TTL, Last request, Last probe, Next probe and Probes / credited the engine last read, and its
+Status reads `finished`. A session without a recipe reads "no recipe" and `Nothing is scheduled because {reason}.`
+inside the details.
 
 At a phone's width, under 600 px, the session table scrolls sideways inside its card. An open row's detail stays as wide
 as the card's visible part, its content 12 px in from each side, and keeps to the card's left edge while the table
