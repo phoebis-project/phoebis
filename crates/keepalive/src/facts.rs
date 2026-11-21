@@ -1,5 +1,5 @@
 //! The facts a companion mod reports of its session and of each agent, and the one place each value is cleaned. A
-//! value comes from another program, and the console, the admin API and `status --json` print it, so a value enters a
+//! value comes from another program, and the admin API, the console and `status --json` print it, so a value enters a
 //! record only through the rules here: no control or format character, no credential of a remote, and a bound on its
 //! size.
 
@@ -269,8 +269,8 @@ fn host_colon(value: &str) -> Option<usize> {
     None
 }
 
-/// The last check: a result is kept only where it reads as `host/path` itself, so a port that is no number, a
-/// credential or a local path never stands as a repository.
+/// The last check: a result is kept only where it reads as `host/path` itself, so a credential, a local path or a port
+/// that is no number never stands as a repository.
 fn reads_reduced(value: &str) -> bool {
     // A `[` that no `]` closes ahead of the first `/` would hide each colon behind it from the colon test.
     let host_side = value.find('/').map_or(value, |at| &value[..at]);

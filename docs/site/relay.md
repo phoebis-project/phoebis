@@ -502,11 +502,12 @@ that fact, and neither renews the lease or counts as activity. The router cleans
 of line breaks and tabs folds to one space, each other control and format character goes, white space at both ends goes,
 and a value left empty is absent. A `description`, a `name` or a `title` over 256 bytes is cut to its longest prefix of
 whole characters, an `agent_type` or a `branch` over 256 bytes is left out, and so is a `cwd`, a `project`, a
-`repository_root` or a reduced `repository` over 1,024 bytes. The `repository` is kept as `host/path` with the host in
-lower case, without the scheme, the user information, the port, the query, the fragment and one trailing `.git`, and a
-value already in the form `host/path` is kept as it is given. A local path, a `file` URL, a remote with an `@` behind
-its host part and each other remote the rule cannot read are left out. The facts are display values of the console's
-Sessions view, and the router never refuses a report over a fact's content.
+`repository_root` or a reduced `repository` over 1,024 bytes. The `repository` is kept as `host/path` with the ASCII
+letters of the host in lower case, without the scheme, the user information, the port, the query, the fragment, one
+trailing `.git` and each trailing slash, and a value already in the form `host/path` is kept as it is given. A `file`
+URL, a local path, a remote with an `@` behind its host part and each other remote the rule cannot read are left out.
+The facts are display values of the console's Sessions view, and the router never refuses a report over a fact's
+content.
 
 The router accepts five states. `busy` is an agent at work. `idle` is an agent between requests: a prompt that sent no
 request, such as a local command, lets the idle window go on, and a park that ended restarts it. `parked` is an agent
