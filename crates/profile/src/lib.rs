@@ -91,8 +91,8 @@ pub struct SocketRow {
     pub plane: Plane,
 }
 
-/// The calls of each claude.ai feature the router forwards, as this client build sends them, and the two it serves
-/// without a key.
+/// The calls of each claude.ai feature the router forwards, as this client build sends them, the two it serves without
+/// a key, and the sockets, which carry no key either.
 pub struct FeatureTable {
     pub artifacts: &'static [FeatureRow],
     pub connectors: &'static [FeatureRow],

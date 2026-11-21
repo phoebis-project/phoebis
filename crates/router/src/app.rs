@@ -70,12 +70,13 @@ const DOMAIN_CHECKS_TOTAL: usize = 16;
 const KEY_SOCKETS: usize = 256;
 /// Half of the listener's connections, so the keyed calls keep the other half.
 const SOCKETS_TOTAL: usize = 2_048;
-/// A stop of an account's features, a deleted key, a moved selection and a new pairing each end the open sockets
-/// they reach within this time.
+/// A deleted key, a disconnect of the account, a moved selection and a stop of an account's features each end the open
+/// sockets they reach within this time.
 const SOCKET_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 /// Past the client's own 80 s of silence, and four of the upstream's pings. It ends a socket whose two sides went
-/// silent, and it is also the kernel's bound on the bytes a socket's client leaves unacknowledged, which ends the
-/// sockets whose client died without a close under the DNS redirect, where no proxy's TCP keepalive finds one.
+/// silent. On Linux it is also the kernel's bound on the bytes a socket's client leaves unacknowledged, or that wait
+/// unsent behind a client that takes none, which ends the sockets whose client died without a close under the DNS
+/// redirect, where no proxy's TCP keepalive finds one.
 const SOCKET_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
 // A completion is published on every path, the handler's drop guard included, so an in-flight entry silent this

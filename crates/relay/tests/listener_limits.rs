@@ -407,8 +407,8 @@ async fn an_open_tunnel_keeps_its_connections_place() {
     let token = sync_token(1_600);
     let up = watch_upstream(&token, &sockets).await;
     let h = features_harness(&up, both_features_at_a()).await;
-    // This host's daemon dials each new loopback listener and sends nothing, and the short bound frees the place such
-    // a dial holds well inside the case.
+    // Another process of the machine may connect to a new loopback listener and send nothing, and the short bound
+    // frees the place such a connection holds well inside the case.
     let (listener, _serving) = feature_listener_under(
         &h,
         phoebis_relay::ListenLimits {

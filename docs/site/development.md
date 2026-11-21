@@ -470,20 +470,21 @@ the message of that state and print no other line. Four more cases show that a s
 client's start, that a fingerprint of another value stops the start at the compare, that an empty `ROUTER_KEY` stops it
 ahead of the fetch, and that a `.curlrc` in the user's home leads no probe. One more shows that a redirect stops the
 start where one address family reaches the router and the other reaches another peer. Another shows that a redirect
-under `PRIVATE_HOSTS=no` names the family over which nothing answered in a notice and still starts the client, and that
-a start whose two families reach the router prints the client's line alone. The script's curl calls read no `.curlrc`,
-so the test leads curl through a stand-in that adds the test's `--connect-to` rules and stops where they lack the rule
-that keeps a connection on loopback, and no connection leaves loopback.
+under `PRIVATE_HOSTS=no` names the family over which nothing answered, `ipv4` or `ipv6`, in a notice and still starts
+the client, and that a start whose two families reach the router prints the client's line alone. The script's curl calls
+read no `.curlrc`, so the test leads curl through a stand-in that adds the test's `--connect-to` rules and stops where
+they lack the rule that keeps a connection on loopback, and no connection leaves loopback.
 
-Under `PRIVATE_HOSTS=yes` the script meets stand-ins of `sudo`, `unshare`, `setpriv` and `mount`. The test stops ahead
+Under `PRIVATE_HOSTS=yes` the script meets stand-ins of `sudo`, `unshare`, `mount` and `setpriv`. The test stops ahead
 of its first case where the `PATH` it hands the script finds one of the four tools ahead of its stand-in, since a `sudo`
-that asks for no password would then run the script's root part as root. Seven cases there show that the client gets the
-caller's variables, umask and arguments, with none of the arguments on `sudo`'s command line, that `SETUP=proxy` reads
-no word of the input, that the private hosts file holds the machine's lines less the two feature names, that a caller's
-marker word outside that road reads no file, and that no variable of the calling shell makes the second run remove a
-file. The case of the other peer, and the side of the notice's case where both families reach the router, need `::1` on
-the loopback interface, and the case of the private file needs a user namespace that the host grants to a user without
-privileges. On a host that lacks what it needs, each of the three prints one line and does not run.
+that asks for no password would then run the script's root part as root. Eight cases there show that the client gets the
+caller's variables, umask and arguments, with none of the arguments on `sudo`'s command line and no `SUDO_UID` in its
+environment, that a bind that fails stops the start ahead of the second run, that `SETUP=proxy` reads no word of the
+input, that the private hosts file holds the machine's lines less the two feature names, that a caller's marker word
+outside that road reads no file, and that no variable of the calling shell makes the second run remove a file. The case
+of the other peer, and the sides of the notice's case where IPv6 reaches the router, need `::1` on the loopback
+interface, and the case of the private file needs a user namespace that the host grants to a user without privileges. On
+a host that lacks what it needs, each of the three prints one line and does not run.
 
 ### Links to another product
 

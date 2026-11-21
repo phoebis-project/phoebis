@@ -218,8 +218,8 @@ comment left out, the line's other names stay, and a line with no name left goes
 lines would otherwise keep the router's private address for both names beside loopback, and the client refuses live
 updates for one such address among those a name resolves to. The loopback lines stand last, so a reverse lookup of
 `127.0.0.1` or `::1` still reads the machine's own name. The file is the user's, at mode `0644` as the machine's file
-is. It stands for `/etc/hosts` in the start's tree until the session ends, when it goes, unless the machine puts another
-file in that place first.
+is. It goes when the session ends and stands for `/etc/hosts` in the start's tree until then, unless the machine renames
+another file over that name or removes it first.
 
 A program of the machine that puts a new file in the place of `/etc/hosts` by a rename, as `sed -i` does, or that
 removes the file while a session runs takes the private file out of the start's tree, and a write in place leaves it
@@ -229,11 +229,12 @@ upstream with the router key, and where it holds a redirect's lines, the calls r
 live updates again. The script's check runs once, at the start, and sees neither, and `SETUP=proxy` is the setup that
 rests on no hosts file.
 
-`sudo` empties the environment, so the second file, `shell-env.<pid>` at mode `0600`, carries the shell's exported
-variables, its umask and the arguments for the client to the second run, which reads it and removes it before anything
-else. The root shell hands that file's path over behind the marker word `phoebis-private-hosts`, and a run reads it only
-where its own inputs say `SETUP=redirect` and `PRIVATE_HOSTS=yes`. The file's `set --` line puts its own path ahead of
-the arguments, and the run removes the file by that word, so no inherited variable makes a run read or remove a file.
+`sudo` resets the environment to a small set of its own, and the root part's own `env -i` empties it, so the second
+file, `shell-env.<pid>` at mode `0600`, carries the shell's exported variables, its umask and the arguments for the
+client to the second run, which reads it and removes it before anything else. The root shell hands that file's path over
+behind the marker word `phoebis-private-hosts`, and a run reads it only where its own inputs say `SETUP=redirect` and
+`PRIVATE_HOSTS=yes`. The file's `set --` line puts its own path ahead of the arguments, and the run removes the file by
+that word, so no inherited variable makes a run read or remove a file.
 
 `sudo`'s own configuration decides where root finds `unshare`, `mount` and `setpriv`, through `secure_path` where it
 sets one, and the script fixes no `PATH` for its root part. The call suits a user who may run each command as root:
@@ -262,11 +263,12 @@ elsewhere than to the router, and `SETUP=proxy` is the road for such a machine. 
 `hosts: files myhostname resolve [!UNAVAIL=return] dns`, names `files` first, so a lookup there reads the private file
 for both names ahead of the daemon.
 
-**The caller's environment.** The script's test runs the root part against stand-ins of `sudo`, `unshare`, `setpriv`
-and `mount`, with a `sudo` that empties the environment and joins `0022` to the umask, as the tool does by default. A
-variable of the calling shell, the caller's umask and arguments with two blanks in a row, a quote, an empty one and a
-line break reach the client as the caller gave them, and no argument rides `sudo`'s command line. No start through the
-real tools stands behind this road yet, so the form with `--propagation slave` has no run behind it.
+**The caller's environment.** The script's test runs the root part against stand-ins of `sudo`, `unshare`, `mount` and
+`setpriv`, with a `sudo` that resets the environment to a small set and joins `0022` to the umask, as the tool does by
+default, and the root part's own `env -i` then empties the environment. A variable of the calling shell, the caller's
+umask and arguments with two blanks in a row, a quote, an empty one and a line break reach the client as the caller gave
+them, and no argument rides `sudo`'s command line. No start through the real tools stands behind this road yet, so the
+form with `--propagation slave` has no run behind it.
 
 **A connected watch.** Not measured: no session has held an artifact's live updates on this road yet.
 
@@ -324,7 +326,9 @@ start the client through it in place of `claude`: each argument goes on to the c
 secret, so keep it readable by its user alone, at mode `0700`. At each start it fetches the CA's certificate, compares
 its fingerprint, checks the road to both feature hosts, writes the env file for Bash commands, sets the client's
 variables and starts the client. It is a POSIX `sh` script, and it needs `curl` and one of `sha256sum` and `shasum`. A
-start under `PRIVATE_HOSTS=yes` also needs `mount`, `setpriv`, `sudo` and `unshare`.
+start under `PRIVATE_HOSTS=yes` also needs `mount`, `setpriv`, `sudo` and `unshare`, and it runs the file by itself or
+through `sh`: its second run reads the variables the first run saved through `sh`, and a `dash` there cannot read the
+form in which `bash` saves them.
 
 ```sh
 #!/bin/sh
@@ -341,11 +345,11 @@ PRIVATE_HOSTS='no'                 # no, or yes: a hosts file for this start alo
 PLAN='max'                         # max, or pro
 BASE_CA=''                         # the private CA of the base URL's certificate, where it has one
 
-# A start under PRIVATE_HOSTS=yes runs this file a second time inside its namespace, below a sudo that empties the
-# environment. The root part hands that run a marker word and the path of a file the first run wrote: the exported
-# variables, the umask and a set line with the file's own path and then the caller's arguments. The run removes the
-# file by that word and by no variable, since a variable the file restores could name another file. The two inputs
-# above decide whether a run reads the file, so no variable it inherited does.
+# A start under PRIVATE_HOSTS=yes runs this file a second time inside its namespace, below a sudo that resets the
+# environment and an env -i that empties it. The root part hands that run a marker word and the path of a file the
+# first run wrote: the exported variables, the umask and a set line with the file's own path and then the caller's
+# arguments. The run removes the file by that word and by no variable, since a variable the file restores could name
+# another file. The two inputs above decide whether a run reads the file, so no variable it inherited does.
 entered=no
 if [ "$SETUP" = redirect ] && [ "$PRIVATE_HOSTS" = yes ] && [ "${1-}" = phoebis-private-hosts ]; then
   . "$2"
@@ -421,9 +425,10 @@ if [ "$SETUP" = redirect ] && [ "$PRIVATE_HOSTS" = yes ] && [ "$entered" = no ];
     echo '::1 api.anthropic.com mcp-proxy.anthropic.com'
   } > "$hosts"
   chmod 644 "$hosts"
-  # sudo empties the environment, joins its own umask to the caller's and logs its command line. So the second run
-  # takes the caller's variables, umask and arguments from this file, and sudo's line holds none of them. The set line
-  # opens with the file's own path, by which the second run removes it.
+  # sudo resets the environment to a small set, and the root part's env -i empties it. sudo also joins its own umask
+  # to the caller's and logs its command line. So the second run takes the caller's variables, umask and arguments
+  # from this file, and sudo's line holds none of them. The set line opens with the file's own path, by which the
+  # second run removes it.
   saved="$state/shell-env.$$"
   {
     export -p
@@ -606,7 +611,7 @@ host `router.example.com` with the name that reaches the router. Each input, wit
 
 | Input | Holds | The variable it sets |
 | --- | --- | --- |
-| `BASE_URL` | the URL of the router's proxy listener | `ANTHROPIC_BASE_URL` |
+| `BASE_URL` | the URL of the router's proxy listener | `ANTHROPIC_BASE_URL`, and under `SETUP=proxy` the first entry of `NO_PROXY`, the URL's host |
 | `ROUTER_KEY` | the key's secret | `CLAUDE_CODE_OAUTH_TOKEN` |
 | `PHOEBIS_FEATURE_CA_SHA256` | the fingerprint of the router's feature CA, from the operator | none, the script compares the fetched CA with it |
 | `SETUP` | `proxy` for "Base URL and proxy", `redirect` for "Base URL and DNS redirect" | none, it picks the road and whether the script sets `HTTPS_PROXY` and `NO_PROXY` |
@@ -631,11 +636,11 @@ the shell's umask back ahead of the client's start, since under `077` each file 
 would be made `0600`. The files of a start in progress carry the process id in their names and go at each exit, so two
 starts at one time share none of them. Each start has two, and under `PRIVATE_HOSTS=yes` two more: `hosts.<pid>`, the
 private hosts file at mode `0644`, and `shell-env.<pid>`, which the second run reads and removes as it starts. Each curl
-call gives up after 10 seconds without a connection and after 30 seconds in all, apart from the probe through the proxy,
-which waits up to 15 seconds for its connection, past the proxy's ten seconds for its own, so a name that leads to an
-address which drops packets does not hold the start for the system's own timeout.
-Each curl call opens with `-q`, so curl reads no configuration file of the user, and a line of a `.curlrc` leads neither
-the fetch nor a probe along another road than the client's.
+call gives up after 10 seconds without a connection and after 30 seconds in all, so a name that leads to an address
+which drops packets does not hold the start for the system's own timeout. The probe through the proxy waits up to 15
+seconds for its connection, past the proxy's ten seconds for its own, inside the same 30 seconds. Each curl call opens
+with `-q`, so curl reads no configuration file of the user, and a line of a `.curlrc` leads neither the fetch nor a
+probe along another road than the client's.
 
 ### The fetch, the compare and the check
 
@@ -686,7 +691,7 @@ script's order:
 | `PLAN is neither max nor pro` | The input holds another word. |
 | `PRIVATE_HOSTS=yes needs {tool}, which this machine lacks. SETUP=proxy needs none of the three` | Under `SETUP=redirect`, the machine lacks a tool of the private hosts file, and the line names the first it lacks of `setpriv`, `sudo` and `unshare`. |
 | `sudo named no calling user` | The root part prints it ahead of the bind, where `sudo` set no `SUDO_UID` or `SUDO_GID`, or one that is no number. The next stop follows. |
-| `the private hosts file could not be put in place (exit {n})` | Under `PRIVATE_HOSTS=yes`, the second run never started: `sudo` refused the call, `unshare` or the bind failed, or `setpriv` failed, and `{n}` is the exit that `sudo` passed back. A home on a share that maps root to another user can stop the bind too, a cause that no run measured. |
+| `the private hosts file could not be put in place (exit {n})` | Under `PRIVATE_HOSTS=yes`, the second run never started or could not read the file of the shell's variables: `sudo` refused the call, `unshare` or the bind failed, `setpriv` failed, or a start through `bash` saved the variables in a form that a `dash` as `sh` cannot read, and `{n}` is the exit that `sudo` passed back. A home on a share that maps root to another user can stop the bind too, a cause that no run measured. |
 | `the router at {BASE_URL} does not answer (curl exit {n})` | The fetch got no HTTP answer: a wrong base URL, a router that is down, or a certificate curl does not trust, for which `BASE_CA` names the private CA. |
 | `the router at {BASE_URL} has no feature listener` | The download answered `404`, as a router without the `features` block does. Ask the operator. |
 | `the CA fetch from {BASE_URL} answered {status}` | The download answered another status, such as a redirect or a `502` of a front. The base URL has to reach the router's proxy listener as the client reaches it. |
@@ -857,16 +862,16 @@ whole call 30 seconds, and forwards 16 checks at one time, 4 from one source add
 for a place inside its 30 seconds. A request on either path in another form is no call without a key and meets the key
 check.
 
-A socket request matches by its whole form too: a `GET` on `api.anthropic.com` whose path is `/api/frame/sync`, compared
-whole in each decoded form the path check reads, with an `Upgrade` line that names `websocket`, a `Connection` line that
-lists `upgrade` and no body. The router reads no router key on it and admits it by its token, the one entry of the
-client's token shape in its `Sec-WebSocket-Protocol` list. A keyed `GET` of `/api/frame/{id}` that the upstream answers
-`200` hands out such a token in its JSON member `syncToken`, whatever the read's query, so the read ahead of a watch and
-the read ahead of a presence connection each hand one out. The router reads the member beside the answer's stream, in
-each content coding it decodes, and at the body's clean end it keeps the token's SHA-256 in memory with the key that
-read it and the account the read went out under, until the token's own end, held between 300 and 900 seconds behind the
-read. It keeps 1,024 tokens for each key and drops a key's oldest at one more, a read whose body fails behind its token
-keeps nothing, and a restart starts with none.
+A socket request matches by its whole form too: an HTTP/1.1 `GET` on `api.anthropic.com` whose path is
+`/api/frame/sync`, compared whole in its last decoded form, with an `Upgrade` line that names `websocket`, a
+`Connection` line that lists `upgrade` and no body. The router reads no router key on it and admits it by its token, the
+one entry of the client's token shape in its `Sec-WebSocket-Protocol` list. A keyed `GET` of `/api/frame/{id}` that the
+upstream answers `200` hands out such a token in its JSON member `syncToken`, whatever the read's query, so the read
+ahead of a watch and the read ahead of a presence connection each hand one out. The router reads the member beside the
+answer's stream, in each content coding it decodes, and at the body's clean end it keeps the token's SHA-256 in memory
+with the key that read it and the account the read went out under, until the token's own end, held between 300 and 900
+seconds behind the read. It keeps 1,024 tokens for each key and drops a key's oldest at one more, a read whose body
+fails behind its token keeps nothing, and a restart starts with none.
 
 Behind the token the router checks what a keyed call meets: the key that read the token still stands, its selection for
 Artifacts still names the account, the account still holds the sign-in the read went out under, the account's state lets
@@ -907,8 +912,8 @@ is, or it is past its subscription's end. The message closes on `(operator)` for
 While a selection of a pool or of a key names an account that is not ready or past its subscription's end, the
 dashboard's attention line and the selecting pools' cards show the item `feature_account_unavailable`
 ([Conditions and gauges](statistics.md#conditions-and-gauges)), and the selects of the pool dialog and the key dialog
-list the account disabled with its reason. The stored selection stays as it is, and its calls keep getting the `403`
-until the account can serve again or the selection moves.
+list the account disabled with its reason. The stored selection stays as it is, and the account refuses the calls its
+selections send until it can serve again or the selection moves.
 
 A paused account keeps serving the features. A pause stops the routing of model requests and nothing else, and the
 router keeps a paused account's sign-in fresh. A spent window, a cooldown, a budget, overage, the utilization ceiling, a
@@ -917,7 +922,8 @@ window.
 
 To stop an account's features, change the selection or disconnect the account. A deletion sets each selection that names
 the account to none. A stop holds from the next call on: a keyed call in flight still runs to its own end, a connector's
-long stream among them, and an open socket ends at its next check, at most 30 seconds later.
+long stream among them, and an open socket ends at its next check, at most 30 seconds later. A pairing of a connected
+account renews its credential and keeps its sign-in, so it ends no open socket and an earlier token still admits.
 
 What a `401` of a feature host gets depends on one header. A `401` that carries `X-Mcp-Error-Code` is the connector's
 word that it wants a sign-in of its own, and it goes back at once and untouched for the client to read. A `401` without
@@ -991,19 +997,20 @@ admits it ([What the router forwards](#what-the-router-forwards)). The client re
 of the dial and refuses a carrier-NAT, link-local, private or unique-local address, so under `SETUP=redirect` the name
 has to lead to a loopback address or a public one ([Base URL and DNS redirect](#base-url-and-dns-redirect)). The router
 counts the open sockets of each key and of the listener and refuses a socket request above either count with a `429`
-([What the router refuses and what the client shows](#what-the-router-refuses-and-what-the-client-shows)), and it ends
-a socket that moved no byte in either direction for 90 seconds. On Linux the router also lets the kernel end a socket's
-client connection where bytes the router sent stay unacknowledged for the same 90 seconds, so the socket of a client
-that died without a close ends about that long after the first byte the client did not acknowledge, even while the
-upstream still sends. No setting moves the two counts or the idle time. Each 30 seconds from a socket's open the router
-checks the socket's key, that key's selection, the account's sign-in and the account's state again, as the admission
-checked them, and ends at once, on both sides, a socket that fails one of these checks. A pause ends no socket, as it
-stops no feature call. Where the router refuses a watch for another cause than a full count, or ends its socket after
-the idle time, at a failed check or at the router's stop, the session reads a lost connection and, by the client's code,
-dials again behind a new page read. After a failed check, that read meets the router's refusal for the changed state, or
-goes out under the account the selection names now. At the `429` of a full count the session waits 30 seconds or more,
-counts no failure and dials again, by the client's code. The client's event report, `POST /api/frame/track`, gets the
-`403`, which the session shows nowhere.
+([What the router refuses and what the client shows](#what-the-router-refuses-and-what-the-client-shows)), and it ends a
+socket that moved no byte in either direction for 90 seconds. On Linux the router also lets the kernel end a socket's
+client connection where bytes the router sent stay unacknowledged, or wait unsent behind a client that takes none, for
+the same 90 seconds, so the socket of a client that died without a close ends about that long after the first byte the
+client did not acknowledge, even while the upstream still sends. No setting moves the two counts, the idle time or the
+check's interval. Each 30 seconds from a socket's open the router checks the socket's key, that key's selection, the
+account's sign-in and the account's state again, as the admission checked them, and ends at once, on both sides, a
+socket that fails one of these checks. A pause ends no socket, as it stops no feature call. Where the router refuses a
+watch for another cause than a full count or a ledger that stands behind, or ends its socket after the idle time, at a
+failed check or at the router's stop, the session reads a lost connection and, by the client's code, dials again behind
+a new page read. After a failed check, that read meets the router's refusal for the changed state, or goes out under the
+account the selection names now. At the `429` of a full count and at the `503` `ledger_behind` the session waits 30
+seconds or more, counts no failure and dials again, by the client's code. The client's event report,
+`POST /api/frame/track`, gets the `403`, which the session shows nowhere.
 
 **The `/usage` dialog** cannot read the account's usage. Its read gets the `403`, and the dialog's Usage tab reads
 "Couldn't load usage data" and prints the router's whole answer body below it, a `permission_error` with the message

@@ -78,6 +78,8 @@ struct Tokens {
     /// Each key's hashes in the order they came, the oldest first.
     orders: HashMap<KeyId, VecDeque<TokenHash>>,
     stamps: u64,
+    /// The instant of the last sweep of each key's order.
+    swept_at: i64,
 }
 
 impl Tokens {
@@ -98,25 +100,44 @@ impl Tokens {
         }
     }
 
-    /// Drops the ended entries in `key`'s order.
+    /// Drops the ended entries in `key`'s order. Once the longest life of an entry has passed since the last sweep of
+    /// each key's order, it sweeps each key's order instead, so the entries of a key that reads no more leave too,
+    /// since an entry that stood at the last such sweep has ended by this one. That walk of the whole map runs at most
+    /// once in an entry's longest life.
     fn sweep(&mut self, key: &KeyId, now: i64) {
         let Tokens {
-            entries, orders, ..
+            entries,
+            orders,
+            swept_at,
+            ..
         } = self;
+        if now.saturating_sub(*swept_at) >= LIFE_MAX_MS {
+            *swept_at = now;
+            orders.retain(|_, order| {
+                drop_ended(entries, order, now);
+                !order.is_empty()
+            });
+            return;
+        }
         let Some(order) = orders.get_mut(key) else {
             return;
         };
-        order.retain(|hash| {
-            let live = entries.get(hash).is_some_and(|stored| stored.ends_at > now);
-            if !live {
-                entries.remove(hash);
-            }
-            live
-        });
+        drop_ended(entries, order, now);
         if order.is_empty() {
             orders.remove(key);
         }
     }
+}
+
+/// Drops the ended entries of `order` from it and from `entries`.
+fn drop_ended(entries: &mut HashMap<TokenHash, Stored>, order: &mut VecDeque<TokenHash>, now: i64) {
+    order.retain(|hash| {
+        let live = entries.get(hash).is_some_and(|stored| stored.ends_at > now);
+        if !live {
+            entries.remove(hash);
+        }
+        live
+    });
 }
 
 /// The tokens the keyed page reads handed out, by the SHA-256 of each, in memory alone.

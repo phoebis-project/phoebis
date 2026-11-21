@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::request::Parts;
-use axum::http::{header, HeaderMap, HeaderName, Uri};
+use axum::http::{header, HeaderMap, HeaderName, Uri, Version};
 use axum::response::Response;
 use bytes::BytesMut;
 use hyper::upgrade::OnUpgrade;
@@ -95,16 +95,18 @@ pub(crate) fn signed_in_as(
         .is_some_and(|row| (row.incarnation, row.lifecycle_generation) == sign_in)
 }
 
-/// The socket row a request falls under: a `GET` whose host and plain path equal a row's, whose head asks for a
-/// WebSocket and declares no body.
+/// The socket row a request falls under: an HTTP/1.1 `GET` whose host and plain path equal a row's, whose head asks
+/// for a WebSocket and declares no body. The server upgrades no request of an earlier version, so such a request meets
+/// the key check as each other request does.
 pub(crate) fn row_of(
     table: &'static FeatureTable,
     method: &str,
+    version: Version,
     host: Option<&str>,
     uri: &Uri,
     headers: &HeaderMap,
 ) -> Option<&'static SocketRow> {
-    if method != "GET" {
+    if method != "GET" || version < Version::HTTP_11 {
         return None;
     }
     let host = host?;
@@ -348,8 +350,8 @@ impl Tunnel {
         // stop ends it at once, since a tunnel that waited out the drain would hold each stop for its bound, a check
         // ends one whose admission no longer holds, the idle time ends one whose two sides went silent, and the bound
         // on the client's unacknowledged bytes ends one whose client died while the upstream still sends. A check
-        // that is due wins over a byte or the idle time of the same poll, so such a socket carries no more bytes and
-        // ends under the check's cause.
+        // that fails wins over a byte or the idle time of the same poll, so a socket whose admission no longer holds
+        // carries no more bytes and ends under the check's cause.
         let (cause, check) = tokio::select! {
             biased;
             () = stopped(&mut stop) => ("stopped", None),
@@ -447,11 +449,11 @@ async fn carry(
     }
 }
 
-/// Bounds at `idle` how long bytes sent to a socket's client may stay unacknowledged. The idle time cannot end a
-/// socket whose client died without a close while the upstream still sends: each byte of the upstream starts that
-/// time again, and the write toward the client lands in the kernel's buffer. Under this bound the kernel ends the
-/// connection, and the tunnel's next read or write on the client's leg fails. A set that fails leaves the socket
-/// under the idle time alone.
+/// Bounds at `idle` how long bytes sent to a socket's client may stay unacknowledged, or wait unsent behind a client
+/// that takes none. The idle time cannot end a socket whose client died without a close while the upstream still
+/// sends: each byte of the upstream starts that time again, and the write toward the client lands in the kernel's
+/// buffer. Under this bound the kernel ends the connection, and the tunnel's next read or write on the client's leg
+/// fails. A set that fails leaves the socket under the idle time alone.
 #[cfg(target_os = "linux")]
 fn bound_unacknowledged(client: &Accepted, idle: Duration) {
     use tokio_util::either::Either;

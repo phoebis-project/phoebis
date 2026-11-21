@@ -605,11 +605,14 @@ test("the pager's state reads under its own address, and another address reads t
   assert.deepEqual(d.pagingFor(paging, 'other'), { cursor: undefined, stack: [], to: undefined });
 });
 
-test("Next from the first page keeps the first page's cursor on the stack, and Previous returns to the first page", () => {
+test("Next keeps each page's cursor on the stack, and Previous walks back one page at a time to the first", () => {
   frozen();
   const f = follow();
   act(() => f.last().goNext());
   assert.deepEqual([f.last().paging.cursor, f.last().paging.atFirst], ['26', false], 'the first page, whose cursor is undefined, stands before the second');
+  act(() => f.last().goNext());
+  act(() => f.last().paging.previous());
+  assert.deepEqual([f.last().paging.cursor, f.last().paging.atFirst], ['26', false], 'Previous from the third page reads the second, with the first before it');
   act(() => f.last().paging.previous());
   assert.deepEqual([f.last().paging.cursor, f.last().paging.atFirst], [undefined, true], 'Previous reads the first page, with nothing before it');
 });

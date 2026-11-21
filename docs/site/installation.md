@@ -67,11 +67,15 @@ environment file as root. A proxy listener that serves the LAN takes `--proxy-li
 `deploy/phoebis.service` runs the process as the `phoebis` user from `/var/lib/phoebis` with
 `EnvironmentFile=/etc/phoebis/phoebis.env`, which systemd reads and hands over, so the process never opens the file.
 `TimeoutStopSec=40` covers the 35-second shutdown budget, and `ProtectSystem=strict` with `StateDirectory=phoebis` and
-`ProtectHome=true` is the hardening around it. `StateDirectoryMode=0700` has systemd create `/var/lib/phoebis` for the
-`phoebis` user alone, the mode `check-config` expects of the data directory. The file `init` wrote names
-`/etc/phoebis/api_prices.yaml` as `stats.api_prices_path` and `/etc/phoebis/subscription_costs.yaml` as
-`stats.subscription_costs_path`. Leave both files uninstalled: the shipped files carry every revision and a release adds
-the next, and a copy at either path would shadow every later release's revisions until it was copied again.
+`ProtectHome=true` is the hardening around it. `LimitNOFILE=65536` raises the descriptor limit above systemd's default
+soft limit of 1,024 (`DefaultLimitNOFILE=` in `systemd-system.conf(5)`): the proxy listener and the feature listener
+admit 4,096 connections each, and each connection can hold an upstream connection, so both listeners at their bound hold
+16,384 descriptors ahead of the admin listener, the metrics listener and the store's files. `StateDirectoryMode=0700`
+has systemd create `/var/lib/phoebis` for the `phoebis` user alone, the mode `check-config` expects of the data
+directory. The file `init` wrote names `/etc/phoebis/api_prices.yaml` as `stats.api_prices_path` and
+`/etc/phoebis/subscription_costs.yaml` as `stats.subscription_costs_path`. Leave both files uninstalled: the shipped
+files carry every revision and a release adds the next, and a copy at either path would shadow every later release's
+revisions until it was copied again.
 
 A router that already runs from a file in your home directory moves under the unit after every line of the install block
 but `init`, which refuses every file that exists: stop the router, create `/var/lib/phoebis` at `0700`
@@ -137,6 +141,8 @@ KillSignal=SIGTERM
 TimeoutStopSec=40
 Restart=on-failure
 RestartSec=5
+# Two listeners of 4,096 connections, each with its upstream connection, hold up to 16,384 descriptors.
+LimitNOFILE=65536
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

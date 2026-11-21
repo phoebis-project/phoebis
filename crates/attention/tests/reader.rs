@@ -20,8 +20,9 @@ use phoebis_bus::{Kind as RequestKind, Origin, Outcome, QUEUE_DEPTH};
 use phoebis_ledger::{AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord};
 use phoebis_oauth::PollOutcome;
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, AttemptOutcome, Cancellation,
-    MemberWrite, NewBundle, PoolRow, Secret, StateCause, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, AttemptOutcome, Cancellation,
+    FeatureOverride, KeyFeatureAccounts, MemberWrite, NewBundle, PoolRow, Secret, StateCause,
+    StorageKey, Store,
 };
 use serde_json::json;
 use tower::ServiceExt;
@@ -682,6 +683,52 @@ async fn an_account_a_pool_selects_without_being_its_member_joins_that_pools_car
         (item.holds, &item.pools),
         (true, &vec!["guest".to_string()]),
         "the card is the selecting pool's, and the pool the account is a member of selects nothing"
+    );
+}
+
+#[tokio::test]
+async fn an_account_that_two_pools_and_a_key_select_names_each_pool_once_and_its_selections_in_order(
+) {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    mark(&rig, "business", AccountState::ReauthRequired, NOW);
+    let mut main = rig.store.pool("main").unwrap().unwrap();
+    main.feature_accounts.connectors = Some("business".into());
+    rig.store
+        .update_pool_with_members_and_guardrails(&main, main.updated_at, None, None, "test")
+        .unwrap();
+    let desktop = rig.store.api_key("desktop").unwrap().unwrap();
+    rig.store
+        .update_api_key(
+            &ApiKeyRow {
+                feature_accounts: KeyFeatureAccounts {
+                    artifacts: FeatureOverride::Account("business".into()),
+                    connectors: FeatureOverride::Inherit,
+                },
+                ..desktop.clone()
+            },
+            desktop.updated_at,
+            "test",
+        )
+        .unwrap();
+    // An id ahead of `main`, stored behind it, so the cards follow the ids and not the writes.
+    let mut guest = PoolRow::for_tests("guest");
+    guest.feature_accounts.artifacts = Some("business".into());
+    rig.store.insert_pool(&guest, "test").unwrap();
+    rig.router.reload().await.unwrap();
+    let conditions = read(&attention, NOW);
+    let item = find(&conditions, Kind::FeatureAccountUnavailable, "business").unwrap();
+    assert_eq!(
+        (item.holds, &item.pools, &item.detail["selections"]),
+        (
+            true,
+            &vec!["guest".to_string(), "main".to_string()],
+            &json!([
+                { "feature": "artifacts", "key": null, "pool": "guest" },
+                { "feature": "connectors", "key": null, "pool": "main" },
+                { "feature": "artifacts", "key": "desktop", "pool": "main" },
+            ])
+        )
     );
 }
 

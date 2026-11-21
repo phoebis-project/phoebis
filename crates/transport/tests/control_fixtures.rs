@@ -332,8 +332,9 @@ async fn bytes_that_are_no_answer_head_are_named_unreadable() {
 
 /// A TLS upstream for `api.anthropic.com` that hands its connection to `end` once the request has come up to its blank
 /// line, for the ends the fake cannot script, since each of its answers ends a connection in order. It serves the first
-/// connection whose handshake completes and drops each other, since a daemon of the development host connects to each
-/// new loopback listener. Answers the address, the CA and the task, whose join shows a failure of the upstream's own.
+/// connection whose handshake completes and drops each other, since another process of the machine may connect to a
+/// new loopback listener and send nothing. Answers the address, the CA and the task, whose join shows a failure of the
+/// upstream's own.
 async fn upstream_that_ends<F, Fut>(end: F) -> (SocketAddr, String, JoinHandle<()>)
 where
     F: FnOnce(SslStream<TcpStream>) -> Fut + Send + 'static,

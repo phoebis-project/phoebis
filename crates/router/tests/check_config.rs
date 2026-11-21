@@ -1,10 +1,9 @@
-//! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown or removed key,
-//! names the routing keys in its summary, and passes every shipped deploy config. It reads the key file as the start
-//! does and proves the key against the registry's canary, or against the sealed rows of a registry from before the
-//! canary, refuses a registry or a ledger a newer build wrote, and warns about an unset secret variable while refusing
-//! a set one the start refuses. It reads each listener's certificate pair as the start does, prints each listener's
-//! scheme on any address, and refuses a pair the start refuses with the loader's line. It reads the feature CA's files
-//! with a `features` block alone.
+//! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown or removed key, and
+//! passes every shipped deploy config. It reads the key file as the start does and proves the key against the
+//! registry's canary, or against the sealed rows of a registry from before the canary, refuses a registry or a ledger a
+//! newer build wrote, and warns about an unset secret variable while refusing a set one the start refuses. It reads
+//! each listener's certificate pair as the start does, prints each listener's scheme on any address, and refuses a pair
+//! the start refuses with the loader's line. It reads the feature CA's files with a `features` block alone.
 
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;

@@ -176,7 +176,9 @@ pub struct Limits {
     pub model_rejection: Duration,
     /// How often an open socket of the feature listener is checked against the registry.
     pub socket_check_interval: Duration,
-    /// How long an open socket of the feature listener may move no byte in either direction.
+    /// How long an open socket of the feature listener may move no byte in either direction, and on Linux the kernel's
+    /// bound on how long the bytes sent to the socket's client may stay unacknowledged, or wait unsent behind a client
+    /// that takes none.
     pub socket_idle_timeout: Duration,
     /// The open sockets of the feature listener, whatever their key.
     pub sockets_total: usize,

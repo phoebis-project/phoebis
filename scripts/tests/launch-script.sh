@@ -4,9 +4,9 @@
 # against loopback stubs, four of which speak TLS under a CA the test makes with openssl. A proxy's 502 to the CONNECT
 # has a stop of its own, which the script reaches only where curl knows each --write-out name of the probe. The script
 # runs in an empty environment under a throwaway home and reaches no host off loopback. Under PRIVATE_HOSTS=yes it
-# meets stand-ins of sudo, unshare, setpriv and mount, so no run gets root or binds a file over the machine's hosts
-# file. A claude on its PATH records its arguments and its umask and prints one line, which fails a case that expects
-# a stop and ends a case of the sound road.
+# meets stand-ins of sudo, unshare, mount and setpriv, so no run gets root or binds a file over the machine's hosts
+# file. A claude on its PATH records its arguments, its environment and its umask and prints one line, which fails a
+# case that expects a stop and ends a case of the sound road.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -50,9 +50,9 @@ command -v openssl > /dev/null || fail "openssl is missing"
 # families needs the router to answer at that port over each. Each TLS listener answers a request the way the router
 # answers a call without a key. The stub prints the first listener's port, the download's SHA-256, the four other ports
 # and yes or no for the two listeners on ::1 once it listens, yes where both stand, since a host without ::1, or another
-# process on one of their ports there, leaves one out. A thread per connection and the read timeout keep a listener
-# serving past a connection that sends nothing, so each TLS handshake runs in its connection's thread under that timeout
-# and never in the thread that accepts.
+# process on one of their ports there, leaves one or both out. A thread per connection and the read timeout keep a
+# listener serving past a connection that sends nothing, so each TLS handshake runs in its connection's thread under
+# that timeout and never in the thread that accepts.
 cat > "$tmp/stub.py" <<'PY'
 import hashlib
 import http.server
@@ -65,7 +65,7 @@ import threading
 ca_file, leaf_file, key_file, downloads = sys.argv[1:]
 
 # The download is the test CA's certificate, so the fingerprint the test fills is that file's, and the handshake with
-# either TLS listener passes under it as curl's CA file.
+# each TLS listener passes under it as curl's CA file.
 with open(ca_file, "rb") as f:
     CA = f.read()
 
@@ -217,10 +217,12 @@ SH
 chmod +x "$tmp/bin/curl"
 
 # A start under PRIVATE_HOSTS=yes calls tools that need root and binds a file over the machine's hosts file. The
-# stand-in of sudo empties the environment, sets the caller's ids and joins 022 to the umask, as the tool does by
-# default, and keeps PATH so the stand-ins stay found. unshare and setpriv run what follows their options, and mount
-# copies the file it is asked to bind. Each records its call, and sudo its words. The case of the private file's lines
-# needs the host's own unshare and mount, so their paths are read ahead of the stand-ins.
+# stand-in of sudo resets the environment to PATH and the caller's ids, as the tool resets it to a small set of its own,
+# and joins 022 to the umask, as the tool does by default. It keeps PATH so the stand-ins stay found, and the root
+# part's own env -i then empties the environment. unshare and setpriv run what follows their options, and mount copies
+# the file it is asked to bind, or fails as a failed mount does where a case asks it to. Each records its call, and sudo
+# its words. The case of the private file's lines needs the host's own unshare and mount, so their paths are read ahead
+# of the stand-ins.
 host_unshare=$(command -v unshare) || host_unshare=
 host_mount=$(command -v mount) || host_mount=
 cat > "$tmp/bin/sudo" <<SH
@@ -242,6 +244,7 @@ done
 cat > "$tmp/bin/mount" <<SH
 #!/bin/sh
 echo mount >> '$tmp/tools.called'
+[ ! -e '$tmp/mount-fails' ] || exit 32
 cp "\$2" '$tmp/hosts.bound'
 SH
 chmod +x "$tmp/bin/mount" "$tmp/bin/setpriv" "$tmp/bin/sudo" "$tmp/bin/unshare"
@@ -254,6 +257,7 @@ done
 
 cat > "$tmp/bin/claude" <<SH
 #!/bin/sh
+env > '$tmp/client-env'
 umask > '$tmp/client-umask'
 for word in "\$@"; do printf '[%s]\n' "\$word"; done > '$tmp/client-words'
 if [ "\${LAUNCH_MARK+x}" = x ]; then
@@ -330,20 +334,34 @@ rm "$tmp/home/.curlrc"
 standing_rules
 fill SETUP proxy
 
-# Under PRIVATE_HOSTS=yes the script runs a second time below sudo, which empties the environment, so the client gets
-# a variable of the calling shell only where the first run hands it over.
+# Under PRIVATE_HOSTS=yes the script runs a second time below sudo, which resets the environment to a small set, and
+# the root part's env -i empties it, so the client gets a variable of the calling shell only where the first run hands
+# it over, and none of the variables sudo sets.
 fill SETUP redirect
 fill PRIVATE_HOSTS yes
-rm -f "$tmp/tools.called"
+rm -f "$tmp/tools.called" "$tmp/client-env"
 LAUNCH_MARK=kept launch
 [[ "$out" == "the launch script started the client with LAUNCH_MARK=kept" ]] \
   || fail "a variable of the calling shell did not reach the client under PRIVATE_HOSTS=yes (exit $status): $out"
 grep -qx sudo "$tmp/tools.called" || fail "a start under PRIVATE_HOSTS=yes did not call sudo"
+[[ -f "$tmp/client-env" ]] && ! grep -q '^SUDO_UID=' "$tmp/client-env" \
+  || fail "the client got sudo's SUDO_UID under PRIVATE_HOSTS=yes: $(grep '^SUDO_' "$tmp/client-env" 2>&1)"
+
+# A bind that failed would leave the second run under the machine's hosts file, so the root part stops there, and the
+# first run names the private file and starts no client.
+fill SETUP redirect
+fill PRIVATE_HOSTS yes
+touch "$tmp/mount-fails"
+launch
+rm "$tmp/mount-fails"
+[[ "$out" == "phoebis: the private hosts file could not be put in place (exit 32)" ]] \
+  || fail "a bind that failed did not stop the start ahead of the second run (exit $status): $out"
 
 # A proxy setup reads no hosts file of its own, so a script that read PRIVATE_HOSTS there would ask its user for root
 # to bind a file that nothing reads.
 fill SETUP proxy
 fill PROXY_URL "http://127.0.0.1:$good"
+fill PRIVATE_HOSTS yes
 rm -f "$tmp/tools.called"
 launch
 [[ ! -e "$tmp/tools.called" ]] || fail "PRIVATE_HOSTS=yes under SETUP=proxy called $(tr '\n' ' ' < "$tmp/tools.called")"
@@ -454,16 +472,24 @@ grep -qx 'the launch script started the client' <<< "$out" \
   || fail "a start with a family that nothing answered over did not reach the client's start (exit $status): $out"
 [[ "$(grep -c '^phoebis: .*ipv6' <<< "$out")" == 1 && "$out" != *ipv4* ]] \
   || fail "a start that proved ipv4 alone did not name ipv6 in one line and ipv4 nowhere (exit $status): $out"
-# No other case starts the client with both families at the router, so a start that stopped or named a family there
-# would go unseen. localhost at the fifth listener's port leads each family to the router.
 if [[ "$v6" == yes ]]; then
+  # The families turned, so an arm or a notice that knows one family's word alone fails one of the two sides. Rules
+  # toward an IPv6 literal give each probe over IPv4 nothing to connect to and lead each probe over IPv6 to the router.
+  rules "api.anthropic.com:443:[::1]:$direct" "mcp-proxy.anthropic.com:443:[::1]:$direct"
+  launch
+  grep -qx 'the launch script started the client' <<< "$out" \
+    || fail "a start with a family that nothing answered over did not reach the client's start (exit $status): $out"
+  [[ "$(grep -c '^phoebis: .*ipv4' <<< "$out")" == 1 && "$out" != *ipv6* ]] \
+    || fail "a start that proved ipv6 alone did not name ipv4 in one line and ipv6 nowhere (exit $status): $out"
+  # No other case starts the client with both families at the router, so a start that stopped or named a family there
+  # would go unseen. localhost at the fifth listener's port leads each family to the router.
   rules "api.anthropic.com:443:localhost:$direct" "mcp-proxy.anthropic.com:443:localhost:$direct"
   launch
   [[ "$out" == "the launch script started the client" ]] \
     || fail "a start that proved both families did not end at the client's start alone (exit $status): $out"
   standing_rules
 else
-  echo "launch-script: no listener on ::1, the side with both families proved did not run"
+  echo "launch-script: no listener on ::1, the sides with the families turned and with both proved did not run"
 fi
 
 echo "launch-script: ok"

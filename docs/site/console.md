@@ -969,7 +969,7 @@ The filter bar holds the range, the search, Add filter, the Columns button, the 
 split Refresh button and the count of rows shown ("25 shown, more available"), the right edge on a second line at 1280
 px whatever the count reads, since its slot keeps the width of its longest text. The range offers Last hour, Last 6
 hours, Last 24 hours (the default), Last 7 days, Last 30 days or Custom range with From and To, drawn as the pills 1h,
-6h, 24h, 7d, 30d and Custom, the pressed pill reading `{label}, from {from}` on hover. Custom opens From and To in a
+6h, 24h, 7d, 30d and Custom, a pressed preset reading `{label}, from {from}` on hover. Custom opens From and To in a
 popover on the window the table shows, where Apply stays disabled under "End must be after start." while the pair is
 wrong, an end past now reads as now, and the pill prints an applied span ("13:00 to 14:30", the date before each time
 across days). The search, "Search id, session, key, account, model, error, message id", matches the request id, the

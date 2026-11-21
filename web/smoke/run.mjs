@@ -11588,7 +11588,7 @@ await forView('/keys', async () => {
   results.push({
     name: "/keys the key dialog's feature selects wait for the account list at each opening",
     ok:
-      held.calls.length > 0 &&
+      held.calls.length === 1 &&
       JSON.stringify(read.waiting?.map((s) => s?.disabled ?? null)) === JSON.stringify([true, true]) &&
       JSON.stringify(read.landed) === JSON.stringify([{ disabled: false, third: 'contract (contract)' }, { disabled: false, third: 'contract (contract)' }]),
     missing: [`listAccounts held ${held.calls.length}`, `waiting ${JSON.stringify(read.waiting)}`, `landed ${JSON.stringify(read.landed)}, where the third option of each is the seed contract in the pool contract`],
@@ -16727,7 +16727,7 @@ await forView('/requests', async () => {
         JSON.stringify(read[NOT_FOUND]) === JSON.stringify({ text: '404', tone: 'badge--critical' }),
       missing: [JSON.stringify(read)],
     });
-    // The socket of the seed's watch, at 14:19:36.200 on the story's clock, whose row ends at the 101.
+    // The socket of the seed's watch, at 13:13:26.200 on the story's clock, whose row ends at the 101.
     const WATCH = 'req_phoebis_3f9d2c71e6a84b05c8e1a7d4b2f60e93';
     const watch = toneOf(WATCH);
     results.push({

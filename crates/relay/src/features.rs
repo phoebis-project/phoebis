@@ -117,7 +117,14 @@ async fn feature_call(State(listener): State<Listener>, request: Request) -> Res
         .await;
     }
     // Ahead of the key, which a socket request does not present: its feature's own rule admits it.
-    if let Some(row) = row_of(table, method, host.as_deref(), &parts.uri, &parts.headers) {
+    if let Some(row) = row_of(
+        table,
+        method,
+        parts.version,
+        host.as_deref(),
+        &parts.uri,
+        &parts.headers,
+    ) {
         return socket_request(&listener, row, parts, call).await;
     }
     let snapshot = relay.router().snapshot();

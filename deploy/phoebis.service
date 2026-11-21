@@ -16,6 +16,8 @@ KillSignal=SIGTERM
 TimeoutStopSec=40
 Restart=on-failure
 RestartSec=5
+# Two listeners of 4,096 connections, each with its upstream connection, hold up to 16,384 descriptors.
+LimitNOFILE=65536
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

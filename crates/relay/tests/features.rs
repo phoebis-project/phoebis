@@ -600,7 +600,11 @@ async fn a_path_whose_visible_characters_end_at_a_prefix_is_refused() {
     let h = features_harness(&up, both_features_at_a()).await;
     let listener = feature_listener(&h).await;
     let mut answers = Vec::new();
-    for request_line in ["GET /api/frame/%20", "GET /api/frame/%20%3Fx"] {
+    for request_line in [
+        "GET /api/frame/%20",
+        "GET /api/frame/%20%3Fx",
+        "GET /api/frame%20/x",
+    ] {
         let (status, headers, _) = listener.send(API, &keyed(request_line, API, "", b"")).await;
         let (status, code, _) = refusal_of(status, &headers);
         answers.push((request_line, status, code.to_owned()));
@@ -614,6 +618,7 @@ async fn a_path_whose_visible_characters_end_at_a_prefix_is_refused() {
                 403,
                 "feature_not_allowed".to_owned()
             ),
+            ("GET /api/frame%20/x", 403, "feature_not_allowed".to_owned()),
         ]
     );
     assert_eq!(feature_lines(&up), Vec::<String>::new());
@@ -3068,6 +3073,29 @@ async fn a_socket_request_that_offers_two_tokens_is_refused() {
 }
 
 #[tokio::test]
+async fn an_http_1_0_request_in_the_sockets_shape_gets_the_401_of_a_call_without_a_key() {
+    let sockets = Switched::default();
+    let token = sync_token(1_600);
+    let up = watch_fake(page_answer(&token), switch(&sockets)).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    read_page(&listener).await;
+    let request = format!(
+        "GET /api/frame/sync HTTP/1.0\r\nHost: api.anthropic.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+         Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: aW52ZW50ZWQga2V5IDAwMQ==\r\n\
+         Sec-WebSocket-Protocol: frame-sync.v1,{token}\r\n\r\n"
+    );
+    let (status, headers, _) = refused_upgrade(&listener, request.as_bytes()).await;
+    assert_eq!(
+        (status, error_code(&headers)),
+        (401, Some("auth_missing")),
+        "{headers:?}"
+    );
+    assert_eq!(upgrade_heads(&up).len(), 0, "an upgrade went upstream");
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_page_read_cut_behind_its_token_admits_nothing() {
     let sockets = Switched::default();
     let token = sync_token(1_600);
@@ -3118,14 +3146,14 @@ async fn a_token_behind_text_that_expands_far_admits() {
 }
 
 #[tokio::test]
-async fn a_token_of_a_deleted_key_is_refused() {
+async fn a_token_of_a_revoked_key_is_refused() {
     let sockets = Switched::default();
     let token = sync_token(1_600);
     let up = watch_fake(page_answer(&token), switch(&sockets)).await;
     let h = features_harness(&up, both_features_at_a()).await;
     let listener = feature_listener(&h).await;
     read_page(&listener).await;
-    h.store.delete_api_key("desktop", "test").unwrap();
+    h.store.revoke_api_key("desktop", NOW, "test").unwrap();
     h.router.reload().await.unwrap();
     let (status, headers, _) = refused_upgrade(&listener, &upgrade_request(&token)).await;
     assert_eq!(status, 401, "{headers:?}");
@@ -3471,10 +3499,12 @@ async fn a_socket_past_the_total_gets_the_429_of_the_total() {
     up.shutdown().await;
 }
 
-/// The harness of one key that may hold one open socket.
+/// The harness of one key that may hold one open socket, on a listener that may hold one, so a socket's end has to
+/// free both counts for the next socket.
 async fn one_socket_harness(up: &FakeUpstream) -> Harness {
     let limits = Limits {
         key_sockets: 1,
+        sockets_total: 1,
         ..default_limits()
     };
     harness_with_limits(up, &[oauth("a", SECRET_A, 0)], both_features_at_a(), limits).await

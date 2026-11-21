@@ -263,9 +263,9 @@ pub struct Condition {
     pub kind: Kind,
     pub subject: Subject,
     pub holds: bool,
-    /// When the condition started, in Unix milliseconds. `None` while it does not hold, and for an account state that
-    /// holds on the one read where its account left between the reader's read of the accounts and its read of their
-    /// extras.
+    /// When the condition started, in Unix milliseconds. `None` while it does not hold, and for an account state or a
+    /// `feature_account_unavailable` of an account that is not ready that holds on the one read where its account left
+    /// between the reader's read of the accounts and its read of their extras.
     pub since: Option<i64>,
     /// The pools the condition belongs to, so a pool card filters the same list the dashboard reads.
     pub pools: Vec<String>,
@@ -575,8 +575,8 @@ pub(crate) fn refresh_facts(
     store.refresh_histories(&holders, REFRESH_RUN_READ)
 }
 
-/// What the reset condition, the wall's join and the two account states read beside the accounts: each account's
-/// stored extras and the warning's days.
+/// What the two account states, `feature_account_unavailable`, the reset condition and the wall's join read beside the
+/// accounts: each account's stored extras and the warning's days.
 pub(crate) struct ResetFacts<'a> {
     pub extras: &'a BTreeMap<String, AccountExtras>,
     pub warning_days: u32,
@@ -605,7 +605,8 @@ impl ResetFacts<'_> {
 /// `refresh_facts` and their extras, and the parked rows, before it takes the reader's state, and a read that fails
 /// fails the whole answer, since a series answered without its evidence could clear a real alarm. `resets` carries
 /// those extras, whose stored limit resets `limit_reset_ending` and the wall's `reset` read and whose state instants
-/// date the two account states, with the warning's days.
+/// date the two account states and the `feature_account_unavailable` of an account that is not ready, with the
+/// warning's days.
 /// `ledger` carries the parked rows, the fold's routing conditions and the expiries between turns of the last 24 hours
 /// by pool and key. It is `None` where no ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four
 /// routing conditions (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) and
@@ -804,7 +805,7 @@ pub(crate) fn conditions(
                 .get(&account.id)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            // The listener's own test, so the item holds exactly while the selections' feature calls get the `403`.
+            // The listener's own test, so the item holds while the account refuses the calls its selections send.
             // A deletion clears each selection that names the account, so `Deleted` never holds the item.
             let (obstacle, since) = match feature_ready(&snapshot, &account.id, now) {
                 Err(Obstacle::Unready) => (Some("unready"), state_changed_at),
