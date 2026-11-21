@@ -5,7 +5,7 @@
 
 use unicode_general_category::{get_general_category, GeneralCategory};
 
-/// The cap of a name, a title, a type or a branch, in bytes of UTF-8.
+/// The cap of a branch, a description, a name, a title or a type, in bytes of UTF-8.
 const SHORT_CAP: usize = 256;
 /// The cap of a path or a remote, in bytes of UTF-8.
 const LONG_CAP: usize = 1_024;
@@ -172,12 +172,12 @@ fn text(value: Option<String>) -> Option<String> {
     (!kept.is_empty()).then(|| kept.to_owned())
 }
 
-/// A path, a branch or a type is absent over its cap, since a cut one would name another directory, branch or type.
+/// A branch, a path or a type is absent over its cap, since a cut one would name another branch, directory or type.
 fn whole(value: Option<String>, cap: usize) -> Option<String> {
     text(value).filter(|value| value.len() <= cap)
 }
 
-/// A name, a description or a title over its cap keeps the longest prefix of whole characters within it.
+/// A description, a name or a title over its cap keeps the longest prefix of whole characters within it.
 fn cut(value: Option<String>, cap: usize) -> Option<String> {
     let value = text(value)?;
     if value.len() <= cap {
@@ -272,8 +272,14 @@ fn host_colon(value: &str) -> Option<usize> {
 /// The last check: a result is kept only where it reads as `host/path` itself, so a port that is no number, a
 /// credential or a local path never stands as a repository.
 fn reads_reduced(value: &str) -> bool {
+    // A `[` that no `]` closes ahead of the first `/` would hide each colon behind it from the colon test.
+    let host_side = value.find('/').map_or(value, |at| &value[..at]);
+    let closed = host_side
+        .rfind('[')
+        .is_none_or(|open| host_side[open..].contains(']'));
     !value.contains(['@', '?', '#', '\\', ' '])
         && !value.contains("://")
         && !value.starts_with(['/', '.', '~'])
         && host_colon(value).is_none()
+        && closed
 }
