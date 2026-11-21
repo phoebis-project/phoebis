@@ -359,10 +359,9 @@ export function sessionLabel(session: Pick<Session, 'facts' | 'sessionId'>): str
 
 /**
  * An agent's label: its name, else its description. Null where neither names one or the label is the agent id, so a
- * caller draws the id alone, and null for main, which reads no reported fact.
+ * caller draws the id alone.
  */
 export function agentLabel(agentId: string, facts: Pick<SessionAgentFacts, 'description' | 'name'> | null): string | null {
-  if (agentId === MAIN_AGENT) return null;
   const label = facts?.name ?? facts?.description ?? null;
   return label === agentId ? null : label;
 }

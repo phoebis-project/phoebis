@@ -262,12 +262,11 @@ test("sessionLabel reads the title, else the project's base name, else null", ()
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, title: 'b2c4' }, sessionId: 'b2c4' }), null, 'a title that is the id');
 });
 
-test('agentLabel reads null for main, else the name, else the description, else null', () => {
+test('agentLabel reads the name, else the description, else null', () => {
   assert.equal(d.agentLabel('7b2e', { description: 'Review the retry loop', name: null }), 'Review the retry loop', 'no name');
   assert.equal(d.agentLabel('7b2e', null), null, 'no report');
   assert.equal(d.agentLabel('7b2e', { description: null, name: null }), null, 'a report with neither');
   assert.equal(d.agentLabel('7b2e', { description: null, name: '7b2e' }), null, 'a name that is the id');
-  assert.equal(d.agentLabel('main', { description: 'Lead', name: 'lead' }), null, 'main whatever its entry holds');
 });
 
 test("groupSessions keeps a checkout and its worktrees in one repository group, the groups in name order and each group's rows as handed", () => {
