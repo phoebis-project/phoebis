@@ -26067,6 +26067,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "lifecycle": null
             }
           ],
+          "agent_facts": [],
           "agent_requests": [
             {
               "agent_id": "main",
@@ -26098,6 +26099,14 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             }
           ],
+          "facts": {
+            "branch": null,
+            "cwd": null,
+            "project": null,
+            "repository": null,
+            "repository_root": null,
+            "title": null
+          },
           "keepalive": {
             "cause": null,
             "last_guard": null,
@@ -26186,7 +26195,16 @@ export const FIXTURES: Record<string, Fixture> = {
               "lifecycle": null
             }
           ],
+          "agent_facts": [],
           "agent_requests": [],
+          "facts": {
+            "branch": null,
+            "cwd": null,
+            "project": null,
+            "repository": null,
+            "repository_root": null,
+            "title": null
+          },
           "keepalive": {
             "cause": null,
             "last_guard": null,
@@ -26279,7 +26297,16 @@ export const FIXTURES: Record<string, Fixture> = {
               "lifecycle": null
             }
           ],
+          "agent_facts": [],
           "agent_requests": [],
+          "facts": {
+            "branch": null,
+            "cwd": null,
+            "project": null,
+            "repository": null,
+            "repository_root": null,
+            "title": null
+          },
           "keepalive": {
             "cause": null,
             "last_guard": null,
@@ -26455,6 +26482,14 @@ export const FIXTURES: Record<string, Fixture> = {
               "lifecycle": "registered"
             }
           ],
+          "agent_facts": [
+            {
+              "agent_id": "worker-1",
+              "agent_type": "code-reviewer",
+              "description": "Review the retry loop",
+              "name": "reviewer"
+            }
+          ],
           "agent_requests": [
             {
               "agent_id": "main",
@@ -26552,6 +26587,14 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             }
           ],
+          "facts": {
+            "branch": "fix/checkout-retry",
+            "cwd": "/home/dev/work/storefront/api",
+            "project": "/home/dev/work/storefront",
+            "repository": "git.example/acme/storefront",
+            "repository_root": "/home/dev/work/storefront",
+            "title": "Checkout retry rework"
+          },
           "keepalive": {
             "cause": "scheduled",
             "last_guard": "rearm",
@@ -26637,6 +26680,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 0,
           "agent_contexts": [],
+          "agent_facts": [],
           "agent_requests": [
             {
               "agent_id": "main",
@@ -26667,6 +26711,14 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             }
           ],
+          "facts": {
+            "branch": null,
+            "cwd": null,
+            "project": null,
+            "repository": null,
+            "repository_root": null,
+            "title": null
+          },
           "keepalive": {
             "cause": null,
             "last_guard": null,
@@ -26752,6 +26804,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 0,
           "agent_contexts": [],
+          "agent_facts": [],
           "agent_requests": [
             {
               "agent_id": "main",
@@ -26783,6 +26836,14 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             }
           ],
+          "facts": {
+            "branch": null,
+            "cwd": null,
+            "project": null,
+            "repository": null,
+            "repository_root": null,
+            "title": null
+          },
           "keepalive": {
             "cause": null,
             "last_guard": null,
@@ -26867,6 +26928,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 0,
           "agent_contexts": [],
+          "agent_facts": [],
           "agent_requests": [
             {
               "agent_id": "main",
@@ -26898,6 +26960,14 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             }
           ],
+          "facts": {
+            "branch": null,
+            "cwd": null,
+            "project": null,
+            "repository": null,
+            "repository_root": null,
+            "title": null
+          },
           "keepalive": {
             "cause": null,
             "last_guard": null,

@@ -155,9 +155,15 @@ pub(crate) struct Session {
     /// is `none` the pins used within the lesser of `sessions.non_companion_idle_seconds` and the session expiry. Empty
     /// where none draws.
     pub agent_contexts: Vec<AgentContext>,
+    /// One entry per agent of the keepalive engine's record whose companion reported a fact, ordered by agent id.
+    /// Empty where no agent holds one, on a row without a companion and on a row of an earlier holder.
+    pub agent_facts: Vec<SessionAgentFacts>,
     /// One entry per agent the ledger holds requests of, its requests and their spend over every model it ran, with
     /// the model, the type, the account and the instant of its newest request.
     pub agent_requests: Vec<AgentRequests>,
+    /// What the session's companion reported of it. Every member reads null where it reported none, on a row
+    /// without a companion and on a row of an earlier holder.
+    pub facts: SessionFacts,
     /// Main's recipe, or the newest other agent's where main holds none.
     pub keepalive: SessionKeepalive,
     /// Main's lifecycle word from the keepalive engine's record, whether or not a recipe stands: `busy`, `idle`,
@@ -289,6 +295,43 @@ impl From<&phoebis_keepalive::KeepaliveSummary> for SessionKeepalive {
             state: summary.state.map(word),
         }
     }
+}
+
+/// The session's reported facts, each cleaned by the router before it is kept.
+#[derive(Default, serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionFacts {
+    pub branch: Option<String>,
+    pub cwd: Option<String>,
+    pub project: Option<String>,
+    /// The origin remote as `host/path`, without scheme, credentials, port, query, fragment or one trailing `.git`
+    /// of a raw remote.
+    pub repository: Option<String>,
+    pub repository_root: Option<String>,
+    pub title: Option<String>,
+}
+
+impl From<&phoebis_keepalive::SessionFacts> for SessionFacts {
+    fn from(facts: &phoebis_keepalive::SessionFacts) -> Self {
+        SessionFacts {
+            branch: facts.branch().map(str::to_owned),
+            cwd: facts.cwd().map(str::to_owned),
+            project: facts.project().map(str::to_owned),
+            repository: facts.repository().map(str::to_owned),
+            repository_root: facts.repository_root().map(str::to_owned),
+            title: facts.title().map(str::to_owned),
+        }
+    }
+}
+
+/// One agent's reported facts.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionAgentFacts {
+    pub agent_id: String,
+    pub agent_type: Option<String>,
+    pub description: Option<String>,
+    pub name: Option<String>,
 }
 
 /// The per-model cost card the console shows beside the sessions.
@@ -540,7 +583,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             .entry(key.clone())
             .or_insert_with_key(|key| unpinned_row(key, None));
         // A row whose generation no live key holds is read-only: the engine's sessions and recipes are keyed
-        // under the live generation alone and cannot belong to it, so it carries no companion or recipe. A
+        // under the live generation alone and cannot belong to it, so it carries no companion, fact or recipe. A
         // deleted key's session outlives the key in the engine until the engine's next tick ends it, so a session
         // the engine still holds is skipped on `historical` as well.
         if live.get(&key.key_id) != Some(&key.key_generation) {
@@ -550,6 +593,17 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         entry.companion_since = view.companion_since;
         entry.agents = view.agents as u64;
         entry.keepalive = SessionKeepalive::from(&view.keepalive);
+        entry.agent_facts = view
+            .agent_facts
+            .iter()
+            .map(|(agent_id, facts)| SessionAgentFacts {
+                agent_id: agent_id.clone(),
+                agent_type: facts.agent_type().map(str::to_owned),
+                description: facts.description().map(str::to_owned),
+                name: facts.name().map(str::to_owned),
+            })
+            .collect();
+        entry.facts = SessionFacts::from(&view.facts);
         entry.lifecycle = view
             .lifecycles
             .get(MAIN_AGENT)

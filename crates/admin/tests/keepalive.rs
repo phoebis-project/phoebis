@@ -616,6 +616,97 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes() {
     );
 }
 
+/// Each reported value differs from every other, so a member that answers another member's value fails here.
+#[tokio::test]
+async fn a_session_row_answers_the_facts_its_companion_reported() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let generation = common::generation(&parts.store, "desktop");
+    let report = |event: Event| {
+        parts
+            .keepalive
+            .apply_event("desktop", generation, event.try_into().unwrap())
+            .unwrap()
+    };
+    report(Event {
+        event: "session_start".into(),
+        session_id: "s1".into(),
+        instance_id: "i1".into(),
+        sequence: 1,
+        ..Default::default()
+    });
+    report(Event {
+        event: "session_facts".into(),
+        session_id: "s1".into(),
+        instance_id: "i1".into(),
+        sequence: 2,
+        branch: Some(Some("fix/checkout-retry".into())),
+        cwd: Some(Some("/home/dev/work/storefront/api".into())),
+        project: Some(Some("/home/dev/work/storefront/web".into())),
+        repository: Some(Some("https://git.example/acme/storefront.git".into())),
+        repository_root: Some(Some("/home/dev/work/storefront".into())),
+        title: Some(Some("Checkout retry rework".into())),
+        ..Default::default()
+    });
+    let started = report(Event {
+        event: "agent_start".into(),
+        session_id: "s1".into(),
+        instance_id: "i1".into(),
+        sequence: 3,
+        agent_id: Some("a1".into()),
+        ..Default::default()
+    });
+    report(Event {
+        event: "agent_facts".into(),
+        session_id: "s1".into(),
+        instance_id: "i1".into(),
+        sequence: 4,
+        agent_id: Some("a1".into()),
+        request_generation: Some(started.request_generation),
+        agent_type: Some(Some("code-reviewer".into())),
+        description: Some(Some("Review the retry loop".into())),
+        name: Some(Some("reviewer".into())),
+        ..Default::default()
+    });
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == "s1")
+        .expect("a registered session is listed");
+    assert_eq!(
+        row["facts"],
+        serde_json::json!({
+            "branch": "fix/checkout-retry",
+            "cwd": "/home/dev/work/storefront/api",
+            "project": "/home/dev/work/storefront/web",
+            "repository": "git.example/acme/storefront",
+            "repository_root": "/home/dev/work/storefront",
+            "title": "Checkout retry rework"
+        }),
+        "the row answers the session's facts as the router kept them, the remote reduced"
+    );
+    assert_eq!(
+        row["agent_facts"],
+        serde_json::json!([{
+            "agent_id": "a1",
+            "agent_type": "code-reviewer",
+            "description": "Review the retry loop",
+            "name": "reviewer"
+        }]),
+        "the agent that reported facts has an entry, and main, which reported none, has none"
+    );
+}
+
 /// The ten idle-age buckets as the overview answers them, `reached` raised in the buckets `reached` names.
 fn idle_returns(reached: &[usize]) -> serde_json::Value {
     let bounds = phoebis_keepalive::IDLE_AGE_BOUNDS_SECONDS;
@@ -1964,7 +2055,7 @@ async fn a_main_registered_again_after_its_sessions_end_reads_registered_on_its_
 }
 
 /// A deleted key's session outlives the key in the engine until the engine's next tick ends it: the row must read
-/// as historical, with no companion, agents, or recipe.
+/// as historical, with no agents, companion, facts or recipe.
 #[tokio::test]
 async fn a_deleted_keys_session_is_historical_with_no_companion() {
     let parts = common::admin_parts_full().await;
@@ -1978,7 +2069,7 @@ async fn a_deleted_keys_session_is_historical_with_no_companion() {
     )
     .await;
     let g = common::generation(&parts.store, "desktop");
-    parts
+    let registered = parts
         .keepalive
         .apply_event(
             "desktop",
@@ -1994,6 +2085,32 @@ async fn a_deleted_keys_session_is_historical_with_no_companion() {
             .unwrap(),
         )
         .unwrap();
+    // The session and its live agent each report a fact, so the row behind the deletion has one of each to leave out.
+    for event in [
+        Event {
+            event: "session_facts".into(),
+            session_id: "s1".into(),
+            instance_id: "i1".into(),
+            sequence: 2,
+            title: Some(Some("Checkout retry".into())),
+            ..Default::default()
+        },
+        Event {
+            event: "agent_facts".into(),
+            session_id: "s1".into(),
+            instance_id: "i1".into(),
+            sequence: 3,
+            agent_id: Some("main".into()),
+            request_generation: Some(registered.request_generation),
+            name: Some(Some("lead".into())),
+            ..Default::default()
+        },
+    ] {
+        parts
+            .keepalive
+            .apply_event("desktop", g, event.try_into().unwrap())
+            .unwrap();
+    }
     let listed = common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         v["sessions"]
             .as_array()
@@ -2012,6 +2129,20 @@ async fn a_deleted_keys_session_is_historical_with_no_companion() {
         (row["historical"].as_bool(), row["companion"].as_str()),
         (Some(false), Some("reporting")),
         "live before the key is deleted"
+    );
+    assert_eq!(
+        row["facts"]["title"], "Checkout retry",
+        "the live row answers the session's title"
+    );
+    assert_eq!(
+        row["agent_facts"],
+        serde_json::json!([{
+            "agent_id": "main",
+            "agent_type": null,
+            "description": null,
+            "name": "lead"
+        }]),
+        "the live row answers main's name"
     );
     assert_eq!(
         delete(&parts.app, "/admin/keys/desktop", Some(&cookie))
@@ -2037,6 +2168,15 @@ async fn a_deleted_keys_session_is_historical_with_no_companion() {
         ),
         (Some(true), Some("none"), Some(0), true),
         "the deleted key's session outlives it in the engine, but the row reads as historical and read-only"
+    );
+    assert!(
+        row["facts"]["title"].is_null(),
+        "the historical row answers no title: {row}"
+    );
+    assert_eq!(
+        row["agent_facts"],
+        serde_json::json!([]),
+        "the historical row answers no agent's facts"
     );
     let held =
         |engine: &phoebis_keepalive::Engine| engine.sessions().iter().any(|s| s.session_id == "s1");
