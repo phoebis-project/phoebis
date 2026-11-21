@@ -26471,7 +26471,7 @@ await forView(CARD_VIEWS.map(([path]) => path), async () => {
     '/keys': ['search: Search keys', 'Add filter', 'Sort', 'Create key', 'edge: Refresh, count'],
     '/pools': ['Sort', 'Create pool', 'edge: Refresh, count'],
     '/quota': ['Sort', 'Refresh all', 'edge: Refresh, count'],
-    '/sessions': ['search: Session id', 'Add filter', 'Columns', 'Group by', 'Sort', 'edge: Refresh, count'],
+    '/sessions': ['search: Session id, title, project, repository or branch', 'Add filter', 'Columns', 'Group by', 'Sort', 'edge: Refresh, count'],
   };
   const read = {};
   for (const [path] of CARD_VIEWS) {
@@ -27052,6 +27052,15 @@ await forView('/sessions', async () => {
         query: '?search=8a3c',
         rows: [],
         search: '8a3c',
+      },
+      {
+        // Of the ids and the reported facts, the title of the story's first session (fa23a6da) alone holds rework,
+        // so the term in capitals keeps that row by its title.
+        count: '1 session · 3 agents',
+        name: '/sessions ?search=REWORK keeps the row whose title holds the word, whatever the case',
+        query: '?search=REWORK',
+        rows: ['fa23a6da'],
+        search: 'REWORK',
       },
     ];
     for (const c of FILTER_CASES) {

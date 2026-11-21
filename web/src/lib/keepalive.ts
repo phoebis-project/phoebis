@@ -511,7 +511,7 @@ export interface SessionFilters {
   model: string[];
   pool: string[];
   released: boolean;
-  /** A session id's prefix. */
+  /** A session id's prefix, or a part of a fact the session's companion reports, whatever the case. */
   search: string;
   slowed: boolean;
   /** The lifecycle words, `released`, `unknown` and `unreported` among them. */
@@ -588,15 +588,26 @@ function drawnLines(row: Pick<MatchRow, 'finished' | 'lines'>, filters: Pick<Ses
 }
 
 /**
+ * The id by its start, or one of the session's reported facts by any part, whatever the case. No agent's fact is
+ * read: a match on a line belongs to the Agents filters and their fold.
+ */
+function searchFinds(session: Pick<Session, 'facts' | 'sessionId'>, search: string): boolean {
+  const term = search.toLowerCase();
+  if (session.sessionId.toLowerCase().startsWith(term)) return true;
+  const { branch, cwd, project, repository, repositoryRoot, title } = session.facts;
+  return [branch, cwd, project, repository, repositoryRoot, title].some((value) => value !== null && value.toLowerCase().includes(term));
+}
+
+/**
  * The row passes every Session filter and, where an Agents filter stands, one of the lines it draws passes them all. A
- * finished row is out unless `finished` stands. The search matches the id's prefix whatever its case. Key reads the
- * Requests view's selectors: `id@generation` names one lifetime and a bare id the live key's rows, so an earlier
- * holder's rows answer to their own lifetime alone.
+ * finished row is out unless `finished` stands. The search matches the id's start or a part of a reported fact,
+ * whatever its case. Key reads the Requests view's selectors: `id@generation` names one lifetime and a bare id the live
+ * key's rows, so an earlier holder's rows answer to their own lifetime alone.
  */
 export function matches(row: MatchRow, filters: SessionFilters, now: number): boolean {
   const { session } = row;
   if (row.finished && !filters.finished) return false;
-  if (filters.search !== '' && !session.sessionId.toLowerCase().startsWith(filters.search.toLowerCase())) return false;
+  if (filters.search !== '' && !searchFinds(session, filters.search)) return false;
   const active = ACTIVE_WITHIN.find((a) => a.id === filters.active);
   if (active !== undefined && !activeWithin(session, active.ms, now)) return false;
   if (misses(filters.client, clientVersion(session.userAgent)) || misses(filters.companion, session.companion) || misses(filters.pool, row.poolId)) return false;

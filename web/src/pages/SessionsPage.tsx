@@ -446,7 +446,7 @@ export function SessionsPage() {
           dimensions={SESSIONS_DIMENSIONS}
           filters={filters}
           options={options}
-          placeholder="Session id"
+          placeholder="Session id, title, project, repository or branch"
           refresh={{
             intervalMs,
             onIntervalChange: setIntervalMs,

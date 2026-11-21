@@ -365,6 +365,14 @@ test("matches reads a line's Account as the Agents table shows it: the pin's fir
   assert.equal(d.matches(row({ ...matchLine('a1', 'claude-opus-5', 'busy'), pin: { accountId: 'a' }, recipe: null }), onA, NOW), true, "a pin with no recipe names the pin's account");
 });
 
+test('matches searches the id by its start and the reported facts by a word, whatever the case', () => {
+  const found = (session, search) => d.matches({ finished: false, lines: [], poolId: 'all', session: { ...matchSession, facts: NO_FACTS, ...session } }, { ...NO_FILTERS, search }, NOW);
+  assert.equal(found({ facts: { ...NO_FACTS, title: 'Gateway fixes' } }, 'GATE'), true, 'a word of the title');
+  assert.equal(found({ facts: { ...NO_FACTS, project: '/home/u/work/storefront-gateway' } }, 'GATE'), true, 'the end of the project path');
+  assert.equal(found({ sessionId: 'b2c4d6' }, 'b2'), true, "the id's start");
+  assert.equal(found({ sessionId: 'a7b2c4' }, 'b2'), false, 'the id past its start');
+});
+
 test('hiddenLines counts the lines the Agents filters hide and the earlier agents', () => {
   const session = { ...matchSession, agentRequests: [ledgerEntry('main', 'claude-sonnet-5', ms(14, 0)), ledgerEntry('a1', 'claude-opus-5', ms(14, 5)), ledgerEntry('b2', 'claude-sonnet-5', ms(14, 6)), ledgerEntry('e9', 'claude-haiku-4-5', ms(13, 0))] };
   const row = { finished: false, lines: [matchLine('main', 'claude-sonnet-5', 'busy'), matchLine('a1', 'claude-opus-5', 'busy'), matchLine('b2', 'claude-sonnet-5', 'idle')], poolId: 'all', session };
