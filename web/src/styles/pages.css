@@ -2772,11 +2772,6 @@
   border-bottom-color: transparent;
 }
 
-/* The session id is mono, and the client line under it is prose. */
-.srow__client {
-  font-family: var(--font-sans);
-}
-
 /* The id line: the column's free width cuts it with an ellipsis, the whole id on the cell's title. */
 .srow__id {
   display: block;
