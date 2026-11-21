@@ -1543,7 +1543,8 @@ function AgentRow({
       </td>
       <td>
         <Menu
-          label={`Actions for agent ${label ?? agentId}`}
+          // Two agents of one session can report one name or one description, so the id stays behind a label.
+          label={`Actions for agent ${label === null ? agentId : `${label} (${agentId})`}`}
           items={[
             ...ledgerItems(session, navigate, linked),
             // An hour either side of the agent's last request, read when the item is chosen.

@@ -28701,8 +28701,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   }
   {
     // The session menu names the story's first session by its title with its short id behind it, since two rows can
-    // share a label, the agent menu names c21e by its reported name, and the Cache warming grid's line reads that name
-    // with the id on its title.
+    // share a label, the agent menu names c21e by its reported name with its id behind it for the same reason, and the
+    // Cache warming grid's line reads that name with the id on its title.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     const tr = story === undefined ? null : page.container.querySelector(`[id="${sessionRowId(story)}"]`);
     const sessionMenu = tr?.lastElementChild?.querySelector('.menu__trigger')?.getAttribute('aria-label') ?? null;
@@ -28711,7 +28711,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const gridCell = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head) > .agents__id') ?? [])].find((c) => c.getAttribute('title') === 'c21e');
     page.unmount();
     const read = { agentMenu, grid: gridCell === undefined ? null : { text: textOf(gridCell), title: gridCell.getAttribute('title') }, sessionMenu };
-    const want = { agentMenu: 'Actions for agent reviewer', grid: { text: 'reviewer', title: 'c21e' }, sessionMenu: `Actions for session ${TITLE} (${story?.sessionId.slice(0, 13)}…)` };
+    const want = { agentMenu: 'Actions for agent reviewer (c21e)', grid: { text: 'reviewer', title: 'c21e' }, sessionMenu: `Actions for session ${TITLE} (${story?.sessionId.slice(0, 13)}…)` };
     results.push({
       name: '/sessions the menus and the Cache warming grid name a session and an agent by their labels',
       ok: story !== undefined && JSON.stringify(read) === JSON.stringify(want),
