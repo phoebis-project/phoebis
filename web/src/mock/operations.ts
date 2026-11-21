@@ -876,13 +876,14 @@ const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) *
 // their last use and their last refresh. The row and main's line read warm off the row's last refresh, as the route
 // reads both off one pin, before the row's last use moves to the newest across its pins.
 SESSIONS.forEach((pin, i) => {
+  const recipes = RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId);
   const fold = lastFold.get(pin);
   const display = { burn: fold?.burn ?? null, dollars: fold?.dollars ?? null, lastInputTokens: pin.lastInputTokens };
   const firstSeen = firstSighting.get(pin) ?? null;
   pin.agentContexts = datedLines(
     firstSeen,
     activityOf(pin.keyId, pin.keyGeneration, pin.sessionId),
-    RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId).flatMap((r, j) => {
+    recipes.flatMap((r, j) => {
       if ((r.agentState === 'released' && pin.companion !== 'none') || r.accountId === null) return [];
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
@@ -898,8 +899,7 @@ SESSIONS.forEach((pin, i) => {
   // answers them in agent id order.
   const reported = i < sessionSpec.length ? sessionSpec[i].facts?.agents : undefined;
   if (reported !== undefined) {
-    const own = RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId);
-    pin.agentFacts = own
+    pin.agentFacts = recipes
       .flatMap((r, j) => {
         const facts = reported[j];
         return facts ? [{ agentId: r.agentId, ...facts }] : [];
@@ -910,7 +910,7 @@ SESSIONS.forEach((pin, i) => {
   // The row's ended mark is its display pin's line's. A row the mod released whole lists no line, and the router holds
   // a released agent's pin as ended.
   const ownLine = pin.agentContexts.find((c) => c.agentId === pin.agentId && c.model === pin.model);
-  pin.ended = !pin.pinned ? null : ownLine !== undefined ? ownLine.ended : RECIPES.some((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId && r.agentId === pin.agentId && r.agentState === 'released');
+  pin.ended = !pin.pinned ? null : ownLine !== undefined ? ownLine.ended : recipes.some((r) => r.agentId === pin.agentId && r.agentState === 'released');
   pin.lastUsedAt = newestUse(pin.lastUsedAt, pin.agentContexts);
 });
 

@@ -1,4 +1,4 @@
-import type { AgentContext, AgentRequests, KeepaliveRecipe, Lifecycle, RecipeCause, Session, SessionAgentFacts, SessionSpend, SessionSpendPart } from '@/api/types';
+import type { AgentContext, AgentRequests, KeepaliveRecipe, Lifecycle, RecipeCause, Session, SessionAgentFacts, SessionFacts, SessionSpend, SessionSpendPart } from '@/api/types';
 import { ACTIVE_WITHIN, RANGE_PRESETS, type SessionGroupBy, type SessionsAddress, type SortDir } from '@/lib/address';
 import { clientVersion } from '@/lib/client';
 import { countOf, groupInto, lookup } from '@/lib/counts';
@@ -344,16 +344,27 @@ export function baseName(path: string): string | null {
 /** The short form of a path or of a `host/path`: its last segment, or the whole value where it has none. */
 export const shortPlace = (value: string): string => baseName(value) ?? value;
 
-/** A session's label: its title, else its project's base name, else its id. */
-export function sessionLabel(session: Pick<Session, 'facts' | 'sessionId'>): string {
+/** A session's repository: its remote, and a repository with no remote reads its root. */
+export const repositoryOf = (facts: Pick<SessionFacts, 'repository' | 'repositoryRoot'>): string | null => facts.repository ?? facts.repositoryRoot;
+
+/**
+ * A session's label: its title, else its project's base name. Null where neither names one or the label is the
+ * session id, so a caller draws the id alone.
+ */
+export function sessionLabel(session: Pick<Session, 'facts' | 'sessionId'>): string | null {
   const { facts } = session;
-  return facts.title ?? (facts.project === null ? null : baseName(facts.project)) ?? session.sessionId;
+  const label = facts.title ?? (facts.project === null ? null : baseName(facts.project));
+  return label === session.sessionId ? null : label;
 }
 
-/** An agent's label: `main` for main, else its name, else its description, else its id. */
-export function agentLabel(agentId: string, facts: Pick<SessionAgentFacts, 'description' | 'name'> | null): string {
-  if (agentId === MAIN_AGENT) return MAIN_AGENT;
-  return facts?.name ?? facts?.description ?? agentId;
+/**
+ * An agent's label: its name, else its description. Null where neither names one or the label is the agent id, so a
+ * caller draws the id alone, and null for main, which reads no reported fact.
+ */
+export function agentLabel(agentId: string, facts: Pick<SessionAgentFacts, 'description' | 'name'> | null): string | null {
+  if (agentId === MAIN_AGENT) return null;
+  const label = facts?.name ?? facts?.description ?? null;
+  return label === agentId ? null : label;
 }
 
 export interface SessionGroup<R> {
@@ -369,11 +380,15 @@ const NO_FACT_GROUP: Record<Exclude<SessionGroupBy, 'none'>, string> = { project
 /** The rows in groups by their session's project or repository, the groups in name order and the rows as handed. */
 export function groupSessions<R extends { session: Pick<Session, 'facts'> }>(rows: readonly R[], by: Exclude<SessionGroupBy, 'none'>): SessionGroup<R>[] {
   // A worktree's remote and root are its checkout's, so by repository the two share a group with or without a remote.
-  const keyOf = ({ facts }: Pick<Session, 'facts'>): string | null => (by === 'project' ? facts.project : (facts.repository ?? facts.repositoryRoot));
+  const keyOf = ({ facts }: Pick<Session, 'facts'>): string | null => (by === 'project' ? facts.project : repositoryOf(facts));
   // Code-unit compares, so the five-second re-read and a second browser order the groups alike.
   const named = [...groupInto(rows, (row) => keyOf(row.session))]
-    .map(([key, held]) => ({ key, rows: held, short: shortPlace(key) }))
-    .sort((a, b) => byteOrder(a.short.toLowerCase(), b.short.toLowerCase()) || byteOrder(a.key, b.key));
+    .map(([key, held]) => {
+      const short = shortPlace(key);
+      return { fold: short.toLowerCase(), group: { key, rows: held, short } };
+    })
+    .sort((a, b) => byteOrder(a.fold, b.fold) || byteOrder(a.group.key, b.group.key))
+    .map(({ group }) => group);
   const without = rows.filter((row) => keyOf(row.session) === null);
   return without.length === 0 ? named : [...named, { key: null, rows: without, short: NO_FACT_GROUP[by] }];
 }

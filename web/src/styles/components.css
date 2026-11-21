@@ -1740,13 +1740,11 @@ textarea.input {
   margin-left: 6px;
 }
 
-/* A group's header row is no row to act on, so it keeps the default cursor and takes no hover fill. The clause stands
-   inside :where() so each selector keeps its specificity and a selected row still reads over a hovered one. */
-.table--hover tbody tr:where(:not(.table__group)) {
+.table--hover tbody tr {
   cursor: pointer;
 }
 
-.table--hover > tbody > tr:where(:not(.table__group)):hover > td {
+.table--hover > tbody > tr:hover > td {
   background: var(--surface-2);
 }
 

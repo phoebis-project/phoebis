@@ -2774,12 +2774,9 @@
   border-bottom-color: transparent;
 }
 
-/* The id line: the column's free width cuts it with an ellipsis, the whole id on the cell's title. */
-.srow__id {
-  display: block;
-}
-
-/* The label leads the Session cell on a line of its own over the mono id line, and the fill column cuts it. */
+/* The label and the id each take a line of the Session cell, and the fill column cuts each with an ellipsis, whole on
+   the cell's title. */
+.srow__id,
 .srow__label {
   display: block;
 }
@@ -2860,16 +2857,9 @@
 }
 
 /* The Companion chip's presence reads beside its badge in a fact, where the table's sub line would drop under it. */
-.sessions-table .facts .sub {
+.sessions-table .facts .badge + .sub {
   display: inline;
   margin-left: 6px;
-}
-
-/* The facts grid draws a sub line beside its value. The working directory is a line of its own under the project's
-   path, at the value's left edge where it stands alone. */
-.sessions-table .facts .srow__cwd {
-  display: block;
-  margin-left: 0;
 }
 
 /* The stripe rule paints the Agents table's even rows alone, so its odd rows show what stands behind the table, and the
@@ -2965,10 +2955,6 @@
 
 .agents__row + .agents__row {
   border-top: 1px solid var(--hairline);
-}
-
-.agents__id {
-  white-space: nowrap;
 }
 
 /* An agent's label can be a description of 256 bytes, so both agent cells cut it at one width, whole on the title. */

@@ -23,7 +23,7 @@ import { tierOrder } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
-import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, agentLabel, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, groupSessions, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, requestCount, requestsSpan, sessionLabel, sessionLines, type SessionLine, shortPlace, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, agentLabel, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, groupSessions, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, repositoryOf, requestCount, requestsSpan, sessionLabel, sessionLines, type SessionLine, shortPlace, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
@@ -384,6 +384,7 @@ export function SessionsPage() {
   );
   // The route leaves out a session once it stops listing it, so the filters narrow the rows it answered.
   const rows = useMemo(() => listed?.filter((r) => matches(r, filters, now)) ?? null, [listed, filters, now]);
+  const groups = useMemo(() => (rows === null || filters.by === 'none' ? null : groupSessions(rows, filters.by)), [rows, filters.by]);
   // The lines each kept row draws under the filters and how many the filters fold away, which its detail, its Next
   // probe cell and the bar's count read.
   const drawn = useMemo(() => new Map((rows ?? []).map((r) => [rowKey(r.session), hiddenLines(r, filters)])), [rows, filters]);
@@ -530,9 +531,9 @@ export function SessionsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filters.by === 'none'
+                  {groups === null
                     ? sessionRows(rows)
-                    : groupSessions(rows, filters.by).map((group) => (
+                    : groups.map((group) => (
                         <Fragment key={group.key ?? ''}>
                           <tr className="table__group">
                             <td colSpan={columns} title={group.key ?? undefined}>
@@ -681,7 +682,7 @@ function AccountLink({ account, id }: { account: Account | null; id: string }) {
  * The row's account: a link to its page with the kind on its title, described to a reader that never hovers, the
  * slow-down chip on a slowed pin, the shed mark, and the agents pinned on another account. A dash with no account.
  */
-function RowAccount({ accent, account, others, session, speed }: { accent: boolean; account: Account | null; others: { accountId: string; label: string; model: string }[]; session: Session; speed: ReturnType<typeof memberSpeed> }) {
+function RowAccount({ accent, account, others, session, speed }: { accent: boolean; account: Account | null; others: OtherPin[]; session: Session; speed: ReturnType<typeof memberSpeed> }) {
   if (session.accountId === null) return <span className="muted">-</span>;
   return (
     <span className="srow__pin">
@@ -843,7 +844,7 @@ function SessionRows({
   // matches the filters, a line `shownLines` holds.
   const placed = drawnLines.flatMap((l) => {
     const accountId = lineAccountOf(l);
-    return accountId !== null && l.model !== null ? [{ accountId, label: agentLabel(l.agentId, l.facts), matched: shownLines.includes(l), model: l.model }] : [];
+    return accountId !== null && l.model !== null ? [{ accountId, label: agentLabel(l.agentId, l.facts) ?? l.agentId, matched: shownLines.includes(l), model: l.model }] : [];
   });
   const otherModels = placed.filter((l) => l.model !== session.model);
   const otherAccounts = placed.filter((l) => l.accountId !== session.accountId);
@@ -865,11 +866,13 @@ function SessionRows({
   // The row's figures are main's conversation pin's, so a row with no pin reads a dash.
   const context = contextCell(session.pinned ? session.lastInputTokens : null);
   const label = sessionLabel(session);
+  const shortSession = shortId(session.sessionId, SESSION_CHARS);
   // A client's project read can fail while its working directory read answers, so the directory stands in for the
-  // project, and a repository with no remote reads its root.
+  // project.
   const { facts } = session;
   const folder = facts.project ?? facts.cwd;
-  const place = facts.repository ?? facts.repositoryRoot;
+  const place = repositoryOf(facts);
+  const cwdApart = facts.cwd === facts.project ? null : facts.cwd;
   const client = joinPresent([clientVersion(session.userAgent), session.placements > 1 ? `${session.placements} placements` : null], ' · ');
   const clientTitle = sentences([session.userAgent, session.placements > 1 ? PLACEMENTS_HINT : null]);
   const mainRecipe = row.agents.find((a) => a.agentId === MAIN_AGENT) ?? null;
@@ -917,8 +920,8 @@ function SessionRows({
             <IconChevron size={14} />
           </span>
         </td>
-        <td className="col-fill" title={joinPresent([label === session.sessionId ? null : label, session.sessionId], '\n')}>
-          {label !== session.sessionId && <span className="srow__label ellipsis">{label}</span>}
+        <td className="col-fill" title={joinPresent([label, session.sessionId], '\n')}>
+          {label !== null && <span className="srow__label ellipsis">{label}</span>}
           <span className="mono srow__id ellipsis">{session.sessionId}</span>
           {(forkBase !== null || client !== '') && (
             <span className="sub srow__client" title={clientTitle === '' ? undefined : clientTitle}>
@@ -1045,7 +1048,7 @@ function SessionRows({
           <td className="col-fit" {...timeCell(session.keepalive.nextProbeAt, now, pendingProbe ? 'pending' : 'not scheduled')} />
         )}
         {visible.has('project') && (
-          <td className="col-fit" title={joinPresent([facts.project, facts.cwd === facts.project ? null : facts.cwd], '\n') || undefined}>
+          <td className="col-fit" title={joinPresent([facts.project, cwdApart], '\n') || undefined}>
             {folder === null ? <span className="muted">-</span> : <span className="srow__place ellipsis">{shortPlace(folder)}</span>}
           </td>
         )}
@@ -1065,7 +1068,7 @@ function SessionRows({
             end at 1280 px. */}
         <td className="col-fit" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           <Menu
-            label={`Actions for session ${label === session.sessionId ? shortId(session.sessionId, SESSION_CHARS) : `${label} (${shortId(session.sessionId, SESSION_CHARS)})`}${session.historical ? ', deleted holder' : ''}`}
+            label={`Actions for session ${label === null ? shortSession : `${label} (${shortSession})`}${session.historical ? ', deleted holder' : ''}`}
             items={[
               ...ledgerItems(session, navigate),
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request and
@@ -1113,7 +1116,7 @@ function SessionRows({
                         ) : (
                           <>
                             {facts.project !== null && <span className="mono">{facts.project}</span>}
-                            {facts.cwd !== null && facts.cwd !== facts.project && <span className="sub srow__cwd">working directory {facts.cwd}</span>}
+                            {cwdApart !== null && <span className="sub">working directory {cwdApart}</span>}
                           </>
                         ),
                     },
@@ -1385,8 +1388,8 @@ function AgentLine({ line, now, requestsTo }: { line: SessionLine; now: number; 
   const label = agentLabel(line.agentId, line.facts);
   return (
     <div className="agents__row">
-      <span className={label === line.agentId ? 'mono agents__id ellipsis' : 'agents__id ellipsis'} title={line.agentId}>
-        {requestsTo === null ? label : <Link to={requestsTo}>{label}</Link>}
+      <span className={label === null ? 'mono agents__id ellipsis' : 'agents__id ellipsis'} title={line.agentId}>
+        {requestsTo === null ? (label ?? line.agentId) : <Link to={requestsTo}>{label ?? line.agentId}</Link>}
       </span>
       {ttlMs === null ? <span className="muted">-</span> : <span className="num">{fmtDuration(ttlMs)}</span>}
       <span {...timeCell(lastRequestAt, now, 'none')} />
@@ -1494,11 +1497,11 @@ function AgentRow({
   const label = agentLabel(agentId, line?.facts ?? null);
   return (
     <tr>
-      <td className="agent-cell" title={joinPresent([line?.facts?.name ?? null, line?.facts?.description ?? null, agentId, title === '' ? null : title], '\n')}>
-        <span className={label === agentId ? 'mono agent-cell__label ellipsis' : 'agent-cell__label ellipsis'}>
-          {hasTraffic ? <Link to={requestsHref(session, linked)}>{label}</Link> : label}
+      <td className="agent-cell" title={joinPresent([line?.facts?.name, line?.facts?.description, agentId, title], '\n')}>
+        <span className={label === null ? 'mono agent-cell__label ellipsis' : 'agent-cell__label ellipsis'}>
+          {hasTraffic ? <Link to={requestsHref(session, linked)}>{label ?? agentId}</Link> : (label ?? agentId)}
         </span>
-        {label !== agentId && <span className="mono sub agent-cell__id">{agentId}</span>}
+        {label !== null && <span className="mono sub agent-cell__id">{agentId}</span>}
       </td>
       <td>{type ?? <span className="muted">-</span>}</td>
       <td title={model === null ? undefined : modelTitle(model)}>
@@ -1539,7 +1542,7 @@ function AgentRow({
       </td>
       <td>
         <Menu
-          label={`Actions for agent ${label}`}
+          label={`Actions for agent ${label ?? agentId}`}
           items={[
             ...ledgerItems(session, navigate, linked),
             // An hour either side of the agent's last request, read when the item is chosen.
@@ -1551,11 +1554,13 @@ function AgentRow({
   );
 }
 
+type OtherPin = { accountId: string; label: string; model: string };
+
 /**
  * "+2" beside a row's figure, hovering into `lead` and one line per agent that sits on another model or account, in the
  * accent tone where one of those agents matches the filter standing on its column.
  */
-function OtherPins({ accent, agents, lead }: { accent: boolean; agents: { accountId: string; label: string; model: string }[]; lead: string }) {
+function OtherPins({ accent, agents, lead }: { accent: boolean; agents: OtherPin[]; lead: string }) {
   if (agents.length === 0) return null;
   return (
     <Badge tone={accent ? 'accent' : 'neutral'} title={`${lead}\n${agents.map((a) => `${a.label}: ${a.model} on ${a.accountId}`).join('\n')}`}>

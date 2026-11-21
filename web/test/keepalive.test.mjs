@@ -254,18 +254,20 @@ test("sessionLines reads each line's type from its companion's report, else from
   assert.equal(lines[0].facts, null, "main's line reads no fact its companion reported");
 });
 
-test("sessionLabel reads the title, else the project's base name, else the id", () => {
+test("sessionLabel reads the title, else the project's base name, else null", () => {
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: '/home/u/app/' }, sessionId: 'b2c4' }), 'app', 'a trailing separator');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: 'C:\\work\\app' }, sessionId: 'b2c4' }), 'app', 'a Windows path');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: 'C:\\work\\app\\' }, sessionId: 'b2c4' }), 'app', 'a Windows path with a trailing separator');
-  assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: '/' }, sessionId: 'b2c4' }), 'b2c4', 'a root has no segment, so the id stands');
+  assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: '/' }, sessionId: 'b2c4' }), null, 'a root has no segment, so the id stands');
+  assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, title: 'b2c4' }, sessionId: 'b2c4' }), null, 'a title that is the id');
 });
 
-test('agentLabel reads main, else the name, else the description, else the id', () => {
+test('agentLabel reads null for main, else the name, else the description, else null', () => {
   assert.equal(d.agentLabel('7b2e', { description: 'Review the retry loop', name: null }), 'Review the retry loop', 'no name');
-  assert.equal(d.agentLabel('7b2e', null), '7b2e', 'no report');
-  assert.equal(d.agentLabel('7b2e', { description: null, name: null }), '7b2e', 'a report with neither');
-  assert.equal(d.agentLabel('main', { description: 'Lead', name: 'lead' }), 'main', 'main whatever its entry holds');
+  assert.equal(d.agentLabel('7b2e', null), null, 'no report');
+  assert.equal(d.agentLabel('7b2e', { description: null, name: null }), null, 'a report with neither');
+  assert.equal(d.agentLabel('7b2e', { description: null, name: '7b2e' }), null, 'a name that is the id');
+  assert.equal(d.agentLabel('main', { description: 'Lead', name: 'lead' }), null, 'main whatever its entry holds');
 });
 
 test("groupSessions keeps a checkout and its worktrees in one repository group, the groups in name order and each group's rows as handed", () => {
