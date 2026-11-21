@@ -649,7 +649,7 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
         instance_id: "i1".into(),
         sequence: 2,
         branch: Some(Some("fix/checkout-retry".into())),
-        cwd: Some(Some("/home/dev/work/storefront/api".into())),
+        cwd: Some(Some("/home/dev/work/storefront/web/src".into())),
         project: Some(Some("/home/dev/work/storefront/web".into())),
         repository: Some(Some("https://git.example/acme/storefront.git".into())),
         repository_root: Some(Some("/home/dev/work/storefront".into())),
@@ -687,7 +687,7 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
         row["facts"],
         serde_json::json!({
             "branch": "fix/checkout-retry",
-            "cwd": "/home/dev/work/storefront/api",
+            "cwd": "/home/dev/work/storefront/web/src",
             "project": "/home/dev/work/storefront/web",
             "repository": "git.example/acme/storefront",
             "repository_root": "/home/dev/work/storefront",

@@ -156,13 +156,14 @@ pub(crate) struct Session {
     /// where none draws.
     pub agent_contexts: Vec<AgentContext>,
     /// One entry per agent of the keepalive engine's record whose companion reported a fact, ordered by agent id.
-    /// Empty where no agent holds one, on a row without a companion and on a row of an earlier holder.
+    /// Empty where no agent holds one, on a row the keepalive engine holds no record of and on a row of an earlier
+    /// holder.
     pub agent_facts: Vec<SessionAgentFacts>,
     /// One entry per agent the ledger holds requests of, its requests and their spend over every model it ran, with
     /// the model, the type, the account and the instant of its newest request.
     pub agent_requests: Vec<AgentRequests>,
-    /// What the session's companion reported of it. Every member reads null where it reported none, on a row
-    /// without a companion and on a row of an earlier holder.
+    /// What the session's companion reported of it. Every member reads null where it reported none, on a row the
+    /// keepalive engine holds no record of and on a row of an earlier holder.
     pub facts: SessionFacts,
     /// Main's recipe, or the newest other agent's where main holds none.
     pub keepalive: SessionKeepalive,
@@ -304,8 +305,8 @@ pub(crate) struct SessionFacts {
     pub branch: Option<String>,
     pub cwd: Option<String>,
     pub project: Option<String>,
-    /// The origin remote as `host/path`, without scheme, credentials, port, query, fragment or one trailing `.git`
-    /// of a raw remote.
+    /// The origin remote as `host/path` with the host in lower case. A raw remote loses its scheme, user information,
+    /// port, query, fragment, one trailing `.git` and each trailing slash.
     pub repository: Option<String>,
     pub repository_root: Option<String>,
     pub title: Option<String>,
