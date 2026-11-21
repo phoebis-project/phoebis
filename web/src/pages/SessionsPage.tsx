@@ -924,7 +924,7 @@ function SessionRows({
           {label !== null && <span className="srow__label ellipsis">{label}</span>}
           <span className="mono srow__id ellipsis">{session.sessionId}</span>
           {(forkBase !== null || client !== '') && (
-            <span className="sub srow__client" title={clientTitle === '' ? undefined : clientTitle}>
+            <span className="sub" title={clientTitle === '' ? undefined : clientTitle}>
               {forkBase !== null && (
                 <ForkBadge
                   base={baseRow ? forkBase : null}
@@ -1501,7 +1501,7 @@ function AgentRow({
         <span className={label === null ? 'mono agent-cell__label ellipsis' : 'agent-cell__label ellipsis'}>
           {hasTraffic ? <Link to={requestsHref(session, linked)}>{label ?? agentId}</Link> : (label ?? agentId)}
         </span>
-        {label !== null && <span className="mono sub agent-cell__id">{agentId}</span>}
+        {label !== null && <span className="mono sub">{agentId}</span>}
       </td>
       <td>{type ?? <span className="muted">-</span>}</td>
       <td title={model === null ? undefined : modelTitle(model)}>

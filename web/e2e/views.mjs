@@ -13305,7 +13305,7 @@ async function agentLines(theme, width) {
       new Map(
         [...(grid.closest('tr.srow__detail')?.querySelectorAll('table.agents-table > tbody > tr > td.agent-cell') ?? [])].map((td) => {
           const label = td.querySelector('.agent-cell__label')?.textContent?.trim() ?? '';
-          return [td.querySelector('.agent-cell__id')?.textContent?.trim() ?? label, label];
+          return [td.querySelector('.sub')?.textContent?.trim() ?? label, label];
         }),
       );
     const grids = [...document.querySelectorAll('.agents')].map((grid) => {

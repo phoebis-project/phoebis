@@ -27385,7 +27385,7 @@ await forView('/sessions', async () => {
     const gridLines = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])];
     const lines = [...(table?.querySelectorAll(':scope > tbody > tr') ?? [])].map((r, i) => {
       // The id line under a label that is not the id, else the label, and the grid's line carries the id on its title.
-      const agent = r.children[0]?.querySelector('.agent-cell__id')?.textContent?.trim() ?? r.children[0]?.querySelector('.agent-cell__label')?.textContent?.trim() ?? '';
+      const agent = r.children[0]?.querySelector('.sub')?.textContent?.trim() ?? r.children[0]?.querySelector('.agent-cell__label')?.textContent?.trim() ?? '';
       const l = gridLines[i]?.children[0]?.getAttribute('title') === agent ? gridLines[i] : null;
       const at = (name) => (head.includes(name) ? r.children[head.indexOf(name)] : null);
       const on = (name) => (l !== null && grid.includes(name) ? l.children[grid.indexOf(name)] : null);
@@ -27709,7 +27709,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // twice, and the silent fork four times, its main's two placements and two moves in the mock's routing log, since
     // its keepalive probe renews its pin and moves none.
     const lineOf = (s) => {
-      const line = cellOf(s, 'Session')?.querySelector('.srow__client') ?? null;
+      const line = cellOf(s, 'Session')?.querySelector('.sub') ?? null;
       return line === null ? null : { badge: line.firstElementChild?.classList.contains('srow__fork') === true, text: line.textContent?.trim() ?? '', title: line.getAttribute('title') };
     };
     const read = { client: lineOf(subjects.client), placed: lineOf(subjects.placed), registered: lineOf(subjects.registered), silent: lineOf(subjects.silent), story: lineOf(subjects.story) };
@@ -28157,7 +28157,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       return {
         account: textOf(at('Account')),
         // The agent's id: the line under a label that is not the id, else the label, which is then the id.
-        agent: textOf(at('Agent')?.querySelector('.agent-cell__id')) ?? textOf(at('Agent')?.querySelector('.agent-cell__label')),
+        agent: textOf(at('Agent')?.querySelector('.sub')) ?? textOf(at('Agent')?.querySelector('.agent-cell__label')),
         agentHref: at('Agent')?.querySelector('a')?.getAttribute('href') ?? null,
         agentTitle: at('Agent')?.getAttribute('title') ?? null,
         burn: textOf(at('Burn')),
@@ -28662,7 +28662,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const lineOf = ({ heads, rows }, agent, titleLines) => {
       const r = rows.find((x) => x.agent === agent);
       const td = r?.tr.children[heads.indexOf('Agent')];
-      return r === undefined ? null : { id: textOf(td?.querySelector('.agent-cell__id')), label: r.label, mono: td?.querySelector('.agent-cell__label')?.classList.contains('mono') ?? null, title: (r.agentTitle ?? '').split('\n').slice(0, titleLines), type: r.type };
+      return r === undefined ? null : { id: textOf(td?.querySelector('.sub')), label: r.label, mono: td?.querySelector('.agent-cell__label')?.classList.contains('mono') ?? null, title: (r.agentTitle ?? '').split('\n').slice(0, titleLines), type: r.type };
     };
     const storyTable = agentsOf(await openRow(page, story));
     const billingTable = agentsOf(await openRow(page, explored));
@@ -29072,7 +29072,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const unrouted = rows().find((r) => cell(r, 'Model')?.textContent?.trim() === '-');
     results.push({
       name: '/sessions a session the router has not routed yet reads its blanks',
-      ok: unrouted !== undefined && ['Account', 'Last used'].every((h) => cell(unrouted, h)?.textContent?.trim() === '-') && cell(unrouted, 'Cache')?.textContent?.trim() === 'no pin' && unrouted.querySelector('.srow__client') === null,
+      ok: unrouted !== undefined && ['Account', 'Last used'].every((h) => cell(unrouted, h)?.textContent?.trim() === '-') && cell(unrouted, 'Cache')?.textContent?.trim() === 'no pin' && cell(unrouted, 'Session')?.querySelector('.sub') === null,
       missing: [unrouted ? [...unrouted.children].map((c) => c.textContent?.trim() ?? '').join('|') : 'absent'],
     });
   }
