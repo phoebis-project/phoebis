@@ -305,8 +305,8 @@ pub(crate) struct SessionFacts {
     pub branch: Option<String>,
     pub cwd: Option<String>,
     pub project: Option<String>,
-    /// The origin remote as `host/path` with the host in lower case. A raw remote loses its scheme, user information,
-    /// port, query, fragment, one trailing `.git` and each trailing slash.
+    /// The origin remote as `host/path`. A raw remote loses its scheme, user information, port, query, fragment, one
+    /// trailing `.git` and each trailing slash, and the ASCII letters of its host fold to lower case.
     pub repository: Option<String>,
     pub repository_root: Option<String>,
     pub title: Option<String>,
