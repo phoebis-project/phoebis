@@ -393,8 +393,8 @@ export function SessionsPage() {
   const agentsKept = useMemo(() => matchingAgents(drawn.values()), [drawn]);
   const matching = agentFiltersStand(filters);
   const countWords = rows === null ? '' : countText(rows.length, agentsKept, matching);
-  // Three digits in each figure hold the count's slot at one width, so no count moves a line of the bar, the empty one
-  // while the rows load among them.
+  // Three digits in each figure hold the count's slot at one width, so a count up to 999 in each figure moves no line
+  // of the bar, the empty one while the rows load among them.
   const countSizer = countText(999, 999, matching);
   const summary = useMemo(() => (rows === null ? null : daySummary(rows)), [rows]);
   // The rows wait on these three reads, so the first that failed before it ever answered names the notice, and the card

@@ -301,9 +301,9 @@ on two across midnight (the Custom pill's span taking the slots to 1443 px in th
 px), the Sessions row under the mock on two lines at 1280 by 800 in every case too, since a hidden sizer with three
 digits in each figure of its count holds the count's slot at that width whatever the count and the Sort button read (the
 slots 1278 px in the 992 px row, so the edge wraps alone onto the second line, the row and the bar 72 px at rest and
-under the sort), and at 1440 by 900 on one line at rest and under the sort (the slots 1152 px in the 1152 px row), the
-Sort button reading its pick under the sort and, in the mock pass, the Sessions count reading `1 session · 2 agents`
-there, under another story on two lines where its slots run past the row and on one line otherwise, each
+under the sort), and at 1440 by 900 on one line at rest and under the sort (the slots 1152 px in the 1152 px row), under
+another story on two lines where its slots run past the row and on one line otherwise, the Sort button reading its pick
+under the sort and, in the mock pass, the Sessions count reading `1 session · 2 agents` there, each
 chip 26 px with its word in `--ink-2` and its values in `--ink`, the chip line on one line, the first card's head below
 the bar, on a card view the next element and the tiles below it, on Analytics the Group by select against Add filter,
 and on the routing log and Analytics the width of the row's slots and gaps at rest under the view's bound, and at 950 by
@@ -423,8 +423,9 @@ a type with a hyphen breaking after it in the table's narrowest layout), a strip
 the pointer and on `--accent-soft` once selected on every cell, the grouped Sessions table under `?by=repository` (its
 header rows out of the count and plain, its first four session rows plain, `--stripe`, plain and `--stripe`, its first
 row's detail plain once opened, each group's name at the left of a session row's chevron, the card's 12 px edge, and
-every value the grouped view cuts, a group's name among them, cut with the ellipsis, recorded as skipped in the router
-pass where the seed draws fewer than four session rows), and the pool dialog's form tables plain), the scroll
+every value the grouped view cuts, a group's name and a session row's label among them, cut with the ellipsis, the whole
+grouped read recorded as skipped in the router pass where the seed draws fewer than four session rows), and the pool
+dialog's form tables plain), the scroll
 lock behind a modal dialog (in the mock pass, on the Pools page in a browser that shows scrollbars: a wheel over the
 page moves it, a wheel over the open dialog's backdrop leaves the page's scroll and its content box where they stood,
 and the close returns the page to the scroll it had), the cost reference, its headline words (mock pass, at 1280 by 800:
@@ -451,7 +452,8 @@ Last used cells of the first row whose Status reads unreported on its session id
 Agents tables (on every row Expand all opens at 1280 by 800, each earlier agents line opened: each table inside its
 detail panel's client width with its eleven heads closing on the menu's, its head cells in the type size, weight and ink
 of the session table's, the table whose narrowest layout is widest recorded with that width, and every value the
-expanded view cuts, the Agent labels of its tables and of its agent lines among them, cut with the ellipsis), the agent
+expanded view cuts, the session rows' labels and the Agent labels of its tables and of its agent lines among them, cut
+with the ellipsis), the agent
 menu (mock pass,
 at 1280 by 800 on the open row of a session whose Agents table lists main alone: the open list's last item takes the
 pointer at its center, so the table's wrap clips none of the list), the open row's facts (the written session's row in
