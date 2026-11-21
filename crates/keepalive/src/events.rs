@@ -1,7 +1,7 @@
-//! The keepalive mod's reporting protocol: six events in JSON bodies, monotonic sequences, per-agent
+//! The keepalive mod's reporting protocol: eight events in JSON bodies, monotonic sequences, per-agent
 //! generations, a lease, and a registration acknowledgment that carries the session's agents so the mod
 //! reconciles from the answer. The contract is the Go engine's, plus `owner_id` on `session_start`, the park
-//! fields of a `parked` state, the `presence` activity and the key scope on every session.
+//! fields of a `parked` state, the `presence` activity, the key scope on every session and the two facts events.
 
 use std::collections::BTreeMap;
 
@@ -13,6 +13,7 @@ use crate::engine::{
     agent_mut, agent_ref, open_idle_episode, Agent, AgentState, Engine, HeldPark, Inner, Park,
     ParkKind, Reason, Session, SessionKey, Wasted, AGENT_HELD, MAIN_AGENT,
 };
+use crate::facts::{AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts};
 
 pub const PROTOCOL: u64 = 1;
 
@@ -22,21 +23,45 @@ pub const PROTOCOL: u64 = 1;
 #[serde(deny_unknown_fields)]
 pub struct Event {
     pub agent_id: Option<String>,
+    #[serde(default, deserialize_with = "named")]
+    pub agent_type: Option<Option<String>>,
+    #[serde(default, deserialize_with = "named")]
+    pub branch: Option<Option<String>>,
+    #[serde(default, deserialize_with = "named")]
+    pub cwd: Option<Option<String>>,
     /// Epoch milliseconds: the latest deadline across the background commands a park waits on.
     pub deadline: Option<i64>,
+    #[serde(default, deserialize_with = "named")]
+    pub description: Option<Option<String>>,
     pub event: String,
     pub instance_id: String,
     pub kind: Option<String>,
+    #[serde(default, deserialize_with = "named")]
+    pub name: Option<Option<String>>,
     pub owner_id: Option<String>,
     pub park_kind: Option<String>,
     pub previous_instance_id: Option<String>,
+    #[serde(default, deserialize_with = "named")]
+    pub project: Option<Option<String>>,
     pub protocol: Option<u64>,
+    #[serde(default, deserialize_with = "named")]
+    pub repository: Option<Option<String>>,
+    #[serde(default, deserialize_with = "named")]
+    pub repository_root: Option<Option<String>>,
     pub request_generation: Option<u64>,
     pub sequence: u64,
     pub session_id: String,
     pub state: Option<String>,
+    #[serde(default, deserialize_with = "named")]
+    pub title: Option<Option<String>>,
     /// Epoch milliseconds: the earliest scheduled wakeup a park waits on.
     pub wake_at: Option<i64>,
+}
+
+/// `Some` for a key the body names, a null one too, so the member check reads the key's presence and can refuse a
+/// null fact on an event that does not take it. A null reads as an absent fact behind that check.
+fn named<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    <Option<String> as serde::Deserialize>::deserialize(d).map(Some)
 }
 
 /// A parked agent's entry carries its park as well as its state, so the mod can see that a router restored from an
@@ -104,9 +129,11 @@ fn err_for_generation(code: &'static str, generation: u64) -> EventError {
 
 enum EventKind {
     Activity,
+    AgentFacts,
     AgentStart,
     Heartbeat,
     SessionEnd,
+    SessionFacts,
     SessionStart,
     State,
 }
@@ -124,12 +151,33 @@ fn members(event: &str) -> Option<(EventKind, &'static [(&'static str, bool)])> 
                 ("request_generation", false),
             ],
         ),
+        "agent_facts" => (
+            EventKind::AgentFacts,
+            &[
+                ("agent_id", true),
+                ("agent_type", false),
+                ("description", false),
+                ("name", false),
+                ("request_generation", false),
+            ],
+        ),
         "agent_start" => (
             EventKind::AgentStart,
             &[("agent_id", true), ("request_generation", false)],
         ),
         "heartbeat" => (EventKind::Heartbeat, &[]),
         "session_end" => (EventKind::SessionEnd, &[]),
+        "session_facts" => (
+            EventKind::SessionFacts,
+            &[
+                ("branch", false),
+                ("cwd", false),
+                ("project", false),
+                ("repository", false),
+                ("repository_root", false),
+                ("title", false),
+            ],
+        ),
         "session_start" => (
             EventKind::SessionStart,
             &[("owner_id", false), ("previous_instance_id", false)],
@@ -174,6 +222,11 @@ pub enum Reported {
         presence: bool,
         request_generation: Option<u64>,
     },
+    AgentFacts {
+        agent_id: String,
+        facts: AgentFacts,
+        request_generation: Option<u64>,
+    },
     AgentStart {
         agent_id: String,
         request_generation: Option<u64>,
@@ -186,6 +239,9 @@ pub enum Reported {
         request_generation: Option<u64>,
     },
     SessionEnd,
+    SessionFacts {
+        facts: SessionFacts,
+    },
     SessionStart {
         owner_id: Option<String>,
         previous_instance_id: Option<String>,
@@ -203,10 +259,14 @@ impl Reported {
     fn agent_id(&self) -> Option<&str> {
         match self {
             Reported::Activity { agent_id, .. }
+            | Reported::AgentFacts { agent_id, .. }
             | Reported::AgentStart { agent_id, .. }
             | Reported::Parked { agent_id, .. }
             | Reported::State { agent_id, .. } => Some(agent_id),
-            Reported::Heartbeat | Reported::SessionEnd | Reported::SessionStart { .. } => None,
+            Reported::Heartbeat
+            | Reported::SessionEnd
+            | Reported::SessionFacts { .. }
+            | Reported::SessionStart { .. } => None,
         }
     }
 }
@@ -222,13 +282,22 @@ impl TryFrom<Event> for EventReport {
         };
         let present: Vec<&str> = [
             ("agent_id", event.agent_id.is_some()),
+            ("agent_type", event.agent_type.is_some()),
+            ("branch", event.branch.is_some()),
+            ("cwd", event.cwd.is_some()),
             ("deadline", event.deadline.is_some()),
+            ("description", event.description.is_some()),
             ("kind", event.kind.is_some()),
+            ("name", event.name.is_some()),
             ("owner_id", event.owner_id.is_some()),
             ("park_kind", event.park_kind.is_some()),
             ("previous_instance_id", event.previous_instance_id.is_some()),
+            ("project", event.project.is_some()),
+            ("repository", event.repository.is_some()),
+            ("repository_root", event.repository_root.is_some()),
             ("request_generation", event.request_generation.is_some()),
             ("state", event.state.is_some()),
+            ("title", event.title.is_some()),
             ("wake_at", event.wake_at.is_some()),
         ]
         .into_iter()
@@ -279,12 +348,21 @@ impl TryFrom<Event> for EventReport {
         };
         let Event {
             agent_id,
+            agent_type,
+            branch,
+            cwd,
+            description,
             instance_id,
+            name,
             owner_id,
             previous_instance_id,
+            project,
+            repository,
+            repository_root,
             request_generation,
             sequence,
             session_id,
+            title,
             ..
         } = validate(event)?;
         let required = || err("invalid_event", 400);
@@ -294,12 +372,31 @@ impl TryFrom<Event> for EventReport {
                 presence,
                 request_generation,
             },
+            EventKind::AgentFacts => Reported::AgentFacts {
+                agent_id: agent_id.ok_or_else(required)?,
+                facts: AgentFacts::of(RawAgentFacts {
+                    agent_type: agent_type.flatten(),
+                    description: description.flatten(),
+                    name: name.flatten(),
+                }),
+                request_generation,
+            },
             EventKind::AgentStart => Reported::AgentStart {
                 agent_id: agent_id.ok_or_else(required)?,
                 request_generation,
             },
             EventKind::Heartbeat => Reported::Heartbeat,
             EventKind::SessionEnd => Reported::SessionEnd,
+            EventKind::SessionFacts => Reported::SessionFacts {
+                facts: SessionFacts::of(RawSessionFacts {
+                    branch: branch.flatten(),
+                    cwd: cwd.flatten(),
+                    project: project.flatten(),
+                    repository: repository.flatten(),
+                    repository_root: repository_root.flatten(),
+                    title: title.flatten(),
+                }),
+            },
             EventKind::SessionStart => Reported::SessionStart {
                 owner_id,
                 previous_instance_id,
@@ -381,8 +478,8 @@ fn agents_of(session: &Session) -> Vec<AckAgent> {
         .collect()
 }
 
-/// `named` is the agent an agent event reports. A session-level event (a heartbeat, a `session_end`, a registration)
-/// names none and its answer carries main's generation, which the mod adopts for main.
+/// `named` is the agent an agent event reports. A session-level event (a heartbeat, a `session_facts`, a
+/// `session_end`, a registration) names none and its answer carries main's generation, which the mod adopts for main.
 fn acknowledge(
     key: &SessionKey,
     session: &Session,
@@ -505,6 +602,12 @@ impl Inner {
                 );
             }
             Reported::Heartbeat => {}
+            Reported::SessionFacts { facts } => {
+                self.sessions
+                    .get_mut(&key)
+                    .expect("the session just checked")
+                    .facts = facts.clone();
+            }
             Reported::SessionEnd => {
                 let agents: Vec<String> = self.sessions[&key].agents.keys().cloned().collect();
                 for agent_id in &agents {
@@ -594,6 +697,16 @@ impl Inner {
                     agent.set_state(AgentState::Busy);
                 }
             }
+            Reported::AgentFacts {
+                facts,
+                request_generation,
+                ..
+            } => {
+                // Display state alone: no state, no park and no idle clock moves, so a facts report never reads as
+                // activity.
+                let agent = self.reported_agent(&key, &agent_id, *request_generation)?;
+                agent.facts = facts.clone();
+            }
             Reported::Parked {
                 park,
                 request_generation,
@@ -661,8 +774,8 @@ impl Inner {
         session.attended = true;
         session.last_report_at = now;
         self.touch_session(&key);
-        // A heartbeat moves the session alone, so it rewrites no agent's sealed prompt.
-        if !renews_lease {
+        // A session-level report moves the session alone, so it rewrites no agent's sealed prompt.
+        if report.event.agent_id().is_some() {
             self.touch_agent(&key, &agent_id);
         }
         // The window opens with the report that moves main to idle or parked, so a prompt inside the same second
@@ -684,8 +797,8 @@ impl Inner {
         ))
     }
 
-    /// The checks an `activity` or a `state` report passes on the agent it names: a known agent, the generation the
-    /// report carries, and a record not released. Answers the agent for the report to write.
+    /// The checks an `activity`, an `agent_facts` or a `state` report passes on the agent it names: a known agent, the
+    /// generation the report carries, and a record not released. Answers the agent for the report to write.
     fn reported_agent(
         &mut self,
         key: &SessionKey,
@@ -841,6 +954,7 @@ impl Inner {
                 slotted,
                 restored_until: None,
                 owner_mismatches: 0,
+                facts: SessionFacts::default(),
                 agents,
             },
         );

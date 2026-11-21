@@ -7,6 +7,7 @@ use std::sync::Arc;
 use phoebis_ledger::{KeepaliveAgents, KeepaliveGaugeSource};
 
 use crate::engine::{Agent, AgentState, Engine, Guard, Park, ParkKind, Reason, MAIN_AGENT};
+use crate::facts::{AgentFacts, SessionFacts};
 
 /// The Sessions row's one word for an agent's recipe, read off the engine's reason beside its pause bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -154,9 +155,13 @@ pub struct KeepaliveSummary {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct SessionView {
+    /// The facts of each agent record that holds at least one, by agent id.
+    pub agent_facts: BTreeMap<String, AgentFacts>,
     pub agents: usize,
     pub companion: CompanionState,
     pub companion_since: Option<i64>,
+    /// The session's reported facts, each member `None` where the companion reports none.
+    pub facts: SessionFacts,
     pub key_id: String,
     pub key_generation: i64,
     pub keepalive: KeepaliveSummary,
@@ -237,12 +242,19 @@ impl Engine {
                     CompanionState::Silent
                 };
                 SessionView {
+                    agent_facts: s
+                        .agents
+                        .iter()
+                        .filter(|(_, a)| !a.facts.is_empty())
+                        .map(|(id, a)| (id.clone(), a.facts.clone()))
+                        .collect(),
                     agents: s.agents.len(),
                     companion,
                     // The end and the lapse are both the moment the companion stopped reporting, which is
                     // the last report either way; a reporting companion has no such moment.
                     companion_since: (companion != CompanionState::Reporting)
                         .then_some(s.last_report_at),
+                    facts: s.facts.clone(),
                     key_id: key.0.clone(),
                     key_generation: s.key_generation,
                     keepalive: KeepaliveSummary {

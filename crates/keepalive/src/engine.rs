@@ -28,6 +28,7 @@ use crate::config::{
     floor_ttl_ms, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
     ONE_HOUR_MS,
 };
+use crate::facts::{AgentFacts, SessionFacts};
 use crate::persist::Dirty;
 use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
@@ -609,6 +610,9 @@ pub(crate) struct Session {
     /// The requests that named another owner than the registration while the holder's lease was live, so the
     /// warning goes out once per session rather than once per request.
     pub owner_mismatches: u64,
+    /// What the companion reports of the session for the Sessions view. Display state that no decision of the engine
+    /// reads.
+    pub facts: SessionFacts,
     pub agents: BTreeMap<String, Agent>,
 }
 
@@ -746,6 +750,9 @@ pub(crate) struct Agent {
     /// The requests credited as kept warm on `counters_day`.
     pub credited_today: u64,
     pub counters_day: i64,
+    /// What the companion reports of the agent for the Sessions view. Display state that no decision of the engine
+    /// reads.
+    pub facts: AgentFacts,
 }
 
 impl Agent {
@@ -806,6 +813,7 @@ impl Agent {
             probes_today: 0,
             credited_today: 0,
             counters_day: utc_day(now),
+            facts: AgentFacts::default(),
         }
     }
 

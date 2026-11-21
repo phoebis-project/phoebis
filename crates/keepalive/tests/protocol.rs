@@ -11,7 +11,7 @@ use fake_upstream::Respond;
 use http_body_util::BodyExt;
 use phoebis_keepalive::{
     keepalive_router, AgentState, CompanionState, Event, EventError, Lifecycle, Park, ParkKind,
-    Reason, EVENTS_PATH,
+    Reason, SessionView, EVENTS_PATH,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, RulesMode};
@@ -157,6 +157,15 @@ fn session_agents(r: &Rig) -> usize {
         .find(|s| s.session_id == "session")
         .expect("the rig's session")
         .agents
+}
+
+/// The rig's session as the Sessions read shows it.
+fn session_view(r: &Rig) -> SessionView {
+    r.engine
+        .sessions()
+        .into_iter()
+        .find(|s| s.session_id == "session")
+        .expect("the rig's session")
 }
 
 #[tokio::test]
@@ -562,6 +571,69 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
             "a generation on a session event",
             Some(JSON),
             json_body(heartbeat(json!({"request_generation": 0}))),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a null agent_type on a heartbeat",
+            Some(JSON),
+            json_body(heartbeat(json!({ "agent_type": null }))),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a null branch on a heartbeat",
+            Some(JSON),
+            json_body(heartbeat(json!({ "branch": null }))),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a null cwd on a heartbeat",
+            Some(JSON),
+            json_body(heartbeat(json!({ "cwd": null }))),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a null description on a heartbeat",
+            Some(JSON),
+            json_body(heartbeat(json!({ "description": null }))),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a null name on a heartbeat",
+            Some(JSON),
+            json_body(heartbeat(json!({ "name": null }))),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a null project on a heartbeat",
+            Some(JSON),
+            json_body(heartbeat(json!({ "project": null }))),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a null repository on a heartbeat",
+            Some(JSON),
+            json_body(heartbeat(json!({ "repository": null }))),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a null repository_root on a heartbeat",
+            Some(JSON),
+            json_body(heartbeat(json!({ "repository_root": null }))),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a null title on a heartbeat",
+            Some(JSON),
+            json_body(heartbeat(json!({ "title": null }))),
             400,
             code("invalid_event"),
         ),
@@ -2003,4 +2075,133 @@ async fn an_ended_sessions_released_records_hold_their_agent_slots_until_they_le
     r.step().await;
     r.event(session_start("other"))
         .expect("the leave frees main's slot");
+}
+
+#[tokio::test]
+async fn a_facts_report_replaces_the_whole_set() {
+    let mut r = rig(RigSpec::default()).await;
+    let session_facts = |title: Option<&str>| Event {
+        event: "session_facts".into(),
+        branch: Some(Some("main".into())),
+        // The key is left out where the case clears the title.
+        title: title.map(|title| Some(title.to_owned())),
+        ..Default::default()
+    };
+    r.event(session_facts(Some("Checkout retry"))).unwrap();
+    r.event(session_facts(None)).unwrap();
+    let view = session_view(&r);
+    assert_eq!(
+        (view.facts.branch(), view.facts.title()),
+        (Some("main"), None),
+        "a member the later report leaves out is cleared"
+    );
+    let generation = r
+        .event(Event {
+            event: "agent_start".into(),
+            agent_id: Some("a1".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .request_generation;
+    let agent_facts = |name: Option<&str>| Event {
+        event: "agent_facts".into(),
+        agent_id: Some("a1".into()),
+        description: Some(Some("Review the retry loop".into())),
+        // The key is named with null where the case clears the name.
+        name: Some(name.map(str::to_owned)),
+        request_generation: Some(generation),
+        ..Default::default()
+    };
+    r.event(agent_facts(Some("reviewer"))).unwrap();
+    r.event(agent_facts(None)).unwrap();
+    let facts = &session_view(&r).agent_facts["a1"];
+    assert_eq!(
+        (facts.description(), facts.name()),
+        (Some("Review the retry loop"), None)
+    );
+}
+
+#[tokio::test]
+async fn agent_facts_for_an_unheld_agent_is_refused_and_adds_no_record() {
+    let mut r = rig(RigSpec::default()).await;
+    let agents = session_agents(&r);
+    let refused = r
+        .event(Event {
+            event: "agent_facts".into(),
+            agent_id: Some("ghost".into()),
+            name: Some(Some("reviewer".into())),
+            ..Default::default()
+        })
+        .unwrap_err();
+    assert_eq!((refused.code, refused.status), ("unknown_agent", 409));
+    assert_eq!(
+        session_agents(&r),
+        agents,
+        "a facts report registers no agent"
+    );
+}
+
+#[tokio::test]
+async fn agent_facts_leaves_a_parked_agent_parked() {
+    let mut r = rig(RigSpec::default()).await;
+    let generation = r
+        .event(Event {
+            event: "agent_start".into(),
+            agent_id: Some("a1".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .request_generation;
+    let deadline = r.now() + 60_000;
+    r.event(Event {
+        event: "state".into(),
+        agent_id: Some("a1".into()),
+        state: Some("parked".into()),
+        park_kind: Some("background".into()),
+        deadline: Some(deadline),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .unwrap();
+    r.event(Event {
+        event: "agent_facts".into(),
+        agent_id: Some("a1".into()),
+        name: Some(Some("reviewer".into())),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .unwrap();
+    let agents = r
+        .reregister()
+        .agents
+        .expect("a registration lists the session's agents");
+    let a1 = agents
+        .iter()
+        .find(|a| a.agent_id == "a1")
+        .expect("the registration lists a1");
+    assert_eq!(
+        (a1.state, a1.park),
+        (
+            AgentState::Parked,
+            Some(Park::new(ParkKind::Background, Some(deadline), None))
+        ),
+        "a facts report is no activity, so the park stands"
+    );
+}
+
+#[tokio::test]
+async fn session_facts_renews_no_lease() {
+    let mut r = rig(RigSpec::default()).await;
+    let lease = r.reregister().lease_expires_ms;
+    r.advance(30_000);
+    let ack = r
+        .event(Event {
+            event: "session_facts".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        ack.lease_expires_ms, lease,
+        "a facts report says nothing of the companion's liveness"
+    );
 }

@@ -23,6 +23,7 @@ use crate::engine::{
     ProbeCharge, Reason, SavingsUnit, Session, SessionKey, Settlement, UnansweredProbe, Wasted,
     MAIN_AGENT,
 };
+use crate::facts::{AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts};
 use crate::recipe::Recipe;
 use crate::savings::{AttemptFunding, RowClient};
 use crate::usage::ProbeUsage;
@@ -67,6 +68,10 @@ pub(crate) struct PersistedSession {
     /// build wrote the stamp only at a request that took the slots.
     #[serde(default)]
     pub slotted: Option<bool>,
+    /// Absent from a row an earlier build saved, which loads with no fact. The raw form: the load hands it to the
+    /// sanitizer, so a saved value meets the rules a reported one meets.
+    #[serde(default)]
+    pub facts: RawSessionFacts,
 }
 
 /// Every field of `Agent` but `in_flight`, with the observation's fields and the recipe's own beside it. The prompt,
@@ -140,6 +145,10 @@ pub(crate) struct PersistedAgent {
     pub probes_today: u64,
     pub credited_today: u64,
     pub counters_day: i64,
+    /// Absent from a row an earlier build saved, which loads with no fact. The raw form: the load hands it to the
+    /// sanitizer, so a saved value meets the rules a reported one meets.
+    #[serde(default)]
+    pub facts: RawAgentFacts,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -427,6 +436,7 @@ impl PersistedSession {
             last_report_at: session.last_report_at,
             last_real_at: session.last_real_at,
             slotted: Some(session.slotted),
+            facts: session.facts.raw(),
         }
     }
 
@@ -448,6 +458,7 @@ impl PersistedSession {
             slotted: self.slotted.unwrap_or(self.last_real_at.is_some()),
             restored_until: self.attended.then_some(now + LEASE_MS),
             owner_mismatches: 0,
+            facts: SessionFacts::of(self.facts),
             agents: BTreeMap::new(),
         }
     }
@@ -570,6 +581,7 @@ impl PersistedAgent {
             probes_today: agent.probes_today,
             credited_today: agent.credited_today,
             counters_day: agent.counters_day,
+            facts: agent.facts.raw(),
         }
     }
 
@@ -673,6 +685,7 @@ impl PersistedAgent {
         agent.probes_today = self.probes_today;
         agent.credited_today = self.credited_today;
         agent.counters_day = self.counters_day;
+        agent.facts = AgentFacts::of(self.facts);
         let current = self.current.map(|current| (current, self.client_label));
         Some((agent, current))
     }

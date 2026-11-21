@@ -277,6 +277,51 @@ async fn a_heartbeat_after_the_restart_answers_instance_ended_and_the_same_insta
     );
 }
 
+#[tokio::test]
+async fn an_agents_facts_survive_a_save_and_a_load() {
+    let mut r = rig(on_disk()).await;
+    let generation = r
+        .event(Event {
+            event: "agent_start".into(),
+            agent_id: Some("a1".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .request_generation;
+    r.event(Event {
+        event: "agent_facts".into(),
+        agent_id: Some("a1".into()),
+        agent_type: Some(Some("code-reviewer".into())),
+        description: Some(Some("Review the retry loop".into())),
+        name: Some(Some("reviewer".into())),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .unwrap();
+    r.engine.flush_persisted().await;
+    r.engine = r.restart().await;
+    r.engine.load_persisted().await;
+
+    let view = r
+        .engine
+        .sessions()
+        .into_iter()
+        .find(|s| s.session_id == "session")
+        .expect("the rig's session after the load");
+    let facts = view
+        .agent_facts
+        .get("a1")
+        .expect("a1's facts after the load");
+    assert_eq!(
+        (facts.agent_type(), facts.description(), facts.name()),
+        (
+            Some("code-reviewer"),
+            Some("Review the retry loop"),
+            Some("reviewer")
+        )
+    );
+}
+
 /// A request on main naming `owner` in its owner header, of the class `request_class` when one is named.
 fn owned_request(r: &Rig, id: &str, request_class: Option<&str>, owner: &str) -> BusEvent {
     let mut event = r.observed_with(

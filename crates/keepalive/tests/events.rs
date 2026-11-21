@@ -2,8 +2,8 @@
 mod common;
 use common::*;
 use phoebis_keepalive::{
-    AgentState, CompanionState, Event, EventError, KeepaliveLimits, Park, ParkKind, Reason,
-    RecipeState,
+    decode_json_event, AgentState, CompanionState, Event, EventError, KeepaliveLimits, Park,
+    ParkKind, Reason, RecipeState, Reported, SessionFacts,
 };
 
 /// A real request on main of `session` under `key_id`, the first of which gives the session its slot.
@@ -448,5 +448,133 @@ async fn a_released_subagent_reaches_the_router_so_its_pin_leaves_the_next_round
             .map(|p| p.skip),
         Some(Some("ended")),
         "the release reached the router as the agent's end: {round:?}"
+    );
+}
+
+/// The session's facts as the conversion of a report keeps them.
+fn kept(fields: serde_json::Value) -> SessionFacts {
+    let mut body = serde_json::json!({
+        "protocol": 1,
+        "event": "session_facts",
+        "session_id": "session",
+        "instance_id": "instance",
+        "sequence": 1,
+    });
+    body.as_object_mut()
+        .unwrap()
+        .extend(fields.as_object().unwrap().clone());
+    match decode_json_event(&serde_json::to_vec(&body).unwrap()) {
+        Ok(report) => match report.event {
+            Reported::SessionFacts { facts } => facts,
+            other => panic!("a session_facts report, not {other:?}"),
+        },
+        Err(refused) => panic!("the report is taken, not refused as {}", refused.code),
+    }
+}
+
+#[test]
+fn a_title_is_cut_at_a_character_boundary() {
+    let title = format!("{}é", "a".repeat(255));
+    assert_eq!(
+        kept(serde_json::json!({ "title": title })).title(),
+        Some("a".repeat(255).as_str())
+    );
+}
+
+#[test]
+fn a_title_loses_its_control_and_format_characters() {
+    assert_eq!(
+        kept(serde_json::json!({ "title": "fix\u{1b}[31m\u{202e}the\n\tcart" })).title(),
+        Some("fix[31mthe cart")
+    );
+}
+
+#[test]
+fn a_path_over_its_cap_is_absent() {
+    let whole = format!("/{}", "p".repeat(1_023));
+    assert_eq!(
+        kept(serde_json::json!({ "project": whole })).project(),
+        Some(whole.as_str()),
+        "a path of 1,024 bytes is kept"
+    );
+    let over = format!("/{}", "p".repeat(1_024));
+    assert_eq!(
+        kept(serde_json::json!({ "project": over })).project(),
+        None,
+        "a path of 1,025 bytes would name another directory if cut"
+    );
+}
+
+#[test]
+fn a_remote_is_reduced_to_host_and_path() {
+    let long_raw = format!(
+        "https://git.example/acme/storefront.git?{}",
+        "x".repeat(1_000)
+    );
+    let long_reduced = format!("git.example/{}", "p".repeat(1_013));
+    let rows: [(&str, Option<&str>); 19] = [
+        (
+            "https://user:token@Git.Example/acme/storefront.git?x=1#f",
+            Some("git.example/acme/storefront"),
+        ),
+        (
+            "git@git.example:acme/storefront.git",
+            Some("git.example/acme/storefront"),
+        ),
+        (
+            "ssh://git@git.example:2222/acme/storefront/",
+            Some("git.example/acme/storefront"),
+        ),
+        (
+            "git.example/acme/storefront",
+            Some("git.example/acme/storefront"),
+        ),
+        ("file:///srv/git/storefront.git", None),
+        ("/srv/git/storefront.git", None),
+        ("C:\\work\\storefront", None),
+        ("https://user:pa/ss@git.example/acme/storefront.git", None),
+        (
+            "ssh://git@[2001:db8::1]:2222/acme/storefront.git",
+            Some("[2001:db8::1]/acme/storefront"),
+        ),
+        ("https://to/ken?x@git.example/acme/storefront.git", None),
+        (
+            "https://user:8080/pa#ss@git.example/acme/storefront.git",
+            None,
+        ),
+        ("user:pa/ss?x@git.example:acme/storefront.git", None),
+        ("file://localhost/srv/git/notes.git", None),
+        (
+            "https://git.example/acme/tools.git.git",
+            Some("git.example/acme/tools.git"),
+        ),
+        (
+            "git.example/acme/tools.git",
+            Some("git.example/acme/tools.git"),
+        ),
+        (long_raw.as_str(), Some("git.example/acme/storefront")),
+        ("https://git.example:abc/acme/storefront.git", None),
+        (
+            "[2001:db8::1]/acme/storefront",
+            Some("[2001:db8::1]/acme/storefront"),
+        ),
+        (long_reduced.as_str(), None),
+    ];
+    let wrong: Vec<String> = rows
+        .iter()
+        .filter_map(|(remote, want)| {
+            let facts = kept(serde_json::json!({ "repository": remote }));
+            (facts.repository() != *want)
+                .then(|| format!("{remote}: got {:?}, want {want:?}", facts.repository()))
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_title_of_control_characters_alone_is_absent() {
+    assert_eq!(
+        kept(serde_json::json!({ "title": "\u{1b}\u{202e}\u{200b}\n" })).title(),
+        None
     );
 }

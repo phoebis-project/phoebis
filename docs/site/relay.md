@@ -493,7 +493,20 @@ id is `main`.
 | `agent_start` | `agent_id`, and `request_generation` when known | Starts the agent `busy`, or restarts a released one under the generation the start names |
 | `activity` | `agent_id`, `kind` (`prompt` or `presence`), and `request_generation` when known | A prompt sets the agent `busy` and resets its idle clock. A presence moves the idle clock alone |
 | `state` | `agent_id`, `state`, `request_generation` when known, and the park fields of a `parked` state | Moves the agent to the state |
+| `session_facts` | `branch`, `cwd`, `project`, `repository`, `repository_root` and `title`, each optional | Replaces the session's reported facts with the set |
+| `agent_facts` | `agent_id`, `request_generation` when known, and `agent_type`, `description` and `name`, each optional | Replaces the agent's reported facts with the set |
 | `session_end` | none | Releases every agent of the session and ends it |
+
+`session_facts` and `agent_facts` each state the whole set, so a field the report leaves out or sends as null clears
+that fact, and neither renews the lease or counts as activity. The router cleans each value before it keeps it: each run
+of line breaks and tabs folds to one space, each other control and format character goes, white space at both ends goes,
+and a value left empty is absent. A `title`, a `description` or a `name` over 256 bytes is cut to its longest prefix of
+whole characters, an `agent_type` or a `branch` over 256 bytes is left out, and so is a `cwd`, a `project`, a
+`repository_root` or a reduced `repository` over 1,024 bytes. The `repository` is kept as `host/path`, without the
+scheme, the user information, the port, the query, the fragment and one trailing `.git`, and a value already in the form
+`host/path` is kept as it is given. A local path, a `file` URL, a remote with an `@` behind its host part and each other
+remote the rule cannot read are left out. The facts are display values of the console's Sessions view, and the router
+never refuses a report over a fact's content.
 
 The router accepts five states. `busy` is an agent at work. `idle` is an agent between requests: a prompt that sent no
 request, such as a local command, lets the idle window go on, and a park that ended restarts it. `parked` is an agent
@@ -506,16 +519,16 @@ a `session_start` or a `heartbeat` renews runs 90 seconds, and the pool's idle l
 
 A `200` carries an acknowledgment with `session_id`, `instance_id`, `sequence`, `lease_expires_ms` and
 `request_generation`: for an agent event the named agent's generation beside its `agent_id`, and for a session-level
-event, a `session_start`, a `heartbeat` or a `session_end`, main's generation, which the mod adopts for main. The
-acknowledgment of a `session_start` adds `agents`, a list of `{agent_id, request_generation, state}` for every agent the
-router holds for the session, main included. A parked agent's entry carries what the router still holds of its park:
-`park_kind`, `wake_at` and `deadline`, each where the router has it. The mod adopts every generation the answer names
-and reconciles that list with its own agents. An agent only the router holds is adopted when the client's own agent list
-reads it live, and released otherwise, and without that list the router's entry stays as it is. An agent the mod
-released in this session, which the client has not spawned or given a turn since, is not adopted again whatever the list
-reads, since that release ends the run the router holds, and the mod sends the release once more when none is still
-queued, so a router restored from a save older than the release learns of it. A state the router holds wrongly is sent
-again. An agent only the mod holds is announced with `agent_start` and its state. An entry the router holds as
+event, a `session_start`, a `heartbeat`, a `session_facts` or a `session_end`, main's generation, which the mod adopts
+for main. The acknowledgment of a `session_start` adds `agents`, a list of `{agent_id, request_generation, state}` for
+every agent the router holds for the session, main included. A parked agent's entry carries what the router still holds
+of its park: `park_kind`, `wake_at` and `deadline`, each where the router has it. The mod adopts every generation the
+answer names and reconciles that list with its own agents. An agent only the router holds is adopted when the client's
+own agent list reads it live, and released otherwise, and without that list the router's entry stays as it is. An agent
+the mod released in this session, which the client has not spawned or given a turn since, is not adopted again whatever
+the list reads, since that release ends the run the router holds, and the mod sends the release once more when none is
+still queued, so a router restored from a save older than the release learns of it. A state the router holds wrongly is
+sent again. An agent only the mod holds is announced with `agent_start` and its state. An entry the router holds as
 `released` is skipped both ways, so a subagent the mod holds as parked stays released on the router until its next
 report starts it again with `agent_start`, which registers it anew where the record left one pool cache TTL after the
 release ([The five states](keepalive.md#the-five-states)). When a later answer omits an entry the router named
@@ -537,18 +550,18 @@ without a registration. The eighteen codes, by status:
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_event` | 400 | The body is not typed `application/json`, is not this protocol's JSON, names no `protocol`, carries a field its event does not take or lacks one it requires, carries a park field on a state other than `parked`, reports `parked` without `park_kind` or, outside `background`, without `wake_at`, or carries a `wake_at` on a `background` park or a `deadline` on a `scheduled` park |
+| `invalid_event` | 400 | The body is not typed `application/json`, is not this protocol's JSON, names no `protocol`, carries a field its event does not take (such as a `title` on a `heartbeat`, whatever its value) or lacks one it requires, carries a park field on a state other than `parked`, reports `parked` without `park_kind` or, outside `background`, without `wake_at`, or carries a `wake_at` on a `background` park or a `deadline` on a `scheduled` park |
 | `invalid_identity` | 400 | `session_id`, `instance_id`, `agent_id`, `owner_id` or `previous_instance_id` is not a valid id, or `sequence` is 0 |
 | `invalid_state` | 400 | `kind` is neither `prompt` nor `presence`, `state` is none of the five, or `park_kind` is none of the three |
-| `unknown_event` | 400 | `event` is none of the six |
+| `unknown_event` | 400 | `event` is none of the eight |
 | `unsupported_protocol` | 400 | `protocol` is not `1` |
 | `agent_exists` | 409 | An `agent_start` for an agent the router holds that is not released under the generation the start names |
-| `agent_released` | 409 | An `activity` or a `state` for an agent the router holds as released |
+| `agent_released` | 409 | An `activity`, an `agent_facts` or a `state` for an agent the router holds as released |
 | `instance_conflict` | 409 | A `session_start` for a session another instance holds, without the holder's id as `previous_instance_id` |
 | `instance_ended` | 409 | A report for a session that ended or whose lease lapsed, which only a `session_start` takes back |
-| `stale_request_generation` | 409 | An `activity` or a `state` whose `request_generation` is not the agent's current one |
+| `stale_request_generation` | 409 | An `activity`, an `agent_facts` or a `state` whose `request_generation` is not the agent's current one |
 | `stale_sequence` | 409 | A `sequence` at or below the session's last |
-| `unknown_agent` | 409 | An `activity` or a `state` for an agent the session does not hold |
+| `unknown_agent` | 409 | An `activity`, an `agent_facts` or a `state` for an agent the session does not hold |
 | `unknown_instance` | 409 | A report for a session the router does not hold under this key and its generation, or from an instance other than the holder |
 | `unknown_previous_instance` | 409 | A `session_start` naming a `previous_instance_id` for a session the router does not hold |
 | `event_too_large` | 413 | The body exceeds 16 KiB |
@@ -556,16 +569,19 @@ without a registration. The eighteen codes, by status:
 | `session_limit` | 429 | The engine's session cap is reached on a `session_start`, counting the sessions that hold a slot |
 | `quiesced` | 503 | The engine is closing, so a late report is counted and not applied |
 
-The mod sends one request at a time. Reports queue in order, the next goes out when the answer to the one in flight
-lands, and no hook waits for a request, so a stalled router never holds up a tool call or a prompt. A report that
-repeats what the queue already holds collapses into it: the queue keeps one activity per agent (a prompt over a
-presence), one heartbeat and the newest state per agent. The answer to a `session_start` or a `heartbeat` arms the next
-heartbeat at a third of the remaining lease, between 1 and 25 seconds. No other answer moves it, and no heartbeat goes
-out before a registration has been acknowledged. What each answer makes the mod do:
+The mod sends one request at a time. Reports queue in order, and the next goes out when the answer to the one in flight
+lands. A heartbeat and each other lifecycle report that may go out, which is each report but a `session_facts` or an
+`agent_facts`, go ahead of a facts report that waits, wherever the two stand in the queue. No hook waits for a request,
+so a stalled router never holds up a tool call or a prompt. A report that repeats what the queue already holds collapses
+into it: the queue keeps one activity per agent (a prompt over a presence), one heartbeat, the newest `session_facts`,
+and the newest state and the newest `agent_facts` per agent. The answer to a `session_start` or a `heartbeat` arms the
+next heartbeat at a third of the remaining lease, between 1 and 25 seconds. No other answer moves it, and no heartbeat
+goes out before a registration has been acknowledged. What each answer makes the mod do:
 
 - A `2xx`: the report is done and the backoff starts over.
 - A transport failure, a `5xx`, a `session_limit`, or an `agent_limit` on a `session_start`: the report goes back to the
-  head of the queue and the whole queue is retried after 1, 2, 4, 8 and 16 seconds, then every 30 seconds.
+  head of the queue and the whole queue is retried after 1, 2, 4, 8 and 16 seconds, then every 30 seconds. A facts
+  report that fails this way waits along the same steps under a backoff of its own and holds no other report.
 - An `agent_limit` on an `agent_start`: the start goes back and that agent's reports wait behind it, retried along the
   same backoff under the agent's own retry time, while the heartbeats and the other agents' reports go on.
 - A `401` or a `403`: the mod empties its queue and reports nothing more until a later start's check no longer refuses
@@ -582,7 +598,8 @@ out before a registration has been acknowledged. What each answer makes the mod 
   again, rather than going out at once round after round.
 - `stale_request_generation` with a generation: the mod adopts it and sends the report once more, and drops it on a
   second refusal. Without a generation the mod drops the report and registers again.
-- `unknown_agent`: the report goes back with an `agent_start` right before it.
+- `unknown_agent`: the report goes back with an `agent_start` right before it. An `agent_facts` is dropped in place of
+  that, so a facts report never registers an agent.
 - `unknown_previous_instance`: the mod registers again without `previous_instance_id`.
 - Any other answer, a `400` or a `413`: the mod drops the report, since the router never takes it.
 

@@ -7,6 +7,7 @@ mod companion;
 mod config;
 mod engine;
 mod events;
+mod facts;
 mod persist;
 mod probe;
 mod recipe;
@@ -33,6 +34,7 @@ pub use engine::{
 pub use events::{
     decode_json_event, Ack, AckAgent, Event, EventError, EventReport, Reported, PROTOCOL,
 };
+pub use facts::{AgentFacts, SessionFacts};
 pub use probe::PROBE_DEADLINE;
 pub use recipe::{
     make_recipe, request_ttl_ms, valid_opaque, Recipe, MAX_HEADER_BYTES, MAX_HEADER_VALUE,
