@@ -28702,7 +28702,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // Both columns are hidden by default, so the Columns control shows them on a page of their own. Project reads the
     // folder of the project, else of the working directory, with the whole path and a working directory that differs
     // on hover. Repository reads the last segment of the remote, else of the root, over the branch, with the remote,
-    // the branch and the root on hover. A row with neither reads a muted dash and no hover.
+    // the branch and the root on hover. A row that reports none of a cell's facts reads a muted dash and no hover.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     await showColumn(page, 'Project');
     await showColumn(page, 'Repository');
