@@ -11,7 +11,7 @@ const SHORT_CAP: usize = 256;
 const LONG_CAP: usize = 1_024;
 
 /// A session's facts as a report or a saved row gives them, ahead of this module's rules.
-#[derive(Default, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub(crate) struct RawSessionFacts {
     pub(crate) branch: Option<String>,
@@ -23,7 +23,7 @@ pub(crate) struct RawSessionFacts {
 }
 
 /// An agent's facts in the same form.
-#[derive(Default, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub(crate) struct RawAgentFacts {
     pub(crate) agent_type: Option<String>,
@@ -31,23 +31,18 @@ pub(crate) struct RawAgentFacts {
     pub(crate) name: Option<String>,
 }
 
-/// The facts a companion reports of its session, each cleaned by this module's rules. Display state alone.
+/// The facts a companion reports of its session. Display state alone. It wraps the raw form, and each value in it
+/// passed this module's rules in `of`.
 /// A value enters through `of` alone, a saved one too, so the type takes no `Deserialize`. It serializes because
 /// `SessionView` does.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
-pub struct SessionFacts {
-    branch: Option<String>,
-    cwd: Option<String>,
-    project: Option<String>,
-    repository: Option<String>,
-    repository_root: Option<String>,
-    title: Option<String>,
-}
+#[serde(transparent)]
+pub struct SessionFacts(RawSessionFacts);
 
 impl SessionFacts {
     /// The one way a value becomes a kept one. The conversion of a report and the load of a saved row call it.
     pub(crate) fn of(raw: RawSessionFacts) -> SessionFacts {
-        SessionFacts {
+        SessionFacts(RawSessionFacts {
             branch: whole(raw.branch, SHORT_CAP),
             cwd: whole(raw.cwd, LONG_CAP),
             project: whole(raw.project, LONG_CAP),
@@ -57,86 +52,72 @@ impl SessionFacts {
                 .filter(|remote| remote.len() <= LONG_CAP),
             repository_root: whole(raw.repository_root, LONG_CAP),
             title: cut(raw.title, SHORT_CAP),
-        }
+        })
     }
 
     /// The set as a saved row carries it.
     pub(crate) fn raw(&self) -> RawSessionFacts {
-        RawSessionFacts {
-            branch: self.branch.clone(),
-            cwd: self.cwd.clone(),
-            project: self.project.clone(),
-            repository: self.repository.clone(),
-            repository_root: self.repository_root.clone(),
-            title: self.title.clone(),
-        }
+        self.0.clone()
     }
 
     pub fn branch(&self) -> Option<&str> {
-        self.branch.as_deref()
+        self.0.branch.as_deref()
     }
 
     pub fn cwd(&self) -> Option<&str> {
-        self.cwd.as_deref()
+        self.0.cwd.as_deref()
     }
 
     pub fn project(&self) -> Option<&str> {
-        self.project.as_deref()
+        self.0.project.as_deref()
     }
 
     pub fn repository(&self) -> Option<&str> {
-        self.repository.as_deref()
+        self.0.repository.as_deref()
     }
 
     pub fn repository_root(&self) -> Option<&str> {
-        self.repository_root.as_deref()
+        self.0.repository_root.as_deref()
     }
 
     pub fn title(&self) -> Option<&str> {
-        self.title.as_deref()
+        self.0.title.as_deref()
     }
 }
 
-/// The facts a companion reports of one agent.
+/// The facts a companion reports of one agent, kept as `SessionFacts` keeps a session's.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
-pub struct AgentFacts {
-    agent_type: Option<String>,
-    description: Option<String>,
-    name: Option<String>,
-}
+#[serde(transparent)]
+pub struct AgentFacts(RawAgentFacts);
 
 impl AgentFacts {
     pub(crate) fn of(raw: RawAgentFacts) -> AgentFacts {
-        AgentFacts {
+        AgentFacts(RawAgentFacts {
             agent_type: whole(raw.agent_type, SHORT_CAP),
             description: cut(raw.description, SHORT_CAP),
             name: cut(raw.name, SHORT_CAP),
-        }
+        })
     }
 
     pub(crate) fn raw(&self) -> RawAgentFacts {
-        RawAgentFacts {
-            agent_type: self.agent_type.clone(),
-            description: self.description.clone(),
-            name: self.name.clone(),
-        }
+        self.0.clone()
     }
 
     pub fn agent_type(&self) -> Option<&str> {
-        self.agent_type.as_deref()
+        self.0.agent_type.as_deref()
     }
 
     pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
+        self.0.description.as_deref()
     }
 
     pub fn name(&self) -> Option<&str> {
-        self.name.as_deref()
+        self.0.name.as_deref()
     }
 
     /// No member stands, so the view lists no entry for the agent.
     pub fn is_empty(&self) -> bool {
-        self.agent_type.is_none() && self.description.is_none() && self.name.is_none()
+        self.0.agent_type.is_none() && self.0.description.is_none() && self.0.name.is_none()
     }
 }
 
@@ -144,30 +125,26 @@ impl AgentFacts {
 /// format character goes, white space at both ends goes, and a value left empty is absent.
 fn text(value: Option<String>) -> Option<String> {
     let value = value?;
-    let mut folded = String::with_capacity(value.len());
+    let mut kept = String::with_capacity(value.len());
     let mut in_run = false;
     for c in value.chars() {
         if matches!(c, '\u{9}'..='\u{d}' | '\u{85}' | '\u{2028}' | '\u{2029}') {
             if !in_run {
-                folded.push(' ');
+                kept.push(' ');
             }
             in_run = true;
         } else {
-            folded.push(c);
+            // `char::is_control` reads Cc alone, and the bidirectional overrides, the isolates and the zero-width
+            // characters are Cf.
+            if !matches!(
+                get_general_category(c),
+                GeneralCategory::Control | GeneralCategory::Format
+            ) {
+                kept.push(c);
+            }
             in_run = false;
         }
     }
-    // `char::is_control` reads Cc alone, and the bidirectional overrides, the isolates and the zero-width characters
-    // are Cf.
-    let kept: String = folded
-        .chars()
-        .filter(|c| {
-            !matches!(
-                get_general_category(*c),
-                GeneralCategory::Control | GeneralCategory::Format
-            )
-        })
-        .collect();
     let kept = kept.trim();
     (!kept.is_empty()).then(|| kept.to_owned())
 }
@@ -183,12 +160,7 @@ fn cut(value: Option<String>, cap: usize) -> Option<String> {
     if value.len() <= cap {
         return Some(value);
     }
-    let end = value
-        .char_indices()
-        .map(|(at, c)| at + c.len_utf8())
-        .take_while(|end| *end <= cap)
-        .last()
-        .unwrap_or(0);
+    let end = value.floor_char_boundary(cap);
     Some(value[..end].trim_end().to_owned())
 }
 
