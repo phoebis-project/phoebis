@@ -309,15 +309,27 @@ the table after any accepted re-pin.
 - The Console login's client id and scopes. The 2.1.310 Console authorize URL carries the client id
   `41077d10-94b8-4194-be48-d251e9eb21b4` with the scopes `user:profile user:inference`, where the router's Console
   pairing sends the claude.ai client id and the full login scope list.
-- The paths under `/api/frame/` that no capture and no session sent: the assets, the comments, the database and the
-  sharing calls.
+- The paths under `/api/frame/` that no capture and no session sent. A session of Claude Code 2.1.327 that ran with
+  `CLAUDE_CODE_ARTIFACT_ASSETS=1`, `CLAUDE_CODE_ARTIFACT_DB=1`, `CLAUDE_CODE_ARTIFACT_PRESENCE=1`,
+  `CLAUDE_CODE_ARTIFACT_ROOM=1`, `CLAUDE_CODE_ARTIFACT_SHARE=1` and `CLAUDE_CODE_ARTIFACT_VERSIONS=1` in its environment
+  printed the line `Artifact gates frozen` with `comments=true`, `db=true`, `files=true` and `versions=true` among its
+  gates, and with `delete=false`, `room=false` and `share=false`. Without the six variables the line reads the same but
+  for `versions=false`. The session sent `POST /api/frame/blob/{id}/agent-list` for the assets,
+  `POST /api/frame/db/agent` for the database, `GET /api/frame/versions/{id}` for a page's versions and
+  `GET /api/frame/contract/latest` ahead of its reads, and the feature listener's path rules passed each. The upstream
+  answered the assets call with `403` and the database call with `404`, since the page's published version declares
+  neither capability. Unsent, and so unmeasured, are an asset call and a database call past that check, the comment
+  calls, since the page held no comment, and the sharing calls, since the tool offered no action that reads or changes a
+  page's sharing.
 - The quota-wall usage variant of token counting on the wire. The Read tool's pre-turn count is the measured one
   (`count.json` and the three `count_*.http` heads under the fixtures).
 - The usage read under `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. With the switch set the `/usage` dialog opens on
   the row `Error: Failed to load usage data` and no request reaches the wire, so `control_usage.http` is the read of
   the capture variant without the switch.
 - TLS record-level behavior after the ClientHello (key update, ticket handling) and the ServerHello path.
-- Whether a feature answer carries the upstream's rate-limit headers, and whether the client reads them there.
+- Whether a connector answer carries the upstream's rate-limit headers, and whether the client reads them there. The
+  answers that the feature listener passed back for a keyed read of an artifact's page and for a socket request, a `101`
+  and a `403`, carry none.
 
 ## Re-pinning
 

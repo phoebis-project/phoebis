@@ -3,10 +3,10 @@
 # what runs it. It takes the script from the page, which stays the one source, and runs it under sh with the real curl
 # against loopback stubs, four of which speak TLS under a CA the test makes with openssl. A proxy's 502 to the CONNECT
 # has a stop of its own, which the script reaches only where curl knows each --write-out name of the probe. The script
-# runs in an empty environment under a throwaway home and reaches no host off loopback. Under PRIVATE_HOSTS=yes it
-# meets stand-ins of sudo, unshare, mount and setpriv, so no run gets root or binds a file over the machine's hosts
-# file. A claude on its PATH records its arguments, its environment and its umask and prints one line, which fails a
-# case that expects a stop and ends a case of the sound road.
+# runs in an empty environment under a throwaway home and reaches no host off loopback. Under PRIVATE_HOSTS=yes it meets
+# stand-ins of sudo, unshare, mount and setpriv, so no run gets root or binds a file over the machine's hosts file. A
+# claude on its PATH records its arguments, its environment and its umask and prints one line, which fails a case that
+# expects a stop and ends a case of the sound road.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -187,14 +187,14 @@ fill PROXY_URL "http://127.0.0.1:$port"
 
 mkdir "$tmp/home" "$tmp/bin"
 
-# The page's script decides where curl connects, so an edit there that takes the proxy off a probe or sends the run
-# into the redirect's branch would send a request to the real feature hosts. Each curl call of the script opens with
-# -q and so reads no .curlrc. This stand-in therefore runs the host's curl with the words of the rules file ahead of
-# the call's own arguments and behind a leading -q, which curl reads in the first place alone, and each exit and each
-# --write-out value stays the real tool's. curl takes the first rule that fits, so a case writes its own rules ahead
-# of the last one, which sends a connection to the stub whatever host and port the URL names. The stand-in stops where
-# the rules lack that last one, so a case that writes its rules wrong cannot dial a real host. A call through a proxy
-# connects to the proxy's address, which each fill of PROXY_URL sets to a port of the stub.
+# The page's script decides where curl connects, so an edit there that takes the proxy off a probe or sends the run into
+# the redirect's branch would send a request to the real feature hosts. Each curl call of the script opens with -q and
+# so reads no .curlrc. This stand-in therefore runs the host's curl with the words of the rules file ahead of the call's
+# own arguments and behind a leading -q, which curl reads in the first place alone, and each exit and each --write-out
+# value stays the real tool's. curl takes the first rule that fits, so a case writes its own rules ahead of the last
+# one, which sends a connection to the stub whatever host and port the URL names. The stand-in stops where the rules
+# lack that last one, so a case that writes its rules wrong cannot dial a real host. A call through a proxy connects to
+# the proxy's address, which each fill of PROXY_URL sets to a port of the stub.
 real_curl=$(command -v curl) || fail "curl is missing"
 rules() { printf -- '--connect-to %s\n' "$@" "::127.0.0.1:$port" > "$tmp/curl-rules"; }
 # Both feature hosts lead to the stand-in of the feature listener, so a redirect's probe over IPv4 reaches the router.
@@ -269,8 +269,8 @@ exit 1
 SH
 chmod +x "$tmp/bin/claude"
 
-# A LAUNCH_MARK or a handed of the caller joins the script's environment, so a case can follow a variable of the
-# calling shell into the script.
+# A LAUNCH_MARK or a handed of the caller joins the script's environment, so a case can follow a variable of the calling
+# shell into the script.
 launch() {
   status=0
   out=$(env -i HOME="$tmp/home" PATH="$tmp/bin:$PATH" ${LAUNCH_MARK+"LAUNCH_MARK=$LAUNCH_MARK"} \
@@ -307,8 +307,8 @@ launch
 [[ "$out" == "phoebis: the fetched CA does not have the operator's fingerprint. Get the fingerprint from the router's operator" ]] \
   || fail "a CA of another fingerprint passed the compare (exit $status): $out"
 
-# A client started with an empty token can fall back to a login of its own. A key check behind the fetch prints the
-# same stop, so the download's record tells the two apart.
+# A client started with an empty token can fall back to a login of its own. A key check behind the fetch prints the same
+# stop, so the download's record tells the two apart.
 fill PHOEBIS_FEATURE_CA_SHA256 "$fingerprint"
 fill ROUTER_KEY ''
 : > "$tmp/downloads"
@@ -334,9 +334,9 @@ rm "$tmp/home/.curlrc"
 standing_rules
 fill SETUP proxy
 
-# Under PRIVATE_HOSTS=yes the script runs a second time below sudo, which resets the environment to a small set, and
-# the root part's env -i empties it, so the client gets a variable of the calling shell only where the first run hands
-# it over, and none of the variables sudo sets.
+# Under PRIVATE_HOSTS=yes the script runs a second time below sudo, which resets the environment to a small set, and the
+# root part's env -i empties it, so the client gets a variable of the calling shell only where the first run hands it
+# over, and none of the variables sudo sets.
 fill SETUP redirect
 fill PRIVATE_HOSTS yes
 rm -f "$tmp/tools.called" "$tmp/client-env"
@@ -357,8 +357,8 @@ rm "$tmp/mount-fails"
 [[ "$out" == "phoebis: the private hosts file could not be put in place (exit 32)" ]] \
   || fail "a bind that failed did not stop the start ahead of the second run (exit $status): $out"
 
-# A proxy setup reads no hosts file of its own, so a script that read PRIVATE_HOSTS there would ask its user for root
-# to bind a file that nothing reads.
+# A proxy setup reads no hosts file of its own, so a script that read PRIVATE_HOSTS there would ask its user for root to
+# bind a file that nothing reads.
 fill SETUP proxy
 fill PROXY_URL "http://127.0.0.1:$good"
 fill PRIVATE_HOSTS yes
@@ -382,9 +382,9 @@ else
   echo "launch-script: no listener on ::1, the case of a family that reaches another peer did not run"
 fi
 
-# A private file that kept the machine's address for a feature host would get live updates refused on the road it
-# exists for, and a filter that dropped a line whole would lose the router's own name. The script reads the machine's
-# hosts file by its path, so the case binds one of its own there, inside a namespace the host grants.
+# A private file that kept the machine's address for a feature host would get live updates refused on the road it exists
+# for, and a filter that dropped a line whole would lose the router's own name. The script reads the machine's hosts
+# file by its path, so the case binds one of its own there, inside a namespace the host grants.
 if [[ -n "$host_unshare" && -n "$host_mount" ]] && "$host_unshare" -rm true 2>/dev/null; then
   cat > "$tmp/machine-hosts" <<'EOF'
 127.0.0.1 localhost
@@ -410,8 +410,8 @@ else
   echo "launch-script: no user namespace on this host, the case of the private file's lines did not run"
 fi
 
-# No second run comes outside the private road, so a script that took the marker word from its caller there would
-# read and remove each file the next argument named.
+# No second run comes outside the private road, so a script that took the marker word from its caller there would read
+# and remove each file the next argument named.
 fill SETUP proxy
 fill PROXY_URL "http://127.0.0.1:$good"
 fill PRIVATE_HOSTS no
@@ -422,8 +422,8 @@ launch phoebis-private-hosts "$tmp/planted"
 [[ -e "$tmp/planted" ]] || fail "a caller's marker word made the script remove a file under SETUP=proxy"
 
 # sudo writes each command line it runs to the system's log, so the caller's arguments cross to the second run in the
-# saved file, and each has to reach the client as typed: an option, two blanks in a row with a quote, an empty one and
-# a line break.
+# saved file, and each has to reach the client as typed: an option, two blanks in a row with a quote, an empty one and a
+# line break.
 cat > "$tmp/words.expected" <<'EOF'
 [--verbose]
 [say  it's]
@@ -440,8 +440,8 @@ launch --verbose "say  it's" '' $'line one\nline two'
 [[ -f "$tmp/sudo-words" ]] && ! grep -qxF -e '[--verbose]' -e "[say  it's]" -e '[]' -e '[line one' "$tmp/sudo-words" \
   || fail "a caller's argument rode sudo's command line: $(cat "$tmp/sudo-words" 2>&1)"
 
-# sudo joins its own umask to the caller's, so a second run that took its umask for the shell's would start the
-# client under sudo's, and each file of the session would be made under it.
+# sudo joins its own umask to the caller's, so a second run that took its umask for the shell's would start the client
+# under sudo's, and each file of the session would be made under it.
 fill SETUP redirect
 fill PRIVATE_HOSTS yes
 rm -f "$tmp/client-umask"

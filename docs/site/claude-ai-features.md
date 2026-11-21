@@ -11,9 +11,13 @@ refuses, the records, and the CA over time.
 
 ## What works and what it takes
 
-Two features work behind the router. With Artifacts, the client's Artifact tool publishes a page to claude.ai, lists the
-pages and reads one back, and the client can delete a page and change who sees it. With the claude.ai connectors, the
-client reads an account's connector list and opens an MCP session with a connector.
+Two features work behind the router. With Artifacts, the client's Artifact tool publishes a page to claude.ai, updates
+it in place, lists the pages and reads one back. The client's build also holds an action that deletes a page and one
+that changes who sees it, each behind a switch of the client, and neither was on in a session measured for this page.
+The line in which the client names the state of its artifact switches read `delete=false` and `share=false` in each
+session, one that set the client's variable for sharing among them, and the tool offered no action that reads or changes
+who sees a page. With the claude.ai connectors, the client reads an account's connector list and opens an MCP session
+with a connector.
 
 Both take three things:
 
@@ -99,8 +103,8 @@ traffic to other hosts off the router: it tunnels each host apart from the two t
 
 "Base URL and DNS redirect" fits a machine, a container or a virtual machine whose programs reach the two hosts through
 the router alone. The redirect holds for each program of the machine, or on Linux under `PRIVATE_HOSTS=yes` for the
-programs of one start alone. It needs no process beside the client, apart from the relay that a private hosts file
-takes ([A hosts file for one start](#a-hosts-file-for-one-start)).
+programs of one start alone. It needs no process beside the client, apart from the relay that a private hosts file takes
+([A hosts file for one start](#a-hosts-file-for-one-start)).
 
 ## Base URL and proxy
 
@@ -176,8 +180,8 @@ start](#a-hosts-file-for-one-start) is the road to them.
 
 A machine whose lines are missing or incomplete would send the feature calls to the upstream with the router key, as the
 "Base URL" setup does. The launch script's check stops the start where one of the two names leads to another host over
-an address family the machine has a road over at that moment, so start the client through the script: the card's lines
-alone run no check. The check cannot tell one case from a sound machine: the line of one family is missing, and the
+an address family the machine has a road over at that moment, so start the client through the script, which runs the
+check at each start. The check cannot tell one case from a sound machine: the line of one family is missing, and the
 machine has no road over that family while the script runs ([The fetch, the compare and the
 check](#the-fetch-the-compare-and-the-check)). Where the machine gains such a road inside the session, through a changed
 network or a tunnel that comes up, a new connection of the client to a feature host can leave to the upstream with the
@@ -191,9 +195,9 @@ shell would resolve the two names on its own machine.
 ### A hosts file for one start
 
 On Linux the launch script's input `PRIVATE_HOSTS=yes` gives each start a hosts file of its own, which leads both names
-to loopback for the client and its children alone, and a relay on loopback passes port 443 on to the router ([A relay
-on loopback](#a-relay-on-loopback)). The script reads the input under `SETUP=redirect` alone, and under its default,
-`no`, a start keeps the machine's own name resolution.
+to loopback for the client and its children alone, and a relay on loopback passes port 443 on to the router ([A relay on
+loopback](#a-relay-on-loopback)). The script reads the input under `SETUP=redirect` alone, and under its default, `no`,
+a start keeps the machine's own name resolution.
 
 Behind its stops for the inputs and ahead of the fetch, such a start writes two files into the script's directory and
 calls `sudo unshare --mount --propagation slave`. Inside that new mount namespace a root shell binds the private file,
@@ -237,23 +241,23 @@ behind the marker word `phoebis-private-hosts`, and a run reads it only where it
 that word, so no inherited variable makes a run read or remove a file.
 
 `sudo`'s own configuration decides where root finds `unshare`, `mount` and `setpriv`, through `secure_path` where it
-sets one, and the script fixes no `PATH` for its root part. The call suits a user who may run each command as root:
-the root shell binds a file that the user owns and can write while the session runs, and it runs a script whose path
-the user names, so the call is no line to grant by itself in `sudoers`. By `sudoers(5)`, `sudo` logs each command it
-runs under `log_allowed`, which is on by default. Here the command line holds the root shell's text and three paths of
-the script's files, and no argument of the caller's. The client's session runs below `sudo` to its end, so the
-settings of `sudo` for a session hold for it: by the same manual, `use_pty`, on by default from sudo 1.9.14, runs the
-client in a pseudo-terminal of its own, `log_output` logs what the session prints, and `command_timeout` ends the
-session at its bound.
+sets one, and the script fixes no `PATH` for its root part. The call suits a user who may run each command as root: the
+root shell binds a file that the user owns and can write while the session runs, and it runs a script whose path the
+user names, so the call is no line to grant by itself in `sudoers`. By `sudoers(5)`, `sudo` logs each command it runs
+under `log_allowed`, which is on by default. Here the command line holds the root shell's text and three paths of the
+script's files, and no argument of the caller's. The client's session runs below `sudo` to its end, so the settings of
+`sudo` for a session hold for it: by the same manual, `use_pty`, on by default from sudo 1.9.14, runs the client in a
+pseudo-terminal of its own, `log_output` logs what the session prints, and `command_timeout` ends the session at its
+bound.
 
 Four points of this road stand as follows.
 
 **A user namespace in place of `sudo`.** Measured on Debian 13, in a user namespace that maps the caller's id alone
-(`unshare --map-current-user --keep-caps --mount`). The user and group ids read as the caller's, a file made in the
-home belongs to the caller as read from outside, and a name of a hosts file bound there resolves to its address. But
+(`unshare --map-current-user --keep-caps --mount`). The user and group ids read as the caller's, a file made in the home
+belongs to the caller as read from outside, and a name of a hosts file bound there resolves to its address. But
 `/usr/bin/sudo` reads as owned by 65534, an id the namespace does not map, and a set-user-ID program whose owner has no
-mapping runs with that bit ignored (`user_namespaces(7)`). A `sudo` of the client's session would lose its rights
-there, so the script asks for root through `sudo` instead.
+mapping runs with that bit ignored (`user_namespaces(7)`). A `sudo` of the client's session would lose its rights there,
+so the script asks for root through `sudo` instead.
 
 **A resolver daemon ahead of `files`.** Not measured, since such a lookup can put a query on the network. A machine
 whose `nsswitch.conf` names `resolve` ahead of `files` asks `systemd-resolved` first. The daemon reads `/etc/hosts`
@@ -267,20 +271,33 @@ for both names ahead of the daemon.
 `setpriv`, with a `sudo` that resets the environment to a small set and joins `0022` to the umask, as the tool does by
 default, and the root part's own `env -i` then empties the environment. A variable of the calling shell, the caller's
 umask and arguments with two blanks in a row, a quote, an empty one and a line break reach the client as the caller gave
-them, and no argument rides `sudo`'s command line. No start through the real tools stands behind this road yet, so the
-form with `--propagation slave` has no run behind it.
+them, and no argument rides `sudo`'s command line. A start through the real `sudo`,
+`unshare --mount --propagation slave`, `mount` and `setpriv` ran whole too, with a terminal and without one, on Debian
+13 with sudo 1.9.16p2 and util-linux 2.41.5. With a terminal the client ran as the calling user in the pseudo-terminal
+that `use_pty` gave it, and its environment held the caller's `PATH` and not `secure_path`, no `SUDO_*` name and no
+proxy variable. Without one, a headless turn with its input from `/dev/null` ended with exit 0, and a file it wrote
+under the caller's umask `0002` has mode `0664`, so the caller's umask crossed a `sudo` that joins `0022`. The log line
+of `sudo` for the call held the root shell's text and three paths of the script's files, and none of the client's
+arguments.
 
-**A connected watch.** Not measured: no session has held an artifact's live updates on this road yet.
+**A connected watch.** Measured with Claude Code 2.1.327 on Debian 13 under Linux 7.0.12, with `dash` 0.5.12 as `sh`,
+curl 8.14.1, sudo 1.9.16p2, util-linux 2.41.5, socat 1.8.0.3 and systemd 257.13. For the measurement the start read a
+hosts file that led both feature names to a private address, bound inside a mount namespace of the measurement's own, so
+the machine's file held no redirect. Both probes passed through the relay, for both hosts and both address families. The
+hosts file of the client's namespace held the machine's lines and then the two loopback lines, with the redirect's line
+gone, and the machine's `/etc/hosts` kept its bytes and its modification time through the session. The session updated a
+page in place and its watch connected: the feature call list held `GET /api/frame/sync` with the status 101, and the
+Artifact tool's status action read the watch as connected.
 
 ### A relay on loopback
 
-The private file leads both names to loopback, so a relay on the client's machine passes each connection to port 443
-of `127.0.0.1` and of `::1` on to the feature listener, byte for byte. The client's TLS ends at the router, so the
-relay reads no key and holds no certificate. It connects to the listener's own port, so the router needs no port 443
-for this road. The script runs no relay of its own: it ends in the client's start, a second session would find the
-port taken, and port 443 needs a right that the user lacks. The relay is a standing service, which the machine's
-administrator installs once, with the right to bind a low port and no other. For a feature listener at
-`192.0.2.10:8443`, two `socat` listeners as service units:
+The private file leads both names to loopback, so a relay on the client's machine passes each connection to port 443 of
+`127.0.0.1` and of `::1` on to the feature listener, byte for byte. The client's TLS ends at the router, so the relay
+reads no key and holds no certificate. It connects to the listener's own port, so the router needs no port 443 for this
+road. The script runs no relay of its own: it ends in the client's start, a second session would find the port taken,
+and port 443 needs a right that the user lacks. The relay is a standing service, which the machine's administrator
+installs once, with the right to bind a low port and no other. For a feature listener at `192.0.2.10:8443`, two `socat`
+listeners as service units:
 
 ```ini title="/etc/systemd/system/phoebis-relay-ipv4.service"
 [Unit]
@@ -310,14 +327,17 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 WantedBy=multi-user.target
 ```
 
-The administrator installs and starts the two units. No run on this page installed them, so their bind of port 443
-under `DynamicUser=yes` is unmeasured. Both `socat` lines carried a request from curl on loopback, one for each address
-family, to a TLS server under a certificate for `api.anthropic.com`, with ports of the test's own in place of 443 and
-8443, and `systemd-analyze verify` passed both units under systemd 257. At each start the script's probes go through
-the relay, and a missing one stops the start with `nothing answers at {host}:443 as this machine resolves it`.
+The administrator installs and starts the two units. A measured machine ran both from `/run/systemd/system`, started
+through `systemctl start` and not enabled: under systemd 257.13 each read `active` under a dynamic user of its own, and
+the two processes of socat 1.8.0.3 held `127.0.0.1:443` and `[::1]:443`, so the bind of port 443 under `DynamicUser=yes`
+with the two capability lines works there. The units installed under `/etc/systemd/system` and enabled are unmeasured,
+so their `WantedBy` line has no run behind it. Both `socat` lines carried a request from curl on loopback, one for each
+address family, to a TLS server under a certificate for `api.anthropic.com`, with ports of the test's own in place of
+443 and 8443, and `systemd-analyze verify` passed both units under systemd 257. At each start the script's probes go
+through the relay, and a missing one stops the start with `nothing answers at {host}:443 as this machine resolves it`.
 
-No relay runs where the router is on the client's machine and its feature listener answers on port 443 of both
-loopback addresses. A listener that answers on one loopback family takes one relay listener for the other.
+No relay runs where the router is on the client's machine and its feature listener answers on port 443 of both loopback
+addresses. A listener that answers on one loopback family takes one relay listener for the other.
 
 ## The launch script
 
@@ -327,8 +347,8 @@ secret, so keep it readable by its user alone, at mode `0700`. At each start it 
 its fingerprint, checks the road to both feature hosts, writes the env file for Bash commands, sets the client's
 variables and starts the client. It is a POSIX `sh` script, and it needs `curl` and one of `sha256sum` and `shasum`. A
 start under `PRIVATE_HOSTS=yes` also needs `mount`, `setpriv`, `sudo` and `unshare`, and it runs the file by itself or
-through `sh`: its second run reads the variables the first run saved through `sh`, and a `dash` there cannot read the
-form in which `bash` saves them.
+through `sh`: its second run reads, through `sh`, the variables the first run saved, and a `dash` cannot read the form
+in which `bash` saves them.
 
 ```sh
 #!/bin/sh
@@ -638,9 +658,11 @@ starts at one time share none of them. Each start has two, and under `PRIVATE_HO
 private hosts file at mode `0644`, and `shell-env.<pid>`, which the second run reads and removes as it starts. Each curl
 call gives up after 10 seconds without a connection and after 30 seconds in all, so a name that leads to an address
 which drops packets does not hold the start for the system's own timeout. The probe through the proxy waits up to 15
-seconds for its connection, past the proxy's ten seconds for its own, inside the same 30 seconds. Each curl call opens
-with `-q`, so curl reads no configuration file of the user, and a line of a `.curlrc` leads neither the fetch nor a
-probe along another road than the client's.
+seconds for its connection, past the proxy's ten seconds for its own, inside the same 30 seconds, so the proxy's `502`
+picks the stop where the router's address drops packets: measured against such an address, the script stopped after 10.0
+seconds with `the proxy at {PROXY_URL} does not reach the router's feature listener`. Each curl call opens with `-q`, so
+curl reads no configuration file of the user, and a line of a `.curlrc` leads neither the fetch nor a probe along
+another road than the client's.
 
 ### The fetch, the compare and the check
 
@@ -697,7 +719,7 @@ script's order:
 | `the CA fetch from {BASE_URL} answered {status}` | The download answered another status, such as a redirect or a `502` of a front. The base URL has to reach the router's proxy listener as the client reaches it. |
 | `the fetched CA does not have the operator's fingerprint. Get the fingerprint from the router's operator` | The fetched bytes are not the CA the operator named: the input is mistyped, the operator replaced the CA, or the fetch reached another server. |
 | `no proxy runs at {PROXY_URL}` | Under `SETUP=proxy`, curl could not connect to the proxy's address. |
-| `the proxy at {PROXY_URL} does not reach the router's feature listener` | Under `SETUP=proxy`, the proxy answered the `CONNECT` with `502`: its upstream names another address than the feature listener's, or the listener is down. A router address that drops packets can lead to this `502` too, a cause that no run measured. |
+| `the proxy at {PROXY_URL} does not reach the router's feature listener` | Under `SETUP=proxy`, the proxy answered the `CONNECT` with `502`: its upstream names another address than the feature listener's, or the listener is down. A router address that drops packets leads to this `502` too: measured, the proxy gave up its own connect after ten seconds with the log line `cannot reach the upstream {address}: the connection attempt timed out`, and the script printed this stop. |
 | `{host} leads to another host than the router's feature listener` | Under `SETUP=proxy`, the peer behind the proxy gave a certificate the fetched CA did not sign or another answer than the router's `401`. The program at `PROXY_URL` is no `phoebis-proxy`, or its upstream is no feature listener of this router. |
 | `the check of the road to {host} failed (curl exit {n}, answer {codes})` | Under `SETUP=proxy`, the probe ended another way, a timeout among them. The line carries curl's exit and the two status codes, the answer's and the proxy's. |
 | `{host} leads to another host than the router's feature listener over {family}` | Under `SETUP=redirect`, the name's address of that family, `ipv4` or `ipv6`, is not the router's: the family's hosts line is missing or wrong. Under `PRIVATE_HOSTS=yes` a resolver daemon that `nsswitch.conf` names ahead of `files` answers from the machine's hosts file and from no private one, a cause that no run measured. |
@@ -751,9 +773,13 @@ In an interactive session with an `ANTHROPIC_API_KEY` in its environment, the cl
 want to use this API key?"). Where the user declines, which is the answer the client recommends, both features stay on:
 the session holds the Artifact tool and a connector's tools. Where the user approves, the client prints "claude.ai
 connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai
-login", and its MCP view loads no connector. Whether a headless run asks the question is unmeasured. The Artifact tool
-under an approved key and a session under `ANTHROPIC_AUTH_TOKEN` are unmeasured too, and the client's code switches the
-features off in both, as the row of `CLAUDE_CODE_OAUTH_TOKEN` has it.
+login", and its MCP view reads "No MCP servers loaded." The session's tool list, as the model names it, still holds the
+Artifact tool and no connector's tool, and each call of the Artifact tool ends in the client's own error, with no
+feature call sent: "Artifacts need a claude.ai login, and this session is authenticating with the ANTHROPIC_API_KEY
+environment variable, which takes precedence over a claude.ai account." A session under `ANTHROPIC_AUTH_TOKEN` gets no
+question and shows the same line on the connectors, the same tool list and the same MCP view, and its call of the
+Artifact tool ends in that error with "authenticating with ANTHROPIC_AUTH_TOKEN" in it. So both features are off in
+both, as the row of `CLAUDE_CODE_OAUTH_TOKEN` has it. Whether a headless run asks the question is unmeasured.
 
 `NODE_EXTRA_CA_CERTS` takes one path. Where `BASE_CA` names a private CA, the script writes that file and the feature CA
 into `ca-bundle.pem`, with a line break between them, and names the bundle.
@@ -866,12 +892,14 @@ A socket request matches by its whole form too: an HTTP/1.1 `GET` on `api.anthro
 `/api/frame/sync`, compared whole in its last decoded form, with an `Upgrade` line that names `websocket`, a
 `Connection` line that lists `upgrade` and no body. The router reads no router key on it and admits it by its token, the
 one entry of the client's token shape in its `Sec-WebSocket-Protocol` list. A keyed `GET` of `/api/frame/{id}` that the
-upstream answers `200` hands out such a token in its JSON member `syncToken`, whatever the read's query, so the read
-ahead of a watch and the read ahead of a presence connection each hand one out. The router reads the member beside the
-answer's stream, in each content coding it decodes, and at the body's clean end it keeps the token's SHA-256 in memory
-with the key that read it and the account the read went out under, until the token's own end, held between 300 and 900
-seconds behind the read. It keeps 1,024 tokens for each key and drops a key's oldest at one more, a read whose body
-fails behind its token keeps nothing, and a restart starts with none.
+upstream answers `200` can hand out such a token in its JSON member `syncToken`. Measured in five query forms, the
+upstream puts the member into the answer of a read whose query carries `peer=agent` and into no other, so the read ahead
+of a watch and the read ahead of a presence connection each hand one out. The router looks for the member in the `200`
+of each keyed read of that path form, whatever its query. It reads beside the answer's stream, in each content coding it
+decodes, and at the body's clean end it keeps the token's SHA-256 in memory with the key that read it and the account
+the read went out under, until the token's own end, held between 300 and 900 seconds behind the read. It keeps 1,024
+tokens for each key and drops a key's oldest at one more, a read whose body fails behind its token keeps nothing, and a
+restart starts with none.
 
 Behind the token the router checks what a keyed call meets: the key that read the token still stands, its selection for
 Artifacts still names the account, the account still holds the sign-in the read went out under, the account's state lets
@@ -889,8 +917,10 @@ The answer goes back as the upstream gave it: the status, the head and the body,
 since an MCP session answers with an event stream that can idle between two events. The router frames the answer itself
 and keeps these head lines of the upstream to itself: `anthropic-organization-id`, `connection`, `content-length`,
 `keep-alive`, `proxy-authenticate`, `proxy-authorization`, `set-cookie`, `te`, `trailer`, `transfer-encoding` and
-`upgrade`. Each other line passes, the upstream's rate-limit lines among them where it sends them, which a model answer
-hides. A key holder can read the feature account's plan standing from those.
+`upgrade`. Each other line passes, a rate-limit line of the upstream among them, which a model answer hides. Measured,
+the head of a keyed page read's answer and of a socket request's `101` and `403` hold none: no `anthropic-ratelimit-*`
+line, no `ratelimit-*` line and no `retry-after`. The head of a connector's answer is unmeasured, and a rate-limit line
+there would show a key holder the feature account's plan standing.
 
 A socket request's head goes upstream as the client sent it, with the client's `Connection` and `Upgrade` lines and no
 credential line: the router drops each `Authorization` and `x-api-key` line and adds none, since the token in the
@@ -910,10 +940,10 @@ is, or it is past its subscription's end. The message closes on `(operator)` for
 `(subscription_ended)` for the third.
 
 While a selection of a pool or of a key names an account that is not ready or past its subscription's end, the
-dashboard's attention line and the selecting pools' cards show the item `feature_account_unavailable`
-([Conditions and gauges](statistics.md#conditions-and-gauges)), and the selects of the pool dialog and the key dialog
-list the account disabled with its reason. The stored selection stays as it is, and the account refuses the calls its
-selections send until it can serve again or the selection moves.
+dashboard's attention line and the selecting pools' cards show the item `feature_account_unavailable` ([Conditions and
+gauges](statistics.md#conditions-and-gauges)), and the selects of the pool dialog and the key dialog list the account
+disabled with its reason. The stored selection stays as it is, and the account refuses the calls its selections send
+until it can serve again or the selection moves.
 
 A paused account keeps serving the features. A pause stops the routing of model requests and nothing else, and the
 router keeps a paused account's sign-in fresh. A spent window, a cooldown, a budget, overage, the utilization ceiling, a
@@ -922,8 +952,10 @@ window.
 
 To stop an account's features, change the selection or disconnect the account. A deletion sets each selection that names
 the account to none. A stop holds from the next call on: a keyed call in flight still runs to its own end, a connector's
-long stream among them, and an open socket ends at its next check, at most 30 seconds later. A pairing of a connected
-account renews its credential and keeps its sign-in, so it ends no open socket and an earlier token still admits.
+long stream among them, and an open socket ends at its next check, at most 30 seconds later. Measured over two moves of
+a key's selection to none, the key's open sockets ended 14.4, 24.0 and 28.3 seconds behind the move. A pairing of a
+connected account renews its credential and keeps its sign-in, so it ends no open socket and an earlier token still
+admits.
 
 What a `401` of a feature host gets depends on one header. A `401` that carries `X-Mcp-Error-Code` is the connector's
 word that it wants a sign-in of its own, and it goes back at once and untouched for the client to read. A `401` without
@@ -991,26 +1023,44 @@ and under `max` and `pro` the reads [`CLAUDE_CODE_SUBSCRIPTION_TYPE`](client.md#
 in its log. The session shows no error line for any of these reads.
 
 **Live updates of an artifact** work through the feature listener in both setups. After a publish the client opens a
-WebSocket for the page's live updates, the watch that tells a session of a new version or a comment, and a session that
-edits a page opens a second one beside it, the presence connection. Each dials right behind a page read, whose token
-admits it ([What the router forwards](#what-the-router-forwards)). The client resolves `api.anthropic.com` itself ahead
-of the dial and refuses a carrier-NAT, link-local, private or unique-local address, so under `SETUP=redirect` the name
-has to lead to a loopback address or a public one ([Base URL and DNS redirect](#base-url-and-dns-redirect)). The router
-counts the open sockets of each key and of the listener and refuses a socket request above either count with a `429`
-([What the router refuses and what the client shows](#what-the-router-refuses-and-what-the-client-shows)), and it ends a
-socket that moved no byte in either direction for 90 seconds. On Linux the router also lets the kernel end a socket's
-client connection where bytes the router sent stay unacknowledged, or wait unsent behind a client that takes none, for
-the same 90 seconds, so the socket of a client that died without a close ends about that long after the first byte the
-client did not acknowledge, even while the upstream still sends. No setting moves the two counts, the idle time or the
-check's interval. Each 30 seconds from a socket's open the router checks the socket's key, that key's selection, the
-account's sign-in and the account's state again, as the admission checked them, and ends at once, on both sides, a
-socket that fails one of these checks. A pause ends no socket, as it stops no feature call. Where the router refuses a
-watch for another cause than a full count or a ledger that stands behind, or ends its socket after the idle time, at a
-failed check or at the router's stop, the session reads a lost connection and, by the client's code, dials again behind
-a new page read. After a failed check, that read meets the router's refusal for the changed state, or goes out under the
-account the selection names now. At the `429` of a full count and at the `503` `ledger_behind` the session waits 30
-seconds or more, counts no failure and dials again, by the client's code. The client's event report,
-`POST /api/frame/track`, gets the `403`, which the session shows nowhere.
+WebSocket for the page's live updates, the watch, right behind a page read, whose token admits it ([What the router
+forwards](#what-the-router-forwards)). When a second session under the same key published a new version of a watched
+page, the watching session's socket got it, and that session showed no line for it, started no turn and held no notice
+of it: the client keeps the version for itself and refuses a later publish from an older base, ahead of any upstream
+call. The second session, a headless one, opened no socket. The client's replies to a comment on a page are unmeasured,
+since no comment arrived in a measured session. No session opened a second socket beside its watch, the presence
+connection: a second update in place kept the one socket under the client's defaults, and a session with
+`CLAUDE_CODE_ARTIFACT_PRESENCE=1` in its environment opened its watch alone. The client resolves `api.anthropic.com`
+itself ahead of the dial and refuses a carrier-NAT, link-local, private or unique-local address, so under
+`SETUP=redirect` the name has to lead to a loopback address or a public one ([Base URL and DNS
+redirect](#base-url-and-dns-redirect)). The router counts the open sockets of each key and of the listener and refuses a
+socket request above either count with a `429` ([What the router refuses and what the client
+shows](#what-the-router-refuses-and-what-the-client-shows)), and it ends a socket that moved no byte in either direction
+for 90 seconds. On Linux the router also lets the kernel end a socket's client connection where bytes the router sent
+stay unacknowledged, or wait unsent behind a client that takes none, for the same 90 seconds. Measured, the upstream
+pings a socket each 20 seconds and closes it 15 seconds behind a ping that gets no answer, so the socket of a client
+that died without a close ended at the upstream's close, 26.6 seconds after the client's link went away. The kernel's
+bound ended the socket of a client that kept sending while it took no byte, 90.6 seconds after the first byte it did not
+acknowledge. No setting moves the two counts, the idle time or the check's interval. Each 30 seconds from a socket's
+open the router checks the socket's key, that key's selection, the account's sign-in and the account's state again, as
+the admission checked them, and ends at once, on both sides, a socket that fails one of these checks. A pause ends no
+socket, as it stops no feature call. Where the router ended a watch's socket at a failed check or at its own stop, the
+session showed no line for it and started no turn, and it dialed again behind a new page read with no act of the user.
+After a key's selection moved to none, those reads met the `403` `feature_account_unset`, four of them in the first 32
+seconds with a growing pause. The Artifact tool's status action then read the watch as not connected, with the count of
+its failed attempts, the time of its next one and the note that it gives up after more than 10 failed attempts in a row.
+The watch connected again 9.5 seconds after the selection returned. After a stop and a new start of the router, it
+connected again 12 seconds behind the stop. By the client's code the session dials again the same way where the router
+refuses a watch for another cause than a full count or a ledger that stands behind, and where it ends a socket after the
+idle time. After a failed check, the new page read meets the router's refusal for the changed state, or goes out under
+the account the selection names now. At the `429` of a full count and at the `503` `ledger_behind` the session waits 30
+seconds or more, counts no failure and dials again, by the client's code. One watch stood open for 3 hours and 7 minutes
+and a socket opened by hand beside it for 3 hours and 5 minutes, and neither the router nor the upstream ended one in
+that time. About each 13 minutes the upstream sent a frame of the kind `ctrl:token_refresh` on such a socket, 14 in all,
+which the router carries unread, as it carries each frame. So a socket stays open past the 300 to 900 seconds for which
+the router keeps the token that admitted it. When the router then cut the watch at a failed check, the session that had
+received those frames dialed again behind a new page read. The client's event report, `POST /api/frame/track`, gets the
+`403`, which the session shows nowhere.
 
 **The `/usage` dialog** cannot read the account's usage. Its read gets the `403`, and the dialog's Usage tab reads
 "Couldn't load usage data" and prints the router's whole answer body below it, a `permission_error` with the message
@@ -1077,9 +1127,9 @@ one at its end, with the cause (`check_failed`, `client_ended`, `client_failed`,
 `upstream_failed`), under `check` the failed check (`account`, `key`, `selection` or `sign_in`) where the cause is
 `check_failed`, the method, the path, the key's label and the socket's life in milliseconds. The router writes one where
 a page read under one key returns a token that another key read, with the path and the two keys' labels, and one where
-it cannot scan a page read's answer, with the cause and the path. None of these lines holds a token or a byte of a
-body. Under `RUST_LOG=info,phoebis_relay::features=debug` the router writes the feature module's `debug` lines, these
-among them, and keeps each other module at `info` ([Environment variables](installation.md#environment-variables)).
+it cannot scan a page read's answer, with the cause and the path. None of these lines holds a token or a byte of a body.
+Under `RUST_LOG=info,phoebis_relay::features=debug` the router writes the feature module's `debug` lines, these among
+them, and keeps each other module at `info` ([Environment variables](installation.md#environment-variables)).
 
 ## The CA over time
 
