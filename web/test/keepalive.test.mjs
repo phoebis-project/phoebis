@@ -370,6 +370,10 @@ test('matches searches the id by its start and the reported facts by a word, wha
   const found = (session, search) => d.matches({ finished: false, lines: [], poolId: 'all', session: { ...matchSession, facts: NO_FACTS, ...session } }, { ...NO_FILTERS, search }, NOW);
   assert.equal(found({ facts: { ...NO_FACTS, title: 'Gateway fixes' } }, 'GATE'), true, 'a word of the title');
   assert.equal(found({ facts: { ...NO_FACTS, project: '/home/u/work/storefront-gateway' } }, 'GATE'), true, 'the end of the project path');
+  assert.equal(found({ facts: { ...NO_FACTS, branch: 'fix/gateway-retry' } }, 'GATE'), true, 'a word of the branch');
+  assert.equal(found({ facts: { ...NO_FACTS, cwd: '/home/u/work/storefront/gateway' } }, 'GATE'), true, 'the end of the working directory');
+  assert.equal(found({ facts: { ...NO_FACTS, repository: 'git.example/acme/gateway' } }, 'GATE'), true, 'a word of the repository');
+  assert.equal(found({ facts: { ...NO_FACTS, repositoryRoot: '/home/u/work/gateway' } }, 'GATE'), true, 'the end of the repository root');
   assert.equal(found({ sessionId: 'b2c4d6' }, 'b2'), true, "the id's start");
   assert.equal(found({ sessionId: 'a7b2c4' }, 'b2'), false, 'the id past its start');
 });
