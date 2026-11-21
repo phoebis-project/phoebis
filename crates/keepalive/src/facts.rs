@@ -165,7 +165,7 @@ fn cut(value: Option<String>, cap: usize) -> Option<String> {
 }
 
 /// A remote as `host/path`, without the scheme, the user information, the port, the query, the fragment and one
-/// trailing `.git`, or absent where the value names a local path or the rule cannot read it.
+/// trailing `.git`, or absent where the value names a local path or a git helper address or the rule cannot read it.
 fn reduce(remote: &str) -> Option<String> {
     if remote
         .get(..7)
@@ -173,7 +173,12 @@ fn reduce(remote: &str) -> Option<String> {
     {
         return None;
     }
-    let reduced = if let Some((_, rest)) = remote.split_once("://") {
+    let reduced = if let Some((scheme, rest)) = remote.split_once("://") {
+        // The other two forms hold no `://`, so one behind anything but a scheme follows a drive letter, a query, a
+        // directory name or a git helper's transport.
+        if !is_scheme(scheme) {
+            return None;
+        }
         let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
         let (authority, path) = rest.split_at(end);
         // A raw `/`, `?` or `#` in the user information ends the authority early, so an `@` behind it is the tail of a
@@ -192,9 +197,10 @@ fn reduce(remote: &str) -> Option<String> {
         joined(host, path)?
     } else if let Some(colon) = host_colon(remote) {
         let (side, path) = (&remote[..colon], &remote[colon + 1..]);
-        // One letter ahead of the colon is a Windows drive, so the value is a local path.
+        // One letter ahead of the colon is a Windows drive, so the value is a local path. A second colon makes the value
+        // a git helper address, `transport::address`, whose address can be a local path.
         let drive = matches!(side.as_bytes(), [letter] if letter.is_ascii_alphabetic());
-        if drive || path.contains('@') {
+        if drive || path.starts_with(':') || path.contains('@') {
             return None;
         }
         joined(side.rsplit_once('@').map_or(side, |(_, host)| host), path)?
@@ -225,6 +231,14 @@ fn joined(host: &str, path: &str) -> Option<String> {
     Some(format!("{}/{path}", host.to_ascii_lowercase()))
 }
 
+/// An ASCII letter and then one or more ASCII letters, digits, `+`, `-` or `.`. One letter alone is a Windows drive.
+fn is_scheme(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    value.len() > 1
+        && bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+}
+
 /// The first `:` outside square brackets where it stands ahead of the value's first `/`, which ends a host's side. A
 /// bracketed IPv6 host holds colons of its own.
 fn host_colon(value: &str) -> Option<usize> {
@@ -242,7 +256,9 @@ fn host_colon(value: &str) -> Option<usize> {
 }
 
 /// The last check: a result is kept only where it reads as `host/path` itself, so a credential, a local path or a port
-/// that is no number never stands as a repository.
+/// that is no number never stands as a repository. A cut can leave white space other than U+0020 at an end, such as a
+/// no-break space ahead of `.git`, and the text rule would trim it at the next load and change a kept value, so such a
+/// result is absent.
 fn reads_reduced(value: &str) -> bool {
     // A `[` that no `]` closes ahead of the first `/` would hide each colon behind it from the colon test.
     let host_side = value.find('/').map_or(value, |at| &value[..at]);
@@ -250,6 +266,8 @@ fn reads_reduced(value: &str) -> bool {
         .rfind('[')
         .is_none_or(|open| host_side[open..].contains(']'));
     !value.contains(['@', '?', '#', '\\', ' '])
+        && !value.starts_with(char::is_whitespace)
+        && !value.ends_with(char::is_whitespace)
         && !value.contains("://")
         && !value.starts_with(['/', '.', '~'])
         && host_colon(value).is_none()

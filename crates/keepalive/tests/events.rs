@@ -512,7 +512,7 @@ fn a_remote_is_reduced_to_host_and_path() {
         "x".repeat(1_000)
     );
     let long_reduced = format!("git.example/{}", "p".repeat(1_013));
-    let rows: [(&str, Option<&str>); 29] = [
+    let rows: [(&str, Option<&str>); 34] = [
         (
             "https://user:token@Git.Example/acme/storefront.git?x=1#f",
             Some("git.example/acme/storefront"),
@@ -581,6 +581,14 @@ fn a_remote_is_reduced_to_host_and_path() {
         ("https://git.example/acme\\storefront.git", None),
         ("../repos/storefront", None),
         ("~/repos/storefront", None),
+        (
+            "git@git.example:acme/storefront.git?next=https://git.example/acme/notes",
+            None,
+        ),
+        ("C://work/storefront.git", None),
+        ("gcrypt::/srv/git/storefront.git", None),
+        ("https://git.example/acme/storefront\u{a0}.git", None),
+        ("https://\u{a0}git.example/acme/storefront.git", None),
     ];
     let wrong: Vec<String> = rows
         .iter()
