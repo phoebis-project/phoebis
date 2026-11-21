@@ -66,6 +66,9 @@ const GROUP_OPTIONS: { label: string; value: SessionGroupBy }[] = [
   { label: 'Repository', value: 'repository' },
 ];
 
+/** The bar's count: the kept sessions and their agents, the matching ones while an Agents filter stands. */
+const countText = (sessions: number, agents: number, matching: boolean) => `${plural(sessions, 'session')} · ${plural(agents, matching ? 'matching agent' : 'agent')}`;
+
 /**
  * The pin's runway on its account as the route answers it: a span, `none` at zero, `unbounded` where no window binds.
  * Null for a row with no pin or no projection, which the cell draws as a dash.
@@ -389,7 +392,10 @@ export function SessionsPage() {
   const hiddenTitle = hiddenRows > 0 ? `${plural(hiddenRows, 'session')} hidden by the filters` : undefined;
   const agentsKept = useMemo(() => matchingAgents(drawn.values()), [drawn]);
   const matching = agentFiltersStand(filters);
-  const countWords = rows === null ? '' : `${plural(rows.length, 'session')} · ${plural(agentsKept, matching ? 'matching agent' : 'agent')}`;
+  const countWords = rows === null ? '' : countText(rows.length, agentsKept, matching);
+  // Three digits in each figure hold the count's slot wide, so the bar keeps its line count whatever the count and the
+  // Sort button read, and while the rows load.
+  const countSizer = countText(999, 999, matching);
   const summary = useMemo(() => (rows === null ? null : daySummary(rows)), [rows]);
   // The rows wait on these three reads, so the first that failed before it ever answered names the notice, and the card
   // draws its error state where that read is the sessions. A refresh that fails after a first answer keeps the rows.
@@ -443,6 +449,7 @@ export function SessionsPage() {
         <FilterBar
           address={address}
           count={hiddenTitle === undefined ? countWords : <span title={hiddenTitle}>{countWords}</span>}
+          countSizer={countSizer}
           dimensions={SESSIONS_DIMENSIONS}
           filters={filters}
           options={options}

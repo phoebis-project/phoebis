@@ -3301,8 +3301,9 @@ textarea.input {
   margin-left: auto;
 }
 
-/* The count's slot holds the widest text of a freshly read page, so the edge's width and the row's line count stay
-   put while the count changes. A followed page past 999 rows outgrows the slot. */
+/* The count's slot holds the widest text the view's count draws in its usual range, so the edge's width and the row's
+   line count stay put while the count changes. A followed page past 999 rows outgrows the slot, and so does a
+   Sessions count past 999 in a figure. */
 .filter-bar__count-slot {
   display: inline-grid;
   justify-items: end;

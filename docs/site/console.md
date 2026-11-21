@@ -1448,14 +1448,15 @@ control (Created, newest first by default, Last activity, Cost or Requests, each
 in the address) and at the right edge the split Refresh button and the count, `{n} sessions · {k} agents`, its agents
 counted as the Agents cell counts them over the rows the filters keep. While an Agents filter stands the count reads
 `{k} matching agents`, and while the filters hide rows its hover reads `{h} sessions hidden by the filters`. At 1280 px
-the right edge stands on a second line, as on Requests. The search field matches the start of a session id, or a part of
-the title, the project path, the working directory, the repository, the repository's root or the branch its companion
-reports, whatever the case, and it reads no agent's fact, which the Agents filters hold. Add filter opens a "Filter by"
-field over two groups: Session, which reads the row (Active within, Client, Companion, Finished sessions, Forked
-sessions, Key, Pool and Slowed), and Agents, which reads each agent line, main's among them (Account, Agent type, Cache,
-Effort, Model, Released agents and Status). Filters are AND: a session is listed when it passes every Session filter
-and, while Agents filters stand, when one of its lines passes every Agents filter together. A finished session, one
-whose main agent ended with the session or whose every agent the mod released, stays out unless Finished sessions
+the right edge stands on a second line whatever the count and the Sort control read, as on Requests, since the count's
+slot keeps the width of a count with three digits in each figure. The search field matches the start of a session id, or
+a part of the title, the project path, the working directory, the repository, the repository's root or the branch its
+companion reports, whatever the case, and it reads no agent's fact, which the Agents filters hold. Add filter opens a
+"Filter by" field over two groups: Session, which reads the row (Active within, Client, Companion, Finished sessions,
+Forked sessions, Key, Pool and Slowed), and Agents, which reads each agent line, main's among them (Account, Agent type,
+Cache, Effort, Model, Released agents and Status). Filters are AND: a session is listed when it passes every Session
+filter and, while Agents filters stand, when one of its lines passes every Agents filter together. A finished session,
+one whose main agent ended with the session or whose every agent the mod released, stays out unless Finished sessions
 stands, and Released agents draws a live session's released agents, which stay hidden without it. Status reads each
 line's word as the Agents table draws it, so main's line of a session no mod reports matches `unreported`. The router
 lists a companion session within the session expiry, which for such a session counts from the later of its last request

@@ -17,7 +17,8 @@ export interface FilterBarProps<F extends object> {
   /** The right edge's count ("25 shown, more available", or a node with the attention part in the critical ink), which Analytics leaves out. */
   count?: ReactNode;
   /**
-   * The widest text a freshly read page's count draws. Where given, the count draws in a slot that keeps that width.
+   * The widest text the count draws in the view's usual range, such as a freshly read page's on Requests. Where given,
+   * the count draws in a slot that keeps that width.
    */
   countSizer?: string;
   /** The Add filter list, which a view without filters leaves out. */

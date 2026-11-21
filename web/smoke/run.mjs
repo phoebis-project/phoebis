@@ -26459,9 +26459,11 @@ await forView(CARD_VIEWS.map(([path]) => path), async () => {
   const name = 'the five card views mount the bar first with their slots in order and no empty slot';
   // A slot by what it shows: the search by its placeholder, a control by its name, and the right edge by the split
   // Refresh button and the count it holds.
+  // A count drawn over a sizer stands in a slot, whose own text holds the sizer's words beside the count's.
+  const countIn = (el) => (el.classList.contains('filter-bar__count') ? el : el.querySelector(':scope > .filter-bar__count'));
   const slotOf = (el) => {
     if (el.classList.contains('search')) return `search: ${el.querySelector('input')?.getAttribute('placeholder') ?? 'no placeholder'}`;
-    if (el.classList.contains('filter-bar__edge')) return `edge: ${[...el.children].map((c) => (c.classList.contains('refresh-control') ? 'Refresh' : c.classList.contains('filter-bar__count') && (c.textContent ?? '') !== '' ? 'count' : c.className)).join(', ')}`;
+    if (el.classList.contains('filter-bar__edge')) return `edge: ${[...el.children].map((c) => (c.classList.contains('refresh-control') ? 'Refresh' : (countIn(c)?.textContent ?? '') !== '' ? 'count' : c.className)).join(', ')}`;
     // A labeled select's root carries no name of its own, and its text runs on into its options' labels.
     if (el.matches('label.row')) return el.querySelector(':scope > span')?.textContent?.trim() ?? 'an empty slot';
     return el.getAttribute('aria-label') ?? (el.textContent?.trim() || 'an empty slot');
