@@ -12823,7 +12823,7 @@ const SESSION_DEFAULT_HEADS = ['', 'Session', 'Status', 'Agents', 'Model', 'Acco
  * view. A slowed session's speed chip stands inside its Account cell, which the mock pass requires on studio's
  * sessions, read at 1280. At 1440 by 900 the Columns control's checkboxes then turn every column on: the head reads
  * each column the control lists, in its order between Session and the menu's, Context among them, and the document
- * stays as wide as the window. The eight optional columns need more than the card's width, so the table's and the
+ * stays as wide as the window. The ten optional columns need more than the card's width, so the table's and the
  * wrap's widths are recorded rather than held to the card. The control holds its set in the page's state, so the bare
  * view loads again for the defaults, and at 375 by 800 the set is wider than the phone's card: it scrolls inside its
  * wrap with Session, the fill, at its floor within 1 px, and the document stays as wide as the window. The viewport

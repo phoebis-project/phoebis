@@ -1478,14 +1478,18 @@ agents: {b} busy, {i} idle, {p} parked · {r} requests and {spend} in 24 h`, the
 counts them, the busy, idle and parked ones by their lifecycle word, the client requests of the last 24 hours, and
 their spend as a share of the chosen week, or a dash where a kept row's day holds a request the cost model priced
 nothing for, since a partial sum would read as the whole, with `+ {dollars}` after it where the day billed dollars, the
-probes left out. The Session column is always drawn, and the sixteen others, which the bar's Columns control shows or
+probes left out. The Session column is always drawn, and the eighteen others, which the bar's Columns control shows or
 hides, are Status, Agents, Model, Account, Requests, Cost, Last used and Cache, shown by default, then Companion,
-Context, Created, Effort, Key, Last request, Next probe and Runway, hidden by default. The rows follow the sort
-control: by the session's creation time, its first request, by its last activity, its newest request that is neither a
-keepalive probe nor a token count, or its last use where the ledger holds no such request yet, by the list dollars of
-its requests, which add across units, or by its requests, newest or largest first by default, ties by session id and a
-row without the value last, and the five-second re-read keeps a row's place under Created. Session takes the card's free
-width and keeps at least 74 px, and a set of columns wider than the card scrolls inside it.
+Context, Created, Effort, Key, Last request, Next probe, Project, Repository and Runway, hidden by default. Project
+reads the folder name of the session's project, or of its working directory where the companion reports a working
+directory and no project, with the whole path and a working directory that differs on hover. Repository reads the last
+segment of the repository, or of the repository's root where it has no remote, with the branch under it and the whole
+`host/path`, the branch and the root on hover. Each reads a dash on a session whose companion reports neither. The rows
+follow the sort control: by the session's creation time, its first request, by its last activity, its newest request
+that is neither a keepalive probe nor a token count, or its last use where the ledger holds no such request yet, by the
+list dollars of its requests, which add across units, or by its requests, newest or largest first by default, ties by
+session id and a row without the value last, and the five-second re-read keeps a row's place under Created. Session
+takes the card's free width and keeps at least 74 px, and a set of columns wider than the card scrolls inside it.
 
 The Session cell leads with the session's label, which is the custom title its companion reports, else the folder name
 of its project, else its id. A label that is not the id stands over the id, each cut with an ellipsis, and the hover
@@ -1563,7 +1567,10 @@ one cache TTL after its release, and a record that held a slot of the agent cap 
 grids of facts side by side, one above the other where the open row is narrower than 620 px. Session reads Created
 (`{time}, {ago}`, the first request the ledger holds of the session, which moves when the retention removes it, or
 `unknown` where it holds none), Key (`{key} in pool {pool}`, the key a link to its row in the Keys view, or `{key},
-deleted holder` on an earlier holder's), Client (the client version, the user agent on hover), Fork (the base cut to 13
+deleted holder` on an earlier holder's), Client (the client version, the user agent on hover), Project (the whole path,
+with `working directory {path}` under it where the working directory differs, or that line alone where the companion
+reports a working directory and no project, else `not reported`), Repository (the whole `host/path`, or the repository's
+root where it has no remote, else `not reported`), Branch (the branch, else `not reported`), Fork (the base cut to 13
 characters and whole on hover, a link to its row where the list holds it, the depth and the relation to the base's
 account, or `none`), Placements and Companion, the Companion column's badge with `seen {ago}` or the time since it went
 silent. Routing reads Account (the link and `subscription` or `API key`, or `none`), Pinned since (the instant main's

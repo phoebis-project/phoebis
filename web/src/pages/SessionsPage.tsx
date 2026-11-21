@@ -22,7 +22,7 @@ import { tierOrder } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
-import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, agentLabel, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, requestCount, requestsSpan, sessionLabel, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, agentLabel, baseName, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, requestCount, requestsSpan, sessionLabel, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
@@ -49,12 +49,18 @@ const SESSION_COLUMNS = [
   { id: 'key', label: 'Key' },
   { id: 'lastRequest', label: 'Last request' },
   { id: 'nextProbe', label: 'Next probe' },
+  { id: 'project', label: 'Project' },
+  { id: 'repository', label: 'Repository' },
   { id: 'runway', label: 'Runway' },
 ] as const;
 type SessionColumnId = (typeof SESSION_COLUMNS)[number]['id'];
 // The default set fits the card at 1280 by 800 without these: the Status cell carries the presence, the expanded row
-// carries the pin's figures, the key and the probes, and the Columns control brings each back.
-const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['companion', 'context', 'created', 'effort', 'key', 'lastRequest', 'nextProbe', 'runway'];
+// carries the pin's figures, the key, the probes, the project and the repository, the label leads with the project's
+// folder, and the Columns control brings each back.
+const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['companion', 'context', 'created', 'effort', 'key', 'lastRequest', 'nextProbe', 'project', 'repository', 'runway'];
+
+/** The short form of a path or of a `host/path`: its last segment, or the whole value where it has none. */
+const shortPlace = (value: string): string => baseName(value) ?? value;
 
 /**
  * The pin's runway on its account as the route answers it: a span, `none` at zero, `unbounded` where no window binds.
@@ -106,6 +112,7 @@ const timeCell = (at: string | null, now: number, empty: string): { children: Re
 const since = (at: string, now: number) => `${fmtAbsolute(at)}, ${fmtRelative(at, now)}`;
 const PLACEMENTS_HINT = "How many times the router placed or moved this session's main conversation";
 const NO_TRAFFIC_HINT = 'No ledgered request yet';
+const NOT_REPORTED = <span className="muted">not reported</span>;
 const REQUESTS_HINT = "Requests over the session's life";
 interface Row {
   agentCount: number;
@@ -832,6 +839,11 @@ function SessionRows({
   // The row's figures are main's conversation pin's, so a row with no pin reads a dash.
   const context = contextCell(session.pinned ? session.lastInputTokens : null);
   const label = sessionLabel(session);
+  // A client's project read can fail while its working directory read answers, so the directory stands in for the
+  // project, and a repository with no remote reads its root.
+  const { facts } = session;
+  const folder = facts.project ?? facts.cwd;
+  const place = facts.repository ?? facts.repositoryRoot;
   const client = joinPresent([clientVersion(session.userAgent), session.placements > 1 ? `${session.placements} placements` : null], ' · ');
   const clientTitle = sentences([session.userAgent, session.placements > 1 ? PLACEMENTS_HINT : null]);
   const mainRecipe = row.agents.find((a) => a.agentId === MAIN_AGENT) ?? null;
@@ -1006,6 +1018,17 @@ function SessionRows({
         {visible.has('nextProbe') && (
           <td className="col-fit" {...timeCell(session.keepalive.nextProbeAt, now, pendingProbe ? 'pending' : 'not scheduled')} />
         )}
+        {visible.has('project') && (
+          <td className="col-fit" title={folder === null ? undefined : joinPresent([facts.project, facts.cwd === facts.project ? null : facts.cwd], '\n')}>
+            {folder === null ? <span className="muted">-</span> : <span className="srow__place ellipsis">{shortPlace(folder)}</span>}
+          </td>
+        )}
+        {visible.has('repository') && (
+          <td className="col-fit" title={place === null ? undefined : joinPresent([facts.repository, facts.branch, facts.repositoryRoot], '\n')}>
+            {place === null ? <span className="muted">-</span> : <span className="srow__place ellipsis">{shortPlace(place)}</span>}
+            {facts.branch !== null && <span className="sub srow__place ellipsis">{facts.branch}</span>}
+          </td>
+        )}
         {visible.has('runway') && (
           <td className="col-fit" title={session.pinned && session.cycleMs !== null ? `cycle ${ageWord(session.cycleMs)}` : undefined}>
             {runwayWord(session) ?? <span className="muted">-</span>}
@@ -1056,6 +1079,20 @@ function SessionRows({
                       ),
                     },
                     { label: 'Client', value: session.userAgent === null ? <span className="muted">-</span> : <span title={session.userAgent}>{clientVersion(session.userAgent)}</span> },
+                    {
+                      label: 'Project',
+                      value:
+                        folder === null ? (
+                          NOT_REPORTED
+                        ) : (
+                          <>
+                            {facts.project !== null && <span className="mono">{facts.project}</span>}
+                            {facts.cwd !== null && facts.cwd !== facts.project && <span className="sub srow__cwd">working directory {facts.cwd}</span>}
+                          </>
+                        ),
+                    },
+                    { label: 'Repository', value: place === null ? NOT_REPORTED : <span className="mono">{place}</span> },
+                    { label: 'Branch', value: facts.branch === null ? NOT_REPORTED : <span className="mono">{facts.branch}</span> },
                     {
                       label: 'Fork',
                       value: session.forkedFrom === null ? (

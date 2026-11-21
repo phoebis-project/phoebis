@@ -28207,7 +28207,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       return { path: '/routing-log', session: s.sessionId, from: isoAt(last - HOUR), to: isoAt(Math.min(last + HOUR, CLOCK_ORIGIN)) };
     };
     const LABELS = [
-      ['Created', 'Key', 'Client', 'Fork', 'Placements', 'Companion'],
+      ['Created', 'Key', 'Client', 'Project', 'Repository', 'Branch', 'Fork', 'Placements', 'Companion'],
       ['Account', 'Pinned since', 'Shed mark', 'Moved', 'Runway', 'Speed', 'Cycle'],
     ];
     const want = {
@@ -28215,7 +28215,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         companion: true,
         labels: LABELS,
         routing: { Account: 'primary subscription', 'Pinned since': since(written?.pinnedAt ?? null), 'Shed mark': 'none', Moved: 'none', Runway: 'none', Speed: 'full speed', Cycle: 'not measured yet' },
-        session: { Created: since(written?.firstRequestAt ?? null), Key: `desktop in pool ${poolOf(written)}`, Client: 'Claude Code 2.1.310', Fork: 'none', Placements: '3' },
+        session: { Created: since(written?.firstRequestAt ?? null), Key: `desktop in pool ${poolOf(written)}`, Client: 'Claude Code 2.1.310', Project: 'not reported', Repository: 'not reported', Branch: 'not reported', Fork: 'none', Placements: '3' },
         links: { account: '/accounts/primary', fork: null, forkTitle: null, key: '/keys#desktop', log: written === undefined ? null : window(written), logText: 'View in routing log' },
         speed: false,
         clientTitle: 'claude-cli/2.1.310 (external, cli)',
@@ -28224,7 +28224,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         companion: true,
         labels: LABELS,
         routing: { Account: 'studio subscription', 'Pinned since': since(subjects.slowed?.pinnedAt ?? null), 'Shed mark': 'none', Moved: 'none', Runway: minuteSpan(subjects.slowed?.runwayMs ?? 0), Speed: '0.5x', Cycle: '42 s' },
-        session: { Created: since(subjects.slowed?.firstRequestAt ?? null), Key: `notebook in pool ${poolOf(subjects.slowed)}`, Client: '-', Fork: 'none', Placements: '1' },
+        session: { Created: since(subjects.slowed?.firstRequestAt ?? null), Key: `notebook in pool ${poolOf(subjects.slowed)}`, Client: '-', Project: 'not reported', Repository: 'not reported', Branch: 'not reported', Fork: 'none', Placements: '1' },
         links: { account: '/accounts/studio', fork: null, forkTitle: null, key: '/keys#notebook', log: subjects.slowed === undefined ? null : window(subjects.slowed), logText: 'View in routing log' },
         speed: true,
         clientTitle: null,
@@ -28233,7 +28233,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         companion: true,
         labels: LABELS,
         routing: { Account: 'secondary subscription', 'Pinned since': since(silent?.pinnedAt ?? null), 'Shed mark': 'none', Moved: 'none', Runway: 'unbounded', Speed: 'full speed', Cycle: 'not measured yet' },
-        session: { Created: since(silent?.firstRequestAt ?? null), Key: `desktop in pool ${poolOf(silent)}`, Client: 'Claude Code 2.1.310', Fork: `${silent?.forkedFrom?.slice(0, 13)}… at depth 3, on another account`, Placements: '4' },
+        session: { Created: since(silent?.firstRequestAt ?? null), Key: `desktop in pool ${poolOf(silent)}`, Client: 'Claude Code 2.1.310', Project: 'not reported', Repository: 'not reported', Branch: 'not reported', Fork: `${silent?.forkedFrom?.slice(0, 13)}… at depth 3, on another account`, Placements: '4' },
         links: { account: '/accounts/secondary', fork: silent === undefined ? null : `#${sessionRowId({ ...silent, sessionId: silent.forkedFrom })}`, forkTitle: silent?.forkedFrom ?? null, key: '/keys#desktop', log: silent === undefined ? null : window(silent), logText: 'View in routing log' },
         speed: false,
         clientTitle: 'claude-cli/2.1.310 (external, cli)',
@@ -28686,16 +28686,96 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
     });
   }
+  // Each shape of place the two columns and the open row draw (`sessionSpec` in mock/operations.ts): the story's first
+  // session a remote, its root and a branch, story 3 a root with no remote, story 4 a working directory below its
+  // project and no branch, story 5 nothing, and story 8 a working directory with no project.
+  const placed = {
+    billing: byProject('/home/dev/work/billing-service'),
+    notes: byProject('/home/dev/work/notes'),
+    scratch: listed.find((s) => !s.historical && s.facts.cwd === '/home/dev/work/scratch'),
+    story,
+    unreported: listed.find((s) => !s.historical && s.sessionId.startsWith('0d588de5')),
+  };
+  {
+    // Both columns are hidden by default, so the Columns control shows them on a page of their own. Project reads the
+    // folder of the project, else of the working directory, with the whole path and a working directory that differs
+    // on hover. Repository reads the last segment of the remote, else of the root, over the branch, with the remote,
+    // the branch and the root on hover. A row with neither reads a muted dash and no hover.
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    await showColumn(page, 'Project');
+    await showColumn(page, 'Repository');
+    const cellOf = (s, header) => (s === undefined ? undefined : sessionCell(page, page.container.querySelector(`[id="${sessionRowId(s)}"]`), header));
+    const read = Object.fromEntries(
+      Object.entries(placed).map(([key, s]) => {
+        const project = cellOf(s, 'Project');
+        const repository = cellOf(s, 'Repository');
+        return [
+          key,
+          {
+            project: project === undefined ? null : { muted: project.firstElementChild?.classList.contains('muted') ?? null, text: textOf(project.firstElementChild), title: project.getAttribute('title') },
+            repository: repository === undefined ? null : { branch: textOf(repository.querySelector('.sub')), muted: repository.firstElementChild?.classList.contains('muted') ?? null, text: textOf(repository.firstElementChild), title: repository.getAttribute('title') },
+          },
+        ];
+      }),
+    );
+    page.unmount();
+    const DASH = { muted: true, text: '-', title: null };
+    const want = {
+      billing: {
+        project: { muted: false, text: 'billing-service', title: '/home/dev/work/billing-service\n/home/dev/work/billing-service/api' },
+        repository: { branch: null, muted: false, text: 'billing-service', title: 'git.example/acme/billing-service\n/home/dev/work/billing-service' },
+      },
+      notes: { project: { muted: false, text: 'notes', title: '/home/dev/work/notes' }, repository: { branch: 'main', muted: false, text: 'notes', title: 'main\n/home/dev/work/notes' } },
+      scratch: { project: { muted: false, text: 'scratch', title: '/home/dev/work/scratch' }, repository: { branch: null, ...DASH } },
+      story: {
+        project: { muted: false, text: 'storefront', title: '/home/dev/work/storefront' },
+        repository: { branch: 'fix/checkout-retry', muted: false, text: 'storefront', title: 'git.example/acme/storefront\nfix/checkout-retry\n/home/dev/work/storefront' },
+      },
+      unreported: { project: DASH, repository: { branch: null, ...DASH } },
+    };
+    results.push({
+      name: "/sessions the Project and Repository columns read the folder and the repository's name, the branch under it",
+      ok: Object.values(placed).every((s) => s !== undefined) && JSON.stringify(read) === JSON.stringify(want),
+      missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
+    });
+  }
+  {
+    // An open row reads three facts behind Client: Project the whole path, with a working directory that differs on a
+    // line under it, or that line alone where no project stands, Repository the remote, else the root, and Branch. Each
+    // reads `not reported` in the muted ink where the companion sends none.
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const fact = (dd) => (dd === undefined ? null : { muted: dd.querySelector(':scope > .muted') !== null, parts: [...dd.children].map((el) => textOf(el)) });
+    const read = {};
+    for (const [key, s] of Object.entries(placed)) {
+      const { values } = factsOf(await openRow(page, s), 'Session');
+      read[key] = { Branch: fact(values.Branch), Project: fact(values.Project), Repository: fact(values.Repository), labels: Object.keys(values) };
+    }
+    page.unmount();
+    const NOT_REPORTED = { muted: true, parts: ['not reported'] };
+    const labels = ['Created', 'Key', 'Client', 'Project', 'Repository', 'Branch', 'Fork', 'Placements', 'Companion'];
+    const want = {
+      billing: { Branch: NOT_REPORTED, Project: { muted: false, parts: ['/home/dev/work/billing-service', 'working directory /home/dev/work/billing-service/api'] }, Repository: { muted: false, parts: ['git.example/acme/billing-service'] }, labels },
+      notes: { Branch: { muted: false, parts: ['main'] }, Project: { muted: false, parts: ['/home/dev/work/notes'] }, Repository: { muted: false, parts: ['/home/dev/work/notes'] }, labels },
+      scratch: { Branch: NOT_REPORTED, Project: { muted: false, parts: ['working directory /home/dev/work/scratch'] }, Repository: NOT_REPORTED, labels },
+      story: { Branch: { muted: false, parts: ['fix/checkout-retry'] }, Project: { muted: false, parts: ['/home/dev/work/storefront'] }, Repository: { muted: false, parts: ['git.example/acme/storefront'] }, labels },
+      unreported: { Branch: NOT_REPORTED, Project: NOT_REPORTED, Repository: NOT_REPORTED, labels },
+    };
+    results.push({
+      name: "/sessions an open row's Session facts read Project, Repository and Branch behind Client",
+      ok: Object.values(placed).every((s) => s !== undefined) && JSON.stringify(read) === JSON.stringify(want),
+      missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
+    });
+  }
 }
 {
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
   const cell = (tr, header) => sessionCell(m, tr, header);
   const heads = () => [...m.container.querySelectorAll('.sessions-table > thead th')].map((th) => th.textContent?.trim() ?? '');
   // The columns the control offers: the Session column is the row's identity and is always drawn.
-  const COLUMNS = ['Status', 'Agents', 'Model', 'Account', 'Requests', 'Cost', 'Last used', 'Cache', 'Companion', 'Context', 'Created', 'Effort', 'Key', 'Last request', 'Next probe', 'Runway'];
-  const HIDDEN = ['Companion', 'Context', 'Created', 'Effort', 'Key', 'Last request', 'Next probe', 'Runway'];
+  const COLUMNS = ['Status', 'Agents', 'Model', 'Account', 'Requests', 'Cost', 'Last used', 'Cache', 'Companion', 'Context', 'Created', 'Effort', 'Key', 'Last request', 'Next probe', 'Project', 'Repository', 'Runway'];
+  const HIDDEN = ['Companion', 'Context', 'Created', 'Effort', 'Key', 'Last request', 'Next probe', 'Project', 'Repository', 'Runway'];
   {
-    // The default set fits the card at 1280 by 800 without these eight, each one tick away in the control.
+    // The default set fits the card at 1280 by 800 without these ten, each one tick away in the control.
     const button = () => m.container.querySelector('button[aria-label="Columns"]');
     const shown = heads();
     const label = `${button()?.textContent?.trim()}, ${button()?.getAttribute('title')}`;
@@ -28705,12 +28785,12 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     button()?.click();
     await m.settle(100);
     results.push({
-      name: '/sessions the Columns control offers sixteen columns with Companion, Context, Created, Effort, Key, Last request, Next probe and Runway hidden',
+      name: '/sessions the Columns control offers eighteen columns with Companion, Context, Created, Effort, Key, Last request, Next probe, Project, Repository and Runway hidden',
       ok:
         JSON.stringify(offered.map((c) => c.label)) === JSON.stringify(COLUMNS) &&
         offered.every((c) => c.checked === !HIDDEN.includes(c.label)) &&
         JSON.stringify(shown) === JSON.stringify(['', 'Session', ...COLUMNS.filter((c) => !HIDDEN.includes(c)), '']) &&
-        label === '8, Columns: 8 of 16 shown' &&
+        label === '8, Columns: 8 of 18 shown' &&
         document.querySelector('.popover .cols-popover') === null,
       missing: [JSON.stringify(offered), JSON.stringify(shown), String(label)],
     });

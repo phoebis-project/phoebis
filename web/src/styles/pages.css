@@ -2787,6 +2787,13 @@
   display: block;
 }
 
+/* A folder's name can run to 255 bytes, and a fit column takes its widest content, so the two optional columns cut a
+   name at one width, whole on the cell's title. */
+.srow__place {
+  display: block;
+  max-width: 24ch;
+}
+
 /* The fork badge reads `fork` alone at the head of the client line under the id, never wider than the column, so a cut
    line never clips it or its link. */
 .sessions-table .srow__fork {
@@ -2859,6 +2866,13 @@
 .sessions-table .facts .sub {
   display: inline;
   margin-left: 6px;
+}
+
+/* The facts grid draws a sub line beside its value. The working directory is a line of its own under the project's
+   path, at the value's left edge where it stands alone. */
+.sessions-table .facts .srow__cwd {
+  display: block;
+  margin-left: 0;
 }
 
 /* The stripe rule paints the Agents table's even rows alone, so its odd rows show what stands behind the table, and the
