@@ -556,25 +556,76 @@ fn pass(
     target: Vec<Thresholds>,
     mut after: Option<After>,
 ) -> Result<usize, LedgerError> {
-    let (old, new) = (revisions_of(&source)?, revisions_of(&target)?);
-    let floor = cutoff.map_or(since, |cutoff| cutoff.max(since));
-    let first = first_difference(&old, &new, floor);
-    let page = page_size();
+    let band = BandPass::new(db, since, cutoff, guard, &source, &target)?;
     let mut moved = 0;
-    let mut pages = 0;
     loop {
-        let done = db.write(|c| {
+        let (count, next, last) = band.page(after.as_ref(), PAGE)?;
+        moved += count;
+        if last {
+            return Ok(moved);
+        }
+        after = next;
+    }
+}
+
+/// What each page of one pass from `source` to `target` reads: the revisions that each list prices a band from, and
+/// the first instant at or after the floor at which their bands differ.
+struct BandPass<'a> {
+    db: &'a LedgerDb,
+    since: i64,
+    guard: Option<i64>,
+    first: Option<i64>,
+    source: &'a [Thresholds],
+    target: &'a [Thresholds],
+    old: PriceRevisions,
+    new: PriceRevisions,
+}
+
+impl<'a> BandPass<'a> {
+    fn new(
+        db: &'a LedgerDb,
+        since: i64,
+        cutoff: Option<i64>,
+        guard: Option<i64>,
+        source: &'a [Thresholds],
+        target: &'a [Thresholds],
+    ) -> Result<Self, LedgerError> {
+        let (old, new) = (revisions_of(source)?, revisions_of(target)?);
+        let floor = cutoff.map_or(since, |cutoff| cutoff.max(since));
+        let first = first_difference(&old, &new, floor);
+        Ok(Self {
+            db,
+            since,
+            guard,
+            first,
+            source,
+            target,
+            old,
+            new,
+        })
+    }
+
+    /// One page of a band pass in one transaction: the next `size` requests behind `after`, their moves, then the
+    /// cursor, or the mark behind the last page. Answers the requests that moved, the cursor behind the page and
+    /// whether the page was the last.
+    fn page(
+        &self,
+        after: Option<&After>,
+        size: usize,
+    ) -> Result<(usize, Option<After>, bool), LedgerError> {
+        self.db.write(|c| {
             let tx = begin_write(c)?;
-            let requests = match first {
-                Some(first) => requests_after(&tx, first, after.as_ref(), page)?,
+            let requests = match self.first {
+                Some(first) => requests_after(&tx, first, after, size)?,
                 None => Vec::new(),
             };
+            let mut moved = 0;
             for (request, attempts, _) in &requests {
                 let (was, now) = (
-                    deltas_of(request, attempts, &old),
-                    deltas_of(request, attempts, &new),
+                    deltas_of(request, attempts, &self.old),
+                    deltas_of(request, attempts, &self.new),
                 );
-                if moves(&tx, guard, request.received_at, &was, &now)? {
+                if moves(&tx, self.guard, request.received_at, &was, &now)? {
                     for delta in &was {
                         unfold(&tx, delta)?;
                     }
@@ -584,38 +635,30 @@ fn pass(
                     moved += 1;
                 }
             }
-            let last = requests.len() < page;
+            let last = requests.len() < size;
+            let mut next = None;
             if last {
                 delete_meta(&tx, PRICE_BANDS_REFOLD_KEY)?;
                 write_meta(
                     &tx,
                     PRICE_BANDS_KEY,
                     &Mark {
-                        since,
-                        revisions: target.clone(),
+                        since: self.since,
+                        revisions: self.target.to_vec(),
                     },
                 )?;
             } else if let Some((request, _, _)) = requests.last() {
-                let next = After::of(request);
-                write_meta(
-                    &tx,
-                    PRICE_BANDS_REFOLD_KEY,
-                    &Cursor {
-                        source: source.clone(),
-                        target: target.clone(),
-                        after: next.clone(),
-                    },
-                )?;
-                after = Some(next);
+                let cursor = Cursor {
+                    source: self.source.to_vec(),
+                    target: self.target.to_vec(),
+                    after: After::of(request),
+                };
+                write_meta(&tx, PRICE_BANDS_REFOLD_KEY, &cursor)?;
+                next = Some(cursor.after);
             }
             tx.commit()?;
-            Ok(last)
-        })?;
-        pages += 1;
-        fail_after_page(pages)?;
-        if done {
-            return Ok(moved);
-        }
+            Ok((moved, next, last))
+        })
     }
 }
 
@@ -788,40 +831,6 @@ pub(crate) fn write_meta(
 pub(crate) fn delete_meta(tx: &Transaction<'_>, key: &str) -> Result<(), LedgerError> {
     tx.execute("DELETE FROM meta WHERE key = ?1", params![key])?;
     Ok(())
-}
-
-#[cfg(not(test))]
-pub(crate) fn page_size() -> usize {
-    PAGE
-}
-
-#[cfg(test)]
-pub(crate) fn page_size() -> usize {
-    TEST_PAGE.get().unwrap_or(PAGE)
-}
-
-#[cfg(not(test))]
-pub(crate) fn fail_after_page(_pages: usize) -> Result<(), LedgerError> {
-    Ok(())
-}
-
-/// The failure a test injects once a pass has committed the pages it names, so the resume has a pass to finish.
-#[cfg(test)]
-pub(crate) fn fail_after_page(pages: usize) -> Result<(), LedgerError> {
-    if FAIL_AFTER_PAGES.get() == Some(pages) {
-        return Err(LedgerError::Io(std::io::Error::other(
-            "injected failure after a committed page",
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-thread_local! {
-    /// The page size a test sets in place of `PAGE`, so a pass of three requests runs three pages.
-    pub(crate) static TEST_PAGE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
-    /// The pages a pass commits before it fails, which a test sets to interrupt a pass after a committed page.
-    pub(crate) static FAIL_AFTER_PAGES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -1396,20 +1405,25 @@ mod tests {
 
     /// A pass that fails after a committed page leaves its cursor and the old mark, and the next start resumes
     /// after the cursor with the cursor's own lists rather than subtracting the committed page again: the rows then
-    /// equal an uninterrupted pass's.
+    /// equal an uninterrupted pass's. One page through `BandPass::page` leaves what a pass that failed behind that
+    /// page's commit leaves, since such a failure falls outside the page's transaction. The seed holds one request
+    /// more than a page so that both passes run more than one page.
     #[test]
     fn a_pass_that_fails_after_a_committed_page_resumes_after_its_cursor_and_sums_as_an_uninterrupted_pass_does(
     ) {
+        const MINUTE: i64 = 60_000;
         let seed = |db: &LedgerDb| {
-            assert_eq!(
-                refold_bands(db, &list(Some(1_000)), 0, 0, NEW_YEAR).unwrap(),
-                0
-            );
-            for (n, id) in ["a", "b", "c"].into_iter().enumerate() {
+            let prices = list(Some(1_000));
+            assert_eq!(refold_bands(db, &prices, 0, 0, NEW_YEAR).unwrap(), 0);
+            for n in 0..=PAGE {
                 land(
                     db,
-                    &haiku(id, NEW_YEAR + (n as i64 + 1) * DAY, 1_500),
-                    &list(Some(1_000)),
+                    &haiku(
+                        &format!("r{n:04}"),
+                        NEW_YEAR + DAY + n as i64 * MINUTE,
+                        1_500,
+                    ),
+                    &prices,
                 );
             }
         };
@@ -1417,15 +1431,27 @@ mod tests {
         seed(&whole);
         assert_eq!(
             refold_bands(&whole, &list(Some(2_000)), 0, 0, NEW_YEAR + 9 * DAY).unwrap(),
-            3
+            PAGE + 1,
+            "the uninterrupted pass moves every request over two pages"
         );
         let (interrupted, _interrupted_dir) = crate::db::open_temp();
         seed(&interrupted);
-        TEST_PAGE.set(Some(1));
-        FAIL_AFTER_PAGES.set(Some(1));
-        let failed = refold_bands(&interrupted, &list(Some(2_000)), 0, 0, NEW_YEAR + 9 * DAY);
-        FAIL_AFTER_PAGES.set(None);
-        assert!(failed.is_err(), "the injected failure after the first page");
+        let (source, target) = (
+            thresholds_of(&list(Some(1_000))),
+            thresholds_of(&list(Some(2_000))),
+        );
+        let band = BandPass::new(&interrupted, NEW_YEAR, None, None, &source, &target).unwrap();
+        let (moved, next, last) = band.page(None, 1).unwrap();
+        assert_eq!(
+            (
+                moved,
+                next.as_ref()
+                    .map(|after| (after.received_at, after.id.as_str())),
+                last
+            ),
+            (1, Some((NEW_YEAR + DAY, "r0000")), false),
+            "one page moves the first request and hands on its cursor"
+        );
         let cursor =
             meta(&interrupted, PRICE_BANDS_REFOLD_KEY).expect("the cursor of the committed page");
         assert_eq!(
@@ -1434,7 +1460,7 @@ mod tests {
                 haiku_over(&cursor["source"]),
                 haiku_over(&cursor["target"])
             ),
-            (Some("a"), Some(1_000), Some(2_000))
+            (Some("r0000"), Some(1_000), Some(2_000))
         );
         assert_eq!(
             haiku_over(&meta(&interrupted, PRICE_BANDS_KEY).expect("the mark")["revisions"]),
@@ -1443,10 +1469,9 @@ mod tests {
         );
         assert_eq!(
             refold_bands(&interrupted, &list(Some(2_000)), 0, 0, NEW_YEAR + 10 * DAY).unwrap(),
-            2,
-            "the resumed pass moves the two requests after the cursor"
+            PAGE,
+            "the resumed pass moves the requests after the cursor"
         );
-        TEST_PAGE.set(None);
         assert_eq!(
             meta(&interrupted, PRICE_BANDS_REFOLD_KEY),
             None,
