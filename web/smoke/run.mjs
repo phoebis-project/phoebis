@@ -16551,6 +16551,8 @@ await forView('/requests', async () => {
   {
     // A filter change under a held list read leaves the old filter's rows drawn and stale. Their cursor is the old
     // query's, so Next waits for the new list, while the count still says that more rows stand behind the drawn ones.
+    // The expected words are a full page: `rows` in `REQUESTS_CODEC` (`web/src/lib/address.ts`) defaults to 25, and
+    // `REQUESTS` in `web/src/mock/requests.ts` holds more requests than that in the default 24 hours.
     const page = await mount('/requests', { now: CLOCK_ORIGIN });
     const nextDisabled = () => page.container.querySelector('button[aria-label="Next page"]')?.disabled ?? null;
     const atRest = countText(page);
@@ -17760,6 +17762,8 @@ await forView('/routing-log', async () => {
   {
     // A filter change under a held list read leaves the old filter's rows drawn and stale. Their cursor is the old
     // query's, so Next waits for the new list, while the count still says that more rows stand behind the drawn ones.
+    // The expected words are a full page: `PAGE_SIZE` in `web/src/pages/RoutingLogPage.tsx` is 25, and `SUMMARIES` and
+    // `ROUTING_EVENTS` in `web/src/mock/routingLog.ts` hold more rows than that in the default hour.
     const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
     const nextDisabled = () => pagerButton(page, 'Next page')?.disabled ?? null;
     const atRest = barCount(page);
