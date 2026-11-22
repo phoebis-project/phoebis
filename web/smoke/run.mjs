@@ -16548,6 +16548,34 @@ await forView('/requests', async () => {
       missing: [JSON.stringify(waiting), several, empty, alone],
     });
   }
+  {
+    // A filter change under a held list read leaves the old filter's rows drawn and stale. Their cursor is the old
+    // query's, so Next waits for the new list, while the count still says that more rows stand behind the drawn ones.
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    const nextDisabled = () => page.container.querySelector('button[aria-label="Next page"]')?.disabled ?? null;
+    const atRest = countText(page);
+    const held = deferNextCall('listRequests');
+    await page.navigate('/requests?kind=inference');
+    await page.settle();
+    const loading = { count: countText(page), nextDisabled: nextDisabled() };
+    held.release();
+    await page.settle();
+    held.restore();
+    // The held query on the same frozen clock, so it answers what the released read answered.
+    const answer = await api.listRequests(held.calls[0]?.[0]);
+    const answered = { cursor: answer.nextCursor, nextDisabled: nextDisabled() };
+    page.unmount();
+    results.push({
+      name: "/requests the pager's Next is disabled while a changed filter's list loads, and enabled once that list answers a next cursor",
+      ok: loading.nextDisabled === true && answered.cursor !== null && answered.nextDisabled === false,
+      missing: [`Next disabled ${loading.nextDisabled} while the list loads`, `Next disabled ${answered.nextDisabled} once it answers the cursor ${answered.cursor}`],
+    });
+    results.push({
+      name: "/requests the count reads the drawn rows with more available while a changed filter's list loads, as at rest",
+      ok: atRest === '25 shown, more available' && loading.count === '25 shown, more available',
+      missing: [`at rest ${JSON.stringify(atRest)}`, `while the list loads ${JSON.stringify(loading.count)}`],
+    });
+  }
 });
 
 // The Feature calls section over the 65 feature calls of `FEATURE_CALLS` in `web/src/mock/requests.ts`, all inside the
@@ -17727,6 +17755,34 @@ await forView('/routing-log', async () => {
       name: '/routing-log the count reads No rows, n shown and more available',
       ok: waiting === '' && several === '25 shown, more available' && empty === 'No rows' && own.nextCursor === null && alone === `${own.rows.length} shown`,
       missing: [JSON.stringify(waiting), String(several), String(empty), `${own.rows.length} rows, read ${alone}`],
+    });
+  }
+  {
+    // A filter change under a held list read leaves the old filter's rows drawn and stale. Their cursor is the old
+    // query's, so Next waits for the new list, while the count still says that more rows stand behind the drawn ones.
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    const nextDisabled = () => pagerButton(page, 'Next page')?.disabled ?? null;
+    const atRest = barCount(page);
+    const held = deferNextCall('listRoutingLog');
+    await page.navigate('/routing-log?accounts=primary');
+    await page.settle();
+    const loading = { count: barCount(page), nextDisabled: nextDisabled() };
+    held.release();
+    await page.settle();
+    held.restore();
+    // The held query on the same frozen clock, so it answers what the released read answered.
+    const answer = await api.listRoutingLog(held.calls[0]?.[0]);
+    const answered = { cursor: answer.nextCursor, nextDisabled: nextDisabled() };
+    page.unmount();
+    results.push({
+      name: "/routing-log the pager's Next is disabled while a changed filter's list loads, and enabled once that list answers a next cursor",
+      ok: loading.nextDisabled === true && answered.cursor !== null && answered.nextDisabled === false,
+      missing: [`Next disabled ${loading.nextDisabled} while the list loads`, `Next disabled ${answered.nextDisabled} once it answers the cursor ${answered.cursor}`],
+    });
+    results.push({
+      name: "/routing-log the count reads the drawn rows with more available while a changed filter's list loads, as at rest",
+      ok: atRest === '25 shown, more available' && loading.count === '25 shown, more available',
+      missing: [`at rest ${JSON.stringify(atRest)}`, `while the list loads ${JSON.stringify(loading.count)}`],
     });
   }
   {

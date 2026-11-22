@@ -36,7 +36,7 @@ export function useFollow<R>(input: {
   paused: boolean;
   read: (cursor: string | undefined, to: number, landedAfter?: number) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>;
   stale: boolean;
-}): { error: string | null; fresh: Set<string>; goNext: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>> } {
+}): { error: string | null; fresh: Set<string>; goNext: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>>; shownCursor: string | null } {
   const { address, compare, cursor, error, fixedEnd, identity, intervalMs, list, next, paused, read, stale } = input;
   const [followed, setFollowed] = useState<Followed<R> | null>(null);
   // The tint marks what the last poll brought, or after the tab's return what its read and the tick after it brought,
@@ -157,14 +157,17 @@ export function useFollow<R>(input: {
   // Past an overrun, Next walks on from the last row the poll read, so the rows it left are the next page. A poll that
   // stood in for the list walks on from its own page, under the end it read to.
   const walk = overrun ?? standIn;
-  const nextCursor = walk === null ? (list?.nextCursor ?? null) : walk.cursor;
+  // The count line says whether more rows stand behind the drawn ones, which the stored cursor says while stale too.
+  const shownCursor = walk === null ? (list?.nextCursor ?? null) : walk.cursor;
+  // A stale list's cursor is another query's, so Next waits for this query's own.
+  const nextCursor = walk === null && stale ? null : shownCursor;
   const goNext = () => {
     if (!nextCursor) return;
     // The cursor pauses the poll, and the tint marks what the last poll brought with no poll to take it away.
     setFollowed((f) => f && { ...f, fresh: new Set() });
     next(nextCursor, walk?.to);
   };
-  return { error: standIn === null ? error : null, fresh, goNext, nextCursor, overrun, rows, setFollowed };
+  return { error: standIn === null ? error : null, fresh, goNext, nextCursor, overrun, rows, setFollowed, shownCursor };
 }
 
 /**

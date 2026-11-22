@@ -89,7 +89,7 @@ export function RoutingLogPage() {
   const log = useAsync(() => api.listRoutingLog(query), [query]);
 
   // An open menu or popover under the bar stands over the list, so the poll waits for it to close.
-  const { error, fresh, goNext, nextCursor, overrun, rows, setFollowed } = useFollow<RoutingLogRow>({
+  const { error, fresh, goNext, nextCursor, overrun, rows, setFollowed, shownCursor } = useFollow<RoutingLogRow>({
     address,
     // Ascending is the stream reversed whole, as the read pages it, so a tie at one instant flips with the time.
     compare: dir === 'asc' ? (a, b) => compareRows(b, a) : compareRows,
@@ -151,7 +151,7 @@ export function RoutingLogPage() {
       <div className="routing-log stack">
         <FilterBar
           address={address}
-          count={shownCount(rows, nextCursor, log.data !== null)}
+          count={shownCount(rows, shownCursor, log.data !== null)}
           dimensions={dimensions}
           disabled={disabled}
           filters={filters}

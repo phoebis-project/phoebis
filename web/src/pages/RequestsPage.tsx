@@ -322,7 +322,7 @@ export function RequestsPage() {
   const requests = useAsync(() => api.listRequests(query), [query]);
   // The open drawer reads one of the rows, and an open menu or popover under the bar stands over the list, so the poll
   // waits for either to close. Under the feature calls the list is not drawn, so it waits there too.
-  const { error, fresh, goNext, nextCursor, overrun, rows, setFollowed } = useFollow<RequestLog>({
+  const { error, fresh, goNext, nextCursor, overrun, rows, setFollowed, shownCursor } = useFollow<RequestLog>({
     address,
     compare: requestOrder(order, dir),
     cursor,
@@ -394,7 +394,7 @@ export function RequestsPage() {
           <div className={`requests ${requestId ? 'has-drawer' : ''}`} {...sectionPanel('requests')}>
             <FilterBar
               address={address}
-              count={shownCount(rows, nextCursor, requests.data !== null)}
+              count={shownCount(rows, shownCursor, requests.data !== null)}
               countSizer={WIDEST_COUNT}
               dimensions={REQUESTS_DIMENSIONS}
               disabled={disabled}
