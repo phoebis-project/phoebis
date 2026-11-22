@@ -360,7 +360,10 @@ inside the cell and its hint's chips on a row of their own under it, each on one
 the table, at 1280 by 800 and 1440 by 900, the story's Fable request reading its figure in the Ultra week alone on the
 cost row, then its plan, and a 5-hour, a 7-day and a Fable week share in that order, and scrolled up to 600 px at 1280
 by 800 the drawer's top at or under the section bar's bottom, the scroll recorded in both passes, where a page that does
-not scroll fails the mock pass alone and the router pass's two requests can leave it too short to), the Requests view's
+not scroll fails the mock pass alone and the router pass's two requests can leave it too short to), the Accounts list
+at the page's end (scrolled to its end at 1280 by 800: the list's top at or under its dock, the dock, whether the list
+fills its greatest height, the list's height and greatest height, the scroll and the top recorded in both passes, where
+a list short of its greatest height or a page that does not scroll fails the mock pass alone), the Requests view's
 Feature calls section (mock pass, on its first page at 1280 by 800: the table as wide as its card with Time the one
 fill, every Path cell on one line with its whole path in its title, a cut path drawn at 48 characters with the ellipsis,
 the cut paths recorded, and its pager's three buttons 32 px square with the footer one control tall), a reasons panel

@@ -9758,6 +9758,43 @@ async function requestDrawerCompact(theme) {
 }
 
 /**
+ * The Accounts list at the page's end at 1280 by 800: scrolled to the end, the list's top stands at or under its dock,
+ * the sticky top its rule sets, so the foot under a list that fills its greatest height leaves room for the content's
+ * bottom padding. The dock, whether the list fills its greatest height, the list's height and greatest height, the
+ * scroll and the top are recorded in both passes, and a list short of its greatest height or a page that does not
+ * scroll fails the mock pass alone. It scrolls back to the top, so the view's later measures and its shot read the view
+ * as it loaded.
+ */
+async function accountsListFoot(theme) {
+  const say = (what) => failures.push(`${theme} /accounts: ${what}`);
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await settle();
+  const foot = await page.evaluate(() => {
+    const list = document.querySelector('.accounts__list');
+    const style = list ? getComputedStyle(list) : null;
+    const box = list?.getBoundingClientRect();
+    const limit = style ? Number.parseFloat(style.maxHeight) : Number.NaN;
+    return {
+      dock: style ? Math.round(Number.parseFloat(style.top) * 10) / 10 : Number.NaN,
+      filled: !!box && Math.abs(box.height - limit) <= 0.5,
+      height: box ? Math.round(box.height * 10) / 10 : Number.NaN,
+      limit: Math.round(limit * 10) / 10,
+      scrolled: window.scrollY,
+      top: box ? Math.round(box.top * 10) / 10 : Number.NaN,
+    };
+  });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await settle();
+  measurements.push(`${theme} /accounts the list at the page's end at 1280 by 800 ${JSON.stringify(foot)}`);
+  if (!(foot.top >= foot.dock - 0.5)) say(`at the page's end at 1280 by 800, the Accounts list's top at ${foot.top}px stands above its dock at ${foot.dock}px ${JSON.stringify(foot)}`);
+  // The mock's story holds enough accounts to fill the list's greatest height and make the page scroll, while the
+  // seeded router's few accounts can leave both short, so a list or a page that falls short fails the mock pass alone.
+  if (mock && (!foot.filled || foot.scrolled === 0)) say(`at the page's end at 1280 by 800, the Accounts list does not fill its greatest height or the page does not scroll, so its foot is not measured ${JSON.stringify(foot)}`);
+}
+
+/**
  * The Requests view's Feature calls section as it loads, on its first page with no filter, at 1280 by 800: the table
  * as wide as its card with nothing to scroll sideways, Time its one fill, and every Path cell on one line with the
  * whole path in its title, a path the cell cuts drawn at 48 characters with the ellipsis, the cut paths and every
@@ -14440,6 +14477,7 @@ try {
         if (mock) await settingsSetups(theme);
       }
       if (view.path === '/accounts') {
+        await accountsListFoot(theme);
         if (mock) await accountBadges(theme);
         await planEndedLines(theme, view.path);
         await accountsSortControl(theme);

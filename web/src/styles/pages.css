@@ -1141,13 +1141,15 @@
   grid-column: 1 / -1;
 }
 
+/* Under the panel stays the content's 48 px bottom padding: at the page's end the row stops that far above the
+   window's bottom, and a panel that reached lower would be pushed up off its dock. */
 .accounts__list,
 .drawer {
   position: sticky;
   top: calc(var(--main-top) + var(--drawer-dock, 0px) + 20px);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - var(--main-top) - var(--drawer-dock, 0px) - 20px - var(--drawer-foot, 24px));
+  max-height: calc(100vh - var(--main-top) - var(--drawer-dock, 0px) - 20px - var(--drawer-foot, 48px));
   overflow: auto;
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -1752,13 +1754,10 @@
 
 /* The section bar above the list docks under the shell's block as the drawer does, so where the drawer sticks beside
    the list it docks under the bar: the bar's 53.3 px (its two 8 px paddings around the tabs' 36.3 px row and their
-   1 px hairline), rounded up, ahead of the drawer's own 20 px, and its greatest height gives up the same 54 px. Under
-   it the drawer leaves the content's 48 px bottom padding, since at the page's end the list's row stops that far above
-   the window's bottom, and a drawer that reached lower would be pushed up over the bar. */
+   1 px hairline), rounded up, ahead of the drawer's own 20 px, and its greatest height gives up the same 54 px. */
 @media (min-width: 1100.02px) {
   .requests > .drawer {
     --drawer-dock: 54px;
-    --drawer-foot: 48px;
   }
 }
 
