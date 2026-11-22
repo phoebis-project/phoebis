@@ -568,8 +568,8 @@ fn pass(
     }
 }
 
-/// What each page of one pass from `source` to `target` reads: the revisions that each list prices a band from, and
-/// the first instant at or after the floor at which their bands differ.
+/// What each page of one pass from `source` to `target` reads: the revisions that each list prices a band from, and the
+/// first instant at which their bands differ, at or after the later of `since` and the cutoff.
 struct BandPass<'a> {
     db: &'a LedgerDb,
     since: i64,
@@ -1406,8 +1406,8 @@ mod tests {
     /// A pass that fails after a committed page leaves its cursor and the old mark, and the next start resumes
     /// after the cursor with the cursor's own lists rather than subtracting the committed page again: the rows then
     /// equal an uninterrupted pass's. One page through `BandPass::page` leaves what a pass that failed behind that
-    /// page's commit leaves, since such a failure falls outside the page's transaction. The seed holds one request
-    /// more than a page so that both passes run more than one page.
+    /// page's commit leaves, since such a failure falls outside the page's transaction. The seed holds one request more
+    /// than a page so that both passes run more than one page.
     #[test]
     fn a_pass_that_fails_after_a_committed_page_resumes_after_its_cursor_and_sums_as_an_uninterrupted_pass_does(
     ) {
