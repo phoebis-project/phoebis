@@ -101,8 +101,8 @@ fn the_code_grant_body_matches_the_captured_fixture() {
     );
 }
 
-fn store_with_account() -> Arc<Store> {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+fn store_with_account(clock: phoebis_store::Clock) -> Arc<Store> {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), clock).unwrap());
     store
         .insert_account(&AccountRow {
             identity: Some(phoebis_store::Identity {
@@ -120,6 +120,15 @@ async fn manager_with(
     rules: Vec<Rule>,
     now: Arc<AtomicI64>,
 ) -> (CredentialManager, Arc<Store>, FakeUpstream) {
+    manager_with_store_clock(rules, now, common::wall()).await
+}
+
+/// `manager_with` over a store that stamps its rows from `store_clock`.
+async fn manager_with_store_clock(
+    rules: Vec<Rule>,
+    now: Arc<AtomicI64>,
+    store_clock: phoebis_store::Clock,
+) -> (CredentialManager, Arc<Store>, FakeUpstream) {
     let up = FakeUpstream::start(rules).await;
     let p = claude_code_2_1_310_linux_x64();
     let mut b = connector_builder(p, Plane::Control).unwrap();
@@ -128,7 +137,7 @@ async fn manager_with(
     let resolver: Resolver =
         Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
     let control = Arc::new(ControlClient::new(p, b.build(), resolver));
-    let store = store_with_account();
+    let store = store_with_account(store_clock);
     let n = now.clone();
     let clock: phoebis_oauth::Clock = Arc::new(move || n.load(Ordering::SeqCst));
     (
@@ -441,12 +450,16 @@ async fn a_repeated_backoff_failure_leaves_the_credentials_last_error_row_untouc
             body: b"{}".to_vec(),
         },
     };
-    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
     // The store stamps the row on a clock of its own, apart from the manager's, so a step of it moves the stamp a
     // write would leave without moving the manager past its backoff.
     let stamped = Arc::new(AtomicI64::new(1_000_000));
     let at = stamped.clone();
-    store.set_clock(Arc::new(move || at.load(Ordering::SeqCst)));
+    let (mgr, store, up) = manager_with_store_clock(
+        vec![rule],
+        now.clone(),
+        Arc::new(move || at.load(Ordering::SeqCst)),
+    )
+    .await;
     store
         .commit_credentials(
             "a",
@@ -920,7 +933,7 @@ async fn manager_without_upstream(now: Arc<AtomicI64>) -> (CredentialManager, Ar
         connector_builder(p, Plane::Control).unwrap().build(),
         resolver,
     ));
-    let store = store_with_account();
+    let store = store_with_account(common::wall());
     let n = now.clone();
     let clock: phoebis_oauth::Clock = Arc::new(move || n.load(Ordering::SeqCst));
     (

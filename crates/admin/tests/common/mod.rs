@@ -71,6 +71,12 @@ pub fn month_end() -> i64 {
     1_793_491_200_000
 }
 
+/// The clock that reads `cell`, so a store opened over it stamps the instants that its harness steps.
+pub fn clock_of(cell: &Arc<AtomicI64>) -> Clock {
+    let c = cell.clone();
+    Arc::new(move || c.load(Ordering::SeqCst))
+}
+
 const BODY_CAPTURE_MAX_HOURS: u32 = 72;
 
 /// The bound the relay harness gives discovery too, so a fake that never answers cannot hang the suite.
@@ -177,8 +183,8 @@ pub async fn admin_parts_full_with_accounting(accounting: AccountingSource) -> F
 
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
 /// spawn, so a test that needs a pin in the list has to write it before this call.
-pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
-    full_from(app_with(None, ACCOUNT_UUID, false, Some(store)).await)
+pub async fn admin_parts_full_on(store: Arc<Store>, clock_cell: Arc<AtomicI64>) -> Full {
+    full_from(app_with(None, ACCOUNT_UUID, false, Some((store, clock_cell))).await)
 }
 
 /// The full harness over a store the caller holds, its ledger's event mirror ticking every `event_poll` rather than
@@ -186,9 +192,14 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 /// interval paces the writer's revision poll, which lands pending budget rows, and the retry of a failed spend read on
 /// the ledger's clock, so a budget row a seed provokes lands on that cadence as well. Its router prices a pin's rewrite
 /// through the shipped cost model, as `admin_parts_full_on_equivalent` wires it.
-pub async fn admin_parts_full_on_polled(store: Arc<Store>, event_poll: Duration) -> Full {
+pub async fn admin_parts_full_on_polled(
+    store: Arc<Store>,
+    clock_cell: Arc<AtomicI64>,
+    event_poll: Duration,
+) -> Full {
     admin_parts_full_on_equivalent(
         store,
+        clock_cell,
         PlanTables::shipped(),
         LedgerConfig {
             event_poll,
@@ -205,6 +216,7 @@ pub async fn admin_parts_full_on_polled(store: Arc<Store>, event_poll: Duration)
 /// capture's fixture alone reads.
 pub async fn admin_parts_full_on_equivalent(
     store: Arc<Store>,
+    clock_cell: Arc<AtomicI64>,
     costs: PlanTables,
     ledger_config: LedgerConfig,
 ) -> Full {
@@ -214,7 +226,7 @@ pub async fn admin_parts_full_on_equivalent(
             None,
             ACCOUNT_UUID,
             false,
-            Some(store),
+            Some((store, clock_cell)),
             None,
             None,
             None,
@@ -260,6 +272,7 @@ pub async fn admin_parts_full_priced(prices: PriceRevisions) -> Full {
 /// runway and a spare rate of its own rates rather than the shipped cost model's.
 pub async fn admin_parts_full_on_rated(
     store: Arc<Store>,
+    clock_cell: Arc<AtomicI64>,
     rate: impl Fn(&str, Option<&str>, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync + 'static,
 ) -> Full {
     full_from(
@@ -267,7 +280,7 @@ pub async fn admin_parts_full_on_rated(
             None,
             ACCOUNT_UUID,
             false,
-            Some(store),
+            Some((store, clock_cell)),
             None,
             None,
             None,
@@ -285,13 +298,17 @@ pub async fn admin_parts_full_on_rated(
 /// The full harness over a store the caller holds, its router's pricer answering `factor` for the Fable week through
 /// `SharePricer::with_week_factor`, the builder the router's start wires the cost model's factor through, where the
 /// default pricer answers none: a case reads a Fable reservation worked from its own factor.
-pub async fn admin_parts_full_on_week_factor(store: Arc<Store>, factor: f64) -> Full {
+pub async fn admin_parts_full_on_week_factor(
+    store: Arc<Store>,
+    clock_cell: Arc<AtomicI64>,
+    factor: f64,
+) -> Full {
     full_from(
         build_app_routed(
             None,
             ACCOUNT_UUID,
             false,
-            Some(store),
+            Some((store, clock_cell)),
             None,
             None,
             None,
@@ -347,13 +364,17 @@ pub async fn admin_parts_full_costed(costs: PlanTables) -> Full {
 }
 
 /// The same over a store the caller holds (the router task loads its pins at spawn, so a pin is written first).
-pub async fn admin_parts_full_on_costed(store: Arc<Store>, costs: PlanTables) -> Full {
+pub async fn admin_parts_full_on_costed(
+    store: Arc<Store>,
+    clock_cell: Arc<AtomicI64>,
+    costs: PlanTables,
+) -> Full {
     full_from(
         build_app(
             None,
             ACCOUNT_UUID,
             false,
-            Some(store),
+            Some((store, clock_cell)),
             None,
             None,
             None,
@@ -364,13 +385,17 @@ pub async fn admin_parts_full_on_costed(store: Arc<Store>, costs: PlanTables) ->
 }
 
 /// The same over a store the caller holds (the router task loads its pins at spawn, so a pin is written first).
-pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceRevisions) -> Full {
+pub async fn admin_parts_full_on_priced(
+    store: Arc<Store>,
+    clock_cell: Arc<AtomicI64>,
+    prices: PriceRevisions,
+) -> Full {
     full_from(
         build_app(
             None,
             ACCOUNT_UUID,
             false,
-            Some(store),
+            Some((store, clock_cell)),
             None,
             Some(prices),
             None,
@@ -382,7 +407,7 @@ pub async fn admin_parts_full_on_priced(store: Arc<Store>, prices: PriceRevision
 
 /// The full harness pricing dollars and shares through the ledger's test tables rather than the shipped files, over
 /// `store` where the caller holds one, so a case works both its dollars and its shares out by hand from the fixtures.
-pub async fn admin_parts_full_test_tables(store: Option<Arc<Store>>) -> Full {
+pub async fn admin_parts_full_test_tables(store: Option<(Arc<Store>, Arc<AtomicI64>)>) -> Full {
     full_from(
         build_app(
             None,
@@ -402,6 +427,7 @@ pub async fn admin_parts_full_test_tables(store: Option<Arc<Store>>) -> Full {
 /// `non_companion_idle` rather than the defaults' 24 hours and one hour.
 pub async fn admin_parts_full_on_bounded(
     store: Arc<Store>,
+    clock_cell: Arc<AtomicI64>,
     session_expiry: Duration,
     non_companion_idle: Duration,
 ) -> Full {
@@ -410,7 +436,7 @@ pub async fn admin_parts_full_on_bounded(
             None,
             ACCOUNT_UUID,
             false,
-            Some(store),
+            Some((store, clock_cell)),
             None,
             None,
             None,
@@ -699,9 +725,17 @@ pub async fn admin_parts_sweepable() -> Sweepable {
 }
 
 /// A second app over a store another `Parts` already opened, so its router task loads whatever the store
-/// holds at this moment rather than what it held when the first app started.
+/// holds at this moment rather than what it held when the first app started. Its parts read a new cell at `NOW` and the
+/// store keeps the clock of its open, since neither this tuple nor the one the store came from carries a cell that a
+/// caller could step.
 pub async fn admin_parts_on(store: Arc<Store>) -> (Router, FakeUpstream, Arc<Store>, RouterHandle) {
-    let parts = app_with(None, ACCOUNT_UUID, false, Some(store)).await;
+    let parts = app_with(
+        None,
+        ACCOUNT_UUID,
+        false,
+        Some((store, Arc::new(AtomicI64::new(NOW)))),
+    )
+    .await;
     (parts.app, parts.up, parts.store, parts.router)
 }
 
@@ -1069,7 +1103,7 @@ async fn app_with(
     identity: Option<Identity>,
     upstream_uuid: &str,
     tls: bool,
-    store: Option<Arc<Store>>,
+    store: Option<(Arc<Store>, Arc<AtomicI64>)>,
 ) -> Parts {
     build_app(identity, upstream_uuid, tls, store, None, None, None, None).await
 }
@@ -1079,7 +1113,7 @@ async fn build_app(
     identity: Option<Identity>,
     upstream_uuid: &str,
     tls: bool,
-    store: Option<Arc<Store>>,
+    store: Option<(Arc<Store>, Arc<AtomicI64>)>,
     accounting: Option<AccountingSource>,
     prices: Option<PriceRevisions>,
     tls_reload: Option<Arc<dyn TlsReload>>,
@@ -1107,7 +1141,7 @@ async fn build_app_routed(
     identity: Option<Identity>,
     upstream_uuid: &str,
     tls: bool,
-    store: Option<Arc<Store>>,
+    store: Option<(Arc<Store>, Arc<AtomicI64>)>,
     accounting: Option<AccountingSource>,
     prices: Option<PriceRevisions>,
     tls_reload: Option<Arc<dyn TlsReload>>,
@@ -1143,7 +1177,7 @@ async fn build_app_bounded(
     identity: Option<Identity>,
     upstream_uuid: &str,
     tls: bool,
-    store: Option<Arc<Store>>,
+    store: Option<(Arc<Store>, Arc<AtomicI64>)>,
     accounting: Option<AccountingSource>,
     prices: Option<PriceRevisions>,
     tls_reload: Option<Arc<dyn TlsReload>>,
@@ -1158,14 +1192,12 @@ async fn build_app_bounded(
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_310_linux_x64();
-    let clock_cell = Arc::new(AtomicI64::new(NOW));
-    let clock: Clock = {
-        let c = clock_cell.clone();
-        Arc::new(move || c.load(Ordering::SeqCst))
-    };
-    let store =
-        store.unwrap_or_else(|| Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()));
-    store.set_clock(clock.clone());
+    let (store, clock_cell) = store.unwrap_or_else(|| {
+        let clock_cell = Arc::new(AtomicI64::new(NOW));
+        let store = Store::open_in_memory(&StorageKey::generate(), clock_of(&clock_cell)).unwrap();
+        (Arc::new(store), clock_cell)
+    });
+    let clock = clock_of(&clock_cell);
     let paired = identity.is_some();
     // A store handed in by the caller already carries its own accounts; seeding it again would collide.
     if store.accounts().unwrap().is_empty() {

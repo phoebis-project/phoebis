@@ -4,6 +4,11 @@ use phoebis_store::{
 };
 use serde_json::json;
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> phoebis_store::Clock {
+    std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 fn account(id: &str) -> AccountRow {
     AccountRow {
         state: AccountState::Unpaired,
@@ -28,7 +33,7 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 
 #[test]
 fn credentials_round_trip_encrypted_and_generation_increments() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g1 = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -83,7 +88,7 @@ fn sealed_blobs_open_only_with_their_key_row_and_generation() {
 
 #[test]
 fn disconnect_revokes_both_credential_kinds() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -121,7 +126,7 @@ fn stored_block(store: &Store) -> (Option<serde_json::Value>, Option<i64>) {
 
 #[test]
 fn a_block_read_for_a_replaced_holder_lands_nothing() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let bumped = store.bump_lifecycle("a", StateCause::Operator).unwrap();
     assert!(
@@ -142,7 +147,7 @@ fn a_block_read_for_a_replaced_holder_lands_nothing() {
 
 #[test]
 fn a_block_write_from_before_a_fold_or_a_pairing_lands_nothing() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     assert!(store
         .set_limit_resets("a", 1, 1, 0, Some(BLOCK), 5_000)
@@ -180,7 +185,7 @@ fn a_block_write_from_before_a_fold_or_a_pairing_lands_nothing() {
 
 #[test]
 fn a_fold_from_before_a_pairing_folds_nothing() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     store
         .commit_pairing("a", 1, 1, None, &bundle("at-1"))
@@ -204,7 +209,7 @@ fn a_fold_from_before_a_pairing_folds_nothing() {
 
 #[test]
 fn a_deleted_accounts_block_write_and_fold_land_nothing_on_the_slot_that_took_its_id() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     store.delete_account("a", "test").unwrap();
     store.insert_account(&account("a")).unwrap();
@@ -236,7 +241,7 @@ fn a_deleted_accounts_block_write_and_fold_land_nothing_on_the_slot_that_took_it
 
 #[test]
 fn deleting_an_account_ends_its_pending_refresh_attempt() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -259,7 +264,7 @@ fn deleting_an_account_ends_its_pending_refresh_attempt() {
 
 #[test]
 fn an_attempt_carries_the_incarnation_it_began_under() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -308,7 +313,7 @@ fn an_attempt_carries_the_incarnation_it_began_under() {
 
 #[test]
 fn an_in_flight_attempt_blocks_a_new_one_and_an_uncertain_one_does_not() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -339,7 +344,7 @@ fn an_in_flight_attempt_blocks_a_new_one_and_an_uncertain_one_does_not() {
 
 #[test]
 fn a_commit_resolves_its_attempt_in_the_same_transaction() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -361,7 +366,7 @@ fn a_commit_resolves_its_attempt_in_the_same_transaction() {
 
 #[test]
 fn a_commit_supersedes_an_attempt_left_open_by_the_bundle_it_replaces() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -396,7 +401,7 @@ fn a_commit_supersedes_an_attempt_left_open_by_the_bundle_it_replaces() {
 
 #[test]
 fn stale_generation_is_rejected() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g1 = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -425,7 +430,7 @@ fn stale_generation_is_rejected() {
 
 #[test]
 fn a_missing_refresh_token_keeps_the_previous_one() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g1 = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -463,7 +468,7 @@ fn a_refresh_keeps_the_stored_refresh_end_it_leaves_out_and_a_pairing_stores_its
     };
 
     // `bundle` names a refresh token, so a body that carries the end only with the token fails the first read.
-    let refreshed = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let refreshed = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     refreshed.insert_account(&account("a")).unwrap();
     let g1 = refreshed
         .commit_credentials("a", 1, 1, None, None, &ending("at-1", first_end))
@@ -477,7 +482,7 @@ fn a_refresh_keeps_the_stored_refresh_end_it_leaves_out_and_a_pairing_stores_its
         .unwrap();
     let replaced = stored_end(&refreshed);
 
-    let paired = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let paired = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     paired.insert_account(&account("a")).unwrap();
     let g1 = paired
         .commit_pairing("a", 1, 1, None, &ending("at-1", first_end))
@@ -492,7 +497,7 @@ fn a_refresh_keeps_the_stored_refresh_end_it_leaves_out_and_a_pairing_stores_its
 
 #[test]
 fn only_one_refresh_attempt_can_be_pending() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -521,7 +526,7 @@ fn only_one_refresh_attempt_can_be_pending() {
 
 #[test]
 fn a_bogus_attempt_id_is_rejected_and_leaves_credentials_unchanged() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g1 = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -542,7 +547,7 @@ fn secret_debug_never_prints_the_value() {
 
 #[test]
 fn an_identity_is_bound_once_and_survives_a_disconnect() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let bound = Identity {
         account_uuid: "uuid-1".into(),
@@ -585,7 +590,7 @@ fn an_identity_is_bound_once_and_survives_a_disconnect() {
 
 #[test]
 fn a_configuration_update_rewrites_the_kind_and_label() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     store
         .update_account_config("a", AccountKind::ApiKey, "Renamed")
@@ -602,7 +607,7 @@ fn a_configuration_update_rewrites_the_kind_and_label() {
 
 #[test]
 fn a_kind_change_is_refused_while_a_credential_is_stored() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -627,7 +632,7 @@ fn a_kind_change_is_refused_while_a_credential_is_stored() {
 
 #[test]
 fn a_deleted_incarnations_refresh_cannot_commit_into_the_slot_that_took_its_id() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     assert_eq!(store.account("a").unwrap().unwrap().incarnation, 1);
     store
@@ -662,7 +667,7 @@ fn a_deleted_incarnations_refresh_cannot_commit_into_the_slot_that_took_its_id()
 
 #[test]
 fn an_attempt_of_a_deleted_incarnation_settles_nothing_on_the_slot_that_took_its_id() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
@@ -692,7 +697,7 @@ fn an_attempt_of_a_deleted_incarnation_settles_nothing_on_the_slot_that_took_its
 
 #[test]
 fn resolved_refresh_attempts_are_listed_after_a_watermark() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
         .unwrap();
@@ -774,7 +779,7 @@ fn resolved_refresh_attempts_are_listed_after_a_watermark() {
 
 #[test]
 fn the_newest_settled_attempt_is_the_mirrors_starting_watermark() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     assert_eq!(store.newest_resolved_refresh_attempt().unwrap(), None);
     let first = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
@@ -818,7 +823,7 @@ fn the_newest_settled_attempt_is_the_mirrors_starting_watermark() {
 
 #[test]
 fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_incarnation() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let mut settled = Vec::new();
     for outcome in [
@@ -906,7 +911,7 @@ fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_
 
 #[test]
 fn one_refresh_history_read_answers_each_holders_own_attempts_and_end_under_its_id() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     store.insert_account(&account("b")).unwrap();
     store
@@ -972,7 +977,7 @@ fn one_refresh_history_read_answers_each_holders_own_attempts_and_end_under_its_
 
 #[test]
 fn a_credential_error_is_recorded_refused_past_its_incarnation_and_cleared_by_the_next_commit() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_account(&account("a")).unwrap();
     store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))

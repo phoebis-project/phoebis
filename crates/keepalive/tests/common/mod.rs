@@ -138,6 +138,9 @@ pub struct RigSpec {
     /// The key the registry seals under and the companion's pseudonyms are digested with: drawn per rig by default,
     /// and a fixed one for a case whose pseudonyms have to sort in a known order.
     pub storage_key: StorageKey,
+    /// The clock that the registry stamps a row with: the wall clock by default, and a fixed instant for a case that
+    /// needs two rows on one stamp.
+    pub store_clock: Clock,
     /// The shipped tables by default; a test naming a model the cost model has no weight for (though the price
     /// table prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
     pub tables: PlanTables,
@@ -164,6 +167,7 @@ impl Default for RigSpec {
             router: RouterConfig::default(),
             session_expiry: Duration::from_secs(86_400),
             storage_key: StorageKey::generate(),
+            store_clock: relay_common::wall(),
             tables: PlanTables::shipped(),
             tier: None,
             // The Go rig's 90 percent deadline: a five-minute entry is probed at 270 s, and no jitter, so the
@@ -199,10 +203,10 @@ pub async fn rig(spec: RigSpec) -> Rig {
     let (store, store_path, scratch) = if spec.on_disk {
         let scratch = Scratch::new();
         let path = scratch.0.join("router.sqlite");
-        let store = Arc::new(Store::open(&path, &spec.storage_key).unwrap());
+        let store = Arc::new(Store::open(&path, &spec.storage_key, spec.store_clock).unwrap());
         (store, Some(path), Some(scratch))
     } else {
-        let store = Arc::new(Store::open_in_memory(&spec.storage_key).unwrap());
+        let store = Arc::new(Store::open_in_memory(&spec.storage_key, spec.store_clock).unwrap());
         (store, None, None)
     };
     let h = relay_common::harness_on_with_bus_and_catalog(

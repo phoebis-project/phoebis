@@ -2923,7 +2923,7 @@ async fn harness_after_a_run(up: &FakeUpstream, down_since: i64) -> Harness {
     })
     .unwrap();
     harness_on(
-        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
+        Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap()),
         db,
         up,
         &[oauth("a", A, 0)],
@@ -3883,7 +3883,7 @@ async fn a_wind_down_a_cancellation_after_the_start_opens_lands_whenever_its_win
 
 #[tokio::test]
 async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_start() {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     store
         .insert_account(&phoebis_store::AccountRow::for_tests(
             "a",
@@ -3977,7 +3977,7 @@ async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_s
 
 #[tokio::test]
 async fn the_start_row_dates_the_gap_from_the_previous_run_whatever_the_mirror_finds_at_spawn() {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     store
         .insert_account(&phoebis_store::AccountRow::for_tests(
             "a",
@@ -4062,7 +4062,7 @@ async fn the_start_row_dates_the_gap_from_the_previous_run_whatever_the_mirror_f
 async fn the_start_fold_waits_for_the_start_row_so_a_span_the_previous_run_left_open_closes_at_it()
 {
     const HOUR: i64 = 3_600_000;
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
     // The previous run's last row opened a span on a three hours ago, so the run stopped with the span open, and the
@@ -4197,7 +4197,7 @@ async fn the_start_fold_reads_the_requests_retention_so_a_run_begun_before_it_wr
     .unwrap();
     plan_funded_request(&db, "old", SUNDAY - DAY - 3 * HOUR + 10 * MINUTE, 20);
     plan_funded_request(&db, "new", SUNDAY - 3 * HOUR + 10 * MINUTE, 20);
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     let clock: phoebis_oauth::Clock = Arc::new(|| SUNDAY);
     let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
     let ledger = phoebis_ledger::spawn(
@@ -4239,7 +4239,7 @@ async fn the_start_fold_reads_the_requests_retention_so_a_run_begun_before_it_wr
 /// quarantine it lands are mirrored as changes rather than taken as history.
 #[tokio::test]
 async fn a_quarantine_the_start_lands_after_the_mirrors_baseline_is_mirrored() {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     let account = |id: &str, cause: StateCause| phoebis_store::AccountRow {
         state_cause: cause,
         ..phoebis_store::AccountRow::for_tests(id, phoebis_store::AccountKind::Oauth)

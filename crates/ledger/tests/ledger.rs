@@ -7298,7 +7298,7 @@ async fn on_disk(
 }
 
 fn fresh_store() -> Arc<Store> {
-    Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap())
+    Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap())
 }
 
 /// A short revision poll, so the writer reads a budget edit within the test's waits.
@@ -8789,7 +8789,7 @@ async fn the_start_row_dates_the_gap_from_the_newest_row_and_counts_the_load() {
 #[tokio::test]
 async fn a_budget_reached_at_the_start_lands_behind_the_start_row_and_leaves_its_gap_alone() {
     let up = FakeUpstream::start(vec![]).await;
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     // The previous run seeded the registry and stopped. Its last request spent past a budget the member carries now.
     let previous = harness_on(
@@ -8883,7 +8883,7 @@ async fn a_budget_reached_at_the_start_lands_behind_the_start_row_and_leaves_its
 /// The registry and the ledger a previous run left: the member's last request spent past the monthly budget it
 /// carries now, so the writer's first spend read at the next start crosses it.
 async fn over_budget_after_a_run(up: &FakeUpstream) -> (Arc<Store>, Arc<LedgerDb>) {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     let previous = harness_on(
         store.clone(),
@@ -8981,7 +8981,7 @@ async fn a_replay_on_the_writers_first_turn_lands_its_budget_row_behind_the_star
 #[tokio::test]
 async fn a_restart_over_a_ledger_holding_the_period_s_crossing_writes_no_second_one() {
     let up = FakeUpstream::start(vec![]).await;
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     let accounts = [api_key("a", C, 0)];
     let run = || {

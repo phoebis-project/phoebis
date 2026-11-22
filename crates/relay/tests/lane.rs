@@ -80,7 +80,7 @@ async fn a_speed_switch_reads_the_pin_cold_and_stamps_the_lane_on_the_pin_and_th
     }])
     .await;
     let catalog_up = FakeUpstream::start(undated_listing()).await;
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     let h = harness_with_store_and_catalog(
         store.clone(),
         &up,
@@ -204,7 +204,7 @@ async fn the_pin_carries_the_effort_its_turn_named_by_the_newest_control_entry_o
     }])
     .await;
     let catalog_up = FakeUpstream::start(undated_listing()).await;
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     let h = harness_with_store_and_catalog(
         store.clone(),
         &up,

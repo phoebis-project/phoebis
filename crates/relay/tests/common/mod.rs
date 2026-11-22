@@ -72,6 +72,11 @@ pub async fn on_held_clock<T>(work: impl Future<Output = T>) -> Option<T> {
     }
 }
 
+/// The wall clock, for a case that reads no stamp.
+pub fn wall() -> Clock {
+    Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 pub fn user(text: &str) -> serde_json::Value {
     serde_json::json!({"role": "user", "content": text})
 }
@@ -415,7 +420,7 @@ pub async fn harness_with_router_config(
     pool: PoolSpec,
     config: RouterConfig,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     build(
         store,
         up,
@@ -459,7 +464,7 @@ pub async fn harness_with(
     pool: PoolSpec,
     limits: Limits,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     harness_on(store, up, accounts, pool, limits).await
 }
 
@@ -477,7 +482,7 @@ pub async fn harness_with_connector_host(
     pool: PoolSpec,
     limits: Limits,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     build(
         store,
         up,
@@ -568,7 +573,7 @@ pub async fn harness_with_memory_cap(
     pool: PoolSpec,
     cap: usize,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     build(
         store,
         up,
@@ -594,7 +599,7 @@ pub async fn harness_with_signed_placeholder(
     accounts: &[TestAccount],
     pool: PoolSpec,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     build(
         store,
         up,
@@ -631,7 +636,7 @@ pub async fn harness_with_bus_limits(
     bus: Bus,
     limits: Limits,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     build(
         store,
         up,
@@ -659,7 +664,7 @@ pub async fn harness_with_shutdown_mark(
     limits: Limits,
     mark: ShutdownMark,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     build(
         store,
         up,
@@ -684,7 +689,7 @@ pub async fn harness_with_accounting(
     accounts: &[TestAccount],
     source: AccountingSource,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     build(
         store,
         up,
@@ -712,7 +717,7 @@ pub async fn harness_with_bus_and_accounting(
     limits: Limits,
     source: AccountingSource,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     build(
         store,
         up,
@@ -739,7 +744,7 @@ pub async fn harness_with_pool_and_accounting(
     limits: Limits,
     source: AccountingSource,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     build(
         store,
         up,
@@ -786,7 +791,7 @@ pub async fn harness_with_catalog_and_head_timeout(
     pool: PoolSpec,
     head_timeout: Duration,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     build(
         store,
         up,

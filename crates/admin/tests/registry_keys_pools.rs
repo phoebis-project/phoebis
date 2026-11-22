@@ -2105,8 +2105,14 @@ async fn a_member_with_an_unknown_field_is_refused_rather_than_silently_dropped(
 async fn a_key_created_again_under_a_used_id_answers_the_stamped_generation() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
+    let clock_cell = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(common::NOW));
     let store = std::sync::Arc::new(
-        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+        phoebis_store::Store::open(
+            &path,
+            &phoebis_store::StorageKey::generate(),
+            common::clock_of(&clock_cell),
+        )
+        .unwrap(),
     );
     let (app, _up, store, _router) = common::admin_parts_on(store).await;
     let cookie = login(&app, "admin-secret").await;

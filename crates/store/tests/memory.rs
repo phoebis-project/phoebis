@@ -2,6 +2,11 @@
 //! `last_seen`, and an on-disk store keeps the rows across a reopen.
 use phoebis_store::{MemoryKey, MemoryRecord, MemoryStore, StorageKey, Store};
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> phoebis_store::Clock {
+    std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 fn key(agent: &str) -> MemoryKey {
     MemoryKey::for_session("desktop", 1_000, "s1", agent)
 }
@@ -16,7 +21,7 @@ fn record(version: u32, payload: &str, last_seen: i64) -> MemoryRecord {
 
 #[test]
 fn records_save_load_by_key_replace_and_purge_by_last_seen() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     assert_eq!(store.load(&key("main")).unwrap(), None);
     store
         .save(&[
@@ -51,12 +56,12 @@ fn rows_outlive_a_reopen_of_the_on_disk_store() {
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
     {
-        let store = Store::open(&path, &storage_key).unwrap();
+        let store = Store::open(&path, &storage_key, wall()).unwrap();
         store
             .save(&[(key("main"), record(1, "{}", 1_000))])
             .unwrap();
     }
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     assert_eq!(
         store.load(&key("main")).unwrap(),
         Some(record(1, "{}", 1_000))

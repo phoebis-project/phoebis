@@ -16,6 +16,11 @@ use phoebis_store::{
     Store, StoreError,
 };
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> phoebis_store::Clock {
+    std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 /// The key that sealed the registry, the one an operator lost.
 const OLD_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 /// The replacement an operator wrote before the run.
@@ -164,7 +169,7 @@ fn agent(agent_id: &str, body: Option<&[u8]>) -> KeepaliveAgentRow {
 /// one with a refresh resolved uncertain, an api_key account with its secret, and a keepalive session whose two
 /// agents hold one recipe body between them. Answers the accounts as seeded.
 fn seed(registry: &Path, key: &StorageKey) -> Vec<AccountRow> {
-    let store = Store::open(registry, key).unwrap();
+    let store = Store::open(registry, key, wall()).unwrap();
     for (id, kind) in [
         ("claude-a", AccountKind::Oauth),
         ("claude-b", AccountKind::Oauth),
@@ -219,7 +224,7 @@ fn assert_untouched(registry: &Path, key: &StorageKey) {
         Store::read_canary(registry, key).unwrap(),
         CanaryRead::Matches
     );
-    let store = Store::open(registry, key).unwrap();
+    let store = Store::open(registry, key, wall()).unwrap();
     assert!(store.credentials("claude-a").unwrap().is_some());
     assert!(store.api_key_secret("console").unwrap().is_some());
     let (_, agents, _) = store.load_keepalive().unwrap();
@@ -280,7 +285,7 @@ fn the_recovery_refuses_a_registry_another_process_holds_with_the_lock_line_and_
     let config = config_file(dir.path());
     let old = key(OLD_KEY);
     seed(&registry(dir.path()), &old);
-    let held = Store::open(&registry(dir.path()), &old).unwrap();
+    let held = Store::open(&registry(dir.path()), &old, wall()).unwrap();
     let out = recover_key(&config, &["--yes"], b"");
     drop(held);
     assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
@@ -325,7 +330,7 @@ fn a_key_file_that_opens_the_rows_of_a_registry_without_a_canary_seals_one_witho
     let config = config_file(dir.path());
     let old = key(OLD_KEY);
     let seeded = seed(&registry(dir.path()), &old);
-    Store::open(&registry(dir.path()), &old)
+    Store::open(&registry(dir.path()), &old, wall())
         .unwrap()
         .debug_drop_canary()
         .unwrap();
@@ -340,7 +345,7 @@ fn a_key_file_that_opens_the_rows_of_a_registry_without_a_canary_seals_one_witho
     );
     assert_no_key(&out, &[OLD_KEY]);
     assert_untouched(&registry(dir.path()), &old);
-    let store = Store::open(&registry(dir.path()), &old).unwrap();
+    let store = Store::open(&registry(dir.path()), &old, wall()).unwrap();
     assert!(
         store.credentials("claude-b").unwrap().is_some(),
         "the second bundle is kept as well"
@@ -464,10 +469,10 @@ fn a_missing_key_file_is_generated_at_0600_and_the_recovery_discards_every_seale
         "the run sealed a canary under the new key"
     );
     assert!(matches!(
-        Store::open(&registry(dir.path()), &old),
+        Store::open(&registry(dir.path()), &old, wall()),
         Err(StoreError::KeyMismatch { .. })
     ));
-    let store = Store::open(&registry(dir.path()), &new).unwrap();
+    let store = Store::open(&registry(dir.path()), &new, wall()).unwrap();
     for id in ["claude-a", "claude-b"] {
         assert!(store.credentials(id).unwrap().is_none(), "{id}");
         let attempt = store.last_refresh_attempt(id, 1).unwrap().unwrap();
@@ -735,7 +740,7 @@ fn a_start_that_opened_the_lock_file_before_a_declined_run_exited_still_shuts_ou
     );
     assert!(
         matches!(
-            Store::open(&registry(dir.path()), &old),
+            Store::open(&registry(dir.path()), &old, wall()),
             Err(StoreError::Locked)
         ),
         "a second start opens the file the first one holds and is refused"
@@ -962,7 +967,7 @@ fn a_registry_without_a_canary_whose_one_readable_row_follows_32_unreadable_ones
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path());
     let old = key(OLD_KEY);
-    let store = Store::open(&registry(dir.path()), &old).unwrap();
+    let store = Store::open(&registry(dir.path()), &old, wall()).unwrap();
     for index in 0..33 {
         let id = format!("claude-{index:02}");
         store
@@ -984,7 +989,7 @@ fn a_registry_without_a_canary_whose_one_readable_row_follows_32_unreadable_ones
         .unwrap();
     assert!(
         matches!(
-            Store::open(&registry(dir.path()), &old),
+            Store::open(&registry(dir.path()), &old, wall()),
             Err(StoreError::KeyMismatch { .. })
         ),
         "the bounded proof refuses the right key at the start"
@@ -1008,7 +1013,7 @@ fn a_registry_without_a_canary_whose_one_readable_row_follows_32_unreadable_ones
         CanaryRead::Matches
     );
     assert!(
-        Store::open(&registry(dir.path()), &old).is_ok(),
+        Store::open(&registry(dir.path()), &old, wall()).is_ok(),
         "the start the bounded proof refused passes through the canary"
     );
 }
@@ -1018,7 +1023,7 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path());
     let old = key(OLD_KEY);
-    let store = Store::open(&registry(dir.path()), &old).unwrap();
+    let store = Store::open(&registry(dir.path()), &old, wall()).unwrap();
     store
         .save_keepalive(&KeepaliveBatch {
             sessions: vec![KeepaliveSessionRow {
@@ -1052,7 +1057,7 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
         "a key the body does not open discards it: {}",
         printed(&out)
     );
-    let store = Store::open(&registry(dir.path()), &key(NEW_KEY)).unwrap();
+    let store = Store::open(&registry(dir.path()), &key(NEW_KEY), wall()).unwrap();
     let (_, agents, _) = store.load_keepalive().unwrap();
     assert!(agents.iter().all(|agent| agent.body.is_none()));
 }

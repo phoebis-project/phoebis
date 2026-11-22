@@ -3,6 +3,11 @@
 use phoebis_store::{StorageKey, Store};
 use rusqlite::{Connection, OpenFlags};
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> phoebis_store::Clock {
+    std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 /// One space for every whitespace run and none beside `,`, `(` or `)`: a column an `ALTER TABLE` added sits in the
 /// stored text after a line break and a comma, where a creating statement writes `, name TYPE`.
 fn normalize(sql: &str) -> String {
@@ -74,7 +79,7 @@ fn shape(conn: &Connection) -> String {
 fn a_fresh_registry_has_the_shape_the_fixture_holds() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    drop(Store::open(&path, &StorageKey::generate()).unwrap());
+    drop(Store::open(&path, &StorageKey::generate(), wall()).unwrap());
     let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     let shape = shape(&conn);
     assert!(

@@ -1655,7 +1655,7 @@ async fn a_session_row_on_a_usage_based_seat_reads_its_burn_in_dollars() {
             thinking_sums: Default::default(),
         })
         .unwrap();
-    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let parts = common::admin_parts_full_on(seed.store.clone(), seed.clock_cell.clone()).await;
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = sessions["sessions"]
@@ -1724,7 +1724,7 @@ async fn lines_harness(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>) -> comm
     for pin in pins(common::generation(&seed.store, "desktop")) {
         seed.store.upsert_pin(&pin).unwrap();
     }
-    common::admin_parts_full_on(seed.store.clone()).await
+    common::admin_parts_full_on(seed.store.clone(), seed.clock_cell.clone()).await
 }
 
 /// Registers `session` with the companion, with one observed turn of main and of each of `agents`, so the engine holds

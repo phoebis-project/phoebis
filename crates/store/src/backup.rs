@@ -142,7 +142,12 @@ mod tests {
     use rusqlite::{Connection, OpenFlags};
 
     use super::*;
-    use crate::{PoolRow, StorageKey, Store};
+    use crate::{Clock, PoolRow, StorageKey, Store};
+
+    /// The wall clock, for a case that reads no stamp.
+    fn wall() -> Clock {
+        std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+    }
 
     /// Every entry in `dir`, sorted, so a test can show what a call left there.
     fn entries(dir: &Path) -> Vec<String> {
@@ -178,7 +183,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = StorageKey::generate();
         let source = dir.path().join("data").join("router.sqlite");
-        let store = Store::open(&source, &key).unwrap();
+        let store = Store::open(&source, &key, wall()).unwrap();
         store
             .insert_pool(&PoolRow::for_tests("work"), "test")
             .unwrap();
@@ -196,7 +201,7 @@ mod tests {
 
         assert_eq!(bytes, std::fs::metadata(&copy).unwrap().len());
         drop(store);
-        let restored = Store::open(&copy, &key).unwrap();
+        let restored = Store::open(&copy, &key, wall()).unwrap();
         let pools: Vec<String> = restored
             .pools()
             .unwrap()
@@ -211,7 +216,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let key = StorageKey::generate();
         let source = dir.path().join("data").join("router.sqlite");
-        drop(Store::open(&source, &key).unwrap());
+        drop(Store::open(&source, &key, wall()).unwrap());
         let out = dir.path().join("out");
         let copy = out.join("router.sqlite");
         snapshot(&source, &copy, Duration::from_secs(5)).unwrap();

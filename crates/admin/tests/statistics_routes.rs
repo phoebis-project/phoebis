@@ -1560,7 +1560,7 @@ async fn a_pin_the_ledger_has_no_row_for_reads_a_zero_request_count() {
             })
             .unwrap();
     }
-    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let parts = common::admin_parts_full_on(seed.store.clone(), seed.clock_cell.clone()).await;
     let cookie = login(&parts.app, "admin-secret").await;
     let generation = common::generation(&seed.store, "desktop");
     for i in 0..3 {
@@ -1609,12 +1609,18 @@ async fn the_sessions_route_prices_from_the_snapshots_tier_so_a_failed_store_tie
 ) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
+    let clock_cell = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(common::NOW));
     let store = std::sync::Arc::new(
-        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+        phoebis_store::Store::open(
+            &path,
+            &phoebis_store::StorageKey::generate(),
+            common::clock_of(&clock_cell),
+        )
+        .unwrap(),
     );
     // The router loads the pins at spawn, so the pool, the key and the pin are written through one harness and
     // the store is handed to the one under test.
-    let seed = common::admin_parts_full_on(store.clone()).await;
+    let seed = common::admin_parts_full_on(store.clone(), clock_cell.clone()).await;
     let seeding = login(&seed.app, "admin-secret").await;
     post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&seeding)).await;
     post(
@@ -1658,7 +1664,7 @@ async fn the_sessions_route_prices_from_the_snapshots_tier_so_a_failed_store_tie
             thinking_sums: Default::default(),
         })
         .unwrap();
-    let parts = common::admin_parts_full_on(store).await;
+    let parts = common::admin_parts_full_on(store, clock_cell).await;
     let cookie = login(&parts.app, "admin-secret").await;
     // The snapshot takes Ultra before the column goes, so the pin's zero burn reads a share of 0, where an account
     // with no tier reads null.
@@ -1863,7 +1869,7 @@ async fn a_sessions_placements_count_mains_placements_and_moves_and_no_other_age
             })
             .unwrap();
     }
-    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let parts = common::admin_parts_full_on(seed.store.clone(), seed.clock_cell.clone()).await;
     let cookie = login(&parts.app, "admin-secret").await;
     for (at, kind, agent) in [
         (generation, "pin_created", "main"),
@@ -7106,7 +7112,7 @@ async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped()
             ..stamped.clone()
         })
         .unwrap();
-    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let parts = common::admin_parts_full_on(seed.store.clone(), seed.clock_cell.clone()).await;
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row_of = |session: &str| {

@@ -16,6 +16,11 @@ use phoebis_ledger::{EventRecord, LedgerDb};
 use phoebis_router::backup::{self, BackupArgs, RunError};
 use phoebis_store::{CanaryRead, PoolRow, StorageKey, Store};
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> phoebis_store::Clock {
+    Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 const HEX_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /// A data directory as a first start leaves it: the key file, a registry sealed under it with the pool `kept`, and a
@@ -37,7 +42,7 @@ fn first_start(dir: &Path) -> (Data, Store, LedgerDb) {
     let key = StorageKey::from_file(&key_file).unwrap();
     let registry = data.join("router.sqlite");
     let ledger = data.join("ledger.sqlite");
-    let store = Store::open(&registry, &key).unwrap();
+    let store = Store::open(&registry, &key, wall()).unwrap();
     store
         .insert_pool(&PoolRow::for_tests("kept"), "test")
         .unwrap();
@@ -282,7 +287,7 @@ fn a_backup_taken_while_both_databases_are_written_opens_under_the_key() {
     for name in ["ledger.sqlite", "router.sqlite"] {
         std::fs::copy(target.join(name), restore.join(name)).unwrap();
     }
-    let restored = Store::open(&restore.join("router.sqlite"), &data.key).unwrap();
+    let restored = Store::open(&restore.join("router.sqlite"), &data.key, wall()).unwrap();
     // Each round inserts its pool and deletes it in two transactions, so the instant the copy saw holds at most one.
     let restored_pools = pools(&restored);
     let churn: Vec<&String> = restored_pools
@@ -549,7 +554,7 @@ fn a_copy_waits_out_an_exclusive_lock_on_the_registry() {
     let restore = dir.path().join("restore");
     std::fs::create_dir(&restore).unwrap();
     std::fs::copy(&copy, restore.join("router.sqlite")).unwrap();
-    let restored = Store::open(&restore.join("router.sqlite"), &data.key).unwrap();
+    let restored = Store::open(&restore.join("router.sqlite"), &data.key, wall()).unwrap();
     assert_eq!(pools(&restored), ["kept"]);
 }
 

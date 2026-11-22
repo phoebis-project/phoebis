@@ -198,6 +198,7 @@ fn a_null_alias_key_without_limits_yields_no_fable_window() {
 }
 
 mod service {
+    use crate::common::wall;
     use fake_upstream::{wait_for, FakeUpstream, RecordedRequest, Respond, Rule};
     use phoebis_oauth::{
         grant_states, parse_limit_resets, BackoffEdge, BackoffEndCause, ClaimOutcome, ClaimRefusal,
@@ -223,7 +224,7 @@ mod service {
     use std::time::Duration;
 
     fn store_with_account() -> Arc<Store> {
-        let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+        let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
         store
             .insert_account(&AccountRow {
                 identity: Some(phoebis_store::Identity {
@@ -309,7 +310,7 @@ mod service {
             },
         ])
         .await;
-        let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+        let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
         store
             .insert_account(&AccountRow {
                 identity: Some(phoebis_store::Identity {

@@ -1127,9 +1127,14 @@ impl Store {
 mod tests {
     use super::*;
 
+    /// The wall clock, for a case that reads no stamp.
+    fn wall() -> crate::Clock {
+        std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+    }
+
     #[test]
     fn a_holders_pending_read_is_answered_from_the_partial_index() {
-        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
         let conn = store.conn.lock().unwrap();
         let plan: Vec<String> = conn
             .prepare(&format!("EXPLAIN QUERY PLAN {}", HOLDER_PENDING.as_str()))
@@ -1147,7 +1152,7 @@ mod tests {
 
     #[test]
     fn a_holders_newest_attempt_is_read_through_the_account_index() {
-        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
         let conn = store.conn.lock().unwrap();
         let plan: Vec<String> = conn
             .prepare(&format!("EXPLAIN QUERY PLAN {LAST_REFRESH_ATTEMPT}"))
@@ -1169,7 +1174,7 @@ mod tests {
 
     #[test]
     fn the_resolved_cursor_query_reads_through_its_index() {
-        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
         let conn = store.conn.lock().unwrap();
         let plan: String = conn
             .prepare(&format!("EXPLAIN QUERY PLAN {}", RESOLVED_AFTER.as_str()))
@@ -1191,7 +1196,7 @@ mod tests {
 
     #[test]
     fn the_holders_newest_attempts_read_through_their_own_index() {
-        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
         let conn = store.conn.lock().unwrap();
         let plan: String = conn
             .prepare(&format!(
@@ -1216,7 +1221,7 @@ mod tests {
 
     #[test]
     fn a_resolved_row_whose_outcome_word_is_none_of_the_three_reads_back_failed() {
-        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
         store
             .conn
             .lock()

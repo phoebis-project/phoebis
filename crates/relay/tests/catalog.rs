@@ -522,7 +522,7 @@ async fn the_first_request_after_a_restart_carries_the_dated_id_from_the_persist
         },
     }])
     .await;
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     store
         .rekey_resolution(&RekeyWrite {
             resolution: ResolutionRow {
@@ -1043,7 +1043,7 @@ async fn a_persisted_newer_mapping_is_not_moved_back_by_an_older_startup_listing
         respond: json_list(&["claude-sonnet-4-5-20250929"]),
     }])
     .await;
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     store
         .rekey_resolution(&RekeyWrite {
             resolution: ResolutionRow {

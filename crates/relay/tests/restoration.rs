@@ -837,7 +837,7 @@ async fn the_previous_request_id_survives_a_restart_through_the_store() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
-    let store = Arc::new(Store::open(&path, &storage_key).unwrap());
+    let store = Arc::new(Store::open(&path, &storage_key, wall()).unwrap());
     let h = harness_on(
         store.clone(),
         &up,
@@ -870,7 +870,7 @@ async fn the_previous_request_id_survives_a_restart_through_the_store() {
     drop(store);
     let store = Arc::new(
         wait_for(std::time::Duration::from_secs(2), || {
-            Store::open(&path, &storage_key).ok()
+            Store::open(&path, &storage_key, wall()).ok()
         })
         .await,
     );
@@ -1014,7 +1014,7 @@ async fn a_restart_changes_no_prompt_id_since_the_memory_is_no_longer_its_source
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
-    let store = Arc::new(Store::open(&path, &storage_key).unwrap());
+    let store = Arc::new(Store::open(&path, &storage_key, wall()).unwrap());
     let h = harness_on(
         store.clone(),
         &up,
@@ -1033,7 +1033,7 @@ async fn a_restart_changes_no_prompt_id_since_the_memory_is_no_longer_its_source
     drop(store);
     let store = Arc::new(
         wait_for(std::time::Duration::from_secs(2), || {
-            Store::open(&path, &storage_key).ok()
+            Store::open(&path, &storage_key, wall()).ok()
         })
         .await,
     );

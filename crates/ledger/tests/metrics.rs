@@ -324,7 +324,7 @@ fn the_ledgers_degraded_state_and_its_parked_priced_records_render_as_their_own_
 #[tokio::test]
 async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
     use phoebis_store::{StorageKey, Store};
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     let router = phoebis_routing::spawn(
         store,
         Arc::new(|| 1_000),
@@ -366,7 +366,7 @@ async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
 #[tokio::test]
 async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_longer_wait() {
     use phoebis_store::{AccountKind, AccountRow, CooldownRow, CooldownScope, StorageKey, Store};
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     store
         .insert_account(&AccountRow::for_tests("a", AccountKind::ApiKey))
         .unwrap();
@@ -416,7 +416,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
 #[tokio::test]
 async fn an_overage_observations_reset_decides_the_gauge_rather_than_the_raw_flag() {
     use phoebis_store::{AccountKind, AccountRow, StorageKey, Store};
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     for id in ["past", "ahead"] {
         store
             .insert_account(&AccountRow::for_tests(id, AccountKind::Oauth))
@@ -945,7 +945,7 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
     use http_body_util::BodyExt;
     use phoebis_store::{StorageKey, Store, StoreError};
     let router = phoebis_routing::spawn(
-        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
+        Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap()),
         Arc::new(|| 1_000),
         phoebis_routing::RouterConfig::default(),
     )
@@ -1022,7 +1022,7 @@ async fn the_scrape_answers_while_its_attention_source_waits() {
     use phoebis_store::{StorageKey, Store};
     use std::sync::atomic::Ordering;
     let router = phoebis_routing::spawn(
-        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
+        Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap()),
         Arc::new(|| 1_000),
         phoebis_routing::RouterConfig::default(),
     )
@@ -1125,7 +1125,8 @@ revisions:
     let january = phoebis_ledger::test_tables::JANUARY_2026;
     let february = phoebis_ledger::effective_instant("2026-02-01").unwrap() + 43_200_000;
     let store = Arc::new(
-        phoebis_store::Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap(),
+        phoebis_store::Store::open_in_memory(&phoebis_store::StorageKey::generate(), wall())
+            .unwrap(),
     );
     let clock: phoebis_oauth::Clock = Arc::new(move || february);
     let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
@@ -1202,7 +1203,8 @@ async fn a_batch_the_file_refused_once_counts_its_request_once_when_its_retry_la
         Arc::new(move || c.load(Ordering::SeqCst))
     };
     let store = Arc::new(
-        phoebis_store::Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap(),
+        phoebis_store::Store::open_in_memory(&phoebis_store::StorageKey::generate(), wall())
+            .unwrap(),
     );
     let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
     let db = Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());

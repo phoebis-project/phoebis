@@ -542,7 +542,7 @@ impl Store {
     ) -> Result<T, StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.park_on_routing_hold();
-        let clock = self.clock.lock().expect(LOCK_POISONED).clone();
+        let clock = self.clock.clone();
         self.routing_transaction(|tx| f(&mut RoutingTx { clock, tx }))
     }
 

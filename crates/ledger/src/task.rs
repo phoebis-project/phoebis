@@ -2022,12 +2022,18 @@ mod tests {
     use crate::pricing::{PriceRevisions, PriceTable};
     use phoebis_store::AccountKind;
 
+    /// The wall clock, for a case that reads no stamp.
+    fn wall() -> Clock {
+        Arc::new(|| jiff::Timestamp::now().as_millisecond())
+    }
+
     /// A ledger whose channel holds one record and has no writer draining it.
     fn stalled() -> (Ledger, mpsc::Receiver<Record>) {
         let (tx, rx) = mpsc::channel(1);
         let (stop, _) = watch::channel(false);
-        let store =
-            Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap());
+        let store = Arc::new(
+            Store::open_in_memory(&phoebis_store::StorageKey::generate(), wall()).unwrap(),
+        );
         let router = phoebis_routing::spawn(
             store,
             Arc::new(|| 0),
@@ -2142,8 +2148,9 @@ mod tests {
     /// The writer's spend refresh over a router whose pool `p` holds the API-key members given with their monthly
     /// budgets, and a ledger priced at a dollar per token of model `m`, read at `clock`, with the registry beside it.
     fn spends_over(members: &[(&str, f64)], clock: Arc<AtomicI64>) -> (Spends, Arc<Store>) {
-        let store =
-            Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap());
+        let store = Arc::new(
+            Store::open_in_memory(&phoebis_store::StorageKey::generate(), wall()).unwrap(),
+        );
         for (id, _) in members {
             store
                 .insert_account(&phoebis_store::AccountRow::for_tests(

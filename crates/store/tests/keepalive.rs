@@ -7,6 +7,11 @@ use phoebis_store::{
     StorageKey, Store,
 };
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> phoebis_store::Clock {
+    std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 const PROMPT: &[u8] =
     br#"{"system":"a private prompt the store must never hold in the clear","messages":[]}"#;
 
@@ -137,7 +142,7 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
     );
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    let store = Store::open(&path, &StorageKey::generate(), wall()).unwrap();
     // Two pairs of identity tuples whose plain concatenation would collide: `s:x` and `y` against `s` and `x:y`,
     // and generation 1 with session `1:s` against generation 11 with session `s`.
     let batch = KeepaliveBatch {
@@ -273,7 +278,7 @@ fn counter(pool_id: &str, day: i64, bucket: u32, reached: u64, returned: u64) ->
 
 #[test]
 fn the_idle_return_counters_keep_a_row_per_pool_day_and_bucket_and_load_in_that_order() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .save_keepalive(&KeepaliveBatch {
             counters: vec![
@@ -315,7 +320,7 @@ fn the_idle_return_counters_keep_a_row_per_pool_day_and_bucket_and_load_in_that_
 
 #[test]
 fn a_save_carrying_a_purge_drops_the_counters_of_the_days_before_its_day_and_keeps_that_day() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .save_keepalive(&KeepaliveBatch {
             counters: vec![
@@ -361,7 +366,7 @@ fn a_save_carrying_a_purge_drops_the_counters_of_the_days_before_its_day_and_kee
 fn an_upsert_keeps_the_stored_body_unless_it_seals_a_new_one_and_a_clear_removes_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    let store = Store::open(&path, &StorageKey::generate(), wall()).unwrap();
     store
         .save_keepalive(&KeepaliveBatch {
             sessions: vec![session(1, "s")],

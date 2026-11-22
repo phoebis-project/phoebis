@@ -26,6 +26,11 @@ use phoebis_store::{
 
 const HOUR: i64 = 3_600_000;
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> Clock {
+    Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 fn seeded(ids: &[&str]) -> Arc<Store> {
     seeded_kind(AccountKind::ApiKey, ids)
 }
@@ -37,7 +42,7 @@ fn seeded_oauth(ids: &[&str]) -> Arc<Store> {
 
 fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
     seed(
-        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
+        Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap()),
         kind,
         ids,
     )
@@ -575,7 +580,7 @@ async fn dropping_the_last_handle_ends_the_loop_and_frees_the_stores_lock() {
     let path = dir.path().join("router.sqlite");
     let key = StorageKey::generate();
     let store = seed(
-        Arc::new(Store::open(&path, &key).unwrap()),
+        Arc::new(Store::open(&path, &key, wall()).unwrap()),
         AccountKind::ApiKey,
         &["a"],
     );
@@ -590,7 +595,7 @@ async fn dropping_the_last_handle_ends_the_loop_and_frees_the_stores_lock() {
     drop(store);
     // No `shutdown`: the loop has to end on its own once nothing can send to it, releasing its store.
     drop(handle);
-    let reopened = wait_for(DRAINED, || Store::open(&path, &key).ok()).await;
+    let reopened = wait_for(DRAINED, || Store::open(&path, &key, wall()).ok()).await;
     drop(reopened);
 }
 

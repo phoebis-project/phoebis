@@ -466,12 +466,15 @@ async fn a_pin_names_its_holder_and_warm_follows_the_refresh_and_the_ttl() {
 
 #[tokio::test]
 async fn a_pin_of_another_session_or_another_key_is_absent() {
-    let mut r = rig(RigSpec::default()).await;
+    let mut r = rig(RigSpec {
+        store_clock: std::sync::Arc::new(|| NOW),
+        ..RigSpec::default()
+    })
+    .await;
     let app = companion_router(r.engine.clone());
-    // The store stamps a key's creation from its own clock, so the laptop key is created at the desktop key's
-    // generation and the key id alone tells the laptop's pin on the same session id apart.
+    // The store's clock stands at one instant for the rig's life, so both keys carry one generation and the key id
+    // alone tells the two pins apart.
     let generation = r.generation("desktop");
-    r.h.store.set_clock(std::sync::Arc::new(move || generation));
     r.h.store
         .insert_api_key(&laptop_key(&r, CompanionPermissions::default()), "test")
         .unwrap();

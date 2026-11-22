@@ -53,10 +53,15 @@ pub struct Rig {
     pub store: Arc<Store>,
 }
 
+/// The clock that reads `cell`, so the store, the router and the reader of one rig stand at one instant.
+pub fn clock_of(cell: &Arc<AtomicI64>) -> Clock {
+    let c = cell.clone();
+    Arc::new(move || c.load(Ordering::SeqCst))
+}
+
 impl Rig {
     pub fn clock(&self) -> Clock {
-        let c = self.clock.clone();
-        Arc::new(move || c.load(Ordering::SeqCst))
+        clock_of(&self.clock)
     }
 
     /// The reader over the rig's store, router, ledger and clock, its arm on the rig's bus.
@@ -161,35 +166,31 @@ impl KeepaliveFacts for Standing {
 }
 
 pub async fn rig() -> Rig {
-    rig_with_store(Arc::new(
-        Store::open_in_memory(&StorageKey::generate()).unwrap(),
-    ))
-    .await
+    let clock_cell = Arc::new(AtomicI64::new(NOW));
+    let store =
+        Arc::new(Store::open_in_memory(&StorageKey::generate(), clock_of(&clock_cell)).unwrap());
+    rig_with_store(store, clock_cell).await
 }
 
-/// The rig over a store the test opened itself, for the case that reads the store again after a restart.
-pub async fn rig_with_store(store: Arc<Store>) -> Rig {
-    rig_on(store, tables_of(COSTS)).await
+/// The rig over a store the test opened itself on `clock_cell`, for the case that reads the store again after a
+/// restart.
+pub async fn rig_with_store(store: Arc<Store>, clock_cell: Arc<AtomicI64>) -> Rig {
+    rig_on(store, clock_cell, tables_of(COSTS)).await
 }
 
 /// The rig over a cost model the test wrote, for the case that needs a revision the fixture lacks.
 pub async fn rig_with_tables(tables: PlanTables) -> Rig {
-    rig_on(
-        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
-        tables,
-    )
-    .await
+    let clock_cell = Arc::new(AtomicI64::new(NOW));
+    let store =
+        Arc::new(Store::open_in_memory(&StorageKey::generate(), clock_of(&clock_cell)).unwrap());
+    rig_on(store, clock_cell, tables).await
 }
 
-async fn rig_on(store: Arc<Store>, tables: PlanTables) -> Rig {
+async fn rig_on(store: Arc<Store>, clock_cell: Arc<AtomicI64>, tables: PlanTables) -> Rig {
     if store.accounts().unwrap().is_empty() {
         seed(&store);
     }
-    let clock_cell = Arc::new(AtomicI64::new(NOW));
-    let clock: Clock = {
-        let c = clock_cell.clone();
-        Arc::new(move || c.load(Ordering::SeqCst))
-    };
+    let clock = clock_of(&clock_cell);
     let router = spawn_router(store.clone(), clock.clone(), RouterConfig::default()).unwrap();
     let bus = Bus::new();
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());

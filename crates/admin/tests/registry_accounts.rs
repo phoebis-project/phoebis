@@ -2406,10 +2406,16 @@ async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_as_if_no_su
 ) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
+    let clock_cell = Arc::new(std::sync::atomic::AtomicI64::new(common::NOW));
     let store = Arc::new(
-        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+        phoebis_store::Store::open(
+            &path,
+            &phoebis_store::StorageKey::generate(),
+            common::clock_of(&clock_cell),
+        )
+        .unwrap(),
     );
-    let parts = common::admin_parts_full_on(store).await;
+    let parts = common::admin_parts_full_on(store, clock_cell).await;
     let cookie = login(&parts.app, "admin-secret").await;
     parts
         .store

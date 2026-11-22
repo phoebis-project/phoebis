@@ -3414,7 +3414,7 @@ async fn a_usage_based_account_answers_its_spend_window_with_the_polled_figures_
     // Built again over the same store, with the same rows in its ledger: the router's memory of the head's reset is
     // gone, so the reset reads the estimate. Past the head's reset the ledger's head row has lapsed, so the share that
     // stands is the one the rebuilt router loaded from the credits row, which lapses at the estimate over its instant.
-    let again = common::admin_parts_full_on(parts.store.clone()).await;
+    let again = common::admin_parts_full_on(parts.store.clone(), parts.clock_cell.clone()).await;
     for row in &rows {
         again.db.insert_samples(&[], Some(row)).unwrap();
     }
@@ -6828,7 +6828,7 @@ async fn sessions_harness_priced(
     pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
 ) -> common::Full {
     let seed = sessions_seed(pins).await;
-    common::admin_parts_full_on_priced(seed.store.clone(), prices).await
+    common::admin_parts_full_on_priced(seed.store.clone(), seed.clock_cell.clone(), prices).await
 }
 
 /// `sessions_harness_with` pricing dollars and shares through the ledger's test tables rather than the shipped files.
@@ -6836,7 +6836,7 @@ async fn sessions_harness_on_test_tables(
     pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
 ) -> common::Full {
     let seed = sessions_seed(pins).await;
-    common::admin_parts_full_test_tables(Some(seed.store.clone())).await
+    common::admin_parts_full_test_tables(Some((seed.store.clone(), seed.clock_cell.clone()))).await
 }
 
 /// `sessions_harness_with` with the sessions route bounded by `session_expiry` and `non_companion_idle` rather than
@@ -6847,8 +6847,13 @@ async fn sessions_harness_bounded(
     pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
 ) -> common::Full {
     let seed = sessions_seed(pins).await;
-    common::admin_parts_full_on_bounded(seed.store.clone(), session_expiry, non_companion_idle)
-        .await
+    common::admin_parts_full_on_bounded(
+        seed.store.clone(),
+        seed.clock_cell.clone(),
+        session_expiry,
+        non_companion_idle,
+    )
+    .await
 }
 
 /// The harness `sessions_harness_with` writes its store through: the pool, the key, the business account's tier and
@@ -7107,6 +7112,7 @@ async fn a_fable_pins_move_cost_reads_its_rewrites_pro_share_of_the_fable_week_o
     .await;
     let parts = common::admin_parts_full_on_equivalent(
         seed.store.clone(),
+        seed.clock_cell.clone(),
         tables,
         phoebis_ledger::LedgerConfig::default(),
     )
@@ -7213,6 +7219,7 @@ async fn a_session_row_and_its_line_answer_the_size_and_the_drop_a_round_reads_a
         .unwrap();
     let parts = common::admin_parts_full_on_equivalent(
         seed.store.clone(),
+        seed.clock_cell.clone(),
         tables,
         phoebis_ledger::LedgerConfig::default(),
     )
@@ -7451,7 +7458,8 @@ async fn sessions_harness_rated(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>
     for pin in pins(generation(&seed.store, "desktop")) {
         seed.store.upsert_pin(&pin).unwrap();
     }
-    common::admin_parts_full_on_rated(seed.store.clone(), round_rates).await
+    common::admin_parts_full_on_rated(seed.store.clone(), seed.clock_cell.clone(), round_rates)
+        .await
 }
 
 /// Reports `readings` of `account` as an answer's head would land them, read a minute before the rig's clock.
@@ -7831,7 +7839,8 @@ async fn slow_down_harness(slow_down: bool) -> common::Full {
             )
         })
         .unwrap();
-    common::admin_parts_full_on_rated(seed.store.clone(), round_rates).await
+    common::admin_parts_full_on_rated(seed.store.clone(), seed.clock_cell.clone(), round_rates)
+        .await
 }
 
 /// A main turn of `session` on the desktop key at `at`, as the relay asks for its first wire attempt.
@@ -8317,7 +8326,8 @@ async fn fit_harness(
     for pin in pins(generation(&seed.store, "desktop")) {
         seed.store.upsert_pin(&pin).unwrap();
     }
-    common::admin_parts_full_on_rated(seed.store.clone(), round_rates).await
+    common::admin_parts_full_on_rated(seed.store.clone(), seed.clock_cell.clone(), round_rates)
+        .await
 }
 
 #[tokio::test]
@@ -8485,7 +8495,9 @@ async fn a_pool_member_with_a_fable_hour_answers_its_fable_reservation_and_a_pai
             })
         })
         .unwrap();
-    let parts = common::admin_parts_full_on_week_factor(seed.store.clone(), 0.25).await;
+    let parts =
+        common::admin_parts_full_on_week_factor(seed.store.clone(), seed.clock_cell.clone(), 0.25)
+            .await;
     let cookie = login(&parts.app, "admin-secret").await;
     // Over the fifty hours to the reset the hour reads half the Fable week, past the room of 0.4 the reading leaves, so
     // the factor of a quarter holds back 0.1 of the week.
@@ -8627,7 +8639,7 @@ async fn sessions_harness_costed(
     pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
 ) -> common::Full {
     let seed = sessions_seed(pins).await;
-    common::admin_parts_full_on_costed(seed.store.clone(), costs).await
+    common::admin_parts_full_on_costed(seed.store.clone(), seed.clock_cell.clone(), costs).await
 }
 
 #[tokio::test]
@@ -9190,7 +9202,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
         })
         .unwrap();
     // The router task loads its pins at spawn, so the pins above need the store written before this call.
-    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let parts = common::admin_parts_full_on(seed.store.clone(), seed.clock_cell.clone()).await;
     parts.clock_cell.store(now, Ordering::SeqCst);
     let cookie = login(&parts.app, "admin-secret").await;
 
@@ -9394,7 +9406,7 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin() {
             thinking_sums: Default::default(),
         })
         .unwrap();
-    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let parts = common::admin_parts_full_on(seed.store.clone(), seed.clock_cell.clone()).await;
     parts.clock_cell.store(now, Ordering::SeqCst);
     let cookie = login(&parts.app, "admin-secret").await;
     parts.ledger.record(Record::Request {

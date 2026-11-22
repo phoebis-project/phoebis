@@ -1408,6 +1408,11 @@ mod tests {
     use phoebis_transport::control::{ResolveFuture, Resolver};
     use phoebis_transport::{connector_builder, Plane};
 
+    /// The wall clock, for a case that reads no stamp.
+    fn wall() -> Clock {
+        Arc::new(|| jiff::Timestamp::now().as_millisecond())
+    }
+
     /// A manager for account `a` over an in-memory store, a fixed clock, and a fake token endpoint that
     /// answers every refresh with the measured fixture.
     async fn manager_at(now: i64) -> (CredentialManager, Arc<Store>, FakeUpstream) {
@@ -1427,7 +1432,7 @@ mod tests {
         let resolver: Resolver =
             Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
         let control = Arc::new(ControlClient::new(profile, builder.build(), resolver));
-        let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+        let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
         store
             .insert_account(&AccountRow {
                 identity: Some(Identity {

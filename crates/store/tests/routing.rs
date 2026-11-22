@@ -6,6 +6,11 @@ use phoebis_store::{
     ShedStamp, StorageKey, Store, ThinkingBindingRow, WindowRow, WindowSetRow,
 };
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> phoebis_store::Clock {
+    std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 const SPELLING: &str = "claude-sonnet-4-5";
 const DATED: &str = "claude-sonnet-4-5-20250929";
 
@@ -46,7 +51,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
 }
 
 fn store_with(ids: &[&str]) -> Store {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     seed_accounts(&store, ids);
     store
 }
@@ -101,7 +106,7 @@ fn every_stored_cooldown_scope_text_loads_as_its_scope() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
-    seed_accounts(&Store::open(&path, &storage_key).unwrap(), &["a"]);
+    seed_accounts(&Store::open(&path, &storage_key, wall()).unwrap(), &["a"]);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute(
         "INSERT INTO cooldowns (account_id, scope, until, reason, window, incarnation) VALUES \
@@ -113,7 +118,7 @@ fn every_stored_cooldown_scope_text_loads_as_its_scope() {
     )
     .unwrap();
     drop(conn);
-    let scopes: Vec<CooldownScope> = Store::open(&path, &storage_key)
+    let scopes: Vec<CooldownScope> = Store::open(&path, &storage_key, wall())
         .unwrap()
         .load_routing()
         .unwrap()
@@ -139,7 +144,10 @@ fn an_overage_source_stored_under_any_word_but_sample_loads_as_a_head() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
-    seed_accounts(&Store::open(&path, &storage_key).unwrap(), &["a", "b", "c"]);
+    seed_accounts(
+        &Store::open(&path, &storage_key, wall()).unwrap(),
+        &["a", "b", "c"],
+    );
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute(
         "INSERT INTO overage_state (account_id, in_use, observed_at, source, incarnation) VALUES \
@@ -148,7 +156,7 @@ fn an_overage_source_stored_under_any_word_but_sample_loads_as_a_head() {
     )
     .unwrap();
     drop(conn);
-    let sources: Vec<(String, EvidenceSource)> = Store::open(&path, &storage_key)
+    let sources: Vec<(String, EvidenceSource)> = Store::open(&path, &storage_key, wall())
         .unwrap()
         .load_routing()
         .unwrap()
@@ -297,7 +305,7 @@ fn a_pins_lane_and_an_affinity_entrys_lane_survive_a_reopen() {
     let standard = pin("k", "s", "claude-opus-5-5", "a");
     let fast = lane_key("claude-opus-5-5", "fast", "adaptive", "*");
     {
-        let store = Store::open(&path, &storage_key).unwrap();
+        let store = Store::open(&path, &storage_key, wall()).unwrap();
         seed_accounts(&store, &["a"]);
         store.upsert_pin(&standard).unwrap();
         store
@@ -315,7 +323,7 @@ fn a_pins_lane_and_an_affinity_entrys_lane_survive_a_reopen() {
             }])
             .unwrap();
     }
-    let reopened = Store::open(&path, &storage_key)
+    let reopened = Store::open(&path, &storage_key, wall())
         .unwrap()
         .load_routing()
         .unwrap();
@@ -350,12 +358,12 @@ fn a_pins_auxiliary_mark_and_effort_survive_a_reopen() {
         ..pin("k", "s", "claude-opus-5-5", "a")
     };
     {
-        let store = Store::open(&path, &storage_key).unwrap();
+        let store = Store::open(&path, &storage_key, wall()).unwrap();
         seed_accounts(&store, &["a"]);
         store.upsert_pin(&auxiliary).unwrap();
     }
     let marks = || {
-        Store::open(&path, &storage_key)
+        Store::open(&path, &storage_key, wall())
             .unwrap()
             .load_routing()
             .unwrap()
@@ -369,7 +377,7 @@ fn a_pins_auxiliary_mark_and_effort_survive_a_reopen() {
         [("s".to_string(), true, Some("high".to_string()))],
         "the written mark and effort read back after a reopen"
     );
-    Store::open(&path, &storage_key)
+    Store::open(&path, &storage_key, wall())
         .unwrap()
         .upsert_pin(&PinRow {
             auxiliary_only: false,
@@ -396,12 +404,12 @@ fn a_windows_plan_and_tier_survive_a_reopen_and_a_reading_without_them_reads_non
     };
     let bare = window_row("seven_day", 0.25, 1_000, 1);
     {
-        let store = Store::open(&path, &storage_key).unwrap();
+        let store = Store::open(&path, &storage_key, wall()).unwrap();
         seed_accounts(&store, &["a"]);
         assert!(store.upsert_window(&priced).unwrap());
         assert!(store.upsert_window(&bare).unwrap());
     }
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     assert_eq!(
         store
             .load_routing()
@@ -510,12 +518,12 @@ fn a_pins_shed_reason_survives_a_reopen_and_a_rounds_move_stamps_its_own() {
         ..pin("k", "s", "claude-opus-5-5", "a")
     };
     {
-        let store = Store::open(&path, &storage_key).unwrap();
+        let store = Store::open(&path, &storage_key, wall()).unwrap();
         seed_accounts(&store, &["a"]);
         store.upsert_pin(&landed).unwrap();
     }
     let reasons = || {
-        Store::open(&path, &storage_key)
+        Store::open(&path, &storage_key, wall())
             .unwrap()
             .load_routing()
             .unwrap()
@@ -529,7 +537,7 @@ fn a_pins_shed_reason_survives_a_reopen_and_a_rounds_move_stamps_its_own() {
         [("s".to_string(), Some("cooldown".to_string()))],
         "a failover's landing reads its word back after a reopen"
     );
-    Store::open(&path, &storage_key)
+    Store::open(&path, &storage_key, wall())
         .unwrap()
         .upsert_pin(&PinRow {
             shed: Some(ShedStamp {
@@ -619,13 +627,13 @@ fn usage_windows_survive_a_reopen_move_only_forward_and_leave_with_their_account
         window_row("seven_day_fable", 0.75, 1_000, 1),
     ];
     {
-        let store = Store::open(&path, &storage_key).unwrap();
+        let store = Store::open(&path, &storage_key, wall()).unwrap();
         seed_accounts(&store, &["a"]);
         for row in &rows {
             assert!(store.upsert_window(row).unwrap(), "{row:?}");
         }
     }
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     assert_eq!(
         store.load_routing().unwrap().windows,
         rows,
@@ -680,11 +688,11 @@ fn window_sets_survive_a_reopen_keep_the_newest_and_leave_with_their_account() {
     let storage_key = StorageKey::generate();
     let row = window_set_row("seven_day", 1_000, 1);
     {
-        let store = Store::open(&path, &storage_key).unwrap();
+        let store = Store::open(&path, &storage_key, wall()).unwrap();
         seed_accounts(&store, &["a"]);
         assert!(store.upsert_window_set(&row).unwrap());
     }
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     assert_eq!(
         store.load_routing().unwrap().window_sets,
         std::slice::from_ref(&row),
@@ -717,7 +725,7 @@ fn a_re_paired_id_loads_no_old_window_set() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     seed_accounts(&store, &["a"]);
     store.delete_account("a", "test").unwrap();
     seed_accounts(&store, &["a"]);
@@ -737,7 +745,7 @@ fn a_re_paired_id_loads_no_old_window_set() {
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     assert!(
         store.load_routing().unwrap().window_sets.is_empty(),
         "the previous holder's set is never loaded"
@@ -755,7 +763,7 @@ fn the_purge_drops_a_window_set_of_another_holder() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     seed_accounts(&store, &["a"]);
     store.delete_account("a", "test").unwrap();
     seed_accounts(&store, &["a"]);
@@ -768,7 +776,7 @@ fn the_purge_drops_a_window_set_of_another_holder() {
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     assert_eq!(store.purge_stale_windows().unwrap(), 1);
     assert_eq!(
         store.purge_stale_windows().unwrap(),
@@ -810,7 +818,7 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     let path = dir.path().join("router.sqlite");
     let key = StorageKey::generate();
     {
-        let store = Store::open(&path, &key).unwrap();
+        let store = Store::open(&path, &key, wall()).unwrap();
         seed_accounts(&store, &["a"]);
     }
     // The file as a version-2 build left it.
@@ -845,7 +853,7 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     assert!(
         store
             .upsert_window_set(&window_set_row("seven_day", 1_000, 1))
@@ -859,7 +867,7 @@ fn a_window_of_another_holder_of_the_id_is_never_written_loaded_or_kept() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     seed_accounts(&store, &["a"]);
     store.delete_account("a", "test").unwrap();
     seed_accounts(&store, &["a"]);
@@ -881,7 +889,7 @@ fn a_window_of_another_holder_of_the_id_is_never_written_loaded_or_kept() {
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     assert!(
         store.load_routing().unwrap().windows.is_empty(),
         "the previous holder's row is never loaded"
@@ -899,7 +907,7 @@ fn the_replacements_own_window_replaces_a_stale_row_of_another_holder_however_ne
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     seed_accounts(&store, &["a"]);
     store.delete_account("a", "test").unwrap();
     seed_accounts(&store, &["a"]);
@@ -913,7 +921,7 @@ fn the_replacements_own_window_replaces_a_stale_row_of_another_holder_however_ne
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     let replacement = window_row("five_hour", 0.2, 3_000, 2);
     assert!(
         store.upsert_window(&replacement).unwrap(),
@@ -940,11 +948,11 @@ fn the_credits_state_survives_a_reopen_moves_only_forward_and_stays_with_its_hol
     let storage_key = StorageKey::generate();
     let blocked = credits_row(false, 1_000, 1);
     {
-        let store = Store::open(&path, &storage_key).unwrap();
+        let store = Store::open(&path, &storage_key, wall()).unwrap();
         seed_accounts(&store, &["a"]);
         assert!(store.upsert_credits(&blocked).unwrap());
     }
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     assert_eq!(
         store.load_routing().unwrap().credits,
         std::slice::from_ref(&blocked),
@@ -981,7 +989,7 @@ fn the_credits_state_survives_a_reopen_moves_only_forward_and_stays_with_its_hol
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     assert!(
         store.load_routing().unwrap().credits.is_empty(),
         "the previous holder's state is never loaded"
@@ -999,7 +1007,7 @@ fn the_purge_drops_a_credits_state_of_another_holder() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     seed_accounts(&store, &["a"]);
     store.delete_account("a", "test").unwrap();
     seed_accounts(&store, &["a"]);
@@ -1012,7 +1020,7 @@ fn the_purge_drops_a_credits_state_of_another_holder() {
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     assert_eq!(store.purge_stale_windows().unwrap(), 1);
     assert_eq!(
         store.purge_stale_windows().unwrap(),
@@ -1150,7 +1158,7 @@ fn a_rekey_read_back_after_a_reopen_carries_the_moved_rows_and_the_spelling_row_
     let path = dir.path().join("router.sqlite");
     let storage_key = StorageKey::generate();
     {
-        let store = Store::open(&path, &storage_key).unwrap();
+        let store = Store::open(&path, &storage_key, wall()).unwrap();
         seed_accounts(&store, &["a"]);
         store.upsert_pin(&spelling_pin()).unwrap();
         store
@@ -1158,7 +1166,7 @@ fn a_rekey_read_back_after_a_reopen_carries_the_moved_rows_and_the_spelling_row_
             .unwrap();
         store.rekey_resolution(&rekey_of_a()).unwrap();
     }
-    let load = Store::open(&path, &storage_key)
+    let load = Store::open(&path, &storage_key, wall())
         .unwrap()
         .load_routing()
         .unwrap();

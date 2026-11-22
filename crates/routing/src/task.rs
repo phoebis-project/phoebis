@@ -6110,6 +6110,11 @@ mod tests {
     use super::*;
     use crate::select::FIVE_HOUR_MS;
 
+    /// The wall clock, for a case that reads no stamp.
+    fn wall() -> Clock {
+        Arc::new(|| jiff::Timestamp::now().as_millisecond())
+    }
+
     fn cooldown(account_id: &str, scope: &str) -> CooldownRow {
         CooldownRow {
             account_id: account_id.into(),
@@ -6399,7 +6404,7 @@ mod tests {
 
     #[test]
     fn of_two_refused_rekeys_of_one_spelling_the_newer_is_the_one_retried() {
-        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
         let landed = replay(
             &store,
             vec![
@@ -6421,14 +6426,14 @@ mod tests {
     fn linked_stores(scratch: &tempfile::TempDir) -> (Store, Store) {
         let key = StorageKey::generate();
         let path = scratch.path().join("store").join("router.sqlite");
-        let store = Store::open(&path, &key).unwrap();
+        let store = Store::open(&path, &key, wall()).unwrap();
         store
             .insert_account(&AccountRow::for_tests("a", AccountKind::ApiKey))
             .unwrap();
         let linked = scratch.path().join("holder").join("router.sqlite");
         std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&path, &linked).unwrap();
-        (store, Store::open(&linked, &key).unwrap())
+        (store, Store::open(&linked, &key, wall()).unwrap())
     }
 
     /// Holds `holder`'s write lock on a thread until the answered sender is dropped or sent to.
@@ -6543,7 +6548,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_handle_counts_the_windows_by_account_as_the_load_carried_them() {
-        let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+        let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
         for id in ["a", "b"] {
             store
                 .insert_account(&AccountRow::for_tests(id, AccountKind::Oauth))

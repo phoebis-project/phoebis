@@ -142,8 +142,9 @@ pub async fn run_until(
     let profile = profile();
 
     let key = load_storage_key(&config.storage)?;
+    let clock: Clock = Arc::new(|| jiff::Timestamp::now().as_millisecond());
     let store = Arc::new(
-        Store::open(&config.storage.path, &key)
+        Store::open(&config.storage.path, &key, clock.clone())
             .with_context(|| format!("opening the store at {}", config.storage.path.display()))?,
     );
     tracing::info!(database = %config.storage.path.display(), "store opened");
@@ -167,7 +168,6 @@ pub async fn run_until(
             .with_context(|| format!("upstream.extra_ca_pem {}", path.display()))?;
     }
 
-    let clock: Clock = Arc::new(|| jiff::Timestamp::now().as_millisecond());
     let feature_ca = open_feature_ca(&config, clock())?;
     let resolver = resolver_for(&config.upstream);
     let control = Arc::new(ControlClient::new(

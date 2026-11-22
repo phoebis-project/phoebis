@@ -928,7 +928,7 @@ async fn a_re_spread_during_a_hold_reads_the_held_account_when_its_hold_ends() {
 async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    let store = Arc::new(Store::open(&path, &StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open(&path, &StorageKey::generate(), wall()).unwrap());
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
     let h = harness_on(

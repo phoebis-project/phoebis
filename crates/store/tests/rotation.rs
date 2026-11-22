@@ -3,6 +3,11 @@ use phoebis_store::{
     StorageKey, Store, Strategy, ROTATION_GRACE_MS,
 };
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> phoebis_store::Clock {
+    std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 fn pool(id: &str) -> PoolRow {
     PoolRow {
         strategy: Strategy::Priority,
@@ -42,7 +47,7 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
 
 #[test]
 fn a_rotation_retires_the_previous_secret_for_the_grace_and_a_second_rotation_replaces_it() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "t").unwrap();
     store
         .insert_api_key(&key(&store, "k", "main", "one"), "t")
@@ -117,7 +122,7 @@ fn a_rotation_retires_the_previous_secret_for_the_grace_and_a_second_rotation_re
 
 #[test]
 fn a_touch_stamps_the_retired_secret_only_for_the_rotation_it_authenticated_under() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "t").unwrap();
     store
         .insert_api_key(&key(&store, "k", "main", "one"), "t")
@@ -180,7 +185,7 @@ fn a_touch_stamps_the_retired_secret_only_for_the_rotation_it_authenticated_unde
 
 #[test]
 fn a_revocation_drops_the_retired_secret_and_a_deletion_cascades_it() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "t").unwrap();
 
     store
@@ -216,7 +221,7 @@ fn a_revocation_drops_the_retired_secret_and_a_deletion_cascades_it() {
 
 #[test]
 fn a_deleted_keys_id_is_created_again_under_a_fresh_secret() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "t").unwrap();
     store
         .insert_api_key(&key(&store, "k", "main", "one"), "t")

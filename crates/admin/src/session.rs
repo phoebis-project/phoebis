@@ -279,8 +279,13 @@ fn verified(key: &[u8; 32], cookie: &str, now: i64) -> Option<[u8; SESSION_ID_LE
 mod tests {
     use super::*;
 
+    /// The wall clock, for a case that reads no stamp.
+    fn wall() -> phoebis_store::Clock {
+        Arc::new(|| jiff::Timestamp::now().as_millisecond())
+    }
+
     fn store() -> Arc<Store> {
-        Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap())
+        Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate(), wall()).unwrap())
     }
 
     fn sessions_on(store: &Arc<Store>, secret: &str) -> Sessions {

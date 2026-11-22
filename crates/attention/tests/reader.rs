@@ -5,6 +5,7 @@
 //! read.
 mod common;
 use std::collections::BTreeSet;
+use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -778,7 +779,6 @@ fn resolve(rig: &Rig, outcome: AttemptOutcome) -> u64 {
 #[tokio::test]
 async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_first() {
     let rig = rig().await;
-    rig.store.set_clock(rig.clock());
     let (attention, _arm) = rig.attention(None);
     resolve(
         &rig,
@@ -839,7 +839,6 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
 #[tokio::test]
 async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() {
     let rig = rig().await;
-    rig.store.set_clock(rig.clock());
     let (attention, _arm) = rig.attention(None);
     let lost = resolve(
         &rig,
@@ -923,9 +922,10 @@ async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() 
 /// because a newer credential committed, so it ends the run as a commit does.
 #[tokio::test]
 async fn a_pairing_that_supersedes_a_pending_retry_leaves_no_refresh_run() {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
-    let rig = rig_with_store(store.clone()).await;
-    rig.store.set_clock(rig.clock());
+    let clock_cell = Arc::new(AtomicI64::new(NOW));
+    let store =
+        Arc::new(Store::open_in_memory(&StorageKey::generate(), clock_of(&clock_cell)).unwrap());
+    let rig = rig_with_store(store.clone(), clock_cell).await;
     let failed = resolve(
         &rig,
         AttemptOutcome::Failed {

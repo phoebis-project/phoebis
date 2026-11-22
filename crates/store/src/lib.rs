@@ -434,12 +434,12 @@ impl CompanionKey {
     }
 }
 
-/// The instant the store stamps a row with, in Unix milliseconds: the wall clock in production, and a test rig's own
-/// cell under `set_clock`, so a capture of the registry's answers reads the same twice.
+/// The instant the store stamps a row with, in Unix milliseconds. The caller hands it to the open: the router passes
+/// the clock that its other parts read, and a suite passes the wall clock or a cell that it steps.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 pub struct Store {
-    clock: Mutex<Clock>,
+    clock: Clock,
     conn: CountedMutex<Connection>,
     key: StorageKey,
     _lock: Option<lock::ProcessLock>,
@@ -491,9 +491,14 @@ impl<T> CountedMutex<T> {
 }
 
 impl Store {
-    fn from_parts(conn: Connection, key: &StorageKey, lock: Option<lock::ProcessLock>) -> Store {
+    fn from_parts(
+        conn: Connection,
+        key: &StorageKey,
+        lock: Option<lock::ProcessLock>,
+        clock: Clock,
+    ) -> Store {
         Store {
-            clock: Mutex::new(Arc::new(|| jiff::Timestamp::now().as_millisecond())),
+            clock,
             conn: CountedMutex::new(conn),
             key: key.clone(),
             _lock: lock,
@@ -504,7 +509,7 @@ impl Store {
 
     /// Opens (creating if needed) the on-disk registry at `db_path`: the directory holding it at mode 0700,
     /// the process lock beside it, then the database file at mode 0600.
-    pub fn open(db_path: &Path, key: &StorageKey) -> Result<Store, StoreError> {
+    pub fn open(db_path: &Path, key: &StorageKey, clock: Clock) -> Result<Store, StoreError> {
         let dir = permissions::data_dir_of(db_path);
         let dir_existed = dir.exists();
         permissions::create_private_dir(dir)?;
@@ -525,27 +530,22 @@ impl Store {
         }
 
         let mut conn = Connection::open(db_path)?;
-        prepare(&mut conn, true, schema::MIGRATIONS)?;
+        prepare(&mut conn, schema::MIGRATIONS)?;
         check_or_seal_canary(&mut conn, key, db_path)?;
-        Ok(Store::from_parts(conn, key, Some(process_lock)))
+        Ok(Store::from_parts(conn, key, Some(process_lock), clock))
     }
 
-    /// Opens an in-memory registry for tests: no directory, no lock, no on-disk file.
-    pub fn open_in_memory(key: &StorageKey) -> Result<Store, StoreError> {
+    /// Opens an in-memory registry: no directory, no lock, no on-disk file.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn open_in_memory(key: &StorageKey, clock: Clock) -> Result<Store, StoreError> {
         let mut conn = Connection::open_in_memory()?;
-        prepare(&mut conn, false, schema::MIGRATIONS)?;
+        prepare_in_memory(&mut conn, schema::MIGRATIONS)?;
         check_or_seal_canary(&mut conn, key, Path::new(":memory:"))?;
-        Ok(Store::from_parts(conn, key, None))
-    }
-
-    /// Every stamp written from here on reads `clock`. The admin fixture capture sets it before it seeds the
-    /// registry, so two captures stamp the same instants.
-    pub fn set_clock(&self, clock: Clock) {
-        *self.clock.lock().expect(LOCK_POISONED) = clock;
+        Ok(Store::from_parts(conn, key, None, clock))
     }
 
     pub(crate) fn now_ms(&self) -> i64 {
-        (self.clock.lock().expect(LOCK_POISONED))()
+        (self.clock)()
     }
 
     pub fn schema_version(&self) -> Result<u32, StoreError> {
@@ -1003,14 +1003,14 @@ impl RecoveryStore {
     /// statements meet the columns they name. A failure here moved nothing the discard would, so the caller says
     /// nothing was discarded.
     pub fn prepare_recovery(&mut self) -> Result<(), StoreError> {
-        prepare(&mut self.conn, true, schema::MIGRATIONS)
+        prepare(&mut self.conn, schema::MIGRATIONS)
     }
 
     /// `prepare_recovery` over a chain the test names, so a failing step can be driven whatever the build's own chain
     /// holds.
     #[cfg(test)]
     fn prepare_recovery_with(&mut self, migrations: &[(u32, &str)]) -> Result<(), StoreError> {
-        prepare(&mut self.conn, true, migrations)
+        prepare(&mut self.conn, migrations)
     }
 
     /// One transaction over a schema `prepare_recovery` moved: the canary, the credentials, the API-key secrets and
@@ -1307,24 +1307,34 @@ fn open_canary(key: &StorageKey, value: &str) -> Result<Vec<u8>, StoreError> {
 }
 
 /// Runs `SCHEMA`, the baseline at version 1, then the steps above the stored `schema_version`.
-fn prepare(conn: &mut Connection, on_disk: bool, steps: &[(u32, &str)]) -> Result<(), StoreError> {
+fn prepare(conn: &mut Connection, steps: &[(u32, &str)]) -> Result<(), StoreError> {
+    let current = prepare_head(conn)?;
+    // WAL lets the router task's reads run beside an admin write. Unlike `foreign_keys` this rewrites the database
+    // header, so it waits behind the version check too.
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    // Every change to the registry's own rows (accounts, credentials, keys, members, pools, refresh attempts, rules,
+    // secrets) is on disk before its commit returns. `routing_commit` alone relaxes, for routing state whose last
+    // moments a power loss may take: the next requests rebuild it, and an operator makes a lost cooldown clear or
+    // session release again.
+    conn.pragma_update(None, "synchronous", "FULL")?;
+    Ok(migrations::apply(conn, schema::SCHEMA, current, steps)?)
+}
+
+/// The in-memory form of `prepare`: an in-memory database has no journal, so it sets none.
+#[cfg(any(test, feature = "test-support"))]
+fn prepare_in_memory(conn: &mut Connection, steps: &[(u32, &str)]) -> Result<(), StoreError> {
+    let current = prepare_head(conn)?;
+    Ok(migrations::apply(conn, schema::SCHEMA, current, steps)?)
+}
+
+/// The settings that both forms of `prepare` give a connection ahead of its journal, answering the stored version.
+fn prepare_head(conn: &mut Connection) -> Result<u32, StoreError> {
     conn.busy_timeout(BUSY_TIMEOUT)?;
     conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
     // A per-connection setting, never written to the database file, so it costs nothing to set before the
     // version is even known.
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    let current = check_schema(conn)?;
-    if on_disk {
-        // WAL lets the router task's reads run beside an admin write; an in-memory database has no journal.
-        // Unlike `foreign_keys` this rewrites the database header, so it waits behind the version check too.
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        // Every change to the registry's own rows (accounts, credentials, keys, members, pools, refresh attempts,
-        // rules, secrets) is on disk before its commit returns; `routing_commit` alone relaxes, for routing state
-        // whose last moments a power loss may take: the next requests rebuild it, and an operator makes a lost
-        // cooldown clear or session release again.
-        conn.pragma_update(None, "synchronous", "FULL")?;
-    }
-    Ok(migrations::apply(conn, schema::SCHEMA, current, steps)?)
+    check_schema(conn)
 }
 
 /// What a registry's `meta` without its `schema_version` row reads as: version 1, the baseline `schema::SCHEMA`
@@ -1384,6 +1394,11 @@ mod tests {
 
     use super::*;
 
+    /// The wall clock, for a case that reads no stamp.
+    fn wall() -> Clock {
+        Arc::new(|| jiff::Timestamp::now().as_millisecond())
+    }
+
     fn canary_of(store: &Store) -> Option<String> {
         stored_canary(&store.conn.lock().unwrap()).unwrap()
     }
@@ -1421,12 +1436,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
         let key = StorageKey::generate();
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         assert_eq!(store.admin_session_epoch().unwrap(), 0);
         assert_eq!(store.bump_admin_session_epoch().unwrap(), 1);
         assert_eq!(store.admin_session_epoch().unwrap(), 1);
         drop(store);
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         assert_eq!(store.admin_session_epoch().unwrap(), 1);
         assert_eq!(store.bump_admin_session_epoch().unwrap(), 2);
     }
@@ -1436,8 +1451,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
         let key = StorageKey::generate();
-        drop(Store::open(&db, &key).unwrap());
-        match Store::open(&db, &StorageKey::generate()) {
+        drop(Store::open(&db, &key, wall()).unwrap());
+        match Store::open(&db, &StorageKey::generate(), wall()) {
             Err(StoreError::KeyMismatch { path }) => {
                 assert_eq!(path, db);
                 assert_eq!(
@@ -1452,7 +1467,7 @@ mod tests {
             Ok(_) => panic!("opened under another key"),
         }
         assert!(
-            Store::open(&db, &key).is_ok(),
+            Store::open(&db, &key, wall()).is_ok(),
             "the refusal left the canary as it was"
         );
     }
@@ -1462,17 +1477,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
         let key = StorageKey::generate();
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         with_a_credential(&store);
         store.debug_drop_canary().unwrap();
         assert_eq!(canary_of(&store), None);
         drop(store);
-        match Store::open(&db, &StorageKey::generate()) {
+        match Store::open(&db, &StorageKey::generate(), wall()) {
             Err(StoreError::KeyMismatch { path }) => assert_eq!(path, db),
             Err(other) => panic!("refused for another reason: {other}"),
             Ok(_) => panic!("opened under another key"),
         }
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         let value = canary_of(&store).expect("the start under the right key sealed the canary");
         assert_eq!(open_canary(&key, &value).unwrap(), CANARY_PLAINTEXT);
         assert_eq!(
@@ -1501,7 +1516,7 @@ mod tests {
             Err(StoreError::KeyMismatch { path }) => assert_eq!(path, db),
             answer => panic!("read under another key: {answer:?}"),
         }
-        match Store::open(db, &other) {
+        match Store::open(db, &other, wall()) {
             Err(StoreError::KeyMismatch { path }) => assert_eq!(path, db),
             Err(other) => panic!("refused for another reason: {other}"),
             Ok(_) => panic!("opened under another key"),
@@ -1510,7 +1525,7 @@ mod tests {
             Store::read_canary(db, key).unwrap(),
             CanaryRead::SealedRowMatches
         );
-        let store = Store::open(db, key).unwrap();
+        let store = Store::open(db, key, wall()).unwrap();
         let value = canary_of(&store).expect("the start under the right key sealed the canary");
         assert_eq!(open_canary(key, &value).unwrap(), CANARY_PLAINTEXT);
     }
@@ -1520,7 +1535,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
         let key = StorageKey::generate();
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         store
             .insert_account(&account("vendor", AccountKind::ApiKey))
             .unwrap();
@@ -1537,7 +1552,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
         let key = StorageKey::generate();
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         store
             .save_keepalive(&KeepaliveBatch {
                 agents: vec![KeepaliveAgentRow {
@@ -1569,7 +1584,7 @@ mod tests {
         let key = StorageKey::generate();
 
         let db = dir.path().join("router.sqlite");
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         with_a_credential(&store);
         store.debug_corrupt_credentials("a").unwrap();
         store
@@ -1584,7 +1599,7 @@ mod tests {
 
         // With no row that opens there is nothing to prove the key by, so even the key that sealed them is refused.
         let only_corrupt = dir.path().join("only-corrupt.sqlite");
-        let store = Store::open(&only_corrupt, &key).unwrap();
+        let store = Store::open(&only_corrupt, &key, wall()).unwrap();
         with_a_credential(&store);
         store.debug_corrupt_credentials("a").unwrap();
         store.debug_drop_canary().unwrap();
@@ -1594,7 +1609,7 @@ mod tests {
             answer => panic!("{answer:?}"),
         }
         assert!(matches!(
-            Store::open(&only_corrupt, &key),
+            Store::open(&only_corrupt, &key, wall()),
             Err(StoreError::KeyMismatch { .. })
         ));
     }
@@ -1605,7 +1620,7 @@ mod tests {
         let key = StorageKey::generate();
 
         let db = dir.path().join("router.sqlite");
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         with_a_credential_on(&store, "a");
         with_a_credential_on(&store, "b");
         store.debug_corrupt_credentials("a").unwrap();
@@ -1614,7 +1629,7 @@ mod tests {
         assert_the_sealed_rows_prove_the_key(&db, &key);
 
         let all_corrupt = dir.path().join("all-corrupt.sqlite");
-        let store = Store::open(&all_corrupt, &key).unwrap();
+        let store = Store::open(&all_corrupt, &key, wall()).unwrap();
         with_a_credential_on(&store, "a");
         with_a_credential_on(&store, "b");
         store.debug_corrupt_credentials("a").unwrap();
@@ -1625,7 +1640,7 @@ mod tests {
             Err(StoreError::KeyMismatch { path }) => assert_eq!(path, all_corrupt),
             answer => panic!("{answer:?}"),
         }
-        match Store::open(&all_corrupt, &key) {
+        match Store::open(&all_corrupt, &key, wall()) {
             Err(StoreError::KeyMismatch { path }) => assert_eq!(path, all_corrupt),
             Err(other) => panic!("refused for another reason: {other}"),
             Ok(_) => panic!("opened with no sealed row to prove the key by"),
@@ -1642,7 +1657,7 @@ mod tests {
             ("short", "AAAA"),
         ] {
             let db = dir.path().join(format!("{name}.sqlite"));
-            drop(Store::open(&db, &key).unwrap());
+            drop(Store::open(&db, &key, wall()).unwrap());
             Connection::open(&db)
                 .unwrap()
                 .execute(
@@ -1654,7 +1669,7 @@ mod tests {
                 Err(StoreError::KeyMismatch { path }) => assert_eq!(path, db, "{name}"),
                 answer => panic!("{name}: {answer:?}"),
             }
-            match Store::open(&db, &key) {
+            match Store::open(&db, &key, wall()) {
                 Err(StoreError::KeyMismatch { path }) => assert_eq!(path, db, "{name}"),
                 Err(other) => panic!("{name}: refused for another reason: {other}"),
                 Ok(_) => panic!("{name}: opened"),
@@ -1685,16 +1700,16 @@ mod tests {
             .execute_batch(schema::SCHEMA)
             .unwrap();
         let unsealed = dir.path().join("unsealed.sqlite");
-        let store = Store::open(&unsealed, &key).unwrap();
+        let store = Store::open(&unsealed, &key, wall()).unwrap();
         store.debug_drop_canary().unwrap();
         drop(store);
         let legacy = dir.path().join("legacy.sqlite");
-        let store = Store::open(&legacy, &key).unwrap();
+        let store = Store::open(&legacy, &key, wall()).unwrap();
         with_a_credential(&store);
         store.debug_drop_canary().unwrap();
         drop(store);
         let sealed = dir.path().join("sealed.sqlite");
-        drop(Store::open(&sealed, &key).unwrap());
+        drop(Store::open(&sealed, &key, wall()).unwrap());
 
         let files = [&empty_file, &v1, &unsealed, &legacy, &sealed];
         let modified = || files.map(|path| std::fs::metadata(path).unwrap().modified().unwrap());
@@ -1734,7 +1749,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
         let key = StorageKey::generate();
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         // The store holds the directory's process lock and its connection sits inside a write transaction, as a
         // running router's writer would.
         let conn = store.conn.lock().unwrap();
@@ -1757,7 +1772,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
         let key = StorageKey::generate();
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         with_a_credential_on(&store, "a");
         with_a_credential_on(&store, "b");
         store.debug_corrupt_credentials("a").unwrap();
@@ -1789,21 +1804,29 @@ mod tests {
         let db = dir.path().join("router.sqlite");
         let key = StorageKey::generate();
         let other = StorageKey::generate();
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         with_a_credential(&store);
         drop(store);
         let recovery = Store::open_for_recovery(&db).unwrap();
         assert_eq!(recovery.key_matches(&key).unwrap(), KeyMatch::Matches);
         assert_eq!(recovery.key_matches(&other).unwrap(), KeyMatch::Differs);
         drop(recovery);
-        Store::open(&db, &key).unwrap().debug_drop_canary().unwrap();
+        Store::open(&db, &key, wall())
+            .unwrap()
+            .debug_drop_canary()
+            .unwrap();
         let recovery = Store::open_for_recovery(&db).unwrap();
         assert_eq!(recovery.key_matches(&other).unwrap(), KeyMatch::Differs);
     }
 
     /// On disk: `synchronous` on an in-memory registry syncs nothing, so only a file proves the setting.
     fn on_disk(dir: &tempfile::TempDir) -> Store {
-        Store::open(&dir.path().join("router.sqlite"), &StorageKey::generate()).unwrap()
+        Store::open(
+            &dir.path().join("router.sqlite"),
+            &StorageKey::generate(),
+            wall(),
+        )
+        .unwrap()
     }
 
     fn pragma(store: &Store, name: &str) -> i64 {
@@ -1922,7 +1945,7 @@ mod tests {
 
     #[test]
     fn a_file_the_database_cannot_read_or_write_is_database_wide_and_a_refused_row_is_not() {
-        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
         let refused = store
             .upsert_cooldown(&cooldown("ghost", "account"))
             .unwrap_err();
@@ -1956,7 +1979,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
         let key = StorageKey::generate();
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         with_a_credential(&store);
         // Dropped first, since the recovery's open takes the process lock the store holds.
         drop(store);
@@ -1967,7 +1990,7 @@ mod tests {
         assert!(matches!(error, StoreError::Sqlite(_)), "{error:?}");
         assert_eq!(recovery.sealed_counts().unwrap().credentials, 1);
         drop(recovery);
-        let store = Store::open(&db, &key).unwrap();
+        let store = Store::open(&db, &key, wall()).unwrap();
         assert_eq!(store.schema_version().unwrap(), schema::SCHEMA_VERSION);
         assert!(
             store.credentials("a").unwrap().is_some(),
@@ -2034,7 +2057,7 @@ mod tests {
             params![(schema::SCHEMA_VERSION + 1).to_string()],
         )
         .unwrap();
-        let error = prepare(&mut conn, false, schema::MIGRATIONS).unwrap_err();
+        let error = prepare_in_memory(&mut conn, schema::MIGRATIONS).unwrap_err();
         assert!(
             matches!(
                 error,

@@ -11,6 +11,11 @@ use phoebis_store::{
     SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
 };
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> phoebis_store::Clock {
+    std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 fn account(id: &str, kind: AccountKind) -> AccountRow {
     AccountRow::for_tests(id, kind)
 }
@@ -165,7 +170,7 @@ fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_t
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
     {
-        let store = Store::open(&path, &key).unwrap();
+        let store = Store::open(&path, &key, wall()).unwrap();
         store
             .insert_account(&account("a", AccountKind::Oauth))
             .unwrap();
@@ -243,7 +248,7 @@ fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_t
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     assert_eq!(
         store.schema_version().unwrap(),
         phoebis_store::SCHEMA_VERSION
@@ -277,7 +282,7 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
     let path = dir.path().join("registry.sqlite");
     let key_store = StorageKey::generate();
     {
-        let store = Store::open(&path, &key_store).unwrap();
+        let store = Store::open(&path, &key_store, wall()).unwrap();
         store.insert_pool(&pool("main"), "test").unwrap();
         store
             .insert_api_key(&key(&store, "plain", "main", "phoebis-plain"), "test")
@@ -302,7 +307,7 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &key_store).unwrap();
+    let store = Store::open(&path, &key_store, wall()).unwrap();
     let plain = store
         .api_key("plain")
         .unwrap()
@@ -377,7 +382,7 @@ fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_c
         updated_at: 1,
     };
     {
-        let store = Store::open(&path, &key).unwrap();
+        let store = Store::open(&path, &key, wall()).unwrap();
         store
             .insert_account(&account("a", AccountKind::Oauth))
             .unwrap();
@@ -406,7 +411,7 @@ fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_c
          WHERE agent_id = 'main'; \
          UPDATE pins SET last_classifier = 1 WHERE agent_id = 'helper';",
     );
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     assert_eq!(
         store.load_routing().unwrap().pins,
         vec![
@@ -439,7 +444,7 @@ fn a_registry_before_the_eighth_step_reads_its_pools_with_the_thinking_switch_of
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
     {
-        let store = Store::open(&path, &key).unwrap();
+        let store = Store::open(&path, &key, wall()).unwrap();
         store
             .insert_pool(
                 &PoolRow {
@@ -486,7 +491,7 @@ fn a_registry_before_the_eighth_step_reads_its_pools_with_the_thinking_switch_of
     conn.execute_batch("UPDATE meta SET value = '7' WHERE key = 'schema_version';")
         .unwrap();
     drop(conn);
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     assert_eq!(
         store
             .pools()
@@ -526,12 +531,14 @@ fn a_registry_before_the_eighth_step_reads_its_pools_with_the_thinking_switch_of
 fn a_pool_inserted_at_one_instant_and_updated_at_another_reads_both_stamps_and_its_first_incarnation(
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(&dir.path().join("router.sqlite"), &StorageKey::generate()).unwrap();
     let instant = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(1_000_000));
     let cell = instant.clone();
-    store.set_clock(std::sync::Arc::new(move || {
-        cell.load(std::sync::atomic::Ordering::SeqCst)
-    }));
+    let store = Store::open(
+        &dir.path().join("router.sqlite"),
+        &StorageKey::generate(),
+        std::sync::Arc::new(move || cell.load(std::sync::atomic::Ordering::SeqCst)),
+    )
+    .unwrap();
     let row = PoolRow {
         label: "Main".into(),
         ..PoolRow::new("main")
@@ -563,17 +570,18 @@ fn a_pseudonym_holds_across_a_reopen_and_differs_under_another_storage_key() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("registry.sqlite");
     let storage_key = StorageKey::generate();
-    let first = Store::open(&path, &storage_key)
+    let first = Store::open(&path, &storage_key, wall())
         .unwrap()
         .companion_key()
         .pseudonym("a");
-    let reopened = Store::open(&path, &storage_key)
+    let reopened = Store::open(&path, &storage_key, wall())
         .unwrap()
         .companion_key()
         .pseudonym("a");
     let elsewhere = Store::open(
         &dir.path().join("elsewhere.sqlite"),
         &StorageKey::generate(),
+        wall(),
     )
     .unwrap()
     .companion_key()
@@ -592,7 +600,7 @@ fn a_pool_inserted_without_a_placement_reads_by_strategy() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
@@ -620,7 +628,7 @@ fn a_pool_inserted_without_a_placement_reads_by_strategy() {
 #[test]
 fn a_pin_with_a_distinct_value_in_every_integer_field_and_every_optional_group_set_reads_back_as_written(
 ) {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
@@ -714,7 +722,7 @@ fn a_pin_with_a_distinct_value_in_every_integer_field_and_every_optional_group_s
 
 #[test]
 fn the_plan_ended_flag_is_set_once_cleared_once_and_read_by_the_term_and_the_registry_load() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     for id in ["ended", "plan"] {
         store
             .insert_account(&account(id, AccountKind::Oauth))
@@ -767,7 +775,7 @@ fn the_plan_ended_flag_is_set_once_cleared_once_and_read_by_the_term_and_the_reg
 
 #[test]
 fn a_pool_round_trips_its_slow_down_and_return_to_plan_fields() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     let written = PoolRow {
         slow_down: SlowDown {
             slow_down: true,
@@ -872,7 +880,7 @@ fn a_pool_created_without_the_stretch_reads_two_and_a_half_hours() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     store
         .insert_pool(
             &PoolRow {
@@ -902,7 +910,7 @@ fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
@@ -932,7 +940,7 @@ fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_
 
 #[test]
 fn the_canceled_flag_and_its_end_are_the_operators_alone_and_survive_a_profile_write() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
@@ -974,7 +982,7 @@ fn the_canceled_flag_and_its_end_are_the_operators_alone_and_survive_a_profile_w
 #[test]
 fn the_term_classes_a_usage_based_seat_from_its_stored_tier_or_seat_tier_and_never_an_api_key_account(
 ) {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     for (id, kind) in [
         ("by-tier", AccountKind::Oauth),
         ("by-seat", AccountKind::Oauth),
@@ -1063,7 +1071,7 @@ fn the_term_classes_a_usage_based_seat_from_its_stored_tier_or_seat_tier_and_nev
 
 #[test]
 fn the_term_resolves_the_plan_from_the_organization_type_first_and_the_tier_second() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     let profiles: [(&str, Option<&str>, &str, Option<&str>); 8] = [
         ("free", Some("claude_free"), "default_claude_ai", None),
         (
@@ -1160,12 +1168,12 @@ fn a_pool_reopens_on_and_a_key_reopens_inheriting_until_set_off() {
     let dir = tempfile::tempdir().unwrap();
     let key_store = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &key_store).unwrap();
+    let store = Store::open(&path, &key_store, wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     let desktop = key(&store, "desktop", "main", "phoebis-0123456789abcdef");
     store.insert_api_key(&desktop, "test").unwrap();
     drop(store);
-    let store = Store::open(&path, &key_store).unwrap();
+    let store = Store::open(&path, &key_store, wall()).unwrap();
     assert!(store.pool("main").unwrap().unwrap().auto_mode_server);
     let mut read = store.api_key("desktop").unwrap().unwrap();
     assert_eq!(read.auto_mode_server, None, "a new key inherits the pool's");
@@ -1174,7 +1182,7 @@ fn a_pool_reopens_on_and_a_key_reopens_inheriting_until_set_off() {
         .update_api_key(&read, read.updated_at, "test")
         .unwrap();
     drop(store);
-    let store = Store::open(&path, &key_store).unwrap();
+    let store = Store::open(&path, &key_store, wall()).unwrap();
     assert_eq!(
         store.api_key("desktop").unwrap().unwrap().auto_mode_server,
         Some(false)
@@ -1197,7 +1205,7 @@ fn a_key_created_with_its_own_auto_mode_setting_reopens_with_it() {
     let dir = tempfile::tempdir().unwrap();
     let key_store = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &key_store).unwrap();
+    let store = Store::open(&path, &key_store, wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     for (id, secret, setting) in [
         ("desktop", "phoebis-desktop-secret", true),
@@ -1208,7 +1216,7 @@ fn a_key_created_with_its_own_auto_mode_setting_reopens_with_it() {
         store.insert_api_key(&row, "test").unwrap();
     }
     drop(store);
-    let store = Store::open(&path, &key_store).unwrap();
+    let store = Store::open(&path, &key_store, wall()).unwrap();
     assert_eq!(
         store.api_key("desktop").unwrap().unwrap().auto_mode_server,
         Some(true)
@@ -1228,7 +1236,7 @@ fn an_id_created_again_in_the_millisecond_it_was_deleted_in_is_a_reused_one() {
     let dir = tempfile::tempdir().unwrap();
     let storage_key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     store
         .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
@@ -1256,7 +1264,7 @@ fn an_id_created_again_in_the_millisecond_it_was_deleted_in_is_a_reused_one() {
 
 #[test]
 fn a_key_created_again_under_a_deleted_id_reads_as_reused_after_the_purge_ages_out_the_delete() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     store
         .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
@@ -1280,7 +1288,7 @@ fn a_key_created_again_under_a_deleted_id_reads_as_reused_after_the_purge_ages_o
 /// `key_id` the same way it cascades `pins` rather than leaving them for the retention purge.
 #[test]
 fn deleting_a_key_drops_its_session_memory_so_a_reissued_id_reads_nothing() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     store
         .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
@@ -1314,7 +1322,7 @@ fn a_key_created_in_its_previous_holders_millisecond_takes_the_next_generation()
     let dir = tempfile::tempdir().unwrap();
     let storage_key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     store
         .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
@@ -1353,7 +1361,7 @@ fn a_key_created_in_its_previous_holders_millisecond_takes_the_next_generation()
 
 #[test]
 fn two_slots_cannot_bind_one_upstream_account() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
@@ -1375,7 +1383,7 @@ fn two_slots_cannot_bind_one_upstream_account() {
 
 #[test]
 fn an_account_created_under_a_held_id_answers_id_taken() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     let row = account("a", AccountKind::Oauth);
     store.create_account(&row, None, 1, "admin").unwrap();
     let error = store.create_account(&row, None, 2, "admin").unwrap_err();
@@ -1387,7 +1395,7 @@ fn an_account_created_under_a_held_id_answers_id_taken() {
 
 #[test]
 fn a_key_created_under_a_held_id_answers_id_taken() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     store
         .insert_api_key(&key(&store, "k", "main", "phoebis-first"), "test")
@@ -1403,7 +1411,7 @@ fn a_key_created_under_a_held_id_answers_id_taken() {
 
 #[test]
 fn a_pool_created_under_a_held_id_answers_id_taken() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_pool_with_members(&pool("main"), None, "test")
         .unwrap();
@@ -1418,7 +1426,7 @@ fn a_pool_created_under_a_held_id_answers_id_taken() {
 
 #[test]
 fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::ApiKey))
         .unwrap();
@@ -1549,7 +1557,12 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
 fn a_new_pool_waits_out_a_throttle_of_up_to_a_minute_by_default() {
     assert_eq!(Failover::default().retry_in_place_seconds, 60);
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(&dir.path().join("router.sqlite"), &StorageKey::generate()).unwrap();
+    let store = Store::open(
+        &dir.path().join("router.sqlite"),
+        &StorageKey::generate(),
+        wall(),
+    )
+    .unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     let pools = store.pools().unwrap();
     let main = pools.iter().find(|p| p.id == "main").unwrap();
@@ -1558,7 +1571,7 @@ fn a_new_pool_waits_out_a_throttle_of_up_to_a_minute_by_default() {
 
 #[test]
 fn an_api_key_secret_carries_a_generation_that_fences_state_verdicts() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::ApiKey))
         .unwrap();
@@ -1622,7 +1635,7 @@ fn an_api_key_secret_carries_a_generation_that_fences_state_verdicts() {
 
 #[test]
 fn each_state_writer_stores_its_word_beside_the_state() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     let read = |id: &str| {
         let row = store.account(id).unwrap().unwrap();
         (row.state, row.state_cause)
@@ -1724,7 +1737,7 @@ fn each_state_writer_stores_its_word_beside_the_state() {
 fn each_state_writer_dates_the_state_it_changes_and_leaves_the_date_of_the_state_it_keeps() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    let store = Store::open(&path, &StorageKey::generate(), wall()).unwrap();
     let dated = || {
         store
             .account_extras_of("a")
@@ -1843,7 +1856,7 @@ fn each_state_writer_dates_the_state_it_changes_and_leaves_the_date_of_the_state
 
 #[test]
 fn set_enabled_leaves_the_state_cause() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
@@ -1865,7 +1878,7 @@ fn a_row_written_without_the_column_s_word_reads_unrecorded() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    drop(Store::open(&path, &key).unwrap());
+    drop(Store::open(&path, &key, wall()).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute(
         "INSERT INTO accounts (id, kind, label, enabled, state, created_at, updated_at) \
@@ -1874,7 +1887,7 @@ fn a_row_written_without_the_column_s_word_reads_unrecorded() {
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     assert_eq!(
         store.account("a").unwrap().unwrap().state_cause,
         StateCause::Unrecorded,
@@ -1887,7 +1900,7 @@ fn a_stored_word_outside_the_list_fails_the_read() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
@@ -1899,7 +1912,7 @@ fn a_stored_word_outside_the_list_fails_the_read() {
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     let error = store.account("a").unwrap_err();
     assert!(
         matches!(
@@ -1916,7 +1929,7 @@ fn an_unknown_stored_feature_word_fails_the_pool_read() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
@@ -1926,7 +1939,7 @@ fn an_unknown_stored_feature_word_fails_the_pool_read() {
     )
     .unwrap();
     drop(conn);
-    let store = Store::open(&path, &key).unwrap();
+    let store = Store::open(&path, &key, wall()).unwrap();
     let error = store.pool("main").unwrap_err();
     assert!(
         matches!(
@@ -2064,7 +2077,7 @@ fn every_stored_word_of_the_text_enums_reads_as_its_variant() {
 
 #[test]
 fn two_pool_edits_from_one_read_answer_stale_on_the_second() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::ApiKey))
         .unwrap();
@@ -2145,7 +2158,7 @@ fn a_in_p1(store: &Store) {
 
 #[test]
 fn a_member_write_naming_an_account_in_another_pool_is_refused_and_writes_nothing() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     a_in_p1(&store);
     let before = store.pool("p2").unwrap().unwrap();
     let changes = store.registry_changes_after(0, 100).unwrap();
@@ -2209,7 +2222,7 @@ fn a_member_write_naming_an_account_in_another_pool_is_refused_and_writes_nothin
 
 #[test]
 fn a_write_that_keeps_an_account_in_its_own_pool_lands() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     a_in_p1(&store);
     store
         .set_pool_members("p1", &[member("a", 2)], "test")
@@ -2256,7 +2269,7 @@ fn change_count(store: &Store) -> usize {
 
 #[test]
 fn a_member_list_equal_to_the_stored_one_writes_no_change_row_and_moves_no_stamp() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     budgeted_pool(&store);
     let before = store.pool("main").unwrap().unwrap();
     let changes = change_count(&store);
@@ -2289,7 +2302,7 @@ fn a_member_list_that_differs_in_order_priority_or_budget_writes_the_list_again(
         ("a changed priority", reprioritized),
         ("a changed budget", rebudgeted),
     ] {
-        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
         budgeted_pool(&store);
         let before = store.pool("main").unwrap().unwrap();
         let changes = change_count(&store);
@@ -2312,7 +2325,7 @@ fn a_member_list_that_differs_in_order_priority_or_budget_writes_the_list_again(
 #[test]
 fn a_pool_save_that_changes_the_member_list_alone_records_the_list_and_no_pool_edit_and_moves_the_stamp(
 ) {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     budgeted_pool(&store);
     let read = store.pool("main").unwrap().unwrap();
     let stored = budgeted_members();
@@ -2339,7 +2352,7 @@ fn a_pool_save_that_changes_the_member_list_alone_records_the_list_and_no_pool_e
 #[test]
 fn a_pool_save_that_changes_no_field_no_policy_no_member_and_no_guardrail_writes_nothing_and_answers_the_stamp_it_was_given(
 ) {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     budgeted_pool(&store);
     let read = store.pool("main").unwrap().unwrap();
     let changes = change_count(&store);
@@ -2368,7 +2381,7 @@ fn a_pool_save_that_changes_no_field_no_policy_no_member_and_no_guardrail_writes
 #[test]
 fn a_pool_save_whose_keepalive_policy_differs_in_key_order_and_whitespace_alone_writes_nothing_and_answers_the_stamp_it_was_given(
 ) {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_pool(
             &PoolRow {
@@ -2406,7 +2419,7 @@ fn a_pool_save_whose_keepalive_policy_differs_in_key_order_and_whitespace_alone_
 #[test]
 fn a_pool_save_that_changes_nothing_under_a_stale_stamp_or_another_incarnation_is_refused_as_stale()
 {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     budgeted_pool(&store);
     let first = store.pool("main").unwrap().unwrap();
     store
@@ -2458,7 +2471,7 @@ fn a_pool_save_that_changes_nothing_under_a_stale_stamp_or_another_incarnation_i
 #[test]
 fn a_pool_save_that_changes_the_keepalive_policy_alone_writes_one_pool_edit_naming_the_member_it_moved_and_moves_the_stamp(
 ) {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_pool(
             &PoolRow {
@@ -2506,7 +2519,7 @@ fn a_pool_save_that_changes_the_keepalive_policy_alone_writes_one_pool_edit_nami
 #[test]
 fn a_pool_created_with_a_keepalive_policy_lists_each_member_under_its_dotted_name_in_its_snapshot()
 {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_pool(
             &PoolRow {
@@ -2542,7 +2555,7 @@ fn a_pool_created_with_a_keepalive_policy_lists_each_member_under_its_dotted_nam
 #[test]
 fn a_first_save_over_a_pool_stored_with_an_empty_policy_names_each_member_it_gave_a_value_from_null(
 ) {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     let read = store.pool("main").unwrap().unwrap();
     assert_eq!(read.keepalive_json, "{}");
@@ -2574,7 +2587,7 @@ fn a_first_save_over_a_pool_stored_with_an_empty_policy_names_each_member_it_gav
 #[test]
 fn a_pool_created_with_an_empty_member_list_records_no_member_row_and_one_created_with_a_member_records_both(
 ) {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::ApiKey))
         .unwrap();
@@ -2605,7 +2618,7 @@ fn a_pool_created_with_an_empty_member_list_records_no_member_row_and_one_create
 fn the_index_refuses_a_direct_insert_the_check_would_have_caught() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    let store = Store::open(&path, &StorageKey::generate(), wall()).unwrap();
     a_in_p1(&store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     let refused = conn
@@ -2627,7 +2640,7 @@ fn the_index_refuses_a_direct_insert_the_check_would_have_caught() {
 
 #[test]
 fn two_key_edits_from_one_read_answer_stale_on_the_second() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     store
         .insert_api_key(
@@ -2685,7 +2698,7 @@ fn a_pool_deleted_and_created_again_inside_one_millisecond_refuses_the_predecess
     let dir = tempfile::tempdir().unwrap();
     let storage_key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     let first = store.insert_pool(&pool("main"), "test").unwrap();
     assert_eq!(
         first.incarnation, 1,
@@ -2745,7 +2758,7 @@ fn a_key_deleted_and_created_again_inside_one_millisecond_refuses_the_predecesso
     let dir = tempfile::tempdir().unwrap();
     let storage_key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &storage_key).unwrap();
+    let store = Store::open(&path, &storage_key, wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     let first = store
         .insert_api_key(
@@ -2813,7 +2826,7 @@ fn a_key_deleted_and_created_again_inside_one_millisecond_refuses_the_predecesso
 
 #[test]
 fn a_stale_account_update_carrying_enabled_and_a_cancellation_writes_nothing() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
@@ -2883,7 +2896,7 @@ fn insert_ready_api_key_account(store: &Store, id: &str) {
 }
 
 fn seeded_api_key_account(id: &str) -> Store {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     insert_ready_api_key_account(&store, id);
     store
 }
@@ -2925,7 +2938,7 @@ fn a_state_verdict_from_a_previous_incarnation_changes_nothing() {
 
 #[test]
 fn an_account_update_commits_its_secret_and_label_together_or_not_at_all() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .create_account(
             &account("a", AccountKind::ApiKey),
@@ -2991,7 +3004,7 @@ fn an_account_update_commits_its_secret_and_label_together_or_not_at_all() {
 
 #[test]
 fn a_recreated_account_never_answers_an_edit_token_its_predecessor_answered() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .create_account(&account("a", AccountKind::Oauth), None, 1, "admin")
         .unwrap();
@@ -3019,7 +3032,7 @@ fn a_recreated_account_never_answers_an_edit_token_its_predecessor_answered() {
 
 #[test]
 fn deleting_an_account_sets_each_selection_that_names_it_to_none() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     for id in ["a", "b"] {
         store
             .insert_account(&account(id, AccountKind::Oauth))
@@ -3074,7 +3087,7 @@ fn deleting_an_account_sets_each_selection_that_names_it_to_none() {
 
 #[test]
 fn a_write_from_before_the_deletion_is_refused_as_stale() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     for id in ["a", "b"] {
         store
             .insert_account(&account(id, AccountKind::Oauth))
@@ -3175,7 +3188,7 @@ fn paired_row(id: &str, account_uuid: &str) -> AccountRow {
 
 #[test]
 fn a_paired_account_is_born_ready_with_its_credential_attempt_and_change_in_one_write() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     let subscription = SubscriptionRow {
         tier: Some("default_claude_max_5x".into()),
         since: Some(1_773_482_400_000),
@@ -3333,7 +3346,7 @@ fn an_edit_token_too_wide_for_a_console_number_is_refused_by_its_own_row() {
 
 #[test]
 fn an_account_update_read_from_a_deleted_account_is_stale_on_the_one_that_took_its_id() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .create_account(
             &account("a", AccountKind::ApiKey),
@@ -3404,7 +3417,7 @@ fn an_account_update_read_from_a_deleted_account_is_stale_on_the_one_that_took_i
 
 #[test]
 fn every_write_that_changes_a_dispatch_input_moves_the_account_revision() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::ApiKey))
         .unwrap();
@@ -3428,7 +3441,7 @@ fn every_write_that_changes_a_dispatch_input_moves_the_account_revision() {
 
 #[test]
 fn deleting_an_account_cascades_and_the_load_reads_everything() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::ApiKey))
         .unwrap();
@@ -3452,7 +3465,7 @@ fn deleting_an_account_cascades_and_the_load_reads_everything() {
 
 #[test]
 fn the_newest_change_id_is_the_mirrors_starting_watermark() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     assert_eq!(store.newest_registry_change_id().unwrap(), None);
     store
         .insert_account(&account("a", AccountKind::Oauth))
@@ -3480,7 +3493,7 @@ fn the_newest_change_id_is_the_mirrors_starting_watermark() {
 fn every_key_write_stamps_updated_at_and_a_use_leaves_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    let store = Store::open(&path, &StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("p"), "test").unwrap();
     let created_at = store
         .insert_api_key(&key(&store, "k", "p", "secret-one"), "test")
@@ -3531,7 +3544,7 @@ fn every_key_write_stamps_updated_at_and_a_use_leaves_it() {
 fn two_key_updates_inside_one_millisecond_read_two_different_stamps() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    let store = Store::open(&path, &StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("p"), "test").unwrap();
     let created_at = store
         .insert_api_key(&key(&store, "k", "p", "secret-one"), "test")
@@ -3605,7 +3618,7 @@ fn two_key_updates_inside_one_millisecond_read_two_different_stamps() {
 fn the_history_purge_cuts_old_resolved_attempts_and_changes_and_keeps_what_their_readers_need() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    let store = Store::open(&path, &StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
@@ -3754,7 +3767,7 @@ fn the_history_purge_cuts_old_resolved_attempts_and_changes_and_keeps_what_their
 
 #[test]
 fn a_pool_stores_round_robin_and_the_subscription_preference_is_the_operators_alone() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     let mut row = pool("rr");
     row.strategy = Strategy::RoundRobin;
     row.prefer_subscription = true;
@@ -3811,7 +3824,7 @@ fn account_edit<'a>(store: &Store, id: &'a str, label: &'a str) -> AccountUpdate
 
 #[test]
 fn a_pool_edit_records_each_field_it_changed_with_its_value_before_and_after_and_nothing_else() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     let created = pool("main");
     store
         .insert_pool(
@@ -3868,7 +3881,7 @@ fn a_pool_edit_records_each_field_it_changed_with_its_value_before_and_after_and
 
 #[test]
 fn a_key_edit_records_each_field_it_changed_with_its_value_before_and_after_and_nothing_else() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     store
         .insert_api_key(
@@ -3910,7 +3923,7 @@ fn a_key_edit_records_each_field_it_changed_with_its_value_before_and_after_and_
 
 #[test]
 fn a_creation_records_the_rows_snapshot() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     store
         .insert_api_key(
@@ -3939,7 +3952,7 @@ fn a_creation_records_the_rows_snapshot() {
 
 #[test]
 fn an_account_edit_of_the_label_and_the_end_records_two_pairs_and_no_secret_flag() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("plan", AccountKind::Oauth))
         .unwrap();
@@ -3974,7 +3987,7 @@ fn an_account_edit_of_the_label_and_the_end_records_two_pairs_and_no_secret_flag
 
 #[test]
 fn an_uncancel_records_the_end_the_update_drops_as_null() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("plan", AccountKind::Oauth))
         .unwrap();
@@ -4055,7 +4068,7 @@ fn an_account_edit_that_stages_a_secret_records_the_flag_beside_its_pairs_and_ne
 
 #[test]
 fn a_pause_and_a_resume_each_record_the_enabled_pair_and_a_repeated_pause_writes_nothing() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
@@ -4094,7 +4107,7 @@ fn a_pause_and_a_resume_each_record_the_enabled_pair_and_a_repeated_pause_writes
 
 #[test]
 fn an_edit_of_an_absent_pool_key_or_account_answers_not_found_and_writes_nothing() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     let logged = store.registry_changes_after(0, 100).unwrap().len();
     assert!(matches!(
@@ -4127,7 +4140,7 @@ fn an_edit_of_an_absent_pool_key_or_account_answers_not_found_and_writes_nothing
 
 #[test]
 fn an_account_update_is_fenced_on_the_revision_it_was_built_from() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     let row = account("vendor", AccountKind::ApiKey);
     store
         .create_account(&row, Some(&Secret::new("k1")), 1, "admin")
@@ -4169,7 +4182,7 @@ fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_an
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let lost = StorageKey::generate();
-    let store = Store::open(&path, &lost).unwrap();
+    let store = Store::open(&path, &lost, wall()).unwrap();
     store
         .insert_account(&account("claude", AccountKind::Oauth))
         .unwrap();
@@ -4227,7 +4240,7 @@ fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_an
 
     let new = StorageKey::generate();
     assert!(matches!(
-        Store::open(&path, &new),
+        Store::open(&path, &new, wall()),
         Err(StoreError::KeyMismatch { .. })
     ));
     rusqlite::Connection::open(&path)
@@ -4240,7 +4253,7 @@ fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_an
         "nothing sealed is left to prove a key against"
     );
 
-    let store = Store::open(&path, &new).unwrap();
+    let store = Store::open(&path, &new, wall()).unwrap();
     assert_eq!(
         Store::read_canary(&path, &new).unwrap(),
         CanaryRead::Matches,
@@ -4313,7 +4326,7 @@ fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_an
 fn a_recovery_keeps_the_stamp_of_a_state_that_holds_and_stamps_a_state_it_changes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
-    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    let store = Store::open(&path, &StorageKey::generate(), wall()).unwrap();
     let anchor = |id: &str, state: AccountState, at: i64| {
         store
             .create_account(&account(id, AccountKind::Oauth), None, 1, "admin")
@@ -4344,7 +4357,7 @@ fn a_recovery_keeps_the_stamp_of_a_state_that_holds_and_stamps_a_state_it_change
     recovery.discard_sealed(&new, StateCause::Operator).unwrap();
     drop(recovery);
 
-    let store = Store::open(&path, &new).unwrap();
+    let store = Store::open(&path, &new, wall()).unwrap();
     let read = |id: &str| {
         (
             store.account(id).unwrap().unwrap().state,
@@ -4407,7 +4420,7 @@ fn seed_subjects(store: &Store) {
 }
 
 fn guarded_store() -> Store {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     seed_subjects(&store);
     store
 }
@@ -5410,7 +5423,7 @@ fn a_row_whose_conditions_do_not_parse_or_whose_mode_is_an_unknown_word_fails_th
         let dir = tempfile::tempdir().unwrap();
         let key = StorageKey::generate();
         let path = dir.path().join("router.sqlite");
-        let store = Store::open(&path, &key).unwrap();
+        let store = Store::open(&path, &key, wall()).unwrap();
         seed_subjects(&store);
         store
             .insert_guardrail(&guardrail("g1", None), &ids(&["main"]), &[], "test")
@@ -5424,7 +5437,7 @@ fn a_row_whose_conditions_do_not_parse_or_whose_mode_is_an_unknown_word_fails_th
         )
         .unwrap();
         drop(conn);
-        let store = Store::open(&path, &key).unwrap();
+        let store = Store::open(&path, &key, wall()).unwrap();
         assert!(
             matches!(
                 store.load_registry(),

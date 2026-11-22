@@ -38,6 +38,11 @@ pub const A: &str = "sk-ant-oat01-AAAA";
 pub const B: &str = "sk-ant-oat01-BBBB";
 pub const C: &str = "sk-ant-api03-CCCC";
 
+/// The wall clock, for a case that reads no stamp.
+pub fn wall() -> Clock {
+    Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 pub struct Harness {
     pub app: axum::Router,
     pub bus: Bus,
@@ -87,7 +92,7 @@ pub async fn harness(
     capture: (u32, Option<u32>),
     config: LedgerConfig,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     harness_on(store, db, up, accounts, capture, config, false).await
 }
@@ -100,7 +105,7 @@ pub async fn harness_with_poll(
     capture: (u32, Option<u32>),
     config: LedgerConfig,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     harness_on(store, db, up, accounts, capture, config, true).await
 }

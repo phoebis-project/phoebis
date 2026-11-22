@@ -3,6 +3,7 @@
 mod common;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -448,11 +449,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // The private mode the key reader expects, so the read warns nothing.
     std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
     let key = StorageKey::from_file(&key_file).unwrap();
-    let parts = common::admin_parts_full_on_polled(
-        Arc::new(Store::open_in_memory(&key).unwrap()),
-        MIRROR_POLL,
-    )
-    .await;
+    let clock_cell = Arc::new(AtomicI64::new(common::NOW));
+    let store = Arc::new(Store::open_in_memory(&key, common::clock_of(&clock_cell)).unwrap());
+    let parts = common::admin_parts_full_on_polled(store, clock_cell, MIRROR_POLL).await;
     // The mirror's own starting point, since the harness writes the registry before it spawns the ledger and never
     // after.
     let baseline = parts

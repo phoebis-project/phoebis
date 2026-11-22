@@ -9,6 +9,11 @@ use phoebis_profile::fixtures::{
 use std::net::TcpListener;
 use std::sync::Mutex;
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> phoebis_store::Clock {
+    std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 /// `app::run` reads the admin secret from the process environment, and the tests in this binary set the same
 /// variables to different values, so each holds this across its whole set-then-run sequence.
 static ENV: Mutex<()> = Mutex::new(());
@@ -486,6 +491,7 @@ usage:
     let store = phoebis_store::Store::open(
         &dir.path().join("phoebis.sqlite"),
         &phoebis_store::StorageKey::from_file(&dir.path().join("storage.key")).unwrap(),
+        wall(),
     )
     .unwrap();
     assert!(
@@ -2955,7 +2961,7 @@ async fn a_start_after_a_band_threshold_moved_re_prices_the_hour_at_the_new_band
 /// returned `Store` drops at the end of the caller's scope, before `run` opens the same file.
 fn seed_oauth_account(db_path: &std::path::Path, key_path: &std::path::Path) {
     let key = phoebis_store::StorageKey::from_file(key_path).unwrap();
-    let store = phoebis_store::Store::open(db_path, &key).unwrap();
+    let store = phoebis_store::Store::open(db_path, &key, wall()).unwrap();
     if store.accounts().unwrap().is_empty() {
         store
             .insert_account(&phoebis_store::AccountRow {
@@ -3084,6 +3090,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     phoebis_store::Store::open(
         &db_path,
         &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+        wall(),
     )
     .unwrap()
     .set_profile(
@@ -3198,6 +3205,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     let store = phoebis_store::Store::open(
         &db_path,
         &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+        crate::wall(),
     )
     .unwrap();
     let pin = store
@@ -3272,6 +3280,7 @@ async fn a_refresh_left_in_flight_is_quarantined_at_the_start_and_the_routing_lo
     phoebis_store::Store::open(
         &db_path,
         &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+        wall(),
     )
     .unwrap()
     .open_refresh_attempt("a", 1, 1, 1)
@@ -3367,6 +3376,7 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
         let store = phoebis_store::Store::open(
             &db_path,
             &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+            wall(),
         )
         .unwrap();
         pair_oauth(
@@ -3769,6 +3779,7 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
             if let Ok(store) = phoebis_store::Store::open(
                 &db_path,
                 &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+                wall(),
             ) {
                 drop(store);
                 break;
@@ -3834,6 +3845,7 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
             phoebis_store::Store::open(
                 &db_path,
                 &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+                wall(),
             )
             .unwrap(),
         );
@@ -3941,7 +3953,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
     // The run before this one: `a` read near its limit, `b` barely touched, both a day from their reset.
     let reset = jiff::Timestamp::now().as_millisecond() + 86_400_000;
     {
-        let store = phoebis_store::Store::open(&db_path, &storage_key()).unwrap();
+        let store = phoebis_store::Store::open(&db_path, &storage_key(), wall()).unwrap();
         pair_oauth(&store, "a", A_TOKEN, "00000000-0000-4000-8000-00000000000a");
         pair_oauth(&store, "b", B_TOKEN, "00000000-0000-4000-8000-00000000000b");
         store
@@ -4117,7 +4129,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
     // holder left went with it.
     let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let store = loop {
-        if let Ok(store) = phoebis_store::Store::open(&db_path, &storage_key()) {
+        if let Ok(store) = phoebis_store::Store::open(&db_path, &storage_key(), wall()) {
             break store;
         }
         assert!(
@@ -4161,7 +4173,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
     server.await.unwrap().unwrap();
     let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let store = loop {
-        if let Ok(store) = phoebis_store::Store::open(&db_path, &storage_key()) {
+        if let Ok(store) = phoebis_store::Store::open(&db_path, &storage_key(), wall()) {
             break store;
         }
         assert!(

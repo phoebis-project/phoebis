@@ -12,6 +12,11 @@ use std::process::{Command, Output};
 
 use phoebis_store::{AccountKind, AccountRow, AccountState, NewBundle, Secret, StorageKey, Store};
 
+/// The wall clock, for a case that reads no stamp.
+fn wall() -> phoebis_store::Clock {
+    std::sync::Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 const HEX_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn config_file(dir: &Path, name: &str, extra: &str) -> PathBuf {
@@ -142,7 +147,7 @@ fn assert_refused_as_a_mismatch(out: &Output, registry: &Path) {
 /// A registry holding one committed credential bundle and no canary, the shape a registry sealed before the canary
 /// existed has.
 fn registry_from_before_the_canary(registry: &Path, key: &StorageKey) {
-    let store = Store::open(registry, key).unwrap();
+    let store = Store::open(registry, key, wall()).unwrap();
     store
         .insert_account(&AccountRow {
             state: AccountState::Unpaired,
@@ -655,7 +660,7 @@ fn a_registry_sealed_under_another_key_fails_check_config_naming_the_path() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path(), "mismatch", "");
     let registry = dir.path().join("router.sqlite");
-    drop(Store::open(&registry, &StorageKey::generate()).unwrap());
+    drop(Store::open(&registry, &StorageKey::generate(), wall()).unwrap());
     let out = check_config(&mut phoebis(), &config);
     assert_refused_as_a_mismatch(&out, &registry);
 }
@@ -714,7 +719,7 @@ fn a_registry_a_newer_build_wrote_fails_check_config_naming_the_path_and_both_ve
     let config = config_file(dir.path(), "newer-registry", "");
     let registry = dir.path().join("router.sqlite");
     let key = StorageKey::from_file(&dir.path().join("storage.key")).unwrap();
-    Store::open(&registry, &key)
+    Store::open(&registry, &key, wall())
         .unwrap()
         .debug_set_schema_version(99)
         .unwrap();

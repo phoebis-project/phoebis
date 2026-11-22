@@ -10,7 +10,7 @@ version.workspace = true
 # crate's own below, turn it on for a test build, so a release build carries no way to damage a stored
 # credential.
 debug-hooks = []
-# The test builders of the registry's rows, so a release build carries none of them.
+# The test builders of the registry's rows and the in-memory open, so a release build carries none of them.
 test-support = []
 
 [dependencies]
