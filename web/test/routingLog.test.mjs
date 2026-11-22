@@ -517,7 +517,7 @@ const candidate = (o) => ({
   kind: 'oauth',
   obstacle: null,
   overage: null,
-  pace: { deadline: null, end: null, fableReservation: null, hours: 120, remaining: 0.91, reset: null, score: 0.0076 },
+  pace: { deadline: null, end: null, fableReservation: null, hours: 120, remaining: 0.91, reset: null, score: 0.0076, window: null },
   partition: null,
   planTier: 'default_claude_max_20x',
   prefix: NO_PREFIX,
@@ -734,7 +734,7 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.equal(chosen.pace, '0.76 %/h');
   assert.deepEqual(chosen.verdict, { badge: 'chosen', badgeTone: 'accent', chip: null, chosen: true, tone: null });
   assert.deepEqual(cell({ windows: { five_hour: window5h(1, ms(15, 42), 'poll', 120_000), seven_day: window5h(0.88, null, 'poll', 120_000) } }).windows, [['100%', '15:42', 'poll 2 min'], ['88%', 'no reset', 'poll 2 min'], ['not reported']]);
-  const key = cell({ accountId: 'overflow', kind: 'api_key', pace: { deadline: null, end: null, fableReservation: null, hours: null, remaining: 0.96, reset: null, score: 0.96 }, planTier: null, priority: 1, tier: [2, 1, 0], windows: { worst_bucket: window5h(0.04, ms(14, 28, 8)) } });
+  const key = cell({ accountId: 'overflow', kind: 'api_key', pace: { deadline: null, end: null, fableReservation: null, hours: null, remaining: 0.96, reset: null, score: 0.96, window: null }, planTier: null, priority: 1, tier: [2, 1, 0], windows: { worst_bucket: window5h(0.04, ms(14, 28, 8)) } });
   assert.deepEqual([key.plan, key.tier, key.windows, key.pace], ['API key', 'paid P1', [['worst bucket 4%']], '96% left']);
   assert.equal(cell({ inOverage: true, tier: [1, 0, 1] }).tier, 'overage P0');
   assert.equal(cell({ pace: null }).pace, '-');

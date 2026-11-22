@@ -1523,7 +1523,7 @@ const paceWindowWord = (id: string): string => windowEntry(WINDOW_LABEL, id) ?? 
  * tier, and keeps it where a share that lapsed at its reset or was not yet read leaves no spend entry, so the shape
  * marks the class and neither the entry nor the tier does.
  */
-const isSpendSeat = (c: RecordCandidate): boolean => c.kind === 'oauth' && c.pace !== null && c.pace.hours === null && c.pace.deadline === null && (c.pace.window ?? null) === null;
+const isSpendSeat = (c: RecordCandidate): boolean => c.kind === 'oauth' && c.pace !== null && c.pace.hours === null && c.pace.deadline === null && c.pace.window === null;
 
 /**
  * A seat whose record carries the spend entry: the cells draw the reading the entry holds, while the title and the
@@ -1554,8 +1554,7 @@ const scoreUnit = (c: RecordCandidate, record: DecisionRecord): FactUnit => {
   const fact = record.walk.find((s) => s.step === 'pick')?.facts.find((f) => f.key === 'score' && f.accountId === c.accountId);
   const unit = unitOf(fact?.unit ?? null);
   if (unit !== null) return unit;
-  // A pace built by hand without the window key names no window, as a null one does.
-  return c.pace !== null && c.pace.hours === null && (c.pace.window ?? null) === null ? 'percent' : 'percent_per_hour';
+  return c.pace !== null && c.pace.hours === null && c.pace.window === null ? 'percent' : 'percent_per_hour';
 };
 
 /**
@@ -1567,8 +1566,7 @@ function paceTitle(c: RecordCandidate, record: DecisionRecord, now: number): str
   if (p === null) return null;
   if (c.kind === 'api_key') return `${fmtPct(p.remaining)} of its worst live bucket left. Scored by the remaining share alone, with no division by hours.`;
   if (isSpendSeat(c)) return `${fmtPct(p.remaining)} of its allowance left. Scored by the remaining share alone, with no division by hours.`;
-  // A pace built by hand without the key names no window, as a null one does.
-  const id = p.window ?? null;
+  const id = p.window;
   const share = id === null ? 'its window' : `the ${paceWindowWord(id)} window`;
   const reserved = p.fableReservation;
   const left = `${fmtPct(p.remaining)} of ${share} left${reserved === null ? '' : `, less ${fmtPct(reserved)} reserved for Fable,`}`;
