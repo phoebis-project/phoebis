@@ -2212,8 +2212,8 @@ async fn a_read_waiting_on_the_registry_leaves_the_bus_arm_free() {
     let before = rig.store.debug_lock_count();
     let reading = std::thread::spawn({
         let attention = attention.clone();
-        // The read runs on a runtime of the thread's own. The case's runtime runs no task while the body below waits,
-        // and a task of the rig that ran beside the case on a second worker would move the lock count too.
+        // The case's runtime runs no task while the body below waits, so a read spawned there would not start, and a
+        // task of the rig that ran beside the case on a second worker would move the lock count too.
         move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .build()
