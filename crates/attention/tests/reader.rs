@@ -35,8 +35,8 @@ fn find<'a>(conditions: &'a [Condition], kind: Kind, subject: &str) -> Option<&'
         .find(|c| c.kind == kind && c.subject.id == subject)
 }
 
-fn read(attention: &Attention, at: i64) -> Vec<Condition> {
-    attention.conditions_blocking(at).unwrap()
+async fn read(attention: &Arc<Attention>, at: i64) -> Vec<Condition> {
+    attention.conditions(at).await.unwrap()
 }
 
 /// Every series of the read as `(kind, subject, holds)`, sorted, since the pools and the drift records come in
@@ -55,7 +55,7 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     assert_eq!(
-        series(&read(&attention, NOW)),
+        series(&read(&attention, NOW).await),
         [
             ("destination_spent", "business".to_string(), false),
             ("expired_between_turns", "keepalive".to_string(), false),
@@ -95,7 +95,7 @@ async fn each_loaded_pair_has_a_series_of_both_certificate_kinds_at_zero_while_n
     ]);
     let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs));
     assert_eq!(
-        series(&read(&attention, NOW)),
+        series(&read(&attention, NOW).await),
         [
             ("certificate_expiring", "admin.tls".to_string(), false),
             ("certificate_expiring", "proxy.tls".to_string(), false),
@@ -142,7 +142,7 @@ async fn a_pool_exhaustion_holds_from_its_first_exhausted_outcome_until_a_reques
         attention.observe(&observed(id, Some("desktop"), "main"));
         attention.observe(&complete(id, Outcome::Exhausted, None, None, at));
     }
-    let conditions = read(&attention, NOW + 3_000);
+    let conditions = read(&attention, NOW + 3_000).await;
     let held = find(&conditions, Kind::PoolExhausted, "main").unwrap();
     assert_eq!(
         (
@@ -171,13 +171,17 @@ async fn a_pool_exhaustion_holds_from_its_first_exhausted_outcome_until_a_reques
         attention.observe(&complete(id, outcome, None, None, NOW + 4_000));
     }
     assert!(
-        find(&read(&attention, NOW + 4_000), Kind::PoolExhausted, "main")
-            .unwrap()
-            .holds
+        find(
+            &read(&attention, NOW + 4_000).await,
+            Kind::PoolExhausted,
+            "main"
+        )
+        .unwrap()
+        .holds
     );
     attention.observe(&observed("r5", Some("desktop"), "main"));
     attention.observe(&complete("r5", Outcome::Succeeded, None, None, NOW + 5_000));
-    let cleared = read(&attention, NOW + 5_000);
+    let cleared = read(&attention, NOW + 5_000).await;
     let cleared = find(&cleared, Kind::PoolExhausted, "main").unwrap();
     assert_eq!(
         (cleared.holds, cleared.since),
@@ -191,7 +195,7 @@ async fn an_exhausted_completion_holds_its_pool_with_no_observation_before_it() 
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     attention.observe(&complete("r1", Outcome::Exhausted, None, None, NOW));
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let held = find(&conditions, Kind::PoolExhausted, "main").unwrap();
     assert_eq!(
         (held.holds, held.since, &held.detail),
@@ -208,7 +212,7 @@ async fn a_drift_refusal_holds_until_a_request_from_that_version_is_relayed_and_
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     assert!(
-        find(&read(&attention, NOW), Kind::ClientDrift, "2.1.274").is_none(),
+        find(&read(&attention, NOW).await, Kind::ClientDrift, "2.1.274").is_none(),
         "a version never refused has no series"
     );
     attention.observe(&observed("d1", Some("desktop"), "main"));
@@ -219,7 +223,7 @@ async fn a_drift_refusal_holds_until_a_request_from_that_version_is_relayed_and_
         Some("2.1.274"),
         NOW + 1_000,
     ));
-    let conditions = read(&attention, NOW + 1_000);
+    let conditions = read(&attention, NOW + 1_000).await;
     let drift = find(&conditions, Kind::ClientDrift, "2.1.274").unwrap();
     assert_eq!(
         (
@@ -258,9 +262,13 @@ async fn a_drift_refusal_holds_until_a_request_from_that_version_is_relayed_and_
         NOW + 2_000,
     ));
     assert!(
-        find(&read(&attention, NOW + 2_000), Kind::ClientDrift, "2.1.274")
-            .unwrap()
-            .holds
+        find(
+            &read(&attention, NOW + 2_000).await,
+            Kind::ClientDrift,
+            "2.1.274"
+        )
+        .unwrap()
+        .holds
     );
     attention.observe(&observed("d4", Some("desktop"), "main"));
     attention.observe(&complete(
@@ -270,7 +278,7 @@ async fn a_drift_refusal_holds_until_a_request_from_that_version_is_relayed_and_
         Some("2.1.274"),
         NOW + 3_000,
     ));
-    let conditions = read(&attention, NOW + 3_000);
+    let conditions = read(&attention, NOW + 3_000).await;
     let cleared = find(&conditions, Kind::ClientDrift, "2.1.274")
         .expect("a cleared version keeps its series");
     assert_eq!((cleared.holds, cleared.since), (false, None));
@@ -282,7 +290,7 @@ async fn a_drift_refusal_holds_until_a_request_from_that_version_is_relayed_and_
         Some("2.1.274"),
         NOW + 9_000,
     ));
-    let conditions = read(&attention, NOW + 9_000);
+    let conditions = read(&attention, NOW + 9_000).await;
     let again = find(&conditions, Kind::ClientDrift, "2.1.274").unwrap();
     assert_eq!(
         (again.holds, again.since, &again.detail["trigger"]),
@@ -307,7 +315,7 @@ async fn a_keyless_drift_refusal_names_no_key_and_carries_no_link() {
         Some("2.1.274"),
         NOW,
     ));
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let drift = find(&conditions, Kind::ClientDrift, "2.1.274").unwrap();
     assert_eq!(
         (
@@ -327,13 +335,13 @@ async fn a_drift_refusal_without_a_version_clears_on_a_relayed_request_without_o
     attention.observe(&observed("d1", Some("desktop"), "main"));
     attention.observe(&complete("d1", Outcome::Rejected, Some("hash"), None, NOW));
     assert!(
-        find(&read(&attention, NOW), Kind::ClientDrift, "unknown")
+        find(&read(&attention, NOW).await, Kind::ClientDrift, "unknown")
             .unwrap()
             .holds
     );
     attention.observe(&observed("d2", Some("desktop"), "main"));
     attention.observe(&complete("d2", Outcome::Succeeded, None, None, NOW + 1_000));
-    let conditions = read(&attention, NOW + 1_000);
+    let conditions = read(&attention, NOW + 1_000).await;
     let cleared = find(&conditions, Kind::ClientDrift, "unknown").unwrap();
     assert_eq!((cleared.holds, cleared.since), (false, None));
 }
@@ -384,9 +392,13 @@ async fn a_drift_condition_clears_only_on_a_relayed_client_inference_of_its_vers
             NOW + 1_000,
         ));
         assert!(
-            find(&read(&attention, NOW + 1_000), Kind::ClientDrift, "2.1.274")
-                .unwrap()
-                .holds,
+            find(
+                &read(&attention, NOW + 1_000).await,
+                Kind::ClientDrift,
+                "2.1.274"
+            )
+            .unwrap()
+            .holds,
             "a succeeded {} {} leaves the condition held",
             origin.as_str(),
             kind.as_str()
@@ -401,9 +413,13 @@ async fn a_drift_condition_clears_only_on_a_relayed_client_inference_of_its_vers
         NOW + 2_000,
     ));
     assert!(
-        !find(&read(&attention, NOW + 2_000), Kind::ClientDrift, "2.1.274")
-            .unwrap()
-            .holds
+        !find(
+            &read(&attention, NOW + 2_000).await,
+            Kind::ClientDrift,
+            "2.1.274"
+        )
+        .unwrap()
+        .holds
     );
 }
 
@@ -414,7 +430,7 @@ async fn a_flood_of_refused_versions_keeps_the_newest_sixteen_series_on_the_read
     for n in 0..40 {
         refuse(&attention, &format!("d{n}"), &format!("2.1.{n}"), NOW + n);
     }
-    let conditions = read(&attention, NOW + 40);
+    let conditions = read(&attention, NOW + 40).await;
     let mut want: Vec<String> = (24..40).map(|n| format!("2.1.{n}")).collect();
     want.sort();
     assert_eq!(
@@ -440,7 +456,7 @@ async fn a_flood_of_refused_versions_keeps_the_newest_sixteen_series_on_the_read
         Some("2.1.39"),
         NOW + 50,
     ));
-    let cleared = read(&attention, NOW + 50);
+    let cleared = read(&attention, NOW + 50).await;
     let cleared = find(&cleared, Kind::ClientDrift, "2.1.39").unwrap();
     assert_eq!((cleared.holds, cleared.since), (false, None));
 }
@@ -463,7 +479,7 @@ async fn at_the_cap_a_new_version_evicts_the_oldest_cleared_version_before_any_h
         ));
     }
     refuse(&attention, "d16", "2.1.16", NOW + 30);
-    let subjects = drift_subjects(&read(&attention, NOW + 30));
+    let subjects = drift_subjects(&read(&attention, NOW + 30).await);
     assert_eq!(subjects.len(), 16);
     assert!(
         !subjects.contains(&"2.1.5".to_string()) && subjects.contains(&"2.1.9".to_string()),
@@ -495,7 +511,7 @@ async fn a_version_that_does_not_read_as_a_release_files_under_one_other_subject
     {
         refuse(&attention, &format!("d{n}"), version, NOW);
     }
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let mut want = vec![widest.clone(), "2.1.286.1".to_string(), "other".to_string()];
     want.sort();
     assert_eq!(
@@ -548,7 +564,7 @@ async fn the_account_states_hold_by_kind_and_date_from_the_instant_the_registry_
     let (attention, _arm) = rig.attention(None);
     mark(&rig, "business", AccountState::ReauthRequired, NOW + 1_000);
     mark(&rig, "direct", AccountState::FundingRequired, NOW + 2_000);
-    let conditions = read(&attention, NOW + 5_000);
+    let conditions = read(&attention, NOW + 5_000).await;
     let reauth = find(&conditions, Kind::ReauthRequired, "business").unwrap();
     assert_eq!(
         (reauth.holds, reauth.since, &reauth.pools, &reauth.detail),
@@ -571,7 +587,7 @@ async fn the_account_states_hold_by_kind_and_date_from_the_instant_the_registry_
     );
     mark(&rig, "business", AccountState::Ready, NOW + 6_000);
     mark(&rig, "direct", AccountState::Ready, NOW + 6_000);
-    let conditions = read(&attention, NOW + 7_000);
+    let conditions = read(&attention, NOW + 7_000).await;
     assert!(
         !find(&conditions, Kind::ReauthRequired, "business")
             .unwrap()
@@ -583,7 +599,7 @@ async fn the_account_states_hold_by_kind_and_date_from_the_instant_the_registry_
             .holds
     );
     mark(&rig, "business", AccountState::ReauthRequired, NOW + 8_000);
-    let conditions = read(&attention, NOW + 9_000);
+    let conditions = read(&attention, NOW + 9_000).await;
     assert_eq!(
         find(&conditions, Kind::ReauthRequired, "business")
             .unwrap()
@@ -593,7 +609,7 @@ async fn the_account_states_hold_by_kind_and_date_from_the_instant_the_registry_
     );
     // The relay marks an API key the upstream refuses as it marks an OAuth login whose refresh is gone.
     mark(&rig, "direct", AccountState::ReauthRequired, NOW + 10_000);
-    let conditions = read(&attention, NOW + 12_000);
+    let conditions = read(&attention, NOW + 12_000).await;
     let refused = find(&conditions, Kind::ReauthRequired, "direct").unwrap();
     assert_eq!(
         (refused.holds, refused.since, &refused.pools, &refused.link),
@@ -642,13 +658,23 @@ async fn an_ended_account_raises_the_feature_kind_while_a_selection_names_it_and
         .unwrap();
     select_artifacts(&rig, "main", Some("a")).await;
     assert_eq!(
-        find(&read(&attention, NOW), Kind::FeatureAccountUnavailable, "a").map(|c| c.holds),
+        find(
+            &read(&attention, NOW).await,
+            Kind::FeatureAccountUnavailable,
+            "a"
+        )
+        .map(|c| c.holds),
         Some(true),
         "a ready account past its subscription's end refuses the pool's Artifacts calls"
     );
     select_artifacts(&rig, "main", None).await;
     assert_eq!(
-        find(&read(&attention, NOW), Kind::FeatureAccountUnavailable, "a").map(|c| c.holds),
+        find(
+            &read(&attention, NOW).await,
+            Kind::FeatureAccountUnavailable,
+            "a"
+        )
+        .map(|c| c.holds),
         Some(false),
         "an ended account no selection names refuses no feature call"
     );
@@ -678,7 +704,7 @@ async fn an_account_a_pool_selects_without_being_its_member_joins_that_pools_car
     guest.feature_accounts.connectors = Some("a".into());
     rig.store.insert_pool(&guest, "test").unwrap();
     rig.router.reload().await.unwrap();
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let item = find(&conditions, Kind::FeatureAccountUnavailable, "a").unwrap();
     assert_eq!(
         (item.holds, &item.pools),
@@ -717,7 +743,7 @@ async fn an_account_that_two_pools_and_a_key_select_names_each_pool_once_and_its
     guest.feature_accounts.artifacts = Some("business".into());
     rig.store.insert_pool(&guest, "test").unwrap();
     rig.router.reload().await.unwrap();
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let item = find(&conditions, Kind::FeatureAccountUnavailable, "business").unwrap();
     assert_eq!(
         (item.holds, &item.pools, &item.detail["selections"]),
@@ -750,7 +776,7 @@ async fn an_ended_accounts_item_dates_from_the_end_that_has_passed() {
         .unwrap();
     assert!(rig.store.set_plan_ended("a", NOW - DAY).unwrap());
     select_artifacts(&rig, "main", Some("a")).await;
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let item = find(&conditions, Kind::FeatureAccountUnavailable, "a").unwrap();
     assert_eq!(
         (item.holds, item.since),
@@ -765,7 +791,7 @@ async fn an_unready_accounts_feature_item_dates_from_the_change_to_its_state() {
     let (attention, _arm) = rig.attention(None);
     mark(&rig, "business", AccountState::ReauthRequired, NOW + 1_000);
     select_artifacts(&rig, "main", Some("business")).await;
-    let conditions = read(&attention, NOW + 5_000);
+    let conditions = read(&attention, NOW + 5_000).await;
     let item = find(&conditions, Kind::FeatureAccountUnavailable, "business").unwrap();
     assert_eq!((item.holds, item.since), (true, Some(NOW + 1_000)));
 }
@@ -787,7 +813,7 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
             detail: "invalid_grant".into(),
         },
     );
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let one = find(&conditions, Kind::RefreshFailed, "business").unwrap();
     assert_eq!(
         (one.holds, &one.detail["failures"]),
@@ -815,7 +841,7 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
         .unwrap()
         .attempts;
     assert!(attempts[1].started_at < attempts[0].started_at);
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let held = find(&conditions, Kind::RefreshFailed, "business").unwrap();
     assert_eq!(
         (held.holds, held.since, &held.detail),
@@ -829,7 +855,7 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
     rig.store
         .resolve_refresh_attempt(lost, 1, AttemptOutcome::Committed)
         .unwrap();
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let cleared = find(&conditions, Kind::RefreshFailed, "business").unwrap();
     assert_eq!((cleared.holds, cleared.since), (false, None));
 }
@@ -887,7 +913,7 @@ async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() 
         "the commit settles both rows, the retry first"
     );
     assert_eq!(attempts[0].resolved_at, attempts[1].resolved_at);
-    let cleared = read(&attention, NOW);
+    let cleared = read(&attention, NOW).await;
     let cleared = find(&cleared, Kind::RefreshFailed, "business").unwrap();
     assert_eq!(
         (cleared.holds, &cleared.detail["failures"]),
@@ -903,7 +929,7 @@ async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() 
             detail: "invalid_grant".into(),
         },
     );
-    let one = read(&attention, NOW);
+    let one = read(&attention, NOW).await;
     let one = find(&one, Kind::RefreshFailed, "business").unwrap();
     assert_eq!((one.holds, &one.detail["failures"]), (false, &json!(1)));
     resolve(
@@ -913,7 +939,7 @@ async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() 
             detail: "invalid_grant".into(),
         },
     );
-    let held = read(&attention, NOW);
+    let held = read(&attention, NOW).await;
     let held = find(&held, Kind::RefreshFailed, "business").unwrap();
     assert_eq!((held.holds, &held.detail["failures"]), (true, &json!(2)));
 }
@@ -979,7 +1005,7 @@ async fn a_pairing_that_supersedes_a_pending_retry_leaves_no_refresh_run() {
         ]
     );
     let (attention, _arm) = rig.attention(None);
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let cleared = find(&conditions, Kind::RefreshFailed, "business").unwrap();
     assert_eq!(
         (cleared.holds, cleared.since, &cleared.detail),
@@ -1006,7 +1032,7 @@ async fn a_refresh_run_is_read_back_by_a_second_reader_over_the_same_store() {
         );
     }
     assert!(
-        find(&read(&first, NOW), Kind::RefreshFailed, "business")
+        find(&read(&first, NOW).await, Kind::RefreshFailed, "business")
             .unwrap()
             .holds
     );
@@ -1014,7 +1040,7 @@ async fn a_refresh_run_is_read_back_by_a_second_reader_over_the_same_store() {
     drop(first);
     let (second, _arm) = rig.attention(None);
     assert!(
-        find(&read(&second, NOW), Kind::RefreshFailed, "business")
+        find(&read(&second, NOW).await, Kind::RefreshFailed, "business")
             .unwrap()
             .holds,
         "the run lives in the store, so a restart keeps it"
@@ -1051,7 +1077,7 @@ async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_through_a_failed
     let rig = rig().await;
     let usage = usage_over(&rig, &up);
     let (attention, _arm) = rig.attention(Some(usage.clone()));
-    let before = read(&attention, NOW);
+    let before = read(&attention, NOW).await;
     let unpolled = find(&before, Kind::PollBackoff, "business").unwrap();
     assert_eq!(
         (unpolled.holds, &unpolled.detail["backoff_since"]),
@@ -1066,12 +1092,12 @@ async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_through_a_failed
     // A second 429 once the first step's two minutes have passed: the run keeps its start and climbs the ladder.
     rig.at(NOW + 29 * 60_000);
     usage.poll("business").await.unwrap();
-    let short = read(&attention, NOW + BACKOFF_ATTENTION_AFTER_MS - 1);
+    let short = read(&attention, NOW + BACKOFF_ATTENTION_AFTER_MS - 1).await;
     assert!(
         !find(&short, Kind::PollBackoff, "business").unwrap().holds,
         "short of thirty minutes nothing holds"
     );
-    let conditions = read(&attention, NOW + BACKOFF_ATTENTION_AFTER_MS);
+    let conditions = read(&attention, NOW + BACKOFF_ATTENTION_AFTER_MS).await;
     let held = find(&conditions, Kind::PollBackoff, "business").unwrap();
     assert_eq!(
         (held.holds, held.since, &held.detail),
@@ -1097,7 +1123,7 @@ async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_through_a_failed
     );
     assert!(
         find(
-            &read(&attention, NOW + 29 * 60_000 + 240_000),
+            &read(&attention, NOW + 29 * 60_000 + 240_000).await,
             Kind::PollBackoff,
             "business"
         )
@@ -1112,7 +1138,7 @@ async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_through_a_failed
         usage.poll_status("business").unwrap().last_outcome,
         PollOutcome::Clean
     );
-    let conditions = read(&attention, NOW + 29 * 60_000 + 300_000);
+    let conditions = read(&attention, NOW + 29 * 60_000 + 300_000).await;
     assert!(
         !find(&conditions, Kind::PollBackoff, "business")
             .unwrap()
@@ -1127,7 +1153,7 @@ async fn a_deleted_account_and_pool_lose_their_series_at_the_next_read() {
     attention.observe(&observed("r1", Some("desktop"), "main"));
     attention.observe(&complete("r1", Outcome::Exhausted, None, None, NOW));
     assert!(
-        find(&read(&attention, NOW), Kind::PoolExhausted, "main")
+        find(&read(&attention, NOW).await, Kind::PoolExhausted, "main")
             .unwrap()
             .holds
     );
@@ -1135,7 +1161,7 @@ async fn a_deleted_account_and_pool_lose_their_series_at_the_next_read() {
     rig.store.delete_pool("main", "test").unwrap();
     rig.store.delete_account("direct", "test").unwrap();
     rig.router.reload().await.unwrap();
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     assert!(find(&conditions, Kind::PoolExhausted, "main").is_none());
     assert!(find(&conditions, Kind::FundingRequired, "direct").is_none());
     assert!(find(&conditions, Kind::ReauthRequired, "direct").is_none());
@@ -1153,7 +1179,7 @@ async fn the_bus_arm_reads_the_request_outcomes_off_the_bus() {
     rig.bus
         .publish(complete("r1", Outcome::Exhausted, None, None, NOW));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while !find(&read(&attention, NOW), Kind::PoolExhausted, "main")
+    while !find(&read(&attention, NOW).await, Kind::PoolExhausted, "main")
         .unwrap()
         .holds
     {
@@ -1183,7 +1209,7 @@ async fn a_completion_behind_more_events_than_the_arms_queue_holds_reaches_the_a
         .unwrap()
         .1;
     let observed_it = tokio::time::timeout(Duration::from_secs(5), async {
-        while !find(&read(&attention, NOW), Kind::PoolExhausted, "main")
+        while !find(&read(&attention, NOW).await, Kind::PoolExhausted, "main")
             .unwrap()
             .holds
         {
@@ -1229,7 +1255,7 @@ async fn a_failed_holder_read_fails_the_conditions_and_the_scrape() {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     rig.store.debug_fail_next_refresh_read();
-    assert!(attention.conditions_blocking(NOW).is_err());
+    assert!(attention.conditions(NOW).await.is_err());
     rig.store.debug_fail_next_refresh_read();
     let (status, text) = scrape(&rig, &attention).await;
     assert_eq!(
@@ -1299,7 +1325,7 @@ async fn a_parked_priced_record_holds_the_condition_on_its_pool_until_the_table_
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     park(&rig, Some("main"), "business", NOW - 60_000);
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let parked = find(&conditions, Kind::LedgerRecordParked, "main").unwrap();
     assert_eq!(
         (
@@ -1330,7 +1356,7 @@ async fn a_parked_priced_record_holds_the_condition_on_its_pool_until_the_table_
         "{text}"
     );
     ledger_sql(&rig, "DELETE FROM parked_records;");
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let cleared = find(&conditions, Kind::LedgerRecordParked, "main")
         .expect("a pool keeps its series once its rows are gone");
     assert_eq!(
@@ -1349,11 +1375,11 @@ async fn a_parked_record_without_a_pool_holds_under_the_router_subject_until_its
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     assert!(
-        find(&read(&attention, NOW), Kind::LedgerRecordParked, "-").is_none(),
+        find(&read(&attention, NOW).await, Kind::LedgerRecordParked, "-").is_none(),
         "no record without a pool, no series for one"
     );
     park(&rig, None, "direct", NOW - 1_000);
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let parked = find(&conditions, Kind::LedgerRecordParked, "-").unwrap();
     assert_eq!(
         (
@@ -1381,7 +1407,7 @@ async fn a_parked_record_without_a_pool_holds_under_the_router_subject_until_its
     );
     ledger_sql(&rig, "DELETE FROM parked_records;");
     assert!(
-        find(&read(&attention, NOW), Kind::LedgerRecordParked, "-").is_none(),
+        find(&read(&attention, NOW).await, Kind::LedgerRecordParked, "-").is_none(),
         "the series leaves with the rows"
     );
 }
@@ -1454,7 +1480,7 @@ async fn a_round_that_marked_nothing_for_want_of_runway_holds_the_condition_on_i
         json!({ "window": "five_hour", "projection": 0.99, "outcome": "nothing_to_mark", "reason": "no_runway" }),
     );
     fold_at(&rig, NOW).await;
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let held = find(&conditions, Kind::ShedNoRunway, "main").unwrap();
     assert_eq!(
         (
@@ -1491,7 +1517,7 @@ async fn a_round_that_marked_nothing_for_want_of_runway_holds_the_condition_on_i
     );
     fold_at(&rig, NOW + 25 * HOUR).await;
     let cleared = find(
-        &read(&attention, NOW + 25 * HOUR),
+        &read(&attention, NOW + 25 * HOUR).await,
         Kind::ShedNoRunway,
         "main",
     )
@@ -1536,7 +1562,7 @@ async fn a_move_whose_destination_was_spent_within_the_hour_holds_the_condition_
         json!({ "window": "five_hour", "source": "head" }),
     );
     fold_at(&rig, NOW).await;
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let held = find(&conditions, Kind::DestinationSpent, "business").unwrap();
     assert_eq!(
         (
@@ -1575,7 +1601,7 @@ async fn a_move_whose_destination_was_spent_within_the_hour_holds_the_condition_
     );
     fold_at(&rig, NOW + 25 * HOUR).await;
     let cleared = find(
-        &read(&attention, NOW + 25 * HOUR),
+        &read(&attention, NOW + 25 * HOUR).await,
         Kind::DestinationSpent,
         "business",
     )
@@ -1614,7 +1640,7 @@ async fn a_routing_condition_on_an_account_the_registry_no_longer_holds_opens_no
         json!({ "window": "five_hour", "source": "head" }),
     );
     fold_at(&rig, NOW).await;
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let held = find(&conditions, Kind::DestinationSpent, "gone").unwrap();
     assert_eq!(
         (held.holds, &held.subject, &held.pools, &held.link),
@@ -1653,7 +1679,7 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
         json!({ "window": "five_hour", "source": "predicted" }),
     );
     fold_at(&rig, NOW).await;
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     assert!(
         !find(&conditions, Kind::ShedNoRunway, "main").unwrap().holds,
         "a round that marked a pin holds no pool's condition"
@@ -1697,7 +1723,7 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
     );
     fold_at(&rig, NOW + 25 * HOUR).await;
     let cleared = find(
-        &read(&attention, NOW + 25 * HOUR),
+        &read(&attention, NOW + 25 * HOUR).await,
         Kind::WallReached,
         "business",
     )
@@ -1735,7 +1761,7 @@ async fn a_wall_row_with_no_pool_on_an_api_key_member_reads_no_setting_values() 
         json!({ "window": "five_hour", "source": "head" }),
     );
     fold_at(&rig, NOW).await;
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let held = find(&conditions, Kind::WallReached, "direct").unwrap();
     assert_eq!(
         (held.holds, held.detail.get("setting_values")),
@@ -1838,7 +1864,7 @@ async fn an_account_slowed_past_twice_its_pools_threshold_in_the_day_holds_the_c
     held_request("r-1", NOW - 2 * HOUR, HOUR);
     held_request("r-2", NOW - 40 * MINUTE, 40 * MINUTE);
     fold_at(&rig, NOW).await;
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let held = find(&conditions, Kind::SlowedLong, "business").unwrap();
     assert_eq!(
         (
@@ -1885,7 +1911,7 @@ async fn an_account_slowed_past_twice_its_pools_threshold_in_the_day_holds_the_c
     ended(NOW + 10 * MINUTE, NOW - 50 * MINUTE, 58 * MINUTE, 0.35);
     fold_at(&rig, NOW + 25 * HOUR).await;
     let cleared = find(
-        &read(&attention, NOW + 25 * HOUR),
+        &read(&attention, NOW + 25 * HOUR).await,
         Kind::SlowedLong,
         "business",
     )
@@ -1929,7 +1955,7 @@ async fn meter_drift_holds_on_an_off_window_and_clears_when_the_newest_reads_ins
     let (attention, _arm) = rig.attention(None);
     reconciled(&rig, NOW - 2 * HOUR, 0.3, 0.15, 2.0);
     fold_at(&rig, NOW).await;
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let held = find(&conditions, Kind::MeterDrift, "business").unwrap();
     assert_eq!(
         (
@@ -1975,7 +2001,7 @@ async fn meter_drift_holds_on_an_off_window_and_clears_when_the_newest_reads_ins
     reconciled(&rig, NOW - HOUR, 0.04, 0.04 / 3.0, 3.0);
     fold_at(&rig, NOW + MINUTE).await;
     let small = find(
-        &read(&attention, NOW + MINUTE),
+        &read(&attention, NOW + MINUTE).await,
         Kind::MeterDrift,
         "business",
     )
@@ -1990,7 +2016,7 @@ async fn meter_drift_holds_on_an_off_window_and_clears_when_the_newest_reads_ins
     reconciled(&rig, NOW - 30 * MINUTE, 0.3, 0.3, 1.0);
     fold_at(&rig, NOW + 2 * MINUTE).await;
     let inside = find(
-        &read(&attention, NOW + 2 * MINUTE),
+        &read(&attention, NOW + 2 * MINUTE).await,
         Kind::MeterDrift,
         "business",
     )
@@ -2013,7 +2039,7 @@ async fn a_parked_record_keeps_its_condition_after_its_pool_is_deleted() {
     let (attention, _arm) = rig.attention(None);
     // An id the registry does not hold, as the pool of a record parked before the pool was deleted.
     park(&rig, Some("gone"), "business", NOW - 5_000);
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let parked = find(&conditions, Kind::LedgerRecordParked, "gone").unwrap();
     assert_eq!(
         (
@@ -2036,7 +2062,12 @@ async fn a_parked_record_keeps_its_condition_after_its_pool_is_deleted() {
     );
     ledger_sql(&rig, "DELETE FROM parked_records;");
     assert!(
-        find(&read(&attention, NOW), Kind::LedgerRecordParked, "gone").is_none(),
+        find(
+            &read(&attention, NOW).await,
+            Kind::LedgerRecordParked,
+            "gone"
+        )
+        .is_none(),
         "the deleted pool's series leaves with its rows"
     );
 }
@@ -2048,7 +2079,7 @@ async fn a_failed_parked_read_fails_the_attention_read_as_the_refresh_read_does(
     ledger_sql(&rig, "DROP TABLE parked_records;");
     assert!(
         matches!(
-            attention.conditions_blocking(NOW),
+            attention.conditions(NOW).await,
             Err(AttentionError::Ledger(_))
         ),
         "a read without the parked rows would report a held condition clear"
@@ -2061,7 +2092,12 @@ async fn a_failed_parked_read_fails_the_attention_read_as_the_refresh_read_does(
     );
     ledger_sql(&rig, PARKED_RECORDS);
     assert!(
-        find(&read(&attention, NOW), Kind::LedgerRecordParked, "main").is_some_and(|c| !c.holds),
+        find(
+            &read(&attention, NOW).await,
+            Kind::LedgerRecordParked,
+            "main"
+        )
+        .is_some_and(|c| !c.holds),
         "the read answers again once the table is back"
     );
 }
@@ -2116,7 +2152,7 @@ async fn a_degraded_ledger_holds_writer_degraded_from_the_first_read_that_saw_it
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let first = read(&attention, NOW + 1_000);
+    let first = read(&attention, NOW + 1_000).await;
     let held = find(&first, Kind::WriterDegraded, "ledger").unwrap();
     assert_eq!(
         (
@@ -2141,7 +2177,7 @@ async fn a_degraded_ledger_holds_writer_degraded_from_the_first_read_that_saw_it
         !find(&first, Kind::WriterDegraded, "routing").unwrap().holds,
         "the routing state writer has its own series"
     );
-    let second = read(&attention, NOW + 5_000);
+    let second = read(&attention, NOW + 5_000).await;
     assert_eq!(
         find(&second, Kind::WriterDegraded, "ledger").unwrap().since,
         Some(NOW + 1_000),
@@ -2173,7 +2209,16 @@ async fn a_read_waiting_on_the_registry_leaves_the_bus_arm_free() {
     let before = rig.store.debug_lock_count();
     let reading = std::thread::spawn({
         let attention = attention.clone();
-        move || attention.conditions_blocking(NOW).map(|read| read.len())
+        // The read runs on a runtime of the thread's own. The case's runtime runs no task while the body below waits,
+        // and a task of the rig that ran beside the case on a second worker would move the lock count too.
+        move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            runtime
+                .block_on(attention.conditions(NOW))
+                .map(|read| read.len())
+        }
     });
     // The counter moves as a caller reaches for the registry's connection, before it blocks on the holder, so
     // once it moves the read is the one waiting there.
@@ -2229,7 +2274,7 @@ async fn a_pair_within_thirty_days_of_its_end_holds_certificate_expiring_since_t
     let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs.clone()));
 
     pairs.set(vec![pair("proxy.tls", NOW + 30 * DAY)]);
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let held = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
     assert_eq!(
         (
@@ -2256,7 +2301,7 @@ async fn a_pair_within_thirty_days_of_its_end_holds_certificate_expiring_since_t
     );
 
     pairs.set(vec![pair("proxy.tls", NOW + 31 * DAY)]);
-    let clear = read(&attention, NOW);
+    let clear = read(&attention, NOW).await;
     let clear = find(&clear, Kind::CertificateExpiring, "proxy.tls").unwrap();
     assert_eq!(
         (clear.holds, clear.since, &clear.detail["days_left"]),
@@ -2265,7 +2310,7 @@ async fn a_pair_within_thirty_days_of_its_end_holds_certificate_expiring_since_t
     );
 
     pairs.set(vec![pair("proxy.tls", NOW - 3 * DAY)]);
-    let past = read(&attention, NOW);
+    let past = read(&attention, NOW).await;
     let past = find(&past, Kind::CertificateExpiring, "proxy.tls").unwrap();
     assert_eq!(
         (past.holds, past.since, &past.detail["days_left"]),
@@ -2280,7 +2325,7 @@ async fn a_leaf_thirty_days_and_twelve_hours_from_its_end_holds_no_expiring_item
     let pairs = Arc::new(Pairs::default());
     pairs.set(vec![pair("proxy.tls", NOW + 30 * DAY + 12 * HOUR)]);
     let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs));
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let clear = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
     assert_eq!(
         (clear.holds, clear.since, &clear.detail["days_left"]),
@@ -2303,7 +2348,7 @@ async fn a_leaf_exactly_thirty_days_from_its_end_holds_the_expiring_item_since_t
         (NOW + 31 * DAY, (true, Some(NOW + 31 * DAY))),
         (NOW + 31 * DAY + 12 * HOUR, (true, Some(NOW + 31 * DAY))),
     ] {
-        let conditions = read(&attention, at);
+        let conditions = read(&attention, at).await;
         let c = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
         assert!(
             c.since.is_none_or(|since| since <= at),
@@ -2357,7 +2402,7 @@ async fn a_refresh_token_within_three_days_of_its_end_holds_pairing_expiring_sin
             .unwrap();
     }
 
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let lead = find(&conditions, Kind::PairingExpiring, "lead").unwrap();
     assert_eq!(
         (lead.holds, lead.since, &lead.link, &lead.detail),
@@ -2397,7 +2442,7 @@ async fn a_failed_reload_holds_certificate_reload_failed_until_a_reload_succeeds
         failed: Some((NOW, line.to_string())),
         ..pair("proxy.tls", NOW + 90 * DAY)
     }]);
-    let conditions = read(&attention, NOW + 1_000);
+    let conditions = read(&attention, NOW + 1_000).await;
     let held = find(&conditions, Kind::CertificateReloadFailed, "proxy.tls").unwrap();
     assert_eq!(
         (
@@ -2434,7 +2479,7 @@ async fn a_failed_reload_holds_certificate_reload_failed_until_a_reload_succeeds
         loaded_at: NOW + 2_000,
         ..pair("proxy.tls", NOW + 90 * DAY)
     }]);
-    let cleared = read(&attention, NOW + 3_000);
+    let cleared = read(&attention, NOW + 3_000).await;
     let cleared = find(&cleared, Kind::CertificateReloadFailed, "proxy.tls").unwrap();
     assert_eq!(
         (cleared.holds, cleared.since),
@@ -2517,10 +2562,14 @@ fn store_resets(rig: &Rig, block: serde_json::Value) {
 }
 
 /// The reset item of `business`, read under the rig's warning of five days.
-fn reset_item(attention: &Attention, at: i64) -> Condition {
-    find(&read(attention, at), Kind::LimitResetEnding, "business")
-        .cloned()
-        .expect("an account the poll asks carries the reset series")
+async fn reset_item(attention: &Arc<Attention>, at: i64) -> Condition {
+    find(
+        &read(attention, at).await,
+        Kind::LimitResetEnding,
+        "business",
+    )
+    .cloned()
+    .expect("an account the poll asks carries the reset series")
 }
 
 #[tokio::test]
@@ -2532,7 +2581,7 @@ async fn a_reset_holds_from_the_threshold_before_its_end() {
         &rig,
         json!({ "eligible": true, "grants": [grant("rg-b-1", "2023-11-20T22:13:20Z")] }),
     );
-    let outside = reset_item(&attention, NOW);
+    let outside = reset_item(&attention, NOW).await;
     assert_eq!(
         (outside.holds, outside.since),
         (false, None),
@@ -2543,7 +2592,7 @@ async fn a_reset_holds_from_the_threshold_before_its_end() {
         &rig,
         json!({ "eligible": true, "grants": [grant("rg-b-1", "2023-11-18T22:13:20Z")] }),
     );
-    let inside = reset_item(&attention, NOW);
+    let inside = reset_item(&attention, NOW).await;
     assert_eq!(
         (
             inside.holds,
@@ -2564,7 +2613,7 @@ async fn a_reset_holds_from_the_threshold_before_its_end() {
         &rig,
         json!({ "eligible": true, "grants": [grant("rg-b-1", "2023-11-19T22:13:20Z")] }),
     );
-    let edge = reset_item(&attention, NOW);
+    let edge = reset_item(&attention, NOW).await;
     assert_eq!(
         (
             edge.holds,
@@ -2589,7 +2638,7 @@ async fn a_used_reset_ends_nothing() {
     let mut used = grant("rg-b-1", "2023-11-18T22:13:20Z");
     used["resets_left"] = json!(0);
     store_resets(&rig, json!({ "eligible": true, "grants": [used] }));
-    let item = reset_item(&attention, NOW);
+    let item = reset_item(&attention, NOW).await;
     assert_eq!(
         (item.holds, item.since),
         (false, None),
@@ -2615,7 +2664,7 @@ async fn the_reset_item_counts_the_resets_that_end_inside_the_threshold() {
             ],
         }),
     );
-    let item = reset_item(&attention, NOW);
+    let item = reset_item(&attention, NOW).await;
     assert_eq!(
         (
             item.holds,
@@ -2636,7 +2685,7 @@ async fn a_reset_shorter_than_the_threshold_is_dated_from_its_start() {
     let mut short = grant("rg-b-1", "2023-11-16T22:13:20Z");
     short["starts_at"] = json!("2023-11-12T22:13:20Z");
     store_resets(&rig, json!({ "eligible": true, "grants": [short] }));
-    let item = reset_item(&attention, NOW);
+    let item = reset_item(&attention, NOW).await;
     assert_eq!(
         (item.holds, item.since),
         (true, Some(1_699_827_200_000)),
@@ -2688,7 +2737,7 @@ async fn the_wall_offers_a_reset_only_for_a_window_at_its_limit_now() {
     );
 
     usage.poll("business").await.unwrap();
-    let under = read(&attention, NOW);
+    let under = read(&attention, NOW).await;
     let wall = find(&under, Kind::WallReached, "business").unwrap();
     assert_eq!(
         (wall.holds, wall.detail.get("reset")),
@@ -2699,7 +2748,7 @@ async fn the_wall_offers_a_reset_only_for_a_window_at_its_limit_now() {
     up.set_rule_after(0, "/api/oauth/usage", fable_week(100));
     rig.at(NOW + 5 * MINUTE);
     usage.poll("business").await.unwrap();
-    let at_limit = read(&attention, NOW + 5 * MINUTE);
+    let at_limit = read(&attention, NOW + 5 * MINUTE).await;
     let wall = find(&at_limit, Kind::WallReached, "business").unwrap();
     assert_eq!(
         (wall.holds, wall.detail.get("reset")),
@@ -2745,7 +2794,7 @@ async fn a_reset_on_a_cooldown_clears_no_wall() {
     );
 
     usage.poll("business").await.unwrap();
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let wall = find(&conditions, Kind::WallReached, "business").unwrap();
     assert_eq!(
         (wall.holds, wall.detail.get("reset")),
@@ -2779,7 +2828,7 @@ async fn a_plan_that_ended_is_offered_no_reset() {
     );
     usage.poll("business").await.unwrap();
 
-    let asked = read(&attention, NOW);
+    let asked = read(&attention, NOW).await;
     let item = find(&asked, Kind::LimitResetEnding, "business").unwrap();
     let wall = find(&asked, Kind::WallReached, "business").unwrap();
     assert_eq!(
@@ -2789,7 +2838,7 @@ async fn a_plan_that_ended_is_offered_no_reset() {
     );
 
     assert!(rig.store.set_plan_ended("business", NOW).unwrap());
-    let ended = read(&attention, NOW);
+    let ended = read(&attention, NOW).await;
     let wall = find(&ended, Kind::WallReached, "business").unwrap();
     assert_eq!(
         (
@@ -2850,13 +2899,13 @@ fn unpriced_requests(conditions: &[Condition], model: &str) -> u64 {
 /// The read once the item about `model` counts `requests` or more: the ledger records it after the landing commits,
 /// so a read waits for it rather than for the row.
 async fn read_counting(
-    attention: &Attention,
+    attention: &Arc<Attention>,
     at: i64,
     model: &str,
     requests: u64,
 ) -> Vec<Condition> {
-    fake_upstream::wait_for(Duration::from_secs(5), || {
-        let conditions = read(attention, at);
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        let conditions = read(attention, at).await;
         (unpriced_requests(&conditions, model) >= requests).then_some(conditions)
     })
     .await
@@ -3015,10 +3064,10 @@ async fn a_revision_that_weights_the_model_clears_its_item_at_the_next_landing_a
     rig.ledger
         .record_request(on_model("r2", "claude-opus-5", "business", later, 1))
         .await;
-    let cleared = fake_upstream::wait_for(Duration::from_secs(5), || {
+    let cleared = fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         // At an instant the first entry governs, where the read clears nothing itself, so the landing's clear alone
         // answers it.
-        let conditions = read(&attention, NOW);
+        let conditions = read(&attention, NOW).await;
         find(&conditions, Kind::ModelUnpriced, "claude-opus-5")
             .is_some_and(|c| !c.holds)
             .then_some(conditions)
@@ -3058,7 +3107,7 @@ async fn a_keepalive_cap_holds_its_item_from_ninety_percent_of_its_max() {
     fill(89);
     assert!(
         !find(
-            &read(&attention, NOW),
+            &read(&attention, NOW).await,
             Kind::KeepaliveCap,
             "keepalive.sessions"
         )
@@ -3067,7 +3116,7 @@ async fn a_keepalive_cap_holds_its_item_from_ninety_percent_of_its_max() {
         "89 of 100 sits under the bar"
     );
     fill(90);
-    let conditions = read(&attention, NOW + MINUTE);
+    let conditions = read(&attention, NOW + MINUTE).await;
     let cap = find(&conditions, Kind::KeepaliveCap, "keepalive.sessions").unwrap();
     assert_eq!(
         (
@@ -3106,16 +3155,23 @@ async fn a_bus_gap_holds_its_item_for_a_day_and_clears_after() {
         standing.bus_gaps = 1;
         standing.last_bus_gap_at = Some(at);
     };
-    let holds = |at| {
-        find(&read(&attention, at), Kind::KeepaliveBusGaps, "keepalive")
-            .unwrap()
-            .holds
+    let holds = async |at| {
+        find(
+            &read(&attention, at).await,
+            Kind::KeepaliveBusGaps,
+            "keepalive",
+        )
+        .unwrap()
+        .holds
     };
-    assert!(!holds(NOW), "no gap raises nothing");
+    assert!(!holds(NOW).await, "no gap raises nothing");
     gap_at(NOW - DAY - MINUTE);
-    assert!(!holds(NOW), "a gap a day and a minute old raises nothing");
+    assert!(
+        !holds(NOW).await,
+        "a gap a day and a minute old raises nothing"
+    );
     gap_at(NOW - DAY + MINUTE);
-    let conditions = read(&attention, NOW);
+    let conditions = read(&attention, NOW).await;
     let gap = find(&conditions, Kind::KeepaliveBusGaps, "keepalive").unwrap();
     assert_eq!(
         (gap.holds, gap.since, &gap.detail),
@@ -3126,7 +3182,7 @@ async fn a_bus_gap_holds_its_item_for_a_day_and_clears_after() {
         ),
         "a gap 23 hours and 59 minutes old raises the item, dated by the read that first saw it"
     );
-    let later = read(&attention, NOW + 2 * MINUTE);
+    let later = read(&attention, NOW + 2 * MINUTE).await;
     let gap = find(&later, Kind::KeepaliveBusGaps, "keepalive").unwrap();
     assert_eq!(
         (gap.holds, gap.since),
@@ -3134,14 +3190,14 @@ async fn a_bus_gap_holds_its_item_for_a_day_and_clears_after() {
         "a day after the last gap the item clears"
     );
     gap_at(NOW + 3 * MINUTE);
-    let raised = read(&attention, NOW + 4 * MINUTE);
+    let raised = read(&attention, NOW + 4 * MINUTE).await;
     let gap = find(&raised, Kind::KeepaliveBusGaps, "keepalive").unwrap();
     assert_eq!(
         (gap.holds, gap.since),
         (true, Some(NOW + 4 * MINUTE)),
         "a gap after the clear raises the item again, dated by its new run, never the earlier one"
     );
-    let held = read(&attention, NOW + 5 * MINUTE);
+    let held = read(&attention, NOW + 5 * MINUTE).await;
     let gap = find(&held, Kind::KeepaliveBusGaps, "keepalive").unwrap();
     assert_eq!(
         gap.since,
@@ -3187,19 +3243,19 @@ fn expired_turn(id: &str) -> Record {
 }
 
 /// The read's expiry item as `(holds, detail)`.
-fn expiry_item(attention: &Attention) -> (bool, serde_json::Value) {
-    let conditions = read(attention, NOW);
+async fn expiry_item(attention: &Arc<Attention>) -> (bool, serde_json::Value) {
+    let conditions = read(attention, NOW).await;
     let item = find(&conditions, Kind::ExpiredBetweenTurns, "keepalive").unwrap();
     (item.holds, item.detail.clone())
 }
 
 /// Records `expired_turn("r1")` and waits until the item holds, so a clear read after it is taken with the expiry
 /// landed.
-async fn expiry_landed(rig: &Rig, attention: &Attention) -> serde_json::Value {
+async fn expiry_landed(rig: &Rig, attention: &Arc<Attention>) -> serde_json::Value {
     rig.ledger.record_request(expired_turn("r1")).await;
     // The rollup lands after the call returns, so the read waits for the item rather than for the call.
-    fake_upstream::wait_for(Duration::from_secs(5), || {
-        let (holds, detail) = expiry_item(attention);
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        let (holds, detail) = expiry_item(attention).await;
         holds.then_some(detail)
     })
     .await
@@ -3217,14 +3273,14 @@ async fn expiries_between_turns_hold_their_item_only_while_their_pool_warms_cach
     );
     standing.0.lock().unwrap().warming = BTreeSet::from(["other".to_string()]);
     assert_eq!(
-        expiry_item(&attention),
+        expiry_item(&attention).await,
         (false, json!({ "expired": 0 })),
         "an expiry on a pool whose policy is off counts nothing while another pool warms caches"
     );
     standing.0.lock().unwrap().warming = BTreeSet::new();
     assert!(
         !find(
-            &read(&attention, NOW),
+            &read(&attention, NOW).await,
             Kind::ExpiredBetweenTurns,
             "keepalive"
         )
@@ -3252,7 +3308,7 @@ async fn expiries_between_turns_hold_their_item_only_under_a_key_with_the_keepal
         .unwrap();
     rig.router.reload().await.unwrap();
     assert_eq!(
-        expiry_item(&attention),
+        expiry_item(&attention).await,
         (false, json!({ "expired": 0 })),
         "an expiry under a key the keepalive may not probe for counts nothing on a warming pool"
     );

@@ -542,10 +542,11 @@ async fn a_held_model_unpriced_condition_lists_on_the_route_after_every_degraded
             bodies: None,
         })
         .await;
-    fake_upstream::wait_for(Duration::from_secs(5), || {
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         parts
             .attention
-            .conditions_blocking(common::NOW)
+            .conditions(common::NOW)
+            .await
             .unwrap()
             .iter()
             .any(|c| c.kind == phoebis_attention::Kind::ModelUnpriced && c.holds)

@@ -2326,10 +2326,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )],
         bodies: None,
     });
-    fake_upstream::wait_for(Duration::from_secs(5), || {
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         parts
             .attention
-            .conditions_blocking(now)
+            .conditions(now)
+            .await
             .unwrap()
             .iter()
             .any(|c| c.kind == phoebis_attention::Kind::ModelUnpriced && c.holds)

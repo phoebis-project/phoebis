@@ -157,18 +157,6 @@ impl Attention {
             .map_err(|_| AttentionError::Canceled)?
     }
 
-    /// The same read for a caller on a thread of its own, such as a test's, which waits for the ledger's connection on
-    /// that thread. A task on the runtime awaits `conditions` instead, and no blocking worker of the runtime calls
-    /// this: waiting here, it can be the worker a queued ledger read needs to return its connection.
-    pub fn conditions_blocking(&self, now: i64) -> Result<Vec<Condition>, AttentionError> {
-        let ledger = self
-            .ledger
-            .as_ref()
-            .map(|ledger| ledger.db().read_blocking(|c| ledger_facts(c, now)))
-            .transpose()?;
-        self.conditions_over(ledger, now)
-    }
-
     /// The conditions over the ledger's parked rows, routing conditions and expiries between turns, read before this
     /// runs so a read waiting on a reader connection never holds the bus arm's `observe` behind the state lock.
     fn conditions_over(
