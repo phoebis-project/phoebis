@@ -2062,7 +2062,12 @@ impl Default for ShareRow<'_> {
 }
 
 fn plant_share(db: &LedgerDb, row: ShareRow<'_>) {
-    db.insert_request(
+    plant_share_at(db, row, &PRICES);
+}
+
+/// `plant_share` landed at `prices`, for a case that reads under a price list of its own.
+fn plant_share_at(db: &LedgerDb, row: ShareRow<'_>, prices: &PriceRevisions) {
+    db.insert_request_at(
         &RequestRecord {
             id: row.id.into(),
             received_at: row.at,
@@ -2104,6 +2109,7 @@ fn plant_share(db: &LedgerDb, row: ShareRow<'_>) {
             ..Default::default()
         }],
         None,
+        prices,
     )
     .unwrap();
 }
@@ -5508,7 +5514,7 @@ async fn a_burn_bucket_answers_its_plan_rows_list_dollars_in_plan_usd_and_its_bi
         bucket_seconds: 3_600,
         ..SeriesFilter::default()
     };
-    plant_share(
+    plant_share_at(
         &db,
         ShareRow {
             id: "r-plan",
@@ -5518,8 +5524,9 @@ async fn a_burn_bucket_answers_its_plan_rows_list_dollars_in_plan_usd_and_its_bi
             tier: Some("test_tier"),
             ..ShareRow::default()
         },
+        &prices,
     );
-    plant_share(
+    plant_share_at(
         &db,
         ShareRow {
             id: "r-billed",
@@ -5530,6 +5537,7 @@ async fn a_burn_bucket_answers_its_plan_rows_list_dollars_in_plan_usd_and_its_bi
             tier: None,
             ..ShareRow::default()
         },
+        &prices,
     );
     let point = point_at(
         &burn_points_under(&db, &share_tables(), &prices, &filter).await,
@@ -5599,20 +5607,7 @@ async fn burn_points(
         bucket_seconds,
         ..SeriesFilter::default()
     };
-    let mut groups = burn_groups_paged(
-        db,
-        tables,
-        prices,
-        &filter,
-        GroupBy::All,
-        &LiveKeys::default(),
-        &[],
-        NOW,
-    )
-    .await
-    .unwrap();
-    assert_eq!(groups.len(), 1, "one group of every row: {groups:?}");
-    groups.remove(0).2
+    burn_points_under(db, tables, prices, &filter).await
 }
 
 /// The points of the one group the burn route's reader answers for the rows of `filter`'s scopes, the shares answered

@@ -7263,11 +7263,11 @@ mod tests {
         );
         let row = &rows[0];
         let costs = crate::test_tables::subscription_costs();
-        let part = crate::query::Part {
+        let part = Part {
             at: last_millisecond(row.hour),
             usage: row.usage(),
         };
-        let usd = crate::query::priced(row, part, &prices, &costs, row.hour * 1_000)
+        let usd = priced(row, part, &prices, &costs, row.hour * 1_000)
             .usd
             .expect("the test list carries the model")
             .total();
@@ -7336,11 +7336,11 @@ mod tests {
         let priced: f64 = deltas
             .iter()
             .map(|d| {
-                let part = crate::query::Part {
+                let part = Part {
                     at: last_millisecond(d.hour),
                     usage: d.usage(),
                 };
-                crate::query::priced(d, part, &prices, &costs, d.hour * 1_000)
+                priced(d, part, &prices, &costs, d.hour * 1_000)
                     .usd
                     .expect("the test list carries the model")
                     .total()
