@@ -1791,7 +1791,7 @@ test("a By chip reads the strategy with its tier or the rung, and a priority or 
   const placed = d.byOf(decision({ by: strategy('pace', [0, 0, 0]), tier: [0, 0, 0] }));
   assert.equal(placed.value, 'Pace P0');
   const held = d.byOf(decision({ by: by('hold', 'strategy_pick'), kind: 'held', tier: [0, 0, 0] }));
-  assert.equal(held.value, 'Pace P0');
+  assert.deepEqual(held, { title: placed.title, value: 'Pace P0' }, "a held row's Pace chip carries the hover of a placed row's");
   assert.deepEqual(d.byOf(decision({ by: strategy('priority', [0, 1, 0]), strategy: 'priority' })), { value: 'priority P1' });
   assert.deepEqual(d.byOf(decision({ by: by('rung', 'static') })), { value: 'static rung' });
 });

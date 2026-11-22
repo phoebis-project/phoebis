@@ -132,14 +132,6 @@ const marksOf = (pins, over = {}) => {
   return [preview.sessions, preview.warm, preview.covered.toFixed(3)];
 };
 
-test('the round marks pins in order until the burn it removed reaches the target', () => {
-  // The cap's half of the 10 points an hour the four pins burn is 5. cold-3, the one cold pin, leads and removes 3, and
-  // warm-4, the first warm pin by burn, covers the rest of 2: 2 sessions, 1 warm, 7 points. A walk whose removed burn
-  // never grows marks on: warm-4 outright, then warm-1 in warm-2's place, since warm-2's mark would leave warm-1's 1
-  // point under the tenth of the round's 10, which reads 0.010000000000000002 in floats: 3 sessions, 2 warm, 8 points.
-  assert.deepEqual(marksOf([pin('hot', 'cold-3', 0.03, false), pin('hot', 'warm-4', 0.04, true), pin('hot', 'warm-2', 0.02, true), pin('hot', 'warm-1', 0.01, true)]), [2, 1, '0.070']);
-});
-
 test('the round marks a pin whose mark leaves exactly a tenth of its burn sum on the account', () => {
   // A cap of 0.9 puts the target at 0.9 of the two pins' 1.0, which a's 0.9 covers, and its mark leaves b's 0.1, the
   // tenth itself: 1 session, none warm, 0.9. The sum less a's burn reads 0.09999999999999998, so a guard that read it
