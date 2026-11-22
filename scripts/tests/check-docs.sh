@@ -438,8 +438,10 @@ fn pick(kind: u8) -> &'static str {
 RS
 out=$(python3 "$tmp/codes-if_else/scripts/check-docs.py" codes 2>&1) && fail "a code bound to a function that is no match passed"
 echo "$out" | grep -q "models.rs:5: fn pick is no single match the check reads" || fail "the function that is no match did not report: $out"
+# The local stands in the first source that the arm reads and the last one holds no function, so a lookup that reads
+# another source's functions finds no binding.
 cp -R "$tmp/codes" "$tmp/codes-arm"
-cat > "$tmp/codes-arm/crates/relay/src/models.rs" <<'RS'
+cat > "$tmp/codes-arm/crates/bus/src/event.rs" <<'RS'
 fn refuse(kind: Kind, id: &str) -> Response {
     let code = pick(kind);
     anthropic_error(StatusCode::BAD_REQUEST, "invalid_request_error", code, "m", id)
@@ -452,7 +454,7 @@ fn pick(kind: Kind) -> &'static str {
 }
 RS
 out=$(python3 "$tmp/codes-arm/scripts/check-docs.py" codes 2>&1) && fail "a code bound to an arm the check cannot read passed"
-echo "$out" | grep -qF 'models.rs:8: arm format!("a") of fn pick is no code the check reads' || fail "the arm the check cannot read did not report: $out"
+echo "$out" | grep -qF 'event.rs:8: arm format!("a") of fn pick is no code the check reads' || fail "the arm the check cannot read did not report: $out"
 echo 'Failure { code: NOWHERE, message: "q" }' >> "$tmp/codes/crates/relay/src/errors.rs"
 out=$(python3 "$tmp/codes/scripts/check-docs.py" codes 2>&1) && fail "a code that resolves to no const passed"
 echo "$out" | grep -q "errors.rs:9: code NOWHERE resolves to no const in the files read" || fail "the unresolved code did not report: $out"

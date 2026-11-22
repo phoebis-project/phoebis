@@ -49,7 +49,6 @@ CHECK_CONFIG_BEGIN, CHECK_CONFIG_END = "<!-- check-config: begin -->", "<!-- che
 REFUSAL_CODES_BEGIN, REFUSAL_CODES_END = "<!-- refusal-codes: begin -->", "<!-- refusal-codes: end -->"
 
 METHODS = ("any", "delete", "get", "head", "options", "patch", "post", "put", "trace")
-METHOD_CALL = re.compile(r"\b(" + "|".join(METHODS) + r")\(")
 # Any other call inside a handler expression is a method this checker does not recognize; CALL finds it so the
 # check fails closed instead of silently dropping the route.
 CALL = re.compile(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\(")
@@ -548,10 +547,10 @@ def function_bodies(blanked):
     return bodies
 
 
-def bound_call(blanked, offset, local):
-    """The function the last `let <local> = <fn>(..)` ahead of `offset` calls, in the innermost function holding
-    `offset`, or None."""
-    holding = [(opened, close) for _, opened, close in function_bodies(blanked) if opened < offset < close]
+def bound_call(blanked, bodies, offset, local):
+    """The function the last `let <local> = <fn>(..)` ahead of `offset` calls, in the innermost function of `bodies`
+    holding `offset`, or None."""
+    holding = [(opened, close) for _, opened, close in bodies if opened < offset < close]
     if not holding:
         return None
     opened, _ = min(holding, key=lambda span: span[1] - span[0])
@@ -636,7 +635,7 @@ def check_codes(code_files, client_md):
             print(f"{path} is missing; the code file list names it")
             return 1
         code, blanked = tokenized(path.read_text(encoding="utf-8"))
-        sources[path] = code, blanked
+        sources[path] = code, blanked, function_bodies(blanked)
         consts.update(CODE_CONST.findall(code))
         failures.update(failure_codes(code, blanked, consts))
         for offset, expression in code_expressions(code, blanked):
@@ -651,7 +650,7 @@ def check_codes(code_files, client_md):
         if path.name == "errors.rs":
             answered.update(CODE_TUPLE.findall(code))
     for path, offset, ident in pending:
-        code, blanked = sources[path]
+        code, blanked, functions = sources[path]
         line = line_of(code, offset)
         direct = DIRECT_CALL.match(ident)
         if direct:
@@ -665,15 +664,15 @@ def check_codes(code_files, client_md):
                 print(f"{path.name}:{line}: code {ident} resolves to no const in the files read")
                 findings += 1
                 continue
-            called = bound_call(blanked, offset, ident)
+            called = bound_call(blanked, functions, offset, ident)
             if called is None:
                 print(f"{path.name}:{line}: code {ident} resolves to no const or binding in the files read")
                 findings += 1
                 continue
         bodies = [
             (source, opened, close)
-            for source, (_, source_blanked) in sources.items()
-            for fn, opened, close in function_bodies(source_blanked)
+            for source, (_, _, source_functions) in sources.items()
+            for fn, opened, close in source_functions
             if fn == called
         ]
         if len(bodies) != 1:
@@ -684,7 +683,7 @@ def check_codes(code_files, client_md):
             continue
         read_arms.add(called)
         source, opened, close = bodies[0]
-        source_code, source_blanked = sources[source]
+        source_code, source_blanked, _ = sources[source]
         arms = match_arms(source_code, source_blanked, opened, close)
         if arms is None:
             print(f"{source.name}:{line_of(source_code, opened)}: fn {called} is no single match the check reads")
