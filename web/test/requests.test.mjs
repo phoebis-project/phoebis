@@ -298,6 +298,15 @@ test("the poll's comparator ties by id in the chosen direction and files a row w
   assert.deepEqual([noTtfb, tiedA].sort(d.requestOrder('ttfb_ms', 'asc')).map((r) => r.id), ['req_a', 'req_c'], 'no TTFB files last under asc');
 });
 
+test("the poll's comparator orders by the count of attempts in each direction", () => {
+  const row = (id, attempts) => ({ at: '2026-09-16T10:00:00.000Z', attempts, durationMs: 1_500, id, ttfbMs: 300 });
+  // The ids run against the counts, so the tie break by id alone orders the rows the other way.
+  const one = row('req_b', [{}]);
+  const three = row('req_a', [{}, {}, {}]);
+  assert.deepEqual([one, three].sort(d.requestOrder('attempts', 'desc')).map((r) => r.id), ['req_a', 'req_b']);
+  assert.deepEqual([three, one].sort(d.requestOrder('attempts', 'asc')).map((r) => r.id), ['req_b', 'req_a']);
+});
+
 test("the poll's comparator orders each token word by its own count", () => {
   // The two rows' input and output counts order opposite ways, so a word that read the other count flips its order.
   const row = (id, input, output) => ({ at: '2026-09-16T10:00:00.000Z', id, storedTokens: { input, output } });

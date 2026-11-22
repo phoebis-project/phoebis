@@ -370,7 +370,7 @@ test("a deleted key's session rows read historical with no pin and keep their pl
   assert.deepEqual([...new Set(after.map((s) => s.historical))], [true], 'each of them reads historical once the key is gone');
   // With the key's pins gone, the list reads each row's last request alone against the 3,600 s non-companion timeout.
   // The story's requests 15 m 40 s and 7 m 07 s back keep 5eeed6ce and 7d3e1c20. The other six laptop rows leave:
-  // 1c0f9727, c64358b5 and 76ddb35b hold drawn requests at most, which all fall over an hour back, and cd9a5904,
+  // 1c0f9727, 76ddb35b, c64358b5 and cd9a5904 hold drawn requests at most, which all fall over an hour back, and
   // 0f1d7c64 and 3e9b7c21 hold no laptop request.
   const pins = Object.fromEntries(after.map((s) => [s.sessionId, { lines: s.agentContexts.length, pinned: s.pinned }]));
   const kept = { '5eeed6ce-bf6f-4c62-91f4-775b7fa78f23': { lines: 0, pinned: false }, '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f': { lines: 0, pinned: false } };

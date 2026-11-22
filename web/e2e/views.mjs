@@ -2721,8 +2721,8 @@ async function poolRoutingCards(theme) {
  * The pool dialog's two ceiling handles in the plain view: each stands on its own track of used shares at the ceiling
  * its field holds, centered on the track's height and taller than the track, the first track's lowest mark stands
  * above the second track's highest with a focused handle's ring counted on both, an arrow key on the weekly handle
- * moves the weekly field a point, up under the handle's maximum and down at it, and leaves the 5-hour one, and the bar's
- * legend names the two readings alone.
+ * moves the weekly field a point, up where a point of room is left under the handle's maximum and down wherever less is
+ * left, and leaves the 5-hour one, and the bar's legend names the two readings alone.
  */
 async function utilizationCeiling(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);

@@ -501,9 +501,10 @@ The page runs on Playwright's clock: it starts at `PHOEBIS_E2E_CLOCK` (an ISO in
 launches when that is unset, and stands still except where the script moves it, in fixed steps, while a view loads and
 again before its shot. A step starts once the page has had two frames with no request in flight, so a view that loads a
 module waits for the module's file however late it arrives. A request that a navigation cancels stops counting once the
-new document commits, since Playwright reports neither its end nor its failure. A request that has not landed after 30 s
-fails the pass with its address, and the later steps wait for the frames alone. Animations are off and the time zone is
-UTC, so two passes over one tree at one clock origin draw the same pixels.
+main frame commits the new document, where it started before that document's own request, since Playwright reports
+neither its end nor its failure. A request that has not landed after 30 s fails the pass with its address, and the later
+steps wait for the frames alone. Animations are off and the time zone is UTC, so two passes over one tree at one clock
+origin draw the same pixels.
 
 ## Run it against a running router
 
