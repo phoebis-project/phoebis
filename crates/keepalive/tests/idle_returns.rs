@@ -104,19 +104,6 @@ fn counters(r: &Rig, pool: &str) -> ([u64; 10], [u64; 10]) {
     summed(by_day(r, pool))
 }
 
-/// The pool's rows the registry holds, by UTC day, as a restart loads them.
-fn saved_by_day(r: &Rig, pool: &str) -> BTreeMap<i64, ([u64; 10], [u64; 10])> {
-    let mut days: BTreeMap<i64, ([u64; 10], [u64; 10])> = BTreeMap::new();
-    for row in r.h.store.load_keepalive().unwrap().2 {
-        if row.pool_id == pool {
-            let day = days.entry(row.day).or_default();
-            day.0[row.bucket as usize] = row.reached;
-            day.1[row.bucket as usize] = row.returned;
-        }
-    }
-    days
-}
-
 /// The rig's timing with the idle-return retention set to `days`.
 fn retained_for(days: u32) -> RigSpec {
     RigSpec {
@@ -460,12 +447,11 @@ async fn a_day_past_the_retention_leaves_at_the_roll_and_stays_gone_after_a_save
         BTreeSet::from([1, 2]),
         "the save took the first day's rows"
     );
-    // The load saves the rows it drops before it returns, so the rows after it are the ones the restarted engine holds.
     let second = r.restart().await;
     second.load_persisted().await;
     assert_eq!(
-        saved_by_day(&r, "main"),
-        BTreeMap::from([(1, days[&1]), (2, days[&2])]),
+        [0, 1, 2].map(|day| day_of(&second, "main", day)),
+        [([0; 10], [0; 10]), days[&1], days[&2]],
         "the load reads the days kept, each as the engine counted it"
     );
 }
@@ -486,11 +472,14 @@ async fn a_retention_of_0_keeps_every_day() {
     );
     assert_eq!((reached(&r), returned(&r)), counted, "the roll");
     r.engine.flush_persisted().await;
-    // The load saves the rows it drops before it returns, so the rows after it are the ones the restarted engine holds.
     let second = r.restart().await;
     second.load_persisted().await;
+    let over = &second.idle_returns_over(r.now(), 30)["main"];
     assert_eq!(
-        summed(saved_by_day(&r, "main")),
+        (
+            over.buckets.map(|bucket| bucket.reached),
+            over.buckets.map(|bucket| bucket.returned)
+        ),
         counted,
         "the save and the load"
     );

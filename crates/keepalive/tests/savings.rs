@@ -438,10 +438,10 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     assert_eq!(r.view("main").probes_today, 3);
     r.advance(270_000);
     r.step().await;
-    // The wasted rows below read the three probes the ceiling kept pending, settled under `idle_limit`.
+    // No settlement waits for a save yet, so this save sends nothing to the ledger.
     assert_eq!(
-        r.view("main").cause,
-        Reason::IdleLimit,
+        (r.view("main").cause, r.saved_unanswered("main").await),
+        (Reason::IdleLimit, 3),
         "the ceiling keeps the three probes pending"
     );
     // The last probe's entry, written 810 s in, ends at 1,110 s. The lapse's settlements reach the ledger with the save
@@ -1811,10 +1811,10 @@ async fn an_api_key_account_s_credit_settlement_and_skip_rows_file_under_billed(
         r.advance(270_000);
         r.step().await;
     }
-    // The wasted rows below read the three probes the ceiling kept pending.
+    // No settlement waits for a save yet, so this save sends nothing to the ledger.
     assert_eq!(
-        r.view("main").cause,
-        Reason::IdleLimit,
+        (r.view("main").cause, r.saved_unanswered("main").await),
+        (Reason::IdleLimit, 3),
         "the ceiling keeps the three probes pending"
     );
     // The last probe's entry, written 810 s in, ends at 1,110 s. The lapse's settlements reach the ledger with the save
@@ -2389,11 +2389,7 @@ async fn a_session_holding_a_pending_probe_alone_settles_it_at_the_lapse_without
     let r = ended_by_the_idle_limit().await;
     // The probe is pending: the tick at its entry's end settles it, and the save after the tick sends that one
     // settlement, which the rows below read.
-    assert_eq!(
-        r.engine.stats().retained_bytes,
-        0,
-        "nothing retained, the probe pending"
-    );
+    assert_eq!(r.engine.stats().retained_bytes, 0, "nothing retained");
     let views = r.engine.router_views();
     r.advance(30_000);
     r.engine.step().await;

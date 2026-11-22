@@ -530,12 +530,11 @@ async fn the_idle_age_counters_round_trip() {
         "a day apiece: {counted:?}"
     );
     r.engine.flush_persisted().await;
-    // The load saves the rows it drops before it returns, so the rows after it are the ones the restarted engine holds.
     let second = r.restart().await;
     second.load_persisted().await;
     assert_eq!(
-        saved_counts(&r),
-        BTreeMap::from([(today, counted[0]), (today + 1, counted[1])])
+        [today, today + 1].map(|day| day_counts(&second, day)),
+        counted
     );
 }
 
@@ -551,19 +550,6 @@ fn day_counts(engine: &Engine, day: i64) -> ([u64; 10], [u64; 10]) {
                 counters.buckets.map(|bucket| bucket.returned),
             )
         })
-}
-
-/// The main pool's rows the registry holds, by UTC day, as a restart loads them.
-fn saved_counts(r: &Rig) -> BTreeMap<i64, ([u64; 10], [u64; 10])> {
-    let mut days: BTreeMap<i64, ([u64; 10], [u64; 10])> = BTreeMap::new();
-    for row in r.h.store.load_keepalive().unwrap().2 {
-        if row.pool_id == "main" {
-            let day = days.entry(row.day).or_default();
-            day.0[row.bucket as usize] = row.reached;
-            day.1[row.bucket as usize] = row.returned;
-        }
-    }
-    days
 }
 
 /// The rows of each UTC day the registry holds.
@@ -1613,9 +1599,13 @@ async fn a_restart_restores_an_unanswered_probe_with_what_its_credit_and_its_set
     r.observe("main").await;
     r.advance_attended(270_000);
     r.step().await;
-    // The rows read back equal the rows saved, and the payload below holds the one unanswered probe.
     let (_, agents) = r.engine.persist_rows();
     r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_unanswered(&r, "session", "main"),
+        1,
+        "the saved row holds the one unanswered probe"
+    );
     let second = r.restart().await;
     second.load_persisted().await;
     let (_, loaded) = second.persist_rows();
@@ -1849,7 +1839,6 @@ async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_l
     r.step().await;
     r.advance(270_000);
     r.step().await;
-    // The payload below holds the one probe the idle limit left pending.
     assert_eq!(
         r.view("main").cause,
         Reason::IdleLimit,
@@ -1857,6 +1846,11 @@ async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_l
     );
     let (_, agents) = r.engine.persist_rows();
     r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_unanswered(&r, "session", "main"),
+        1,
+        "the saved row holds the one probe the idle limit left pending"
+    );
     let second = r.restart().await;
     second.load_persisted().await;
     let (_, loaded) = second.persist_rows();

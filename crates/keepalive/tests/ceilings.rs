@@ -258,8 +258,7 @@ fn pending_lapse(r: &Rig, agent: &str) -> i64 {
 
 /// The recipe is still retained at `end - 1` and ends with `reason` on the tick at `end`, its unanswered probes
 /// settled under `label`: at once, or under `idle_limit` once the newest entry they wrote has ended, every probe
-/// pending until its own entry's end. The wasted rows read every probe since the request under `label`, so a probe
-/// that a ceiling's end did not leave pending fails the last assertion.
+/// pending until its own entry's end. The wasted rows read every probe since the request under `label`.
 async fn ends_at(r: &mut Rig, agent: &str, end: i64, reason: Reason, label: &str) {
     tick_to(r, end - 1).await;
     assert!(
@@ -932,7 +931,7 @@ async fn a_subagents_park_follows_the_park_rules_and_no_idle_window_applies_to_i
             view.ttl_seconds,
             retained(&r, "worker")
         ),
-        (Lifecycle::Busy, Reason::Scheduled, HOUR / 1_000, true),
+        (Lifecycle::Busy, Reason::Scheduled, 3_600, true),
         "{view:?}"
     );
     // The lifetime count: the day ran past a UTC midnight, where the view's day count starts again.
