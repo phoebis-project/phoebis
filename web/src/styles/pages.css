@@ -2439,9 +2439,17 @@
   grid-template-columns: fit-content(50%) 1fr;
 }
 
+/* The recent requests table keeps its eight columns, so the two cards stack until the table fits beside the Sessions
+   card. The columns need 796 px at their floors, and the table's share of the row reaches that at a window width of
+   1503 px. */
+@media (max-width: 1502.98px) {
+  .dash-bottom {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 1100px) {
   .accounts,
-  .dash-bottom,
   .requests.has-drawer {
     grid-template-columns: 1fr;
   }

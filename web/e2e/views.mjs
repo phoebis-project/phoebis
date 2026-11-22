@@ -5893,9 +5893,7 @@ async function ringLinesSpan(theme) {
 /**
  * The Dashboard's recent requests read each model id on one line, so a long id cannot set its row's height, and the
  * table fits its card: the Model cell stops at its cap behind an ellipsis, with the whole id on the title. The Time and
- * Tokens cells keep their second lines, so the rows' heights are not asserted. The fit is asserted in the router pass
- * and recorded in the mock pass, whose story's subscription rows read their figure in the Ultra week in the Cost cell,
- * wider than the card leaves at 1280 by 800, so there the table scrolls inside its wrap as the request list does.
+ * Tokens cells keep their second lines, so the rows' heights are not asserted.
  */
 async function recentRowsOneLine(theme) {
   const read = await page.evaluate(() => {
@@ -5939,10 +5937,7 @@ async function recentRowsOneLine(theme) {
   measurements.push(`${theme} / recent table ${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client === null || read.least === null ? 'n/a' : read.client - read.least}px), edges ${JSON.stringify(read.edges)}, model cells ${JSON.stringify(read.cells)}`);
   if (mock && read.cells.length === 0) failures.push(`${theme} /: the story has recent requests, yet no Model cell is drawn`);
   if (read.client === null) failures.push(`${theme} /: no Recent requests table to measure`);
-  else if (read.scroll > read.client) {
-    if (mock) measurements.push(`${theme} / the Recent requests table needs ${read.scroll}px of its card's ${read.client}px and scrolls inside it`);
-    else failures.push(`${theme} /: the Recent requests table needs ${read.scroll}px of its card's ${read.client}px`);
-  }
+  else if (read.scroll > read.client) failures.push(`${theme} /: the Recent requests table needs ${read.scroll}px of its card's ${read.client}px`);
   for (const cell of read.cells) {
     if (cell.lines > 1) failures.push(`${theme} /: the Model cell "${cell.text}" wraps onto ${cell.lines} lines`);
     // The cell drops the id's prefix and date, so the title holds the shown text inside the whole id.
@@ -13065,8 +13060,7 @@ async function sessionsTableFits(theme) {
  * widest single item, which is the need its width is held to, and the stacked read is no failure. Two or more fill
  * columns are equal within 1 px, and the table does not overflow its wrap: its `.table-wrap` ancestor where one
  * exists, else its parent element, unless `overflowRecorded` holds, when a table wider than its wrap is recorded
- * rather than failed (the Dashboard's recent requests in the mock pass, whose story's values run past its card at 1280
- * by 800).
+ * rather than failed (the Meter view's two tables under 900 px).
  * `fixed` counts the leading columns that keep a width of their own (the Sessions
  * gutter's 30 px) and carry neither class. In the mock pass a table that read no rows fails, since a table whose every
  * row spans its cells would otherwise pass on its header alone. The measurement records every column's class, width
@@ -14371,15 +14365,16 @@ try {
       }
       if (view.path === '/') {
         await recentRowsOneLine(theme);
-        // Time is the fill at both sizes, and the mock story's values still run past the card at 1280 by 800, which the
-        // read records.
+        // Time is the fill at each size. The first two sizes see the two cards stacked, so the third is the first width
+        // at which the table stands beside the Sessions card.
         for (const size of [
           { height: 800, width: 1280 },
           { height: 900, width: 1440 },
+          { height: 800, width: 1503 },
         ]) {
           await page.setViewportSize(size);
           await settle();
-          await tableColumns(theme, size.width === 1280 ? '' : ' at 1440 by 900', '.dash__recent', ['Time'], 0, { overflowRecorded: mock });
+          await tableColumns(theme, size.width === 1280 ? '' : ` at ${size.width} by ${size.height}`, '.dash__recent', ['Time'], 0);
         }
         await page.setViewportSize({ height: 800, width: 1280 });
         await settle();

@@ -234,8 +234,8 @@ table's fit, the recent requests' Cost cell under All in dollars and Billed doll
 equivalent line in the size, line height and ink of the Tokens cell's second line, and its dash under the nothing billed
 title), the Estimated cost, 24h tile on the story's own unpriced rows (mock pass, on a load of its own: the subscription
 line's dash under the unpriced title, in the size, weight and ink of the billed figure beside it and in the weight and
-ink of the Tokens, 24h tile's lone figure), the recent requests' columns at 1280 by 800 and 1440 by 900 (Time the fill,
-its scroll past the card recorded in the mock pass), the cost-cap rows, the wasted-probe rows, the Cache warming tab's
+ink of the Tokens, 24h tile's lone figure), the recent requests' columns (Time the fill, the table inside its card at
+1280 by 800, at 1440 by 900 and at 1503 by 800), the cost-cap rows, the wasted-probe rows, the Cache warming tab's
 saving tiles under each unit position (Probe cost, Saved by probes, Net saving and Kept warm on one row at one top, the
 two saving tiles in the Probe cost tile's box and value type, and the Saved by probes chart in the box and title type
 of the card beside it), the Cost tab on the story's own unpriced rows (mock pass, on loads of its own: the Cost tile's
@@ -487,10 +487,8 @@ dialog's secret in the mock pass, on a load of its own), the login screen's pale
 login, the first one's and each one's after a Log out: the root's `data-palette` against the stored palette, since the
 theme script alone sets it on that screen, then the secret field's, the row's, its box's, its label's and its hint's
 edges inside the card recorded, asserting nothing)). A check that opens an editor, a dialog or a row closes it again
-before the view's shot, and one that turns a column on turns it off again. The recent requests' table is fitted in the
-router pass and recorded in the mock pass, whose story's subscription rows read their figure in the Ultra week in the
-Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there. The script exits
-non-zero with the list of failures when any of that does not hold.
+before the view's shot, and one that turns a column on turns it off again. The script exits non-zero with the list of
+failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.
