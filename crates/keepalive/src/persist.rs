@@ -5,6 +5,7 @@
 //! the save carried.
 
 use std::collections::BTreeMap;
+#[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
@@ -1422,8 +1423,11 @@ impl Engine {
     }
 
     fn flush_blocking(&self) {
-        self.persist_entries.fetch_add(1, Ordering::SeqCst);
-        self.persist_progress.notify_waiters();
+        #[cfg(any(test, feature = "debug-hooks"))]
+        {
+            self.persist_entries.fetch_add(1, Ordering::SeqCst);
+            self.persist_progress.notify_waiters();
+        }
         // A panic inside a flush poisons the lock, which orders flushes and guards no invariant of its own.
         let _flushing = self
             .flush_lock
@@ -1431,8 +1435,11 @@ impl Engine {
             .unwrap_or_else(PoisonError::into_inner);
         let now = self.now();
         let mut snapshot = self.lock().persist_snapshot(now);
-        self.persist_snapshots.fetch_add(1, Ordering::SeqCst);
-        self.persist_progress.notify_waiters();
+        #[cfg(any(test, feature = "debug-hooks"))]
+        {
+            self.persist_snapshots.fetch_add(1, Ordering::SeqCst);
+            self.persist_progress.notify_waiters();
+        }
         let settled = std::mem::take(&mut snapshot.settled);
         // Nothing to write means the registry already holds every row, which releases the held settlements too.
         if snapshot.is_empty() {

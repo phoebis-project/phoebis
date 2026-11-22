@@ -3,7 +3,9 @@
 //! it does I/O.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#[cfg(any(test, feature = "debug-hooks"))]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -1520,18 +1522,20 @@ pub struct Engine {
     pub(crate) idle: Notify,
     pub(crate) workers: TaskTracker,
     /// How many times `step` has actually asked the router, for a test to hold against one ask per due tick.
-    /// Cheap enough to keep in every build. Only the reader is gated.
+    #[cfg(any(test, feature = "debug-hooks"))]
     router_view_calls: AtomicU64,
     /// Orders the flushes: a snapshot, its save and its acknowledgment run under it whole, so two flushes never
     /// overlap and an older batch never reaches the store after a newer one.
     pub(crate) flush_lock: Mutex<()>,
     /// How many flushes have entered, counted before the flush lock, so a test can hold a save and know a second
-    /// flush is queued behind it. Cheap enough to keep in every build, so only the reader is gated.
+    /// flush is queued behind it.
+    #[cfg(any(test, feature = "debug-hooks"))]
     pub(crate) persist_entries: AtomicU64,
     /// How many flushes have read their batch, for a test to change a row only once the save it races has read it.
-    /// Cheap enough to keep in every build, so only the reader is gated.
+    #[cfg(any(test, feature = "debug-hooks"))]
     pub(crate) persist_snapshots: AtomicU64,
     /// Woken as either count rises, which is what a test's wait on them waits on.
+    #[cfg(any(test, feature = "debug-hooks"))]
     pub(crate) persist_progress: Notify,
     /// Events a gap left queued behind it, counted down as they are applied. What arrives inside that backlog cannot
     /// be trusted: the terminal event of any request among them may be one the gap dropped. Apart from the engine's
@@ -1562,10 +1566,14 @@ impl Engine {
             cancel: CancellationToken::new(),
             idle: Notify::new(),
             workers: TaskTracker::new(),
+            #[cfg(any(test, feature = "debug-hooks"))]
             router_view_calls: AtomicU64::new(0),
             flush_lock: Mutex::new(()),
+            #[cfg(any(test, feature = "debug-hooks"))]
             persist_entries: AtomicU64::new(0),
+            #[cfg(any(test, feature = "debug-hooks"))]
             persist_snapshots: AtomicU64::new(0),
+            #[cfg(any(test, feature = "debug-hooks"))]
             persist_progress: Notify::new(),
             gap_backlog: AtomicUsize::new(0),
         })
@@ -4077,6 +4085,7 @@ impl Engine {
     /// Five asks of the router task per tick, whatever the number of recipes: the scheduler must not queue one
     /// command per agent in front of selection.
     pub(crate) async fn router_view(&self, now: i64, retained_models: Vec<String>) -> RouterView {
+        #[cfg(any(test, feature = "debug-hooks"))]
         self.router_view_calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let snapshot = self.parts.router.snapshot();
