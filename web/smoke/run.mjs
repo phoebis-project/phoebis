@@ -8850,19 +8850,18 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   setter.call(nameInput, 'draft');
   nameInput?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(150);
-  const memberless = [status()?.textContent ?? '', JSON.stringify(goTo())];
-  dlg?.querySelector('.members-table tbody tr input[type="checkbox"]')?.click();
-  await m.settle(150);
+  const memberless = [status()?.textContent ?? '', JSON.stringify(goTo()), String(status()?.classList.contains('is-held'))];
+  const create = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create pool');
   results.push({
-    name: "/pools a new pool's footer names the missing name, then the missing member",
+    name: "/pools a new pool's footer names the missing name, and a named pool with no member can be created",
     ok:
       unnamed[0] === 'Save is held: the pool needs a name.Go to Identity' &&
       unnamed[1] === '["Go to Identity"]' &&
-      memberless[0] === 'Save is held: the pool needs a member.Go to Members' &&
-      memberless[1] === '["Go to Members"]' &&
-      status()?.textContent === 'Every group saves together.' &&
-      status()?.classList.contains('is-held') === false,
-    missing: [...unnamed, ...memberless, status()?.textContent ?? 'no status line'],
+      memberless[0] === 'Every group saves together.' &&
+      memberless[1] === '[]' &&
+      memberless[2] === 'false' &&
+      create?.disabled === false,
+    missing: [...unnamed, ...memberless, create ? `Create pool disabled ${create.disabled}` : 'no Create pool button'],
   });
   rail(dlg, 'keys')?.click();
   await m.settle(150);
@@ -9941,15 +9940,15 @@ await forView(['/keys', '/pools'], async () => {
       .map((ref) => document.getElementById(ref)?.textContent?.trim());
   const marks = ['identity', 'members', 'keys', 'models', 'guardrails'].map((id) => markOf(id)?.textContent?.trim() ?? null);
   results.push({
-    name: '/pools Create pool marks Identity and Members needed and Keys and Guardrails after saving, each hidden from the name and read in the description',
+    name: '/pools Create pool marks Identity needed and Keys and Guardrails after saving, each hidden from the name and read in the description',
     ok:
-      JSON.stringify(marks) === '["needed","needed","after saving",null,"after saving"]' &&
+      JSON.stringify(marks) === '["needed",null,"after saving",null,"after saving"]' &&
       markOf('identity')?.getAttribute('aria-hidden') === 'true' &&
       JSON.stringify(described('identity')) === '["needed","holds a refusal"]' &&
       JSON.stringify(described('keys')) === '["after saving"]' &&
       JSON.stringify(described('guardrails')) === '["after saving"]' &&
       rail(dlg, 'identity')?.querySelector('.dialog-rail__label')?.textContent === 'Identity' &&
-      (dlg?.querySelectorAll('.dialog-rail__mark').length ?? 0) === 4,
+      (dlg?.querySelectorAll('.dialog-rail__mark').length ?? 0) === 3,
     missing: [...marks.map(String), ...described('identity'), ...described('keys'), ...described('guardrails')],
   });
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;

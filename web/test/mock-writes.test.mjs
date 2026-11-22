@@ -169,6 +169,20 @@ test('a pool save reads the resolved figures off the saved members, so a member 
   assert.ok(saved.keepaliveResolved.breakEvenSeconds.min < before.breakEvenSeconds.min, `the low end reads ${saved.keepaliveResolved.breakEvenSeconds.min} against ${before.breakEvenSeconds.min}`);
 });
 
+test('a pool with no member answers exhausted while it is enabled, as the route does', async () => {
+  const api = await signedIn();
+  // The story's pool all is degraded, so each create states the status the dialog sends.
+  const empty = await api.createPool({ ...(await storyPool(api)), members: [], name: 'empty', status: 'active' });
+  assert.equal(empty.status, 'exhausted', 'a pool saved as active with no member');
+  const disabled = await api.updatePool(empty.id, { ...poolInputOf(empty), status: 'disabled' }, empty.revision);
+  assert.equal(disabled.status, 'disabled', 'a disabled pool with no member');
+  await api.createAccount({ id: 'fresh', kind: 'oauth', label: 'fresh', secret: null });
+  const single = await api.createPool({ ...(await storyPool(api)), members: [{ accountId: 'fresh', priority: 0 }], name: 'single', status: 'active' });
+  assert.equal(single.status, 'active', 'a pool saved as active with a member');
+  await api.deleteAccount('fresh');
+  assert.equal((await api.listPools()).find((p) => p.id === single.id)?.status, 'exhausted', 'an account delete that took the last member');
+});
+
 test('a created and a rotated key answer a sixteen-character prefix', async () => {
   const api = await signedIn();
   const created = await api.createKey({ ...keyInput, name: 'prefixed' });

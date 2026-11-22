@@ -87,7 +87,10 @@ export type MemberColumn = 'budget_daily' | 'budget_monthly' | 'member' | 'prior
 export const memberField = (column: MemberColumn, accountId: string): string => `${column}:${accountId}`;
 
 export interface PoolRefusal {
-  /** The refused control's accessible name; `priority:<id>`, `budget_daily:<id>`, `budget_monthly:<id>`, `member:<id>` for a member row; `members` for the missing member or an account list that did not load. */
+  /**
+   * The refused control's accessible name: `priority:<id>`, `budget_daily:<id>`, `budget_monthly:<id>` or
+   * `member:<id>` for a member row, and `members` for an account list that did not load.
+   */
   field: string;
   group: PoolGroup;
   /** The member row and the control a member row's refusal names. */
@@ -188,7 +191,6 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   if (checks.identity?.isNew && input.name.length > 0) refuse('identity', 'Name', derivedIdRefusal('pool', input.name, checks.identity.poolIds));
 
   refuse('members', 'members', accountIds !== null ? null : 'the account list did not load, so the members cannot be checked.');
-  refuse('members', 'members', input.members.length > 0 ? null : 'the pool needs a member.');
   for (const m of input.members) {
     const id = m.accountId;
     const refuseMember = (column: MemberColumn, text: string | null) => refuse('members', memberField(column, id), text, { accountId: id, column });

@@ -430,7 +430,7 @@ test('a spent window ranks behind the wind-down, and a pool of spent members sti
 
 test('the status sentence reads one row of the table per pool state', () => {
   assert.equal(read(at(pool('pace', 'allow', [member('plan', 0)]), 'disabled')), 'Disabled: the pool accepts no requests, but its keys and members stay.');
-  assert.equal(read(at(pool('pace', 'allow', []), 'active')), 'Active: the pool has no members yet.');
+  assert.equal(read(at(pool('pace', 'allow', []), 'exhausted')), 'Exhausted: the pool has no members yet.');
   assert.equal(read(at(pool('pace', 'allow', [member('plan', 0, 'cooldown')]), 'degraded')), 'Degraded: no member takes a fresh session right now.');
   assert.equal(read(at(pool('pace', 'allow', [member('plan', 0)]), 'active')), `Active: ${labelOf('plan')} takes every fresh session.`);
   assert.deepEqual(linked(at(pool('pace', 'allow', [member('plan', 0)]), 'active')), ['plan']);

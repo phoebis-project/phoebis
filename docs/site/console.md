@@ -623,8 +623,9 @@ moved or revoked first."
 The pool dialog, "Create pool" or `Edit pool {name}`, is grouped: a rail "Pool settings" on the left, one group open
 at a time, a status line reading "Every group saves together." or `Save is held: {reason}` (a pool that changed since
 you opened it holds the save until "Reload"), and Cancel beside "Create pool" or "Save pool". On create the rail marks
-Identity and Members "needed" and Keys and Guardrails "after saving", and the Keepalive group's "Keep prompt caches
-warm" switch starts off. The groups by rail parent, with what the expert view adds:
+Identity "needed" and Keys and Guardrails "after saving", and the Keepalive group's "Keep prompt caches warm" switch
+starts off. A pool can be saved with no member, and its card then reads "Exhausted: the pool has no members yet." The
+groups by rail parent, with what the expert view adds:
 
 | Rail parent | Groups | In the expert view alone |
 | --- | --- | --- |

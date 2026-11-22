@@ -68,7 +68,7 @@ test('a pool input refuses a keepalive idle below 0, a fraction of a second and 
 });
 
 test('a pool input refuses members the member write would refuse', () => {
-  assert.notEqual(d.poolRefusals({ ...input, members: [] }, accounts).length, 0, 'a pool needs a member');
+  assert.deepEqual(d.poolRefusals({ ...input, members: [] }, accounts), [], 'a pool can be saved with no member');
   assert.notEqual(d.poolRefusals({ ...input, members: [...input.members, { accountId: 'ghost', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }] }, accounts).length, 0, 'an account the console does not know');
   assert.notEqual(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority: -1 }] }, accounts).length, 0, 'priorities are unsigned');
   assert.notEqual(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 1.5 }] }, accounts).length, 0, 'priorities are whole');
@@ -325,7 +325,6 @@ test('a pool refusal names the group its control sits in', () => {
   const refused = (field, group, text) => [{ field, group, text }];
   const cases = [
     [{ name: '' }, refused('Name', 'identity', 'the pool needs a name.')],
-    [{ members: [] }, refused('members', 'members', 'the pool needs a member.')],
     [{ members: [...input.members, { accountId: 'ghost', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }] }, [{ field: 'member:ghost', group: 'members', member: { accountId: 'ghost', column: 'member' }, text: 'ghost is not an account the console lists.' }]],
     [{ members: [{ accountId: first.accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 1.5 }] }, [{ field: 'priority:business', group: 'members', member: { accountId: 'business', column: 'priority' }, text: 'Priority is a whole number of 0 or more.' }]],
     [{ members: [{ ...first, budgetDailyUsd: 0 }] }, [{ field: 'budget_daily:business', group: 'members', member: { accountId: 'business', column: 'budget_daily' }, text: 'A budget is a dollar amount above 0. Leave it empty for no budget.' }]],
@@ -408,15 +407,15 @@ test('the Keepalive group refuses its three numbers in the order it draws them',
   assert.deepEqual(Object.keys(d.KEEPALIVE_FIELD_LABELS).sort(), Object.keys(d.KEEPALIVE_BOUNDS).sort());
 });
 
-test("refusals come in rail order, a new pool's first two the name and the member", () => {
+test("refusals come in rail order, a new pool's first the name", () => {
   const refusals = d.poolRefusals({ ...input, bodyCaptureHours: Number.NaN, name: '', members: [], modelRules: rules('a***') }, accounts, { capture: { maxHours: 72, on: true } });
   assert.deepEqual(
     refusals.map((r) => r.group),
-    ['identity', 'members', 'models', 'bodyCapture'],
+    ['identity', 'models', 'bodyCapture'],
   );
   assert.deepEqual(
-    refusals.slice(0, 2).map((r) => r.text),
-    ['the pool needs a name.', 'the pool needs a member.'],
+    refusals.slice(0, 1).map((r) => r.text),
+    ['the pool needs a name.'],
   );
 });
 

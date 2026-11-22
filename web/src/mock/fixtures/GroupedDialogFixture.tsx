@@ -6,7 +6,7 @@ import { POOL_RAIL } from '@/lib/poolRail';
 
 const list = (value: string | null) => (value ?? '').split(',').filter(Boolean);
 // A copy of the pool dialog's create marks, so the fixture draws the page's words without importing the page.
-const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { guardrails: 'after saving', identity: 'needed', keys: 'after saving', members: 'needed' };
+const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { guardrails: 'after saving', identity: 'needed', keys: 'after saving' };
 
 export default function GroupedDialogFixture() {
   // `?refused=<id>,<id>` marks groups refused, since the dot widens a rail entry and the pass measures that state;

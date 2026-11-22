@@ -328,6 +328,8 @@ export function poolStatusSentence(pool: Pool, accounts: Account[] | null, now: 
   };
   const say = (parts: StatusPart[]): PoolStatusSentence => ({ parts, status, word });
   if (status === 'disabled') return say([{ text: 'the pool accepts no requests, but its keys and members stay.' }]);
+  // The route answers `exhausted` for an enabled pool with no member, so this test stands ahead of that branch.
+  if (pool.members.length === 0) return say([{ text: 'the pool has no members yet.' }]);
   if (status === 'exhausted') {
     if (accounts === null) return say([{ text: 'no member can take a request.' }]);
     const first = pool.members
@@ -339,7 +341,6 @@ export function poolStatusSentence(pool: Pool, accounts: Account[] | null, now: 
   }
   const members = pool.members.length;
   const eligible = pool.members.filter((m) => m.eligible === 'eligible');
-  if (members === 0) return say([{ text: 'the pool has no members yet.' }]);
   if (eligible.length === 0) return say([{ text: 'no member takes a fresh session right now.' }]);
   const count = eligible.length === members ? `all ${members} members take fresh sessions` : `${eligible.length} of ${members} members ${noun(eligible.length, 'takes', 'take')} fresh sessions`;
   if (accounts === null) return say([{ text: members === 1 ? "the pool's one member takes every fresh session." : `${count}.` }]);

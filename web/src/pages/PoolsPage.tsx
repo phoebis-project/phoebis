@@ -46,7 +46,7 @@ import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_L
 
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
 // What a first pool needs, said on the create dialog's rail. The words stay while the refusal dots come and go.
-const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { guardrails: 'after saving', identity: 'needed', keys: 'after saving', members: 'needed' };
+const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { guardrails: 'after saving', identity: 'needed', keys: 'after saving' };
 // Every field of these groups belongs to the expert view, so with the mode off a group has nothing to show and leaves
 // the rail.
 const EXPERT_ONLY: ReadonlySet<PoolGroup> = new Set(['autoMode', 'cacheDiagnostics', 'failover', 'placement', 'slowDown']);

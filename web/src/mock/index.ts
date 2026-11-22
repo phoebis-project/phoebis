@@ -669,7 +669,8 @@ export class MockApi implements Api {
     // A member's pins are read under the keys the pool holds at the read, as its figure is, so a key that moved here
     // counts its pins on the member cells too.
     const members = p.members.map((m) => ({ ...m, activePins: memberPins(ids, m.accountId) }));
-    return { ...p, activePins: poolPins(p, this.keys), guardrails: this.guardrailRefs('pools', p.id), keys, members, warnings: poolWarnings(p, cohort) };
+    // The route answers `exhausted` for an enabled pool with no member, whatever status the pool was saved with.
+    return { ...p, activePins: poolPins(p, this.keys), guardrails: this.guardrailRefs('pools', p.id), keys, members, status: p.status !== 'disabled' && p.members.length === 0 ? 'exhausted' : p.status, warnings: poolWarnings(p, cohort) };
   }
 
   /**
