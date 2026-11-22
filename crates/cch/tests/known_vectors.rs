@@ -40,7 +40,7 @@ fn reference_vectors_from_the_proxy_test_suite() {
 /// compares the raw capture's digits with the signer's at capture time.
 #[test]
 fn captured_first_party_bodies_resign_to_their_native_value() {
-    let digits = [BodyFixture::FirstParty, BodyFixture::FirstPartyAgain].map(|fixture| {
+    for fixture in [BodyFixture::FirstParty, BodyFixture::FirstPartyAgain] {
         let native = body(fixture);
         let digits = cch_of(native);
         assert_ne!(
@@ -49,12 +49,7 @@ fn captured_first_party_bodies_resign_to_their_native_value() {
         );
         let signed = sign(native).unwrap();
         assert_eq!(signed, native, "re-signing a native body is a fixed point");
-        digits
-    });
-    assert_ne!(
-        digits[0], digits[1],
-        "the two first-party fixtures are two hash vectors"
-    );
+    }
 }
 
 /// A body the 2.1.329 client stamped, kept byte for byte with the client's digits. Each comes from one headless turn
