@@ -625,10 +625,9 @@ function PoolCard({
   // The selection order skips a member the accounts list does not carry, so the table lists it after the tiers.
   const unlisted = pool.members.filter((m) => !accountById.has(m.accountId));
   // The route counts the moves of the last hour by reason on the pool's member accounts, so every figure is a whole
-  // number. The figure sums the rule moves, a keepalive probe's move included, which the log lists as moved only with
-  // probe decisions chosen. The title names under their own headings the failovers, which the log draws as a later
-  // attempt's placement, the moves an account's state forced, which it draws as a placement too, and any reason this
-  // build does not know.
+  // number. The figure sums the rule moves. The title names under their own headings the failovers, which the log draws
+  // as a later attempt's placement, the moves an account's state forced, which it draws as a placement too, and any
+  // reason this build does not know.
   const moveCounts = Object.entries(pool.movesPerHour)
     .filter(([, count]) => count > 0)
     .sort(([, a], [, b]) => b - a);
@@ -645,7 +644,7 @@ function PoolCard({
     ...(failovers.length === 0 ? [] : ['Failovers left out of the count', ...failovers.map(moveLine)]),
     ...(causes.length === 0 ? [] : ["Moves an account's state forced, left out of the count", ...causes.map(moveLine)]),
     ...(others.length === 0 ? [] : ['Other moves left out of the count', ...others.map(moveLine)]),
-    `Opens the Routing log on pool ${pool.id} and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen`,
+    `Opens the Routing log on pool ${pool.id} and the moved kind for the last hour`,
   ].join('\n');
   return (
     <Card id={pool.id} tabIndex={-1} padded={false} className="pool">

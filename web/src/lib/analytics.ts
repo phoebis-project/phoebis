@@ -22,7 +22,7 @@ export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
 };
 /**
  * The pool's own balancing: what the pool card's move tile sums, the rule moves on the pool's member accounts in the
- * last hour. A keepalive probe's move counts among them, and the routing log lists it only with probe decisions chosen.
+ * last hour.
  */
 export const RULE_MOVE_REASONS: readonly PinMigrationReason[] = ['drain', 'overage', 'return_to_plan', 'shed', 'spent'];
 /** The moves an answer forced on a session, which the pool card's move tile names apart from its count. */

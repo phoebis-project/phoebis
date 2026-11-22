@@ -6653,7 +6653,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     'Failovers left out of the count',
     'failed over 3',
     'fast lane cooling 1',
-    "Opens the Routing log on pool all and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen",
+    'Opens the Routing log on pool all and the moved kind for the last hour',
   ].join('\n');
   // The route's sentences for all's three warnings, the affinity under the injected cache TTL and the two ceilings
   // under 80 %, in the order of their codes.
@@ -6857,7 +6857,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       'account paused 1',
       'Other moves left out of the count',
       'unknown 2',
-      "Opens the Routing log on pool all and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen",
+      'Opens the Routing log on pool all and the moved kind for the last hour',
     ].join('\n');
     results.push({
       name: "/pools the moves tile lists the moves an account's state forced and a reason it does not know apart from the rule moves and the failovers",
