@@ -3,6 +3,7 @@
 mod common;
 use common::{delete, get, json, login, patch, post};
 use phoebis_store::AccountKind;
+use rusqlite::TransactionBehavior;
 
 #[tokio::test]
 async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
@@ -878,7 +879,9 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     parts
         .db
         .write(|c| {
-            let tx = c.transaction()?;
+            // The transaction takes the write lock at its start, as the ledger's own writes do: the fold reads before
+            // it writes, and the purge task commits on a connection of its own.
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
             for (id, pool, at) in [
                 ("p1", "main", now),
                 ("p2", "night", now),
@@ -1029,7 +1032,9 @@ async fn the_overviews_expired_count_sums_every_row_of_the_day_the_inference_row
     parts
         .db
         .write(|c| {
-            let tx = c.transaction()?;
+            // The transaction takes the write lock at its start, as the ledger's own writes do: the fold reads before
+            // it writes, and the purge task commits on a connection of its own.
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
             for (id, pool) in [("r1", "main"), ("r2", "main"), ("r3", "night")] {
                 phoebis_ledger::fold_request(
                     &tx,
