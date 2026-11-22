@@ -1576,7 +1576,7 @@ function paceTitle(c: RecordCandidate, record: DecisionRecord, now: number): str
   const deadline = p.deadline === null ? ' with no reset read' : ` to ${p.reset !== null && msOf(p.reset) === msOf(p.deadline) ? 'its reset' : "its subscription's end"} at ${formatFact(p.deadline, 'time', now)}`;
   const score = formatFact(p.score, scoreUnit(c, record), now);
   // A version 1 record read no burn, and its score was the share left an hour above the pace floor.
-  const burn = p.burn ?? null;
+  const burn = p.burn;
   if (burn === null) return `${left}${over}${deadline}: ${score}. Inside its tier, the highest above the pace floor wins.`;
   return `${left}${over}${deadline}, less ${formatFact(burn, 'percent_per_hour', now)} of burn: ${score}. Inside its tier, the highest spare rate wins.`;
 }

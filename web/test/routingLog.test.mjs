@@ -517,7 +517,7 @@ const candidate = (o) => ({
   kind: 'oauth',
   obstacle: null,
   overage: null,
-  pace: { deadline: null, end: null, fableReservation: null, hours: 120, remaining: 0.91, reset: null, score: 0.0076, window: null },
+  pace: { burn: null, deadline: null, end: null, fableReservation: null, hours: 120, remaining: 0.91, reset: null, score: 0.0076, window: null },
   partition: null,
   planTier: 'default_claude_max_20x',
   prefix: NO_PREFIX,
@@ -1761,7 +1761,6 @@ test("the Pace cell's title names the share, the hours, the deadline, the burn a
   assert.equal(title({ ...read, hours: 0.2 }), `66% of the 7-day window left over 12 min to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
   // A version 1 record read no burn, and its score was the share left an hour above the pace floor.
   assert.equal(title({ ...read, burn: null, score: 0.01 }), '66% of the 7-day window left over 66 h to its reset at Sep 19 08:30: 1.00 %/h. Inside its tier, the highest above the pace floor wins.');
-  assert.equal(d.candidateCells(candidate({}), record(), NOW).paceTitle, '91% of its window left over 120 h with no reset read: 0.76 %/h. Inside its tier, the highest above the pace floor wins.', 'a pace written without the burn reads as a version 1 one');
   const keyPace = { burn: null, deadline: null, end: null, fableReservation: null, hours: null, remaining: 0.45, reset: null, score: 0.45, window: null };
   const key = candidate({ accountId: 'overflow', kind: 'api_key', pace: keyPace, planTier: null, tier: [2, 0, 0], windows: { worst_bucket: window5h(0.55, ms(14, 28, 8)) } });
   assert.equal(d.candidateCells(key, record(), NOW).paceTitle, '45% of its worst live bucket left. Scored by the remaining share alone, with no division by hours.');
