@@ -51,9 +51,6 @@ pub(crate) struct ProbeJob {
     pub client_label: Option<String>,
     pub recipe: Recipe,
     pub expected: u64,
-    /// The dispatch counted this probe in the agent's `idle_ticks`, as it does for an idle main agent or an unattended
-    /// session alone. A hold gives back only a tick its dispatch counted.
-    pub counted_idle_tick: bool,
 }
 
 #[derive(Default)]
@@ -486,14 +483,7 @@ impl Inner {
         let result = match answered {
             Some(result) if record.outcome == ProbeOutcome::Ok => result,
             answered => {
-                self.probe_error(
-                    key,
-                    agent_id,
-                    record.outcome,
-                    answered.as_ref(),
-                    job.counted_idle_tick,
-                    now,
-                );
+                self.probe_error(key, agent_id, record.outcome, answered.as_ref(), now);
                 return;
             }
         };
@@ -611,8 +601,8 @@ impl Inner {
     /// the relay answers when every account is cooled, retries on the ladder under `probe_quota_exhausted`, its
     /// `Retry-After` replacing the step where it is longer. A probe the selector refused on the pinned member's spend
     /// budget holds under `budget` without a pause, since only a raised budget or the period's end clears it, never a
-    /// wait. A probe the router refused with `ledger_behind` holds under it for the answer's wait, counting no failure
-    /// and no idle tick. A probe the selector answered on its pinned member's standing holds under that standing:
+    /// wait. A probe the router refused with `ledger_behind` holds under it for the answer's wait, counting no
+    /// failure. A probe the selector answered on its pinned member's standing holds under that standing:
     /// `Paused` for the operator's pause and for a deleted member or one in a state other than ready,
     /// `IneligibleCredential` for a subscription that ended between the gate's read and the selection (both read
     /// `paused` in the console), a retry for a member this probe already tried or for one whose budget the degraded
@@ -630,7 +620,6 @@ impl Inner {
         agent_id: &str,
         outcome: ProbeOutcome,
         result: Option<&ProbeResult>,
-        counted_idle_tick: bool,
         now: i64,
     ) {
         // An exchange the relay never answered reads as status 0, with no code, obstacle or wait.
@@ -717,12 +706,6 @@ impl Inner {
             let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
             let wait_ms = retry_after_ms.unwrap_or(agent.timing.retry_ms);
             agent.retry_at = Some(now.saturating_add(wait_ms));
-            // A hold costs no tick: `idle_ticks` counts served or failed probes, so the tick this probe's dispatch
-            // counted comes back, and a dispatch that counted none gives back nothing. The entry's lapse and the
-            // ceilings bound the hold.
-            if counted_idle_tick {
-                agent.idle_ticks = agent.idle_ticks.saturating_sub(1);
-            }
             self.set_reason(key, agent_id, Reason::LedgerBehind);
             return;
         }
@@ -931,7 +914,6 @@ mod tests {
                 fast: false,
             },
             expected: 0,
-            counted_idle_tick: false,
         }
     }
 
@@ -1003,7 +985,6 @@ mod tests {
                     Some(obstacle),
                     None,
                 )),
-                false,
                 1_000,
             );
             let agent = &inner.sessions[&key].agents["main"];
@@ -1030,7 +1011,6 @@ mod tests {
                 Some(ProbeObstacle::Cooldown),
                 Some(120),
             )),
-            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];
@@ -1055,7 +1035,6 @@ mod tests {
                 Some(ProbeObstacle::PoolMoved),
                 Some(1),
             )),
-            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];
@@ -1074,7 +1053,6 @@ mod tests {
             "main",
             ProbeOutcome::RateLimited,
             Some(&answered(429, None, None, None)),
-            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];
@@ -1109,7 +1087,6 @@ mod tests {
                 "main",
                 ProbeOutcome::Rejected,
                 Some(&answered(403, Some(code), None, None)),
-                false,
                 1_000,
             );
             let agent = &inner.sessions[&key].agents["main"];
@@ -1143,7 +1120,6 @@ mod tests {
             "main",
             ProbeOutcome::Held,
             Some(&answered(503, Some("ledger_behind"), None, Some(5))),
-            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];
@@ -1162,7 +1138,6 @@ mod tests {
             "main",
             ProbeOutcome::Held,
             Some(&answered(503, Some("ledger_behind"), None, None)),
-            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];
@@ -1193,7 +1168,6 @@ mod tests {
                 "main",
                 ProbeOutcome::Held,
                 Some(&answered(503, Some("ledger_behind"), None, Some(5))),
-                false,
                 now,
             );
             let agent = &inner.sessions[&key].agents["main"];
@@ -1213,7 +1187,6 @@ mod tests {
             "main",
             ProbeOutcome::Failed,
             Some(&answered(503, None, None, None)),
-            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];

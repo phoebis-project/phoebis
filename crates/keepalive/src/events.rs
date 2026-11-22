@@ -654,7 +654,6 @@ impl Inner {
                         agent.set_state(AgentState::Busy);
                         agent.leaves_at = None;
                         agent.last_activity = now;
-                        agent.idle_ticks = 0;
                         // The restart moves the window's start on purpose, so the floor its release left goes.
                         agent.idle_window_floor = None;
                     }
@@ -693,7 +692,6 @@ impl Inner {
                     if let Some(episode) = agent.idle_episode.as_mut() {
                         episode.prompt_at = Some(now);
                     }
-                    agent.idle_ticks = 0;
                     agent.set_state(AgentState::Busy);
                 }
             }
@@ -882,7 +880,6 @@ impl Inner {
                         main.set_state(AgentState::Busy);
                         main.leaves_at = None;
                         main.last_activity = now;
-                        main.idle_ticks = 0;
                         // The revival moves the window's start on purpose, so the floor the end left goes.
                         main.idle_window_floor = None;
                     } else {

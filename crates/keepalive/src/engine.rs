@@ -703,7 +703,6 @@ pub(crate) struct Agent {
     pub last_activity: i64,
     pub cache_started: i64,
     pub ttl_ms: i64,
-    pub idle_ticks: u64,
     pub cold: u32,
     pub failures: u32,
     pub account: Option<String>,
@@ -792,7 +791,6 @@ impl Agent {
             last_activity: now,
             cache_started: now,
             ttl_ms: 0,
-            idle_ticks: 0,
             cold: 0,
             failures: 0,
             account: None,
@@ -3101,7 +3099,6 @@ impl Engine {
         // `unknown` main returned above and move no start, so their floor stands.
         agent.idle_window_floor = None;
         agent.cache_started = now;
-        agent.idle_ticks = 0;
         agent.cold = 0;
         agent.failures = 0;
         agent.hold_counted = false;
@@ -3973,9 +3970,6 @@ impl Engine {
                 if inner.running >= MAX_WORKERS {
                     break;
                 }
-                let idle = agent_id == MAIN_AGENT
-                    && inner.sessions[&key].agents[&agent_id].state == AgentState::Idle
-                    || !inner.sessions[&key].attended;
                 let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
                 let observation = agent.current.as_ref().unwrap();
                 let job = ProbeJob {
@@ -3994,15 +3988,11 @@ impl Engine {
                     client_label: observation.client_label.clone(),
                     recipe: observation.recipe.clone(),
                     expected: observation.expected,
-                    counted_idle_tick: idle,
                 };
                 agent.in_flight = true;
                 agent.hold_counted = false;
                 agent.probes += 1;
                 agent.count_probe(now);
-                if idle {
-                    agent.idle_ticks += 1;
-                }
                 inner.running += 1;
                 inner.set_reason(&key, &agent_id, Reason::Probing);
                 // The tracker counts the job from here, under the lock that reserved the worker: the spawn

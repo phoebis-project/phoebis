@@ -113,7 +113,6 @@ pub(crate) struct PersistedAgent {
     pub last_activity: i64,
     pub cache_started: i64,
     pub ttl_ms: i64,
-    pub idle_ticks: u64,
     pub cold: u32,
     pub failures: u32,
     pub account: Option<String>,
@@ -530,7 +529,6 @@ impl PersistedAgent {
             last_activity: agent.last_activity,
             cache_started: agent.cache_started,
             ttl_ms: agent.ttl_ms,
-            idle_ticks: agent.idle_ticks,
             cold: agent.cold,
             failures: agent.failures,
             account: agent.account.clone(),
@@ -631,7 +629,6 @@ impl PersistedAgent {
         agent.retry_at = self.retry_at;
         agent.cache_started = self.cache_started;
         agent.ttl_ms = self.ttl_ms;
-        agent.idle_ticks = self.idle_ticks;
         agent.cold = self.cold;
         agent.failures = self.failures;
         agent.account = self.account;

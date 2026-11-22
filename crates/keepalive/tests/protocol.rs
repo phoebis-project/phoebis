@@ -1112,7 +1112,6 @@ async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_e
             "probe",
             "next_refresh",
             "migrations",
-            "idle_ticks",
             "cache_ttl",
             "owner",
             "private prompt",
