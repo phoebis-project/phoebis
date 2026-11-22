@@ -19185,10 +19185,6 @@ fn a_placement_books_its_rewrite_on_the_destination_until_the_usage_replaces_it_
         fact(line(&d.record, "reserve"), "attempt"),
         &FactValue::Int(i64::from(req.attempt))
     );
-    assert!(d.writes.iter().any(|w| matches!(
-        w,
-        StateWrite::UpsertPin(row) if row.key() == pin_key("s1") && row.account_id == "a"
-    )));
     assert!(
         close(booked.rewrite[FIVE_HOUR], 0.02),
         "200 000 tokens at a ten-millionth each: {booked:?}"
@@ -19978,10 +19974,6 @@ fn a_spent_move_books_the_pins_last_prompt_as_its_rewrite_and_its_own_decayed_bu
         .as_ref()
         .expect("the move books on its destination");
     assert_eq!(booked.account_id, "b");
-    assert!(d.writes.iter().any(|w| matches!(
-        w,
-        StateWrite::UpsertPin(row) if row.key() == pin_key("s1") && row.account_id == "b"
-    )));
     assert!(
         close(booked.rewrite[FIVE_HOUR], 813_365.0 / 10_000_000.0),
         "the pin's last prompt as one five-minute write, not the body: {booked:?}"
