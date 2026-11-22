@@ -438,8 +438,8 @@ fn pick(kind: u8) -> &'static str {
 RS
 out=$(python3 "$tmp/codes-if_else/scripts/check-docs.py" codes 2>&1) && fail "a code bound to a function that is no match passed"
 echo "$out" | grep -q "models.rs:5: fn pick is no single match the check reads" || fail "the function that is no match did not report: $out"
-# The local stands in the first source that the arm reads and the last one holds no function, so a lookup that reads
-# another source's functions finds no binding.
+# The local stands in the first source that the codes check reads and the last one holds no function, so a lookup that
+# reads another source's functions finds no binding.
 cp -R "$tmp/codes" "$tmp/codes-arm"
 cat > "$tmp/codes-arm/crates/bus/src/event.rs" <<'RS'
 fn refuse(kind: Kind, id: &str) -> Response {
