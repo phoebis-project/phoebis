@@ -2234,7 +2234,7 @@ async fn a_loaded_recipe_probes_warm_when_due() {
     let sent = r.up.requests().len();
     r.advance(270_000);
     second.step().await;
-    second.wait_idle().await;
+    no_probe_running(&second).await;
 
     assert_eq!(
         r.up.requests().len(),

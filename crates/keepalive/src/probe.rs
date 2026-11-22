@@ -323,10 +323,9 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
         probe_outcome_label(record.outcome, cache_read),
     );
     engine.flush();
-    // The worker slot comes back only after both sends: `wait_idle` returns on a zero count, and a caller that
-    // asserts on the ledger right after it would otherwise race the records this probe owes.
+    // The worker slot comes back only after both sends: `Engine::stats` reads a zero count only then, and a caller
+    // that asserts on the ledger right after it would otherwise race the records this probe owes.
     engine.lock().running -= 1;
-    engine.idle.notify_waiters();
 }
 
 impl Inner {

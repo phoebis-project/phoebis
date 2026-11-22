@@ -3799,7 +3799,7 @@ async fn a_paid_probe_held_upstream(session_expiry: Duration) -> Rig {
 /// and its settlement directly, so the two can land in different batches.
 async fn served_probe_rows(r: &Rig) -> Vec<RollupRow> {
     r.up.release();
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     final_rollups(r).await
 }
 
@@ -3812,7 +3812,7 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
     let r = a_paid_probe_held_upstream(day).await;
     r.engine.close();
     r.up.release();
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     let probe = probe_rows(&final_rollups(&r).await);
     assert_eq!(
         (probe.wasted_probes, tokens(probe.usage())),

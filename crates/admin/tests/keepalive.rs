@@ -2378,7 +2378,10 @@ async fn a_probe_leaves_the_keys_last_used_at_alone() {
         .clock_cell
         .store(due + 1_000, std::sync::atomic::Ordering::SeqCst);
     parts.keepalive.step().await;
-    parts.keepalive.wait_idle().await;
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        (parts.keepalive.stats().running_probes == 0).then_some(())
+    })
+    .await;
     assert!(main().unwrap().probes_today >= 1, "the probe ran");
     // The router task processes commands in order, so a round trip through it waits out anything a probe
     // queued before this point.

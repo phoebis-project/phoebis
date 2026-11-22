@@ -678,9 +678,10 @@ impl Rig {
         self.pump(None).await;
     }
 
-    /// Waits for the answer of the probe in flight on `id`: the dispatch words the view's cause `probing`, and the
-    /// worker replaces it under the lock that writes the rest of the result. On the current-thread runtime of these
-    /// suites, the worker then runs to its end without yielding, so a read after the wait finds all of it.
+    /// Waits for the answer of the probe in flight on `id`: the dispatch words the view's cause `probing`, and
+    /// `apply_probe` replaces it under the lock that writes the rest of the result. What the worker sends behind the
+    /// apply, its metrics and its settlements, can still be on the way, so a read of those waits for
+    /// `no_probe_running`.
     pub async fn probe_answered(&self, id: &str) {
         wait_for(Duration::from_secs(5), || {
             (self.view(id).cause != Reason::Probing).then_some(())

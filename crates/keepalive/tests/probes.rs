@@ -643,7 +643,7 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
     let mut r = a_probe_held_upstream().await;
     r.engine.observe(r.observed("new", "main", BODY));
     r.up.release();
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     assert_eq!(
         r.engine.stats().running_probes,
         0,
@@ -737,7 +737,7 @@ async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
     .await;
     r.state("main", "released");
     r.up.release();
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     r.pump(None).await;
     let charged = ledger_probe_cost(&r).await;
     // The wasted rows below read the late result settled under the release, so it kept nothing unanswered.
@@ -814,7 +814,7 @@ async fn a_probe_answered_after_the_idle_limit_stays_pending_until_its_entry_lap
         "the ceiling ended the recipe while its probe was in flight"
     );
     r.up.release();
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     r.pump(None).await;
     let charged = ledger_probe_cost(&r).await;
     let (_, agents) = r.engine.persist_rows();
@@ -917,7 +917,7 @@ async fn a_probe_orphaned_by_a_release_and_then_a_revival_settles_under_the_rele
     })
     .expect("a released agent starts again under the generation its release named");
     r.up.release();
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     r.pump(None).await;
     // The late result kept nothing: the wasted rows below read it settled under the release.
     r.observe("main").await;
@@ -999,7 +999,7 @@ async fn a_replacement_registration_during_a_probe_keeps_the_new_agents_in_fligh
     .await;
     // Both gated probes answer; the old worker's result must leave the new agent's bookkeeping alone.
     r.up.release();
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     let status = r.view("main");
     let saved = r.saved("main").await;
     let unanswered = saved["unanswered"].as_array().map_or(0, Vec::len)
@@ -1064,7 +1064,7 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
     tokio::time::advance(phoebis_keepalive::PROBE_DEADLINE + std::time::Duration::from_secs(1))
         .await;
     tokio::time::resume();
-    r.probe_answered("main").await;
+    no_probe_running(&r.engine).await;
     r.pump(None).await;
     // The transport error's first rung would land at the five-minute entry's expiry, so the ladder pauses at once.
     assert_eq!(
@@ -2075,7 +2075,7 @@ async fn a_probe_pause_survives_late_stream_usage() {
     );
     r.advance(270_000);
     r.engine.step().await;
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     r.engine.observe(chunk);
     assert_eq!(
         r.view("main").next_probe_at,
@@ -2123,7 +2123,7 @@ async fn shorter_stream_evidence_recomputes_from_the_last_refresh() {
     );
     r.advance(270_000);
     r.engine.step().await;
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     r.advance(10_000);
     r.engine.observe(emit("5m"));
     assert_eq!(

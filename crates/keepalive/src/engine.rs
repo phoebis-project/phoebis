@@ -21,6 +21,7 @@ use phoebis_routing::{
     DAY_MS, SEVEN_DAY,
 };
 use phoebis_store::{AccountKind, AccountState, CooldownScope, OveragePolicy, PoolRow, Store};
+#[cfg(any(test, feature = "debug-hooks"))]
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -1518,8 +1519,6 @@ pub struct Engine {
     pub(crate) inner: Mutex<Inner>,
     pub(crate) parts: EngineParts,
     pub(crate) cancel: CancellationToken,
-    /// Woken by every worker that finishes, which is what `wait_idle` waits on.
-    pub(crate) idle: Notify,
     pub(crate) workers: TaskTracker,
     /// How many times `step` has actually asked the router, for a test to hold against one ask per due tick.
     #[cfg(any(test, feature = "debug-hooks"))]
@@ -1564,7 +1563,6 @@ impl Engine {
             )),
             parts,
             cancel: CancellationToken::new(),
-            idle: Notify::new(),
             workers: TaskTracker::new(),
             #[cfg(any(test, feature = "debug-hooks"))]
             router_view_calls: AtomicU64::new(0),
@@ -4026,11 +4024,6 @@ impl Engine {
                 run_job(engine, job).await;
             });
         }
-    }
-
-    /// Resolves once no probe is in flight. The tests drive `step` and then wait here.
-    pub async fn wait_idle(&self) {
-        phoebis_routing::wait_until(&self.idle, None, || self.lock().running == 0, || {}).await;
     }
 
     /// Quiesces, waits for the probes the quiesce canceled, saves, and only then clears: the last save carries
