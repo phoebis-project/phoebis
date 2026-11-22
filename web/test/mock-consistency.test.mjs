@@ -913,8 +913,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(earlier.length > 0, 'the earlier holder has requests');
     // The holder's last request ran hours before the story's clock, so the route's list leaves the row out there and
     // keeps it inside the hour of that request.
-    assert.ok(!s.sessions.some((x) => x.historical) && !s.lib.sessionsListedAt(s.now, undefined, undefined, undefined, s.lib.ROUTING_EVENTS).some((x) => x.historical), "the route's list at the story's clock holds no earlier holder");
-    const historical = s.lib.sessionsListedAt(Date.parse(earlier[0].at) + HOUR / 2, undefined, undefined, undefined, s.lib.ROUTING_EVENTS).filter((x) => x.historical);
+    assert.ok(!s.sessions.some((x) => x.historical) && !s.lib.sessionsListedAt(s.now, s.lib.SESSIONS, s.settings.sessions.nonCompanionIdleSeconds, s.lib.REQUESTS, s.lib.ROUTING_EVENTS).some((x) => x.historical), "the route's list at the story's clock holds no earlier holder");
+    const historical = s.lib.sessionsListedAt(Date.parse(earlier[0].at) + HOUR / 2, s.lib.SESSIONS, s.settings.sessions.nonCompanionIdleSeconds, s.lib.REQUESTS, s.lib.ROUTING_EVENTS).filter((x) => x.historical);
     assert.deepEqual(historical.map((x) => x.keyId), ['desktop'], 'one earlier holder is listed inside the hour of its last request');
     const [held] = historical;
     const holders = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === held.keyGeneration);
@@ -941,7 +941,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const [newest] = refusals;
     assert.ok(refusals.length > 0 && refusals.every((r) => r.refused && r.sessionId === newest.sessionId), 'one session holds the refusals');
     assert.ok(s.lib.insideSessionExpiry(newest.at, s.now), `the newest refusal at ${newest.at} is inside the span`);
-    const listedAt = (now) => s.lib.sessionsListedAt(now, undefined, undefined, undefined, s.lib.ROUTING_EVENTS).filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
+    const listedAt = (now) => s.lib.sessionsListedAt(now, s.lib.SESSIONS, s.settings.sessions.nonCompanionIdleSeconds, s.lib.REQUESTS, s.lib.ROUTING_EVENTS).filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
     const listed = listedAt(Date.parse(newest.at) + HOUR / 2);
     assert.ok(newest.userAgent !== null, 'the newest refusal names its client');
     assert.deepEqual(listed.map((x) => [x.accountId, x.spend, x.userAgent, x.lastRequestAt]), [[null, null, newest.userAgent, newest.at]], "listed off the ledger with no spend and the newest refusal's user agent inside the hour of that refusal");
@@ -965,7 +965,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
-    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds, undefined, s.lib.ROUTING_EVENTS);
+    const seeded = s.lib.sessionsListedAt(s.now, s.lib.SESSIONS, s.settings.sessions.expireAfterSeconds, s.lib.REQUESTS, s.lib.ROUTING_EVENTS);
     const seed = [...s.lib.requestById.values()];
     // The engine files its recipes under each key's live generation alone, so a row of an earlier holder reads none, as
     // the route clears them.
@@ -1082,7 +1082,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     // The runner's rows left the route's list under the non-companion timeout, so the case reads the seed through the
     // session expiry, which lists every row the story seeds.
-    const runner = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds, undefined, s.lib.ROUTING_EVENTS).filter((x) => x.keyId === 'ci' && !x.historical);
+    const runner = s.lib.sessionsListedAt(s.now, s.lib.SESSIONS, s.settings.sessions.expireAfterSeconds, s.lib.REQUESTS, s.lib.ROUTING_EVENTS).filter((x) => x.keyId === 'ci' && !x.historical);
     assert.ok(runner.length > 0, 'the story holds sessions of the ci key');
     for (const x of runner) assert.equal(x.lastUsedAt, x.lastRequestAt, `${x.sessionId}'s last use`);
   });
@@ -1194,8 +1194,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of rows) assert.deepEqual([r.cause, r.state, r.nextProbeAt, r.deadline, r.wakeAt], ['agent_released', 'ended', null, null, null], `${r.agentId} reads as a released agent`);
     const row = s.sessions.find((x) => !x.historical && x.keyId === rows[0].keyId && x.sessionId === rows[0].sessionId);
     assert.ok(row !== undefined, 'the session keeps its row');
-    // The engine's session view takes its cause off an agent that holds a recipe, and the release left none that does.
-    assert.equal(row.keepalive.cause, null, 'the row reads no cause, since no agent holds a recipe');
     const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === row.keyId && r.sessionId === row.sessionId);
     assert.equal(own.length, 1, 'the ledger holds the one request the session routed');
     assert.deepEqual([row.pinned, row.spend.requests, row.lastRequestAt], [true, 1, own[0].at], 'the row reads that request as its activity');
@@ -1224,17 +1222,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of lines) assert.ok(r.lastProbeAt !== null && r.probesToday > 0, `${r.agentId} keeps its probe facts`);
   });
 
-  test(`a session whose main holds no recipe reads the cause of the subagent that holds one, at ${at}`, async () => {
-    const s = await story;
-    const recipes = await s.api.listKeepaliveRecipes();
-    // Main's record under `unsupported_shape` keeps no recipe, while `affinity_too_short` holds the subagent's prompt.
-    // The finder asks for main's record, since a session with none answers its subagent's cause under either pick.
-    const own = (x) => recipes.filter((r) => r.keyId === x.keyId && r.sessionId === x.sessionId);
-    const row = s.sessions.find((x) => !x.historical && own(x).some((r) => r.agentId === 'main' && r.cause === 'unsupported_shape') && own(x).some((r) => r.agentId !== 'main' && r.cause === 'affinity_too_short'));
-    assert.ok(row !== undefined, 'a session whose main reads unsupported_shape beside a subagent held on affinity_too_short');
-    assert.equal(row.keepalive.cause, 'affinity_too_short', "the row reads the held subagent's cause");
-  });
-
   test(`every released line dates its release inside its pool's longest cache TTL, past which the router lists it no more, at ${at}`, async () => {
     const s = await story;
     // The story writes no release instant, so a line's last use, its last request or its last probe, stands in for it.
@@ -1250,7 +1237,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const words = ['low', 'medium', 'high', 'max', null];
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
-    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds, undefined, s.lib.ROUTING_EVENTS);
+    const seeded = s.lib.sessionsListedAt(s.now, s.lib.SESSIONS, s.settings.sessions.expireAfterSeconds, s.lib.REQUESTS, s.lib.ROUTING_EVENTS);
     for (const row of seeded) {
       assert.ok(Array.isArray(row.agentContexts), `${row.keyId} ${row.sessionId} answers a list`);
       assert.ok(words.includes(row.effort), `${row.keyId} ${row.sessionId} reads the effort ${row.effort}`);
@@ -1351,7 +1338,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The session no mod reports: its cold line passes the timeout forty minutes on, while its warm one keeps the row.
     const noMod = plain.find((x) => x.agentContexts.length === 2 && x.agentContexts.some((c) => c.warm) && x.agentContexts.some((c) => !c.warm));
     assert.ok(noMod !== undefined, 'the session no mod reports is listed');
-    const later = s.lib.sessionsListedAt(s.now + 40 * 60_000, undefined, undefined, undefined, s.lib.ROUTING_EVENTS).find((x) => x.keyId === noMod.keyId && x.sessionId === noMod.sessionId);
+    const later = s.lib.sessionsListedAt(s.now + 40 * 60_000, s.lib.SESSIONS, s.settings.sessions.nonCompanionIdleSeconds, s.lib.REQUESTS, s.lib.ROUTING_EVENTS).find((x) => x.keyId === noMod.keyId && x.sessionId === noMod.sessionId);
     assert.deepEqual(later?.agentContexts.map((c) => c.warm), [true], 'the warm line stays and the cold one leaves');
   });
 
@@ -1372,7 +1359,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`every listed session reads its first request and its last turn at or before its last request, the first at or before the last turn, both null with no last request, and each agent entry's last request at or before the row's, at ${at}`, async () => {
     const s = await story;
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
-    const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds, undefined, s.lib.ROUTING_EVENTS);
+    const seeded = s.lib.sessionsListedAt(s.now, s.lib.SESSIONS, s.settings.sessions.expireAfterSeconds, s.lib.REQUESTS, s.lib.ROUTING_EVENTS);
     // The route reads the instants off one set of the session's rows, so a fold that read them off two sets breaks an
     // order below.
     const notAfter = (a, b) => a === null || (b !== null && Date.parse(a) <= Date.parse(b));

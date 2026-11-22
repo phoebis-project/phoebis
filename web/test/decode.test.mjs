@@ -2367,12 +2367,10 @@ test('a parked recipe decodes its park and the day counts, an unknown agent as u
   assert.equal(d.decodeRecipe({ ...wire, park_kind: 'nap' }).parkKind, null, 'a park kind outside the three reads as none');
 });
 
-test('a session row carries the presence age and the cause of its main recipe', () => {
+test('a session row carries the presence age', () => {
   const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
   assert.equal(d.decodeSession({ ...row, presence_age_seconds: 12 }).presenceAgeSeconds, 12);
   assert.equal(d.decodeSession({ ...row, presence_age_seconds: null }).presenceAgeSeconds, null);
-  assert.equal(d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: 'cooled' } }).keepalive.cause, 'cooled');
-  assert.equal(d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: null } }).keepalive.cause, null);
 });
 
 /** An agent line as the route sends it, every member set, the instants in epoch milliseconds. */
@@ -2456,13 +2454,10 @@ test('a session row reads an empty list where it draws no line or sends none, an
   assert.deepEqual([b.agentContexts, b.effort], [[], null], 'a row without the two members');
 });
 
-test('a recipe and a session row decode the compaction verdict and the compacted cause', () => {
+test('a recipe decodes the compaction verdict and the compacted cause', () => {
   const [wire] = fixture('keepalive_recipes').recipes;
   const recipe = d.decodeRecipe({ ...wire, cause: 'compacted', last_guard: 'compaction', next_probe_at: null, state: 'ended' });
   assert.deepEqual([recipe.cause, recipe.lastGuard, recipe.nextProbeAt, recipe.state], ['compacted', 'compaction', null, 'ended']);
-  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
-  const session = d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: 'compacted' } });
-  assert.equal(session.keepalive.cause, 'compacted');
 });
 
 test("the downstream snippet is the seven recommended lines, its base URL the proxy listener's scheme and port on a placeholder host", () => {
@@ -2670,7 +2665,6 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(sessions.find((s) => s.sessionId === 's0').historical, true, 'the row of an earlier holder of the same key id reads historical');
   assert.equal(s1.keyGeneration, fixture('sessions').sessions.find((s) => s.session_id === 's1').key_generation, 'the live holder names the generation its key row carries');
   assert.equal(s1.companion, 'reporting');
-  assert.equal(s1.keepalive.cause, 'scheduled');
   assert.equal(s1.presenceAgeSeconds, null, 'the captured mod reported no presence');
   assert.ok(isIso(s1.lastUsedAt));
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);

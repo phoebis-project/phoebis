@@ -280,6 +280,7 @@ test('the mock leaves out a session no mod reports once the latest of its last u
   const through = (s) => [s.lastUsedAt, s.lastRequestAt, s.companionSince].filter((at) => at !== null).sort().at(-1) ?? null;
   const back = (s) => (through(s) === null ? 'no use on record' : `${Math.round((now - Date.parse(through(s))) / 60_000)} min back`);
   const sessions = await api.listSessions();
+  const settings = await api.getSettings();
   const plain = sessions.filter((s) => s.companion === 'none');
   const desktop = plain.find((s) => s.keyId === 'desktop' && s.accountId === 'primary');
   const pinless = plain.find((s) => s.keyId === 'laptop' && s.accountId === 'secondary' && !s.pinned);
@@ -289,10 +290,10 @@ test('the mock leaves out a session no mod reports once the latest of its last u
   assert.deepEqual(unused.map((s) => `${s.keyId} on ${s.accountId}`), ['laptop on nightly'], 'one row no mod reports has no use on record and is listed at any instant');
   // The session the mod ended 30 seconds back was last used 21 minutes back, so 45 minutes on its end alone keeps it.
   const ended = plain.find((s) => s.companionSince !== null);
-  assert.ok(ended !== undefined && d.sessionsListedAt(now + 45 * 60_000, undefined, undefined, undefined, d.ROUTING_EVENTS).some((s) => key(s) === key(ended)), "the ended session stays listed on its companion's end");
-  assert.ok(d.sessionsListedAt(now, undefined, 10_800, undefined, d.ROUTING_EVENTS).some((s) => s.sessionId === TWO_HOURS_BACK), 'a three-hour timeout lists the row last used two hours back');
-  assert.ok(!d.sessionsListedAt(now, undefined, HOUR_S, undefined, d.ROUTING_EVENTS).some((s) => s.sessionId === TWO_HOURS_BACK), 'the one-hour timeout leaves it out');
-  const later = d.sessionsListedAt(now + 2 * HOUR_S * 1000, undefined, undefined, undefined, d.ROUTING_EVENTS);
+  assert.ok(ended !== undefined && d.sessionsListedAt(now + 45 * 60_000, d.SESSIONS, settings.sessions.nonCompanionIdleSeconds, d.REQUESTS, d.ROUTING_EVENTS).some((s) => key(s) === key(ended)), "the ended session stays listed on its companion's end");
+  assert.ok(d.sessionsListedAt(now, d.SESSIONS, 10_800, d.REQUESTS, d.ROUTING_EVENTS).some((s) => s.sessionId === TWO_HOURS_BACK), 'a three-hour timeout lists the row last used two hours back');
+  assert.ok(!d.sessionsListedAt(now, d.SESSIONS, HOUR_S, d.REQUESTS, d.ROUTING_EVENTS).some((s) => s.sessionId === TWO_HOURS_BACK), 'the one-hour timeout leaves it out');
+  const later = d.sessionsListedAt(now + 2 * HOUR_S * 1000, d.SESSIONS, settings.sessions.nonCompanionIdleSeconds, d.REQUESTS, d.ROUTING_EVENTS);
   assert.deepEqual(later.filter((s) => s.companion === 'none').map(named), unused.map(named), 'two hours on, no row no mod reports with a use on record stays listed');
   assert.deepEqual(later.filter((s) => s.companion !== 'none').map(key), sessions.filter((s) => s.companion !== 'none').map(key), "every companion row of the story's list still stands two hours on");
 });

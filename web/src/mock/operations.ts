@@ -508,7 +508,7 @@ const datedLines = (firstSeen: string | null, session: string, lines: readonly U
   });
 };
 /** The summary of a row main holds no recipe for. */
-const noRecipe = (): Session['keepalive'] => ({ cause: null, nextProbeAt: null });
+const noRecipe = (): Session['keepalive'] => ({ nextProbeAt: null });
 /** A pin no round marked, and a row with no pin. */
 const NO_MARK: Pick<Session, 'mark'> = { mark: null };
 /** A session whose companion reports no fact of it, or that no companion reports. */
@@ -647,7 +647,6 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
           : null,
     keepalive: {
       // Filled in from the recipes below, so a row and its agents cannot disagree.
-      cause: null,
       nextProbeAt: null,
     },
     // Set from the row's index rather than drawn, so the rows after this one keep their rolls: a reporting mod saw the
@@ -838,22 +837,15 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
   });
 });
 
-/** Whether a mock recipe row holds a recipe as the router's session view reads one: a ready observation. */
-const holdsRecipe = (r: (typeof RECIPES)[number]): boolean => (r.state === 'held' || r.state === 'paused' || r.state === 'retained') && r.cause !== 'awaiting_selection';
-
 /**
  * A session's summary as the admin route reads it off the session's recipes. Its next probe is the soonest its agents
  * have scheduled: an agent awaiting cache evidence contributes no time even though it is armed, so a session left with
- * only those reads as pending rather than unscheduled. Its cause is main's recipe's where main holds one, else the one
- * of the other agent with the newest request among those that hold one, else none, so a session whose main holds no
- * recipe still reads the one a subagent holds.
+ * only those reads as pending rather than unscheduled.
  */
 const summaryOf = (sessionId: string): Session['keepalive'] => {
   const own = RECIPES.filter((r) => r.sessionId === sessionId);
   const scheduled = own.flatMap((r) => (r.nextProbeAt === null ? [] : [r.nextProbeAt])).sort();
-  const holding = own.filter(holdsRecipe);
-  const summary = holding.find((r) => r.agentId === 'main') ?? [...holding].sort((a, b) => (b.lastRequestAt === null ? 0 : Date.parse(b.lastRequestAt)) - (a.lastRequestAt === null ? 0 : Date.parse(a.lastRequestAt)))[0];
-  return { cause: summary?.cause ?? null, nextProbeAt: scheduled[0] ?? null };
+  return { nextProbeAt: scheduled[0] ?? null };
 };
 
 for (const pin of SESSIONS) {
@@ -1393,7 +1385,7 @@ const placementsOf = (s: Session, events: readonly PinEvent[]): number => {
  * test reads the list at any instant without moving `Date.now`, the mock's route hands the rows its ledger has written
  * by then, and the mock's routing log reads this module's sessions.
  */
-export const sessionsListedAt = (now: number, sessions: readonly Session[] = SESSIONS, seconds = NON_COMPANION_IDLE_SECONDS, rows: readonly RequestLog[] = REQUESTS, events: readonly PinEvent[]): Session[] => {
+export const sessionsListedAt = (now: number, sessions: readonly Session[], seconds: number, rows: readonly RequestLog[], events: readonly PinEvent[]): Session[] => {
   const bySession = groupInto(rows, (r) => (r.sessionId === null ? null : activityOf(r.keyId, r.keyGeneration, r.sessionId)));
   const mainPins = groupInto(events, (e) => (e.agentId === 'main' && (e.kind === 'pin_created' || e.kind === 'pin_migrated') ? `${e.keyId}|${e.sessionId}` : null));
   return sessions

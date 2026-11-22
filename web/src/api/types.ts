@@ -2259,11 +2259,8 @@ export interface Session extends BurnFigures, MoveFigures {
   forkedFrom: string | null;
   /** A generation no live key holds: the ledger's memory of an earlier holder of this key id. Read-only, no recipe, no release. */
   historical: boolean;
-  /** Main's recipe, or the newest other agent's where main holds none, every member null while no agent holds one. */
-  keepalive: {
-    cause: RecipeCause | null;
-    nextProbeAt: string | null;
-  };
+  /** The soonest probe that the agents of the session have scheduled, null while none of them holds one. */
+  keepalive: { nextProbeAt: string | null };
   /** The `created_at` of the key that owns the session. */
   keyGeneration: number;
   keyId: string;
