@@ -238,14 +238,9 @@ fn presence(r: &mut Rig) {
     );
 }
 
-/// The end of the newest entry the agent's pending probes wrote, read off the payload a save would write.
-fn pending_lapse(r: &Rig, agent: &str) -> i64 {
-    let (_, agents) = r.engine.persist_rows();
-    let row = agents
-        .iter()
-        .find(|row| row.session_id == "session" && row.agent_id == agent)
-        .unwrap_or_else(|| panic!("no row for {agent}"));
-    let payload: serde_json::Value = serde_json::from_str(&row.payload).unwrap();
+/// The end of the newest entry the agent's pending probes wrote, read off the payload a save wrote.
+async fn pending_lapse(r: &Rig, agent: &str) -> i64 {
+    let payload = r.saved(agent).await;
     payload["kept"]
         .as_array()
         .into_iter()
@@ -277,7 +272,7 @@ async fn ends_at(r: &mut Rig, agent: &str, end: i64, reason: Reason, label: &str
     let probes = r.saved(agent).await["probes"].as_u64().unwrap();
     assert!(probes > 0, "{view:?}");
     if label == "idle_limit" {
-        let lapse = pending_lapse(r, agent);
+        let lapse = pending_lapse(r, agent).await;
         tick_to(r, lapse).await;
         // The sweep's settlements reach the ledger with the save that drops the probes, which the production
         // flusher runs on its own.

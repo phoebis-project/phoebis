@@ -817,8 +817,7 @@ async fn a_probe_answered_after_the_idle_limit_stays_pending_until_its_entry_lap
     no_probe_running(&r.engine).await;
     r.pump(None).await;
     let charged = ledger_probe_cost(&r).await;
-    let (_, agents) = r.engine.persist_rows();
-    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    let payload = r.saved("main").await;
     let kept = &payload["kept"];
     // The probe started 270 s in and its answer kept the five-minute entry the real request proved.
     assert_eq!(

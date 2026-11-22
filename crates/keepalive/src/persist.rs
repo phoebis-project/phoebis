@@ -1525,31 +1525,6 @@ impl Engine {
         )
         .await;
     }
-
-    /// Every session and agent as the next save would write it, dirty or not, with each agent's prompt and body as a
-    /// load reads them back, for a test that holds what a restart restored against what was saved. Compiled only under
-    /// `debug-hooks`.
-    #[cfg(any(test, feature = "debug-hooks"))]
-    pub fn persist_rows(&self) -> (Vec<KeepaliveSessionRow>, Vec<KeepaliveAgentRow>) {
-        let now = self.now();
-        let inner = self.lock();
-        let mut sessions = Vec::new();
-        let mut agents = Vec::new();
-        for (key, session) in &inner.sessions {
-            let row = persist_key_of(key, session);
-            sessions.push(session_row(&row, session, now).expect("a session payload serializes"));
-            for agent in session.agents.values() {
-                agents.push(KeepaliveAgentRow {
-                    body: agent.current.as_ref().map(|o| o.recipe.body.to_vec()),
-                    body_write: BodyWrite::Keep,
-                    ..agent_row(&row, agent, now)
-                        .expect("an agent payload serializes")
-                        .0
-                });
-            }
-        }
-        (sessions, agents)
-    }
 }
 
 #[cfg(test)]

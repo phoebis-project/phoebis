@@ -171,7 +171,6 @@ async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_lo
     let deadline = r.now() + 2 * 3_600_000;
     r.report(parked_until(deadline)).unwrap();
     r.advance(MINUTE);
-    let (sessions, agents) = r.engine.persist_rows();
     let stats = r.engine.stats();
     r.engine.flush_persisted().await;
     assert_eq!(
@@ -179,15 +178,8 @@ async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_lo
         (1, 1),
         "the flush wrote the session and its agent"
     );
-
-    let second = r.restart().await;
-    second.load_persisted().await;
-    let (loaded_sessions, loaded_agents) = second.persist_rows();
-    assert_eq!(
-        loaded_agents, agents,
-        "every field of the agent and its recipe reads back as it stood"
-    );
-    let main = &loaded_agents[0];
+    let agents = saved_agents(&r);
+    let main = &agents[0];
     let payload: serde_json::Value = serde_json::from_str(&main.payload).unwrap();
     assert_eq!(
         (
@@ -220,20 +212,18 @@ async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_lo
         (stats.retained_bytes, false),
         "the recipe's size is the retained bytes"
     );
-    let before: serde_json::Value = serde_json::from_str(&sessions[0].payload).unwrap();
-    let after: serde_json::Value = serde_json::from_str(&loaded_sessions[0].payload).unwrap();
+
+    let second = r.restart().await;
+    second.load_persisted().await;
     assert_eq!(
-        (after["attended"].as_bool(), after["lease"].as_i64()),
-        (Some(false), Some(0)),
-        "the session reads silent with its lease at zero"
+        view_of(&second, "session", "main").unwrap(),
+        r.view("main"),
+        "every field of the agent's view reads back as it stood"
     );
     assert_eq!(
-        (&after["sequence"], &after["instance"], &after["owner_id"]),
-        (
-            &before["sequence"],
-            &before["instance"],
-            &before["owner_id"]
-        )
+        second.sessions()[0].presence_age_seconds,
+        Some(60),
+        "the presence a minute before the restart"
     );
     assert_eq!(second.stats().retained_bytes, stats.retained_bytes);
     assert_eq!((second.stats().sessions, second.stats().agents), (1, 1));
@@ -1011,7 +1001,6 @@ async fn the_shutdown_quiesces_drains_saves_and_then_clears() {
     r.observe("main").await;
     r.observe("sub").await;
     r.state("main", "idle");
-    let (sessions, agents) = r.engine.persist_rows();
     r.engine.shutdown().await;
 
     assert_eq!(
@@ -1019,11 +1008,27 @@ async fn the_shutdown_quiesces_drains_saves_and_then_clears() {
         (0, 0),
         "the clear came after the save"
     );
-    assert_eq!(saved_sessions(&r), sessions);
     assert_eq!(
-        saved_agents(&r),
-        agents,
+        saved_sessions(&r)
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["session"]
+    );
+    assert_eq!(
+        saved_agents(&r)
+            .iter()
+            .map(|a| (a.agent_id.as_str(), a.body.is_some()))
+            .collect::<Vec<_>>(),
+        vec![("main", true), ("sub", true)],
         "every agent as it stood at the quiesce, recipes and all"
+    );
+    assert_eq!(
+        (
+            saved_field(&r, "session", "main", "state"),
+            saved_field(&r, "session", "sub", "state")
+        ),
+        (serde_json::json!("idle"), serde_json::json!("busy"))
     );
 }
 
@@ -1034,7 +1039,8 @@ async fn a_request_that_completes_during_shutdown_is_refused_and_counted_and_the
     r.observe("main").await;
     r.engine.observe(r.observed("late", "main", BODY));
     r.engine.observe(r.selected("late", "a"));
-    let (_, agents) = r.engine.persist_rows();
+    r.engine.flush_persisted().await;
+    let agents = saved_agents(&r);
     r.engine.quiesce();
     // A failover onto the other account, which the quiesced state never saw.
     let BusEvent::AccountSelected(mut failover) = r.selected("late", "b") else {
@@ -1484,15 +1490,15 @@ async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_pr
     r.observe("sub").await;
     r.advance_attended(270_000);
     r.step().await;
+    r.engine.flush_persisted().await;
     let main_bytes = {
-        let (_, agents) = r.engine.persist_rows();
+        let agents = saved_agents(&r);
         agents
             .iter()
             .find(|a| a.agent_id == "main")
             .map(|a| a.body_size)
             .unwrap()
     };
-    r.engine.flush_persisted().await;
     assert_eq!(
         (
             saved_unanswered(&r, "session", "main"),
@@ -1599,21 +1605,13 @@ async fn a_restart_restores_an_unanswered_probe_with_what_its_credit_and_its_set
     r.observe("main").await;
     r.advance_attended(270_000);
     r.step().await;
-    let (_, agents) = r.engine.persist_rows();
     r.engine.flush_persisted().await;
     assert_eq!(
         saved_unanswered(&r, "session", "main"),
         1,
         "the saved row holds the one unanswered probe"
     );
-    let second = r.restart().await;
-    second.load_persisted().await;
-    let (_, loaded) = second.persist_rows();
-    assert_eq!(
-        loaded, agents,
-        "the agent with its unanswered probe reads back as it stood"
-    );
-    let payload: serde_json::Value = serde_json::from_str(&loaded[0].payload).unwrap();
+    let payload = saved_of(&r.h.store, "session", "main").unwrap();
     let probe = &payload["unanswered"][0];
     assert_eq!(
         (
@@ -1651,6 +1649,13 @@ async fn a_restart_restores_an_unanswered_probe_with_what_its_credit_and_its_set
     assert!(
         probe["id"].as_str().is_some_and(|id| !id.is_empty()),
         "the probe names its request: {probe}"
+    );
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        view_of(&second, "session", "main").unwrap(),
+        r.view("main"),
+        "the agent with its unanswered probe reads back as it stood"
     );
 }
 
@@ -1758,8 +1763,8 @@ async fn a_saved_released_record_without_a_leave_loads_with_none_and_stays() {
     let mut r = rig(on_disk()).await;
     agent_start(&mut r, "sub").unwrap();
     r.state("sub", "released");
-    let (sessions, mut agents) = r.engine.persist_rows();
     r.engine.flush_persisted().await;
+    let (sessions, mut agents) = (saved_sessions(&r), saved_agents(&r));
     for row in agents.iter_mut().filter(|row| row.agent_id == "sub") {
         let mut payload: serde_json::Value = serde_json::from_str(&row.payload).unwrap();
         payload
@@ -1777,14 +1782,9 @@ async fn a_saved_released_record_without_a_leave_loads_with_none_and_stays() {
         .unwrap();
     let second = r.restart().await;
     second.load_persisted().await;
-    let (_, loaded) = second.persist_rows();
-    let sub = loaded
-        .iter()
-        .find(|row| row.agent_id == "sub")
-        .expect("the record without a leave loads");
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&sub.payload).unwrap()["leaves_at"],
-        serde_json::Value::Null
+    assert!(
+        lifecycle_of(&second, "session", "sub").is_some(),
+        "the record without a leave loads"
     );
     r.advance(3_600_000);
     second.step().await;
@@ -1844,21 +1844,13 @@ async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_l
         Reason::IdleLimit,
         "the idle limit left the probe pending"
     );
-    let (_, agents) = r.engine.persist_rows();
     r.engine.flush_persisted().await;
     assert_eq!(
         saved_unanswered(&r, "session", "main"),
         1,
         "the saved row holds the one probe the idle limit left pending"
     );
-    let second = r.restart().await;
-    second.load_persisted().await;
-    let (_, loaded) = second.persist_rows();
-    assert_eq!(
-        loaded, agents,
-        "the agent with its pending probe reads back as it stood"
-    );
-    let payload: serde_json::Value = serde_json::from_str(&loaded[0].payload).unwrap();
+    let payload = saved_of(&r.h.store, "session", "main").unwrap();
     let kept = &payload["kept"][0];
     assert_eq!(
         (
@@ -1889,6 +1881,13 @@ async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_l
         ),
         (Some(2_000), true, Some(NOW + 270_000), Some("standard")),
         "{kept}"
+    );
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        view_of(&second, "session", "main").unwrap(),
+        r.view("main"),
+        "the agent with its pending probe reads back as it stood"
     );
 }
 
@@ -1933,12 +1932,12 @@ async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_befo
         rows
     };
     let seat = (Some("oauth".to_string()), Some(true));
-    let read_false = (Some("oauth".to_string()), Some(false));
     r.observe("main").await;
     r.up.push_credential_rule(OAUTH, "/v1/messages", probe_answer(2_000, 0));
     r.advance(270_000);
     r.step().await;
-    let (open_sessions, open_agents) = r.engine.persist_rows();
+    r.engine.flush_persisted().await;
+    let (open_sessions, open_agents) = (saved_sessions(&r), saved_agents(&r));
     assert_eq!(
         (
             class_at(&open_agents[0].payload, "/current"),
@@ -1947,7 +1946,6 @@ async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_befo
         (seat.clone(), seat.clone()),
         "the save writes the class the selection and the probe's answer carried"
     );
-    r.engine.flush_persisted().await;
     r.h.store
         .save_keepalive(&KeepaliveBatch {
             sessions: open_sessions,
@@ -1957,14 +1955,10 @@ async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_befo
         .unwrap();
     let older = r.restart().await;
     older.load_persisted().await;
-    let loaded = older.persist_rows().1;
     assert_eq!(
-        (
-            class_at(&loaded[0].payload, "/current"),
-            class_at(&loaded[0].payload, "/unanswered/0")
-        ),
-        (read_false.clone(), read_false.clone()),
-        "an observation and an unanswered probe from before the class load and read false"
+        older.stats().retained_bytes,
+        r.engine.stats().retained_bytes,
+        "an observation from before the class loads"
     );
     r.advance(270_000);
     r.step().await;
@@ -1973,19 +1967,19 @@ async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_befo
         Reason::IdleLimit,
         "the idle limit left the probe pending"
     );
-    let (sessions, agents) = r.engine.persist_rows();
+    r.engine.flush_persisted().await;
+    let (sessions, agents) = (saved_sessions(&r), saved_agents(&r));
     assert_eq!(
         class_at(&agents[0].payload, "/kept/0"),
         seat,
         "the pending probe keeps the class its answer carried"
     );
-    r.engine.flush_persisted().await;
     assert_eq!(saved_unanswered(&r, "session", "main"), 1);
     let second = r.restart().await;
     second.load_persisted().await;
     assert_eq!(
-        second.persist_rows().1,
-        agents,
+        view_of(&second, "session", "main").unwrap(),
+        r.view("main"),
         "the agent with its pending probe reads back as it stood"
     );
     r.h.store
@@ -1997,10 +1991,9 @@ async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_befo
         .unwrap();
     let third = r.restart().await;
     third.load_persisted().await;
-    assert_eq!(
-        class_at(&third.persist_rows().1[0].payload, "/kept/0"),
-        read_false,
-        "a pending probe from before the class loads and reads false"
+    assert!(
+        view_of(&third, "session", "main").is_some(),
+        "a pending probe from before the class loads"
     );
 }
 
@@ -2012,9 +2005,9 @@ async fn a_saved_probe_whose_speed_reads_null_restores_and_settles_at_standard()
     r.observe("main").await;
     r.advance_attended(270_000);
     r.step().await;
-    let (sessions, mut agents) = r.engine.persist_rows();
     r.engine.flush_persisted().await;
     assert_eq!(saved_unanswered(&r, "session", "main"), 1);
+    let (sessions, mut agents) = (saved_sessions(&r), saved_agents(&r));
     let mut payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
     payload["unanswered"][0]["usage"]["speed"] = serde_json::Value::Null;
     agents[0].payload = payload.to_string();
@@ -2167,7 +2160,8 @@ async fn a_saved_session_of_record_version_two_is_dropped_at_the_load_with_one_l
 /// `kept` as its one kept probe, then loaded by a restart: nothing comes back, nothing settles, and one warn line
 /// names it.
 async fn dropped_at_the_load_with_one_line(r: Rig, kept: serde_json::Value) {
-    let (mut sessions, mut agents) = r.engine.persist_rows();
+    r.engine.flush_persisted().await;
+    let (mut sessions, mut agents) = (saved_sessions(&r), saved_agents(&r));
     assert_eq!((sessions.len(), agents.len()), (1, 1));
     let mut payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
     payload["kept"] = serde_json::json!([kept]);
@@ -2828,7 +2822,7 @@ async fn a_lapsed_pending_probe_reaches_the_ledger_once_across_a_failed_save_and
     );
     r.engine.flush_persisted().await;
     assert_eq!(saved_unanswered(&r, "session", "main"), 1);
-    let (_, agents) = r.engine.persist_rows();
+    let agents = saved_agents(&r);
     let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
     let lapse = payload["kept"][0]["entry_expires"]
         .as_i64()

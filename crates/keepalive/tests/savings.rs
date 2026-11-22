@@ -2965,8 +2965,7 @@ async fn a_request_whose_replay_answers_a_401_is_credited_as_a_plain_success() {
         complete.attempt = 2;
     }
     r.engine.observe(done);
-    let (_, agents) = r.engine.persist_rows();
-    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    let payload = r.saved("main").await;
     let rows = final_rollups(&r).await;
     assert_eq!(
         (
@@ -3021,8 +3020,7 @@ async fn a_turn_whose_completion_the_engine_missed_starts_the_next_kept_warm_gap
         }
         r.advance_attended(20_000);
         open_request_as(&r, "third", OTHER_CLIENT, 2_000, 0).await;
-        let (_, agents) = r.engine.persist_rows();
-        let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+        let payload = r.saved("main").await;
         assert_eq!(
             payload["last_answered_at"].as_i64(),
             Some(if credited == 0 { second_at } else { first_at }),
@@ -4305,8 +4303,7 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.view("main").probes_today, 1);
-    let (_, agents) = r.engine.persist_rows();
-    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    let payload = r.saved("main").await;
     assert_eq!(
         payload["unanswered"][0]["unit"].as_str(),
         Some("window_share"),
