@@ -789,7 +789,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
     // job's own `select`, so the selection that follows reads the crossed spend. A later background refresh
     // would compute the same real figure, so nothing after this can disagree with it.
     plant_and_report_spend(&r, "crossing", 3.5).await;
-    r.engine.wait_idle().await;
+    r.probe_answered("main").await;
     r.pump(None).await;
     assert!(
         r.up.requests().is_empty(),

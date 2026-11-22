@@ -21,7 +21,7 @@ use phoebis_bus::{
 };
 use phoebis_keepalive::{
     Ack, Engine, EngineParts, Event, EventError, EventReport, KeepaliveLimits, KeepalivePolicy,
-    KeepaliveTiming, Lifecycle, RecipeView,
+    KeepaliveTiming, Lifecycle, Reason, RecipeView,
 };
 use phoebis_ledger::{
     spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
@@ -674,8 +674,18 @@ impl Rig {
     /// `engine.step` itself instead.
     pub async fn step(&mut self) {
         self.engine.step().await;
-        self.engine.wait_idle().await;
+        no_probe_running(&self.engine).await;
         self.pump(None).await;
+    }
+
+    /// Waits for the answer of the probe in flight on `id`: the dispatch words the view's cause `probing`, and the
+    /// worker replaces it under the lock that writes the rest of the result. On the current-thread runtime of these
+    /// suites, the worker then runs to its end without yielding, so a read after the wait finds all of it.
+    pub async fn probe_answered(&self, id: &str) {
+        wait_for(Duration::from_secs(5), || {
+            (self.view(id).cause != Reason::Probing).then_some(())
+        })
+        .await;
     }
 
     /// The model is the body's, as the relay would report it, so a test observes a request on another model by
@@ -905,6 +915,15 @@ pub fn view_of(engine: &Engine, session_id: &str, agent: &str) -> Option<RecipeV
         .recipes()
         .into_iter()
         .find(|v| v.key_id == "desktop" && v.session_id == session_id && v.agent_id == agent)
+}
+
+/// Waits until `engine` has no probe in flight, read off `Engine::stats`: a worker lowers the count behind its last
+/// send, so a read after the wait finds what each probe settled.
+pub async fn no_probe_running(engine: &Engine) {
+    wait_for(Duration::from_secs(5), || {
+        (engine.stats().running_probes == 0).then_some(())
+    })
+    .await;
 }
 
 /// The session view's lifecycle word for `agent` on `session_id` under the harness key, from any engine of the rig.

@@ -1935,7 +1935,6 @@ async fn a_probe_whose_account_is_deleted_in_flight_files_its_row_under_the_kind
     r.h.store.delete_account("a", "test").unwrap();
     r.h.router.reload().await.unwrap();
     r.up.release();
-    r.engine.wait_idle().await;
     r.pump(None).await;
     // The probe's own request row, which carries its counts.
     let probe_rows_of_a = |rows: &[RollupRow]| {
@@ -4831,7 +4830,11 @@ async fn a_probe_answered_across_a_revision_boundary_files_its_cost_and_its_wast
     );
     r.advance_attended(february + 30_000 - received);
     r.up.release();
-    r.engine.wait_idle().await;
+    let rig = &r;
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async move {
+        (rig.saved_unanswered("main").await == 1).then_some(())
+    })
+    .await;
     r.pump(None).await;
     // The probe landed after midnight and stands unanswered: the release below settles it as the one wasted row.
     r.state("main", "released");

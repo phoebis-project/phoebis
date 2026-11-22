@@ -1344,13 +1344,6 @@ async fn a_released_record_with_a_probe_in_flight_at_its_leave_waits_for_the_res
         "the sweep leaves a record whose probe is still in flight"
     );
     r.up.release();
-    r.engine.wait_idle().await;
-    r.pump(None).await;
-    r.step().await;
-    assert!(
-        r.lifecycle("worker").is_none(),
-        "the sweep after the result removes the record"
-    );
     let wasted = wait_for(Duration::from_secs(30), || {
         let rows =
             r.db.read_blocking(|c| {
@@ -1366,6 +1359,12 @@ async fn a_released_record_with_a_probe_in_flight_at_its_leave_waits_for_the_res
         (!reasons.is_empty()).then_some(reasons)
     })
     .await;
+    r.pump(None).await;
+    r.step().await;
+    assert!(
+        r.lifecycle("worker").is_none(),
+        "the sweep after the result removes the record"
+    );
     assert_eq!(
         wasted,
         BTreeMap::from([("released".to_string(), 1)]),

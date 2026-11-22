@@ -6354,8 +6354,11 @@ async fn one_held_probe() -> (common::Full, String) {
     behind.store(true, Ordering::SeqCst);
     parts.clock_cell.store(due + 1_000, Ordering::SeqCst);
     parts.keepalive.step().await;
-    parts.keepalive.wait_idle().await;
-    let line = main().unwrap();
+    // The dispatch words the cause `probing`, and the probe's result replaces it.
+    let line = wait_for(Duration::from_secs(5), || {
+        main().filter(|line| line.cause != phoebis_keepalive::Reason::Probing)
+    })
+    .await;
     assert_eq!(
         (line.probes_today, line.cause),
         (1, phoebis_keepalive::Reason::LedgerBehind),

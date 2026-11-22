@@ -680,7 +680,7 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
     let r = a_probe_held_upstream().await;
     r.engine.close();
     r.up.release();
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     assert_eq!(
         r.engine.stats().running_probes,
         0,
@@ -691,7 +691,7 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
     let mut r = a_probe_held_upstream().await;
     r.state("main", "released");
     r.up.release();
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     assert_eq!(
         r.engine.stats().running_probes,
         0,
@@ -1064,7 +1064,7 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
     tokio::time::advance(phoebis_keepalive::PROBE_DEADLINE + std::time::Duration::from_secs(1))
         .await;
     tokio::time::resume();
-    r.engine.wait_idle().await;
+    r.probe_answered("main").await;
     r.pump(None).await;
     // The transport error's first rung would land at the five-minute entry's expiry, so the ladder pauses at once.
     assert_eq!(
@@ -1147,7 +1147,7 @@ async fn concurrency_is_bounded_by_max_workers_alone() {
         "every worker holds a probe in flight, and the fifth due agent waits"
     );
     r.up.release();
-    r.engine.wait_idle().await;
+    no_probe_running(&r.engine).await;
     r.step().await;
     assert_eq!(probes(&r), agents.len() as u64, "the capacity recovered");
 }
@@ -1807,7 +1807,7 @@ async fn a_probe_the_deadline_ends_retries_on_the_first_rung_under_probe_transpo
     tokio::time::advance(phoebis_keepalive::PROBE_DEADLINE + std::time::Duration::from_secs(1))
         .await;
     tokio::time::resume();
-    r.engine.wait_idle().await;
+    r.probe_answered("main").await;
     r.pump(None).await;
     let status = r.view("main");
     let saved = saved_main(&r).await;
@@ -1907,7 +1907,7 @@ async fn a_slow_probe_retries_on_the_first_rung_and_pauses_where_that_rung_would
         .await;
         r.advance(late);
         r.up.release();
-        r.engine.wait_idle().await;
+        r.probe_answered("main").await;
         r.pump(None).await;
         let status = r.view("main");
         let saved = saved_main(&r).await;

@@ -2466,7 +2466,7 @@ async fn tick_until(r: &Rig, engine: &Arc<Engine>, end: i64) {
         let next = due.unwrap_or(end).min(now + MINUTE / 2).min(end);
         r.advance(next - now);
         engine.step().await;
-        engine.wait_idle().await;
+        no_probe_running(engine).await;
     }
 }
 
@@ -2516,7 +2516,6 @@ async fn a_restored_park_past_the_idle_window_survives_one_lease_length_and_ends
     second.load_persisted().await;
     let loaded = r.now();
     second.step().await;
-    second.wait_idle().await;
     let main = view_of(&second, "session", "main").unwrap();
     assert_eq!(
         (second.recipes_for("desktop", "session"), main.cause),
@@ -2564,7 +2563,6 @@ async fn a_restored_both_park_keeps_its_deadline_and_its_wake() {
     let second = r.restart().await;
     second.load_persisted().await;
     second.step().await;
-    second.wait_idle().await;
     let main = view_of(&second, "session", "main").unwrap();
     assert_eq!(
         (
@@ -2839,7 +2837,6 @@ async fn a_lapsed_pending_probe_reaches_the_ledger_once_across_a_failed_save_and
     let second = r.restart().await;
     second.load_persisted().await;
     second.step().await;
-    second.wait_idle().await;
     conn.execute_batch("DROP TRIGGER refuse_insert; DROP TRIGGER refuse_update;")
         .unwrap();
     second.flush_persisted().await;
