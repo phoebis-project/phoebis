@@ -11,7 +11,7 @@ use common::*;
 use fake_upstream::{install, Captured};
 use phoebis_bus::{ClientFacts, Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
-    continues_prefix, idle_age_bucket, Event, Guard, IdleReturns, KeepalivePolicy, KeepaliveTiming,
+    continues_prefix, idle_age_bucket, Engine, Event, Guard, KeepalivePolicy, KeepaliveTiming,
     Lifecycle, PrefixAnchor, Reason,
 };
 
@@ -66,46 +66,55 @@ fn with_idle_window(seconds: u64) -> KeepalivePolicy {
     }
 }
 
-/// One pool's days summed bucket by bucket.
-fn summed(days: &BTreeMap<i64, IdleReturns>) -> IdleReturns {
-    let mut total = IdleReturns::default();
-    for counters in days.values() {
-        for (sum, bucket) in total.buckets.iter_mut().zip(&counters.buckets) {
-            sum.reached += bucket.reached;
-            sum.returned += bucket.returned;
+/// Each `reached` and `returned` of `pool` on the UTC day `day`, through the overview's sum over that one day, which
+/// answers zero buckets for a day the pool holds no count on.
+fn day_of(engine: &Engine, pool: &str, day: i64) -> ([u64; 10], [u64; 10]) {
+    engine
+        .idle_returns_over(day * DAY, 1)
+        .get(pool)
+        .map_or(([0; 10], [0; 10]), |counters| {
+            (
+                counters.buckets.map(|bucket| bucket.reached),
+                counters.buckets.map(|bucket| bucket.returned),
+            )
+        })
+}
+
+/// `day_of` for each UTC day from the rig's first to the clock's.
+fn by_day(r: &Rig, pool: &str) -> BTreeMap<i64, ([u64; 10], [u64; 10])> {
+    (0..=r.now().div_euclid(DAY))
+        .map(|day| (day, day_of(&r.engine, pool, day)))
+        .collect()
+}
+
+/// The pool's `reached` and `returned` summed bucket by bucket over `days`.
+fn summed(days: BTreeMap<i64, ([u64; 10], [u64; 10])>) -> ([u64; 10], [u64; 10]) {
+    let mut total = ([0; 10], [0; 10]);
+    for (reached, returned) in days.into_values() {
+        for bucket in 0..10 {
+            total.0[bucket] += reached[bucket];
+            total.1[bucket] += returned[bucket];
         }
     }
     total
 }
 
-/// The pool's counters over every day the engine holds.
-fn counters(r: &Rig, pool: &str) -> IdleReturns {
-    r.engine
-        .idle_returns()
-        .get(pool)
-        .map(summed)
-        .unwrap_or_default()
+/// The pool's counters over each UTC day from the rig's first to the clock's.
+fn counters(r: &Rig, pool: &str) -> ([u64; 10], [u64; 10]) {
+    summed(by_day(r, pool))
 }
 
-/// Each `reached` and `returned` of `pool` by the UTC day the engine keys them under.
-fn by_day(r: &Rig, pool: &str) -> BTreeMap<i64, ([u64; 10], [u64; 10])> {
-    r.engine
-        .idle_returns()
-        .get(pool)
-        .map(|days| {
-            days.iter()
-                .map(|(day, counters)| {
-                    (
-                        *day,
-                        (
-                            counters.buckets.map(|bucket| bucket.reached),
-                            counters.buckets.map(|bucket| bucket.returned),
-                        ),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// The pool's rows the registry holds, by UTC day, as a restart loads them.
+fn saved_by_day(r: &Rig, pool: &str) -> BTreeMap<i64, ([u64; 10], [u64; 10])> {
+    let mut days: BTreeMap<i64, ([u64; 10], [u64; 10])> = BTreeMap::new();
+    for row in r.h.store.load_keepalive().unwrap().2 {
+        if row.pool_id == pool {
+            let day = days.entry(row.day).or_default();
+            day.0[row.bucket as usize] = row.reached;
+            day.1[row.bucket as usize] = row.returned;
+        }
+    }
+    days
 }
 
 /// The rig's timing with the idle-return retention set to `days`.
@@ -126,11 +135,11 @@ fn attend_to(r: &mut Rig, at: i64) {
 }
 
 fn reached_in(r: &Rig, pool: &str) -> [u64; 10] {
-    counters(r, pool).buckets.map(|bucket| bucket.reached)
+    counters(r, pool).0
 }
 
 fn returned_in(r: &Rig, pool: &str) -> [u64; 10] {
-    counters(r, pool).buckets.map(|bucket| bucket.returned)
+    counters(r, pool).1
 }
 
 fn reached(r: &Rig) -> [u64; 10] {
@@ -408,17 +417,25 @@ async fn a_day_past_the_retention_leaves_at_the_roll_and_stays_gone_after_a_save
     attend_to(&mut r, DAY + 12 * MINUTE);
     r.step().await;
     r.engine.flush_persisted().await;
-    assert_eq!(
-        by_day(&r, "main").into_keys().collect::<Vec<_>>(),
-        vec![0, 1],
+    assert!(
+        by_day(&r, "main")
+            .values()
+            .all(|(reached, _)| reached.iter().any(|count| *count > 0)),
         "both days before the roll"
     );
     attend_to(&mut r, 2 * DAY + 12 * MINUTE);
     r.step().await;
+    let days = by_day(&r, "main");
     assert_eq!(
-        by_day(&r, "main").into_keys().collect::<Vec<_>>(),
-        vec![1, 2],
+        days[&0],
+        ([0; 10], [0; 10]),
         "the first day leaves at the roll"
+    );
+    assert!(
+        [1, 2]
+            .iter()
+            .all(|day| days[day].0.iter().any(|count| *count > 0)),
+        "the days kept hold their counts: {days:?}"
     );
     let over = &r.engine.idle_returns_over(r.now(), 30)["main"];
     assert_eq!(
@@ -443,12 +460,13 @@ async fn a_day_past_the_retention_leaves_at_the_roll_and_stays_gone_after_a_save
         BTreeSet::from([1, 2]),
         "the save took the first day's rows"
     );
+    // The load saves the rows it drops before it returns, so the rows after it are the ones the restarted engine holds.
     let second = r.restart().await;
     second.load_persisted().await;
     assert_eq!(
-        second.idle_returns(),
-        r.engine.idle_returns(),
-        "the load reads the days kept"
+        saved_by_day(&r, "main"),
+        BTreeMap::from([(1, days[&1]), (2, days[&2])]),
+        "the load reads the days kept, each as the engine counted it"
     );
 }
 
@@ -468,14 +486,11 @@ async fn a_retention_of_0_keeps_every_day() {
     );
     assert_eq!((reached(&r), returned(&r)), counted, "the roll");
     r.engine.flush_persisted().await;
+    // The load saves the rows it drops before it returns, so the rows after it are the ones the restarted engine holds.
     let second = r.restart().await;
     second.load_persisted().await;
-    let loaded = summed(&second.idle_returns()["main"]);
     assert_eq!(
-        (
-            loaded.buckets.map(|bucket| bucket.reached),
-            loaded.buckets.map(|bucket| bucket.returned)
-        ),
+        summed(saved_by_day(&r, "main")),
         counted,
         "the save and the load"
     );
@@ -490,14 +505,26 @@ async fn a_return_whose_reach_day_left_at_the_roll_counts_nothing() {
     let start = idle_after_request(&mut r).await;
     attend_to(&mut r, start + 32 * 60 * MINUTE + MINUTE);
     r.step().await;
+    let days = by_day(&r, "main");
     assert_eq!(
-        by_day(&r, "main").into_keys().collect::<Vec<_>>(),
-        vec![1],
+        (days[&0], days[&1].0),
+        (([0; 10], [0; 10]), [1; 10]),
         "every bucket reached on the second day"
     );
     attend_to(&mut r, 3 * DAY + MINUTE);
     r.observe_with("main", &next_turn()).await;
-    assert_eq!(by_day(&r, "main").get(&1), None, "the reach's day left");
+    let over = r
+        .engine
+        .idle_returns_over(r.now(), 30)
+        .get("main")
+        .map_or([0; 10], |counters| {
+            counters.buckets.map(|bucket| bucket.reached)
+        });
+    assert_eq!(
+        (day_of(&r.engine, "main", 1), over),
+        (([0; 10], [0; 10]), [0; 10]),
+        "the reach's day left, and no day reads its reach"
+    );
     assert_eq!(returned(&r), [0; 10], "no return counted anywhere");
 }
 
@@ -1226,7 +1253,7 @@ async fn an_attended_session_without_a_recipe_still_reaches_buckets() {
     let start = r.now();
     r.state("main", "idle");
     tick_to(&mut r, start, 6).await;
-    let pools: Vec<String> = r.engine.idle_returns().into_keys().collect();
+    let pools: Vec<String> = r.engine.idle_returns_over(r.now(), 1).into_keys().collect();
     assert_eq!(pools, vec!["warm".to_string()]);
     assert_eq!(
         (reached_in(&r, "warm"), returned_in(&r, "warm")),
@@ -1448,14 +1475,17 @@ async fn a_busy_main_a_subagent_and_a_silent_session_count_nothing() {
     .unwrap();
     r.state("worker", "parked");
     tick_to(&mut r, start, 20).await;
-    assert!(r.engine.idle_returns().is_empty(), "subagent");
+    assert!(
+        r.engine.idle_returns_over(r.now(), 1).is_empty(),
+        "subagent"
+    );
     // A session whose lease lapsed before any tick opens none.
     let mut r = rig(RigSpec::default()).await;
     let start = r.now();
     r.state("main", "idle");
     r.advance(2 * MINUTE);
     tick_silent_to(&mut r, start, 20).await;
-    assert!(r.engine.idle_returns().is_empty(), "silent");
+    assert!(r.engine.idle_returns_over(r.now(), 1).is_empty(), "silent");
 }
 
 #[test]

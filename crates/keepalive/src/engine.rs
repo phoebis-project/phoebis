@@ -1591,11 +1591,6 @@ impl Engine {
         self.lock().reasons.clone()
     }
 
-    /// The counters per pool id and UTC day, read by the tests.
-    pub fn idle_returns(&self) -> BTreeMap<String, BTreeMap<i64, IdleReturns>> {
-        self.lock().idle_returns.clone()
-    }
-
     /// The counters per pool id summed over the UTC day of `now` and the `days - 1` before it, for the overview, so
     /// the day fold stays the engine's.
     pub fn idle_returns_over(&self, now: i64, days: u32) -> BTreeMap<String, IdleReturns> {

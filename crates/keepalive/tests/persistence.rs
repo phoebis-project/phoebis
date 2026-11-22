@@ -511,7 +511,7 @@ async fn the_idle_age_counters_round_trip() {
     // The next turn of the same conversation, six minutes into the window.
     r.observe_with("main", &next_turn()).await;
     assert_eq!(
-        r.engine.idle_returns()["main"][&today].buckets[..2]
+        r.engine.idle_returns_over(today * DAY, 1)["main"].buckets[..2]
             .iter()
             .map(|b| (b.reached, b.returned))
             .collect::<Vec<_>>(),
@@ -522,16 +522,48 @@ async fn the_idle_age_counters_round_trip() {
     r.state("main", "idle");
     r.advance_attended(DAY);
     r.step().await;
-    let counters = r.engine.idle_returns();
-    assert_eq!(
-        counters["main"].keys().copied().collect::<Vec<_>>(),
-        vec![today, today + 1],
-        "a day apiece"
+    let counted = [today, today + 1].map(|day| day_counts(&r.engine, day));
+    assert!(
+        counted
+            .iter()
+            .all(|(reached, _)| reached.iter().any(|count| *count > 0)),
+        "a day apiece: {counted:?}"
     );
     r.engine.flush_persisted().await;
+    // The load saves the rows it drops before it returns, so the rows after it are the ones the restarted engine holds.
     let second = r.restart().await;
     second.load_persisted().await;
-    assert_eq!(second.idle_returns(), counters);
+    assert_eq!(
+        saved_counts(&r),
+        BTreeMap::from([(today, counted[0]), (today + 1, counted[1])])
+    );
+}
+
+/// Main's `reached` and `returned` on the UTC day `day`, through the overview's sum over that one day, which answers
+/// zero buckets for a day main's pool holds no count on.
+fn day_counts(engine: &Engine, day: i64) -> ([u64; 10], [u64; 10]) {
+    engine
+        .idle_returns_over(day * DAY, 1)
+        .get("main")
+        .map_or(([0; 10], [0; 10]), |counters| {
+            (
+                counters.buckets.map(|bucket| bucket.reached),
+                counters.buckets.map(|bucket| bucket.returned),
+            )
+        })
+}
+
+/// The main pool's rows the registry holds, by UTC day, as a restart loads them.
+fn saved_counts(r: &Rig) -> BTreeMap<i64, ([u64; 10], [u64; 10])> {
+    let mut days: BTreeMap<i64, ([u64; 10], [u64; 10])> = BTreeMap::new();
+    for row in r.h.store.load_keepalive().unwrap().2 {
+        if row.pool_id == "main" {
+            let day = days.entry(row.day).or_default();
+            day.0[row.bucket as usize] = row.reached;
+            day.1[row.bucket as usize] = row.returned;
+        }
+    }
+    days
 }
 
 /// The rows of each UTC day the registry holds.
@@ -560,7 +592,7 @@ async fn the_only_day_rolled_off(r: &mut Rig) -> i64 {
     r.engine.flush_persisted().await;
     r.step().await;
     assert!(
-        r.engine.idle_returns().is_empty(),
+        r.engine.idle_returns_over(r.now(), 1).is_empty(),
         "the roll dropped the only day"
     );
     today
@@ -638,18 +670,8 @@ async fn an_open_windows_bucket_day_round_trips() {
         BODY.as_bytes(),
         "claude-sonnet-4-5",
     ));
-    let days = &second.idle_returns()["main"];
-    assert_eq!(
-        days.get(&today)
-            .map(|counters| counters.buckets[8].returned),
-        Some(1),
-        "the reach's day"
-    );
-    assert!(
-        days.get(&(today + 1))
-            .is_none_or(|counters| counters.buckets.iter().all(|bucket| bucket.returned == 0)),
-        "the closing day"
-    );
+    assert_eq!(day_counts(&second, today).1[8], 1, "the reach's day");
+    assert_eq!(day_counts(&second, today + 1).1, [0; 10], "the closing day");
 }
 
 /// A saved open window whose row carries no day for its reached bucket loads, and its return, which raises no bucket,
@@ -694,14 +716,15 @@ async fn a_return_of_a_window_loaded_without_its_buckets_day_counts_nothing() {
         BODY.as_bytes(),
         "claude-sonnet-4-5",
     ));
-    let returned: Vec<u64> = second.idle_returns()["main"]
-        .values()
-        .flat_map(|counters| counters.buckets.iter().map(|bucket| bucket.returned))
-        .collect();
-    assert!(
-        returned.iter().all(|count| *count == 0),
-        "no return counted: {returned:?}"
-    );
+    // The day's read and the wider sum beside it, so a return filed under another day fails too.
+    let wider = second
+        .idle_returns_over(r.now(), 30)
+        .get("main")
+        .map_or([0; 10], |counters| {
+            counters.buckets.map(|bucket| bucket.returned)
+        });
+    let returned = (day_counts(&second, r.now() / DAY).1, wider);
+    assert_eq!(returned, ([0; 10], [0; 10]), "no return counted");
 }
 
 /// Main's request on two messages, so its prefix holds a boundary before the last.
@@ -872,7 +895,7 @@ async fn a_row_saved_with_the_static_hash_and_tail_pair_loads_with_no_boundary_b
         "claude-sonnet-4-5",
     ));
     assert_eq!(
-        second.idle_returns()["main"][&(NOW / DAY)].buckets[1].returned,
+        day_counts(&second, NOW / DAY).1[1],
         1,
         "the loaded window counts a return on its tail"
     );
