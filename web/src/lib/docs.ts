@@ -1,4 +1,7 @@
-/** The router's part of the documentation site: the `site_url` the site's configuration publishes, with the router's folder. */
+/**
+ * The router's part of the documentation site. The address follows `site_url` in `zensical.toml` of the `phoebis-docs`
+ * repository, with the router's folder behind it, so a change of that value is followed here by hand.
+ */
 const DOCS_SITE = 'https://phoebis-project.github.io/phoebis-docs/router/';
 
 export type DocsPage = 'claude-ai-features' | 'installation';
