@@ -2818,10 +2818,10 @@ const resetButtonOf = (label) => resetCardOf(label)?.querySelector('.qcard__use'
   });
 }
 {
-  // The use of rg-primary-1 two cases up left primary's Fable week at 100% left, and the refusal of rg-primary-2 since
-  // lowered no window, so the confirmation of rg-primary-2 warns that the reset has nothing to clear. A screen reader
-  // hears that warning only where its region stood before the step from the pick page, so the node must be the one the
-  // pick page drew empty.
+  // The use of rg-primary-1 two cases up left primary's Fable week at 100% left, and the refused use of rg-primary-2 in
+  // the case behind it lowered no window, so the confirmation of rg-primary-2 warns that the reset has nothing to
+  // clear. A screen reader hears that warning only where its region stood before the step from the pick page, so the
+  // node must be the one the pick page drew empty.
   resetButtonOf('primary')?.click();
   await m.settle(600);
   const region = resetDialogs()[0]?.querySelector('[role="status"]') ?? null;

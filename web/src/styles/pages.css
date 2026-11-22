@@ -1352,9 +1352,9 @@
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
-/* The Pools view's tile row takes the same seat, on the rows of its own grid. A tile's note takes a third row,
-   which stands only while a tile of the row draws a note, since an empty row would still add its gap to each tile.
-   The class is that row's alone, so no other view's tiles move. */
+/* The Pools view's tile row takes the seat of a pool card's tiles (.pool__stats > div), on the rows of its own grid. A
+   tile's note takes a third row, which stands only while a tile of the row draws a note, since an empty row would still
+   add its gap to each tile. The class is that row's alone, so no other view's tiles move. */
 .stat-grid--fit > .stat {
   display: grid;
   grid-row: span 2;
