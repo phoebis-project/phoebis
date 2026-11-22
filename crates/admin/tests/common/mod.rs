@@ -725,9 +725,9 @@ pub async fn admin_parts_sweepable() -> Sweepable {
 }
 
 /// A second app over a store another `Parts` already opened, so its router task loads whatever the store
-/// holds at this moment rather than what it held when the first app started. Its parts read a new cell at `NOW` and the
-/// store keeps the clock of its open, since neither this tuple nor the one the store came from carries a cell that a
-/// caller could step.
+/// holds at this moment rather than what it held when the first app started. Its parts read a new cell at `NOW` while
+/// the store keeps the clock of its open, so a case that steps the store's clock takes `admin_parts_full_on` with that
+/// clock's cell.
 pub async fn admin_parts_on(store: Arc<Store>) -> (Router, FakeUpstream, Arc<Store>, RouterHandle) {
     let parts = app_with(
         None,
