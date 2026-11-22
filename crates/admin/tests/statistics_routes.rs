@@ -68,12 +68,26 @@ fn keys_in_order(object: &serde_json::Value) -> Vec<&str> {
 
 #[tokio::test]
 async fn settings_and_system_show_effective_values_ledger_health_and_gaps_without_secrets() {
+    // The second entry moves past the clock, so the model holds one entry in force and one ahead of it.
+    let loaded = phoebis_ledger::test_tables::tables(
+        phoebis_ledger::CostRevisions::from_yaml(
+            &phoebis_ledger::test_tables::SUBSCRIPTION_COSTS.replacen(
+                "  - effective: 2026-02-01\n",
+                "  - effective: 2099-01-01\n",
+                1,
+            ),
+        )
+        .unwrap(),
+    );
     // Two day counts apart, so each member reads its own key's figure.
-    let parts = common::admin_parts_full_retained(phoebis_ledger::LedgerConfig {
-        retention_days: 400,
-        rollup_retention_days: 500,
-        ..phoebis_ledger::LedgerConfig::default()
-    })
+    let parts = common::admin_parts_full_retained_costed(
+        phoebis_ledger::LedgerConfig {
+            retention_days: 400,
+            rollup_retention_days: 500,
+            ..phoebis_ledger::LedgerConfig::default()
+        },
+        loaded.clone(),
+    )
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
     let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
@@ -190,7 +204,6 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             .collect::<Vec<_>>(),
         "in the file's order"
     );
-    let loaded = phoebis_ledger::PlanTables::shipped();
     let cost_model = loaded.revisions.in_force(common::NOW);
     let costs = &settings["subscription_costs"];
     assert_eq!(
@@ -298,12 +311,11 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             &serde_json::json!(shipped.effective),
             &serde_json::json!(revisions.len()),
             &serde_json::json!({
-                "path": null, "source": "shipped", "effective": cost_model.effective,
-                "revisions": loaded.revisions.len(), "next": null,
+                "path": null, "source": "test", "effective": "2026-01-01", "revisions": 2, "next": "2099-01-01",
             })
         ),
-        "the harness configures neither path, so both tables are the shipped ones, and the clock sits past every entry \
-         of the cost model: {system}"
+        "the harness configures neither path, the price list is the shipped one, and the cost model is the \
+         case's own, whose second entry lies ahead of the clock: {system}"
     );
     let stored = parts.db.schema_version().await.unwrap();
     assert_eq!(

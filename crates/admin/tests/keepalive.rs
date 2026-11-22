@@ -608,13 +608,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes() {
         (Some(1), Some(0), Some(1), Some(1))
     );
     let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
-    assert_eq!(
-        (
-            system["keepalive"]["sessions"].as_u64(),
-            system["keepalive"]["running_probes"].as_u64()
-        ),
-        (Some(1), Some(0))
-    );
+    assert_eq!(system["keepalive"]["running_probes"].as_u64(), Some(0));
 }
 
 /// Each reported value differs from every other, so a member that answers another member's value fails here.

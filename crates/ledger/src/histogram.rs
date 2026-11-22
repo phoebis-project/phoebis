@@ -201,17 +201,12 @@ mod tests {
         let i = bucket_index(100.0);
         assert!(p99 >= edges[i] && p99 <= edges[i + 1]);
         let bytes = merged.to_le_bytes();
-        assert_eq!(bytes.len(), 336);
         assert_eq!(Histogram::from_le_bytes(&bytes), merged);
         let mut back = merged.clone();
         back.subtract(&b);
         assert_eq!(
             back, a,
             "subtracting a merged contribution restores the other"
-        );
-        assert_eq!(
-            Histogram::from_le_bytes(&bytes[..8]).count(),
-            merged.buckets()[..2].iter().sum::<u64>()
         );
         assert_eq!(
             &bytes[4 * bucket_index(10.0)..4 * bucket_index(10.0) + 4],

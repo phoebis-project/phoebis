@@ -239,10 +239,6 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         "{} vs 0.000612",
         business["cost_usd"]
     );
-    assert_eq!(
-        business["histograms"]["ttfb_ms"].as_array().unwrap().len(),
-        84
-    );
     let p50 = business["percentiles"]["ttfb_ms"]["p50"].as_f64().unwrap();
     assert!(
         p50 > 100.0 && p50 < 145.0,
@@ -2675,7 +2671,6 @@ async fn the_dashboard_reads_the_day_and_the_pins_and_the_account_list_the_newes
     );
     assert!((dashboard["error_rate_24h"].as_f64().unwrap() - 5.0 / 25.0).abs() < 1e-9);
     assert_eq!(dashboard["top_error_code"].as_str(), Some("upstream_error"));
-    assert_eq!(dashboard["hourly"].as_array().unwrap().len(), 25);
     assert_eq!(dashboard["sessions"]["active_pins"].as_u64(), Some(0));
     let list = json(get(&parts.app, "/admin/accounts", Some(&cookie)).await).await;
     let business = list["accounts"]

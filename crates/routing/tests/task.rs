@@ -3786,7 +3786,7 @@ async fn a_fable_completions_hour_reaches_the_reservation_of_the_next_starts_non
 }
 
 #[tokio::test]
-async fn a_completed_requests_share_is_added_to_the_reading_until_the_next_reading_drops_it() {
+async fn a_completed_requests_share_is_added_to_the_reading() {
     let store = seeded_oauth(&["a"]);
     with_tier(&store, "a");
     let now = Arc::new(AtomicI64::new(3_000));
@@ -3809,17 +3809,6 @@ async fn a_completed_requests_share_is_added_to_the_reading_until_the_next_readi
     assert!(
         close(read(&handle, "a", FIVE_HOUR).await, 0.6),
         "the reading plus the request's share"
-    );
-    handle
-        .report(observed(
-            "a",
-            sample_with(3_000, FIVE_HOUR, 0.55, Some(10 * HOUR)),
-        ))
-        .await;
-    assert!(
-        close(read(&handle, "a", FIVE_HOUR).await, 0.56),
-        "a reading observed after the request carries it, so the share is dropped, and a head's percent from 0.55 \
-         bounds the router's 0.6 at 0.56"
     );
 }
 

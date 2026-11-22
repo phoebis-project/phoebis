@@ -344,6 +344,29 @@ pub async fn admin_parts_full_retained(ledger_config: LedgerConfig) -> Full {
     )
 }
 
+/// `admin_parts_full_retained` with the cost model `costs` in place of the shipped one, so a case holds an entry dated
+/// ahead of the harness's clock.
+pub async fn admin_parts_full_retained_costed(
+    ledger_config: LedgerConfig,
+    costs: PlanTables,
+) -> Full {
+    full_from(
+        build_app_routed(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            None,
+            None,
+            None,
+            Some(costs),
+            RouterConfig::default(),
+            ledger_config,
+        )
+        .await,
+    )
+}
+
 /// The full harness reading the subscription cost model `costs` rather than the shipped one, over a fresh store, so a
 /// case names a model the list leaves unweighted without reading the shipped file.
 pub async fn admin_parts_full_costed(costs: PlanTables) -> Full {

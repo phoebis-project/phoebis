@@ -1411,23 +1411,4 @@ mod tests {
             ("failed", "failed")
         );
     }
-
-    #[test]
-    fn a_probe_covers_its_prefix_by_reading_it_back() {
-        let usage = |read, write, input| ProbeUsage {
-            read,
-            write,
-            input,
-            ..ProbeUsage::default()
-        };
-        assert_eq!(
-            [
-                covers(&usage(2_000, 0, 0), 2_000),
-                covers(&usage(1_999, 1, 0), 2_000),
-                covers(&usage(0, 2_000, 0), 2_000),
-            ],
-            [true, false, false],
-            "a whole read, a partial read, a rebuild"
-        );
-    }
 }

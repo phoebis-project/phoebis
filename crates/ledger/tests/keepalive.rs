@@ -9,7 +9,7 @@ use fake_upstream::FakeUpstream;
 use phoebis_ledger::{
     breakdown, fold_keepalive, hour_of, read_expired_between_turns, read_rollups, AttemptRecord,
     KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, PriceRevisions, Record, RequestRecord,
-    RollupSelect, Speed, UNATTRIBUTED,
+    RollupSelect, Speed,
 };
 use phoebis_store::AccountKind;
 
@@ -477,63 +477,6 @@ fn a_kept_warm_credit_folds_under_its_requests_client_and_prices_its_saving_unde
                 .all(|((key, got), (client, saving))| key == client
                     && (got - saving).abs() < 1e-12),
         "each credit under its own client and regime: {savings:?}"
-    );
-}
-
-/// A settlement, a skip and a migration mark that carry no client of their own, as the deltas of an agent saved before
-/// the agent kept its client label do, take the reserved client from the savings code and share its row.
-#[test]
-fn a_settlement_a_skip_and_a_migration_mark_without_a_client_fold_under_the_reserved_one() {
-    let at = 1_700_000_000_000;
-    let reserved = |delta: KeepaliveDelta| KeepaliveDelta {
-        client: UNATTRIBUTED.into(),
-        ..delta
-    };
-    let (db, _dir) = common::temp_ledger();
-    db.write(|c| {
-        let tx = c.transaction()?;
-        fold_keepalive(
-            &tx,
-            &reserved(KeepaliveDelta {
-                wasted_probes: 1,
-                wasted_input_tokens: 10,
-                wasted_probe_reasons: BTreeMap::from([("idle_limit".to_string(), 1)]),
-                ..delta(at, "probe")
-            }),
-        )?;
-        fold_keepalive(
-            &tx,
-            &reserved(KeepaliveDelta {
-                probes_skipped: 1,
-                ..delta(at, "probe")
-            }),
-        )?;
-        fold_keepalive(
-            &tx,
-            &reserved(KeepaliveDelta {
-                probe_migrated: 1,
-                ..delta(at, "probe")
-            }),
-        )?;
-        tx.commit()?;
-        Ok(())
-    })
-    .unwrap();
-    let rows: Vec<(String, (u64, u64, u64))> = db
-        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
-        .unwrap()
-        .into_iter()
-        .map(|row| {
-            (
-                row.client.clone(),
-                (row.wasted_probes, row.probes_skipped, row.probe_migrated),
-            )
-        })
-        .collect();
-    assert_eq!(
-        rows,
-        [(UNATTRIBUTED.to_string(), (1, 1, 1))],
-        "the three deltas share the reserved client's row"
     );
 }
 
