@@ -123,7 +123,7 @@ pub struct Park {
 impl Park {
     /// The park of `kind`, keeping the deadline only on a background kind and the wake only on a scheduled one, so no
     /// park holds a part its kind does not take.
-    pub fn new(kind: ParkKind, deadline: Option<i64>, wake_at: Option<i64>) -> Park {
+    pub(crate) fn new(kind: ParkKind, deadline: Option<i64>, wake_at: Option<i64>) -> Park {
         Park {
             deadline: deadline.filter(|_| kind.background()),
             kind,
@@ -131,15 +131,15 @@ impl Park {
         }
     }
 
-    pub fn kind(self) -> ParkKind {
+    pub(crate) fn kind(self) -> ParkKind {
         self.kind
     }
 
-    pub fn deadline(self) -> Option<i64> {
+    pub(crate) fn deadline(self) -> Option<i64> {
         self.deadline
     }
 
-    pub fn wake_at(self) -> Option<i64> {
+    pub(crate) fn wake_at(self) -> Option<i64> {
         self.wake_at
     }
 

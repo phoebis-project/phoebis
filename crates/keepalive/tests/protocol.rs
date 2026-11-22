@@ -10,7 +10,7 @@ use common::*;
 use fake_upstream::Respond;
 use http_body_util::BodyExt;
 use phoebis_keepalive::{
-    keepalive_router, AgentState, CompanionState, Event, EventError, Lifecycle, Park, ParkKind,
+    keepalive_router, AgentState, CompanionState, Event, EventError, Lifecycle, ParkKind,
     SessionView, EVENTS_PATH,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
@@ -2219,11 +2219,19 @@ async fn agent_facts_leaves_a_parked_agent_parked() {
         .iter()
         .find(|a| a.agent_id == "a1")
         .expect("the registration lists a1");
+    let answered = serde_json::to_value(a1).unwrap();
     assert_eq!(
-        (a1.state, a1.park),
+        (
+            a1.state,
+            &answered["park_kind"],
+            &answered["deadline"],
+            &answered["wake_at"]
+        ),
         (
             AgentState::Parked,
-            Some(Park::new(ParkKind::Background, Some(deadline), None))
+            &serde_json::json!("background"),
+            &serde_json::json!(deadline),
+            &serde_json::Value::Null
         ),
         "a facts report is no activity, so the park stands"
     );

@@ -13,7 +13,7 @@ use fake_upstream::{install_at, Captured, Respond};
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
     Ack, CompanionState, Engine, Event, EventError, EventReport, KeepaliveLimits, KeepalivePolicy,
-    KeepaliveTiming, Lifecycle, Park, ParkKind, Reason, LEASE_MS,
+    KeepaliveTiming, Lifecycle, ParkKind, Reason, LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
@@ -2642,23 +2642,40 @@ async fn a_restored_park_drops_a_saved_part_its_kind_does_not_take() {
     r.engine = r.restart().await;
     r.engine.load_persisted().await;
 
-    let parks: Vec<(String, Option<Park>)> = r
+    let parks: Vec<(
+        String,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+    )> = r
         .reregister()
         .agents
         .expect("a registration answers the session's agents")
         .into_iter()
-        .map(|agent| (agent.agent_id, agent.park))
+        .map(|agent| {
+            let answered = serde_json::to_value(&agent).unwrap();
+            (
+                agent.agent_id,
+                answered["park_kind"].clone(),
+                answered["deadline"].clone(),
+                answered["wake_at"].clone(),
+            )
+        })
         .collect();
     assert_eq!(
         parks,
         vec![
             (
                 "main".to_string(),
-                Some(Park::new(ParkKind::Background, Some(deadline), None))
+                serde_json::json!("background"),
+                serde_json::json!(deadline),
+                serde_json::Value::Null
             ),
             (
                 "worker".to_string(),
-                Some(Park::new(ParkKind::Scheduled, None, Some(wake)))
+                serde_json::json!("scheduled"),
+                serde_json::Value::Null,
+                serde_json::json!(wake)
             ),
         ],
         "each restored park keeps the parts its kind takes"
