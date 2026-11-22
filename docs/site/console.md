@@ -638,8 +638,9 @@ Selection's Strategy field explains the chosen strategy under it. Under Pace it 
 spare rate: the allowance left in the window it reads, the model's own 7-day Fable window where the model has one, else
 the 7-day window, per hour until that window resets or the subscription ends, less what its sessions burn of that window
 an hour, within the first priority tier that has an eligible account. An API-key member scores the room left in its
-worst bucket. An unsampled account counts as untouched, and ties are random. Each account's windows are on the Accounts
-page."
+worst bucket. An unsampled account counts as untouched, and ties are random. On the 7-day window, Pace's allowance first
+loses the member's Fable reservation, the share its expected Fable use is to take of it. Each account's windows are on
+the Accounts page."
 
 Windows opens on "The windows the router works from: the share of each it keeps every account under, and the span each
 session's burn is averaged over." Its first row holds `5-hour ceiling (%)` and then `Weekly ceiling (%)` side by side in
