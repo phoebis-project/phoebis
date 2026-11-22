@@ -318,7 +318,7 @@ def table_steps(listed):
 def last_step(schema_rs):
     """The number of the last step of the `MIGRATIONS` table in `schema_rs`, or None after printing why there is not
     one table that reads as `(number, expression)` steps whose numbers ascend."""
-    shown = schema_rs.relative_to(ROOT) if schema_rs.is_relative_to(ROOT) else schema_rs
+    shown = schema_rs.relative_to(ROOT)
     _, blanked = tokenized(schema_rs.read_text(encoding="utf-8"))
     declarations = list(MIGRATIONS_DECLARATION.finditer(blanked))
     if len(declarations) != 1:
@@ -717,40 +717,25 @@ def check_codes(code_files, client_md):
     return 1 if findings else 0
 
 
-# name: (check, its usage arguments, its default paths, whether its leading paths are a list of files)
+# name: (check, its paths)
 COMMANDS = {
-    "check-config": (check_check_config, "MAIN_RS INSTALLATION_MD", (MAIN_RS, INSTALLATION_MD), False),
-    "client": (check_client, "ROUTE_RS... CLIENT_MD", (PROXY_ROUTE_FILES, CLIENT_MD), True),
-    "codes": (check_codes, "RS_FILE... CLIENT_MD", (CODE_FILES, CLIENT_MD), True),
-    "example": (check_example, "EXAMPLE_YAML INSTALLATION_MD", (EXAMPLE_YAML, INSTALLATION_MD), False),
-    "schema": (
-        check_schema,
-        "REGISTRY_SCHEMA_RS LEDGER_SCHEMA_RS OPERATIONS_MD",
-        (REGISTRY_SCHEMA_RS, LEDGER_SCHEMA_RS, OPERATIONS_MD),
-        False,
-    ),
-    "unit": (check_unit, "UNIT_FILE INSTALLATION_MD", (UNIT_FILE, INSTALLATION_MD), False),
+    "check-config": (check_check_config, (MAIN_RS, INSTALLATION_MD)),
+    "client": (check_client, (PROXY_ROUTE_FILES, CLIENT_MD)),
+    "codes": (check_codes, (CODE_FILES, CLIENT_MD)),
+    "example": (check_example, (EXAMPLE_YAML, INSTALLATION_MD)),
+    "schema": (check_schema, (REGISTRY_SCHEMA_RS, LEDGER_SCHEMA_RS, OPERATIONS_MD)),
+    "unit": (check_unit, (UNIT_FILE, INSTALLATION_MD)),
 }
-USAGE = "usage: check-docs.py " + " | ".join(f"{name} [{usage}]" for name, (_, usage, _, _) in COMMANDS.items())
+USAGE = "usage: check-docs.py " + " | ".join(COMMANDS)
 
 
 def main(argv):
-    command = COMMANDS.get(argv[1]) if len(argv) >= 2 else None
+    command = COMMANDS.get(argv[1]) if len(argv) == 2 else None
     if command is None:
         print(USAGE)
         return 2
-    check, _, defaults, listed = command
-    given = [pathlib.Path(p) for p in argv[2:]]
-    if not given:
-        return check(*defaults)
-    if listed:
-        # A route or code file without the client page to check it against is a mistake, not a default.
-        if len(given) >= 2:
-            return check(given[:-1], given[-1])
-    elif len(given) == len(defaults):
-        return check(*given)
-    print(USAGE)
-    return 2
+    check, paths = command
+    return check(*paths)
 
 
 if __name__ == "__main__":
