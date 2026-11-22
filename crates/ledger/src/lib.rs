@@ -60,28 +60,26 @@ pub use pricing::{
     Pricing, Speed,
 };
 #[cfg(any(test, feature = "test-support"))]
-pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
+pub use query::{apply_filter, breakdown, series};
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_tables;
 pub use query::session_placements;
 pub use query::{
-    account_request_counts, breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over,
-    dashboard_on, decision_record, guardrail_counts, held_series, hour_ceil, hourly_window_samples,
+    account_request_counts, breakdown_paged, bucket_seconds, burn_groups_paged, dashboard_on,
+    decision_record, guardrail_counts, held_series, hour_ceil, hourly_window_samples,
     key_request_totals, key_request_totals_by_generation, latest_extra_usage,
     latest_extra_usage_polled, latest_extra_usage_share, latest_quota, limit_reset_uses,
-    list_requests, list_routing_log, member_spends, moves_by_reason, moves_by_reason_and_fit,
-    names_one_account, parked_count, parked_summary, parse_range,
-    pin_migrations_by_account_and_reason, placements, pool_traffic, pools_traffic,
-    recent_events_of_kind, recent_gaps, request_by_id, request_events, revision_spans,
-    rewrite_series, routing_conditions, series_paged, session_activity, session_burn_series,
-    session_identities, BudgetedMember, BurnPoint, CacheEquivalent, CacheFacts, Dashboard,
-    DecisionListRow, EventListRow, FundingFilter, GroupBy, GroupRow, GuardrailCountRow,
-    HourlyWindowSample, LimitResetUsed, LiveKeys, LogKinds, ParkedSummary, PlacementRow,
-    ProbeCounts, ProbeEquivalent, ProbeView, RequestCursor, RequestFilter, RollupFilter,
-    RoutingCondition, RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow,
-    SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SessionSpendKey, Span, Totals,
-    TrafficBucket, DECISION_KINDS, EVENT_KINDS, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
-    MAX_POINTS, MAX_RANGE_MS,
+    list_requests, list_routing_log, member_spends, moves_by_reason_and_fit, names_one_account,
+    parked_count, parked_summary, parse_range, pin_migrations_by_account_and_reason, placements,
+    pool_traffic, pools_traffic, recent_events_of_kind, recent_gaps, request_by_id, request_events,
+    revision_spans, rewrite_series, routing_conditions, series_paged, session_activity,
+    session_burn_series, session_identities, BudgetedMember, BurnPoint, CacheEquivalent,
+    CacheFacts, Dashboard, DecisionListRow, EventListRow, FundingFilter, GroupBy, GroupRow,
+    GuardrailCountRow, HourlyWindowSample, LimitResetUsed, LiveKeys, LogKinds, ParkedSummary,
+    PlacementRow, ProbeCounts, ProbeEquivalent, ProbeView, RequestCursor, RequestFilter,
+    RollupFilter, RoutingCondition, RoutingLogCursor, RoutingLogFilter, RoutingLogPage,
+    RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SessionSpendKey,
+    Span, Totals, TrafficBucket, DECISION_KINDS, EVENT_KINDS, MAX_POINTS, MAX_RANGE_MS,
 };
 pub use query::{guardrail_sample_page, request_body, request_body_held, SampleRow};
 pub use query::{list_feature_calls, FeatureCallFilter, FeatureCallRow};

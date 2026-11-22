@@ -1002,9 +1002,9 @@ pub struct GuardrailCountRow {
     pub blocked_bytes: u64,
 }
 
-/// The two statements `guardrail_counts` prepares, exported so a test can read their query plans against the index.
-pub const GUARDRAIL_COUNTS_SQL: &str = "SELECT guardrail_id, SUM(blocked = 0), SUM(blocked = 1) FROM request_guardrails WHERE received_at >= ?1 AND received_at < ?2 GROUP BY guardrail_id ORDER BY guardrail_id";
-pub const GUARDRAIL_BLOCKED_BYTES_SQL: &str = "SELECT COALESCE(SUM(r.request_bytes), 0) FROM request_guardrails g JOIN requests r ON r.id = g.request_id WHERE g.guardrail_id = ?1 AND g.blocked = 1 AND g.received_at >= ?2 AND g.received_at < ?3";
+/// The two statements `guardrail_counts` prepares, spelled once so the plan test reads the statements the read runs.
+pub(crate) const GUARDRAIL_COUNTS_SQL: &str = "SELECT guardrail_id, SUM(blocked = 0), SUM(blocked = 1) FROM request_guardrails WHERE received_at >= ?1 AND received_at < ?2 GROUP BY guardrail_id ORDER BY guardrail_id";
+pub(crate) const GUARDRAIL_BLOCKED_BYTES_SQL: &str = "SELECT COALESCE(SUM(r.request_bytes), 0) FROM request_guardrails g JOIN requests r ON r.id = g.request_id WHERE g.guardrail_id = ?1 AND g.blocked = 1 AND g.received_at >= ?2 AND g.received_at < ?3";
 
 /// One row per guardrail that matched a request in the whole hours the range from `from` to `to` touches, from the
 /// start of the hour that holds `from` up to and not at the hour ceiling of `to`, ordered by id, through the child
@@ -2558,7 +2558,7 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
 /// plain call that fills nothing in after it. Its reader, `shared_figures`, reads its `usd` and `equivalent` and not
 /// its `shares`, since the shares a route answers come from `ShareSums::add` where the read's groups each hold one
 /// account's rows. So the key carries no tier, as `price_group`'s does, and `price_row` prices no share window.
-pub(crate) fn priced(
+fn priced(
     row: &RollupRow,
     part: Part,
     prices: &PriceRevisions,
@@ -5173,8 +5173,8 @@ pub struct SeriesFilter {
     /// One point per bucket, from `bucket_seconds(from, to)`; buckets align with the hour edges as `series` aligns
     /// them.
     pub bucket_seconds: i64,
-    /// Account ids; empty means every account. The one scope `rewrite_series` and `moves_by_reason` read, since the
-    /// account rollups carry no other dimension.
+    /// Account ids. Empty means every account. The one scope `rewrite_series` and `moves_by_reason_and_fit` read, since
+    /// the account rollups carry no other dimension.
     pub accounts: Vec<String>,
     /// Key selectors as a `keys=` filter names them: a bare id names the live generation, `<id>@<generation>` that one,
     /// and the reserved id its rows at any generation. Empty means every key, and selectors none of which names a
@@ -5182,8 +5182,6 @@ pub struct SeriesFilter {
     pub keys: Vec<String>,
     /// Pool ids. Empty means every pool.
     pub pools: Vec<String>,
-    /// Request classes, `NO_CLASS` naming the classless rows; empty means every class. `rollups_hourly` only.
-    pub request_classes: Vec<String>,
 }
 
 /// The first bucket's edge at or below `start`, in seconds, once the range up to `end` passes the guard every series
@@ -5532,67 +5530,6 @@ pub(crate) fn price_request(
     })
 }
 
-/// The rollup rows `burn_series` prices for `filter`: every hour of its bucket range, whatever its scopes, so one
-/// read serves `burn_series_over` for every scope over the same range and bucket. The burn route reads through
-/// `burn_groups_paged` instead, which holds a page at a time.
-#[cfg(any(test, feature = "test-support"))]
-pub fn burn_rows(conn: &Connection, filter: &SeriesFilter) -> Result<Vec<RollupRow>, LedgerError> {
-    let (first, last) = bucket_range(filter)?;
-    crate::rollup::read_rollups(conn, first, last, &RollupSelect::default())
-}
-
-/// `burn_series_over` on the rows `burn_rows` reads for `filter`, read at `now`.
-#[cfg(any(test, feature = "test-support"))]
-pub fn burn_series(
-    conn: &Connection,
-    tables: &PlanTables,
-    prices: &PriceRevisions,
-    filter: &SeriesFilter,
-    live: &LiveKeys,
-    now: i64,
-) -> Result<Vec<BurnPoint>, LedgerError> {
-    let rows = burn_rows(conn, filter)?;
-    burn_series_over(&rows, tables, prices, filter, live, now)
-}
-
-/// The burn series of `filter`'s scopes over `rows`, which `burn_rows` read for the same range and bucket, its shares
-/// answered where the filter names one account. A subscription row's 5-hour share and figures carry the band of the
-/// hour the rollup folded the request under, since the rollup keeps no completion. The band reads per row rather than
-/// per bucket, since a six-hour or daily bucket can straddle a band edge and only the row's own hour says which side of
-/// it the row fell on. Each tier's figures divide by its capacity under the row's own revision. One pass: each row
-/// lands in its bucket by index. With no connection it reads no request row, so it hands `row_parts` no side and
-/// prices each row whole at the end of its hour.
-pub fn burn_series_over(
-    rows: &[RollupRow],
-    tables: &PlanTables,
-    prices: &PriceRevisions,
-    filter: &SeriesFilter,
-    live: &LiveKeys,
-    now: i64,
-) -> Result<Vec<BurnPoint>, LedgerError> {
-    let (first, last) = bucket_range(filter)?;
-    let mut sums = empty_burn_sums(first, last, filter.bucket_seconds, &burn_tiers(tables));
-    let shares = names_one_account(&filter.accounts);
-    let Some(keys) = key_selectors(&filter.keys, live) else {
-        return Ok(sums.into_iter().map(BurnSums::point).collect());
-    };
-    let sides = Sides::default();
-    for row in rows.iter().filter(|r| burn_scope_holds(filter, &keys, r)) {
-        price_burn_row(
-            &mut sums,
-            first,
-            filter.bucket_seconds,
-            row,
-            tables,
-            prices,
-            shares,
-            now,
-            &sides,
-        );
-    }
-    Ok(sums.into_iter().map(BurnSums::point).collect())
-}
-
 /// Every bucket of `[first, last)`, empty, each holding every tier of `tiers`. Ceiling, not floor: `last` is only
 /// rounded up to the hour (`hour_ceil`), so a 6-hour or daily bucket can leave a trailing partial bucket, which is a
 /// point of its own.
@@ -5623,19 +5560,6 @@ fn burn_tiers(tables: &PlanTables) -> BTreeSet<&str> {
         .flat_map(|revision| revision.capacity.keys())
         .map(String::as_str)
         .collect()
-}
-
-/// Whether a row lies in the filter's scopes. `keys` holds the filter's selectors as `key_selectors` resolved them, an
-/// empty list matching every key, each matched on its id and on its generation where it carries one, so the reserved id
-/// matches at any generation.
-fn burn_scope_holds(filter: &SeriesFilter, keys: &[KeySelector], r: &RollupRow) -> bool {
-    (keys.is_empty()
-        || keys.iter().any(|k| {
-            k.key_id == r.key_id && k.key_generation.is_none_or(|g| g == r.key_generation)
-        }))
-        && (filter.pools.is_empty() || filter.pools.contains(&r.pool_id))
-        && (filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
-        && (filter.request_classes.is_empty() || filter.request_classes.contains(&r.request_class))
 }
 
 /// One rollup row priced into the bucket it falls in, part by part as `row_parts` answers it against `sides`, nothing
@@ -5669,13 +5593,12 @@ fn price_burn_row(
 }
 
 /// The burn series of every group under `group_by`, any dimension `GroupBy` names, within `filter`'s scopes, read
-/// through `read_rollups_paged` and priced into the group's buckets as the pages arrive: each group's points are the
-/// ones `burn_series_over` answers for that group's rows alone, the shares answered where each group holds one
-/// account's rows. A group is answered where a row of the range itself holds a token, and the read reaches back to the
-/// first bucket's edge, which may start before it. Each group carries the unit its rows' recorded funding names, as
-/// `BurnGroup::finish` reads it. The sides of the read's boundary hours load in one read ahead of the pages, so each
-/// request of such an hour prices at the entries in force when it arrived. A filter whose keys name no lifetime answers
-/// no group.
+/// through `read_rollups_paged` and priced into the group's buckets as the pages arrive: each group's points are priced
+/// from that group's rows alone, the shares answered where each group holds one account's rows. A group is answered
+/// where a row of the range itself holds a token, and the read reaches back to the first bucket's edge, which may start
+/// before it. Each group carries the unit its rows' recorded funding names, as `BurnGroup::finish` reads it. The sides
+/// of the read's boundary hours load in one read ahead of the pages, so each request of such an hour prices at the
+/// entries in force when it arrived. A filter whose keys name no lifetime answers no group.
 #[allow(clippy::too_many_arguments)]
 pub async fn burn_groups_paged(
     db: &Arc<LedgerDb>,
@@ -5708,12 +5631,6 @@ pub async fn burn_groups_paged(
     let mut groups: BTreeMap<String, BurnGroup> = BTreeMap::new();
     let tiers = burn_tiers(tables);
     read_rollups_paged(db, &select, first, last, |row| {
-        // The read binds the pools, the accounts and the keys, which leaves the request classes to this test.
-        if !(filter.request_classes.is_empty()
-            || filter.request_classes.contains(&row.request_class))
-        {
-            return;
-        }
         let group = groups
             .entry(grouping.group_of(row))
             .or_insert_with(|| BurnGroup::new(first, last, filter.bucket_seconds, &tiers));
@@ -5857,18 +5774,6 @@ pub fn held_series(
     Ok(points)
 }
 
-/// The moves the account rollups counted over the range, summed by reason across every bucket and account the
-/// filter admits: each reason's sum over its fits.
-pub fn moves_by_reason(
-    conn: &Connection,
-    filter: &SeriesFilter,
-) -> Result<BTreeMap<String, u64>, LedgerError> {
-    Ok(moves_by_reason_and_fit(conn, filter)?
-        .into_iter()
-        .map(|(reason, fits)| (reason, fits.values().sum()))
-        .collect())
-}
-
 /// The moves of the range by reason, then by destination fit (`fits`, `rewrite_only`, `least_bad`, `unknown`), from
 /// the rollups' `{reason}/{fit}` key, so a chart can split each reason by its own fits. A key without `/` reads fit
 /// `unknown`.
@@ -5876,8 +5781,8 @@ pub fn moves_by_reason_and_fit(
     conn: &Connection,
     filter: &SeriesFilter,
 ) -> Result<BTreeMap<String, BTreeMap<String, u64>>, LedgerError> {
-    let (first, last) = rollup_hours(filter)?;
-    let rows = read_account_rollups(conn, first, last)?;
+    let (from_hour, to_hour) = rollup_hours(filter)?;
+    let rows = read_account_rollups(conn, from_hour, to_hour)?;
     let mut out: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     for row in rows
         .iter()
@@ -6381,8 +6286,8 @@ fn session_request_of(row: &Row) -> rusqlite::Result<SessionRequest> {
 }
 
 /// The twenty sessions with the most tokens over the filter's range, each priced per bucket the way
-/// `burn_series` prices an account row, save that an attempt lands in the bucket it started in, reads the band at
-/// its completion and prices under the account tier it recorded. A session can move between accounts, so its shares
+/// `burn_groups_paged` prices an account row, save that an attempt lands in the bucket it started in, reads the band
+/// at its completion and prices under the account tier it recorded. A session can move between accounts, so its shares
 /// are answered where the filter names one account, whose attempts alone the series then holds. Named keys and pools
 /// rank and price their own requests alone, and a session is answered where an attempt of the range itself holds a
 /// token, as `burn_groups_paged` answers a group, with the unit its attempts' recorded funding names. Each tier's
@@ -7316,6 +7221,227 @@ mod tests {
                     ..PinUsage::default()
                 },
             )]
+        );
+    }
+
+    /// An answer that reported no speed was served standard whatever the request asked for, so its row files and
+    /// prices at the standard cells, as the session burn prices the same attempt.
+    #[test]
+    fn an_answer_that_reported_no_speed_folds_and_prices_at_the_standard_cells_on_a_fast_request() {
+        use crate::rollup::{fold_request, read_rollups, PLAN_FUNDING, STANDARD_SPEED};
+        const OPUS: &str = "claude-opus-5-5";
+        let prices = crate::test_tables::api_prices();
+        let (db, _dir) = crate::db::open_temp();
+        let r = RequestRecord {
+            received_at: 3_700_000,
+            canonical_model: OPUS.into(),
+            requested_speed: Some("fast".into()),
+            ..Default::default()
+        };
+        let answered = AttemptRecord {
+            account_kind: AccountKind::Oauth,
+            input_tokens: Some(1_000_000),
+            speed: None,
+            ..Default::default()
+        };
+        db.write(|c| {
+            let tx = c.transaction()?;
+            fold_request(&tx, &r, std::slice::from_ref(&answered), None, &prices)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let rows = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.speed.as_str(), row.funding.as_str(), row.input_tokens))
+                .collect::<Vec<_>>(),
+            [(STANDARD_SPEED, PLAN_FUNDING, 1_000_000)],
+            "the answer's own speed keys the row"
+        );
+        let row = &rows[0];
+        let costs = crate::test_tables::subscription_costs();
+        let part = crate::query::Part {
+            at: last_millisecond(row.hour),
+            usage: row.usage(),
+        };
+        let usd = crate::query::priced(row, part, &prices, &costs, row.hour * 1_000)
+            .usd
+            .expect("the test list carries the model")
+            .total();
+        let standard = prices.in_force(r.received_at).models[OPUS].standard.input;
+        let attempt_usd = prices
+            .in_force(r.received_at)
+            .estimate(
+                OPUS,
+                Speed::of(answered.speed.as_deref()),
+                PinUsage {
+                    input: 1_000_000,
+                    cache_read: 0,
+                    write_5m: 0,
+                    write_1h: 0,
+                    output: 0,
+                },
+            )
+            .expect("the test list carries the model")
+            .total();
+        assert!(
+            (usd - standard).abs() < 1e-9 && (usd - attempt_usd).abs() < 1e-9,
+            "{usd} against the standard input cell {standard} and the attempt's own price {attempt_usd}"
+        );
+    }
+
+    /// A fast retry beside a standard answer folds into two deltas, each at its own speed and funding, so each
+    /// prices at its own cells once the row carries no dollar: a million input tokens at the fast cell and a million
+    /// at the standard one.
+    #[test]
+    fn a_fast_attempt_beside_a_standard_one_folds_into_two_deltas_priced_at_their_own_cells() {
+        use crate::rollup::{FAST_FUNDING, PLAN_FUNDING, STANDARD_BAND, STANDARD_SPEED};
+        const OPUS: &str = "claude-opus-5-5";
+        let prices = crate::test_tables::api_prices();
+        let r = RequestRecord {
+            received_at: 3_700_000,
+            canonical_model: OPUS.into(),
+            ..Default::default()
+        };
+        let million = |speed: &str| AttemptRecord {
+            account_kind: AccountKind::Oauth,
+            input_tokens: Some(1_000_000),
+            speed: Some(speed.into()),
+            ..Default::default()
+        };
+        let deltas = deltas_of(&r, &[million("fast"), million(STANDARD_SPEED)], &prices);
+        let seen: Vec<_> = deltas
+            .iter()
+            .map(|d| {
+                (
+                    (d.band.as_str(), d.speed.as_str(), d.funding.as_str()),
+                    (d.input_tokens, d.attempts, d.requests),
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ((STANDARD_BAND, "fast", FAST_FUNDING), (1_000_000, 1, 0)),
+                (
+                    (STANDARD_BAND, STANDARD_SPEED, PLAN_FUNDING),
+                    (1_000_000, 1, 1)
+                ),
+            ]
+        );
+        let costs = crate::test_tables::subscription_costs();
+        let priced: f64 = deltas
+            .iter()
+            .map(|d| {
+                let part = crate::query::Part {
+                    at: last_millisecond(d.hour),
+                    usage: d.usage(),
+                };
+                crate::query::priced(d, part, &prices, &costs, d.hour * 1_000)
+                    .usd
+                    .expect("the test list carries the model")
+                    .total()
+            })
+            .sum();
+        let row = &prices.in_force(r.received_at).models[OPUS];
+        let fast = row
+            .fast
+            .as_ref()
+            .expect("the test list's Opus 5.5 serves fast");
+        assert!(
+            (priced - (fast.input + row.standard.input)).abs() < 1e-9,
+            "{priced} against the fast and the standard input cells over a million each"
+        );
+    }
+
+    /// The fold files an answered attempt under the speed its answer reported, so no row it folds today holds tokens
+    /// under the fast speed with plan funding. A ledger can still hold such rows from a fold before that rule, since
+    /// rollups stay for 365 days by default. The burn prices such a row on the plan it drew from, its window shares and
+    /// figures as a standard row of the same usage reads them, while its list dollars read the cells of the speed the
+    /// row is filed under, as the breakdown's cost does.
+    #[tokio::test]
+    async fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_as_a_standard_row() {
+        use crate::rollup::{fold_delta, PLAN_FUNDING};
+        const MAX_20X: &str = "default_claude_max_20x";
+        const NOW: i64 = 1_798_761_600_000;
+        let tables = PlanTables::shipped();
+        let prices = PriceRevisions::shipped();
+        let filter = SeriesFilter {
+            from: 0,
+            to: 7_200_000,
+            bucket_seconds: 3_600,
+            accounts: vec!["a".into()],
+            ..SeriesFilter::default()
+        };
+        let point = async |speed: &str| {
+            let row = RollupRow {
+                input_tokens: 1_000,
+                output_tokens: 100,
+                ..RollupRow::key(
+                    3_600,
+                    "k",
+                    0,
+                    "p",
+                    "a",
+                    "claude-opus-5-5",
+                    "inference",
+                    UNATTRIBUTED,
+                    UNATTRIBUTED,
+                    "none",
+                    NO_CLASS,
+                    speed,
+                    PLAN_FUNDING,
+                    "standard",
+                    MAX_20X,
+                    "-",
+                )
+            };
+            let (db, _dir) = crate::db::open_temp();
+            let db = Arc::new(db);
+            db.write(|c| {
+                let tx = c.transaction()?;
+                fold_delta(&tx, &row)?;
+                tx.commit()?;
+                Ok(())
+            })
+            .unwrap();
+            let mut groups = burn_groups_paged(
+                &db,
+                &tables,
+                &prices,
+                &filter,
+                GroupBy::All,
+                &LiveKeys::default(),
+                &[],
+                NOW,
+            )
+            .await
+            .unwrap();
+            assert_eq!(groups.len(), 1, "one group of every row: {groups:?}");
+            groups
+                .remove(0)
+                .2
+                .into_iter()
+                .find(|p| p.at == 3_600_000)
+                .unwrap()
+        };
+        let standard = point("standard").await;
+        assert!(
+            standard.five_hour_share.is_some_and(|share| share > 0.0),
+            "{standard:?}"
+        );
+        // The plan's list dollars read the cells the row files under, as the breakdown's dollars price a row, so they
+        // are left out of the plan's shares and figures this case reads.
+        assert_eq!(
+            BurnPoint {
+                plan_usd: standard.plan_usd,
+                ..point("fast").await
+            },
+            standard,
+            "an asked speed never prices as a served one"
         );
     }
 

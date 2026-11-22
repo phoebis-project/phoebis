@@ -6,17 +6,16 @@ use std::sync::LazyLock;
 
 use phoebis_ledger::{
     account_request_counts, apply_filter, breakdown, breakdown_paged, bucket_index, bucket_seconds,
-    burn_groups_paged, burn_rows, burn_series, burn_series_over, deltas_of, fold_account,
-    fold_event, fold_keepalive, held_series, hour_ceil, hour_of, key_request_totals, list_requests,
-    member_spends, moves_by_reason, placements, pool_traffic, pools_traffic, price_shares,
-    read_account_rollups, read_rollups, refusal_categories, rewrite_series, run_retention_blocking,
-    series, series_paged, session_identities, AttemptRecord, BudgetedMember, CostRevisions,
-    EventRecord, FundingFilter, GroupBy, GroupRow, Histogram, InputTransformation, KeepaliveDelta,
-    LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlacementRow, PlanTables,
-    PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
-    RollupSelect, SeriesFilter, SessionSpendKey, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING,
-    NO_CLASS, OTHER_DIMENSION, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
-    USAGE_BASED_FUNDING,
+    burn_groups_paged, deltas_of, fold_account, fold_event, fold_keepalive, held_series, hour_ceil,
+    hour_of, key_request_totals, list_requests, member_spends, placements, pool_traffic,
+    pools_traffic, price_shares, read_account_rollups, read_rollups, refusal_categories,
+    rewrite_series, run_retention_blocking, series, series_paged, session_identities,
+    AttemptRecord, BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupBy, GroupRow,
+    Histogram, InputTransformation, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice,
+    ModelRow, Patterns, PlacementRow, PlanTables, PriceRevisions, PriceTable, RequestFilter,
+    RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter, SessionSpendKey, Speed,
+    WindowShares, FAST_FUNDING, NO_CLASS, OTHER_DIMENSION, OVERAGE_FUNDING, PAGE_HOURS,
+    PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_ledger::{RefusalCount, Refusals};
 use phoebis_routing::{
@@ -2026,6 +2025,7 @@ fn the_speed_filter_reads_the_serving_attempts_speed() {
 /// keyed apart from a credit, and the classifier standing where a case marks the client's own classifier call.
 struct ShareRow<'a> {
     id: &'a str,
+    key: &'a str,
     account: &'a str,
     account_kind: AccountKind,
     kind: &'a str,
@@ -2044,6 +2044,7 @@ impl Default for ShareRow<'_> {
     fn default() -> Self {
         ShareRow {
             id: "r",
+            key: "k",
             account: "a",
             account_kind: AccountKind::Oauth,
             kind: "inference",
@@ -2066,7 +2067,7 @@ fn plant_share(db: &LedgerDb, row: ShareRow<'_>) {
             id: row.id.into(),
             received_at: row.at,
             finished_at: Some(row.at + 500),
-            key_id: Some("k".into()),
+            key_id: Some(row.key.into()),
             pool_id: Some("p".into()),
             session_id: Some("s".into()),
             canonical_model: row.model.into(),
@@ -4057,8 +4058,10 @@ async fn a_classifier_rows_cache_equivalents_and_split_read_zero_beside_its_zero
 
 /// A rollup row keyed as the client's classifier call reads a zero share on both windows and a zero Pro-week figure in
 /// its burn bucket, while a plain row of the same counts in the next bucket reads its figures from its counts.
-#[test]
-fn a_classifier_rows_burn_bucket_reads_zero_shares_and_figure_beside_a_plain_rows_figures() {
+#[tokio::test]
+async fn a_classifier_rows_burn_bucket_reads_zero_shares_and_figure_beside_a_plain_rows_figures() {
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let tables = share_tables();
     let filter = SeriesFilter {
         from: 0,
@@ -4067,37 +4070,18 @@ fn a_classifier_rows_burn_bucket_reads_zero_shares_and_figure_beside_a_plain_row
         accounts: vec!["a".into()],
         ..SeriesFilter::default()
     };
-    let row = |hour: i64, classifier: &str| RollupRow {
-        input_tokens: 1_000,
-        output_tokens: 100,
-        ..RollupRow::key(
-            hour,
-            "k",
-            0,
-            "p",
-            "a",
-            "claude-sonnet-5-5",
-            "inference",
-            UNATTRIBUTED,
-            UNATTRIBUTED,
-            "none",
-            NO_CLASS,
-            "standard",
-            PLAN_FUNDING,
-            "standard",
-            "test_tier",
-            classifier,
-        )
+    let row = |id, at, classifier| ShareRow {
+        id,
+        model: "claude-sonnet-5-5",
+        at,
+        usage: usage(1_000, 100),
+        tier: Some("test_tier"),
+        classifier,
+        ..ShareRow::default()
     };
-    let points = burn_series_over(
-        &[row(3_600, "client"), row(7_200, NO_CLASS)],
-        &tables,
-        &PRICES,
-        &filter,
-        &LiveKeys::default(),
-        NOW,
-    )
-    .unwrap();
+    plant_share(&db, row("r-classifier", 3_600_000, Some("client")));
+    plant_share(&db, row("r-plain", 7_200_000, None));
+    let points = burn_points_under(&db, &tables, &PRICES, &filter).await;
     let figures = |at: i64| {
         let point = points
             .iter()
@@ -4123,8 +4107,11 @@ fn a_classifier_rows_burn_bucket_reads_zero_shares_and_figure_beside_a_plain_row
 
 /// A free classifier call spends no window: beside a priced row, one on a tier the cost model does not size and one on
 /// a tier sized on the 5-hour window alone leave the bucket's shares and its 5-hour figure as the priced row set them.
-#[test]
-fn a_free_call_on_an_unsized_or_one_window_tier_marks_no_window_and_adds_no_five_hour_figure() {
+#[tokio::test]
+async fn a_free_call_on_an_unsized_or_one_window_tier_marks_no_window_and_adds_no_five_hour_figure()
+{
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let tables = share_tables();
     let filter = SeriesFilter {
         from: 0,
@@ -4133,41 +4120,19 @@ fn a_free_call_on_an_unsized_or_one_window_tier_marks_no_window_and_adds_no_five
         accounts: vec!["a".into()],
         ..SeriesFilter::default()
     };
-    let row = |tier: &str, classifier: &str| RollupRow {
-        input_tokens: 1_000,
-        output_tokens: 100,
-        ..RollupRow::key(
-            3_600,
-            "k",
-            0,
-            "p",
-            "a",
-            "claude-sonnet-5-5",
-            "inference",
-            UNATTRIBUTED,
-            UNATTRIBUTED,
-            "none",
-            NO_CLASS,
-            "standard",
-            PLAN_FUNDING,
-            "standard",
-            tier,
-            classifier,
-        )
+    let row = |id, tier, classifier| ShareRow {
+        id,
+        model: "claude-sonnet-5-5",
+        at: 3_600_000,
+        usage: usage(1_000, 100),
+        tier: Some(tier),
+        classifier,
+        ..ShareRow::default()
     };
-    let points = burn_series_over(
-        &[
-            row("test_tier", NO_CLASS),
-            row("unlisted_tier", "client"),
-            row("narrow_tier", "client"),
-        ],
-        &tables,
-        &PRICES,
-        &filter,
-        &LiveKeys::default(),
-        NOW,
-    )
-    .unwrap();
+    plant_share(&db, row("r-priced", "test_tier", None));
+    plant_share(&db, row("r-unlisted", "unlisted_tier", Some("client")));
+    plant_share(&db, row("r-narrow", "narrow_tier", Some("client")));
+    let points = burn_points_under(&db, &tables, &PRICES, &filter).await;
     let point = point_at(&points, 3_600);
     // 1,000 input and 100 output tokens at weight 1 are 2,000 units, over test_tier's 100 on the 5-hour window and
     // 1,000 on the week, off the band at 01:00 UTC, and the 5-hour figure divides by the same 100 of the anchor tier.
@@ -4252,9 +4217,10 @@ fn a_classifier_row_reads_zero_in_the_session_series_beside_a_plain_rows_figures
 /// The burn prices each row by its funding: a subscription row in the share of its own windows where the read names
 /// its one account, an api_key row in dollars, and every plan row in the Pro-week figure under every scope, so the
 /// figures of two accounts add into one while their shares do not.
-#[test]
-fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_in_dollars() {
+#[tokio::test]
+async fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_in_dollars() {
     let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let plant = |id: &str,
                  account: &str,
                  kind: AccountKind,
@@ -4304,7 +4270,7 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
         Some(500),
     );
     let tables = PlanTables::shipped();
-    let point_of = |accounts: &[&str]| {
+    let point_of = async |accounts: &[&str]| {
         let filter = SeriesFilter {
             from: 0,
             to: 7_200_000,
@@ -4312,8 +4278,8 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
             accounts: accounts.iter().map(|a| a.to_string()).collect(),
             ..SeriesFilter::default()
         };
-        db.read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
-            .unwrap()
+        burn_points_under(&db, &tables, &PRICES, &filter)
+            .await
             .into_iter()
             .find(|p| p.at == 3_600_000)
             .expect("the bucket every tracked row landed in")
@@ -4325,7 +4291,7 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
         cache_read: 500,
         ..tokens
     };
-    let every = point_of(&[]);
+    let every = point_of(&[]).await;
     assert_eq!(
         (every.five_hour_share, every.seven_day_share),
         (None, None),
@@ -4366,7 +4332,7 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
         (500, 3_000),
         "the tierless row counts its tokens and prices no dollar"
     );
-    let sub = point_of(&["oauth-a"]);
+    let sub = point_of(&["oauth-a"]).await;
     let five_hour = share_of(
         &tables,
         FIVE_HOUR,
@@ -4398,8 +4364,8 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
 
 /// The burn prices a row by the funding its key carries, so a tier on the key moves no dollar into a share: a billed
 /// row reads its dollars, no share and a zero figure, under `-` as under a sized tier.
-#[test]
-fn a_billed_burn_row_reads_in_dollars_and_a_zero_equivalent_whatever_tier_its_key_carries() {
+#[tokio::test]
+async fn a_billed_burn_row_reads_in_dollars_and_a_zero_equivalent_whatever_tier_its_key_carries() {
     let tables = PlanTables::shipped();
     let filter = SeriesFilter {
         from: 0,
@@ -4408,30 +4374,38 @@ fn a_billed_burn_row_reads_in_dollars_and_a_zero_equivalent_whatever_tier_its_ke
         accounts: vec!["k".into()],
         ..SeriesFilter::default()
     };
-    let reading = |tier: &str| {
-        let row = RollupRow {
-            input_tokens: 1_000,
-            ..RollupRow::key(
-                3_600,
-                "k",
-                0,
-                "p",
-                "k",
-                "claude-sonnet-5-5",
-                "inference",
-                UNATTRIBUTED,
-                UNATTRIBUTED,
-                "none",
-                NO_CLASS,
-                "standard",
-                BILLED_FUNDING,
-                "standard",
-                tier,
-                "-",
-            )
-        };
-        let point = burn_series_over(&[row], &tables, &PRICES, &filter, &LiveKeys::default(), NOW)
-            .unwrap()
+    let reading = async |tier: Option<&str>| {
+        let (db, _dir) = common::temp_ledger();
+        let db = std::sync::Arc::new(db);
+        db.insert_request(
+            &RequestRecord {
+                id: "r".into(),
+                received_at: 3_600_000,
+                key_id: Some("k".into()),
+                pool_id: Some("p".into()),
+                canonical_model: "claude-sonnet-5-5".into(),
+                model: "claude-sonnet-5-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: "r".into(),
+                attempt: 1,
+                account_id: "k".into(),
+                account_kind: AccountKind::ApiKey,
+                outcome: "succeeded".into(),
+                input_tokens: Some(1_000),
+                tier: tier.map(String::from),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+        let point = burn_points_under(&db, &tables, &PRICES, &filter)
+            .await
             .into_iter()
             .find(|p| p.at == 3_600_000)
             .unwrap();
@@ -4443,7 +4417,7 @@ fn a_billed_burn_row_reads_in_dollars_and_a_zero_equivalent_whatever_tier_its_ke
             point.tokens,
         )
     };
-    let recorded = reading(UNATTRIBUTED);
+    let recorded = reading(None).await;
     let key_usd = shipped_usd(
         3_600_000,
         "claude-sonnet-5-5",
@@ -4456,14 +4430,14 @@ fn a_billed_burn_row_reads_in_dollars_and_a_zero_equivalent_whatever_tier_its_ke
         "an api_key account's row prices in dollars from its counts and adds a zero figure"
     );
     assert_eq!(
-        reading(MAX_20X),
+        reading(Some(MAX_20X)).await,
         recorded,
         "and reads the same under a sized tier on its key"
     );
 }
 
-#[test]
-fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
+#[tokio::test]
+async fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
     let tables = PlanTables::shipped();
     let filter = SeriesFilter {
         from: 0,
@@ -4473,37 +4447,29 @@ fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
         ..SeriesFilter::default()
     };
     // The shipped model places Mystery 2 in no tier, so its standard row leaves the bucket unpriced on both windows.
-    let row = |model: &str, speed: &str| RollupRow {
-        input_tokens: 1_000,
-        ..RollupRow::key(
-            3_600,
-            "k",
-            0,
-            "p",
-            "a",
-            model,
-            "inference",
-            UNATTRIBUTED,
-            UNATTRIBUTED,
-            "none",
-            NO_CLASS,
-            speed,
-            if speed == "fast" {
-                FAST_FUNDING
-            } else {
-                PLAN_FUNDING
-            },
-            "standard",
-            MAX_20X,
-            "-",
-        )
+    let row = |id, key, model, speed| ShareRow {
+        id,
+        key,
+        model,
+        at: 3_600_000,
+        usage: usage(1_000, 0),
+        speed,
+        tier: Some(MAX_20X),
+        ..ShareRow::default()
     };
-    let unpriced = row("claude-mystery-2", "standard");
-    let fast = row("claude-opus-5-5", "fast");
     let fast_usd = shipped_usd(3_600_000, "claude-opus-5-5", Speed::Fast, usage(1_000, 0));
-    for rows in [[unpriced.clone(), fast.clone()], [fast, unpriced]] {
-        let point = burn_series_over(&rows, &tables, &PRICES, &filter, &LiveKeys::default(), NOW)
-            .unwrap()
+    // The read hands a bucket's rows in the order of their keys: under one key Mystery 2 reads ahead of Opus 5.5, and a
+    // key that sorts ahead of `k` puts the fast row first.
+    for fast_key in ["k", "j"] {
+        let (db, _dir) = common::temp_ledger();
+        let db = std::sync::Arc::new(db);
+        plant_share(&db, row("r-unpriced", "k", "claude-mystery-2", None));
+        plant_share(
+            &db,
+            row("r-fast", fast_key, "claude-opus-5-5", Some("fast")),
+        );
+        let point = burn_points_under(&db, &tables, &PRICES, &filter)
+            .await
             .into_iter()
             .find(|p| p.at == 3_600_000)
             .unwrap();
@@ -4520,8 +4486,8 @@ fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
     }
 }
 
-#[test]
-fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
+#[tokio::test]
+async fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
     let tables = PlanTables::shipped();
     let filter = SeriesFilter {
         from: 0,
@@ -4530,40 +4496,27 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
         accounts: vec!["a".into()],
         ..SeriesFilter::default()
     };
-    let point = |speed: &str, tier: &str| {
-        let row = RollupRow {
-            input_tokens: 1_000,
-            output_tokens: 100,
-            ..RollupRow::key(
-                3_600,
-                "k",
-                0,
-                "p",
-                "a",
-                "claude-opus-5-5",
-                "inference",
-                UNATTRIBUTED,
-                UNATTRIBUTED,
-                "none",
-                NO_CLASS,
-                speed,
-                if speed == "fast" {
-                    FAST_FUNDING
-                } else {
-                    PLAN_FUNDING
-                },
-                "standard",
+    let point = async |speed: &str, tier: Option<&str>| {
+        let (db, _dir) = common::temp_ledger();
+        let db = std::sync::Arc::new(db);
+        plant_share(
+            &db,
+            ShareRow {
+                model: "claude-opus-5-5",
+                at: 3_600_000,
+                usage: usage(1_000, 100),
+                speed: Some(speed),
                 tier,
-                "-",
-            )
-        };
-        burn_series_over(&[row], &tables, &PRICES, &filter, &LiveKeys::default(), NOW)
-            .unwrap()
+                ..ShareRow::default()
+            },
+        );
+        burn_points_under(&db, &tables, &PRICES, &filter)
+            .await
             .into_iter()
             .find(|p| p.at == 3_600_000)
             .unwrap()
     };
-    let standard = point("standard", MAX_20X);
+    let standard = point("standard", Some(MAX_20X)).await;
     assert!(
         standard.five_hour_share.is_some()
             && standard.equivalent_by_tier[PRO].is_some_and(|e| e > 0.0)
@@ -4571,7 +4524,7 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
         "a standard row on a subscription reads a share, a figure and no dollars: {standard:?}"
     );
     let fast_usd = shipped_usd(3_600_000, "claude-opus-5-5", Speed::Fast, usage(1_000, 100));
-    let fast = point("fast", MAX_20X);
+    let fast = point("fast", Some(MAX_20X)).await;
     assert_eq!(
         (
             fast.usd,
@@ -4584,7 +4537,7 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
         "a fast row draws usage credits: its dollars and its tokens, a zero share of either window that still \
          says the tier is sized, and a zero figure"
     );
-    let tierless = point("fast", UNATTRIBUTED);
+    let tierless = point("fast", None).await;
     assert_eq!(
         (
             tierless.usd,
@@ -4596,69 +4549,8 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
     );
 }
 
-/// The fold files an answered attempt under the speed its answer reported, so no row it folds today holds tokens under
-/// the fast speed with plan funding. A ledger can still hold such rows from a fold before that rule, since rollups stay
-/// for 365 days by default. The burn prices such a row on the plan it drew from, its window shares and figures as a
-/// standard row of the same usage reads them, while its list dollars read the cells of the speed the row is filed
-/// under, as the breakdown's cost does.
-#[test]
-fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_as_a_standard_row() {
-    let tables = PlanTables::shipped();
-    let filter = SeriesFilter {
-        from: 0,
-        to: 7_200_000,
-        bucket_seconds: 3_600,
-        accounts: vec!["a".into()],
-        ..SeriesFilter::default()
-    };
-    let point = |speed: &str| {
-        let row = RollupRow {
-            input_tokens: 1_000,
-            output_tokens: 100,
-            ..RollupRow::key(
-                3_600,
-                "k",
-                0,
-                "p",
-                "a",
-                "claude-opus-5-5",
-                "inference",
-                UNATTRIBUTED,
-                UNATTRIBUTED,
-                "none",
-                NO_CLASS,
-                speed,
-                PLAN_FUNDING,
-                "standard",
-                MAX_20X,
-                "-",
-            )
-        };
-        burn_series_over(&[row], &tables, &PRICES, &filter, &LiveKeys::default(), NOW)
-            .unwrap()
-            .into_iter()
-            .find(|p| p.at == 3_600_000)
-            .unwrap()
-    };
-    let standard = point("standard");
-    assert!(
-        standard.five_hour_share.is_some_and(|share| share > 0.0),
-        "{standard:?}"
-    );
-    // The plan's list dollars read the cells the row files under, as the breakdown's dollars price a row, so they are
-    // left out of the plan's shares and figures this case reads.
-    assert_eq!(
-        phoebis_ledger::BurnPoint {
-            plan_usd: standard.plan_usd,
-            ..point("fast")
-        },
-        standard,
-        "an asked speed never prices as a served one"
-    );
-}
-
-#[test]
-fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_and_a_zero_equivalent_on_a_sized_tier(
+#[tokio::test]
+async fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_and_a_zero_equivalent_on_a_sized_tier(
 ) {
     let tables = phoebis_ledger::test_tables::subscription_costs();
     // Haiku 5.5 carries no weight in the test cost model, and fast cells in this list alone: the standard cells at $1
@@ -4677,28 +4569,38 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_and_a_zero_
         accounts: vec!["a".into()],
         ..SeriesFilter::default()
     };
-    let row = RollupRow {
-        input_tokens: 1_000,
-        output_tokens: 100,
-        ..RollupRow::key(
-            3_600,
-            "k",
-            0,
-            "p",
-            "a",
-            "claude-haiku-5-5",
-            "inference",
-            UNATTRIBUTED,
-            UNATTRIBUTED,
-            "none",
-            NO_CLASS,
-            "fast",
-            FAST_FUNDING,
-            "standard",
-            MAX_20X,
-            "-",
-        )
-    };
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
+    db.insert_request_at(
+        &RequestRecord {
+            id: "r".into(),
+            received_at: 3_600_000,
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            canonical_model: "claude-haiku-5-5".into(),
+            model: "claude-haiku-5-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: AccountKind::Oauth,
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            speed: Some("fast".into()),
+            tier: Some(MAX_20X.into()),
+            ..Default::default()
+        }],
+        None,
+        &prices,
+    )
+    .unwrap();
     assert_eq!(
         tables.share_at(
             FIVE_HOUR,
@@ -4711,8 +4613,8 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_and_a_zero_
         None,
         "the model has no weight, so it prices nothing on the plan window"
     );
-    let point = burn_series_over(&[row], &tables, &prices, &filter, &LiveKeys::default(), NOW)
-        .unwrap()
+    let point = burn_points_under(&db, &tables, &prices, &filter)
+        .await
         .into_iter()
         .find(|p| p.at == 3_600_000)
         .unwrap();
@@ -4732,8 +4634,8 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_and_a_zero_
 
 /// The week's band factor is 1 in both the shipped and the test model; a file that bands the week weighs the 7-day
 /// share by the band at the row's hour, as it weighs the 5-hour share, with no change to the analytics.
-#[test]
-fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
+#[tokio::test]
+async fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
     let banded_week = phoebis_ledger::test_tables::first_entry_costs_text().replacen(
         "capacity_factor: {five_hour: 0.5, seven_day: 1}",
         "capacity_factor: {five_hour: 0.5, seven_day: 0.5}",
@@ -4751,36 +4653,23 @@ fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
         accounts: vec!["a".into()],
         ..SeriesFilter::default()
     };
-    let week_at = |at: i64| {
-        let row = RollupRow {
-            input_tokens: 1_000,
-            ..RollupRow::key(
-                hour_of(at),
-                "k",
-                0,
-                "p",
-                "a",
-                "claude-opus-5-5",
-                "inference",
-                UNATTRIBUTED,
-                UNATTRIBUTED,
-                "none",
-                NO_CLASS,
-                "standard",
-                PLAN_FUNDING,
-                "standard",
-                MAX_20X,
-                "-",
-            )
-        };
-        burn_series_over(&[row], &tables, &PRICES, &filter, &LiveKeys::default(), NOW)
-            .unwrap()
-            .into_iter()
-            .find(|p| p.at == hour_of(at) * 1_000)
-            .unwrap()
-            .seven_day_share
-            .unwrap()
-    };
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
+    for (id, at) in [("peak", WEEKDAY_PEAK), ("off_peak", WEEKDAY_OFF_PEAK)] {
+        plant_share(
+            &db,
+            ShareRow {
+                id,
+                model: "claude-opus-5-5",
+                at,
+                usage: usage(1_000, 0),
+                tier: Some(MAX_20X),
+                ..ShareRow::default()
+            },
+        );
+    }
+    let points = burn_points_under(&db, &tables, &PRICES, &filter).await;
+    let week_at = |at: i64| point_at(&points, hour_of(at)).seven_day_share.unwrap();
     // The test model: Opus 5.5 weighs 2 and an input token multiplies by 1, so 1,000 input tokens are 2,000 units
     // of the Ultra week's 1,000, and inside the band the week holds the 0.5 this test sets.
     assert!(
@@ -4795,10 +4684,11 @@ fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
     );
 }
 
-#[test]
-fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_day_share_at_its_hour(
+#[tokio::test]
+async fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_day_share_at_its_hour(
 ) {
     let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     for (id, at) in [("peak", WEEKDAY_PEAK), ("off_peak", WEEKDAY_OFF_PEAK)] {
         db.insert_request(
             &RequestRecord {
@@ -4837,9 +4727,7 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         accounts: vec!["a".into()],
         ..SeriesFilter::default()
     };
-    let points = db
-        .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
-        .unwrap();
+    let points = burn_points_under(&db, &tables, &PRICES, &filter).await;
     let peak = points
         .iter()
         .find(|p| p.at == phoebis_ledger::hour_of(WEEKDAY_PEAK) * 1_000)
@@ -4885,18 +4773,7 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         bucket_seconds: 86_400,
         ..filter.clone()
     };
-    let daily_points = db
-        .read_blocking(|c| {
-            burn_series(
-                c,
-                &tables,
-                &PRICES,
-                &daily_filter,
-                &LiveKeys::default(),
-                NOW,
-            )
-        })
-        .unwrap();
+    let daily_points = burn_points_under(&db, &tables, &PRICES, &daily_filter).await;
     let day = daily_points
         .iter()
         .find(|p| p.five_hour_share.is_some())
@@ -4915,9 +4792,10 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
     );
 }
 
-#[test]
-fn a_bucket_counts_every_token_type_its_rows_carry() {
+#[tokio::test]
+async fn a_bucket_counts_every_token_type_its_rows_carry() {
     let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     // A cold-cache request: cache writes and output, no uncached input and no cache read.
     db.insert_request(
         &RequestRecord {
@@ -4956,9 +4834,8 @@ fn a_bucket_counts_every_token_type_its_rows_carry() {
         bucket_seconds: 3_600,
         ..SeriesFilter::default()
     };
-    let point = db
-        .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
-        .unwrap()
+    let point = burn_points_under(&db, &tables, &PRICES, &filter)
+        .await
         .into_iter()
         .find(|p| p.at == hour)
         .unwrap();
@@ -4969,9 +4846,10 @@ fn a_bucket_counts_every_token_type_its_rows_carry() {
     );
 }
 
-#[test]
-fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_its_dollars() {
+#[tokio::test]
+async fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_its_dollars() {
     let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     // A million Opus 5.5 input tokens per account in one off-band hour.
     let plant = |account: &str, kind: AccountKind, tier: Option<&str>| {
         let id = format!("r-{account}");
@@ -5010,7 +4888,7 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
     plant("key", AccountKind::ApiKey, None);
     let tables = PlanTables::shipped();
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
-    let point_of = |account: &str| {
+    let point_of = async |account: &str| {
         let filter = SeriesFilter {
             from: hour,
             to: hour + 3_600_000,
@@ -5018,8 +4896,8 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
             accounts: vec![account.into()],
             ..SeriesFilter::default()
         };
-        db.read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
-            .unwrap()
+        burn_points_under(&db, &tables, &PRICES, &filter)
+            .await
             .into_iter()
             .find(|p| p.at == hour)
             .expect("the planted hour")
@@ -5028,20 +4906,20 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
     let share = |window: &str, tier: &str| {
         share_of(&tables, window, tier, "claude-opus-5-5", million, hour)
     };
-    let max = point_of("max");
+    let max = point_of("max").await;
     assert!(
         (max.five_hour_share.unwrap() - share(FIVE_HOUR, MAX_20X)).abs() < 1e-9
             && (max.seven_day_share.unwrap() - share(SEVEN_DAY, MAX_20X)).abs() < 1e-9,
         "a million Opus 5.5 input tokens read their share of each Ultra window off the band: {max:?}"
     );
     assert_eq!(max.usd, 0.0, "a subscription spends no dollars");
-    let pro = point_of("pro");
+    let pro = point_of("pro").await;
     assert!(
         (pro.five_hour_share.unwrap() - share(FIVE_HOUR, PRO)).abs() < 1e-9
             && (pro.seven_day_share.unwrap() - share(SEVEN_DAY, PRO)).abs() < 1e-9,
         "Pro reads the same tokens over its own capacity on each window: {pro:?}"
     );
-    let tierless = point_of("tierless");
+    let tierless = point_of("tierless").await;
     assert_eq!(
         (
             tierless.five_hour_share,
@@ -5052,7 +4930,7 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
         (None, None, 1_000_000, 0.0),
         "no tier sizes a window, so the tokens count and no share is priced"
     );
-    let key = point_of("key");
+    let key = point_of("key").await;
     assert_eq!(
         (
             key.five_hour_share,
@@ -5136,7 +5014,10 @@ fn plant_in_the_off_band_hour(
 }
 
 /// The off-band hour's burn point of `account`, an Ultra subscription.
-fn off_band_point_on_max_20x(db: &LedgerDb, account: &str) -> phoebis_ledger::BurnPoint {
+async fn off_band_point_on_max_20x(
+    db: &std::sync::Arc<LedgerDb>,
+    account: &str,
+) -> phoebis_ledger::BurnPoint {
     let tables = PlanTables::shipped();
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
     let filter = SeriesFilter {
@@ -5146,17 +5027,18 @@ fn off_band_point_on_max_20x(db: &LedgerDb, account: &str) -> phoebis_ledger::Bu
         accounts: vec![account.into()],
         ..SeriesFilter::default()
     };
-    db.read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
-        .unwrap()
+    burn_points_under(db, &tables, &PRICES, &filter)
+        .await
         .into_iter()
         .find(|p| p.at == hour)
         .expect("the planted hour")
 }
 
-#[test]
-fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_and_counts_every_token(
+#[tokio::test]
+async fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_and_counts_every_token(
 ) {
     let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     // The same hour on Ultra: a million input tokens of a model the table prices and a million Mystery 2 tokens of
     // a tier it does not place, and a partial sum would read as the hour's share. The rollups read in model order, so
     // Mystery 2 comes before Opus 5.5 and after Fable 5.1, and each order is taken once.
@@ -5175,7 +5057,7 @@ fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_a
             "claude-mystery-2",
             Some(1_000_000),
         );
-        let point = off_band_point_on_max_20x(&db, account);
+        let point = off_band_point_on_max_20x(&db, account).await;
         assert_eq!(
             (
                 point.five_hour_share,
@@ -5193,7 +5075,7 @@ fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_a
     // beside Mystery 2 does.
     plant_in_the_off_band_hour(&db, "c-opus-5-5", "c", "claude-opus-5-5", Some(1_000_000));
     plant_in_the_off_band_hour(&db, "c-opus-4-7", "c", "claude-opus-4-7", Some(1_000_000));
-    let point = off_band_point_on_max_20x(&db, "c");
+    let point = off_band_point_on_max_20x(&db, "c").await;
     assert_eq!(
         (
             point.five_hour_share,
@@ -5206,16 +5088,15 @@ fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_a
     );
 }
 
-#[test]
-fn a_row_with_no_token_never_unprices_a_bucket_and_a_bucket_of_them_alone_reads_no_share() {
+#[tokio::test]
+async fn a_row_with_no_token_never_unprices_a_bucket() {
     let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     // A failed request on Sonnet 4.5, a model the cost model has no weight for, books a row with no token beside a
     // priced hour of Opus 5.5: it has nothing to price, so the hour keeps its share.
     plant_in_the_off_band_hour(&db, "priced", "a", "claude-opus-5-5", Some(1_000_000));
     plant_in_the_off_band_hour(&db, "failed", "a", "claude-sonnet-4-5", None);
-    // A failed request alone on a model the table lists, which would price at zero: an idle hour, not a share of zero.
-    plant_in_the_off_band_hour(&db, "listed", "b", "claude-opus-5-5", None);
-    let point = off_band_point_on_max_20x(&db, "a");
+    let point = off_band_point_on_max_20x(&db, "a").await;
     let opus = share_of(
         &PlanTables::shipped(),
         FIVE_HOUR,
@@ -5231,11 +5112,6 @@ fn a_row_with_no_token_never_unprices_a_bucket_and_a_bucket_of_them_alone_reads_
         "the Opus 5.5 share stands: {point:?} vs {opus}"
     );
     assert_eq!(point.tokens, 1_000_000);
-    let idle = off_band_point_on_max_20x(&db, "b");
-    assert_eq!(
-        (idle.five_hour_share, idle.seven_day_share, idle.tokens),
-        (None, None, 0)
-    );
 }
 
 #[test]
@@ -5426,31 +5302,6 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
     );
 }
 
-/// A rollup row of a million input tokens on account `a` under `tier`, in the hour starting at `hour` seconds.
-fn burn_row(hour: i64, model: &str, speed: &str, funding: &str, tier: &str) -> RollupRow {
-    RollupRow {
-        input_tokens: 1_000_000,
-        ..RollupRow::key(
-            hour,
-            "k",
-            0,
-            "p",
-            "a",
-            model,
-            "inference",
-            UNATTRIBUTED,
-            UNATTRIBUTED,
-            "none",
-            NO_CLASS,
-            speed,
-            funding,
-            "standard",
-            tier,
-            "-",
-        )
-    }
-}
-
 /// The point at `hour` seconds of a series.
 fn point_at(points: &[phoebis_ledger::BurnPoint], hour: i64) -> phoebis_ledger::BurnPoint {
     points
@@ -5462,34 +5313,49 @@ fn point_at(points: &[phoebis_ledger::BurnPoint], hour: i64) -> phoebis_ledger::
 
 /// A billed row draws no plan window, so a bucket with tokens and no plan row reads 0 on every equivalent column,
 /// and `None` stays for an idle bucket alone.
-#[test]
-fn a_burn_bucket_with_tokens_and_no_plan_row_reads_a_zero_equivalent_and_an_idle_bucket_none() {
+#[tokio::test]
+async fn a_burn_bucket_with_tokens_and_no_plan_row_reads_a_zero_equivalent_and_an_idle_bucket_none()
+{
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let tables = PlanTables::shipped();
-    let rows = [
-        burn_row(
-            3_600,
-            "claude-opus-5-5",
-            "standard",
-            OVERAGE_FUNDING,
-            MAX_20X,
-        ),
-        burn_row(7_200, "claude-opus-5-5", "fast", FAST_FUNDING, MAX_20X),
-        burn_row(
-            10_800,
-            "claude-opus-5-5",
-            "standard",
-            BILLED_FUNDING,
-            UNATTRIBUTED,
-        ),
-    ];
+    let row = |id, at| ShareRow {
+        id,
+        model: "claude-opus-5-5",
+        at,
+        usage: usage(1_000_000, 0),
+        tier: Some(MAX_20X),
+        ..ShareRow::default()
+    };
+    plant_share(
+        &db,
+        ShareRow {
+            overage: Some(true),
+            ..row("r-overage", 3_600_000)
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            speed: Some("fast"),
+            ..row("r-fast", 7_200_000)
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            account_kind: AccountKind::ApiKey,
+            tier: None,
+            ..row("r-billed", 10_800_000)
+        },
+    );
     let filter = SeriesFilter {
         from: 0,
         to: 4 * 3_600_000,
         bucket_seconds: 3_600,
         ..SeriesFilter::default()
     };
-    let points =
-        burn_series_over(&rows, &tables, &PRICES, &filter, &LiveKeys::default(), NOW).unwrap();
+    let points = burn_points_under(&db, &tables, &PRICES, &filter).await;
     for hour in [3_600, 7_200, 10_800] {
         let point = point_at(&points, hour);
         assert!(point.usd > 0.0, "{point:?}");
@@ -5510,16 +5376,30 @@ fn a_burn_bucket_with_tokens_and_no_plan_row_reads_a_zero_equivalent_and_an_idle
 /// The burn carries the model week's share beside the two shared windows: a Fable row's week share, which a row on a
 /// model without a week neither adds to nor nulls, and nothing for a bucket whose rows carry no week. The Pro-week
 /// figure sums both rows with no week of its own.
-#[test]
-fn the_burn_answers_the_model_week_share_beside_the_shared_windows() {
+#[tokio::test]
+async fn the_burn_answers_the_model_week_share_beside_the_shared_windows() {
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let tables = PlanTables::shipped();
-    let rows = [
-        burn_row(3_600, "claude-fable-5-1", "standard", PLAN_FUNDING, MAX_20X),
-        burn_row(3_600, "claude-opus-5-5", "standard", PLAN_FUNDING, MAX_20X),
-        burn_row(7_200, "claude-opus-5-5", "standard", PLAN_FUNDING, MAX_20X),
-        burn_row(10_800, "claude-fable-5-1", "fast", FAST_FUNDING, MAX_20X),
-    ];
-    let read = |accounts: Vec<String>| {
+    let row = |id, model, at| ShareRow {
+        id,
+        model,
+        at,
+        usage: usage(1_000_000, 0),
+        tier: Some(MAX_20X),
+        ..ShareRow::default()
+    };
+    plant_share(&db, row("r-fable", "claude-fable-5-1", 3_600_000));
+    plant_share(&db, row("r-opus", "claude-opus-5-5", 3_600_000));
+    plant_share(&db, row("r-opus-next", "claude-opus-5-5", 7_200_000));
+    plant_share(
+        &db,
+        ShareRow {
+            speed: Some("fast"),
+            ..row("r-fable-fast", "claude-fable-5-1", 10_800_000)
+        },
+    );
+    let read = async |accounts: Vec<String>| {
         let filter = SeriesFilter {
             from: 0,
             to: 4 * 3_600_000,
@@ -5527,7 +5407,7 @@ fn the_burn_answers_the_model_week_share_beside_the_shared_windows() {
             accounts,
             ..SeriesFilter::default()
         };
-        burn_series_over(&rows, &tables, &PRICES, &filter, &LiveKeys::default(), NOW).unwrap()
+        burn_points_under(&db, &tables, &PRICES, &filter).await
     };
     let million = usage(1_000_000, 0);
     let week_share = tables
@@ -5545,7 +5425,7 @@ fn the_burn_answers_the_model_week_share_beside_the_shared_windows() {
             .equivalent_at(SEVEN_DAY, None, model, million, 3_600_000, 3_600_000, NOW)
             .unwrap()
     };
-    let named = read(vec!["a".into()]);
+    let named = read(vec!["a".into()]).await;
     let fable = point_at(&named, 3_600);
     assert_eq!(
         fable.model_week_share,
@@ -5563,7 +5443,7 @@ fn the_burn_answers_the_model_week_share_beside_the_shared_windows() {
         Some(0.0),
         "a fast Fable row adds a zero to its week: {fast:?}"
     );
-    let every = point_at(&read(Vec::new()), 3_600);
+    let every = point_at(&read(Vec::new()).await, 3_600);
     let both = figure("claude-fable-5-1") + figure("claude-opus-5-5");
     assert!(
         every.model_week_share.is_none()
@@ -5572,37 +5452,13 @@ fn the_burn_answers_the_model_week_share_beside_the_shared_windows() {
     );
 }
 
-/// A plan row of 1,000 Sonnet 5.5 input tokens on account `a` under `tier` in the hour starting at `hour` seconds, its
-/// `client` the label whose entrypoint names its regime.
-fn regime_row(hour: i64, client: &str, tier: &str) -> RollupRow {
-    RollupRow {
-        input_tokens: 1_000,
-        ..RollupRow::key(
-            hour,
-            "k",
-            0,
-            "p",
-            "a",
-            "claude-sonnet-5-5",
-            "inference",
-            UNATTRIBUTED,
-            client,
-            "none",
-            NO_CLASS,
-            "standard",
-            PLAN_FUNDING,
-            "standard",
-            tier,
-            "-",
-        )
-    }
-}
-
 /// The 5-hour figure prices each row under its own regime and the band of its hour, over the anchor tier whatever tier
 /// served it: inside the band the base regime's factor of 0.5 doubles a base row's figure, while a desk row divides by
 /// the desk regime's own Pro capacity, twice the base one, at its factor of 1, and reads a quarter of it.
-#[test]
-fn the_five_hour_figure_prices_each_row_under_its_own_regime_and_the_band_of_its_hour() {
+#[tokio::test]
+async fn the_five_hour_figure_prices_each_row_under_its_own_regime_and_the_band_of_its_hour() {
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let tables = phoebis_ledger::test_tables::subscription_costs();
     let hour = WEEKDAY_PEAK / 1_000;
     let filter = SeriesFilter {
@@ -5611,12 +5467,22 @@ fn the_five_hour_figure_prices_each_row_under_its_own_regime_and_the_band_of_its
         bucket_seconds: 3_600,
         ..SeriesFilter::default()
     };
-    let rows = [
-        regime_row(hour, UNATTRIBUTED, MAX_20X),
-        regime_row(hour + 3_600, "claude-code/desk", MAX_20X),
-    ];
-    let points =
-        burn_series_over(&rows, &tables, &PRICES, &filter, &LiveKeys::default(), NOW).unwrap();
+    // Each request's client is the label whose entrypoint names its regime.
+    let row = |id, at, client| ShareRow {
+        id,
+        model: "claude-sonnet-5-5",
+        at,
+        usage: usage(1_000, 0),
+        client,
+        tier: Some(MAX_20X),
+        ..ShareRow::default()
+    };
+    plant_share(&db, row("r-base", WEEKDAY_PEAK, None));
+    plant_share(
+        &db,
+        row("r-desk", WEEKDAY_PEAK + 3_600_000, Some("claude-code/desk")),
+    );
+    let points = burn_points_under(&db, &tables, &PRICES, &filter).await;
     // 1,000 input tokens at Sonnet 5.5's weight 2 are 2,000 units. The base row divides by Pro's 5 and the band's
     // 0.5, the desk row by the desk regime's Pro 10 and its factor 1, both rows at 07:00 and 08:00 in Los Angeles.
     assert_eq!(
@@ -5631,8 +5497,10 @@ fn the_five_hour_figure_prices_each_row_under_its_own_regime_and_the_band_of_its
 
 /// A bucket's plan rows answer their list dollars in `plan_usd` and its billed rows theirs in `usd`, neither side
 /// counting the other's.
-#[test]
-fn a_burn_bucket_answers_its_plan_rows_list_dollars_in_plan_usd_and_its_billed_rows_in_usd() {
+#[tokio::test]
+async fn a_burn_bucket_answers_its_plan_rows_list_dollars_in_plan_usd_and_its_billed_rows_in_usd() {
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let prices = priced_table("claude-sonnet-5-5", 1e-6);
     let filter = SeriesFilter {
         from: 0,
@@ -5640,42 +5508,31 @@ fn a_burn_bucket_answers_its_plan_rows_list_dollars_in_plan_usd_and_its_billed_r
         bucket_seconds: 3_600,
         ..SeriesFilter::default()
     };
-    let row = |funding: &str, tier: &str, input: u64, output: u64| RollupRow {
-        input_tokens: input,
-        output_tokens: output,
-        ..RollupRow::key(
-            3_600,
-            "k",
-            0,
-            "p",
-            "a",
-            "claude-sonnet-5-5",
-            "inference",
-            UNATTRIBUTED,
-            UNATTRIBUTED,
-            "none",
-            NO_CLASS,
-            "standard",
-            funding,
-            "standard",
-            tier,
-            "-",
-        )
-    };
-    let rows = [
-        row(PLAN_FUNDING, "test_tier", 1_000, 100),
-        row(BILLED_FUNDING, UNATTRIBUTED, 2_000, 0),
-    ];
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plan",
+            model: "claude-sonnet-5-5",
+            at: 3_600_000,
+            usage: usage(1_000, 100),
+            tier: Some("test_tier"),
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-billed",
+            account_kind: AccountKind::ApiKey,
+            model: "claude-sonnet-5-5",
+            at: 3_600_000,
+            usage: usage(2_000, 0),
+            tier: None,
+            ..ShareRow::default()
+        },
+    );
     let point = point_at(
-        &burn_series_over(
-            &rows,
-            &share_tables(),
-            &prices,
-            &filter,
-            &LiveKeys::default(),
-            NOW,
-        )
-        .unwrap(),
+        &burn_points_under(&db, &share_tables(), &prices, &filter).await,
         3_600,
     );
     // A dollar per million tokens of every type: the plan row's 1,100 tokens and the billed row's 2,000.
@@ -5687,49 +5544,29 @@ fn a_burn_bucket_answers_its_plan_rows_list_dollars_in_plan_usd_and_its_billed_r
 
 /// The Fable week's figure counts the plan rows on a model that draws the Fable week and a zero for every other row
 /// with tokens, while the Pro-week figure keeps both: a busy bucket without a Fable row reads 0, not idle.
-#[test]
-fn the_fable_week_figure_counts_the_fable_rows_alone_and_a_busy_bucket_without_one_reads_zero() {
+#[tokio::test]
+async fn the_fable_week_figure_counts_the_fable_rows_alone_and_a_busy_bucket_without_one_reads_zero(
+) {
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let filter = SeriesFilter {
         from: 0,
         to: 3 * 3_600_000,
         bucket_seconds: 3_600,
         ..SeriesFilter::default()
     };
-    let row = |hour: i64, model: &str| RollupRow {
-        input_tokens: 1_000,
-        ..RollupRow::key(
-            hour,
-            "k",
-            0,
-            "p",
-            "a",
-            model,
-            "inference",
-            UNATTRIBUTED,
-            UNATTRIBUTED,
-            "none",
-            NO_CLASS,
-            "standard",
-            PLAN_FUNDING,
-            "standard",
-            "test_tier",
-            "-",
-        )
+    let row = |id, at, model| ShareRow {
+        id,
+        model,
+        at,
+        usage: usage(1_000, 0),
+        tier: Some("test_tier"),
+        ..ShareRow::default()
     };
-    let rows = [
-        row(3_600, "claude-fable-5-1"),
-        row(3_600, "claude-sonnet-5-5"),
-        row(7_200, "claude-sonnet-5-5"),
-    ];
-    let points = burn_series_over(
-        &rows,
-        &share_tables(),
-        &PRICES,
-        &filter,
-        &LiveKeys::default(),
-        NOW,
-    )
-    .unwrap();
+    plant_share(&db, row("r-fable", 3_600_000, "claude-fable-5-1"));
+    plant_share(&db, row("r-sonnet", 3_600_000, "claude-sonnet-5-5"));
+    plant_share(&db, row("r-sonnet-next", 7_200_000, "claude-sonnet-5-5"));
+    let points = burn_points_under(&db, &share_tables(), &PRICES, &filter).await;
     let figures = |hour: i64| {
         let point = point_at(&points, hour);
         (
@@ -5775,6 +5612,30 @@ async fn burn_points(
     .await
     .unwrap();
     assert_eq!(groups.len(), 1, "one group of every row: {groups:?}");
+    groups.remove(0).2
+}
+
+/// The points of the one group the burn route's reader answers for the rows of `filter`'s scopes, the shares answered
+/// where the filter names one account.
+async fn burn_points_under(
+    db: &std::sync::Arc<LedgerDb>,
+    tables: &PlanTables,
+    prices: &PriceRevisions,
+    filter: &SeriesFilter,
+) -> Vec<phoebis_ledger::BurnPoint> {
+    let mut groups = burn_groups_paged(
+        db,
+        tables,
+        prices,
+        filter,
+        GroupBy::All,
+        &LiveKeys::default(),
+        &[],
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(groups.len(), 1, "one group of the scopes' rows: {groups:?}");
     groups.remove(0).2
 }
 
@@ -6836,9 +6697,10 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
     );
 }
 
-#[test]
-fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
+#[tokio::test]
+async fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
     let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_funded(&db, "r-plan", "s", None);
     plant_funded(&db, "r-overage", "s", Some(true));
     let tables = share_tables();
@@ -6851,7 +6713,14 @@ fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
         ..SeriesFilter::default()
     };
     let mut fundings: Vec<String> = db
-        .read_blocking(|c| burn_rows(c, &filter))
+        .read_blocking(|c| {
+            read_rollups(
+                c,
+                hour / 1_000,
+                hour / 1_000 + 3_600,
+                &RollupSelect::default(),
+            )
+        })
         .unwrap()
         .into_iter()
         .map(|row| row.funding)
@@ -6862,9 +6731,8 @@ fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
         [OVERAGE_FUNDING, PLAN_FUNDING],
         "the fold files the two requests under their fundings"
     );
-    let point = db
-        .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
-        .unwrap()
+    let point = burn_points_under(&db, &tables, &PRICES, &filter)
+        .await
         .into_iter()
         .find(|p| p.at == hour)
         .expect("the planted hour");
@@ -6988,92 +6856,6 @@ fn a_session_s_overage_attempt_adds_dollars_and_no_share_while_its_plan_attempt_
     assert_eq!(point.uncached_tokens, 2_000, "both attempts' tokens count");
 }
 
-/// A caller that folds several scopes reads the range once: the series over the rows `burn_rows` read answers,
-/// point for point, what `burn_series` answers when it reads the range itself for each scope.
-#[test]
-fn the_burn_series_over_one_read_matches_a_read_per_scope() {
-    let (db, _dir) = common::temp_ledger();
-    for (mut request, mut attempts) in synthetic_day(5) {
-        // The day's Claude models all lack a weight in the cost model; its Opus rows move to Opus 5.5, which the
-        // model weighs. Account a's other rows move to what the model prices (Sonnet 5.5, and the API key for its
-        // GPT rows), so its scope reads priced shares, while c keeps its unweighed Sonnet 5 rows beside Opus 5.5 and
-        // its buckets mix priced shares with unpriced rows.
-        if request.canonical_model == "claude-opus-5" {
-            request.canonical_model = "claude-opus-5-5".into();
-        }
-        if let Some(last) = attempts.last_mut().filter(|a| a.account_id == "a") {
-            match request.canonical_model.as_str() {
-                "claude-sonnet-5" => request.canonical_model = "claude-sonnet-5-5".into(),
-                "gpt-5" => last.account_id = "b".into(),
-                _ => {}
-            }
-        }
-        // Account a is an Ultra subscription and c a Pro one, recorded on each attempt as the landing would.
-        for attempt in &mut attempts {
-            attempt.tier = match attempt.account_id.as_str() {
-                "a" => Some(MAX_20X.into()),
-                "c" => Some(PRO.into()),
-                _ => None,
-            };
-        }
-        db.insert_request(&request, &attempts, None).unwrap();
-    }
-    let tables = PlanTables::shipped();
-    // The key scope's bare id reads the generation a live key holds it at, one of the two the day's rows carry.
-    let live = LiveKeys(BTreeMap::from([("k2".to_string(), 0)]));
-    for bucket_seconds in [3_600, 6 * 3_600] {
-        // A range that starts mid-bucket, so the read reaches back to the bucket's edge.
-        let base = SeriesFilter {
-            from: 90 * 60_000,
-            to: DAY_MS,
-            bucket_seconds,
-            ..SeriesFilter::default()
-        };
-        let rows = db.read_blocking(|c| burn_rows(c, &base)).unwrap();
-        let scopes = [
-            SeriesFilter::default(),
-            SeriesFilter {
-                accounts: vec!["a".into()],
-                ..SeriesFilter::default()
-            },
-            SeriesFilter {
-                keys: vec!["k2".into()],
-                ..SeriesFilter::default()
-            },
-            SeriesFilter {
-                pools: vec!["p1".into()],
-                request_classes: vec![NO_CLASS.into()],
-                ..SeriesFilter::default()
-            },
-        ];
-        for scope in scopes {
-            let filter = SeriesFilter {
-                from: base.from,
-                to: base.to,
-                bucket_seconds,
-                ..scope
-            };
-            let read = db
-                .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &live, NOW))
-                .unwrap();
-            let over = burn_series_over(&rows, &tables, &PRICES, &filter, &live, NOW).unwrap();
-            // The unweighted GPT rows of b and c latch their buckets' figure, so a scope holding them reads the fast
-            // rows' dollars alone.
-            assert!(
-                read.iter()
-                    .any(|p| p.equivalent_by_tier[PRO].is_some_and(|e| e > 0.0) || p.usd > 0.0),
-                "the scope reads something: {filter:?}"
-            );
-            assert_eq!(
-                read.iter().any(|p| p.five_hour_share.is_some()),
-                filter.accounts.len() == 1,
-                "the shares answer where the scope names one account alone: {filter:?}"
-            );
-            assert_eq!(over, read, "{filter:?}");
-        }
-    }
-}
-
 #[test]
 fn the_rewrite_series_and_the_moves_by_reason_read_the_account_rollups() {
     let (db, _dir) = common::temp_ledger();
@@ -7114,11 +6896,13 @@ fn the_rewrite_series_and_the_moves_by_reason_read_the_account_rollups() {
         vec![(0, 0), (3_600_000, 40)],
         "one point per bucket, at its millisecond edge: the row's rewrite tokens in the hour it fell in"
     );
-    let moves = db.read_blocking(|c| moves_by_reason(c, &filter)).unwrap();
-    assert_eq!(moves.get("shed"), Some(&1));
     let by_fit = db
         .read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
         .unwrap();
+    assert_eq!(
+        by_fit.get("shed").map(|fits| fits.values().sum::<u64>()),
+        Some(1)
+    );
     assert_eq!(
         by_fit,
         BTreeMap::from([(
@@ -7266,20 +7050,20 @@ fn moves_by_reason_invents_no_vocabulary_for_a_reason_no_code_names_or_none_at_a
         bucket_seconds: 3_600,
         ..SeriesFilter::default()
     };
-    let moves = db.read_blocking(|c| moves_by_reason(c, &filter)).unwrap();
-    assert_eq!(
-        moves.get("future_reason"),
-        Some(&1),
-        "a reason no code names reads back as itself"
-    );
-    assert_eq!(
-        moves.get("unknown"),
-        Some(&1),
-        "no reason at all falls back to unknown"
-    );
     let by_fit = db
         .read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
         .unwrap();
+    let moves = |reason: &str| by_fit.get(reason).map(|fits| fits.values().sum::<u64>());
+    assert_eq!(
+        moves("future_reason"),
+        Some(1),
+        "a reason no code names reads back as itself"
+    );
+    assert_eq!(
+        moves("unknown"),
+        Some(1),
+        "no reason at all falls back to unknown"
+    );
     assert_eq!(
         by_fit,
         BTreeMap::from([
@@ -7509,14 +7293,6 @@ async fn series_readers_over(
                 )
             })
             .map(drop),
-        ),
-        (
-            "burn_rows",
-            db.read_blocking(|c| burn_rows(c, &filter)).map(drop),
-        ),
-        (
-            "burn_series_over",
-            burn_series_over(&[], &COSTS, &PRICES, &filter, &LiveKeys::default(), NOW).map(drop),
         ),
         (
             "burn_groups_paged",
@@ -9009,8 +8785,8 @@ fn a_cost_revision_inside_a_price_span_moves_the_totals_equivalent_at_its_own_bo
 /// lists and one from an entrypoint it leaves out: each prices under its own regime, 2 / 200 and 2 / 100 of the Ultra
 /// 5-hour window, where one price over the group would read the base 0.04. A session attempt from the listed
 /// entrypoint reads the regime's share. 04:00 in Los Angeles, before the band, in the first cost entry.
-#[test]
-fn a_group_mixing_two_clients_prices_each_rows_regime() {
+#[tokio::test]
+async fn a_group_mixing_two_clients_prices_each_rows_regime() {
     let costs = phoebis_ledger::test_tables::subscription_costs();
     let prices = phoebis_ledger::test_tables::api_prices();
     let at = phoebis_ledger::test_tables::JANUARY_2026;
@@ -9033,11 +8809,10 @@ fn a_group_mixing_two_clients_prices_each_rows_regime() {
     };
     let close = |got: f64, want: f64| (got - want).abs() < 1e-12;
     let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(&db, row("r-desk", "claude-code/desk"));
     plant_share(&db, row("r-sdk", "claude-code/sdk-cli"));
-    let points = db
-        .read_blocking(|c| burn_series(c, &costs, &prices, &filter, &LiveKeys::default(), NOW))
-        .unwrap();
+    let points = burn_points_under(&db, &costs, &prices, &filter).await;
     let share = points
         .iter()
         .find_map(|p| p.five_hour_share)

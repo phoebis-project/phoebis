@@ -761,13 +761,15 @@ fn a_pin_migrated_event_counts_under_its_reason_and_its_fit_on_the_destination()
         "the key joins the reason and the destination's fit"
     );
     let filter = two_hours();
-    let by_reason = |db: &LedgerDb| {
-        db.read_blocking(|c| phoebis_ledger::moves_by_reason(c, &filter))
-            .unwrap()
-    };
     let by_fit = |db: &LedgerDb| {
         db.read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
             .unwrap()
+    };
+    let by_reason = |db: &LedgerDb| {
+        by_fit(db)
+            .into_iter()
+            .map(|(reason, fits)| (reason, fits.values().sum::<u64>()))
+            .collect::<std::collections::BTreeMap<_, _>>()
     };
     assert_eq!(
         by_reason(&db),
@@ -807,9 +809,11 @@ fn two_reasons_keep_their_own_fit_counts_in_the_moves_by_reason_and_fit() {
         ],
     );
     let filter = two_hours();
+    let by_fit = db
+        .read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
+        .unwrap();
     assert_eq!(
-        db.read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
-            .unwrap(),
+        by_fit,
         std::collections::BTreeMap::from([
             (
                 "shed".to_string(),
@@ -823,8 +827,10 @@ fn two_reasons_keep_their_own_fit_counts_in_the_moves_by_reason_and_fit() {
         "each reason keeps its own fits, summed over the accounts"
     );
     assert_eq!(
-        db.read_blocking(|c| phoebis_ledger::moves_by_reason(c, &filter))
-            .unwrap(),
+        by_fit
+            .into_iter()
+            .map(|(reason, fits)| (reason, fits.values().sum::<u64>()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
         std::collections::BTreeMap::from([("shed".to_string(), 1), ("spent".to_string(), 2)]),
         "the moves by reason are the sum over each reason's fits"
     );

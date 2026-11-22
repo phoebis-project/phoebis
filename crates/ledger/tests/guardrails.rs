@@ -1,6 +1,6 @@
 //! A request's guardrail matches: the write and the two reads, the request log's filter, the retention purge, the
-//! counts per guardrail with their query plans, a blocked request's row and body as the assembler lands them, and the
-//! dry run's sample pages with the body each row captured.
+//! counts per guardrail, a blocked request's row and body as the assembler lands them, and the dry run's sample pages
+//! with the body each row captured.
 mod common;
 
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use phoebis_ledger::{
     guardrail_counts, guardrail_sample_page, list_requests, request_body, request_by_id,
     run_retention, BodyRecord, Direction, GuardrailCountRow, GuardrailMatchRecord, LedgerConfig,
     LedgerDb, LiveKeys, PriceRevisions, RequestCursor, RequestFilter, RequestOrder, RequestRecord,
-    SampleRow, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
+    SampleRow,
 };
 use phoebis_store::AttachmentSubject;
 
@@ -86,16 +86,6 @@ fn listed_ids(db: &LedgerDb, guardrails: &[&str]) -> Vec<String> {
     .into_iter()
     .map(|(r, _)| r.id)
     .collect()
-}
-
-/// The detail of each step of the statement's query plan under the given parameters.
-fn plan_of(db: &LedgerDb, sql: &str, params: impl rusqlite::Params) -> Vec<String> {
-    db.read_blocking(|c| {
-        let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
-        let rows = stmt.query_map(params, |r| r.get::<_, String>(3))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    })
-    .unwrap()
 }
 
 /// The row carries the blocking guardrail and the child table every match with the request's instant, and both reads
@@ -350,24 +340,6 @@ fn the_counts_read_the_whole_hours_a_range_touches_up_to_the_hour_ceiling_of_its
         [count("g1", 1, 1, 2_000)],
         "the match at 22:40 observed, the one at 21:10 blocked with its bytes alone"
     );
-}
-
-/// Both statements the counts route runs seek the child table's index led by the instant, so neither walks the
-/// table or its primary key on a reload of the page.
-#[test]
-fn the_counts_query_and_the_bytes_query_seek_the_received_index() {
-    let (db, _dir) = common::temp_ledger();
-    let counts = plan_of(&db, GUARDRAIL_COUNTS_SQL, (0_i64, 0_i64));
-    let bytes = plan_of(&db, GUARDRAIL_BLOCKED_BYTES_SQL, ("g1", 0_i64, 0_i64));
-    for (plan, which) in [(&counts, "the counts"), (&bytes, "the bytes")] {
-        assert!(
-            plan.iter().any(|step| {
-                step.contains("USING COVERING INDEX request_guardrails_received")
-                    || step.contains("USING INDEX request_guardrails_received")
-            }),
-            "{which} read seeks the index led by the instant: {plan:?}"
-        );
-    }
 }
 
 /// A record parked by a build from before the guardrails reads with no blocking guardrail and no match.

@@ -1033,7 +1033,6 @@ pub(crate) async fn burn(
         accounts,
         keys: list(q.keys.as_deref()),
         pools: list(q.pools.as_deref()),
-        ..Default::default()
     };
     let prices = state.pricing.revisions();
     let read = async {
@@ -1580,7 +1579,7 @@ pub(crate) async fn rewrites(
         Ok(x) => x,
         Err(e) => return ledger_failure(e),
     };
-    // The sum `moves_by_reason` answers, taken from the nested read so the rollups are read once.
+    // Each reason's sum comes from the map `moves_by_reason_and_fit` answers, so both members read the rollups once.
     let moves = moves_by_reason_and_fit
         .iter()
         .map(|(reason, fits)| (reason.clone(), fits.values().sum()))
