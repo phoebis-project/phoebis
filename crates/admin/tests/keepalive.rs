@@ -766,7 +766,7 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     )
     .await;
     let generation = common::generation(&parts.store, "desktop");
-    parts
+    let started = parts
         .keepalive
         .apply_event(
             "desktop",
@@ -832,31 +832,22 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
             finished_at: now,
         },
     ));
-    // Main goes idle, and the next tick opens its idle window in the first bucket.
-    let request_generation = parts
-        .keepalive
-        .agent_status("desktop", "s1", "main")
-        .unwrap()
-        .request_generation;
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            generation,
-            Event {
-                event: "state".into(),
-                session_id: "s1".into(),
-                instance_id: "i1".into(),
-                sequence: 2,
-                agent_id: Some("main".into()),
-                state: Some("idle".into()),
-                request_generation: Some(request_generation),
-                ..Default::default()
-            }
-            .try_into()
-            .unwrap(),
-        )
-        .unwrap();
+    // Main goes idle, and the next tick opens its idle window in the first bucket. The report goes out under the
+    // generation the registration answered, which main's request moved since.
+    common::report_as_the_mod(
+        &parts.keepalive,
+        generation,
+        Event {
+            event: "state".into(),
+            session_id: "s1".into(),
+            instance_id: "i1".into(),
+            sequence: 2,
+            agent_id: Some("main".into()),
+            state: Some("idle".into()),
+            request_generation: Some(started.request_generation),
+            ..Default::default()
+        },
+    );
     parts.keepalive.step().await;
     let retained = parts.keepalive.stats().retained_bytes;
     assert!(retained > 0, "the request's recipe is retained");
@@ -1101,6 +1092,8 @@ fn idle_returns_counted(reached: [u64; 10], returned: [u64; 10]) -> serde_json::
 struct Companion<'a> {
     parts: &'a common::Full,
     generation: i64,
+    /// Main's request generation as the last answer carried it, every answer here being main's.
+    main_generation: u64,
     session: &'static str,
     sequence: u64,
 }
@@ -1110,6 +1103,7 @@ impl<'a> Companion<'a> {
         let mut companion = Companion {
             parts,
             generation: common::generation(&parts.store, "desktop"),
+            main_generation: 0,
             session,
             sequence: 0,
         };
@@ -1119,32 +1113,21 @@ impl<'a> Companion<'a> {
 
     fn report(&mut self, event: &str, state: Option<&str>) {
         self.sequence += 1;
-        let request_generation = state.map(|_| {
-            self.parts
-                .keepalive
-                .agent_status("desktop", self.session, "main")
-                .unwrap()
-                .request_generation
-        });
-        self.parts
-            .keepalive
-            .apply_event(
-                "desktop",
-                self.generation,
-                Event {
-                    event: event.into(),
-                    session_id: self.session.into(),
-                    instance_id: self.session.into(),
-                    sequence: self.sequence,
-                    agent_id: state.map(|_| "main".into()),
-                    state: state.map(String::from),
-                    request_generation,
-                    ..Default::default()
-                }
-                .try_into()
-                .unwrap(),
-            )
-            .unwrap();
+        let ack = common::report_as_the_mod(
+            &self.parts.keepalive,
+            self.generation,
+            Event {
+                event: event.into(),
+                session_id: self.session.into(),
+                instance_id: self.session.into(),
+                sequence: self.sequence,
+                agent_id: state.map(|_| "main".into()),
+                state: state.map(String::from),
+                request_generation: state.map(|_| self.main_generation),
+                ..Default::default()
+            },
+        );
+        self.main_generation = ack.request_generation;
     }
 
     /// Main's request at the harness clock's instant on the chain `boundaries` names, answered.
@@ -2380,11 +2363,15 @@ async fn a_probe_leaves_the_keys_last_used_at_alone() {
         ["last_used_at"]
         .as_i64();
     assert!(touched.is_some(), "the client request touched the key");
-    let due = fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+    let main = || {
         parts
             .keepalive
-            .agent_status("desktop", "s1", "main")
-            .and_then(|s| s.next_probe_at)
+            .recipes()
+            .into_iter()
+            .find(|line| line.session_id == "s1" && line.agent_id == "main")
+    };
+    let due = fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        main().and_then(|line| line.next_probe_at)
     })
     .await;
     parts
@@ -2392,15 +2379,7 @@ async fn a_probe_leaves_the_keys_last_used_at_alone() {
         .store(due + 1_000, std::sync::atomic::Ordering::SeqCst);
     parts.keepalive.step().await;
     parts.keepalive.wait_idle().await;
-    assert!(
-        parts
-            .keepalive
-            .agent_status("desktop", "s1", "main")
-            .unwrap()
-            .probes
-            >= 1,
-        "the probe ran"
-    );
+    assert!(main().unwrap().probes_today >= 1, "the probe ran");
     // The router task processes commands in order, so a round trip through it waits out anything a probe
     // queued before this point.
     parts.router.reload().await.unwrap();

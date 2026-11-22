@@ -2085,33 +2085,52 @@ async fn every_route_is_captured_and_holds_its_shape() {
     }
     // The mod releases `worker-2` and starts it again under the record's request generation before its next request,
     // so its recipe and its line read `registered` while its earlier request stays on record, and its pin reads ended
-    // until that request.
-    for (sequence, event, state) in [(4, "state", Some("released")), (5, "agent_start", None)] {
-        let request_generation = parts
-            .keepalive
-            .agent_status("desktop", "s1", "worker-2")
-            .unwrap()
-            .request_generation;
-        parts
-            .keepalive
-            .apply_event(
-                "desktop",
-                key_generation,
-                phoebis_keepalive::Event {
-                    event: event.into(),
-                    session_id: "s1".into(),
-                    instance_id: "i1".into(),
-                    sequence,
-                    agent_id: Some("worker-2".into()),
-                    state: state.map(String::from),
-                    request_generation: Some(request_generation),
-                    ..Default::default()
-                }
-                .try_into()
-                .unwrap(),
-            )
-            .unwrap();
-    }
+    // until that request. The agent's generation moved with its request, so the release learns it from the refusal, as
+    // the mod does, and the start takes the one the release answered.
+    let released = |request_generation: Option<u64>| phoebis_keepalive::Event {
+        event: "state".into(),
+        session_id: "s1".into(),
+        instance_id: "i1".into(),
+        sequence: 4,
+        agent_id: Some("worker-2".into()),
+        state: Some("released".into()),
+        request_generation,
+        ..Default::default()
+    };
+    let refused = parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            key_generation,
+            released(None).try_into().unwrap(),
+        )
+        .expect_err("a report under no generation is stale");
+    let release = parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            key_generation,
+            released(refused.request_generation).try_into().unwrap(),
+        )
+        .unwrap();
+    parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            key_generation,
+            phoebis_keepalive::Event {
+                event: "agent_start".into(),
+                session_id: "s1".into(),
+                instance_id: "i1".into(),
+                sequence: 5,
+                agent_id: Some("worker-2".into()),
+                request_generation: Some(release.request_generation),
+                ..Default::default()
+            }
+            .try_into()
+            .unwrap(),
+        )
+        .unwrap();
     // The companion reports the session's facts and those of `worker-1` ahead of the capture loop, so the captured row
     // carries both sets.
     parts
@@ -2913,29 +2932,28 @@ async fn every_route_is_captured_and_holds_its_shape() {
         json(response).await,
     );
     // Main goes idle and a tick opens its idle window, so the overview carries a pool's row with its ten buckets for
-    // the console to decode. It is read after the others, which show main busy.
-    let request_generation = parts
+    // the console to decode. It is read after the others, which show main busy. Main's generation moved with its
+    // request, so the report learns it from the refusal, as the mod does.
+    let idle = |request_generation: Option<u64>| phoebis_keepalive::Event {
+        event: "state".into(),
+        session_id: "s1".into(),
+        instance_id: "i1".into(),
+        sequence: 8,
+        agent_id: Some("main".into()),
+        state: Some("idle".into()),
+        request_generation,
+        ..Default::default()
+    };
+    let refused = parts
         .keepalive
-        .agent_status("desktop", "s1", "main")
-        .unwrap()
-        .request_generation;
+        .apply_event("desktop", key_generation, idle(None).try_into().unwrap())
+        .expect_err("a report under no generation is stale");
     parts
         .keepalive
         .apply_event(
             "desktop",
             key_generation,
-            phoebis_keepalive::Event {
-                event: "state".into(),
-                session_id: "s1".into(),
-                instance_id: "i1".into(),
-                sequence: 8,
-                agent_id: Some("main".into()),
-                state: Some("idle".into()),
-                request_generation: Some(request_generation),
-                ..Default::default()
-            }
-            .try_into()
-            .unwrap(),
+            idle(refused.request_generation).try_into().unwrap(),
         )
         .unwrap();
     parts.keepalive.step().await;

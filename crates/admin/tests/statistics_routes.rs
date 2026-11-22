@@ -6340,23 +6340,24 @@ async fn one_held_probe() -> (common::Full, String) {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let _ = resp.into_body().collect().await.unwrap();
-    let due = wait_for(Duration::from_secs(5), || {
+    let main = || {
         parts
             .keepalive
-            .agent_status("desktop", "s1", "main")
-            .and_then(|s| s.next_probe_at)
+            .recipes()
+            .into_iter()
+            .find(|line| line.session_id == "s1" && line.agent_id == "main")
+    };
+    let due = wait_for(Duration::from_secs(5), || {
+        main().and_then(|line| line.next_probe_at)
     })
     .await;
     behind.store(true, Ordering::SeqCst);
     parts.clock_cell.store(due + 1_000, Ordering::SeqCst);
     parts.keepalive.step().await;
     parts.keepalive.wait_idle().await;
-    let status = parts
-        .keepalive
-        .agent_status("desktop", "s1", "main")
-        .unwrap();
+    let line = main().unwrap();
     assert_eq!(
-        (status.probes, status.reason),
+        (line.probes_today, line.cause),
         (1, phoebis_keepalive::Reason::LedgerBehind),
         "the relay's admission refused the one probe"
     );

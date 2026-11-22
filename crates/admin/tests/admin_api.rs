@@ -9511,34 +9511,29 @@ fn context_pin(
 fn register_companion(parts: &common::Full, session: &str, agents: &[&str], released: &[&str]) {
     let generation = common::generation(&parts.store, "desktop");
     let mut sequence = 0;
+    // The generation each agent's last answer carried, which a state report goes out under.
+    let mut answered: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
     let mut report = |event: &str, agent: Option<&str>, state: Option<&str>| {
         sequence += 1;
-        let request_generation = state.map(|_| {
-            parts
-                .keepalive
-                .agent_status("desktop", session, agent.unwrap())
-                .unwrap()
-                .request_generation
-        });
-        parts
-            .keepalive
-            .apply_event(
-                "desktop",
-                generation,
-                phoebis_keepalive::Event {
-                    event: event.into(),
-                    session_id: session.into(),
-                    instance_id: "i1".into(),
-                    sequence,
-                    agent_id: agent.map(String::from),
-                    state: state.map(String::from),
-                    request_generation,
-                    ..Default::default()
-                }
-                .try_into()
-                .unwrap(),
-            )
-            .unwrap();
+        let request_generation =
+            state.map(|_| answered.get(agent.unwrap()).copied().unwrap_or_default());
+        let ack = common::report_as_the_mod(
+            &parts.keepalive,
+            generation,
+            phoebis_keepalive::Event {
+                event: event.into(),
+                session_id: session.into(),
+                instance_id: "i1".into(),
+                sequence,
+                agent_id: agent.map(String::from),
+                state: state.map(String::from),
+                request_generation,
+                ..Default::default()
+            },
+        );
+        if let Some(agent) = ack.agent_id {
+            answered.insert(agent, ack.request_generation);
+        }
     };
     report("session_start", None, None);
     let observe = |agent: &str| {

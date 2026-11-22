@@ -603,6 +603,27 @@ pub fn generation(store: &Store, key_id: &str) -> i64 {
     store.api_key(key_id).unwrap().unwrap().created_at
 }
 
+/// Applies one companion report under the `desktop` key as the mod sends it: under the request generation the event
+/// carries, which the caller takes from the agent's last answer, and once more under the generation that a
+/// `stale_request_generation` refusal names, under the same sequence, which the refusal did not take. The engine moves
+/// an agent's generation at its real request with no answer in between.
+pub fn report_as_the_mod(
+    engine: &Engine,
+    key_generation: i64,
+    mut event: phoebis_keepalive::Event,
+) -> phoebis_keepalive::Ack {
+    let send = |event: phoebis_keepalive::Event| {
+        engine.apply_event("desktop", key_generation, event.try_into().unwrap())
+    };
+    match send(event.clone()) {
+        Err(refused) if refused.code == "stale_request_generation" => {
+            event.request_generation = refused.request_generation;
+            send(event).unwrap()
+        }
+        answered => answered.unwrap(),
+    }
+}
+
 pub async fn admin_app() -> (Router, FakeUpstream) {
     let parts = app_with(None, ACCOUNT_UUID, false, None).await;
     (parts.app, parts.up)

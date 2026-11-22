@@ -2685,31 +2685,6 @@ pub(crate) fn longest_cache_ttl_ms(policy: &CacheTtlPolicy) -> i64 {
         .fold(FIVE_MINUTES_MS, i64::max)
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct AgentStatus {
-    pub account_id: Option<String>,
-    pub agent_id: String,
-    pub cache_ttl_ms: i64,
-    pub canonical_model: String,
-    pub cold: u32,
-    pub counters_day: i64,
-    pub credited_today: u64,
-    pub failures: u32,
-    pub idle_ticks: u64,
-    pub in_flight: bool,
-    pub last_activity: i64,
-    pub next_probe_at: Option<i64>,
-    pub park: Option<Park>,
-    pub paused: bool,
-    pub probe_usage: ProbeUsage,
-    pub probes: u64,
-    pub probes_today: u64,
-    pub reason: Reason,
-    pub request_generation: u64,
-    pub state: AgentState,
-    pub unanswered: usize,
-}
-
 /// The engine's bus task. Every event is handed to `observe` under the lock. Nothing here awaits while holding
 /// it, so a slow registry read never stalls the queue. The bus drops for a subscriber that falls behind and
 /// counts it. A rise in that counter means events this task never saw, so every observation still open is
@@ -2811,43 +2786,6 @@ impl Engine {
 
     pub fn parts_bus(&self) -> Bus {
         self.parts.bus.clone()
-    }
-
-    pub fn agent_status(
-        &self,
-        key_id: &str,
-        session_id: &str,
-        agent_id: &str,
-    ) -> Option<AgentStatus> {
-        let inner = self.lock();
-        let agent = agent_ref(
-            &inner.sessions,
-            &(key_id.to_string(), session_id.to_string()),
-            agent_id,
-        )?;
-        Some(AgentStatus {
-            account_id: agent.account.clone(),
-            agent_id: agent.id.clone(),
-            cache_ttl_ms: agent.ttl_ms,
-            canonical_model: agent.canonical_model.clone(),
-            cold: agent.cold,
-            counters_day: agent.counters_day,
-            credited_today: agent.credited_today,
-            failures: agent.failures,
-            idle_ticks: agent.idle_ticks,
-            in_flight: agent.in_flight,
-            last_activity: agent.last_activity,
-            next_probe_at: agent.next_probe_at(),
-            park: agent.park.map(|held| held.park),
-            paused: agent.paused,
-            probe_usage: agent.usage,
-            probes: agent.probes,
-            probes_today: agent.probes_today,
-            reason: agent.reason,
-            request_generation: agent.generation,
-            state: agent.state,
-            unanswered: agent.unanswered.len() + agent.kept.len(),
-        })
     }
 
     fn on_observed(&self, observed: RequestObserved, resolve: impl Fn(&str) -> Option<String>) {
