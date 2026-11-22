@@ -44,7 +44,8 @@ phoebis-cch = { path = "../cch" }
 phoebis-ledger = { path = ".", features = ["debug-hooks", "test-support"] }
 # The limit resets parser's re-export a rig writes its block with, kept off the dependency above as the store's are.
 phoebis-oauth = { path = "../oauth", features = ["test-support"] }
-phoebis-profile = { path = "../profile" }
+# The tests read the embedded fixture files, which the feature gates.
+phoebis-profile = { path = "../profile", features = ["test-support"] }
 # The routing loop's test seams, `RouterHandle::emit` among them, kept off the dependency above as the store's are.
 phoebis-routing = { path = "../routing", features = ["debug-hooks"] }
 # The test builders of the registry's rows, kept off the dependency above so a release build carries none.

@@ -22,4 +22,6 @@ zstd = { workspace = true }
 
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
+# The embedded fixture files, which only tests read, kept off the dependency above so a release build compiles none.
+phoebis-profile = { path = "../profile", features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }

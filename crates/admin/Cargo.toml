@@ -43,6 +43,8 @@ phoebis-ledger = { path = "../ledger", features = ["debug-hooks", "test-support"
 # The seed the fixture capture mints its ids and secrets from and the re-export of the limit resets parser a test
 # stores its block with, kept off the dependency above so a release build carries neither.
 phoebis-oauth = { path = "../oauth", features = ["test-support"] }
+# The embedded fixture files, which only tests read, kept off the dependency above so a release build compiles none.
+phoebis-profile = { path = "../profile", features = ["test-support"] }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }

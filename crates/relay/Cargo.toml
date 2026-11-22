@@ -49,6 +49,8 @@ fake-upstream = { path = "../../tests/fake_upstream" }
 flate2 = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-ledger = { path = "../ledger" }
+# The embedded fixture files, which only tests read, kept off the dependency above so a release build compiles none.
+phoebis-profile = { path = "../profile", features = ["test-support"] }
 # An integration test builds the library without `cfg(test)`, so the counter it reads needs the feature on.
 phoebis-relay = { path = ".", features = ["debug-hooks"] }
 # The router task's report hold, which the conversation climb's wait tests park a report behind.

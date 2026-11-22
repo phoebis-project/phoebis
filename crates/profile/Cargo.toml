@@ -5,6 +5,10 @@ license.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+# The embedded fixture files of the pinned client build, which only test code reads.
+test-support = []
+
 [dependencies]
 
 [dev-dependencies]

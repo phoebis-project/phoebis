@@ -12,4 +12,5 @@ thiserror = { workspace = true }
 xxhash-rust = { workspace = true }
 
 [dev-dependencies]
-phoebis-profile = { path = "../profile" }
+# The tests read the embedded fixture files, which the feature gates.
+phoebis-profile = { path = "../profile", features = ["test-support"] }

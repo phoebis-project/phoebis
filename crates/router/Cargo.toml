@@ -58,6 +58,8 @@ fake-upstream = { path = "../../tests/fake_upstream" }
 phoebis-keepalive = { path = "../keepalive", features = ["debug-hooks"] }
 # The test tables, kept off the dependency above so a release build carries none.
 phoebis-ledger = { path = "../ledger", features = ["test-support"] }
+# The embedded fixture files, which only tests read, kept off the dependency above so a release build compiles none.
+phoebis-profile = { path = "../profile", features = ["test-support"] }
 # An integration test builds the library without `cfg(test)`, so the debug figures need it on.
 phoebis-router = { path = ".", features = ["debug-hooks"] }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }

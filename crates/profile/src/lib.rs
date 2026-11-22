@@ -2,6 +2,7 @@
 //! of that build recorded every fixture: the inference plane, the count path and the control plane.
 
 pub mod catalog;
+#[cfg(any(test, feature = "test-support"))]
 pub mod fixtures;
 
 /// The beta that asks the upstream to review each tool use. It lives here, below the relay, so the relay's drop and

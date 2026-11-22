@@ -27,7 +27,8 @@ phoebis-ledger = { path = "../ledger", features = ["test-support"] }
 # A reader test stores a limit reset block from a usage body through the parser's re-export, which needs the feature.
 phoebis-oauth = { path = "../oauth", features = ["test-support"] }
 # A backoff test polls a real usage service over the fake upstream, which needs a profile and a control client.
-phoebis-profile = { path = "../profile" }
+# Its usage answer is one of the embedded fixture files, which the feature gates.
+phoebis-profile = { path = "../profile", features = ["test-support"] }
 # An integration test drives the store's injected-failure seam and builds its pool with the store's test builder,
 # which need the features on.
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
