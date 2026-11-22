@@ -2952,10 +2952,6 @@ impl RoutingState {
             .insert(request_id.to_string(), reservation);
     }
 
-    pub fn reservation(&self, request_id: &str) -> Option<&Reservation> {
-        self.reservations.get(request_id)
-    }
-
     /// The `Usage` and `Ended` paths: the booking leaves and nothing is charged, `None` when the request holds none.
     /// The usage arm calls it before `charge`, which it calls on every usage as today.
     pub fn release_reservation(&mut self, request_id: &str) -> Option<Reservation> {
@@ -2989,16 +2985,6 @@ impl RoutingState {
             .filter(|reservation| reservation.account_id == account_id)
             .filter_map(|reservation| reservation.rewrite.get(window))
             .fold(0.0, |sum, share| sum + share)
-    }
-
-    pub fn reservations_on(&self, account_id: &str) -> Vec<&Reservation> {
-        let mut on: Vec<(&String, &Reservation)> = self
-            .reservations
-            .iter()
-            .filter(|(_, reservation)| reservation.account_id == account_id)
-            .collect();
-        on.sort_by(|a, b| a.0.cmp(b.0));
-        on.into_iter().map(|(_, reservation)| reservation).collect()
     }
 
     /// The account's slow-down entry on the pool as written, whatever the pool's switch or the window's reset reads
@@ -3743,11 +3729,6 @@ impl RoutingState {
     /// Whether the pin under the key carries a standing mark: `marked_at` set and `marked_on` its current account.
     pub fn shed_marked(&self, key: &PinKey) -> bool {
         self.pin(key).is_some_and(mark_holds)
-    }
-
-    /// The pins on the account whose mark stands, in key order, for the round's `standing` skip.
-    pub fn marked_pins(&self, account_id: &str) -> Vec<&PinRow> {
-        self.pins_on(account_id, &mark_holds)
     }
 
     /// The pins on `account_id` that `keep` admits, in key order.
@@ -6075,11 +6056,12 @@ mod tests {
             close(five_hour(&state, "a").utilization, 0.58),
             "the charge alone, the released booking gone"
         );
-        assert!(state.reservation("r").is_none() && state.release_reservation("r").is_none());
+        assert!(!state.reservations.contains_key("r") && state.release_reservation("r").is_none());
         state.book_reservation("r", booking("a", 1));
         state.book_reservation("r", booking("b", 2));
         let booked = state
-            .reservation("r")
+            .reservations
+            .get("r")
             .expect("one booking under the request");
         assert_eq!(
             (booked.account_id.as_str(), booked.attempt),
@@ -6088,8 +6070,15 @@ mod tests {
         );
         assert_eq!(state.reserved("a", FIVE_HOUR), 0.0);
         assert!(close(state.reserved("b", FIVE_HOUR), 0.1));
-        assert!(state.reservations_on("a").is_empty());
-        assert_eq!(state.reservations_on("b").len(), 1);
+        assert!(!state.reservations.values().any(|r| r.account_id == "a"));
+        assert_eq!(
+            state
+                .reservations
+                .values()
+                .filter(|r| r.account_id == "b")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -6111,13 +6100,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["r1"]
         );
-        assert!(state.reservation("r1").is_none() && state.reservation("r2").is_some());
+        assert!(!state.reservations.contains_key("r1") && state.reservations.contains_key("r2"));
         let mut loaded = RoutingState::from_load(RoutingLoad {
             pins: vec![burning("s", 1.0).0],
             ..RoutingLoad::default()
         });
         assert!(
-            loaded.reservations_on("a").is_empty()
+            !loaded.reservations.values().any(|r| r.account_id == "a")
                 && loaded.expire_reservations(i64::MAX).is_empty(),
             "a load carries no booking"
         );
@@ -6517,7 +6506,8 @@ mod tests {
         );
         assert_eq!(
             state
-                .reservation("r")
+                .reservations
+                .get("r")
                 .and_then(|r| r.pin.as_ref())
                 .map(|p| p.model.as_str()),
             Some("m-20260101"),

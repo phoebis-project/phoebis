@@ -494,15 +494,6 @@ pub fn warmth_of(
     (Warmth::Untouched, WarmthCause::Foreign)
 }
 
-/// The pin's warmth on this request: `Refresh` is warm, `Cold` is cold, `Untouched` reads `warm(current, now)`.
-pub fn effective_warm(current: &PinRow, request: &SelectRequest, affinity: &AffinityMap) -> bool {
-    warm_on(
-        current,
-        warmth_of(current, request, affinity).0,
-        request.now,
-    )
-}
-
 fn warm_on(current: &PinRow, verdict: Warmth, now: i64) -> bool {
     match verdict {
         Warmth::Cold => false,
@@ -1342,16 +1333,17 @@ fn not_ready(account: &AccountRow) -> Option<&'static str> {
 /// `pin_expired` of a pin released without a migration, and the `pin_migrated` of a live pin a placement replaced on
 /// another account, which carries them whole and takes its word from them. They are `expired` (idle past the pool's
 /// affinity TTL), `unserved` (the account no longer serves the model for this key: it left the pool, the model was
-/// deselected, or the key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is
-/// off), the account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
-/// `subscription_ended` (canceled and past its saved end), `cooldown` (a live row blocks the model on the account),
-/// `fast_rate_limit` or `fast_credits` for a fast request (one of the fast lane's two rows, or the poll's credits
-/// state, blocks it), `budget_unknown` (the member carries a budget while the ledger is degraded) or else `budget` (the
-/// member's spend is at or above its configured budget), `overage` (in overage under a policy other than `allow`),
-/// `attempted` (this request already tried it), and `spent` (no allowance left in the request's window). A fast request
-/// draws no plan window, so neither `overage` nor `spent` stands against it. Never empty: a pin released by a move
-/// whose destination then answered nothing carries `released`, the one fact the list above does not evaluate.
-pub fn release_reasons(
+/// deselected, or the key or the pool is gone, and the account is still in the registry), `deleted` (the account left
+/// the registry), `paused` (`enabled` is off), the account's state when it cannot serve (`disconnected`,
+/// `funding_required`, `reauth_required`, `unpaired`), `subscription_ended` (canceled and past its saved end),
+/// `cooldown` (a live row blocks the model on the account), `fast_rate_limit` or `fast_credits` for a fast request (one
+/// of the fast lane's two rows, or the poll's credits state, blocks it), `budget_unknown` (the member carries a budget
+/// while the ledger is degraded) or else `budget` (the member's spend is at or above its configured budget), `overage`
+/// (in overage under a policy other than `allow`), `attempted` (this request already tried it), and `spent` (no
+/// allowance left in the request's window). A fast request draws no plan window, so neither `overage` nor `spent`
+/// stands against it. Never empty: a pin released by a move whose destination then answered nothing carries
+/// `released`, the one fact the list above does not evaluate.
+fn release_reasons(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pin: &PinRow,
@@ -1366,12 +1358,12 @@ pub fn release_reasons(
         .candidates
         .iter()
         .any(|c| c.account_id == pin.account_id);
-    if pool.is_none() || !serves {
-        reasons.push("unserved");
-    }
     match snapshot.account(&pin.account_id) {
         None => reasons.push("deleted"),
         Some(account) => {
+            if pool.is_none() || !serves {
+                reasons.push("unserved");
+            }
             if !account.enabled {
                 reasons.push("paused");
             }
@@ -1440,8 +1432,8 @@ pub fn release_reasons(
 }
 
 /// The order that picks the one word a replaced pin's move carries out of what stood against its account: what the
-/// account is first, then what its pool and its limits say, so a deleted account's pin, whose list also holds
-/// `unserved`, reads `deleted`. The reload's purge takes a deleted account's pin before any selection reads it, and its
+/// account is first, then what its pool and its limits say, so a deleted account's pin reads `deleted` whatever its
+/// list holds behind it. The reload's purge takes a deleted account's pin before any selection reads it, and its
 /// landing takes `deleted` from the purge's entry as a failover's takes its word. The word stands here so the order
 /// covers every word `release_reasons` answers but `expired`, which the selection never reads as a move.
 const MOVE_CAUSE_ORDER: [&str; 17] = [
@@ -1473,7 +1465,7 @@ pub(crate) fn move_word(reasons: &[&'static str]) -> &'static str {
         .unwrap_or("released")
 }
 
-/// One decision, whole: the answer and its writes as `select` answers them, with the record and the row summary.
+/// One decision, whole: the selection's answer and its writes, with the record and the row summary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Decided {
     pub result: SelectResult,
@@ -1611,17 +1603,6 @@ fn round_write(
         }
     }
     writes
-}
-
-/// `decide` without its record: the tests' entry and nothing else's.
-pub fn select(
-    state: &mut RoutingState,
-    snapshot: &RegistrySnapshot,
-    request: &SelectRequest,
-    rng: &mut impl Rng,
-) -> (SelectResult, Vec<StateWrite>) {
-    let Decided { result, writes, .. } = decide(state, snapshot, request, rng);
-    (result, writes)
 }
 
 /// What a decision read while it ran, appended where each fact was read, so the record holds the engine's own

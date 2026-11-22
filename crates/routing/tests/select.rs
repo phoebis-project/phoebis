@@ -1,18 +1,20 @@
+mod common;
+
+use common::select;
 use phoebis_routing::{
-    all_plan_windows, burn_average_ms, cohort_hold, decide, effective_warm, feature_ready,
-    lane_key, release_reasons, resolve, select, shed_dwell_ms, warm, warmth_of, AccountTicket,
-    AffinityChain, AffinityMap, AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit,
-    CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditAccount, CreditsState, Decided,
-    DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, FailedOver, HeadMark,
-    HoldFacts, HoldOutcome, HoldReason, HoldWait, LaneFacts, LongContextRates, MemberSpend,
-    MigrateReason, MoveCause, Obstacle, OverageEvidence, PinKeyFacts, PinRef, PinShed, PinUsage,
-    PinnedObstacle, Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates,
-    RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult,
-    SharePricer, SharedWindows, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite,
-    UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading, WindowSource,
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
-    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS,
-    WEEK_MS,
+    all_plan_windows, burn_average_ms, cohort_hold, decide, feature_ready, lane_key, resolve,
+    shed_dwell_ms, warm, warmth_of, AccountTicket, AffinityChain, AffinityMap, AffinityRow,
+    BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts, ClientClass,
+    CohortHold, CreditAccount, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion,
+    FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldReason, HoldWait,
+    LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, Obstacle, OverageEvidence,
+    PinKeyFacts, PinRef, PinShed, PinUsage, PinnedObstacle, Placement, RateTable, Rates,
+    RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation,
+    RoutingState, SelectRequest, SelectResult, SharePricer, SharedWindows, SlowDownEdge,
+    SlowDownRead, SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause,
+    WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON,
+    FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
+    SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -557,6 +559,18 @@ fn picked(result: &SelectResult) -> &str {
 
 fn rng() -> StdRng {
     StdRng::seed_from_u64(7)
+}
+
+/// What stood against the account of the pin the request found, as the decision's pin block records it. A request
+/// that finds no pin records an empty list, on which a read that a reason is absent would pass, so that fails here.
+fn released_of(decided: &Decided) -> Vec<&'static str> {
+    let pin = decided
+        .record
+        .pin
+        .as_ref()
+        .expect("a pinning request records its pin block");
+    assert_ne!(pin.found, "none", "the request finds a pin");
+    pin.released.clone()
 }
 
 #[test]
@@ -2843,34 +2857,42 @@ fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_it_read
 #[test]
 fn the_release_reasons_name_a_funding_mark_only_while_the_selection_would_not_try_the_account() {
     let s = funding_marked_pool();
-    let mut st = RoutingState::from_load(RoutingLoad::default());
     let req = |now: i64| request(&s, Some("s1"), "claude-sonnet-5", true, &[], now);
+    // A decision writes into its state and the state is no `Clone`, so each read decides on a state built again.
+    let placed = || {
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        assert_eq!(
+            picked(&select(&mut st, &s, &req(1_000), &mut rng()).0),
+            "a",
+            "the first request after a restart pins the marked account"
+        );
+        st
+    };
     assert_eq!(
-        picked(&select(&mut st, &s, &req(1_000), &mut rng()).0),
-        "a",
-        "the first request after a restart pins the marked account"
-    );
-    let pin = st.pin(&pin_key("s1")).cloned().unwrap();
-    assert_eq!(
-        release_reasons(&st, &s, &pin, &req(2_000)),
+        released_of(&decide(&mut placed(), &s, &req(2_000), &mut rng())),
         vec!["released"],
         "with no retry entry the account is tried at once"
     );
-    st.funding_marked("a", 1, 2_000, 300_000);
+    let under_mark = || {
+        let mut st = placed();
+        st.funding_marked("a", 1, 2_000, 300_000);
+        st
+    };
     assert_eq!(
-        release_reasons(&st, &s, &pin, &req(301_999)),
+        released_of(&decide(&mut under_mark(), &s, &req(301_999), &mut rng())),
         vec!["funding_required"],
         "a millisecond before the retry is due"
     );
     assert_eq!(
-        release_reasons(&st, &s, &pin, &req(302_000)),
+        released_of(&decide(&mut under_mark(), &s, &req(302_000), &mut rng())),
         vec!["released"],
         "the retry is due and nothing holds it"
     );
+    let mut st = under_mark();
     let ticket = st.in_flight().dispatched("a", 302_000);
     st.claim_funding_retry("a", 1, ticket.id(), 302_000);
     assert_eq!(
-        release_reasons(&st, &s, &pin, &req(302_000)),
+        released_of(&decide(&mut st, &s, &req(302_000), &mut rng())),
         vec!["funding_required"],
         "another attempt holds the one slot"
     );
@@ -3154,13 +3176,13 @@ fn a_fast_request_neither_releases_nor_moves_its_pin_for_a_spent_window_or_plan_
     st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
     st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500), 0);
     st.record_overage("a", overage(true, 1_500, Some(9 * HOUR)));
-    let pin = pinned(&st, "s1");
+    let d = decide(&mut st, &s, &at(2_000), &mut rng());
     assert_eq!(
-        release_reasons(&st, &s, &pin, &at(2_000)),
+        released_of(&d),
         vec!["released"],
         "neither the spent window nor the overage stands against a fast request"
     );
-    let SelectResult::Selected(sel) = select(&mut st, &s, &at(2_000), &mut rng()).0 else {
+    let SelectResult::Selected(sel) = d.result else {
         panic!()
     };
     assert_eq!(
@@ -3168,12 +3190,13 @@ fn a_fast_request_neither_releases_nor_moves_its_pin_for_a_spent_window_or_plan_
         ("a", None, true)
     );
     let standard = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 3_000);
+    let d = decide(&mut st, &s, &standard, &mut rng());
     assert_eq!(
-        release_reasons(&st, &s, &pin, &standard),
+        released_of(&d),
         vec!["overage", "spent"],
         "the same facts stand against a standard request"
     );
-    let SelectResult::Selected(sel) = select(&mut st, &s, &standard, &mut rng()).0 else {
+    let SelectResult::Selected(sel) = d.result else {
         panic!()
     };
     assert_eq!(
@@ -3531,61 +3554,93 @@ fn a_fast_pin_released_by_its_fast_lane_names_the_fast_reason_and_a_standard_one
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
-    let mut st = RoutingState::from_load(RoutingLoad::default());
     let fast_at = |now: i64| fast(request(&s, Some("s1"), "claude-sonnet-5", true, &[], now));
     let standard_at = |now: i64| request(&s, Some("s1"), "claude-sonnet-5", true, &[], now);
+    // A decision writes into its state and the state is no `Clone`, so each read decides on a state built again.
+    let fast_row = || {
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        assert_eq!(
+            picked(&select(&mut st, &s, &fast_at(1_000), &mut rng()).0),
+            "a"
+        );
+        st.record_cooldown(cooled("a", "fast", HOUR, "fast", FAST_RATE_LIMIT_REASON));
+        st
+    };
     assert_eq!(
-        picked(&select(&mut st, &s, &fast_at(1_000), &mut rng()).0),
-        "a"
-    );
-    let pin = pinned(&st, "s1");
-    st.record_cooldown(cooled("a", "fast", HOUR, "fast", FAST_RATE_LIMIT_REASON));
-    assert_eq!(
-        release_reasons(&st, &s, &pin, &fast_at(2_000)),
+        released_of(&decide(&mut fast_row(), &s, &fast_at(2_000), &mut rng())),
         vec![FAST_RATE_LIMIT_REASON]
     );
     assert_eq!(
-        release_reasons(&st, &s, &pin, &standard_at(2_000)),
+        released_of(&decide(
+            &mut fast_row(),
+            &s,
+            &standard_at(2_000),
+            &mut rng()
+        )),
         vec!["released"],
         "the fast lane's row is nothing to a standard request"
     );
-    st.record_cooldown(cooled("a", "account", 2 * HOUR, "five_hour", "rate_limit"));
+    let both_rows = || {
+        let mut st = fast_row();
+        st.record_cooldown(cooled("a", "account", 2 * HOUR, "five_hour", "rate_limit"));
+        st
+    };
     assert_eq!(
-        release_reasons(&st, &s, &pin, &fast_at(2_000)),
+        released_of(&decide(&mut both_rows(), &s, &fast_at(2_000), &mut rng())),
         vec![FAST_RATE_LIMIT_REASON],
         "the plan window's row holds no fast request"
     );
     assert_eq!(
-        release_reasons(&st, &s, &pin, &standard_at(2_000)),
+        released_of(&decide(
+            &mut both_rows(),
+            &s,
+            &standard_at(2_000),
+            &mut rng()
+        )),
         vec!["cooldown"]
     );
-    st.clear_cooldown("a", &CooldownScope::Account);
-    st.clear_cooldown("a", &CooldownScope::Fast);
-    st.record_credits("a", credits(false, None, None, 1_500));
+    let credits_state = || {
+        let mut st = both_rows();
+        st.clear_cooldown("a", &CooldownScope::Account);
+        st.clear_cooldown("a", &CooldownScope::Fast);
+        st.record_credits("a", credits(false, None, None, 1_500));
+        st
+    };
     assert_eq!(
-        release_reasons(&st, &s, &pin, &fast_at(2_000)),
+        released_of(&decide(
+            &mut credits_state(),
+            &s,
+            &fast_at(2_000),
+            &mut rng()
+        )),
         vec![FAST_CREDITS_REASON],
         "the poll's credits state alone"
     );
-    st.record_cooldown(cooled(
-        "a",
-        "fast_credits",
-        HOUR,
-        "out_of_credits",
-        FAST_CREDITS_REASON,
-    ));
+    let credits_row = || {
+        let mut st = credits_state();
+        st.record_cooldown(cooled(
+            "a",
+            "fast_credits",
+            HOUR,
+            "out_of_credits",
+            FAST_CREDITS_REASON,
+        ));
+        st
+    };
     assert_eq!(
-        release_reasons(&st, &s, &pin, &fast_at(2_000)),
+        released_of(&decide(&mut credits_row(), &s, &fast_at(2_000), &mut rng())),
         vec![FAST_CREDITS_REASON],
         "named once when the row and the state both stand"
     );
+    let mut st = credits_row();
     st.record_cooldown(cooled("a", "fast", HOUR, "fast", FAST_RATE_LIMIT_REASON));
+    let d = decide(&mut st, &s, &fast_at(2_000), &mut rng());
     assert_eq!(
-        release_reasons(&st, &s, &pin, &fast_at(2_000)),
+        released_of(&d),
         vec![FAST_RATE_LIMIT_REASON, FAST_CREDITS_REASON],
         "each of the fast lane's two rows is named"
     );
-    let SelectResult::Selected(sel) = select(&mut st, &s, &fast_at(2_000), &mut rng()).0 else {
+    let SelectResult::Selected(sel) = d.result else {
         panic!()
     };
     assert_eq!(
@@ -4896,38 +4951,61 @@ fn the_release_reasons_name_every_fact_against_the_pinned_account_in_the_selecti
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
-    let mut st = RoutingState::from_load(RoutingLoad::default());
     let req = |now: i64, attempted: &[&str]| {
         request(&s, Some("s1"), "claude-sonnet-5", true, attempted, now)
     };
+    // A decision writes into its state and the state is no `Clone`, so each read decides on a state built again.
+    let placed = || {
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        assert_eq!(
+            picked(&select(&mut st, &s, &req(1_000, &[]), &mut rng()).0),
+            "a"
+        );
+        st
+    };
+    let pin = placed().pin(&pin_key("s1")).cloned().unwrap();
     assert_eq!(
-        picked(&select(&mut st, &s, &req(1_000, &[]), &mut rng()).0),
-        "a"
-    );
-    let pin = st.pin(&pin_key("s1")).cloned().unwrap();
-    assert_eq!(
-        release_reasons(&st, &s, &pin, &req(2_000, &[])),
+        released_of(&decide(&mut placed(), &s, &req(2_000, &[]), &mut rng())),
         vec!["released"],
         "nothing stands against a live pin on a serving account"
     );
-    st.record_cooldown(cooled(
-        "a",
-        "account",
-        2_000 + HOUR,
-        "five_hour",
-        "rate_limit",
-    ));
-    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
+    let cooled_and_spent = || {
+        let mut st = placed();
+        st.record_cooldown(cooled(
+            "a",
+            "account",
+            2_000 + HOUR,
+            "five_hour",
+            "rate_limit",
+        ));
+        st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500), 0);
+        st
+    };
     assert_eq!(
-        release_reasons(&st, &s, &pin, &req(2_000, &[])),
+        released_of(&decide(
+            &mut cooled_and_spent(),
+            &s,
+            &req(2_000, &[]),
+            &mut rng()
+        )),
         vec!["cooldown", "spent"]
     );
     assert_eq!(
-        release_reasons(&st, &s, &pin, &req(2_000, &["a"])),
+        released_of(&decide(
+            &mut cooled_and_spent(),
+            &s,
+            &req(2_000, &["a"]),
+            &mut rng()
+        )),
         vec!["cooldown", "attempted", "spent"]
     );
     assert_eq!(
-        release_reasons(&st, &s, &pin, &req(1_000 + 3_600_001, &[])),
+        released_of(&decide(
+            &mut cooled_and_spent(),
+            &s,
+            &req(1_000 + 3_600_001, &[]),
+            &mut rng()
+        )),
         vec!["expired", "cooldown", "spent"],
         "the idle pin is expired first, and the facts behind it still follow"
     );
@@ -4938,21 +5016,22 @@ fn the_release_reasons_name_every_fact_against_the_pinned_account_in_the_selecti
         },
         &[("a", false, AccountState::ReauthRequired)],
     );
-    let quiet = RoutingState::from_load(RoutingLoad::default());
+    let quiet = || loaded(vec![pin.clone()]);
+    let on_paused = request(&paused, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
     assert_eq!(
-        release_reasons(&quiet, &paused, &pin, &request(&paused, Some("s1"), "claude-sonnet-5", true, &[], 2_000)),
+        released_of(&decide(&mut quiet(), &paused, &on_paused, &mut rng())),
         vec!["paused", "reauth_required"],
         "a disabled account in a state that cannot serve names both facts, still resolved as a candidate"
     );
     let gone = without_account(&s, "a");
     assert_eq!(
-        release_reasons(
-            &quiet,
+        released_of(&decide(
+            &mut quiet(),
             &gone,
-            &pin,
-            &request(&gone, Some("s1"), "claude-sonnet-5", true, &[], 2_000)
-        ),
-        vec!["unserved", "deleted"]
+            &request(&gone, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+            &mut rng()
+        )),
+        vec!["deleted"]
     );
 }
 
@@ -5256,10 +5335,6 @@ fn a_pin_on_a_member_at_its_budget_is_released_with_reason_budget() {
         "a",
         "a serves before its spend reaches the budget"
     );
-    let pin = st
-        .pin(&pin_key("s1"))
-        .cloned()
-        .expect("the first select pinned a");
     st.record_member_spend(
         &s,
         vec![MemberSpend {
@@ -5274,7 +5349,7 @@ fn a_pin_on_a_member_at_its_budget_is_released_with_reason_budget() {
     );
     let at_budget = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
     assert!(
-        release_reasons(&st, &s, &pin, &at_budget).contains(&"budget"),
+        released_of(&decide(&mut st, &s, &at_budget, &mut rng())).contains(&"budget"),
         "the member's spend reached its budget, so the pin releases as budget"
     );
 }
@@ -5386,18 +5461,15 @@ fn pinned_to_a_budgeted_member() -> (RegistrySnapshot, RoutingState) {
 #[test]
 fn a_degraded_ledger_moves_a_budgeted_members_session_to_its_unbudgeted_sibling() {
     let (s, mut st) = pinned_to_a_budgeted_member();
-    let pin = st
-        .pin(&pin_key("s1"))
-        .cloned()
-        .expect("the first select pinned a");
     st.set_accounting_degraded(true);
     let degraded = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
+    let d = decide(&mut st, &s, &degraded, &mut rng());
     assert_eq!(
-        release_reasons(&st, &s, &pin, &degraded),
+        released_of(&d),
         ["budget_unknown"],
         "the member's spend may be stale, so the pin releases under that reason alone"
     );
-    let result = select(&mut st, &s, &degraded, &mut rng()).0;
+    let result = d.result;
     assert_eq!(
         picked(&result),
         "b",
@@ -9217,7 +9289,6 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         members: vec![("a", 0)],
         ..Pool::default()
     });
-    let mut st = RoutingState::from_load(RoutingLoad::default());
     let pin = PinRow {
         key_id: "k".into(),
         session_id: "s1".into(),
@@ -9249,15 +9320,24 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         ended: false,
         thinking_sums: BTreeMap::new(),
     };
-    st.record_overage("a", overage(true, 1_000, Some(1_999)));
+    // A decision writes into its state and the state is no `Clone`, so each read decides on a state built again.
+    let past_reset = || {
+        let mut st = loaded(vec![pin.clone()]);
+        st.record_overage("a", overage(true, 1_000, Some(1_999)));
+        st
+    };
     let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
     assert!(
-        !release_reasons(&st, &s, &pin, &req).contains(&"overage"),
+        !released_of(&decide(&mut past_reset(), &s, &req, &mut rng())).contains(&"overage"),
         "the named reset is behind now, so a's evidence no longer stands"
     );
 
     // Evidence naming no reset stands for the request's fallback and then not.
-    st.record_overage("a", overage(true, 2_000, None));
+    let no_reset = || {
+        let mut st = past_reset();
+        st.record_overage("a", overage(true, 2_000, None));
+        st
+    };
     let still = request(
         &s,
         Some("s1"),
@@ -9267,7 +9347,7 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         2_000 + FALLBACK_MS - 1,
     );
     assert!(
-        release_reasons(&st, &s, &pin, &still).contains(&"overage"),
+        released_of(&decide(&mut no_reset(), &s, &still, &mut rng())).contains(&"overage"),
         "inside the fallback the evidence still stands"
     );
     let expired = request(
@@ -9278,7 +9358,7 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         &[],
         2_000 + FALLBACK_MS + 1,
     );
-    assert!(!release_reasons(&st, &s, &pin, &expired).contains(&"overage"));
+    assert!(!released_of(&decide(&mut no_reset(), &s, &expired, &mut rng())).contains(&"overage"));
 }
 
 #[test]
@@ -10082,10 +10162,6 @@ fn a_canceled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_sub
         "a",
         "a still serves before its end"
     );
-    let pin = st
-        .pin(&pin_key("s1"))
-        .cloned()
-        .expect("the first select pinned a");
     let after_end = request(
         &s,
         Some("s1"),
@@ -10094,11 +10170,12 @@ fn a_canceled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_sub
         &[],
         2_000 + 6 * HOUR,
     );
+    let d = decide(&mut st, &s, &after_end, &mut rng());
     assert!(
-        release_reasons(&st, &s, &pin, &after_end).contains(&"subscription_ended"),
+        released_of(&d).contains(&"subscription_ended"),
         "past its saved end, a is the obstacle subscription_ended"
     );
-    let SelectResult::Selected(sel) = select(&mut st, &s, &after_end, &mut rng()).0 else {
+    let SelectResult::Selected(sel) = d.result else {
         panic!()
     };
     assert_eq!(
@@ -10144,16 +10221,13 @@ fn an_account_flagged_plan_ended_is_the_obstacle_subscription_ended_as_one_past_
         ),
         "a"
     );
-    let pin = st
-        .pin(&pin_key("s1"))
-        .cloned()
-        .expect("the first select pinned a");
     let after_flag = request(&flagged, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
+    let d = decide(&mut st, &flagged, &after_flag, &mut rng());
     assert!(
-        release_reasons(&st, &flagged, &pin, &after_flag).contains(&"subscription_ended"),
+        released_of(&d).contains(&"subscription_ended"),
         "the flag reads as an end that has passed"
     );
-    let SelectResult::Selected(sel) = select(&mut st, &flagged, &after_flag, &mut rng()).0 else {
+    let SelectResult::Selected(sel) = d.result else {
         panic!()
     };
     assert_eq!(sel.account.id, "b", "the pin moves off the flagged account");
@@ -10801,11 +10875,16 @@ fn a_probe_never_colds_a_pin() {
             ..probe
         };
         let before = pinned(&st, "s1");
-        assert!(
-            effective_warm(&before, &probe, &st.affinity().read().unwrap()),
-            "{shape}: the round's order reads the pin warm on the probe"
+        let d = decide(&mut st, &s, &probe, &mut rng());
+        let facts = d.record.pin.as_ref().expect("the probe's pin block");
+        assert_eq!(
+            (facts.warmth, facts.warmth_cause),
+            (
+                Some(Warmth::Untouched.as_str()),
+                Some(WarmthCause::Probe.as_str())
+            ),
+            "{shape}: the probe judges the pin untouched, never cold"
         );
-        select(&mut st, &s, &probe, &mut rng());
         let after = pinned(&st, "s1");
         assert!(
             after.last_refresh_at >= before.last_refresh_at,
@@ -11289,15 +11368,18 @@ fn a_fresh_sessions_prior_counts_a_flagged_pin_warm_by_its_last_use_and_leaves_o
         body_tokens: 1_000,
         ..request(&s, Some("s9"), "claude-sonnet-5", true, &[], T)
     };
-    assert_eq!(
-        landed(select(&mut st, &s, &fresh, &mut rng()).0),
-        ("a".into(), None)
-    );
-    let booked = st.reservation("r-1").expect("the placement books");
+    let d = decide(&mut st, &s, &fresh, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the placement books");
     assert!(
         close(
             booked.burn.get(FIVE_HOUR).copied().unwrap_or(0.0),
-            10_000.0 / 10_000_000.0
+            10_000.0 / 10_000_000.0 * 3_600.0
         ),
         "the flagged pin's burn alone is the prior, the clear pin cold: {booked:?}"
     );
@@ -13849,7 +13931,6 @@ fn a_usage_based_seat_reads_no_overage_reason_and_no_never_hold_over_evidence_a_
             "b",
             "{policy:?}: the seat leads by its priority"
         );
-        let pin = pinned(&st, "s1");
         // The head's overage family as the evidence a row stored before the class carries.
         st.record_overage("b", overage(true, 1_000, Some(1_000 + 10 * HOUR)));
         st.purge(&s, 1_500);
@@ -13862,12 +13943,13 @@ fn a_usage_based_seat_reads_no_overage_reason_and_no_never_hold_over_evidence_a_
             None,
             "{policy:?}: no never hold reads the seat"
         );
+        let d = decide(&mut st, &s, &req(2_000), &mut rng());
         assert!(
-            !release_reasons(&st, &s, &pin, &req(2_000)).contains(&"overage"),
+            !released_of(&d).contains(&"overage"),
             "{policy:?}: the pin reads no overage reason"
         );
         assert_eq!(
-            picked(&select(&mut st, &s, &req(2_000), &mut rng()).0),
+            picked(&d.result),
             "b",
             "{policy:?}: the pin renews on the seat"
         );
@@ -14060,16 +14142,6 @@ fn spend_pool(members: Vec<(&'static str, u32)>) -> RegistrySnapshot {
     )
 }
 
-/// The main agent's pin of `session` on `model`.
-fn pinned_on(st: &RoutingState, session: &str, model: &str) -> PinRow {
-    st.pin(&PinKey {
-        model: model.into(),
-        ..pin_key(session)
-    })
-    .cloned()
-    .expect("the session holds a pin on the model")
-}
-
 #[test]
 fn a_usage_based_seat_at_a_share_of_one_is_held_out_on_the_window_spend_until_the_reset_for_every_model(
 ) {
@@ -14128,14 +14200,14 @@ fn a_usage_based_seat_at_a_share_of_one_is_held_out_on_the_window_spend_until_th
             "b",
             "{model}: the seat leads by its priority"
         );
-        let pin = pinned_on(&st, "s1", model);
         st.record_credits("b", credits(true, None, Some(1.0), T - 500));
+        let d = decide(&mut st, &pair, &req(T), &mut rng());
         assert!(
-            release_reasons(&st, &pair, &pin, &req(T)).contains(&"spent"),
+            released_of(&d).contains(&"spent"),
             "{model}: the seat's pin reads no allowance left"
         );
         assert_eq!(
-            picked(&select(&mut st, &pair, &req(T), &mut rng()).0),
+            picked(&d.result),
             "a",
             "{model}: the live pin on the seat is not renewed"
         );
@@ -14497,9 +14569,8 @@ fn a_fast_request_on_a_usage_based_seat_at_its_cap_reads_the_credits_obstacle_un
         Some(None),
         "the candidate's credits read past the reset names no block"
     );
-    let pin = pinned(&st, "s1");
     assert!(
-        !release_reasons(&st, &s, &pin, &at(past)).contains(&FAST_CREDITS_REASON),
+        !released_of(&decide(&mut st, &s, &at(past), &mut rng())).contains(&FAST_CREDITS_REASON),
         "and the pin reads no credits reason"
     );
     for (state, reason) in [
@@ -14560,9 +14631,10 @@ fn a_marked_pin_on_a_cooled_account_is_released_with_cooldown_rather_than_shed()
         "rate_limit",
     ));
     let req = auxiliary(&s, "s1", T);
-    let reasons = release_reasons(&st, &s, &pinned(&st, "s1"), &req);
     past_the_wait(&mut st, &s, "p", "a", T);
-    let (result, _) = select(&mut st, &s, &req, &mut rng());
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let reasons = released_of(&d);
+    let result = d.result;
     let SelectResult::Selected(sel) = result else {
         panic!("expected a selection, got {result:?}")
     };
@@ -15224,13 +15296,6 @@ fn from_load_restores_each_pools_round_time_and_the_marks_from_the_pin_rows() {
         (true, false, false),
         "a mark stands on the loaded row when it was made on the account the pin sits on"
     );
-    assert_eq!(
-        st.marked_pins("a")
-            .into_iter()
-            .map(|p| p.session_id.as_str())
-            .collect::<Vec<_>>(),
-        ["s1"]
-    );
 }
 
 #[test]
@@ -15772,7 +15837,10 @@ fn a_compacted_requests_own_pin_drops_no_thinking_in_its_round_and_its_move_book
         ..main_turn(&s, "compacted", T)
     };
     let Decided {
-        result, shed_round, ..
+        result,
+        record,
+        shed_round,
+        ..
     } = decide(&mut st, &s, &request, &mut rng());
     let round = shed_round.expect("the round ran").facts;
     let (own, warm) = (round_pin(&round, "compacted"), round_pin(&round, "warm"));
@@ -15782,10 +15850,10 @@ fn a_compacted_requests_own_pin_drops_no_thinking_in_its_round_and_its_move_book
         "the request's own pin reads the sums its selection writes: {round:?}"
     );
     assert_eq!(landed(result), ("b".into(), Some(MigrateReason::Shed)));
-    let booked = st
-        .reservation("r-1")
-        .expect("the move books on its destination")
-        .clone();
+    let booked = record
+        .outcome
+        .reservation
+        .expect("the move books on its destination");
     assert!(
         close(booked.rewrite[FIVE_HOUR], 100_000.0 / 10_000_000.0),
         "the whole last prompt as one five-minute write: {booked:?}"
@@ -19101,30 +19169,26 @@ fn a_placement_books_its_rewrite_on_the_destination_until_the_usage_replaces_it_
     st.set_share(ratio_pricer());
     st.record_sample("a", sample(0.5, 0.1, T), 0);
     let req = placing(&s, "r-1", "s1", T);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the placement books under the request");
     assert_eq!(
-        landed(select(&mut st, &s, &req, &mut rng()).0),
-        ("a".into(), None)
+        (booked.account_id.as_str(), booked.expires_at),
+        ("a", T + IN_FLIGHT_RECLAIM_MS)
     );
-    let booked = st
-        .reservation(&req.request_id)
-        .expect("the placement books under the request")
-        .clone();
     assert_eq!(
-        (
-            booked.account_id.as_str(),
-            booked.attempt,
-            booked.pin.as_ref(),
-            booked.booked_at,
-            booked.expires_at,
-        ),
-        (
-            "a",
-            req.attempt,
-            Some(&pin_key("s1")),
-            T,
-            T + IN_FLIGHT_RECLAIM_MS
-        )
+        fact(line(&d.record, "reserve"), "attempt"),
+        &FactValue::Int(i64::from(req.attempt))
     );
+    assert!(d.writes.iter().any(|w| matches!(
+        w,
+        StateWrite::UpsertPin(row) if row.key() == pin_key("s1") && row.account_id == "a"
+    )));
     assert!(
         close(booked.rewrite[FIVE_HOUR], 0.02),
         "200 000 tokens at a ten-millionth each: {booked:?}"
@@ -19153,11 +19217,14 @@ fn a_placement_books_its_rewrite_on_the_destination_until_the_usage_replaces_it_
         body_tokens: 200_000,
         ..request(&s, Some("s2"), "claude-fable-5-1", true, &[], T)
     };
-    assert_eq!(
-        landed(select(&mut st, &s, &fable, &mut rng()).0),
-        ("a".into(), None)
-    );
-    let booked = st.reservation("r-2").expect("the Fable placement books");
+    let d = decide(&mut st, &s, &fable, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the Fable placement books");
     assert_eq!(
         booked
             .rewrite
@@ -19183,12 +19250,14 @@ fn a_failover_to_a_destination_that_books_nothing_releases_the_sources_booking()
     st.set_share(ratio_pricer());
     st.record_sample("a", sample(0.5, 0.1, T), 0);
     let req = placing(&s, "r-1", "s1", T);
-    assert_eq!(
-        landed(select(&mut st, &s, &req, &mut rng()).0),
-        ("a".into(), None)
-    );
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
     assert!(
-        st.reservation("r-1").is_some_and(|r| r.account_id == "a"),
+        d.record
+            .outcome
+            .reservation
+            .as_ref()
+            .is_some_and(|r| r.account_id == "a"),
         "the placement books on a"
     );
     // The stream on a fails over before any usage lands: the second attempt's selection places the request on the
@@ -19211,8 +19280,8 @@ fn a_failover_to_a_destination_that_books_nothing_releases_the_sources_booking()
         "the API-key destination books nothing"
     );
     assert_eq!(
-        st.reservation("r-1"),
-        None,
+        st.reserved("a", FIVE_HOUR),
+        0.0,
         "and the source's booking left with the failover"
     );
     assert!(
@@ -19316,14 +19385,19 @@ fn a_fresh_session_takes_the_median_burn_of_the_pools_warm_priced_pins() {
         body_tokens: 1_000,
         ..placing(&s, "r-1", "s9", T)
     };
-    select(&mut st, &s, &req, &mut rng());
-    let booked = st.reservation("r-1").expect("the placement books");
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the placement books");
     assert!(
-        close(booked.burn[FIVE_HOUR], 20_000.0 / 10_000_000.0),
+        close(booked.burn[FIVE_HOUR], 20_000.0 / 10_000_000.0 * 3_600.0),
         "the median of the three priced pins, the unpriced one left out: {booked:?}"
     );
     assert!(
-        close(booked.burn[SEVEN_DAY], 20_000.0 / 60_000_000.0),
+        close(booked.burn[SEVEN_DAY], 20_000.0 / 60_000_000.0 * 3_600.0),
         "{booked:?}"
     );
     // An even count reads the mean of the two middle pins (40 000), apart from the mean of all four (45 000).
@@ -19335,18 +19409,26 @@ fn a_fresh_session_takes_the_median_burn_of_the_pools_warm_priced_pins() {
     ]);
     four.set_share(ratio_pricer());
     four.record_sample("a", sample(0.5, 0.1, T), 0);
-    select(&mut four, &s, &req, &mut rng());
-    let booked = four.reservation("r-1").expect("the placement books");
+    let d = decide(&mut four, &s, &req, &mut rng());
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the placement books");
     assert!(
-        close(booked.burn[FIVE_HOUR], 40_000.0 / 10_000_000.0),
+        close(booked.burn[FIVE_HOUR], 40_000.0 / 10_000_000.0 * 3_600.0),
         "the two middle pins' mean: {booked:?}"
     );
     let mut cold = loaded(vec![burning("s1", "a", 10_000.0, false, T)]);
     cold.set_share(ratio_pricer());
     cold.record_sample("a", sample(0.5, 0.1, T), 0);
-    select(&mut cold, &s, &req, &mut rng());
-    let booked = cold
-        .reservation("r-1")
+    let d = decide(&mut cold, &s, &req, &mut rng());
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
         .expect("the placement books its rewrite");
     assert_eq!(
         booked.burn.get(FIVE_HOUR).copied().unwrap_or(0.0),
@@ -19367,15 +19449,15 @@ fn a_count_request_a_probe_and_a_renewal_book_nothing() {
     // Each absence is read beside a placement that books, so the case holds only once the booking exists.
     let placed = |st: &mut RoutingState, id: &str, session: &str| {
         let before = five_hour(st, "a", T);
-        select(st, &s, &placing(&s, id, session, T), &mut rng());
-        assert!(st.reservation(id).is_some(), "{id} books");
+        let d = decide(st, &s, &placing(&s, id, session, T), &mut rng());
+        assert!(d.record.outcome.reservation.is_some(), "{id} books");
         assert!(
             close(five_hour(st, "a", T), before + 0.02),
             "{id} raises the prediction by its rewrite"
         );
         assert!(st.release_reservation(id).is_some());
     };
-    select(
+    let d = decide(
         &mut st,
         &s,
         &SelectRequest {
@@ -19384,12 +19466,12 @@ fn a_count_request_a_probe_and_a_renewal_book_nothing() {
         },
         &mut rng(),
     );
-    assert!(
-        st.reservation("r-count").is_none(),
+    assert_eq!(
+        d.record.outcome.reservation, None,
         "a token count writes no cache and books nothing"
     );
     placed(&mut st, "r-1", "s2");
-    select(
+    let d = decide(
         &mut st,
         &s,
         &SelectRequest {
@@ -19398,15 +19480,15 @@ fn a_count_request_a_probe_and_a_renewal_book_nothing() {
         },
         &mut rng(),
     );
-    assert!(
-        st.reservation("r-probe").is_none(),
+    assert_eq!(
+        d.record.outcome.reservation, None,
         "a probe replays a recipe the account carries and books nothing"
     );
     placed(&mut st, "r-2", "s4");
     assert_eq!(pinned(&st, "s2").account_id, "a");
-    select(&mut st, &s, &placing(&s, "r-renew", "s2", T), &mut rng());
-    assert!(
-        st.reservation("r-renew").is_none(),
+    let d = decide(&mut st, &s, &placing(&s, "r-renew", "s2", T), &mut rng());
+    assert_eq!(
+        d.record.outcome.reservation, None,
         "a renewal in place books nothing"
     );
     placed(&mut st, "r-3", "s5");
@@ -19422,12 +19504,10 @@ fn a_fast_request_books_nothing_and_leaves_the_prediction_unchanged() {
     st.set_share(ratio_pricer());
     st.record_sample("a", sample(0.5, 0.1, T), 0);
     credits_on(&mut st, "a", T);
+    let d = decide(&mut st, &s, &fast_request(&s, "r-1", "s1", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
     assert_eq!(
-        landed(select(&mut st, &s, &fast_request(&s, "r-1", "s1", T), &mut rng()).0),
-        ("a".into(), None)
-    );
-    assert!(
-        st.reservation("r-1").is_none(),
+        d.record.outcome.reservation, None,
         "a fast request draws usage credits and books no plan window"
     );
     assert!(
@@ -19444,12 +19524,13 @@ fn a_fast_request_books_nothing_and_leaves_the_prediction_unchanged() {
     st.set_share(ratio_pricer());
     st.record_sample("b", sample(0.5, 0.1, T), 0);
     credits_on(&mut st, "b", T);
+    let d = decide(&mut st, &s, &fast_request(&s, "r-2", "s2", T), &mut rng());
     assert_eq!(
-        landed(select(&mut st, &s, &fast_request(&s, "r-2", "s2", T), &mut rng()).0),
+        landed(d.result.clone()),
         ("b".into(), Some(MigrateReason::ReturnToPlan))
     );
-    assert!(
-        st.reservation("r-2").is_none(),
+    assert_eq!(
+        d.record.outcome.reservation, None,
         "a fast move books nothing on its destination"
     );
     assert!(close(five_hour(&st, "b", T), 0.5));
@@ -19470,8 +19551,8 @@ fn a_classifier_request_books_nothing_and_takes_the_none_verdict_a_fast_request_
     };
     let d = decide(&mut st, &s, &req, &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
-    assert!(
-        st.reservation("r-1").is_none(),
+    assert_eq!(
+        d.record.outcome.reservation, None,
         "a classifier call takes no plan window, so its selection books none"
     );
     assert!(
@@ -19701,17 +19782,12 @@ fn a_hold_books_nothing_and_the_selection_after_it_books_for_the_request() {
     st.record_sample("a", sample(0.5, 0.1, T), 0);
     let ticket = st.in_flight().dispatched("a", T);
     let req = placing(&s, "r-1", "s1", T);
+    let d = decide(&mut st, &s, &req, &mut rng());
     assert!(
-        matches!(
-            select(&mut st, &s, &req, &mut rng()).0,
-            SelectResult::Held(_)
-        ),
+        matches!(d.result, SelectResult::Held(_)),
         "every member at its cap holds the request"
     );
-    assert!(
-        st.reservation("r-1").is_none() && st.reservations_on("a").is_empty(),
-        "a hold books nothing"
-    );
+    assert_eq!(d.record.outcome.reservation, None, "a hold books nothing");
     assert!(close(five_hour(&st, "a", T), 0.5));
     drop(ticket);
     let after = SelectRequest {
@@ -19729,14 +19805,13 @@ fn a_hold_books_nothing_and_the_selection_after_it_books_for_the_request() {
         }],
         ..req
     };
+    let d = decide(&mut st, &s, &after, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
     assert_eq!(
-        landed(select(&mut st, &s, &after, &mut rng()).0),
-        ("a".into(), None)
+        fact(line(&d.record, "reserve"), "attempt"),
+        &FactValue::Int(1),
+        "the placement after the hold books for the request"
     );
-    let booked = st
-        .reservation("r-1")
-        .expect("the placement after the hold books for the request");
-    assert_eq!(booked.attempt, 1);
     assert!(close(five_hour(&st, "a", T), 0.52));
 }
 
@@ -19756,11 +19831,14 @@ fn a_fresh_sessions_prior_counts_a_pin_only_on_the_windows_its_model_draws() {
         body_tokens: 1_000,
         ..request(&s, Some("s9"), "claude-fable-5-1", true, &[], T)
     };
-    assert_eq!(
-        landed(select(&mut st, &s, &fable, &mut rng()).0),
-        ("a".into(), None)
-    );
-    let booked = st.reservation("r-1").expect("the placement books");
+    let d = decide(&mut st, &s, &fable, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the placement books");
     assert_eq!(
         booked
             .rewrite
@@ -19776,7 +19854,7 @@ fn a_fresh_sessions_prior_counts_a_pin_only_on_the_windows_its_model_draws() {
         "the Sonnet pins burn no Fable week, so the prior has none: {booked:?}"
     );
     assert!(
-        close(booked.burn[FIVE_HOUR], 20_000.0 / 10_000_000.0),
+        close(booked.burn[FIVE_HOUR], 20_000.0 / 10_000_000.0 * 3_600.0),
         "the two pins' median on a window both draw: {booked:?}"
     );
 }
@@ -19806,13 +19884,17 @@ fn a_fresh_sessions_prior_leaves_out_the_warm_pins_a_former_pool_left_on_the_acc
             T,
         )
     };
+    let d = decide(&mut st, &s, &req, &mut rng());
     assert_eq!(
-        landed(select(&mut st, &s, &req, &mut rng()).0),
+        landed(d.result.clone()),
         ("a".into(), None),
         "a, at priority 0, fits the fresh session"
     );
-    let booked = st
-        .reservation("r-1")
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
         .expect("the placement books its rewrite");
     assert_eq!(
         booked.burn.get(FIVE_HOUR).copied().unwrap_or(0.0),
@@ -19840,13 +19922,16 @@ fn a_fresh_sessions_prior_leaves_out_the_warm_pin_of_an_agent_that_ended() {
         body_tokens: 1_000,
         ..request(&s, Some("s9"), "claude-sonnet-5", true, &[], T)
     };
-    assert_eq!(
-        landed(select(&mut st, &s, &req, &mut rng()).0),
-        ("a".into(), None)
-    );
-    let booked = st.reservation("r-1").expect("the placement books");
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the placement books");
     assert!(
-        close(booked.burn[FIVE_HOUR], 10_000.0 / 10_000_000.0),
+        close(booked.burn[FIVE_HOUR], 10_000.0 / 10_000_000.0 * 3_600.0),
         "the live pin's burn alone, where the median of both would read twice it: {booked:?}"
     );
 }
@@ -19881,18 +19966,22 @@ fn a_spent_move_books_the_pins_last_prompt_as_its_rewrite_and_its_own_decayed_bu
         body_tokens: 200_000,
         ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], moving_at)
     };
+    let d = decide(&mut st, &s, &req, &mut rng());
     assert_eq!(
-        landed(select(&mut st, &s, &req, &mut rng()).0),
+        landed(d.result.clone()),
         ("b".into(), Some(MigrateReason::Spent))
     );
-    let booked = st
-        .reservation("r-1")
-        .expect("the move books on its destination")
-        .clone();
-    assert_eq!(
-        (booked.account_id.as_str(), booked.pin.as_ref()),
-        ("b", Some(&pin_key("s1")))
-    );
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the move books on its destination");
+    assert_eq!(booked.account_id, "b");
+    assert!(d.writes.iter().any(|w| matches!(
+        w,
+        StateWrite::UpsertPin(row) if row.key() == pin_key("s1") && row.account_id == "b"
+    )));
     assert!(
         close(booked.rewrite[FIVE_HOUR], 813_365.0 / 10_000_000.0),
         "the pin's last prompt as one five-minute write, not the body: {booked:?}"
@@ -19900,12 +19989,15 @@ fn a_spent_move_books_the_pins_last_prompt_as_its_rewrite_and_its_own_decayed_bu
     assert!(close(booked.rewrite[SEVEN_DAY], 813_365.0 / 60_000_000.0));
     let decayed = (-1.0f64).exp();
     assert!(
-        close(booked.burn[FIVE_HOUR], 40_000.0 / 10_000_000.0 * decayed),
+        close(
+            booked.burn[FIVE_HOUR],
+            40_000.0 / 10_000_000.0 * decayed * 3_600.0
+        ),
         "the pin's own rate, decayed one average: {booked:?}"
     );
     assert!(close(
         booked.burn[SEVEN_DAY],
-        40_000.0 / 60_000_000.0 * decayed
+        40_000.0 / 60_000_000.0 * decayed * 3_600.0
     ));
     // A pin never renewed with usage reads its context from the body, and a one-hour pin prices a one-hour write.
     let mut st = loaded(vec![PinRow {
@@ -19918,11 +20010,17 @@ fn a_spent_move_books_the_pins_last_prompt_as_its_rewrite_and_its_own_decayed_bu
         body_tokens: 200_000,
         ..request(&s, Some("s2"), "claude-sonnet-5", true, &[], moving_at)
     };
+    let d = decide(&mut st, &s, &req, &mut rng());
     assert_eq!(
-        landed(select(&mut st, &s, &req, &mut rng()).0),
+        landed(d.result.clone()),
         ("b".into(), Some(MigrateReason::Spent))
     );
-    let booked = st.reservation("r-1").expect("the move books");
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the move books");
     assert!(
         close(booked.rewrite[FIVE_HOUR], 2.0 * 200_000.0 / 10_000_000.0),
         "the body's estimate as one one-hour write: {booked:?}"
@@ -20591,8 +20689,16 @@ fn a_failover_lands_on_the_invalidated_rows_burn_and_books_it() {
         "the booking burns the row's 0.00001 a second, 0.036 an hour: {:?}",
         reserve.facts
     );
-    let booked = st.reservation("r-1").expect("the landing books on b");
-    assert!(close(booked.burn[FIVE_HOUR], 0.000_01), "{booked:?}");
+    let booked = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the landing books on b");
+    assert!(
+        close(booked.burn[FIVE_HOUR], 0.000_01 * 3_600.0),
+        "{booked:?}"
+    );
     assert!(close(booked.rewrite[FIVE_HOUR], 0.02), "{booked:?}");
     assert_eq!(
         d.record.outcome.cause,
@@ -22426,8 +22532,12 @@ fn a_fresh_sessions_prior_prices_under_the_requests_regime_and_not_the_warm_pins
             entrypoint: entrypoint.map(String::from),
             ..placing(&s, "r-1", "s9", T)
         };
-        select(&mut st, &s, &req, &mut rng());
-        st.reservation("r-1").expect("the placement books").burn[FIVE_HOUR] * 3_600.0
+        decide(&mut st, &s, &req, &mut rng())
+            .record
+            .outcome
+            .reservation
+            .expect("the placement books")
+            .burn[FIVE_HOUR]
     };
     let base = booked_prior(None);
     assert!(
@@ -23315,7 +23425,13 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     );
     assert!(at_85.shed_round.is_none());
     assert_eq!(at_85.record.outcome.shed_marks, None);
-    assert!(st.marked_pins("cedar").is_empty());
+    let on_cedar = [
+        subagent_key.clone(),
+        key(HEAVY[0], "main", FABLE),
+        key(HEAVY[1], "main", FABLE),
+        key(LIGHT, "main", FABLE),
+    ];
+    assert!(on_cedar.iter().all(|pin| !st.shed_marked(pin)));
 
     // T + 85 min + 963 s: 0.66 used, the subagent's average down to 0.0256 an hour, and 199 minutes to the reset add
     // 0.3235: 0.9835 still reads over the ceiling and under the wall at the reset. The burn it implies takes the 0.34
@@ -23356,7 +23472,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     );
     assert!(back.shed_round.is_none());
     assert_eq!(back.record.outcome.shed_marks, None);
-    assert!(st.marked_pins("cedar").is_empty());
+    assert!(on_cedar.iter().all(|pin| !st.shed_marked(pin)));
 
     // T + 201 min, the first anchor: 0.87 used.
     charge(&mut st, 101, 201);
@@ -23524,23 +23640,14 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             Some("percent")
         );
     }
-    let live = st.reservation("r-main").expect("the main turn's booking");
     assert_eq!(
-        main.record.outcome.reservation.as_ref().map(|r| (
-            r.account_id.as_str(),
-            &r.rewrite,
-            r.expires_at
-        )),
-        Some(("birch", &live.rewrite, live.expires_at))
+        main.record
+            .outcome
+            .reservation
+            .as_ref()
+            .map(|r| r.account_id.as_str()),
+        Some("birch")
     );
-    let burn = &main.record.outcome.reservation.as_ref().unwrap().burn;
-    for (window, per_second) in &live.burn {
-        assert!(close(burn[window], per_second * 3_600.0), "{window}");
-    }
-    assert!(close(
-        number(fact(reserve, "burn_five_hour")),
-        live.burn[FIVE_HOUR] * 3_600.0
-    ));
     // The fresh subagent reads the main turn's share on birch's 5-hour window, and nothing on cedar.
     let birch = candidate(&fresh.record, "birch");
     assert!(close(birch.windows[FIVE_HOUR].reserved, rewrite));
@@ -23575,7 +23682,7 @@ fn a_placement_or_a_move_that_books_nothing_records_reserve_none_with_the_accoun
         ("fast", &priced, fast_request(&priced, "r-1", "s1", T)),
         ("untiered", &untiered, placing(&untiered, "r-1", "s1", T)),
     ];
-    let none_on = |case: &str, st: &RoutingState, d: &Decided, account: &str| {
+    let none_on = |case: &str, d: &Decided, account: &str| {
         let reserve = d.record.walk.last().expect("a walk");
         assert_eq!(
             (reserve.step, reserve.verdict),
@@ -23597,7 +23704,6 @@ fn a_placement_or_a_move_that_books_nothing_records_reserve_none_with_the_accoun
             "{case}: the account alone"
         );
         assert_eq!(d.record.outcome.reservation, None, "{case}");
-        assert!(st.reservation("r-1").is_none(), "{case}: nothing booked");
     };
     for (case, s, req) in placements {
         let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -23606,7 +23712,7 @@ fn a_placement_or_a_move_that_books_nothing_records_reserve_none_with_the_accoun
         credits_on(&mut st, "a", T);
         let d = decide(&mut st, s, &req, &mut rng());
         assert_eq!(landed(d.result.clone()).0, "a", "{case}");
-        none_on(case, &st, &d, "a");
+        none_on(case, &d, "a");
     }
     // A spent move onto a sibling with no tier: the gate reads both siblings least bad and the order takes b.
     let s = snapshot_with_terms(b_outranks_c_pool(vec![]), tier_terms(&["a"]));
@@ -23621,7 +23727,7 @@ fn a_placement_or_a_move_that_books_nothing_records_reserve_none_with_the_accoun
         landed(d.result.clone()),
         ("b".into(), Some(MigrateReason::Spent))
     );
-    none_on("move", &st, &d, "b");
+    none_on("move", &d, "b");
 }
 
 /// `pool` with the slow-down on at a half-hour stretch threshold and the shipped hold.
@@ -30368,13 +30474,19 @@ fn a_moved_pins_booking_names_the_regime_its_burn_was_priced_under_and_weighs_th
     };
     let d = decide(&mut st, &s, &desk_move, &mut rng());
     assert_eq!(landed(d.result.clone()).0, "b");
-    let booking = st.reservation("r-1").expect("the move booked on b").clone();
-    assert_eq!(
-        booking.entrypoint, None,
-        "the pin's burn was priced under the base regime"
+    let booking = d
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the move booked on b");
+    let per_hour = booking.burn[FIVE_HOUR];
+    assert!(
+        (per_hour - 0.036 / 3_600.0 * 3_600.0).abs() < 1e-15,
+        "{per_hour}"
     );
-    let burn = booking.burn[FIVE_HOUR];
-    assert!((burn - 0.036 / 3_600.0).abs() < 1e-15, "{burn}");
+    // The record states the burn per hour, and the projection below runs per second.
+    let burn = per_hour / 3_600.0;
     // Another request's selection reads b's projection with the booking live: its burn runs half an hour at the rate
     // it was booked at and the rest of the span to the reset at twice it, as the base regime's band weighs it.
     let other = SelectRequest {
@@ -30479,9 +30591,10 @@ fn a_pin_released_for_a_cooldown_names_the_account_it_left() {
         "rate_limit",
     ));
     let req = auxiliary(&s, "s1", T);
-    assert!(release_reasons(&st, &s, &pinned(&st, "s1"), &req).contains(&"cooldown"));
     past_the_wait(&mut st, &s, "p", "a", T);
-    let (result, _) = select(&mut st, &s, &req, &mut rng());
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert!(released_of(&d).contains(&"cooldown"));
+    let result = d.result;
     assert_eq!(picked(&result), "b");
     assert_eq!(left_of(&result), Some("a"));
 }

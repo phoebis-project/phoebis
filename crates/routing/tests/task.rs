@@ -13510,7 +13510,12 @@ async fn a_reservation_on_a_destination_whose_set_lacks_the_five_hour_window_boo
         &placement(&handle, "r-2", "s2", AT),
         &mut rand::rngs::StdRng::seed_from_u64(7),
     );
-    let reservation = state.reservation("r-2").expect("the placement booked on a");
+    let reservation = decided
+        .record
+        .outcome
+        .reservation
+        .as_ref()
+        .expect("the placement booked on a");
     let windows = |shares: &std::collections::BTreeMap<String, f64>| {
         shares.keys().cloned().collect::<Vec<_>>()
     };
