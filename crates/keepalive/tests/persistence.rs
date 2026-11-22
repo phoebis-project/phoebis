@@ -1021,7 +1021,7 @@ async fn the_shutdown_quiesces_drains_saves_and_then_clears() {
             .map(|a| (a.agent_id.as_str(), a.body.is_some()))
             .collect::<Vec<_>>(),
         vec![("main", true), ("sub", true)],
-        "every agent as it stood at the quiesce, recipes and all"
+        "each agent's row and its recipe were saved"
     );
     assert_eq!(
         (
@@ -1590,11 +1590,12 @@ async fn a_session_at_the_agent_limit_frees_a_slot_when_its_released_record_leav
     assert_eq!(r.engine.stats().agents, 2);
 }
 
-/// The credit after a restart reads the newest unanswered probe's coverage, entry, unit and model, and its settlement
-/// its usage, its account tier, its exchange instant and its band, so a probe nobody answered before the flush comes
-/// back with all eight.
+/// A flush saves a probe nobody answered with the eight members read after a restart: its coverage, entry, unit and
+/// model for the credit, and its usage, its account tier, its exchange instant and its band for its settlement. A
+/// restarted engine then loads the agent with the view the first engine gives.
 #[tokio::test]
-async fn a_restart_restores_an_unanswered_probe_with_what_its_credit_and_its_settlement_read() {
+async fn a_flush_saves_an_unanswered_probe_with_what_its_credit_and_its_settlement_read_and_a_restart_loads_it(
+) {
     const OAUTH: &str = "sk-ant-oat01-OOOO";
     let mut r = rig(RigSpec {
         accounts: vec![oauth("o", OAUTH, 0)],
@@ -1655,7 +1656,7 @@ async fn a_restart_restores_an_unanswered_probe_with_what_its_credit_and_its_set
     assert_eq!(
         view_of(&second, "session", "main").unwrap(),
         r.view("main"),
-        "the agent with its unanswered probe reads back as it stood"
+        "the restarted engine's view of the agent equals the first engine's"
     );
 }
 
@@ -1795,10 +1796,12 @@ async fn a_saved_released_record_without_a_leave_loads_with_none_and_stays() {
     );
 }
 
-/// A probe the idle limit left pending comes back from a restart with what its settlement and a later turn read: the
-/// kind and the overage its answer carried, its coverage and unit, and its pending label.
+/// A flush saves a probe the idle limit left pending with what its settlement and a later turn read: the kind and the
+/// overage its answer carried, its coverage and unit, and its pending label. A restarted engine then loads the agent
+/// with the view the first engine gives.
 #[tokio::test]
-async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_label() {
+async fn a_flush_saves_a_pending_probe_with_its_funding_coverage_unit_and_label_and_a_restart_loads_it(
+) {
     const OAUTH: &str = "sk-ant-oat01-OOOO";
     let mut r = rig(RigSpec {
         accounts: vec![oauth("o", OAUTH, 0)],
@@ -1887,15 +1890,15 @@ async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_l
     assert_eq!(
         view_of(&second, "session", "main").unwrap(),
         r.view("main"),
-        "the agent with its pending probe reads back as it stood"
+        "the restarted engine's view of the agent equals the first engine's"
     );
 }
 
-/// A usage-based seat's observation, its unanswered probe and the probe the idle limit left pending come back from a
-/// restart with the class their facts carried, and a payload written before the class rode the records reads false
-/// on each, so its probes settle as they did.
+/// A flush saves the class that a usage-based seat's facts carried on its observation, its unanswered probe and the
+/// probe the idle limit left pending, which its probes settle under. A restarted engine loads the agent with the view
+/// the first engine gives, and it loads a payload written before the class rode the records too.
 #[tokio::test]
-async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_before_reads_false() {
+async fn a_flush_saves_the_class_of_a_seats_records_and_a_payload_from_before_the_class_loads() {
     const OAUTH: &str = "sk-ant-oat01-OOOO";
     let mut r = rig(RigSpec {
         accounts: vec![oauth("o", OAUTH, 0)],
@@ -1980,7 +1983,7 @@ async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_befo
     assert_eq!(
         view_of(&second, "session", "main").unwrap(),
         r.view("main"),
-        "the agent with its pending probe reads back as it stood"
+        "the restarted engine's view of the agent equals the first engine's"
     );
     r.h.store
         .save_keepalive(&KeepaliveBatch {
