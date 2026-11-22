@@ -1812,6 +1812,7 @@ dependencies = [
  "phoebis-routing",
  "phoebis-store",
  "phoebis-transport",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "thiserror",

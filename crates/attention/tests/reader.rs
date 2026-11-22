@@ -25,6 +25,7 @@ use phoebis_store::{
     FeatureOverride, KeyFeatureAccounts, MemberWrite, NewBundle, PoolRow, Secret, StateCause,
     StorageKey, Store,
 };
+use rusqlite::TransactionBehavior;
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -1432,8 +1433,10 @@ fn routing_event(
     );
 }
 
-/// Folds the routing conditions at `at` through the ledger's writer, as the hourly tick does, after the ledger's own
-/// fold at start has run, so that one never lands over this one. The rig's clock moves to `at` too.
+/// Folds the routing conditions at `at` on the ledger's writer connection, the fold that the hourly tick runs, after
+/// the ledger's own fold at start has run, so that one never lands over this one. The transaction takes the write lock
+/// at its start, as the ledger's own writes do: the fold reads before it writes, and a deferred transaction is refused
+/// once the purge task's next commit lands past its snapshot. The rig's clock moves to `at` too.
 async fn fold_at(rig: &Rig, at: i64) {
     let stats = rig.ledger.stats();
     fake_upstream::wait_for(Duration::from_secs(5), || {
@@ -1448,7 +1451,7 @@ async fn fold_at(rig: &Rig, at: i64) {
     let tables = tables_of(COSTS);
     rig.db
         .write(|c| {
-            let tx = c.transaction()?;
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
             phoebis_ledger::fold_routing_conditions(&tx, &tables, at)?;
             tx.commit()?;
             Ok(())

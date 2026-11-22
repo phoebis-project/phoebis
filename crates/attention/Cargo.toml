@@ -33,6 +33,7 @@ phoebis-profile = { path = "../profile" }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 # The backoff test's control client.
 phoebis-transport = { path = "../transport" }
+rusqlite = { workspace = true }
 # The rig's ledger file lives under a temporary directory.
 tempfile = { workspace = true }
 tower = { workspace = true }
