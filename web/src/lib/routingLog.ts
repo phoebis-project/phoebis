@@ -288,7 +288,7 @@ const KEY_REFUSAL_WORD: Record<string, string> = {
 };
 
 /** How the strategy ranks, the hover of a Pace chip on a routing log row. */
-export const PACE_HINT = "Pace: the account with the most of its window left per hour until the window resets or the subscription ends, less the burn of the sessions already on it, wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched. A request of a model without a week of its own first sets aside the room the account's expected Fable use needs.";
+const PACE_HINT = "Pace: the account with the most of its window left per hour until the window resets or the subscription ends, less the burn of the sessions already on it, wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched. A request of a model without a week of its own first sets aside the room the account's expected Fable use needs.";
 
 /** The strategy's word with the tier's priority when the tier is known: `Pace P0`, `round robin`. */
 export function strategyWord(strategy: string, tier: number[] | null): string {

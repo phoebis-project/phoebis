@@ -542,7 +542,7 @@ export function slotIndex(keys: readonly string[], key: string): number {
  * Null without a deadline or a utilization, and null for a deadline at or before the sample, since the window has reset
  * or the account's end has passed since and left the sample stale.
  */
-export const paceScoreOf = (sample: WindowSample): number | null => {
+const paceScoreOf = (sample: WindowSample): number | null => {
   if (sample.deadline === null || sample.utilization === null) return null;
   const hours = (Date.parse(sample.deadline) - Date.parse(sample.sampledAt)) / HOUR;
   return hours > 0 ? Math.max(1 - sample.utilization, 0) / hours : null;

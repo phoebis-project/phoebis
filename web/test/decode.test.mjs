@@ -1383,8 +1383,12 @@ test('a one-number member keeps its null and the display name reads off the prof
   const group = d.decodeAnalyticsGroup({ cache_equivalent: null, cost_equivalent: null, equivalent_split: null, probe_equivalent: null, saving_equivalent: null });
   assert.deepEqual([group.costEquivalent, group.cacheEquivalent, group.probeEquivalent, group.savingEquivalent, group.equivalentSplit], [null, null, null, null, null], 'a group whose plan rows priced nothing');
   assert.equal(d.decodeAnalyticsGroup({ cost_equivalent: 0.0042 }).costEquivalent, 0.0042, 'a priced group reads its figure');
-  const unpriced = d.decodeBurnPoint({ equivalent_by_tier: { default_claude_ai: null }, fable_equivalent_by_tier: { default_claude_ai: null }, five_hour_equivalent_by_tier: { default_claude_ai: null }, unpriced: true });
-  const priced = d.decodeBurnPoint({ equivalent_by_tier: { default_claude_ai: 0.0042 }, unpriced: false });
+  const [unpriced, priced] = d.decodeBurn({
+    points: [
+      { equivalent_by_tier: { default_claude_ai: null }, fable_equivalent_by_tier: { default_claude_ai: null }, five_hour_equivalent_by_tier: { default_claude_ai: null }, unpriced: true },
+      { equivalent_by_tier: { default_claude_ai: 0.0042 }, unpriced: false },
+    ],
+  }).points;
   assert.deepEqual(
     [unpriced.equivalentByTier, unpriced.fableEquivalentByTier, unpriced.fiveHourEquivalentByTier, unpriced.unpriced, priced.equivalentByTier, priced.unpriced],
     [{ default_claude_ai: null }, { default_claude_ai: null }, { default_claude_ai: null }, true, { default_claude_ai: 0.0042 }, false],
@@ -1400,7 +1404,7 @@ test('an answer without the Pro-week members reads them null and the billed doll
     [{ cacheRead: 0, cacheWrite: 0, input: 0, output: 0 }, 0, null, null, null, null, null],
     'a group',
   );
-  const point = d.decodeBurnPoint({});
+  const [point] = d.decodeBurn({ points: [{}] }).points;
   assert.deepEqual([point.equivalentByTier, point.fableEquivalentByTier, point.fiveHourEquivalentByTier, point.unpriced, point.modelWeekShare], [{}, {}, {}, false, null], 'a burn point, each map empty');
   const day = d.decodeDashboard({ hourly: [{ at: 0 }] });
   assert.deepEqual([day.day24h.billedUsd, day.day24h.equivalent, day.hourly[0].billed, day.hourly[0].equivalent], [0, null, 0, null], 'the dashboard');
@@ -1691,7 +1695,7 @@ test('the burn series decodes each point with its instant, both token sides, and
     usd: wire.usd,
   });
   assert.ok(body.points.every((p) => 'model_week_share' in p), 'every point carries the model week beside the two shared windows');
-  const week = d.decodeBurnPoint({ ...wire, model_week_share: 0.125 });
+  const [week] = d.decodeBurn({ points: [{ ...wire, model_week_share: 0.125 }] }).points;
   assert.equal(week.modelWeekShare, 0.125, "a bucket on a model with a week of its own reads that week's share");
   // The account grouping lists each account's points in turn, so a point is found by its group.
   const directAt = body.points.findLastIndex((p) => p.group === 'direct');
@@ -1715,7 +1719,7 @@ test('the burn series decodes each point with its instant, both token sides, and
   assert.deepEqual(keyed.equivalentByTier, wire.equivalent_by_tier);
   assert.ok(body.points.every((p) => typeof p.unpriced === 'boolean'), 'every captured point carries the flag');
   // The priced point reads false, as a missing field decodes, so a copy that sets the flag proves the wire name.
-  const unpriced = d.decodeBurnPoint({ ...wire, equivalent_by_tier: { default_claude_ai: null }, unpriced: true });
+  const [unpriced] = d.decodeBurn({ points: [{ ...wire, equivalent_by_tier: { default_claude_ai: null }, unpriced: true }] }).points;
   assert.deepEqual([unpriced.unpriced, unpriced.equivalentByTier], [true, { default_claude_ai: null }], 'a bucket holding a plan row the cost model could not price reads flagged');
   const { tokens: _, ...untold } = wire;
   assert.equal(d.decodeBurn({ bucket_seconds: 3_600, points: [untold] }).points[0].tokens, 0, 'a point without the count decodes it as zero');
@@ -1762,13 +1766,9 @@ test('a selection trace decodes its placement', () => {
   assert.deepEqual(placed.cohortHold, { cohort: wire.cohort_hold.cohort, heldMs: wire.cohort_hold.held_ms, waitedOn: wire.cohort_hold.waited_on, waits: wire.cohort_hold.waits.map((w) => ({ heldMs: w.held_ms, reason: w.reason })) });
   assert.equal(placed.cohortHold.heldMs, 1250, 'the captured hold names its wait');
   assert.deepEqual([placed.placement.rung, placed.placement.depth, placed.placement.prefixTokens > 0], ['content', 2, true]);
-  const trace = (placement, cohort_hold) => d.decodeSelection({ cohort_hold, placement, renewed: false, skipped: [], strategy: 'pace', tier: null });
-  for (const rung of ['content', 'static', 'with_main']) assert.equal(trace({ depth: 1, prefix_tokens: 10, rung }, null).placement.rung, rung);
-  assert.equal(trace({ depth: 1, prefix_tokens: 10, rung: 'guess' }, null).placement, null, 'a rung the console cannot word reads as no placement');
-  assert.equal(trace(null, null).placement, null);
-  assert.deepEqual(trace(null, { cohort: null, held_ms: 400, waited_on: ['business', 'direct'], waits: [{ held_ms: 400, reason: 'cap' }] }).cohortHold, { cohort: null, heldMs: 400, waitedOn: ['business', 'direct'], waits: [{ heldMs: 400, reason: 'cap' }] }, "a hold on the strategy's choice names no cohort");
-  const older = d.decodeSelection({ renewed: true, skipped: [], strategy: 'pace', tier: null });
-  assert.deepEqual([older.placement, older.cohortHold], [null, null], 'a trace without either member reads as neither');
+  const trace = (placement) => d.decodeRequest({ attempts: [{ index: 1, selection: { placement, renewed: false, skipped: [], strategy: 'pace', tier: null } }] }).attempts[0].selection;
+  for (const rung of ['content', 'static', 'with_main']) assert.equal(trace({ depth: 1, prefix_tokens: 10, rung }).placement.rung, rung);
+  assert.equal(trace({ depth: 1, prefix_tokens: 10, rung: 'guess' }).placement, null, 'a rung the console cannot word reads as no placement');
 });
 
 test('a request decodes the holds it waited through, whether or not an attempt followed', () => {

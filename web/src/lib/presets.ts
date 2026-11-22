@@ -77,7 +77,7 @@ const firstCause = (read: ReadonlySet<ShedCause>): ShedCause | null => SHED_CAUS
  * A covering pin the guard keeps from the pick reads `last_pin` at its own position, since a walk that marks nothing
  * reaches it with the same rest. The cause is null where a mark lands and where the target reads zero or less.
  */
-export function shedMarks(
+function shedMarks(
   ordered: { burn: number | null; cost?: number; id: string; skip?: boolean; standing?: boolean }[],
   target: number,
 ): { marks: string[]; quiet: ShedCause | null } {

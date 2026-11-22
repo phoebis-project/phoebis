@@ -7,7 +7,7 @@ import { emptyCounts, lookup } from '@/lib/counts';
  */
 export const CACHE_MISS_REASONS: CacheMissReason[] = ['none', 'model_changed', 'system_changed', 'tools_changed', 'messages_changed', 'previous_message_not_found', 'unavailable', 'not_requested', 'not_returned', 'pending'];
 
-export const CACHE_MISS_LABEL: Record<CacheMissReason, string> = {
+const CACHE_MISS_LABEL: Record<CacheMissReason, string> = {
   messages_changed: 'History edited',
   model_changed: 'Model changed',
   none: 'No divergence',
@@ -27,7 +27,7 @@ export const missLabel = (reason: CacheMissReason): string => lookup(CACHE_MISS_
  * The misses-by-reason table's header words, one per reason so eleven columns fit beside the group column. The
  * header's title carries `missLabel`, and the panel keeps the full labels.
  */
-export const CACHE_MISS_SHORT: Record<CacheMissReason, string> = {
+const CACHE_MISS_SHORT: Record<CacheMissReason, string> = {
   messages_changed: 'History',
   model_changed: 'Model',
   none: 'None',

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as d from './dist/api.js';
 
+const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
+const NO_EQUIVALENT_TITLE = 'Billed in dollars, no subscription equivalent';
 const attempt = (accountKind, overageInUse, speed) => ({ accountKind, overageInUse, response: { speed } });
 const PLAN = attempt('oauth', false, 'standard');
 const request = (costShares, attempts = [PLAN], costUsd = 0.0048, more = {}) => ({ attempts, costEquivalent: null, costShares, costUsd, shareReason: null, tier: 'default_claude_max_20x', ...more });
@@ -94,8 +96,8 @@ test('under Dollar equivalent an overage request, a fast answer and an API key r
   for (const a of [attempt('oauth', true, 'standard'), attempt('oauth', false, 'fast'), attempt('api_key', null, 'standard')]) {
     const unit = d.costUnitOf(request(null, [PLAN, a], 1.25), 'equivalent', null);
     const what = JSON.stringify(a);
-    assert.deepEqual(unit, { kind: 'dash', title: d.NO_EQUIVALENT_TITLE, usd: 1.25 }, what);
-    assert.deepEqual(cellOf(unit), { main: '-', sub: '', title: d.NO_EQUIVALENT_TITLE }, `${what}: a dash shows no figure`);
+    assert.deepEqual(unit, { kind: 'dash', title: NO_EQUIVALENT_TITLE, usd: 1.25 }, what);
+    assert.deepEqual(cellOf(unit), { main: '-', sub: '', title: NO_EQUIVALENT_TITLE }, `${what}: a dash shows no figure`);
   }
 });
 
@@ -118,8 +120,8 @@ test('under All in dollars and Dollar equivalent a plan request the route priced
 
 test('under Billed dollars a plan request reads a dash titled nothing billed', () => {
   const unit = d.costUnitOf(request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: 0.014667 }), 'usd', null);
-  assert.deepEqual(unit, { kind: 'dash', title: d.NOTHING_BILLED_TITLE, usd: 0.0048 });
-  assert.deepEqual(cellOf(unit), { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }, 'a dash shows no figure');
+  assert.deepEqual(unit, { kind: 'dash', title: NOTHING_BILLED_TITLE, usd: 0.0048 });
+  assert.deepEqual(cellOf(unit), { main: '-', sub: '', title: NOTHING_BILLED_TITLE }, 'a dash shows no figure');
 });
 
 test('a plan rate reads its Pro-week figure under native, its list dollars under the two equivalent positions and a dash under Billed dollars, and a billed rate its dollars and a dash under Dollar equivalent', () => {
@@ -130,7 +132,7 @@ test('a plan rate reads its Pro-week figure under native, its list dollars under
   assert.deepEqual(d.rateUnder('equivalent', plan), { kind: 'dollars', usd: 0.42 }, 'equivalent: the dollars, never the week share');
   const billed = { equivalent: null, side: 'billed', usd: 0.12 };
   for (const position of ['native', 'all', 'usd']) assert.deepEqual(d.rateUnder(position, billed), { kind: 'dollars', usd: 0.12 }, position);
-  assert.deepEqual(d.rateUnder('equivalent', billed), { kind: 'dash', title: d.NO_EQUIVALENT_TITLE });
+  assert.deepEqual(d.rateUnder('equivalent', billed), { kind: 'dash', title: NO_EQUIVALENT_TITLE });
   assert.equal(d.rateUnder('all', { ...plan, usd: null }), null, 'a plan rate with a Pro-week figure and no list dollars draws no rate, never $0.00');
 });
 
@@ -145,8 +147,8 @@ test('a_free_calls_cost_cell_reads_zero_with_the_free_title', () => {
     assert.deepEqual(cellOf(unit), { main: '$0.00', sub: 'equivalent', title: `${d.FREE_SHARE_TITLE}. 0%, $0.00 equivalent` }, `${position}: the dollar equivalent reads over equivalent, the title says why its figure reads zero`);
   }
   const billed = d.costUnitOf(free, 'usd', null);
-  assert.deepEqual(billed, { kind: 'dash', title: d.NOTHING_BILLED_TITLE, usd: 0 });
-  assert.deepEqual(cellOf(billed), { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }, 'usd: a plan-funded call bills nothing, so it reads the dash every subscription request reads');
+  assert.deepEqual(billed, { kind: 'dash', title: NOTHING_BILLED_TITLE, usd: 0 });
+  assert.deepEqual(cellOf(billed), { main: '-', sub: '', title: NOTHING_BILLED_TITLE }, 'usd: a plan-funded call bills nothing, so it reads the dash every subscription request reads');
 });
 
 test('a request with no attempt reads its zero dollars with no funding word and no title under every position', () => {
@@ -226,9 +228,9 @@ test("the Dashboard's glance cell reads a plan and a billed request under each d
   for (const [r, position, cell] of [
     [plan, 'all', equivalent],
     [plan, 'equivalent', equivalent],
-    [plan, 'usd', { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }],
+    [plan, 'usd', { main: '-', sub: '', title: NOTHING_BILLED_TITLE }],
     [billed, 'all', { main: '$1.25', sub: 'overage', title: 'Billed in dollars: overage' }],
-    [billed, 'equivalent', { main: '-', sub: '', title: d.NO_EQUIVALENT_TITLE }],
+    [billed, 'equivalent', { main: '-', sub: '', title: NO_EQUIVALENT_TITLE }],
     [billed, 'usd', { main: '$1.25', sub: 'overage', title: 'Billed in dollars: overage' }],
   ]) {
     const unit = d.costUnitOf(r, position, null);

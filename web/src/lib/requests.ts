@@ -63,8 +63,8 @@ export function requestOrder(order: RequestOrderWord, dir: SortDir): (a: Request
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */
 export const FUNDING_WORD: Record<Exclude<Funding, 'plan'>, string> = { api_key: 'API key', fast: 'fast mode', overage: 'overage', usage_based: 'usage-based' };
 export const NO_SHARE_TITLE = 'The cost model prices no share for this request';
-export const NO_EQUIVALENT_TITLE = 'Billed in dollars, no subscription equivalent';
-export const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
+const NO_EQUIVALENT_TITLE = 'Billed in dollars, no subscription equivalent';
+const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
 export const FREE_SHARE_TITLE = 'Free on the plan: a client classifier call takes no window share';
 /**
  * The refusals the request figures leave out, named on the Refused tile's hover and the Traffic table's Refused column.

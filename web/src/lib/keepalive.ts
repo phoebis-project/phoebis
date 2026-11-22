@@ -337,7 +337,7 @@ const pinModel = (model: string): string => model.toLowerCase().replace(/\[1m\]$
  * The route's entry for an agent's pin on a model, none where it lists none (a released agent's among them). The route
  * answers one entry per pin and an agent can hold pins on two models, so the key is the agent id and the model.
  */
-export const lineFigures = (s: Pick<Session, 'agentContexts'>, agentId: string, model: string): AgentContext | null =>
+const lineFigures = (s: Pick<Session, 'agentContexts'>, agentId: string, model: string): AgentContext | null =>
   s.agentContexts.find((c) => c.agentId === agentId && pinModel(c.model) === pinModel(model)) ?? null;
 
 /**

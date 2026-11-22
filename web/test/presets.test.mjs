@@ -121,54 +121,48 @@ const hot = oauth('hot', 0.99, 0.4);
 const cool = oauth('cool', 0.3, 0.2);
 const three = [pin('hot', 'cold-a', 0.03, false), pin('hot', 'warm-b', 0.025, true), pin('hot', 'warm-c', 0.01, true)];
 
-test('the round marks pins in order until the target and passes over a pin it may not mark', () => {
-  const ordered = [
-    { burn: 3, id: 'cold-3' },
-    { burn: 4, id: 'warm-4' },
-    { burn: 2, id: 'warm-2' },
-    { burn: 1, id: 'warm-1' },
-  ];
-  assert.deepEqual(d.shedMarks(ordered, 5).marks, ['cold-3', 'warm-4'], 'marked in order until the target is reached');
-  assert.deepEqual(d.shedMarks(ordered, 0).marks, [], 'nothing for a zero target');
-  assert.deepEqual(d.shedMarks([{ burn: 1, id: 'priced' }, { burn: null, id: 'unpriced' }, { burn: 2, id: 'last' }], 3).marks, ['priced', 'last'], 'an unpriced pin is passed over and stays the one unmarked pin');
-  assert.deepEqual(d.shedMarks([{ burn: 3, id: 'stuck', skip: true }, { burn: 2, id: 'free' }, { burn: 1, id: 'last' }], 2).marks, ['free'], 'a pin with no sibling to move to is passed over and counts nothing toward the target');
-});
+/**
+ * hot projecting 99 % a minute out on its 5-hour window, nine points past the ceiling: an excess of 540 points an hour,
+ * so the cap's share of the pins' burn sets a round's target.
+ */
+const steep = { ...hot, windows: [win('5h', 0.99, MINUTE), win('7d', 0.4, 5 * HOUR)] };
+/** What `steep`'s round beside `cool` marks over `pins`: its sessions, the warm ones and the burn they carry. */
+const marksOf = (pins, over = {}) => {
+  const preview = d.shedPreview(pool([steep, cool], over), [steep, cool], pins, NOW);
+  return [preview.sessions, preview.warm, preview.covered.toFixed(3)];
+};
 
-test('the round refuses a mark that leaves the unmarked priced pins under a tenth of its burn sum, and marks a later pin that leaves more', () => {
-  // Of a sum of 1.0, a's mark leaves 0.5. b's would leave c's 0.05, under the tenth of 0.1, and c's leaves b's 0.45.
-  assert.deepEqual(d.shedMarks([{ burn: 0.5, id: 'a' }, { burn: 0.45, id: 'b' }, { burn: 0.05, id: 'c' }], 0.95).marks, ['a', 'c']);
+test('the round marks pins in order until the burn it removed reaches the target', () => {
+  // The cap's half of the 10 points an hour the four pins burn is 5. cold-3, the one cold pin, leads and removes 3, and
+  // warm-4, the first warm pin by burn, covers the rest of 2: 2 sessions, 1 warm, 7 points. A walk whose removed burn
+  // never grows marks on: warm-4 outright, then warm-1 in warm-2's place, since warm-2's mark would leave warm-1's 1
+  // point under the tenth of the round's 10, which reads 0.010000000000000002 in floats: 3 sessions, 2 warm, 8 points.
+  assert.deepEqual(marksOf([pin('hot', 'cold-3', 0.03, false), pin('hot', 'warm-4', 0.04, true), pin('hot', 'warm-2', 0.02, true), pin('hot', 'warm-1', 0.01, true)]), [2, 1, '0.070']);
 });
 
 test('the round marks a pin whose mark leaves exactly a tenth of its burn sum on the account', () => {
-  // Of a sum of 1.0, a's mark leaves b's 0.1, the tenth itself. The sum less a's burn reads 0.09999999999999998.
-  assert.deepEqual(d.shedMarks([{ burn: 0.9, id: 'a' }, { burn: 0.1, id: 'b' }], 0.9).marks, ['a']);
+  // A cap of 0.9 puts the target at 0.9 of the two pins' 1.0, which a's 0.9 covers, and its mark leaves b's 0.1, the
+  // tenth itself: 1 session, none warm, 0.9. The sum less a's burn reads 0.09999999999999998, so a guard that read it
+  // would refuse a and mark b: 1 session, none warm, 0.1.
+  assert.deepEqual(marksOf([pin('hot', 'a', 0.9, false), pin('hot', 'b', 0.1, false)], { shedCap: 0.9 }), [1, 0, '0.900']);
 });
 
-test('the round refuses no mark while an unpriced pin stands unmarked', () => {
-  // The unpriced pin's burn is unknown rather than none, so it stays on the account and b's mark leaves it there.
-  assert.deepEqual(d.shedMarks([{ burn: 0.5, id: 'a' }, { burn: 0.45, id: 'b' }, { burn: 0.05, id: 'c' }, { burn: null, id: 'unpriced' }], 0.95).marks, ['a', 'b']);
-});
-
-test('a pin the walk passes over counts among the unmarked priced pins the guard reads', () => {
-  // stuck has no sibling to move to, so its 0.6 of the sum of 0.95 stays on the account beside free's mark.
-  assert.deepEqual(d.shedMarks([{ burn: 0.6, id: 'stuck', skip: true }, { burn: 0.35, id: 'free' }], 0.35).marks, ['free']);
-});
-
-test('a standing mark counts as removed and lifts no guard, a covering pin is the cheapest move, and a sliver stays', () => {
+test('a standing mark lifts no guard, and an unpriced pin under one is not the pin that stays', () => {
+  const mark = { at: at(NOW - 5 * MINUTE), on: 'hot', window: 'five_hour' };
   assert.deepEqual(
     {
-      // The rest is 0.5 past s's 0.1. b and c each cover it, and c's move costs 2 where b's costs 9.
-      cheapest: d.shedMarks([{ burn: 0.1, id: 's', standing: true }, { burn: 0.3, cost: 5, id: 'a' }, { burn: 0.6, cost: 9, id: 'b' }, { burn: 0.6, cost: 2, id: 'c' }], 0.6).marks,
-      // The rest is 0.8 past s's 0.1, and a's 0.03 is under its tenth. c's mark after b's would leave a's 0.03 of the
-      // sum of 0.93, under its tenth.
-      sliver: d.shedMarks([{ burn: 0.1, id: 's', standing: true }, { burn: 0.03, id: 'a' }, { burn: 0.4, id: 'b' }, { burn: 0.4, id: 'c' }], 0.9).marks,
-      // s's 0.4 is a move pending, so the rest of the target of 0.5 is 0.1, which b covers.
-      standing: d.shedMarks([{ burn: 0.4, id: 's', standing: true }, { burn: 0.35, id: 'b' }, { burn: 0.25, id: 'c' }], 0.5).marks,
-      // An unpriced pin under a standing mark is leaving, so it is not the pin that stays, and b's mark would leave
-      // 0.05.
-      standingUnpriced: d.shedMarks([{ burn: 0.5, id: 'a' }, { burn: 0.45, id: 'b' }, { burn: 0.05, id: 'c' }, { burn: null, id: 's', standing: true }], 0.95).marks,
+      // s's 1 point an hour under its mark is a move pending, and the cold a's 0.3 under a tenth of the rest stays as
+      // a sliver. The warm b's mark leaves a's 0.3 and c's 4, and c's after it would leave a's 0.3 alone, under a tenth
+      // of the 9.3 points the pins burn: 1 session, 1 warm, 4 points. A guard that counted s's point among the pins
+      // that stay would let c's mark through: 2 sessions, 2 warm, 8 points. A cap of 1 sets the target at the whole
+      // 9.3, and any target past 5 points marks the same pins.
+      guard: marksOf([pin('hot', 's', 0.01, false, { mark }), pin('hot', 'a', 0.003, false), pin('hot', 'b', 0.04, true), pin('hot', 'c', 0.04, true)], { shedCap: 1 }),
+      // The unpriced s under its mark is leaving, so the guard reads on. Of the target of 9.5, a's 5 go first, b's mark
+      // would leave c's 0.5 of the 10, under its tenth, and c's leaves b's 4.5: 2 sessions, none warm, 5.5 points. A
+      // walk that kept s as the pin that stays would refuse no mark and take b after a: 2 sessions, none warm, 9.5.
+      unpriced: marksOf([pin('hot', 'a', 0.05, false), pin('hot', 'b', 0.045, false), pin('hot', 'c', 0.005, false), pin('hot', 's', null, false, { mark })], { shedCap: 0.95 }),
     },
-    { cheapest: ['c'], sliver: ['b'], standing: ['b'], standingUnpriced: ['a', 'c'] },
+    { guard: [1, 1, '0.040'], unpriced: [2, 0, '0.055'] },
   );
 });
 

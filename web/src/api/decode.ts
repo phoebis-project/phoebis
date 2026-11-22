@@ -501,7 +501,7 @@ const cohortHoldOf = (v: unknown): CohortHold | null =>
   orNull(v, (h) => ({ cohort: strOrNull(h.cohort), heldMs: num(h.held_ms), waitedOn: strings(h.waited_on), waits: list(h.waits).map(rec).map((w) => ({ heldMs: num(w.held_ms), reason: str(w.reason) })) }));
 /** A stamp written before the pin carried a reason reads as a round's move, as the route documents it. */
 const shedOf = (v: unknown): ShedStamp | null => orNull(v, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from), reason: str(x.reason, 'round') }));
-export function decodeSelection(v: unknown): SelectionTrace | null {
+function decodeSelection(v: unknown): SelectionTrace | null {
   return orNull(v, (s) => ({
     cacheRead: numOrNull(s.cache_read), cohortHold: cohortHoldOf(s.cohort_hold), moved: strOrNull(s.moved), placement: placementOf(s.placement), renewed: bool(s.renewed),
     skipped: list(s.skipped).map(rec).map((k) => ({ accountId: str(k.account_id), obstacle: str(k.obstacle) })), strategy: str(s.strategy), tier: tierOf(s.tier),
@@ -791,7 +791,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
 }
 export const decodeAnalyticsPoint = (v: unknown): AnalyticsPoint => ({ at: isoOr(rec(v).at, epoch), groups: list(rec(v).groups).map(decodeAnalyticsGroup) });
 
-export const decodeBurnPoint = (v: unknown): BurnPoint => {
+const decodeBurnPoint = (v: unknown): BurnPoint => {
   const p = rec(v);
   return {
     at: isoOr(p.at, epoch),

@@ -1787,11 +1787,11 @@ test("a Pace hover names the Fable reservation where the candidate carries one",
   assert.equal(title({ ...read, fableReservation: null }), `66% of the 7-day window left over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
 });
 
-test("a Pace row's By chip carries the strategy's hint and a rung row's none", () => {
+test("a By chip reads the strategy with its tier or the rung, and a priority or rung row's chip carries no hint", () => {
   const placed = d.byOf(decision({ by: strategy('pace', [0, 0, 0]), tier: [0, 0, 0] }));
-  assert.deepEqual([placed.value, placed.title], ['Pace P0', d.PACE_HINT]);
+  assert.equal(placed.value, 'Pace P0');
   const held = d.byOf(decision({ by: by('hold', 'strategy_pick'), kind: 'held', tier: [0, 0, 0] }));
-  assert.deepEqual([held.value, held.title], ['Pace P0', d.PACE_HINT]);
+  assert.equal(held.value, 'Pace P0');
   assert.deepEqual(d.byOf(decision({ by: strategy('priority', [0, 1, 0]), strategy: 'priority' })), { value: 'priority P1' });
   assert.deepEqual(d.byOf(decision({ by: by('rung', 'static') })), { value: 'static rung' });
 });

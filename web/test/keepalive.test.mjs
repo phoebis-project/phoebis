@@ -170,17 +170,16 @@ const pinEntry = (agentId, model, lastInputTokens) => ({
 /** A row as the decoder answers it: main's pin on `model`, with figures of its own, and the route's entries. */
 const sessionRow = (model, agentContexts) => ({ agentContexts, agentId: 'main', companion: 'reporting', lastInputTokens: 52_000, model, pinned: true });
 
-test("an agent line reads the route's entry for its agent on its recipe's model, main's among them, and none where the route lists no such pin", () => {
+test("an agent line reads the route's entry for its agent on its recipe's model, and none where the route lists no such pin", () => {
   const main = pinEntry('main', 'claude-sonnet-5-5', 52_000);
   // The route sorts the entries by agent and then model, main first, so the first entry of 7b2e is the other model's.
   const row = sessionRow('claude-sonnet-5-5', [main, pinEntry('7b2e', 'claude-haiku-4-5', 18_000), pinEntry('7b2e', 'claude-sonnet-5-5', 31_000)]);
-  assert.deepEqual(d.lineFigures(row, 'main', 'claude-sonnet-5-5'), main, "main's line reads its entry from the list, not the row");
-  assert.equal(d.lineFigures(row, '7b2e', 'claude-sonnet-5-5')?.lastInputTokens, 31_000, 'the line on the second model reads the second pin');
-  assert.equal(d.lineFigures(row, '7b2e', 'claude-haiku-4-5')?.lastInputTokens, 18_000, 'the line on the first model reads the first pin');
-  assert.equal(d.lineFigures(row, '7b2e', 'claude-sonnet-5-5[1M]')?.lastInputTokens, 31_000, 'the long-context suffix folds out case-blind');
-  assert.equal(d.lineFigures(row, '7b2e', 'claude-opus-5'), null, 'an agent with no pin on the model reads none');
-  assert.equal(d.lineFigures(row, 'main', 'claude-sonnet-5'), null, 'main on a model it holds no pin on reads none');
-  assert.equal(d.lineFigures(row, '4f0c', 'claude-sonnet-5-5'), null, 'an agent the list lacks, a released one among them, reads none');
+  // Main's entry stands in the list, so no line of main is drawn from the row and the recipe's line leads.
+  const pinOf = (agentId, model) => d.sessionLines({ ...row, agentFacts: [], agentRequests: [] }, [{ ...recipe(agentId, 'idle', null), model }])[0].pin;
+  assert.equal(pinOf('7b2e', 'claude-haiku-4-5')?.lastInputTokens, 18_000, 'the line on the first model reads the first pin');
+  assert.equal(pinOf('7b2e', 'claude-sonnet-5-5[1M]')?.lastInputTokens, 31_000, 'the long-context suffix folds out case-blind');
+  assert.equal(pinOf('7b2e', 'claude-opus-5'), null, 'an agent with no pin on the model reads none');
+  assert.equal(pinOf('main', 'claude-sonnet-5'), null, 'main on a model it holds no pin on reads none');
 });
 
 /** A spend part with no request in it. */

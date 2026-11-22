@@ -43,7 +43,7 @@ export { GuardrailDialog } from '@/pages/GuardrailsPage';
 export { anchorTier, bandSentence, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, regimeClients, regimeNames, regimeTitle, regimeWord, revisionAt, shareIn, smallestTier, tierCapacity, tierGroups, tierOrder, weekScale, weightOf, windowMultiple, withRegime } from '@/lib/costs';
 // The Cache miss reasons, their labels and short words in the page's order, so the filter and Analytics table checks
 // read the words the pages draw.
-export { CACHE_MISS_LABEL, CACHE_MISS_REASONS, CACHE_MISS_SHORT, missLabel, missShort } from '@/lib/cache';
+export { CACHE_MISS_REASONS, missLabel, missShort } from '@/lib/cache';
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
