@@ -2671,6 +2671,11 @@ async fn the_dashboard_reads_the_day_and_the_pins_and_the_account_list_the_newes
     );
     assert!((dashboard["error_rate_24h"].as_f64().unwrap() - 5.0 / 25.0).abs() < 1e-9);
     assert_eq!(dashboard["top_error_code"].as_str(), Some("upstream_error"));
+    assert_eq!(
+        dashboard["hourly"].as_array().unwrap().len(),
+        25,
+        "one point for each hour of the day, and none behind the current hour"
+    );
     assert_eq!(dashboard["sessions"]["active_pins"].as_u64(), Some(0));
     let list = json(get(&parts.app, "/admin/accounts", Some(&cookie)).await).await;
     let business = list["accounts"]
