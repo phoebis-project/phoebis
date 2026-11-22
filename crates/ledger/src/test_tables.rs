@@ -56,20 +56,28 @@ pub fn first_entry_costs() -> CostRevisions {
 /// The steps of `EXPLAIN QUERY PLAN` for `sql` under `binds` on `db`.
 #[cfg(test)]
 fn explain(db: &crate::LedgerDb, sql: &str, binds: Vec<rusqlite::types::Value>) -> Vec<String> {
-    db.read_blocking(|c| {
-        let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(binds), |r| r.get::<_, String>(3))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
-    })
-    .unwrap()
+    db.read_blocking(|c| explain_on(c, sql, binds)).unwrap()
+}
+
+/// The steps of `EXPLAIN QUERY PLAN` for `sql` under `binds` on `conn`.
+#[cfg(test)]
+fn explain_on(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    binds: Vec<rusqlite::types::Value>,
+) -> Result<Vec<String>, crate::LedgerError> {
+    let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(binds), |r| r.get::<_, String>(3))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 /// The plan of `sql` under `binds` on an empty ledger.
 #[cfg(test)]
 pub(crate) fn plan_of(sql: &str, binds: Vec<rusqlite::types::Value>) -> Vec<String> {
-    explain(&crate::LedgerDb::open_in_memory().unwrap(), sql, binds)
+    let (db, _dir) = crate::db::open_temp();
+    explain(&db, sql, binds)
 }
 
 /// `plan_of` on a ledger whose `sqlite_stat1` holds `rows` as (table, index, stat).
@@ -79,7 +87,7 @@ pub(crate) fn plan_under(
     binds: Vec<rusqlite::types::Value>,
     rows: &[(&str, &str, &str)],
 ) -> Vec<String> {
-    let db = crate::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = crate::db::open_temp();
     db.purge(|c| {
         for (tbl, idx, stat) in rows {
             c.execute(
@@ -90,8 +98,9 @@ pub(crate) fn plan_under(
         // A connection keeps the statistics it loaded with its schema, and a row written by hand moves no schema
         // cookie, so the planner reads the new rows only once `ANALYZE sqlite_schema` reloads them.
         c.execute_batch("ANALYZE sqlite_schema")?;
-        Ok(())
+        // A pooled reader keeps the statistics it loaded at its open, so the plan is read on the connection that
+        // reloaded them.
+        explain_on(c, sql, binds)
     })
-    .unwrap();
-    explain(&db, sql, binds)
+    .unwrap()
 }

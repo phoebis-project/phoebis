@@ -6685,7 +6685,7 @@ mod tests {
     /// wrong one, and each attempt sits on its own account, so an answer names the attempt it took.
     #[test]
     fn the_session_totals_read_takes_the_highest_attempt() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let request = |id: &str| RequestRecord {
             id: id.into(),
             received_at: 1_000,
@@ -6735,7 +6735,7 @@ mod tests {
     #[test]
     fn the_session_totals_read_answers_a_refused_request_with_its_flag_and_leaves_keyless_and_sessionless_ones_out(
     ) {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let request =
             |id: &str, received_at: i64, key: Option<&str>, session: Option<&str>| RequestRecord {
                 id: id.into(),
@@ -6800,7 +6800,7 @@ mod tests {
     /// live holder's both stay out.
     #[test]
     fn a_historical_sessions_placements_count_main_s_pins_from_its_generation_to_the_live_one() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         for at in [9_999, 10_001, 20_001] {
             db.insert_event(&EventRecord {
                 at,

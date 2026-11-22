@@ -915,7 +915,7 @@ mod tests {
     /// second attempt written first.
     #[test]
     fn a_page_files_each_attempt_under_its_request_in_attempt_order() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let prices = list(None);
         land(&db, &haiku("r1", NEW_YEAR + 1, 10), &prices);
         let (request, mut attempts) = haiku("r2", NEW_YEAR + 2, 10);
@@ -969,7 +969,7 @@ mod tests {
     /// the cutoff keeps its split.
     #[test]
     fn a_moved_threshold_refolds_the_rows_past_the_cutoff_and_leaves_the_older_ones() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let (first, now) = (NEW_YEAR + DAY, NEW_YEAR + 20 * DAY);
         assert_eq!(
             refold_bands(&db, &list(Some(1_000)), 7, 0, first).unwrap(),
@@ -1032,7 +1032,7 @@ mod tests {
     /// so a threshold that moves on the undated id leaves the dated id's request where it landed.
     #[test]
     fn a_dated_row_without_a_block_keeps_its_band_when_its_undated_rows_threshold_moves() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let (first, now) = (NEW_YEAR + DAY, NEW_YEAR + 2 * DAY);
         assert_eq!(
             refold_bands(&db, &with_dated(1_000), 0, 0, first).unwrap(),
@@ -1065,7 +1065,7 @@ mod tests {
     /// unchanged undated row leaves where it was: the pass still re-folds the dated id's request above it.
     #[test]
     fn removing_a_dated_row_without_a_block_refolds_its_requests_under_the_undated_threshold() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let (first, now) = (NEW_YEAR + DAY, NEW_YEAR + 2 * DAY);
         assert_eq!(
             refold_bands(&db, &with_dated(1_000), 0, 0, first).unwrap(),
@@ -1093,7 +1093,7 @@ mod tests {
     /// pass re-folds the dated id's request that landed above it.
     #[test]
     fn adding_a_dated_row_without_a_block_refolds_its_requests_out_of_the_undated_threshold() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let (first, now) = (NEW_YEAR + DAY, NEW_YEAR + 2 * DAY);
         assert_eq!(
             refold_bands(&db, &list(Some(1_000)), 0, 0, first).unwrap(),
@@ -1121,7 +1121,7 @@ mod tests {
     /// nothing.
     #[test]
     fn a_first_start_writes_the_mark_and_an_unchanged_list_moves_nothing() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         land(&db, &haiku("r", NEW_YEAR + DAY, 1_500), &list(Some(1_000)));
         let before = rows(&db);
         assert_eq!(
@@ -1171,7 +1171,7 @@ mod tests {
         let now = split_hour + 7 * DAY + HOUR / 2;
         let (dropped, kept) = (split_hour + 3 * HOUR / 4, split_hour + HOUR + 60_000);
         let refolded = |rollup_retention_days: u32| {
-            let db = LedgerDb::open_in_memory().unwrap();
+            let (db, _dir) = crate::db::open_temp();
             assert_eq!(
                 refold_bands(
                     &db,
@@ -1221,7 +1221,7 @@ mod tests {
     #[test]
     fn under_a_zero_request_retention_a_budgeted_members_kept_hours_move_with_the_threshold() {
         const HOUR: i64 = 3_600_000;
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let now = NEW_YEAR + 20 * DAY;
         assert_eq!(
             refold_bands(&db, &list(Some(1_000)), 0, 7, NEW_YEAR + DAY).unwrap(),
@@ -1300,7 +1300,7 @@ mod tests {
         rollup_retention_days: u32,
         budgeted: &[BudgetedMember],
     ) -> (usize, Vec<(i64, String, u64, u64)>) {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         assert_eq!(
             refold_bands(
                 &db,
@@ -1413,13 +1413,13 @@ mod tests {
                 );
             }
         };
-        let whole = LedgerDb::open_in_memory().unwrap();
+        let (whole, _whole_dir) = crate::db::open_temp();
         seed(&whole);
         assert_eq!(
             refold_bands(&whole, &list(Some(2_000)), 0, 0, NEW_YEAR + 9 * DAY).unwrap(),
             3
         );
-        let interrupted = LedgerDb::open_in_memory().unwrap();
+        let (interrupted, _interrupted_dir) = crate::db::open_temp();
         seed(&interrupted);
         TEST_PAGE.set(Some(1));
         FAIL_AFTER_PAGES.set(Some(1));
@@ -1464,7 +1464,7 @@ mod tests {
     /// received at or after `since`, and no token count over the table changes.
     #[test]
     fn an_upgrade_then_a_threshold_correction_leaves_the_rows_folded_before_the_mark_alone() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         // Folded as the migration's default rows file them: under `standard`, which a list with no long-context
         // block selects for every prompt.
         land(&db, &haiku("before", NEW_YEAR + DAY, 1_500), &list(None));
@@ -1582,7 +1582,7 @@ mod tests {
     /// hour records, which no rule moves.
     #[test]
     fn the_rules_pass_leaves_a_request_that_landed_after_the_marks_as_folded() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let at = NEW_YEAR + DAY;
         let mut other = timed("a", at, 100, (100, 500, 1_500));
         other.1[0].output_tokens = Some(250);
@@ -1602,7 +1602,7 @@ mod tests {
     /// standard row's of 500 stay where they are.
     #[test]
     fn the_rules_pass_folds_under_the_stored_thresholds_before_the_band_refold_moves_the_request() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let now = NEW_YEAR + 3 * DAY;
         refold_bands(&db, &list(Some(1_000)), 0, 0, NEW_YEAR + DAY).unwrap();
         let at = NEW_YEAR + 2 * DAY;
@@ -1630,7 +1630,7 @@ mod tests {
     /// A landing before a clock set back leaves a stamp ahead of the clock.
     #[test]
     fn the_rules_pass_folds_again_a_request_whose_stamp_lies_ahead_of_the_clock() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let at = NEW_YEAR + DAY;
         let request = timed("r", at, 100, (200, 1_000, 1_040));
         store(&db, &request, &list(Some(1_000)), NO_RULES, AHEAD);
@@ -1646,7 +1646,7 @@ mod tests {
     #[test]
     fn the_rules_pass_bands_each_request_by_the_side_of_a_stopped_band_refolds_cursor_it_stands_on()
     {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let (day1, day2) = (NEW_YEAR + DAY, NEW_YEAR + 2 * DAY);
         let (source, target) = (list(Some(1_000)), list(Some(2_000)));
         let first = slowed(timed("r1", day1, 1_500, (21_000, 21_500, 30_000)), 20_000);
@@ -1712,7 +1712,7 @@ mod tests {
     /// past 100,000 once the hold of 20,000 comes out.
     #[test]
     fn a_resumed_pass_folds_for_its_cursors_rules_and_a_second_pass_for_the_other_open_rules() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let at = NEW_YEAR + DAY;
         let first = slowed(timed("r1", at, 100, (21_000, 21_500, 150_000)), 20_000);
         let second = slowed(
@@ -1769,7 +1769,7 @@ mod tests {
     /// alone.
     #[test]
     fn the_rules_pass_splits_a_retained_requests_hit_off_under_its_reason() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let at = NEW_YEAR + DAY;
         let without_split = FoldRules {
             hit_split: false,
@@ -1804,7 +1804,7 @@ mod tests {
     /// cutoff splits. Each request sends ten tokens over 40 ms.
     #[test]
     fn the_rules_pass_writes_no_row_back_into_an_hour_the_rollup_purge_removed() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let dropped = timed("dropped", IN_THE_SPLIT_HOUR, 100, (200, 1_000, 1_040));
         let kept = timed("kept", IN_THE_NEXT_HOUR, 100, (200, 1_000, 1_040));
         store(&db, &dropped, &list(Some(1_000)), NO_RULES, 0);
@@ -1827,7 +1827,7 @@ mod tests {
     /// that stays, of 500 and of 2,500 prompt tokens.
     #[test]
     fn the_rules_pass_bands_a_request_received_before_the_band_mark_by_when_it_landed() {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let (at, since) = (NEW_YEAR + DAY, NEW_YEAR + 2 * DAY);
         let early = slowed(timed("r1", at, 1_500, (21_000, 21_500, 30_000)), 20_000);
         let late = slowed(

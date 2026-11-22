@@ -1,5 +1,6 @@
 //! Rows written before the rollup key carried a generation are stamped with the live key's once at startup,
 //! by the key's own lifetime: an earlier holder's rows under a reused id stay at 0.
+mod common;
 use phoebis_ledger::{
     read_rollups, reconcile_key_generations, request_by_id, AttemptRecord, KeySelector, LedgerDb,
     LiveKeyLifetime, RequestRecord, RollupSelect,
@@ -71,7 +72,7 @@ fn attempt(id: &str) -> AttemptRecord {
 
 #[test]
 fn generation_zero_rows_of_a_live_key_are_stamped_once_and_the_rest_stay() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (id, key) in [("r1", "k1"), ("r2", "k1"), ("r3", "k2")] {
         db.insert_request(&request(id, key, 0), &[attempt(id)], None)
             .unwrap();
@@ -106,7 +107,7 @@ fn generation_zero_rows_of_a_live_key_are_stamped_once_and_the_rest_stay() {
 
 #[test]
 fn a_reused_ids_rows_before_the_live_keys_first_whole_hour_stay_the_earlier_holders() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // The earlier holder's hours, then the live key created mid-hour, then the live key's own hours.
     let created_at = 10 * HOUR_MS + 1_234;
     for (id, at) in [
@@ -150,7 +151,7 @@ fn a_reused_ids_rows_before_the_live_keys_first_whole_hour_stay_the_earlier_hold
 
 #[test]
 fn a_key_with_more_rows_than_one_page_has_every_row_moved() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // One rollup row per hour, over more hours than one page of the fold holds.
     for i in 0..1_250i64 {
         let id = format!("r{i}");

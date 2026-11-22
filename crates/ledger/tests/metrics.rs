@@ -1130,7 +1130,8 @@ revisions:
     );
     let clock: phoebis_oauth::Clock = Arc::new(move || february);
     let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
-    let db = Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     let metrics = Arc::new(Metrics::new());
     let ledger = phoebis_ledger::spawn(
         db,
@@ -1207,7 +1208,8 @@ async fn a_batch_the_file_refused_once_counts_its_request_once_when_its_retry_la
             .unwrap(),
     );
     let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
-    let db = Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     let sql = |sql: &str| {
         db.write(|c| {
             c.execute_batch(sql)?;

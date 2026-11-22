@@ -1,6 +1,6 @@
 //! A store with an OAuth account, an API-key account, a pool holding both and a key on it, the router over
-//! them, a ledger over an in-memory file and the ledger's test cost model, and a clock the test moves. The reader
-//! spawns on the rig's bus.
+//! them, a ledger on a file under a temporary directory that the rig holds and the ledger's test cost model, and a
+//! clock the test moves. The reader spawns on the rig's bus.
 #![allow(dead_code)]
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -49,6 +49,8 @@ pub struct Rig {
     /// The ledger's file, which a test writes its parked rows and its faults through.
     pub db: Arc<LedgerDb>,
     pub ledger: Ledger,
+    /// The directory of the ledger's file, held as long as the rig.
+    ledger_dir: tempfile::TempDir,
     pub router: RouterHandle,
     pub store: Arc<Store>,
 }
@@ -193,7 +195,8 @@ async fn rig_on(store: Arc<Store>, clock_cell: Arc<AtomicI64>, tables: PlanTable
     let clock = clock_of(&clock_cell);
     let router = spawn_router(store.clone(), clock.clone(), RouterConfig::default()).unwrap();
     let bus = Bus::new();
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(LedgerDb::open(&ledger_dir.path().join("ledger.sqlite")).unwrap());
     let ledger = phoebis_ledger::spawn(
         db.clone(),
         Arc::new(Pricing::new(PriceRevisions::shipped())),
@@ -210,6 +213,7 @@ async fn rig_on(store: Arc<Store>, clock_cell: Arc<AtomicI64>, tables: PlanTable
         clock: clock_cell,
         db,
         ledger,
+        ledger_dir,
         router,
         store,
     }

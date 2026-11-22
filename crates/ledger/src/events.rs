@@ -643,7 +643,7 @@ pub fn limit_reset_claimed(
 
 /// `catalog_changed` on the account whose listing moved. The ids travel in the detail, since one row names many
 /// models.
-pub fn catalog_changed(change: &CatalogChange) -> Record {
+pub(crate) fn catalog_changed(change: &CatalogChange) -> Record {
     Record::Event(EventRecord {
         at: change.at,
         kind: CATALOG_CHANGED.into(),

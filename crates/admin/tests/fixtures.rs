@@ -3960,15 +3960,15 @@ async fn routing_stories(
         "profile",
         &profile("claude_max", "default_claude_max_5x", "active"),
     ));
-    parts.ledger.record(phoebis_ledger::catalog_changed(
-        &phoebis_relay::CatalogChange {
+    parts
+        .ledger
+        .on_catalog_change(&phoebis_relay::CatalogChange {
             account_id: "business".into(),
             added: vec!["claude-sonnet-5-5".into()],
             removed: vec!["claude-sonnet-4-5".into()],
             count: 12,
             at: at(9),
-        },
-    ));
+        });
     let written = |minute: i64, kind: &str| EventRecord {
         at: at(minute),
         kind: kind.into(),

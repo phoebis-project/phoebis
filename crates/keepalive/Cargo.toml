@@ -48,6 +48,8 @@ phoebis-transport = { path = "../transport" }
 # The restart tests reach the rig's registry file past the store: they damage a sealed prompt, hold the file's write
 # lock while a save waits and make a save fail, as an operator's `sqlite3` or a failing disk would.
 rusqlite = { workspace = true }
+# The rig's ledger file lives under a temporary directory.
+tempfile = { workspace = true }
 # The probe deadline is five minutes, so the test that waits it out moves tokio's clock instead of the wall's.
 tokio = { workspace = true, features = ["test-util"] }
 # The relay's harness, which the tests include, opens the feature listener's TLS connections through it.

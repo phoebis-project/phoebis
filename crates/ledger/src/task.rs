@@ -118,8 +118,6 @@ pub struct LedgerStats {
     pub retrying: AtomicU64,
     /// Priced records parked since start.
     pub parked_priced: AtomicU64,
-    /// Retention passes the purge task finished since start, whatever each one cut.
-    pub purge_passes: AtomicU64,
     /// Folds of the routing conditions the purge task finished since start, the one at start among them, whatever
     /// each one found.
     pub condition_folds: AtomicU64,
@@ -252,7 +250,7 @@ impl Ledger {
     /// Enters each of `added`, the model ids a catalog change listed, that the cost model in force at `at` weighs
     /// nothing for on the 7-day window, with `at` as its `since` and no request. An entry that already counts
     /// requests keeps its `since` and its count, and a weighted model enters nothing.
-    pub fn note_listed(&self, added: &[String], at: i64) {
+    fn note_listed(&self, added: &[String], at: i64) {
         let costs = self.tables.revisions.in_force(at);
         let models: Vec<&str> = added
             .iter()
@@ -537,7 +535,6 @@ pub fn spawn(
                 (purging.clock)(),
             )
             .await;
-            purging.stats.purge_passes.fetch_add(1, Ordering::Relaxed);
             if let Some(written) = backfill {
                 backfill = continue_backfill(&purging.db, written).await;
             }
@@ -2027,8 +2024,8 @@ mod tests {
         Arc::new(|| jiff::Timestamp::now().as_millisecond())
     }
 
-    /// A ledger whose channel holds one record and has no writer draining it.
-    fn stalled() -> (Ledger, mpsc::Receiver<Record>) {
+    /// A ledger whose channel holds one record and has no writer draining it, with the directory of its file.
+    fn stalled() -> (Ledger, mpsc::Receiver<Record>, tempfile::TempDir) {
         let (tx, rx) = mpsc::channel(1);
         let (stop, _) = watch::channel(false);
         let store = Arc::new(
@@ -2040,8 +2037,9 @@ mod tests {
             phoebis_routing::RouterConfig::default(),
         )
         .unwrap();
+        let (db, dir) = crate::db::open_temp();
         let ledger = Ledger {
-            db: Arc::new(LedgerDb::open_in_memory().unwrap()),
+            db: Arc::new(db),
             stats: Arc::new(LedgerStats::default()),
             assembler: Arc::default(),
             tables: Arc::new(PlanTables::shipped()),
@@ -2056,12 +2054,12 @@ mod tests {
             clock: Arc::new(|| 0),
             retention_days: LedgerConfig::default().retention_days,
         };
-        (ledger, rx)
+        (ledger, rx, dir)
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_request_record_waits_for_room_in_the_channel_rather_than_drop() {
-        let (ledger, mut rx) = stalled();
+        let (ledger, mut rx, _dir) = stalled();
         ledger.record(Record::Event(EventRecord::default()));
         let landing = tokio::spawn({
             let ledger = ledger.clone();
@@ -2089,7 +2087,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_spend_refresh_keeps_the_previous_boundary_armed() {
         let clock = Arc::new(AtomicI64::new(1_000));
-        let (mut spends, _) = spends_over(&[("a", 10.0)], clock.clone());
+        let (mut spends, _, _dir) = spends_over(&[("a", 10.0)], clock.clone());
 
         let first = refresh_member_spends(
             &spends.handles,
@@ -2122,7 +2120,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_spend_refresh_past_its_deadline_retries_at_the_poll_cadence() {
         let now = 1_000;
-        let (mut spends, _) = spends_over(&[("a", 10.0)], Arc::new(AtomicI64::new(now)));
+        let (mut spends, _, _dir) = spends_over(&[("a", 10.0)], Arc::new(AtomicI64::new(now)));
 
         spends
             .handles
@@ -2146,8 +2144,12 @@ mod tests {
     }
 
     /// The writer's spend refresh over a router whose pool `p` holds the API-key members given with their monthly
-    /// budgets, and a ledger priced at a dollar per token of model `m`, read at `clock`, with the registry beside it.
-    fn spends_over(members: &[(&str, f64)], clock: Arc<AtomicI64>) -> (Spends, Arc<Store>) {
+    /// budgets, and a ledger priced at a dollar per token of model `m`, read at `clock`, with the registry and the
+    /// directory of the ledger's file beside it.
+    fn spends_over(
+        members: &[(&str, f64)],
+        clock: Arc<AtomicI64>,
+    ) -> (Spends, Arc<Store>, tempfile::TempDir) {
         let store = Arc::new(
             Store::open_in_memory(&phoebis_store::StorageKey::generate(), wall()).unwrap(),
         );
@@ -2198,10 +2200,11 @@ mod tests {
             )]
             .into(),
         };
+        let (db, dir) = crate::db::open_temp();
         let spends = Spends {
             handles: Handles {
                 clock: Arc::new(move || clock.load(Ordering::SeqCst)),
-                db: Arc::new(LedgerDb::open_in_memory().unwrap()),
+                db: Arc::new(db),
                 metrics: Arc::new(Metrics::new()),
                 pricing: Arc::new(Pricing::new(
                     PriceRevisions::new(vec![table], "test").expect("one entry is a list"),
@@ -2217,7 +2220,7 @@ mod tests {
             budgets: Budgets::default(),
             pending: Vec::new(),
         };
-        (spends, store)
+        (spends, store, dir)
     }
 
     /// A request on pool `p` whose one attempt on `account` used `tokens` input tokens of `m`, a dollar each: written
@@ -2279,7 +2282,7 @@ mod tests {
     #[tokio::test]
     async fn a_spend_that_crosses_its_budget_writes_budget_reached_once() {
         let clock = Arc::new(AtomicI64::new(1_000));
-        let (mut spends, _) = spends_over(&[("a", 10.0)], clock.clone());
+        let (mut spends, _, _dir) = spends_over(&[("a", 10.0)], clock.clone());
         let under = spend(&spends, "r1", "a", 100, 6);
         spends.refresh(&priced_attempts(&[under])).await;
         assert!(budget_rows(&spends).await.is_empty(), "6 of 10 spent");
@@ -2308,7 +2311,7 @@ mod tests {
     #[tokio::test]
     async fn a_budget_crossing_names_the_member_s_own_request_and_not_a_sibling_s_in_the_batch() {
         let clock = Arc::new(AtomicI64::new(1_000));
-        let (mut spends, _) = spends_over(&[("a", 10.0), ("b", 10.0)], clock.clone());
+        let (mut spends, _, _dir) = spends_over(&[("a", 10.0), ("b", 10.0)], clock.clone());
         // One batch: `a`'s request crosses its budget, then a later one of `b` lands beside it.
         let batch = [
             spend(&spends, "ra", "a", 100, 12),
@@ -2338,7 +2341,7 @@ mod tests {
     #[tokio::test]
     async fn a_new_period_writes_budget_period_ended_with_the_previous_spend() {
         let clock = Arc::new(AtomicI64::new(1_000));
-        let (mut spends, _) = spends_over(&[("a", 10.0)], clock.clone());
+        let (mut spends, _, _dir) = spends_over(&[("a", 10.0)], clock.clone());
         let over = spend(&spends, "r1", "a", 100, 12);
         spends.refresh(&priced_attempts(&[over])).await;
         // The first of February 1970, the next monthly period.
@@ -2368,7 +2371,7 @@ mod tests {
     #[tokio::test]
     async fn a_period_whose_budget_was_never_reached_ends_without_a_row() {
         let clock = Arc::new(AtomicI64::new(1_000));
-        let (mut spends, _) = spends_over(&[("a", 10.0)], clock.clone());
+        let (mut spends, _, _dir) = spends_over(&[("a", 10.0)], clock.clone());
         let under = spend(&spends, "r1", "a", 100, 6);
         spends.refresh(&priced_attempts(&[under])).await;
         clock.store(2_678_400_000 + 1_000, Ordering::SeqCst);
@@ -2379,7 +2382,7 @@ mod tests {
     #[tokio::test]
     async fn a_budget_lowered_under_the_spend_writes_budget_reached() {
         let clock = Arc::new(AtomicI64::new(1_000));
-        let (mut spends, store) = spends_over(&[("a", 10.0)], clock.clone());
+        let (mut spends, store, _dir) = spends_over(&[("a", 10.0)], clock.clone());
         let under = spend(&spends, "r1", "a", 100, 6);
         spends.refresh(&priced_attempts(&[under])).await;
         store

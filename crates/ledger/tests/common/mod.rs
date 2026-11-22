@@ -58,6 +58,16 @@ pub struct Harness {
     pub router: RouterHandle,
     pub store: Arc<Store>,
     pub usage: Option<Arc<phoebis_oauth::UsageService>>,
+    /// The directory of the ledger's file where the harness opened it, `None` where the caller handed the ledger in
+    /// and holds its own. Last, so the directory goes after every holder of the ledger inside it has let go.
+    ledger_dir: Option<tempfile::TempDir>,
+}
+
+/// A ledger on a file under a temporary directory. The caller keeps the directory for the handle's life.
+pub fn temp_ledger() -> (LedgerDb, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+    (db, dir)
 }
 
 pub struct Account {
@@ -93,8 +103,10 @@ pub async fn harness(
     config: LedgerConfig,
 ) -> Harness {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    harness_on(store, db, up, accounts, capture, config, false).await
+    let (db, dir) = temp_ledger();
+    let mut h = harness_on(store, Arc::new(db), up, accounts, capture, config, false).await;
+    h.ledger_dir = Some(dir);
+    h
 }
 
 /// `harness` with a `UsageService` built over the same manager and control connector, so a test can run the
@@ -106,8 +118,10 @@ pub async fn harness_with_poll(
     config: LedgerConfig,
 ) -> Harness {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    harness_on(store, db, up, accounts, capture, config, true).await
+    let (db, dir) = temp_ledger();
+    let mut h = harness_on(store, Arc::new(db), up, accounts, capture, config, true).await;
+    h.ledger_dir = Some(dir);
+    h
 }
 
 /// `harness` with the pool's feature accounts at `pool` and the key's overrides at `key`, written once the harness
@@ -580,6 +594,7 @@ pub async fn harness_on_tables(
         router: router_handle,
         store,
         usage,
+        ledger_dir: None,
     }
 }
 

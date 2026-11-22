@@ -89,6 +89,8 @@ pub struct Rig {
     /// The spec's timing, kept so `restart` builds its engine with what this one was built with.
     pub timing: KeepaliveTiming,
     pub up: FakeUpstream,
+    /// The directory of the ledger's file, behind every holder of the ledger, so it goes after they have let go.
+    _ledger_dir: tempfile::TempDir,
     /// Last, so the directory goes after every holder of the store inside it has let go.
     _scratch: Option<Scratch>,
 }
@@ -237,7 +239,8 @@ pub async fn rig(spec: RigSpec) -> Rig {
         let c = h.clock.clone();
         Arc::new(move || c.load(Ordering::SeqCst))
     };
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(LedgerDb::open(&ledger_dir.path().join("ledger.sqlite")).unwrap());
     let pricing = Arc::new(Pricing::new(spec.pricing.clone()));
     let metrics = Arc::new(Metrics::new());
     let tables = Arc::new(spec.tables);
@@ -285,6 +288,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         tables,
         timing: spec.timing,
         up,
+        _ledger_dir: ledger_dir,
         _scratch: scratch,
     };
     rig.event(Event {

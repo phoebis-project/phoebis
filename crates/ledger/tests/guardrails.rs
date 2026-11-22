@@ -102,7 +102,7 @@ fn plan_of(db: &LedgerDb, sql: &str, params: impl rusqlite::Params) -> Vec<Strin
 /// answer the matches in evaluation order, which here runs against the ids' order.
 #[test]
 fn a_request_with_two_matches_round_trips_through_the_row_and_the_child_table() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let written = request(
         "r1",
         5_000,
@@ -146,7 +146,7 @@ fn a_request_with_two_matches_round_trips_through_the_row_and_the_child_table() 
 /// kept beside the earlier one's.
 #[test]
 fn a_listed_page_answers_each_requests_own_matches() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let older = request(
         "r1",
         5_000,
@@ -179,7 +179,7 @@ fn a_listed_page_answers_each_requests_own_matches() {
 /// A record written again under its id replaces its matches: the child rows it no longer names leave with the write.
 #[test]
 fn a_row_written_again_replaces_its_child_rows() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.insert_request(
         &request(
             "r1",
@@ -204,7 +204,7 @@ fn a_row_written_again_replaces_its_child_rows() {
 /// keep either.
 #[test]
 fn the_filter_keeps_the_rows_of_a_listed_id_and_the_rows_of_none() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.insert_request(
         &request("r-g1", 3_000, "k", vec![matched("g1", 0, false)]),
         &[],
@@ -227,7 +227,8 @@ fn the_filter_keeps_the_rows_of_a_listed_id_and_the_rows_of_none() {
 /// The retention pass takes a request's child rows with the request, and a request inside the window keeps its own.
 #[tokio::test]
 async fn the_purge_removes_the_child_rows_with_the_request() {
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     db.insert_request(
         &request(
             "old",
@@ -275,7 +276,7 @@ async fn the_purge_removes_the_child_rows_with_the_request() {
 /// blocked it, and the blocked requests' bytes alone, a guardrail matched only outside those hours left out.
 #[test]
 fn the_counts_answer_observed_blocked_and_bytes_per_guardrail_over_a_range() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let with_bytes =
         |id: &str, at: i64, bytes: u64, matches: Vec<GuardrailMatchRecord>| RequestRecord {
             request_bytes: Some(bytes),
@@ -327,7 +328,7 @@ fn the_counts_answer_observed_blocked_and_bytes_per_guardrail_over_a_range() {
 /// blocked ones at 20:59 and at 23:00 do not.
 #[test]
 fn the_counts_read_the_whole_hours_a_range_touches_up_to_the_hour_ceiling_of_its_end() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let blocked = |id: &str, at: i64, bytes: u64| RequestRecord {
         request_bytes: Some(bytes),
         ..request(id, at, "k", vec![matched("g1", 0, true)])
@@ -355,7 +356,7 @@ fn the_counts_read_the_whole_hours_a_range_touches_up_to_the_hour_ceiling_of_its
 /// table or its primary key on a reload of the page.
 #[test]
 fn the_counts_query_and_the_bytes_query_seek_the_received_index() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let counts = plan_of(&db, GUARDRAIL_COUNTS_SQL, (0_i64, 0_i64));
     let bytes = plan_of(&db, GUARDRAIL_BLOCKED_BYTES_SQL, ("g1", 0_i64, 0_i64));
     for (plan, which) in [(&counts, "the counts"), (&bytes, "the bytes")] {
@@ -523,7 +524,7 @@ fn sample_ids(
 #[test]
 fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_probes_and_uncaptured_rows(
 ) {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // The newest rows sit seconds apart, the window reaches 72 hours back, `g` sits three hours inside it and `old`
     // 1,000 hours back past it, so a bound placed where a window read in minutes puts it leaves `g` out.
     let now = 1_000 * HOUR_MS;
@@ -613,7 +614,7 @@ fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_p
 /// the id opens the next page and one older than the instant follows it.
 #[test]
 fn two_rows_at_one_instant_are_walked_in_id_order_across_a_page_boundary() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = 1_000 * HOUR_MS;
     for row in [
         sampled("a", now, "k1", true, "inference"),
@@ -643,7 +644,7 @@ fn two_rows_at_one_instant_are_walked_in_id_order_across_a_page_boundary() {
 /// never had one.
 #[test]
 fn request_body_answers_the_captured_bytes_and_none_where_the_body_row_is_gone() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let body = br#"{"model":"claude-sonnet-5","messages":[]}"#;
     for id in ["kept", "aged"] {
         db.insert_request(
@@ -687,7 +688,7 @@ fn request_body_answers_the_captured_bytes_and_none_where_the_body_row_is_gone()
 /// answers its bytes, so the dry run never reads content its key's capture window no longer covers.
 #[test]
 fn request_body_answers_none_for_a_body_past_its_expiry_that_no_purge_has_removed_yet() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let body = br#"{"model":"claude-sonnet-5","messages":[]}"#;
     let now = 10 * HOUR_MS;
     let live_expiry = now + HOUR_MS / 2;

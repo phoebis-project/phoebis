@@ -137,9 +137,8 @@ pub async fn admin_parts_full() -> Full {
     full_from(app_with(None, ACCOUNT_UUID, false, None).await)
 }
 
-/// The full harness over a file-backed ledger under the directory it answers, whose pool of `READERS` connections a
-/// test holds one by one, where the in-memory ledger's one connection serves every role and a second held read would
-/// wait on the first. The directory comes back beside the parts so the file outlives the test's last read.
+/// The full harness over a ledger on a file under the directory it answers, whose pool of `READERS` connections a
+/// test holds one by one. The directory comes back beside the parts so the file outlives the test's last read.
 pub async fn admin_parts_full_on_disk() -> (tempfile::TempDir, Full) {
     let dir = tempfile::tempdir().unwrap();
     let parts = build_app_bounded(
@@ -1170,8 +1169,9 @@ async fn build_app_routed(
 }
 
 /// `build_app_routed` with the sessions route bounded by `session_expiry` and `non_companion_idle`, which the settings
-/// view mirrors, and the ledger on the file at `ledger_path` where one is given, in memory otherwise. `features` gives
-/// the settings answer a feature listener, which a router without the `features` block answers as null.
+/// view mirrors, and the ledger on the file at `ledger_path` where one is given, on a file under a temporary directory
+/// otherwise. `features` gives the settings answer a feature listener, which a router without the `features` block
+/// answers as null.
 #[allow(clippy::too_many_arguments)]
 async fn build_app_bounded(
     identity: Option<Identity>,
@@ -1298,7 +1298,17 @@ async fn build_app_bounded(
     let bus = Bus::new();
     let db = Arc::new(match ledger_path {
         Some(path) => LedgerDb::open(&path).unwrap(),
-        None => LedgerDb::open_in_memory().unwrap(),
+        None => {
+            let dir = tempfile::tempdir().unwrap();
+            let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+            // The ledger's own tasks hold the file until the runtime ends, while most helpers answer a few of the
+            // parts and drop the rest, so a task of the same runtime holds the directory as long.
+            tokio::spawn(async move {
+                let _dir = dir;
+                std::future::pending::<()>().await
+            });
+            db
+        }
     });
     let pricing = Arc::new(Pricing::new(prices.unwrap_or_else(PriceRevisions::shipped)));
     let metrics = Arc::new(Metrics::new());

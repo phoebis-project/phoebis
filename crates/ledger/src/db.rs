@@ -66,11 +66,10 @@ const OPEN_OPTIMIZE_MASK: i64 = 0x10012;
 
 pub struct LedgerDb {
     writer: Mutex<Connection>,
-    /// `None` for an in-memory ledger, whose one connection serves every role. In an `Arc`, so `read` hands its
-    /// blocking worker the pool it matched.
-    readers: Option<Arc<Readers>>,
-    /// The retention purge's own connection, so a slice never holds the writer's lock or turn; `None` in memory.
-    purger: Option<Mutex<Connection>>,
+    /// In an `Arc`, so `read` hands its blocking worker the pool.
+    readers: Arc<Readers>,
+    /// The retention purge's own connection, so a slice never holds the writer's lock or turn.
+    purger: Mutex<Connection>,
     /// The writes begun and ended through `write`, which `purge` reads to let a waiting write go first.
     writes: Writes,
     #[cfg(any(test, feature = "debug-hooks"))]
@@ -251,26 +250,14 @@ impl LedgerDb {
         // Before the readers open, since a connection loads `sqlite_stat1` with its schema and keeps what it loaded.
         analyze_at_open(&purger)?;
         let readers = Readers::open(path)?;
-        Ok(LedgerDb::from_parts(writer, Some(readers), Some(purger)))
+        Ok(LedgerDb::from_parts(writer, readers, purger))
     }
 
-    pub fn open_in_memory() -> Result<LedgerDb, LedgerError> {
-        let mut writer = Connection::open_in_memory()?;
-        writer.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
-        prepare(&mut writer, Path::new(":memory:"), schema::MIGRATIONS)?;
-        analyze_at_open(&writer)?;
-        Ok(LedgerDb::from_parts(writer, None, None))
-    }
-
-    fn from_parts(
-        writer: Connection,
-        readers: Option<Readers>,
-        purger: Option<Connection>,
-    ) -> LedgerDb {
+    fn from_parts(writer: Connection, readers: Readers, purger: Connection) -> LedgerDb {
         LedgerDb {
             writer: Mutex::new(writer),
-            readers: readers.map(Arc::new),
-            purger: purger.map(Mutex::new),
+            readers: Arc::new(readers),
+            purger: Mutex::new(purger),
             writes: Writes::default(),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_writer_read: Mutex::new(None),
@@ -317,8 +304,8 @@ impl LedgerDb {
         f(&mut conn)
     }
 
-    /// Runs `f` under the purger connection (the writer's in memory). A poisoned guard is recovered as `write`
-    /// recovers its own: a rolled-back transaction leaves the connection consistent.
+    /// Runs `f` under the purger connection. A poisoned guard is recovered as `write` recovers its own: a rolled-back
+    /// transaction leaves the connection consistent.
     pub fn purge<T>(
         &self,
         f: impl FnOnce(&mut Connection) -> Result<T, LedgerError>,
@@ -339,8 +326,7 @@ impl LedgerDb {
             std::thread::sleep(Duration::from_millis(1));
         }
         let waiting = || self.writes.begun.load(Ordering::SeqCst) > begun;
-        let purger = self.purger.as_ref().unwrap_or(&self.writer);
-        let mut conn = recovered(purger);
+        let mut conn = recovered(&self.purger);
         f(&mut conn, &waiting)
     }
 
@@ -362,54 +348,39 @@ impl LedgerDb {
     }
 
     fn bump_statistics_generation(&self) {
-        if let Some(readers) = &self.readers {
-            readers.generation.fetch_add(1, Ordering::SeqCst);
-        }
+        self.readers.generation.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Runs `f` on a blocking worker under a pooled reader connection, so a slow read never parks the runtime thread
     /// that serves proxy traffic. A read waits only while every pooled connection is out, and it waits before its
-    /// worker spawns, so a waiting read holds no blocking worker. In memory it runs on the one connection, behind the
-    /// writer's mutex.
+    /// worker spawns, so a waiting read holds no blocking worker.
     pub async fn read<T: Send + 'static>(
         self: &Arc<Self>,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError> + Send + 'static,
     ) -> Result<T, LedgerError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.page_reads.fetch_add(1, Ordering::SeqCst);
-        let task = match &self.readers {
-            Some(readers) => {
-                let reader = readers.take().await;
-                let pool = Arc::clone(readers);
-                tokio::task::spawn_blocking(move || LedgerDb::lend(&pool, reader, f))
-            }
-            None => {
-                let db = Arc::clone(self);
-                tokio::task::spawn_blocking(move || db.read_blocking(f))
-            }
-        };
-        task.await.map_err(|_| LedgerError::ReadCanceled)?
+        let reader = self.readers.take().await;
+        let pool = Arc::clone(&self.readers);
+        tokio::task::spawn_blocking(move || LedgerDb::lend(&pool, reader, f))
+            .await
+            .map_err(|_| LedgerError::ReadCanceled)?
     }
 
     /// The same read on the calling thread, for the event mirror's one read as the ledger task starts and for tests
     /// that hold no runtime worker to spare. It waits only while every pooled connection is out. Under the runtime
-    /// every wait on the pool is `read`'s, and no blocking worker of the runtime waits on the pool here (`read`'s
-    /// in-memory arm calls this on a worker, where it takes the writer's mutex and never the pool): a worker waiting
-    /// on the pool can be the worker a queued `read` closure needs to return its connection, and with every worker
-    /// waiting the pool never gets one back.
+    /// every wait on the pool is `read`'s, and no blocking worker of the runtime waits on the pool here: a worker
+    /// waiting on the pool can be the worker a queued `read` closure needs to return its connection, and with every
+    /// worker waiting the pool never gets one back.
     pub fn read_blocking<T>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError>,
     ) -> Result<T, LedgerError> {
         // A read opens no transaction but a read one, such as `list_request_page`'s, which rolls back as it drops
         // while the panic unwinds, so a closure that panics mid-row leaves the connection as consistent as it was
-        // before the call. Returning the reader through `Returned`, and recovering the writer's guard in memory,
-        // rather than propagating the poisoning, keeps one panicked read from turning every later read into a
-        // `ReadCanceled`.
-        match &self.readers {
-            Some(readers) => LedgerDb::lend(readers, readers.take_blocking(), f),
-            None => f(&recovered(&self.writer)),
-        }
+        // before the call. Returning the reader through `Returned` rather than propagating the poisoning keeps one
+        // panicked read from turning every later read into a `ReadCanceled`.
+        LedgerDb::lend(&self.readers, self.readers.take_blocking(), f)
     }
 
     /// Runs `f` on a pooled reader under `Returned`, so the reader goes back to the pool however `f` ends.
@@ -475,8 +446,7 @@ impl LedgerDb {
 
     /// `insert_request_at` with `PriceRevisions::shipped()`. The production landing goes through `insert_request_in`
     /// inside the writer with the list it was started on, so this entry serves the test suites, and a test that
-    /// prices on a list of its own lands through `insert_request_at`. Built for tests alone, since a production
-    /// caller would band a request at the shipped thresholds whatever file the operator loaded.
+    /// prices on a list of its own lands through `insert_request_at`.
     #[cfg(any(test, feature = "test-support"))]
     pub fn insert_request(
         &self,
@@ -490,6 +460,7 @@ impl LedgerDb {
     /// Writes the request and its attempts and folds them into the rollups in one transaction, each answered attempt
     /// under the prompt-length band `prices` selects at the revision in force at the request's `received_at`. The
     /// handle holds no clock, so the row's `landed_at` is one past the newest the ledger holds.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn insert_request_at(
         &self,
         request: &RequestRecord,
@@ -531,19 +502,15 @@ impl LedgerDb {
         self.page_reads.load(Ordering::SeqCst)
     }
 
-    /// The pooled readers' statistics generation. 0 on an in-memory ledger, since the generation lives on the pool,
-    /// which an in-memory ledger lacks.
+    /// The pooled readers' statistics generation.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_statistics_generation(&self) -> u64 {
-        self.readers
-            .as_ref()
-            .map_or(0, |readers| readers.generation.load(Ordering::SeqCst))
+        self.readers.generation.load(Ordering::SeqCst)
     }
 
     /// Moves the pooled readers' statistics generation as a refresh that changed `sqlite_stat1` moves it, so statistics
-    /// a test wrote by hand reach each reader at its next read. Does nothing on an in-memory ledger, since the
-    /// generation lives on the pool, which an in-memory ledger lacks.
+    /// a test wrote by hand reach each reader at its next read.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
     pub fn debug_bump_statistics_generation(&self) {
@@ -1597,7 +1564,6 @@ pub(crate) fn read_version(conn: &Connection) -> Result<u32, LedgerError> {
     Ok(migrations::stored_version(conn, VERSION_WITHOUT_ROW)?)
 }
 
-/// Shared by both opens, so an in-memory ledger analyzes at its open as a file does.
 fn analyze_at_open(conn: &Connection) -> Result<(), LedgerError> {
     conn.pragma_update(None, "analysis_limit", ANALYSIS_LIMIT)?;
     conn.execute_batch(&format!("PRAGMA optimize={OPEN_OPTIMIZE_MASK:#x}"))?;
@@ -1614,6 +1580,14 @@ pub(crate) fn stat1_rows(
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// A ledger on a file under a temporary directory, for the crate's own test modules.
+#[cfg(test)]
+pub(crate) fn open_temp() -> (LedgerDb, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+    (db, dir)
 }
 
 #[cfg(test)]
@@ -1915,7 +1889,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_read_runs_off_the_runtime_thread_and_answers_on_it() {
-        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let (db, _dir) = crate::db::open_temp();
+        let db = Arc::new(db);
         let caller = std::thread::current().id();
         let (worker, version) = db
             .read(move |c| Ok((std::thread::current().id(), read_version(c)?)))
@@ -2241,18 +2216,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_panicked_read_answers_read_canceled_and_the_next_read_on_the_same_ledger_succeeds() {
-        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-        let panicked = db
-            .read(|_conn| -> Result<(), LedgerError> {
-                panic!("a read closure that never means to answer");
-            })
-            .await;
-        assert!(matches!(panicked, Err(LedgerError::ReadCanceled)));
-        assert_eq!(
-            db.read_blocking(read_version).unwrap(),
-            latest_version(),
-            "the poisoned guard recovered rather than turning every later read into ReadCanceled too"
-        );
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
         let panicked = db
@@ -2270,7 +2233,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_writer_side_hook_fails_or_holds_the_read_it_names_and_no_other() {
-        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let (db, _dir) = crate::db::open_temp();
+        let db = Arc::new(db);
         assert_eq!(
             db.writer_read(WriterRead::ParkedCount, crate::query::parked_count)
                 .await
@@ -2320,7 +2284,8 @@ mod tests {
     #[tokio::test]
     async fn a_writer_side_read_recovers_a_poisoned_writer_guard_and_maps_its_own_panic_to_read_canceled(
     ) {
-        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let (db, _dir) = crate::db::open_temp();
+        let db = Arc::new(db);
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             db.write(|_| -> Result<(), LedgerError> { panic!("a bug inside the closure") })
         }));
@@ -2345,7 +2310,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_panic_inside_a_write_closure_leaves_the_writer_usable() {
-        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let (db, _dir) = crate::db::open_temp();
+        let db = Arc::new(db);
         let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             db.write(|_| -> Result<(), LedgerError> { panic!("a bug inside the closure") })
         }));
@@ -2663,7 +2629,8 @@ mod tests {
             let (row, _) = db.request(id).await.unwrap().unwrap();
             row.guardrails.into_iter().map(|m| m.guardrail_id).collect()
         }
-        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let (db, _dir) = crate::db::open_temp();
+        let db = Arc::new(db);
         let matched = |id: &str, guardrails: &[&str]| RequestRecord {
             guardrails: guardrails
                 .iter()

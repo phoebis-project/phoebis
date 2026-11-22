@@ -12,7 +12,7 @@ use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
-    key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, PriceRevisions, RequestRecord,
+    key_usage_windows, AttemptRecord, LedgerConfig, PriceRevisions, RequestRecord,
     KEY_RANGE_PREDICATE,
 };
 use phoebis_store::{
@@ -73,7 +73,7 @@ fn request(
 
 #[test]
 fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.insert_request(
         &request(
             "r1",
@@ -187,7 +187,7 @@ fn request_at(id: &str, key_id: &str, at: i64) -> RequestRecord {
 
 #[test]
 fn the_day_window_is_the_tail_of_the_weeks_own_rows() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // Off the hour, so the reported bound can only match if it is rounded down to the bucket the sum starts
     // at rather than copied from the caller's instant.
     let now = 30 * DAY_MS + HOUR_MS + 1_234;
@@ -219,7 +219,7 @@ fn the_day_window_is_the_tail_of_the_weeks_own_rows() {
 
 #[test]
 fn the_windows_read_the_presenting_keys_generation_alone_and_start_where_their_name_says() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = 30 * DAY_MS + HOUR_MS + 1_234;
     // Two holders of one id inside one hour: the earlier one's row and the current one's.
     let earlier = RequestRecord {
@@ -257,7 +257,7 @@ fn the_windows_read_the_presenting_keys_generation_alone_and_start_where_their_n
 
 #[test]
 fn the_keyed_read_is_planned_on_an_index_that_starts_with_the_key() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let plan = db
         .read_blocking(|c| {
             let mut stmt = c.prepare(&format!(
@@ -739,7 +739,8 @@ async fn a_ledger_the_route_cannot_read_is_refused_in_the_relays_error_shape() {
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     // A ledger without the table the window reads is the cheapest stand-in for the disk failure this branch
     // exists for; the key still authenticates against the router's own snapshot.
-    let unreadable = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (unreadable, _unreadable_dir) = common::temp_ledger();
+    let unreadable = Arc::new(unreadable);
     unreadable
         .write(|c| {
             c.execute_batch("DROP TABLE rollups_hourly")?;

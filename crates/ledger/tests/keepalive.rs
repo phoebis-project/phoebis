@@ -27,7 +27,8 @@ fn delta(at: i64, kind: &str) -> KeepaliveDelta {
 
 #[tokio::test]
 async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let at = 1_700_000_000_000;
     db.insert_request(
         &RequestRecord {
@@ -442,7 +443,7 @@ fn a_kept_warm_credit_folds_under_its_requests_client_and_prices_its_saving_unde
         kept_warm_5m_tokens: 10,
         ..delta(at, "inference")
     };
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(&tx, &credit("claude-code/desk"))?;
@@ -488,7 +489,7 @@ fn a_settlement_a_skip_and_a_migration_mark_without_a_client_fold_under_the_rese
         client: UNATTRIBUTED.into(),
         ..delta
     };
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(
@@ -563,7 +564,7 @@ async fn the_writer_lands_a_keepalive_record_in_its_batch() {
 /// they credit, ahead of the overage flag the answer reported, as `funding_of` reads the request's attempt.
 #[test]
 fn a_usage_based_seats_credit_and_wasted_probe_fold_under_usage_based_beside_its_request_row() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let at = 1_700_000_000_000;
     db.insert_request(
         &RequestRecord {
@@ -660,7 +661,7 @@ fn a_usage_based_seats_credit_and_wasted_probe_fold_under_usage_based_beside_its
 /// requests they keep warm; a delta that names no speed, as every standard one does, files standard.
 #[test]
 fn a_fast_recipes_credit_files_under_speed_fast() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let at = 1_700_000_000_000;
     db.write(|c| {
         let tx = c.transaction()?;
@@ -749,7 +750,7 @@ fn land_expiry(db: &LedgerDb, id: &str, received_at: i64, key: &str) {
 /// between them.
 #[test]
 fn the_expiry_read_sums_a_pool_and_keys_rows_across_hours() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let at = 1_700_000_000_000;
     land_expiry(&db, "r1", at, "desktop");
     land_expiry(&db, "r2", at + 3_600_000, "desktop");

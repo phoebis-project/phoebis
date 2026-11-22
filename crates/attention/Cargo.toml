@@ -22,6 +22,8 @@ axum = { workspace = true }
 bytes = { workspace = true }
 fake-upstream = { path = "../../tests/fake_upstream" }
 http-body-util = { workspace = true }
+# A reader test lands a request priced on a list of its own, through the landing that the feature gates.
+phoebis-ledger = { path = "../ledger", features = ["test-support"] }
 # A reader test stores a limit reset block from a usage body through the parser's re-export, which needs the feature.
 phoebis-oauth = { path = "../oauth", features = ["test-support"] }
 # A backoff test polls a real usage service over the fake upstream, which needs a profile and a control client.
@@ -31,4 +33,6 @@ phoebis-profile = { path = "../profile" }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 # The backoff test's control client.
 phoebis-transport = { path = "../transport" }
+# The rig's ledger file lives under a temporary directory.
+tempfile = { workspace = true }
 tower = { workspace = true }

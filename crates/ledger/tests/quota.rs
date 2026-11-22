@@ -13,7 +13,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
     hourly_window_samples, latest_quota, lead_over_pace, HourlyWindowSample, LedgerConfig,
-    LedgerDb, PlanTables, QuotaPoll, QuotaSampleRecord, SampleSource, Sampled, POLL_INTERVAL,
+    PlanTables, QuotaPoll, QuotaSampleRecord, SampleSource, Sampled, POLL_INTERVAL,
 };
 use phoebis_oauth::{ClaimOutcome, PollOutcome};
 use phoebis_routing::{
@@ -528,7 +528,8 @@ async fn a_head_and_a_poll_of_one_bucket_both_stand_in_either_order_and_the_late
         (&head, &poll, "the head first"),
         (&poll, &head, "the poll first"),
     ] {
-        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let (db, _dir) = common::temp_ledger();
+        let db = Arc::new(db);
         db.insert_samples(&[], Some(first)).unwrap();
         db.insert_samples(&[], Some(second)).unwrap();
         assert_eq!(
@@ -929,7 +930,8 @@ async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let store = Arc::new(Store::open(&path, &StorageKey::generate(), wall()).unwrap());
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
     let h = harness_on(
         store,
@@ -3283,7 +3285,7 @@ async fn a_poll_whose_403_read_the_profile_reads_it_no_second_time() {
 
 #[test]
 fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let sample_of = |account: &str, bucket: i64, utilization: f64| QuotaSampleRecord {
         account_id: account.into(),
         bucket,
@@ -3365,7 +3367,7 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
 #[test]
 fn latest_quota_answers_each_windows_newest_sample_of_the_day_and_an_account_whose_samples_are_older_is_absent(
 ) {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let sample = |account: &str, window: &str, bucket: i64, utilization: f64| QuotaSampleRecord {
         account_id: account.into(),
         bucket,
@@ -3486,7 +3488,8 @@ async fn a_polls_extra_usage_row_stores_the_share_as_a_fraction_and_the_spend_ob
     // rounded 41 tells the two columns apart.
     let with_object = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250001,"used_credits":102501.0,"utilization":41.25,"currency":"USD","decimal_places":2},"spend":{"used":{"amount_minor":102500,"currency":"USD","exponent":2},"limit":{"amount_minor":250000,"currency":"USD","exponent":2},"percent":41}}"#;
     let amounts_alone = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250000,"used_credits":102500.0,"utilization":41.0,"currency":"USD","decimal_places":2}}"#;
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     for (body, at) in [(&with_object[..], NOW), (&amounts_alone[..], NOW + 300_000)] {
         let (quota, extra) = phoebis_ledger::samples_from_poll(&seat_poll(body, at));
         db.insert_samples(&quota, extra.as_ref()).unwrap();
@@ -3619,7 +3622,8 @@ async fn a_usage_based_attempts_head_row_carries_the_share_and_the_reset_with_no
         ("anthropic-ratelimit-unified-overage-reset", reset),
     ];
     let mut assembler = phoebis_ledger::Assembler::new(Arc::new(|| NOW));
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     for events in [
         headed("r-seat", "seat", true, &full, NOW),
         headed("r-reset", "seat-reset", true, &reset_only, NOW),
@@ -3708,7 +3712,8 @@ async fn the_polled_read_answers_the_poll_row_under_a_newer_head_row_while_the_l
         SampleSource::Head,
         0.4,
     );
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     db.insert_samples(&[], Some(&poll)).unwrap();
     db.insert_samples(&[], Some(&head)).unwrap();
     let (latest, polled) = db
@@ -3737,7 +3742,8 @@ async fn the_polled_read_answers_the_poll_row_of_a_bucket_a_head_row_shares_in_e
         (&head, &poll, "the head first"),
         (&poll, &head, "the poll first"),
     ] {
-        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let (db, _dir) = common::temp_ledger();
+        let db = Arc::new(db);
         db.insert_samples(&[], Some(first)).unwrap();
         db.insert_samples(&[], Some(second)).unwrap();
         let polled = db
@@ -3769,7 +3775,8 @@ async fn the_share_read_answers_the_newest_row_that_carries_a_share_under_a_newe
             0.0,
         )
     };
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     for row in [&poll, &head, &reset_only] {
         db.insert_samples(&[], Some(row)).unwrap();
     }
@@ -3805,7 +3812,8 @@ async fn a_head_naming_the_reset_alone_keeps_the_share_an_earlier_head_wrote_in_
         overage_reset: later_reset,
         ..extra_row(bucket, SampleSource::Head, 0.0)
     };
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     for row in [&poll, &head, &reset_only] {
         db.insert_samples(&[], Some(row)).unwrap();
     }

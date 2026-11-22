@@ -1,5 +1,6 @@
 //! Rollups for a synthetic day equal a direct aggregation of the raw rows for every group-by, the unattributed
 //! bucket included, and merged-histogram percentiles lie within one bucket of the exact ones.
+mod common;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
@@ -224,7 +225,7 @@ fn sum_by(
 
 #[test]
 fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let mut rows = synthetic_day(11);
     // Every twentieth request is written twice, the first time with other tokens and another serving account:
     // a retried record must leave exactly one contribution, under the rows the ledger holds now.
@@ -385,7 +386,7 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
 
 #[test]
 fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let plant = |id: &str,
                  key: Option<&str>,
                  generation: i64,
@@ -564,7 +565,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
 #[test]
 fn the_model_grouping_labels_its_empty_key_no_model_on_the_breakdown_and_the_series() {
     const HOUR_MS: i64 = 3_600_000;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let plant = |id: &str, model: &str, kind: &str, outcome: &str| {
         let request = RequestRecord {
             id: id.into(),
@@ -658,7 +659,7 @@ fn the_model_grouping_labels_its_empty_key_no_model_on_the_breakdown_and_the_ser
 fn the_classifier_grouping_labels_its_reserved_id_none_on_the_breakdown_and_the_series_while_the_key_grouping_keeps_unattributed(
 ) {
     const HOUR_MS: i64 = 3_600_000;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let plant = |id: &str, key: Option<&str>, classifier: Option<&str>| {
         let request = RequestRecord {
             id: id.into(),
@@ -758,7 +759,8 @@ fn selected_in_memory(row: &RollupRow, f: &RollupFilter, live: &LiveKeys) -> boo
 #[tokio::test]
 async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_breakdown() {
     const HOUR_MS: i64 = 3_600_000;
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let from = 6 * HOUR_MS;
     let to = from + 400 * DAY_MS;
     let mut planted = synthetic_day(17);
@@ -871,7 +873,7 @@ async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_b
 
 #[test]
 fn a_group_of_plan_probes_alone_stays_out_of_the_default_breakdown() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let plant = |id: &str, key: &str, kind: &str| {
         let (mut request, mut attempts) = synthetic_day(3).swap_remove(0);
         request.id = id.into();
@@ -932,7 +934,8 @@ fn a_group_of_plan_probes_alone_stays_out_of_the_default_breakdown() {
 /// $57.
 #[tokio::test]
 async fn a_probes_off_breakdown_answers_a_billed_probe_s_group_with_its_dollars_and_no_request() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let model = "claude-sonnet-5-5";
     plant_share(
         &db,
@@ -970,7 +973,7 @@ async fn a_probes_off_breakdown_answers_a_billed_probe_s_group_with_its_dollars_
 
 #[test]
 fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(
@@ -1038,7 +1041,7 @@ fn the_saving_prices_each_kept_warm_count_at_its_ttls_write_rate_less_the_read()
         },
     );
     let at = ms(2026, 1, 15, 10, 0);
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         let tx = c.transaction()?;
         for (model, five_minutes, hour) in [
@@ -1104,7 +1107,7 @@ fn the_saving_prices_each_kept_warm_count_at_its_ttls_write_rate_less_the_read()
 
 #[test]
 fn a_keepalive_credits_row_files_under_the_reserved_class() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(
@@ -1175,7 +1178,7 @@ fn peak(db: &LedgerDb, account: &str) -> Option<f64> {
 
 #[test]
 fn a_replace_that_lowers_a_reading_lowers_the_accounts_hourly_peak() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.insert_request(&replaced("r1"), &[reading("r1", "a", 0.9)], None)
         .unwrap();
     assert_eq!(peak(&db, "a"), Some(0.9));
@@ -1190,7 +1193,7 @@ fn a_replace_that_lowers_a_reading_lowers_the_accounts_hourly_peak() {
 
 #[test]
 fn a_replace_that_moves_the_serving_attempt_empties_the_old_accounts_reading() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.insert_request(&replaced("r1"), &[reading("r1", "a", 0.9)], None)
         .unwrap();
     db.insert_request(&replaced("r1"), &[reading("r1", "b", 0.4)], None)
@@ -1260,7 +1263,7 @@ fn blocked(n: u64) -> BTreeMap<String, u64> {
 
 #[test]
 fn a_flagged_request_folds_into_its_hours_refusals_map_and_under_no_other_figure() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.insert_request(&refusal("r1", "k"), &[], None).unwrap();
     let rows = all_rows(&db);
     assert_eq!(rows.len(), 1, "one row for the refused request's hour");
@@ -1356,7 +1359,7 @@ fn refusal_rows(rows: &[(&str, &str, u64)]) -> Vec<RefusalCount> {
 #[test]
 fn the_refusal_count_reads_each_served_refusal_in_range_by_model_and_category_and_the_fallbacks_in_range(
 ) {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_stop(&db, "h1", 1_000, "a", "refusal", Some("harmful_request"));
     plant_stop(&db, "h2", 2_000, "a", "refusal", Some("harmful_request"));
     plant_stop(&db, "t1", 3_000, "a", "refusal", Some("restricted_topic"));
@@ -1440,7 +1443,7 @@ const AT_THE_HOUR_CEILING: i64 = 82_800_000;
 /// ceiling of its end.
 #[test]
 fn the_refusal_count_reads_the_whole_hours_a_range_touches_up_to_the_hour_ceiling_of_its_end() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_stop(
         &db,
         "before",
@@ -1586,7 +1589,7 @@ fn category_counts(rows: &[(&str, u64)]) -> Vec<RefusalCount> {
 
 #[test]
 fn the_refusal_count_narrows_by_a_client_pattern_on_the_label_the_rollups_fold() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_callers(&db);
     assert_eq!(
         count_under(&db, &["claude-code/cli"], &[]).rows,
@@ -1623,7 +1626,7 @@ fn the_refusal_count_narrows_by_a_client_pattern_on_the_label_the_rollups_fold()
 
 #[test]
 fn the_refusal_count_matches_a_user_agent_pattern_against_the_agents_first_product_token() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_callers(&db);
     assert_eq!(
         count_under(&db, &[], &["claude-cli/2.1.310"]).rows,
@@ -1644,7 +1647,7 @@ fn the_refusal_count_matches_a_user_agent_pattern_against_the_agents_first_produ
 
 #[test]
 fn the_refusal_count_counts_the_rows_either_pattern_of_a_list_matches() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_callers(&db);
     assert_eq!(
         count_under(&db, &[], &["claude-cli/2.1.311", "-"]).rows,
@@ -1660,7 +1663,7 @@ fn the_refusal_count_counts_the_rows_either_pattern_of_a_list_matches() {
 
 #[test]
 fn the_refusal_count_counts_a_row_only_where_the_client_and_the_user_agent_lists_both_match() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_callers(&db);
     assert_eq!(
         count_under(&db, &["claude-code/cli"], &["claude-cli/2.1.310"]).rows,
@@ -1671,7 +1674,7 @@ fn the_refusal_count_counts_a_row_only_where_the_client_and_the_user_agent_lists
 
 #[test]
 fn a_rejection_after_an_attempt_folds_as_a_rejected_request_as_before() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let request = RequestRecord {
         status: Some(403),
         outcome: "rejected".into(),
@@ -1712,7 +1715,7 @@ fn a_rejection_after_an_attempt_folds_as_a_rejected_request_as_before() {
 
 #[test]
 fn a_replaced_flagged_request_leaves_its_old_row_and_a_row_of_refusals_alone_is_kept() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.insert_request(&refusal("r1", "k"), &[], None).unwrap();
     db.insert_request(&refusal("r1", "k2"), &[], None).unwrap();
     assert_eq!(
@@ -1724,7 +1727,7 @@ fn a_replaced_flagged_request_leaves_its_old_row_and_a_row_of_refusals_alone_is_
         "the old row held the refusal alone and goes, the new row holds the map alone and stays"
     );
 
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // Landed without an attempt row, the served request files under the unattributed account the refusal's row names:
     // a request with an attempt files under that attempt's account, a row of its own.
     db.insert_request(&replaced("s1"), &[], None).unwrap();
@@ -1759,7 +1762,7 @@ fn a_replaced_flagged_request_leaves_its_old_row_and_a_row_of_refusals_alone_is_
 
 #[test]
 fn merged_histogram_percentiles_lie_within_one_bucket_of_the_exact_percentiles() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let rows = synthetic_day(23);
     for (request, attempts) in &rows {
         db.insert_request(request, attempts, None).unwrap();
@@ -1809,7 +1812,7 @@ fn merged_histogram_percentiles_lie_within_one_bucket_of_the_exact_percentiles()
 
 #[test]
 fn a_breakdown_by_request_class_splits_conversation_from_overhead() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let plant = |id: &str, class: Option<&str>| {
         let (mut request, mut attempts) = synthetic_day(5).swap_remove(0);
         request.id = id.into();
@@ -1889,7 +1892,7 @@ fn served_at(id: &str, speeds: &[Option<&str>]) -> (RequestRecord, Vec<AttemptRe
 
 #[test]
 fn group_by_speed_splits_the_rows_by_served_speed() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (id, speed) in [
         ("r1", Some("fast")),
         ("r2", Some("fast")),
@@ -1928,7 +1931,7 @@ fn group_by_speed_splits_the_rows_by_served_speed() {
 /// way: the `[1m]` spelling names the model it stands for.
 #[test]
 fn a_model_filter_in_the_long_context_spelling_lists_its_canonical_models_requests() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (id, model) in [("r-sonnet", "claude-sonnet-5"), ("r-opus", "claude-opus-5")] {
         let request = RequestRecord {
             id: id.into(),
@@ -1979,7 +1982,7 @@ fn a_model_filter_in_the_long_context_spelling_lists_its_canonical_models_reques
 
 #[test]
 fn the_speed_filter_reads_the_serving_attempts_speed() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let (request, attempts) = served_at("r-moved", &[None, Some("fast")]);
     db.insert_request(&request, &attempts, None).unwrap();
     let (request, attempts) = served_at("r-plain", &[None]);
@@ -2159,7 +2162,8 @@ fn fable_shares(tables: &PlanTables, usage: PinUsage) -> WindowShares {
 
 #[tokio::test]
 async fn a_breakdown_row_under_the_account_grouping_sums_its_plan_rows_shares() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let plain = usage(1_000, 100);
     let cached = PinUsage {
         input: 500,
@@ -2227,7 +2231,8 @@ async fn a_breakdown_row_under_the_account_grouping_sums_its_plan_rows_shares() 
 
 #[tokio::test]
 async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_other() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -2266,7 +2271,8 @@ async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_othe
 #[tokio::test]
 async fn a_group_holding_a_sized_and_an_unsized_row_of_one_account_answers_the_unsized_rows_windows_unpriced(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -2304,7 +2310,8 @@ async fn a_group_holding_a_sized_and_an_unsized_row_of_one_account_answers_the_u
 /// answers them.
 #[tokio::test]
 async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_dollars_and_figures() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let prices = phoebis_ledger::test_tables::api_prices();
     let costs = phoebis_ledger::test_tables::subscription_costs();
     let at = phoebis_ledger::test_tables::JANUARY_2026;
@@ -2488,7 +2495,7 @@ fn test_cost_groups(db: &LedgerDb, group_by: GroupBy, probes_counted: bool) -> V
 
 #[test]
 fn a_plan_row_on_a_model_the_cost_model_cannot_weigh_nulls_its_groups_figure() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (id, account, model) in [
         ("r-priced", "a", "claude-sonnet-5-5"),
         ("r-tierless", "a", "claude-unlisted-1"),
@@ -2520,7 +2527,7 @@ fn a_plan_row_on_a_model_the_cost_model_cannot_weigh_nulls_its_groups_figure() {
 
 #[test]
 fn a_plan_probe_the_cost_model_cannot_weigh_nulls_the_probe_figure_and_not_the_request_figure() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_share(
         &db,
         ShareRow {
@@ -2554,7 +2561,7 @@ fn a_plan_probe_the_cost_model_cannot_weigh_nulls_the_probe_figure_and_not_the_r
 
 #[test]
 fn a_row_on_a_model_without_a_weight_nulls_the_figure_it_joins_alone() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // Opus 5 carries a null weight: on `a` the probe runs on it, on `b` the request does, and on `c` a stopped probe's
     // wasted counts do.
     for (id, account, kind, model) in [
@@ -2635,7 +2642,7 @@ fn a_row_on_a_model_without_a_weight_nulls_the_figure_it_joins_alone() {
 
 #[test]
 fn the_kept_warm_and_probe_counts_count_what_a_plan_account_served_apart() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // Two plan probes and a request on `a`, and a probe through the API key account `k`.
     for (id, account, account_kind, kind) in [
         ("r-request", "a", AccountKind::Oauth, "inference"),
@@ -2800,7 +2807,8 @@ async fn a_billed_row_with_tokens_adds_nothing_to_the_figure_and_a_billed_only_g
             "a billed row beside a plan row on a model without a weight",
         ),
     ] {
-        let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+        let (db, _dir) = common::temp_ledger();
+        let db = std::sync::Arc::new(db);
         for row in rows {
             plant_share(&db, row);
         }
@@ -2812,7 +2820,7 @@ async fn a_billed_row_with_tokens_adds_nothing_to_the_figure_and_a_billed_only_g
 
 #[test]
 fn a_haiku_row_adds_nothing_to_the_fable_week_and_never_nulls_it() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_share(
         &db,
         ShareRow {
@@ -2879,7 +2887,8 @@ fn a_haiku_row_adds_nothing_to_the_fable_week_and_never_nulls_it() {
 
 #[tokio::test]
 async fn a_genuinely_unpriced_fable_row_nulls_the_week() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -2914,7 +2923,8 @@ async fn a_genuinely_unpriced_fable_row_nulls_the_week() {
 
 #[tokio::test]
 async fn the_probe_inclusion_rule_governs_the_request_shares() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let inference = usage(1_000, 100);
     let probe = PinUsage {
         cache_read: 2_000,
@@ -2978,7 +2988,8 @@ async fn the_probe_inclusion_rule_governs_the_request_shares() {
 
 #[tokio::test]
 async fn an_overage_row_and_an_api_key_group_add_to_no_share() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -3028,7 +3039,8 @@ async fn an_overage_row_and_an_api_key_group_add_to_no_share() {
 
 #[tokio::test]
 async fn a_series_bucket_prices_as_the_breakdown_does() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -3098,7 +3110,8 @@ async fn a_series_bucket_prices_as_the_breakdown_does() {
 
 #[tokio::test]
 async fn the_funding_filter_partitions_the_rows() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -3181,7 +3194,8 @@ async fn the_funding_filter_partitions_the_rows() {
 #[tokio::test]
 async fn a_usage_based_seats_row_files_under_usage_based_stays_billed_and_counts_in_the_metered_sum(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -3264,7 +3278,8 @@ async fn a_usage_based_seats_row_files_under_usage_based_stays_billed_and_counts
 #[tokio::test]
 async fn an_api_key_account_s_rows_stay_billed_and_tierless_when_its_id_comes_back_as_an_oauth_account(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -3327,7 +3342,8 @@ async fn an_api_key_account_s_rows_stay_billed_and_tierless_when_its_id_comes_ba
 #[tokio::test]
 async fn an_oauth_account_s_plan_row_stays_plan_under_its_tier_when_its_id_comes_back_as_an_api_key_account(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -3372,7 +3388,8 @@ async fn an_oauth_account_s_plan_row_stays_plan_under_its_tier_when_its_id_comes
 
 #[tokio::test]
 async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_under_plan() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -3483,7 +3500,7 @@ async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_und
 
 #[test]
 fn a_fast_recipe_s_credit_files_under_fast_whatever_its_overage_flag() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         let tx = c.transaction()?;
         fold_keepalive(
@@ -3523,7 +3540,8 @@ fn a_fast_recipe_s_credit_files_under_fast_whatever_its_overage_flag() {
 #[tokio::test]
 async fn a_group_whose_rows_recorded_no_tier_answers_no_share_and_a_dropped_account_prices_under_its_rows_tier(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -3608,7 +3626,8 @@ fn equivalent_of(tables: &PlanTables, model: &str, usage: PinUsage, at: i64) -> 
 /// equivalent adds across accounts and account tiers under a grouping that spans them, where the shares cannot.
 #[tokio::test]
 async fn the_equivalent_under_the_model_grouping_adds_two_accounts_of_two_tiers_into_one_figure() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let (pro, max) = (usage(1_000, 100), usage(3_000, 50));
     plant_share(
         &db,
@@ -3664,7 +3683,8 @@ async fn the_equivalent_under_the_model_grouping_adds_two_accounts_of_two_tiers_
 /// two add to `cost_usd`, and the billed rows add nothing to the equivalent.
 #[tokio::test]
 async fn the_billed_dollars_and_the_plan_rows_dollars_add_to_the_group_s_cost() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let plan = usage(1_000, 100);
     plant_share(
         &db,
@@ -3734,7 +3754,8 @@ async fn the_billed_dollars_and_the_plan_rows_dollars_add_to_the_group_s_cost() 
 /// under the model grouping as under the account grouping.
 #[tokio::test]
 async fn the_equivalent_split_s_four_kinds_sum_to_the_figure_and_the_cache_halves_read_by_model() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let cached = PinUsage {
         input: 500,
         cache_read: 2_000,
@@ -3800,7 +3821,8 @@ async fn the_equivalent_split_s_four_kinds_sum_to_the_figure_and_the_cache_halve
 /// its own row's hour.
 #[tokio::test]
 async fn the_probe_equivalent_prices_the_probe_rows_and_the_wasted_counts() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let probe = PinUsage {
         cache_read: 2_000,
         ..PinUsage::default()
@@ -3865,7 +3887,8 @@ async fn the_probe_equivalent_prices_the_probe_rows_and_the_wasted_counts() {
 /// exactly one account, and under the account grouping, and nowhere else.
 #[tokio::test]
 async fn the_shares_answer_under_any_grouping_where_the_filter_names_one_account() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -3933,7 +3956,8 @@ async fn the_shares_answer_under_any_grouping_where_the_filter_names_one_account
 /// account both rows landed on, so the groups answer their shares.
 #[tokio::test]
 async fn a_classifier_rows_cache_equivalents_and_split_read_zero_beside_its_zero_equivalent() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let cached = PinUsage {
         input: 500,
         cache_read: 2_000,
@@ -4162,7 +4186,7 @@ fn a_free_call_on_an_unsized_or_one_window_tier_marks_no_window_and_adds_no_five
 /// the same counts on another account reads its figures there.
 #[test]
 fn a_classifier_row_reads_zero_in_the_session_series_beside_a_plain_rows_figures() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let tables = share_tables();
     plant_share(
         &db,
@@ -4230,7 +4254,7 @@ fn a_classifier_row_reads_zero_in_the_session_series_beside_a_plain_rows_figures
 /// figures of two accounts add into one while their shares do not.
 #[test]
 fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_in_dollars() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let plant = |id: &str,
                  account: &str,
                  kind: AccountKind,
@@ -4774,7 +4798,7 @@ fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
 #[test]
 fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_day_share_at_its_hour(
 ) {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (id, at) in [("peak", WEEKDAY_PEAK), ("off_peak", WEEKDAY_OFF_PEAK)] {
         db.insert_request(
             &RequestRecord {
@@ -4893,7 +4917,7 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
 
 #[test]
 fn a_bucket_counts_every_token_type_its_rows_carry() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // A cold-cache request: cache writes and output, no uncached input and no cache read.
     db.insert_request(
         &RequestRecord {
@@ -4947,7 +4971,7 @@ fn a_bucket_counts_every_token_type_its_rows_carry() {
 
 #[test]
 fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_its_dollars() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // A million Opus 5.5 input tokens per account in one off-band hour.
     let plant = |account: &str, kind: AccountKind, tier: Option<&str>| {
         let id = format!("r-{account}");
@@ -5132,7 +5156,7 @@ fn off_band_point_on_max_20x(db: &LedgerDb, account: &str) -> phoebis_ledger::Bu
 #[test]
 fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_and_counts_every_token(
 ) {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // The same hour on Ultra: a million input tokens of a model the table prices and a million Mystery 2 tokens of
     // a tier it does not place, and a partial sum would read as the hour's share. The rollups read in model order, so
     // Mystery 2 comes before Opus 5.5 and after Fable 5.1, and each order is taken once.
@@ -5184,7 +5208,7 @@ fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_a
 
 #[test]
 fn a_row_with_no_token_never_unprices_a_bucket_and_a_bucket_of_them_alone_reads_no_share() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // A failed request on Sonnet 4.5, a model the cost model has no weight for, books a row with no token beside a
     // priced hour of Opus 5.5: it has nothing to price, so the hour keeps its share.
     plant_in_the_off_band_hour(&db, "priced", "a", "claude-opus-5-5", Some(1_000_000));
@@ -5216,7 +5240,7 @@ fn a_row_with_no_token_never_unprices_a_bucket_and_a_bucket_of_them_alone_reads_
 
 #[test]
 fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let (started, finished) = (WEEKDAY_BAND_OPENS - 60_000, WEEKDAY_BAND_OPENS + 60_000);
     db.insert_request(
         &RequestRecord {
@@ -5310,7 +5334,7 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
 
 #[test]
 fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (session, speed) in [("s-standard", None), ("s-fast", Some("fast"))] {
         let id = format!("r-{session}");
         db.insert_request(
@@ -5801,7 +5825,8 @@ revisions:
 #[tokio::test]
 async fn a_tiers_burn_figure_scales_each_plan_request_at_the_cost_revision_in_force_when_it_arrived(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     for (id, minute) in [("early", 10), ("late", 45)] {
         plant_share(
             &db,
@@ -5882,7 +5907,8 @@ revisions:
 /// `new_tier`, `old_tier` and `test_tier`.
 #[tokio::test]
 async fn each_burn_point_keys_its_figures_by_the_tiers_of_every_cost_revision() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     for (id, hour) in [("first", 17), ("second", 18)] {
         plant_share(
             &db,
@@ -5982,7 +6008,8 @@ fn three_tier_map(
 #[tokio::test]
 async fn a_tier_its_revision_does_not_size_on_a_window_reads_null_there_beside_the_other_tiers_figures(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_share(
         &db,
         ShareRow {
@@ -6009,7 +6036,8 @@ async fn a_tier_its_revision_does_not_size_on_a_window_reads_null_there_beside_t
 #[tokio::test]
 async fn a_billed_row_and_a_free_classifier_call_add_a_zero_to_every_tiers_burn_figure_an_unsized_tiers_too(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let (from, _) = hour_range(WEEKDAY_OFF_PEAK);
     plant_share(
         &db,
@@ -6097,7 +6125,8 @@ fn plant_burn(db: &LedgerDb, id: &str, account: &str, tier: &str, model: &str, s
 #[tokio::test]
 async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_where_one_account_is_named(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_burn(&db, "r-a-opus", "a", MAX_20X, "claude-opus-5-5", "s");
     plant_burn(&db, "r-a-sonnet", "a", MAX_20X, "claude-sonnet-5-5", "s");
     plant_burn(&db, "r-b-opus", "b", PRO, "claude-opus-5-5", "s");
@@ -6203,7 +6232,8 @@ async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_whe
 /// the cost model has no weight for, which stays and reads unpriced, so a gate written on a priced figure fails here.
 #[tokio::test]
 async fn a_burn_group_of_refusals_alone_is_left_out_beside_an_unpriced_group_with_one_token() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     db.insert_request(
         &RequestRecord {
             id: "r-refused".into(),
@@ -6288,7 +6318,7 @@ async fn a_burn_group_of_refusals_alone_is_left_out_beside_an_unpriced_group_wit
 /// one account, whose attempts alone it then holds.
 #[test]
 fn a_session_series_answers_its_shares_where_the_read_names_one_account() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_burn(&db, "r-a", "a", MAX_20X, "claude-opus-5-5", "s");
     plant_burn(&db, "r-b", "b", PRO, "claude-opus-5-5", "s");
     let tables = PlanTables::shipped();
@@ -6358,7 +6388,7 @@ fn a_session_series_answers_its_shares_where_the_read_names_one_account() {
 /// own busiest sessions even where twenty sessions of another account hold more tokens over the range.
 #[test]
 fn a_session_series_naming_one_account_ranks_that_account_s_sessions_alone() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // Each session carries a million tokens, and a tie ranks by session id, so b's twenty sort ahead of a's one.
     for n in 0..20 {
         plant_burn(
@@ -6412,7 +6442,7 @@ fn a_session_series_naming_one_account_ranks_that_account_s_sessions_alone() {
 /// than session one, so a ranking that binds neither crowds it out of the twenty.
 #[test]
 fn a_session_series_under_a_key_or_a_pool_ranks_and_prices_its_requests_alone() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let plant = |id: &str, session: &str, key: &str, pool: &str, input: Option<u64>| {
         db.insert_request(
             &RequestRecord {
@@ -6498,7 +6528,7 @@ fn a_session_series_under_a_key_or_a_pool_ranks_and_prices_its_requests_alone() 
 /// stay.
 #[test]
 fn a_session_with_tokens_before_the_ranges_first_hour_alone_takes_no_slot_of_the_twenty() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // Each of the twenty carries a million tokens at 20:00, inside the range.
     for n in 0..20 {
         plant_burn(
@@ -6576,7 +6606,8 @@ fn a_session_with_tokens_before_the_ranges_first_hour_alone_takes_no_slot_of_the
 /// match at the generation they carry.
 #[tokio::test]
 async fn the_reserved_key_and_pool_read_the_requests_that_store_neither() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let plant = |id: &str, account: &str, key: Option<&str>, pool: Option<&str>| {
         db.insert_request(
             &RequestRecord {
@@ -6807,7 +6838,7 @@ fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carr
 
 #[test]
 fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_funded(&db, "r-plan", "s", None);
     plant_funded(&db, "r-overage", "s", Some(true));
     let tables = share_tables();
@@ -6883,7 +6914,7 @@ fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
 
 #[test]
 fn a_session_s_overage_attempt_adds_dollars_and_no_share_while_its_plan_attempt_adds_shares() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_funded(&db, "r-plan", "s-mixed", None);
     plant_funded(&db, "r-overage", "s-mixed", Some(true));
     let tables = share_tables();
@@ -6961,7 +6992,7 @@ fn a_session_s_overage_attempt_adds_dollars_and_no_share_while_its_plan_attempt_
 /// point for point, what `burn_series` answers when it reads the range itself for each scope.
 #[test]
 fn the_burn_series_over_one_read_matches_a_read_per_scope() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (mut request, mut attempts) in synthetic_day(5) {
         // The day's Claude models all lack a weight in the cost model; its Opus rows move to Opus 5.5, which the
         // model weighs. Account a's other rows move to what the model prices (Sonnet 5.5, and the API key for its
@@ -7045,7 +7076,7 @@ fn the_burn_series_over_one_read_matches_a_read_per_scope() {
 
 #[test]
 fn the_rewrite_series_and_the_moves_by_reason_read_the_account_rollups() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         let tx = c.transaction()?;
         fold_account(
@@ -7100,7 +7131,7 @@ fn the_rewrite_series_and_the_moves_by_reason_read_the_account_rollups() {
 
 #[test]
 fn the_rewrite_series_sums_the_named_accounts_alone() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         let tx = c.transaction()?;
         fold_account(
@@ -7141,7 +7172,7 @@ fn the_rewrite_series_sums_the_named_accounts_alone() {
 
 #[test]
 fn the_held_series_reads_the_slow_down_columns_per_bucket() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // Two rows of `a` in the second hour, apart by their key, and one of `b`, which the filter leaves out.
     let held = |id: &str, key_id: &str, account_id: &str, held_ms: u64| {
         let request = RequestRecord {
@@ -7202,7 +7233,7 @@ fn the_held_series_reads_the_slow_down_columns_per_bucket() {
 
 #[test]
 fn moves_by_reason_invents_no_vocabulary_for_a_reason_no_code_names_or_none_at_all() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         let tx = c.transaction()?;
         fold_event(
@@ -7271,7 +7302,7 @@ fn moves_by_reason_invents_no_vocabulary_for_a_reason_no_code_names_or_none_at_a
 /// day's 00:00 fill the second point, the one at that edge.
 #[test]
 fn the_account_reads_of_a_range_sum_from_the_hour_that_holds_its_start_on_the_bucket_grid() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         let tx = c.transaction()?;
         fold_account(
@@ -7527,7 +7558,8 @@ async fn series_readers_over(
 /// point the readers answer for it, one past `MAX_POINTS`, where a whole-bucket count reads 10,000 and lets it pass.
 #[tokio::test]
 async fn every_series_reader_refuses_a_range_whose_trailing_partial_bucket_is_one_point_too_many() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let accepted: Vec<&str> = series_readers_over(&db, 10_000 * SIX_HOURS + 3_600)
         .await
         .into_iter()
@@ -7545,7 +7577,8 @@ async fn every_series_reader_refuses_a_range_whose_trailing_partial_bucket_is_on
 /// guard lets through, where a count that rounds a whole bucket up reads 10,001 and refuses it.
 #[tokio::test]
 async fn a_range_of_exactly_the_most_points_answers_from_every_series_reader() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let refused: Vec<(&str, String)> = series_readers_over(&db, 10_000 * SIX_HOURS)
         .await
         .into_iter()
@@ -7674,7 +7707,7 @@ fn budgeted(pool: &str, account: &str, period: BudgetPeriod) -> BudgetedMember {
 
 #[test]
 fn a_members_spend_prices_every_token_kind_at_its_own_rate() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let table = priced_table_distinct("claude-sonnet-5");
     let now = ms(2026, 1, 15, 10, 0);
     plant_spend_every_kind(
@@ -7742,7 +7775,7 @@ fn plant_spend(
 
 #[test]
 fn a_members_spend_is_the_priced_rollups_of_its_utc_period_alone() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let table = priced_table("claude-sonnet-5", 1.0);
 
     // The day bound: a row from the day before is left out; a probe inside the day counts like any other write.
@@ -7857,7 +7890,7 @@ fn a_members_spend_is_the_priced_rollups_of_its_utc_period_alone() {
 
 #[test]
 fn an_unpriced_model_contributes_nothing_to_a_members_spend() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let table = priced_table("claude-sonnet-5", 1.0);
     let now = ms(2026, 1, 15, 10, 0);
     plant_spend(
@@ -7891,7 +7924,7 @@ fn an_unpriced_model_contributes_nothing_to_a_members_spend() {
 
 #[test]
 fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let table = priced_table("claude-sonnet-5", 1.0);
     let now = ms(2026, 1, 20, 12, 0);
     plant_spend(
@@ -7966,7 +7999,7 @@ fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
 
 #[test]
 fn the_rollup_retention_keeps_the_rows_of_a_budgeted_members_active_period() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let table = priced_table("claude-sonnet-5", 1.0);
     let now = ms(2026, 1, 20, 12, 0);
     let ten_days_ago = ms(2026, 1, 10, 12, 0);
@@ -8068,7 +8101,7 @@ fn plant_placement(
 
 #[test]
 fn placements_by_rung_count_hits_from_the_trace_and_the_response() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // content: a hit reads at least the promised prefix.
     plant_placement(&db, "c1", "inference", 1_000, "content", 500, 500);
     plant_placement(&db, "c2", "inference", 2_000, "content", 500, 500);
@@ -8101,7 +8134,7 @@ fn placements_by_rung_count_hits_from_the_trace_and_the_response() {
 /// hour ceiling of its end.
 #[test]
 fn placements_count_the_whole_hours_a_range_touches_up_to_the_hour_ceiling_of_its_end() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_placement(
         &db,
         "before",
@@ -8210,7 +8243,7 @@ fn plant_retried_placement(
 
 #[test]
 fn placements_count_the_serving_attempt_alone_not_every_retried_pass() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_retried_placement(&db, "r1", 1_000, "content", 500, 500);
     let rows = db
         .read_blocking(|c| placements(c, &RollupFilter::default(), &LiveKeys::default(), 0, 10_000))
@@ -8270,7 +8303,7 @@ fn plant_placement_full(
 
 #[test]
 fn placements_apply_the_model_and_client_filter() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_placement_full(
         &db,
         "m1",
@@ -8397,7 +8430,7 @@ fn placed(rows: &[PlacementRow]) -> Vec<(&str, u64)> {
 
 #[test]
 fn placements_match_a_user_agent_pattern_against_the_agents_first_product_token() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_caller_placement(&db, "cli-310", Some("claude-code/cli"), Some(CLI_310), 500);
     plant_caller_placement(
         &db,
@@ -8434,7 +8467,7 @@ fn placements_match_a_user_agent_pattern_against_the_agents_first_product_token(
 
 #[test]
 fn placements_match_a_client_pattern_against_the_label_the_rollups_fold() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_caller_placement(&db, "cli", Some("claude-code/cli"), None, 500);
     // The relay writes an entrypoint of 60 letters into the label whole, past the 64 bytes the rollups keep.
     plant_caller_placement(
@@ -8464,7 +8497,7 @@ fn placements_match_a_client_pattern_against_the_label_the_rollups_fold() {
 
 #[test]
 fn placements_apply_the_keys_and_pools_filter() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_placement_full(
         &db,
         "kp1",
@@ -8536,7 +8569,7 @@ fn placements_apply_the_keys_and_pools_filter() {
 
 #[test]
 fn placements_score_a_with_main_row_like_static() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_placement(&db, "wm1", "inference", 1_000, "with_main", 0, 50);
     plant_placement(&db, "wm2", "inference", 2_000, "with_main", 0, 0);
     let rows = db
@@ -8586,7 +8619,7 @@ fn plant_identity(
 
 #[test]
 fn session_identities_answer_a_session_whose_requests_are_older_than_the_activity_cutoff() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // Old enough that `session_activity`'s own `since` bound would drop it; `session_identities` reads no
     // such bound, since a pin-only row (no request of its own) still needs the identity of what it holds.
     plant_identity(&db, "r1", "k1", 0, "s1", "inference", 0, None, None);
@@ -8613,7 +8646,7 @@ fn session_identities_answer_a_session_whose_requests_are_older_than_the_activit
 
 #[test]
 fn a_forked_sessions_identity_names_its_base_from_its_first_request() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_identity(
         &db,
         "r1",
@@ -8648,7 +8681,7 @@ fn a_forked_sessions_identity_names_its_base_from_its_first_request() {
 
 #[test]
 fn a_forked_sessions_identity_skips_an_auxiliary_request_ahead_of_its_first_main_request() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let plant = |id: &str,
                  session: &str,
                  received_at: i64,
@@ -8723,7 +8756,7 @@ fn a_forked_sessions_identity_skips_an_auxiliary_request_ahead_of_its_first_main
 
 #[test]
 fn a_forked_sessions_identity_skips_a_probe_and_another_keys_session_of_the_same_id() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // The probe is the earliest row of the id and the other key's row lands before the session's own first request,
     // so a lookup that drops either filter answers that row's facts.
     plant_identity(&db, "r1", "k1", 0, "s2", "probe", 500, None, None);
@@ -8771,7 +8804,7 @@ fn a_forked_sessions_identity_skips_a_probe_and_another_keys_session_of_the_same
 
 #[test]
 fn a_session_the_ledger_holds_no_client_request_for_is_absent_from_the_answer() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_identity(&db, "r1", "k1", 0, "s3", "probe", 1_000, None, None);
     let rows = db
         .read_blocking(|c| {
@@ -8793,7 +8826,7 @@ fn a_session_the_ledger_holds_no_client_request_for_is_absent_from_the_answer() 
 
 #[test]
 fn session_identities_chunks_a_call_over_many_sessions_and_merges_the_answer() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let mut named = Vec::new();
     for i in 0..1_000 {
         let session = format!("s{i}");
@@ -8826,7 +8859,7 @@ fn session_identities_chunks_a_call_over_many_sessions_and_merges_the_answer() {
 /// read from the earliest seeded hour, so the sentinel bounds the SQL and nothing multiplies it.
 #[test]
 fn a_lifetime_total_prices_every_row_as_a_read_from_the_earliest_hour_does() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let (first, second) = (ms(2026, 1, 10, 3, 0), ms(2026, 1, 12, 7, 0));
     plant_spend(
         &db,
@@ -8868,7 +8901,7 @@ fn a_lifetime_total_prices_every_row_as_a_read_from_the_earliest_hour_does() {
 /// requests the count differs from the probe's row alone and from all three rows.
 #[test]
 fn the_account_request_counts_leave_the_probe_rows_out() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let at = ms(2026, 1, 10, 3, 0);
     plant_spend(
         &db,
@@ -8902,7 +8935,7 @@ fn the_account_request_counts_leave_the_probe_rows_out() {
 /// after reads them doubled.
 #[test]
 fn a_cost_revision_inside_a_price_span_moves_the_totals_equivalent_at_its_own_boundary() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let costs = PlanTables {
         revisions: CostRevisions::from_yaml(
             &phoebis_ledger::test_tables::SUBSCRIPTION_COSTS.replacen(
@@ -8999,7 +9032,7 @@ fn a_group_mixing_two_clients_prices_each_rows_regime() {
         ..SeriesFilter::default()
     };
     let close = |got: f64, want: f64| (got - want).abs() < 1e-12;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_share(&db, row("r-desk", "claude-code/desk"));
     plant_share(&db, row("r-sdk", "claude-code/sdk-cli"));
     let points = db
@@ -9013,7 +9046,7 @@ fn a_group_mixing_two_clients_prices_each_rows_regime() {
         close(share, 0.01 + 0.02),
         "each row under its own regime: {share}"
     );
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_share(&db, row("r-desk", "claude-code/desk"));
     let sessions = db
         .read_blocking(|c| {
@@ -9040,7 +9073,8 @@ fn a_group_mixing_two_clients_prices_each_rows_regime() {
 #[tokio::test]
 async fn the_dashboard_s_day_and_hour_and_the_pool_s_bucket_split_the_billed_dollars_from_the_plan_rows_equivalent(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let plan = usage(1_000, 0);
     plant_share(
         &db,
@@ -9127,7 +9161,8 @@ async fn the_dashboard_s_day_and_hour_and_the_pool_s_bucket_split_the_billed_dol
 #[tokio::test]
 async fn the_dashboard_counts_an_unflagged_block_in_the_rate_and_the_top_code_like_any_other_rejection(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let row = |n: usize, outcome: &str, status: u16, code: Option<&str>| RequestRecord {
         id: format!("r{n}"),
         received_at: WEEKDAY_OFF_PEAK - 60_000 + n as i64,
@@ -9190,7 +9225,8 @@ fn canceled_at(n: i64, code: &str) -> RequestRecord {
 /// account's cancel alone, whose code sorts first, so a tie would name the client's.
 #[tokio::test]
 async fn the_dashboard_counts_a_client_that_left_among_the_requests_and_not_the_errors() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     db.insert_request(&canceled_at(0, "account_canceled"), &[], None)
         .unwrap();
     db.insert_request(&canceled_at(1, "client_gone"), &[], None)
@@ -9279,7 +9315,8 @@ fn plant_asked_and_refused(db: &LedgerDb) {
 /// requests stay out of the requests and the failed count without a rule of the readers' own.
 #[tokio::test]
 async fn the_pool_traffic_and_the_key_totals_count_the_asked_requests_alone() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_asked_and_refused(&db);
     let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
     let traffic = phoebis_ledger::pool_traffic(
@@ -9308,7 +9345,8 @@ async fn the_pool_traffic_and_the_key_totals_count_the_asked_requests_alone() {
 
 #[tokio::test]
 async fn pools_traffic_answers_every_asked_pool_and_adds_each_rows_figures_into_its_bucket() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let last = WEEKDAY_OFF_PEAK - 60_000;
     let hour = hour_of(last);
     for (n, pool, account, at) in [
@@ -9375,7 +9413,7 @@ async fn pools_traffic_answers_every_asked_pool_and_adds_each_rows_figures_into_
 /// The pools' statement takes the client's cancels off its own complement, apart from the dashboard's fold.
 #[test]
 fn pools_traffic_reads_a_client_that_left_as_a_request_and_no_failed_request() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.insert_request(&canceled_at(0, "client_gone"), &[], None)
         .unwrap();
     let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
@@ -9401,7 +9439,7 @@ fn pools_traffic_reads_a_client_that_left_as_a_request_and_no_failed_request() {
 /// tokens cost $1,100, the seat's probe $23 and the plan probe $400.
 #[test]
 fn a_key_s_totals_add_a_billed_probe_s_dollars_and_no_probe_s_request_or_token() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let model = "claude-sonnet-5-5";
     plant_share(
         &db,
@@ -9514,7 +9552,8 @@ fn plant_a_request_and_a_failed_billed_probe(db: &LedgerDb) {
 /// costs $1,100 and the overage probe $320.
 #[tokio::test]
 async fn the_pool_s_bucket_adds_a_billed_probe_s_dollars_and_no_request_or_failure_of_it() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_a_request_and_a_failed_billed_probe(&db);
     let hour = hour_of(WEEKDAY_OFF_PEAK);
     let traffic = phoebis_ledger::pool_traffic(
@@ -9548,7 +9587,8 @@ async fn the_pool_s_bucket_adds_a_billed_probe_s_dollars_and_no_request_or_failu
 /// nothing. One dollar a token, so the request costs $1,100 and the overage probe $320.
 #[tokio::test]
 async fn the_dashboard_s_day_adds_a_billed_probe_s_dollars_and_no_other_figure_of_it() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_a_request_and_a_failed_billed_probe(&db);
     let (prices, costs) = (
         priced_table("claude-sonnet-5-5", 1.0),
@@ -9588,7 +9628,8 @@ async fn the_dashboard_s_day_adds_a_billed_probe_s_dollars_and_no_other_figure_o
 #[tokio::test]
 async fn the_dashboard_leaves_the_refused_requests_out_of_its_counts_and_reads_them_in_its_own_members(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     plant_asked_and_refused(&db);
     let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
     let day = db
@@ -9628,7 +9669,7 @@ async fn the_dashboard_leaves_the_refused_requests_out_of_its_counts_and_reads_t
 /// A group reads its refused requests in its refused count and its refusals by code, apart from its requests.
 #[test]
 fn the_breakdown_answers_refused_and_refusals_per_group() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_asked_and_refused(&db);
     let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
     let rows = db
@@ -9663,7 +9704,7 @@ fn the_breakdown_answers_refused_and_refusals_per_group() {
 /// A group answers the store's reserved counts as members of their own, so its map holds the answers' keys alone.
 #[test]
 fn the_breakdown_answers_the_dropped_blocks_keys_apart_from_the_moved_count() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let request = RequestRecord {
         id: "r1".into(),
         received_at: WEEKDAY_OFF_PEAK,
@@ -9791,7 +9832,7 @@ fn groups_of(db: &LedgerDb, by: GroupBy) -> Vec<GroupRow> {
 /// One of the reason's two requests read 950 of its 1,000 prompt tokens back, the other none.
 #[test]
 fn a_reasons_hits_answer_apart_from_the_reason_map() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (id, read) in [("hit", 950), ("miss", 0)] {
         let (request, attempts) = cached(
             id,
@@ -9821,7 +9862,7 @@ fn a_reasons_hits_answer_apart_from_the_reason_map() {
 /// the 1 comes from the read alone.
 #[test]
 fn a_token_count_answers_as_uncacheable_beside_a_hit() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (id, kind, read) in [("hit", "inference", 900), ("count", "count_tokens", 0)] {
         let (request, attempts) =
             cached(id, "claude-sonnet-5", kind, (100, read), None, Some(false));
@@ -9835,7 +9876,7 @@ fn a_token_count_answers_as_uncacheable_beside_a_hit() {
 /// refused is still listed.
 #[test]
 fn a_session_of_refusals_alone_is_still_listed() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_asked_and_refused(&db);
     let sessions = db
         .read_blocking(|c| phoebis_ledger::session_activity(c, WEEKDAY_OFF_PEAK - 3_600_000))
@@ -9917,7 +9958,7 @@ fn a_probe_row_on_a_model_the_revision_lacks_reads_no_dollars() {
 /// moves its dollars as it moves every other group's.
 #[test]
 fn a_members_spend_prices_every_group_from_its_band_rows_counts_exactly() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = ms(2026, 1, 15, 10, 0);
     // The rows land at the test list, so the Haiku 5.5 row over the first entry's threshold files under `long` and
     // the Sonnet 5.5 row under `standard`.
@@ -10025,7 +10066,7 @@ fn a_members_spend_prices_every_group_from_its_band_rows_counts_exactly() {
 /// million Sonnet 5.5 input tokens before the date at the first entry's cell and a million after it at the second's.
 #[test]
 fn a_members_spend_across_a_revision_inside_its_period_prices_each_span_at_its_own_entry() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // The test list with its second entry, which doubles the cells, moved into the middle of January.
     let text = phoebis_ledger::test_tables::API_PRICES.replacen(
         "effective: 2026-02-01",
@@ -10163,7 +10204,8 @@ async fn dollars_of_hour(
 /// $10, while the row of 17:00 ends before the entry and reads no dollars on a model the entry before it lacks.
 #[tokio::test]
 async fn the_breakdown_prices_the_hour_an_entry_starts_in_at_that_entry() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let prices = plant_around_an_entry_inside_an_hour(&db);
     assert_eq!(
         (
@@ -10179,7 +10221,7 @@ async fn the_breakdown_prices_the_hour_an_entry_starts_in_at_that_entry() {
 /// 17:00 at the entry before it: the day counts the $10 of the 18:45 request alone.
 #[test]
 fn a_members_spend_prices_the_hour_an_entry_starts_in_at_that_entry() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let prices = plant_around_an_entry_inside_an_hour(&db);
     let spent = db
         .read_blocking(|c| {
@@ -10284,7 +10326,8 @@ fn first_pool() -> RollupFilter {
 /// the row's own: the side of the request before 18:30 carries its tokens alone.
 #[tokio::test]
 async fn the_breakdown_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let prices = plant_a_split_hour(&db);
     let groups = breakdown_paged(
         &db,
@@ -10311,7 +10354,8 @@ async fn the_breakdown_prices_each_request_of_a_split_hour_at_the_entry_in_force
 /// The series loads the sides of its own range, so its point of the split hour reads the first scope's $15.
 #[tokio::test]
 async fn the_series_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let prices = plant_a_split_hour(&db);
     let points = series_paged(
         &db,
@@ -10343,7 +10387,7 @@ async fn the_series_prices_each_request_of_a_split_hour_at_the_entry_in_force_wh
 /// 18:10.
 #[test]
 fn the_dashboards_day_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let prices = plant_a_split_hour(&db);
     let costs = phoebis_ledger::test_tables::subscription_costs();
     let day = db
@@ -10360,7 +10404,8 @@ fn the_dashboards_day_prices_each_request_of_a_split_hour_at_the_entry_in_force_
 /// The burn route's read loads the sides ahead of its pages, so the first pool's point of the split hour reads $15.
 #[tokio::test]
 async fn the_burn_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let prices = plant_a_split_hour(&db);
     let filter = SeriesFilter {
         from: split_hour(),
@@ -10393,7 +10438,7 @@ async fn the_burn_prices_each_request_of_a_split_hour_at_the_entry_in_force_when
 /// A key's own usage prices the split hour by request, so the first scope's key reads $15 over the day.
 #[test]
 fn a_keys_usage_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let prices = plant_a_split_hour(&db);
     let (day, _) = db
         .read_blocking(|c| {
@@ -10407,7 +10452,7 @@ fn a_keys_usage_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_i
 /// stays the rows' own.
 #[test]
 fn the_key_totals_price_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let prices = plant_a_split_hour(&db);
     let live = LiveKeys(BTreeMap::from([
         ("desktop".to_string(), 0),
@@ -10435,7 +10480,7 @@ fn the_key_totals_price_each_request_of_a_split_hour_at_the_entry_in_force_when_
 /// it sums whole: one more million of the first scope at 17:10 reads $5 there.
 #[test]
 fn a_pools_traffic_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let prices = plant_a_split_hour(&db);
     plant_billed(
         &db,
@@ -10474,7 +10519,7 @@ fn a_pools_traffic_prices_each_request_of_a_split_hour_at_the_entry_in_force_whe
 /// and the month reads the split hour's $15 and the hours behind it, $25.
 #[test]
 fn a_members_day_and_month_each_read_their_own_hours_around_a_split_hour() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let prices = plant_a_split_hour(&db);
     let next_day = ms(2026, 1, 16, 10, 0);
     plant_billed(&db, "next-day", FIRST_SCOPE, next_day, 1_000_000, &prices);
@@ -10520,7 +10565,8 @@ revisions:
 /// that the side of 18:20 priced: a million input tokens at 18:10, 18:30 and 18:50 read $5, $10 and $20.
 #[tokio::test]
 async fn each_side_of_an_hour_split_twice_prices_only_the_requests_since_the_instant_before_it() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let prices = PriceRevisions::from_yaml(THREE_RATES_IN_ONE_HOUR, "test").unwrap();
     for (id, minute) in [("first", 10), ("second", 30), ("third", 50)] {
         plant_billed(
@@ -10582,7 +10628,8 @@ revisions:
 #[tokio::test]
 async fn a_cost_entry_inside_an_hour_weighs_each_plan_request_at_the_entry_in_force_when_it_arrived(
 ) {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     for (id, minute) in [("early", 10), ("late", 45)] {
         plant_share(
             &db,
@@ -10624,7 +10671,7 @@ async fn a_cost_entry_inside_an_hour_weighs_each_plan_request_at_the_entry_in_fo
 fn the_reconciliations_read_answers_the_named_accounts_newest_first_inside_the_trailing_thirty_days(
 ) {
     let now = WEEKDAY_OFF_PEAK;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         for (account, window, window_end) in [
             ("a", "five_hour", now - DAY_MS),

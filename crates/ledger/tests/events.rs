@@ -623,7 +623,7 @@ async fn a_pool_save_that_keeps_its_member_list_mirrors_one_event_and_a_save_tha
 
 #[test]
 fn recent_events_of_kind_answers_the_newest_first_and_stops_at_the_limit() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (at, account_id) in [(100, "a"), (200, "b"), (300, "c")] {
         db.insert_event(&EventRecord {
             at,
@@ -648,7 +648,7 @@ fn recent_events_of_kind_answers_the_newest_first_and_stops_at_the_limit() {
 
 #[test]
 fn a_model_scoped_cooldown_lands_with_its_model_in_the_model_column() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let set = event_of(&RouterEvent::CooldownSet {
         account_id: "a".into(),
         scope: CooldownScope::Model("claude-sonnet-4-5".into()),
@@ -671,7 +671,7 @@ fn a_model_scoped_cooldown_lands_with_its_model_in_the_model_column() {
 
 #[test]
 fn a_pin_migrated_event_counts_under_its_reason_on_the_destination() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.write(|c| {
         let tx = c.transaction()?;
         phoebis_ledger::fold_event(
@@ -749,7 +749,7 @@ fn two_hours() -> phoebis_ledger::SeriesFilter {
 
 #[test]
 fn a_pin_migrated_event_counts_under_its_reason_and_its_fit_on_the_destination() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     fold_events(&db, &[moved(3_600_000, "b", "overage", Some("fits"))]);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
@@ -797,7 +797,7 @@ fn a_pin_migrated_event_counts_under_its_reason_and_its_fit_on_the_destination()
 
 #[test]
 fn two_reasons_keep_their_own_fit_counts_in_the_moves_by_reason_and_fit() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     fold_events(
         &db,
         &[
@@ -903,7 +903,7 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
             serde_json::json!({ "window": "five_hour", "source": source }),
         )
     };
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for row in [
         // A round on `a` that found no destination with runway, projecting 0.97 at its horizon, and a round on `c`
         // that marked a pin, which no condition reads.
@@ -1071,7 +1071,7 @@ fn a_wall_names_the_ceiling_of_its_windows_kind_beside_the_shed_cap() {
         detail: Some(serde_json::json!({ "window": window, "source": "poll" }).to_string()),
         ..Default::default()
     };
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for row in [spent("a", "five_hour"), spent("b", "seven_day_fable")] {
         db.insert_event(&row).unwrap();
     }
@@ -1193,7 +1193,7 @@ fn a_no_runway_round_stops_counting_once_a_later_event_on_its_account_refunds_it
     ];
     let tables = phoebis_ledger::test_tables::subscription_costs();
     let folded = |events: &[EventRecord]| {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = common::temp_ledger();
         for event in events {
             db.insert_event(event).unwrap();
         }
@@ -1237,7 +1237,7 @@ fn a_window_cleared_after_a_spent_window_ends_its_reach_so_the_move_before_it_ho
         detail: Some(serde_json::json!({ "window": window, "source": "head" }).to_string()),
         ..Default::default()
     };
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for row in [
         // `b`'s 5-hour window was spent 20 minutes after the move onto it and cleared 20 minutes after that.
         moved(t, "b", "spent", Some("fits")),
@@ -1287,7 +1287,7 @@ fn a_window_cleared_after_a_spent_window_ends_its_reach_so_the_move_before_it_ho
 fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window() {
     const HOUR: i64 = 3_600_000;
     let t = 1_000 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for row in [
         // A 5-hour round an hour before `a`'s 7-day window was spent: its projection reads another window's share.
         EventRecord {
@@ -1372,7 +1372,7 @@ fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window(
 fn the_drift_dates_from_its_oldest_off_windows_end_and_never_after_the_fold() {
     const HOUR: i64 = 3_600_000;
     let t = 1_000 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // `ahead`'s window closed early, its reset two hours past the fold, and `ended`'s reset passed an hour before it.
     reconciled(&db, "ahead", "five_hour", t + 2 * HOUR, 0.5, 0.25, 2.0, 3);
     reconciled(&db, "ended", "five_hour", t - HOUR, 0.5, 0.25, 2.0, 3);
@@ -1445,7 +1445,7 @@ fn a_wall_after_a_slow_down_round_reads_how_early_it_came_and_the_account_rollup
         round(t, "d", "slow_down", 1.3),
         spent(t + 10 * MINUTE, "d", t + 10 * MINUTE),
     ];
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for event in &events {
         db.insert_event(event).unwrap();
     }
@@ -1507,7 +1507,7 @@ fn a_wall_after_a_slow_down_round_reads_how_early_it_came_and_the_account_rollup
 fn a_wall_after_a_round_the_fable_reservation_fired_reads_no_projection_error() {
     const HOUR: i64 = 3_600_000;
     let t = 1_000 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for row in [
         // The account's room fired the round while its week projected 0.6, an hour before the week was spent.
         EventRecord {
@@ -1733,7 +1733,7 @@ fn a_slow_down_that_summed_past_its_bar_of_the_day_folds_the_slowed_long_conditi
     const MINUTE: i64 = 60_000;
     const HOUR: i64 = 60 * MINUTE;
     let now = 1_000 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // Inside the spans below, `a`'s requests waited 40, 40 and 20 minutes under the slow-down, 100 in all, `b`'s 30
     // and 20, 50 in all, and `d`'s 35 under `r` and 35 under `q`.
     held_request(&db, "a-1", "a", "p", now - 5 * HOUR, 40 * MINUTE);
@@ -1855,7 +1855,7 @@ fn slowed_long_holds_on_the_time_the_slow_down_held_an_accounts_requests_and_not
     const MINUTE: i64 = 60_000;
     const HOUR: i64 = 60 * MINUTE;
     let now = 1_000 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // `b`'s requests waited 25 and 20 minutes inside its first span and 15 and 10 inside its second: 70 minutes held
     // on two spans of half an hour.
     held_request(&db, "b-1", "b", "p", now - 5 * HOUR, 25 * MINUTE);
@@ -1908,7 +1908,7 @@ fn a_held_accounts_zero_part_span_second_start_and_orphan_end_join_neither_its_s
     const HOUR: i64 = 60 * MINUTE;
     let now = 1_000 * HOUR;
     let cutoff = now - 24 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     held_request(&db, "a-1", "a", "p", now - 4 * HOUR, 70 * MINUTE);
     let rows = slowed_long_at(
         &db,
@@ -1942,7 +1942,7 @@ fn a_held_accounts_zero_part_span_second_start_and_orphan_end_join_neither_its_s
 fn the_slowed_long_fold_closes_an_open_span_at_the_next_router_started_row() {
     const HOUR: i64 = 3_600_000;
     let now = 1_000 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     held_request(&db, "a-1", "a", "p", now - 3 * HOUR, 2 * HOUR);
     let rows = slowed_long_at(
         &db,
@@ -1971,7 +1971,7 @@ fn the_slowed_long_fold_counts_no_time_for_a_span_whose_restart_down_since_is_it
     const MINUTE: i64 = 60_000;
     const HOUR: i64 = 60 * MINUTE;
     let now = 1_000 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     held_request(&db, "a-1", "a", "p", now - 10 * HOUR, 2 * HOUR);
     let rows = slowed_long_at(
         &db,
@@ -2009,7 +2009,7 @@ fn the_slowed_long_fold_counts_no_time_for_a_span_whose_restart_down_since_is_it
 fn the_slowed_long_fold_counts_an_open_span_from_before_the_cutoff_over_the_whole_day() {
     const HOUR: i64 = 3_600_000;
     let now = 1_000 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     held_request(&db, "a-1", "a", "p", now - 10 * HOUR, 6 * HOUR);
     let rows = slowed_long_at(
         &db,
@@ -2039,7 +2039,7 @@ fn the_slowed_long_fold_counts_the_hour_that_starts_at_the_cutoff_and_not_the_ho
     const HOUR: i64 = 3_600_000;
     let now = 1_000 * HOUR;
     let cutoff = now - 24 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // A request a millisecond before the cutoff files under the hour that starts an hour before it, and one at the
     // cutoff under the hour that starts there.
     held_request(&db, "a-1", "a", "p", cutoff - 1, HOUR);
@@ -2074,7 +2074,7 @@ fn the_slowed_long_fold_leaves_out_the_hour_that_started_inside_the_second_befor
     // second before it, and the next hour starts inside the day.
     let now = 1_000 * HOUR + 1;
     let cutoff = now - 24 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     held_request(&db, "a-1", "a", "p", cutoff - 1, 2 * HOUR);
     held_request(&db, "a-2", "a", "p", cutoff - 1 + HOUR, 70 * MINUTE);
     let rows = slowed_long_at(
@@ -2112,7 +2112,7 @@ fn the_slowed_long_fold_counts_nothing_of_a_span_closed_before_the_cutoff() {
     const HOUR: i64 = 60 * MINUTE;
     let now = 1_000 * HOUR;
     let cutoff = now - 24 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     held_request(&db, "a-1", "a", "p", now - 5 * HOUR, 61 * MINUTE);
     let rows = slowed_long_at(
         &db,
@@ -2155,7 +2155,7 @@ fn a_pool_at_the_default_holds_slowed_long_past_five_hours() {
     const HOUR: i64 = 60 * MINUTE;
     const THRESHOLD_MS: i64 = 9_000_000;
     let now = 1_000 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // The slow-down held `a`'s requests for the bar itself and `b`'s for a millisecond more.
     held_request(&db, "a-1", "a", "p", now - 12 * HOUR, 18_000_000);
     held_request(&db, "b-1", "b", "p", now - 10 * HOUR, 18_000_001);
@@ -2215,7 +2215,7 @@ fn a_pool_under_half_an_hour_holds_slowed_long_past_the_floor() {
     const HOUR: i64 = 60 * MINUTE;
     const THRESHOLD_MS: i64 = 60_000;
     let now = 1_000 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // The slow-down held `a`'s requests for the hour itself, many times twice the threshold, and `b`'s for a
     // millisecond more.
     held_request(&db, "a-1", "a", "p", now - 4 * HOUR, 3_600_000);
@@ -2912,9 +2912,11 @@ async fn a_row_born_ready_by_a_pairing_records_its_transition_from_unpaired() {
     up.shutdown().await;
 }
 
-/// A harness over a ledger whose newest row, the previous run's last, is at `down_since`.
-async fn harness_after_a_run(up: &FakeUpstream, down_since: i64) -> Harness {
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+/// A harness over a ledger whose newest row, the previous run's last, is at `down_since`, with the directory of the
+/// ledger's file.
+async fn harness_after_a_run(up: &FakeUpstream, down_since: i64) -> (Harness, tempfile::TempDir) {
+    let (db, dir) = common::temp_ledger();
+    let db = Arc::new(db);
     db.insert_event(&EventRecord {
         at: down_since,
         kind: "pin_created".into(),
@@ -2922,7 +2924,7 @@ async fn harness_after_a_run(up: &FakeUpstream, down_since: i64) -> Harness {
         ..Default::default()
     })
     .unwrap();
-    harness_on(
+    let h = harness_on(
         Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap()),
         db,
         up,
@@ -2931,14 +2933,15 @@ async fn harness_after_a_run(up: &FakeUpstream, down_since: i64) -> Harness {
         polled_every_50_ms(),
         false,
     )
-    .await
+    .await;
+    (h, dir)
 }
 
 #[tokio::test]
 async fn a_clock_reset_the_previous_run_announced_is_not_written_again() {
     let up = FakeUpstream::start(vec![]).await;
     let down_since = NOW - 60_000;
-    let h = harness_after_a_run(&up, down_since).await;
+    let (h, _dir) = harness_after_a_run(&up, down_since).await;
     let reset = |reset_at: i64, observed: &'static str| RouterEvent::WindowReset {
         account_id: "a".into(),
         window: "five_hour".into(),
@@ -3066,7 +3069,7 @@ fn reset_row(
 #[test]
 fn the_unused_allowance_lists_each_weekly_reset_in_range_newest_first_and_a_term_end_from_the_last_reading_before_it(
 ) {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = 100 * DAY;
     let (from, to) = (now - 30 * DAY, now);
     for row in [
@@ -3160,7 +3163,7 @@ fn the_unused_allowance_lists_each_weekly_reset_in_range_newest_first_and_a_term
 
 #[test]
 fn a_term_end_reads_each_open_weeks_last_reading_once_and_leaves_out_the_resets_after_it() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = 100 * DAY;
     let end = now - 10 * DAY;
     let week_reset = end + 3 * DAY;
@@ -3298,7 +3301,7 @@ fn a_term_end_reads_each_open_weeks_last_reading_once_and_leaves_out_the_resets_
 
 #[test]
 fn a_term_end_leaves_out_an_ended_accounts_resets_by_the_resets_own_instant() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = 100 * DAY;
     let end = now - 10 * DAY;
     let announced =
@@ -3388,7 +3391,7 @@ fn a_term_end_leaves_out_an_ended_accounts_resets_by_the_resets_own_instant() {
 /// own there: the end's row belongs to a range that holds the end.
 #[test]
 fn a_term_end_before_the_range_drops_the_resets_after_it_and_lists_no_row_of_its_own() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let end = 10 * DAY;
     let week_reset = end + 2 * DAY;
     db.insert_samples(
@@ -3458,7 +3461,7 @@ fn a_term_end_before_the_range_drops_the_resets_after_it_and_lists_no_row_of_its
 #[test]
 fn the_unused_allowance_answers_each_resets_pair_from_its_event_and_none_where_the_event_carries_none(
 ) {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = 100 * DAY;
     for row in [
         window_reset_under(
@@ -3579,7 +3582,7 @@ fn used_claim(account_id: &str, cleared: &[&str], at: i64) -> EventRecord {
 
 #[test]
 fn a_drop_with_no_claim_lists_a_claim_row_where_the_poll_after_it_reads_under_five_points() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = 100 * DAY;
     let reset = now + 2 * DAY;
     for row in [
@@ -3616,7 +3619,7 @@ fn a_drop_with_no_claim_lists_a_claim_row_where_the_poll_after_it_reads_under_fi
 
 #[test]
 fn a_drop_within_the_hour_after_a_used_claim_lists_a_row_where_the_claim_names_its_window() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = 100 * DAY;
     let reset = now + 2 * DAY;
     let used = now - DAY;
@@ -3665,7 +3668,7 @@ fn a_drop_within_the_hour_after_a_used_claim_lists_a_row_where_the_claim_names_i
 
 #[test]
 fn a_drop_before_an_ended_account_s_term_end_lists_its_row_and_a_drop_at_the_end_none() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = 100 * DAY;
     let end = now - 10 * DAY;
     // The week the end cut short resets after it, as the reset of each drop names.
@@ -3709,7 +3712,7 @@ fn a_drop_before_an_ended_account_s_term_end_lists_its_row_and_a_drop_at_the_end
 
 #[test]
 fn a_drop_at_the_range_s_start_joins_a_used_claim_from_before_the_range() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = 100 * DAY;
     let from = now - DAY;
     let reset = now + 2 * DAY;
@@ -3740,7 +3743,7 @@ fn a_drop_at_the_range_s_start_joins_a_used_claim_from_before_the_range() {
 /// none on it while the account's resets name theirs.
 #[test]
 fn a_term_end_s_row_names_no_pair_it_was_not_handed() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = 100 * DAY;
     let end = now - 5 * DAY;
     db.insert_event(&window_reset_under(
@@ -3795,7 +3798,7 @@ fn a_term_end_s_row_names_no_pair_it_was_not_handed() {
 async fn a_wind_down_the_previous_run_announced_is_not_written_again() {
     let up = FakeUpstream::start(vec![]).await;
     let down_since = NOW - 60_000;
-    let h = harness_after_a_run(&up, down_since).await;
+    let (h, _dir) = harness_after_a_run(&up, down_since).await;
     let wind_down = |opened_at: i64| RouterEvent::WindDownStarted {
         account_id: "a".into(),
         pool_id: "main".into(),
@@ -3835,7 +3838,7 @@ async fn a_wind_down_the_previous_run_announced_is_not_written_again() {
 async fn a_wind_down_a_cancellation_after_the_start_opens_lands_whenever_its_window_opened() {
     let up = FakeUpstream::start(vec![]).await;
     let down_since = NOW - 60_000;
-    let h = harness_after_a_run(&up, down_since).await;
+    let (h, _dir) = harness_after_a_run(&up, down_since).await;
     // A reload runs a purge, so the start's own walk over the restored state is behind the cancellation.
     h.router.reload().await.unwrap();
     // Ten minutes out under the pool's thirty-minute wind-down: the window opened twenty minutes ago, before the
@@ -3904,7 +3907,8 @@ async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_s
             window: "five_hour".into(),
         })
         .unwrap());
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     db.insert_event(&EventRecord {
         at: down_since,
         kind: "pin_created".into(),
@@ -3985,7 +3989,8 @@ async fn the_start_row_dates_the_gap_from_the_previous_run_whatever_the_mirror_f
         ))
         .unwrap();
     let down_since = NOW - 60_000;
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     db.insert_event(&EventRecord {
         at: down_since,
         kind: "pin_created".into(),
@@ -4263,7 +4268,8 @@ async fn a_quarantine_the_start_lands_after_the_mirrors_baseline_is_mirrored() {
             },
         )
         .unwrap();
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     let clock: phoebis_oauth::Clock = Arc::new(|| NOW);
     let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
     let _ledger = phoebis_ledger::spawn(

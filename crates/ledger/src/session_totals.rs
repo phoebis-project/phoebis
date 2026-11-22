@@ -1767,7 +1767,7 @@ mod tests {
     #[test]
     fn a_moved_threshold_drops_the_cursor_of_a_fill_cut_short_and_the_fill_marks_the_session_it_cleared(
     ) {
-        let db = LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         db.write(|c| {
             c.execute_batch(&format!(
                 "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, \

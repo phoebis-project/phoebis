@@ -36,8 +36,8 @@ pub use bodies::{
 };
 pub use db::{backfill_serving_facts, Backfilled, LedgerDb, WriterRead, BACKFILL_SLICE, READERS};
 pub use events::{
-    catalog_changed, event_of, limit_reset_claimed, plan_ended, plan_restored, poll_backoff,
-    poll_failed, MirrorBaseline,
+    event_of, limit_reset_claimed, plan_ended, plan_restored, poll_backoff, poll_failed,
+    MirrorBaseline,
 };
 pub use generations::{
     key_generations_reconciled, reconcile_key_generations, LiveKeyLifetime,
@@ -92,9 +92,10 @@ pub use quota::{
     PROFILE_EVERY_POLLS,
 };
 pub use reconcile::{
-    newest_rows, read_reconciliations, reconcile_read, reconcile_write, ReconciliationRow,
-    MIN_RISE, RATIO_HIGH, RATIO_LOW,
+    newest_rows, read_reconciliations, ReconciliationRow, MIN_RISE, RATIO_HIGH, RATIO_LOW,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use reconcile::{reconcile_read, reconcile_write};
 pub use record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
     GuardrailMatchRecord, InputTransformation, KeepaliveDelta, ParkedRecord, QuotaSampleRecord,

@@ -690,7 +690,7 @@ async fn text_matches_an_upstream_message_id_and_an_upstream_request_id() {
 
 #[test]
 fn the_recent_gaps_are_the_newest_gap_events_at_or_after_the_cutoff() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (at, kind) in [
         (100, "ledger_gap"),
         (200, "ledger_gap"),
@@ -722,7 +722,7 @@ fn the_recent_gaps_are_the_newest_gap_events_at_or_after_the_cutoff() {
 /// escape, so an id with an underscore never matches one with any other character in its place.
 #[test]
 fn the_search_matches_its_text_literally() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let plant = |id: &str, message_id: &str, error_code: &str| {
         let request = RequestRecord {
             id: id.into(),
@@ -2296,7 +2296,7 @@ fn a_session_the_fill_has_not_reached_reads_the_spend_of_its_request_rows() {
 fn a_cost_entry_inside_a_receipt_hour_prices_each_request_at_the_entry_in_force_at_its_receipt() {
     const MINUTE: i64 = 60_000;
     let noon = phoebis_ledger::test_tables::JANUARY_2026;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     land_two_plan_requests(&db, (noon + 10 * MINUTE, noon + 40 * MINUTE));
     let figures = figures_of(
         &db,
@@ -2317,7 +2317,7 @@ fn a_cost_entry_inside_a_receipt_hour_prices_each_request_at_the_entry_in_force_
 fn a_peak_band_that_opens_inside_a_completion_hour_prices_each_request_at_its_own_completion() {
     const MINUTE: i64 = 60_000;
     let noon = phoebis_ledger::test_tables::JANUARY_2026;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     land_two_plan_requests(&db, (noon + 5 * MINUTE, noon + 35 * MINUTE));
     let figures = figures_of(
         &db,
@@ -2339,7 +2339,7 @@ fn a_peak_band_that_opens_inside_a_completion_hour_prices_each_request_at_its_ow
 fn a_request_of_a_boundary_hour_whose_own_row_is_no_boundary_row_counts_once_from_its_sums() {
     const MINUTE: i64 = 60_000;
     let noon = phoebis_ledger::test_tables::JANUARY_2026;
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     land_two_plan_requests(&db, (noon + 5 * MINUTE, noon + 57 * MINUTE));
     let figures = figures_of(
         &db,
@@ -2359,7 +2359,7 @@ fn a_request_of_a_boundary_hour_whose_own_row_is_no_boundary_row_counts_once_fro
 /// counts under neither, and a replaced request takes its waits back out of its row.
 #[test]
 fn a_requests_slow_down_waits_count_into_its_hourly_row() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let request = |id: &str, key_id: &str, held: &str| RequestRecord {
         id: id.into(),
         received_at: 3_600_000,
@@ -2434,7 +2434,7 @@ fn a_requests_slow_down_waits_count_into_its_hourly_row() {
 /// refusals map alone, so the hour's held count and held time are the served request's.
 #[test]
 fn a_refusal_after_a_slow_down_hold_counts_under_no_held_figure() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let slowed = |held_ms: u64| {
         format!(
             r#"{{"waited_on":["a"],"cohort":null,"held_ms":{held_ms},"waits":[{{"reason":"slow_down","held_ms":{held_ms}}}]}}"#
@@ -2898,7 +2898,7 @@ async fn a_completion_cut_after_its_head_writes_one_stream_interrupted_row_its_r
 
 #[test]
 fn a_live_requests_events_are_read_up_to_the_clock_and_a_finished_ones_up_to_its_end() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let live = RequestRecord {
         finished_at: None,
         received_at: 1_000,
@@ -3162,9 +3162,9 @@ async fn the_held_filter_keeps_the_requests_that_waited_for_a_slot() {
 }
 
 /// A ledger holding `matching` rows under one model, a millisecond apart, and one newer row under another model,
-/// so a page reads the model filter rather than the whole table.
-fn paging_ledger(matching: usize) -> phoebis_ledger::LedgerDb {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+/// so a page reads the model filter rather than the whole table, with the directory of its file.
+fn paging_ledger(matching: usize) -> (phoebis_ledger::LedgerDb, tempfile::TempDir) {
+    let (db, dir) = common::temp_ledger();
     let row = |id: String, received_at: i64, model: &str| RequestRecord {
         id,
         received_at,
@@ -3190,7 +3190,7 @@ fn paging_ledger(matching: usize) -> phoebis_ledger::LedgerDb {
         None,
     )
     .unwrap();
-    db
+    (db, dir)
 }
 
 fn sonnet_page(
@@ -3223,7 +3223,7 @@ fn sonnet_page(
 
 #[test]
 fn a_page_of_exactly_limit_rows_answers_no_cursor() {
-    let db = paging_ledger(5);
+    let (db, _dir) = paging_ledger(5);
     let (ids, next) = sonnet_page(&db, Direction::Desc, None, 5);
     assert_eq!(ids, ["r04", "r03", "r02", "r01", "r00"]);
     assert_eq!(
@@ -3234,7 +3234,7 @@ fn a_page_of_exactly_limit_rows_answers_no_cursor() {
 
 #[test]
 fn a_page_with_one_row_beyond_it_answers_a_cursor_whose_next_page_holds_that_row() {
-    let db = paging_ledger(5);
+    let (db, _dir) = paging_ledger(5);
     let (ids, next) = sonnet_page(&db, Direction::Desc, None, 4);
     assert_eq!(ids, ["r04", "r03", "r02", "r01"]);
     assert_eq!(
@@ -3265,7 +3265,7 @@ fn a_page_with_one_row_beyond_it_answers_a_cursor_whose_next_page_holds_that_row
 /// continues by the arrival rather than the key rereads or skips a row.
 #[test]
 fn pages_under_a_nullable_key_continue_at_the_keys_value_and_list_a_row_without_it_last() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let put = |id: &str, received_at: i64, duration_ms: Option<i64>| {
         db.insert_request(
             &RequestRecord {
@@ -3334,7 +3334,7 @@ fn pages_under_a_nullable_key_continue_at_the_keys_value_and_list_a_row_without_
 /// sent any other text as its speed under `standard`, as the rollups file them.
 #[test]
 fn a_fast_request_refused_before_any_attempt_is_listed_under_the_fast_speed_filter() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let refused = |id: &str, received_at: i64, speed: String| RequestRecord {
         id: id.into(),
         received_at,
@@ -3384,7 +3384,7 @@ fn a_fast_request_refused_before_any_attempt_is_listed_under_the_fast_speed_filt
 /// rollups file its answer under and price it at, rather than under the speed it asked for.
 #[test]
 fn a_fast_request_whose_answer_named_no_speed_is_listed_under_the_standard_speed_filter() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.insert_request(
         &RequestRecord {
             id: "answered".into(),
@@ -3509,7 +3509,7 @@ fn listed_ids(db: &LedgerDb, filter: &RequestFilter) -> Vec<String> {
 
 #[test]
 fn the_cache_miss_reason_filter_reads_the_serving_attempt_alone_and_passes_any_name() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_trail(
         &db,
         "r1",
@@ -3551,7 +3551,7 @@ fn the_cache_miss_reason_filter_reads_the_serving_attempt_alone_and_passes_any_n
 /// the listed key as a part of its text, so a match on the column's text would keep its request.
 #[test]
 fn the_dropped_blocks_filter_keeps_a_request_whose_answer_listed_the_key_and_no_other() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let plant = |id: &str, received_at: i64, keys: &[&str]| {
         let request = RequestRecord {
             id: id.into(),
@@ -3675,7 +3675,7 @@ fn plant_stops(
 #[test]
 fn the_stop_reason_and_refusal_category_filters_read_the_serving_attempt_and_dash_a_request_without_one(
 ) {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_stops(
         &db,
         "harm-a",
@@ -3796,7 +3796,7 @@ fn plant_agent_request(db: &LedgerDb, id: &str, received_at: i64, agent_id: Opti
 
 #[test]
 fn the_request_log_keeps_one_agents_requests_under_agent_id() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_agent_request(&db, "from-main", 3, Some("main"));
     plant_agent_request(&db, "from-agent", 2, Some("agent-7"));
     plant_agent_request(&db, "from-none", 1, None);
@@ -3841,7 +3841,7 @@ fn landed_at(db: &LedgerDb, id: &str) -> Option<i64> {
 
 #[test]
 fn a_list_from_a_stamp_answers_the_rows_written_after_it_and_the_newest_stamp() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let page = |filter: &RequestFilter, cursor: Option<&str>, limit: usize| {
         db.read_blocking(|c| {
             phoebis_ledger::list_request_page(
@@ -3931,7 +3931,7 @@ fn a_list_from_a_stamp_answers_the_rows_written_after_it_and_the_newest_stamp() 
 
 #[test]
 fn a_row_received_after_the_pages_bound_keeps_the_watermark_below_its_stamp_for_the_next_poll() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let page = |filter: &RequestFilter| {
         db.read_blocking(|c| {
             phoebis_ledger::list_request_page(
@@ -4139,7 +4139,7 @@ async fn a_fixed_end_read_lets_its_watermark_pass_to_so_a_row_that_landed_after_
 
 #[test]
 fn the_account_filter_reads_the_serving_attempt_as_the_rollups_file_it() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_trail(&db, "r1", 3, &[("a", 200, Some("messages_changed"))]);
     plant_trail(
         &db,
@@ -4178,7 +4178,7 @@ fn the_account_filter_reads_the_serving_attempt_as_the_rollups_file_it() {
 
 #[test]
 fn the_effort_and_class_filters_match_the_rollups_fold() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let rows = [
         ("plain", None, None),
         ("high-main", Some("high"), Some("main".to_string())),
@@ -4298,6 +4298,9 @@ async fn a_request_record_waits_for_the_writer_rather_than_dropping() {
             .expect("every send resolves once the writer drains")
             .unwrap();
     }
+    // A send resolves once the channel holds its record, so the shutdown, which lands what the channel holds, comes
+    // between the last send and the reads of the rows.
+    h.ledger.clone().shutdown().await.unwrap();
     assert_eq!(h.ledger.dropped(), 0);
     for i in 0..total {
         assert!(
@@ -5098,7 +5101,7 @@ async fn a_decision_lands_as_a_row_whose_frame_decodes_to_the_record() {
         })
         .unwrap()
     };
-    let helper = LedgerDb::open_in_memory().unwrap();
+    let (helper, _helper_dir) = common::temp_ledger();
     put_decision(&helper, &row);
     let frame = frame_of(&h.db);
     assert_eq!(
@@ -5121,7 +5124,7 @@ async fn a_decision_lands_as_a_row_whose_frame_decodes_to_the_record() {
 /// filter finds it under an empty id.
 #[test]
 fn a_decision_whose_pool_is_empty_reads_back_with_no_pool() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let (summary, mut record) = decision("r1", 1, 1);
     record.request.pool_id = String::new();
     put_decision(&db, &DecisionRow::of(summary, record, NOW));
@@ -5246,7 +5249,7 @@ async fn a_request_through_the_relay_lands_its_decision_with_the_cache_map_its_a
 
 #[test]
 fn an_incomplete_request_counts_in_the_rollups_incomplete_column_and_nowhere_else() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.insert_request(
         &RequestRecord {
             id: "r0".into(),
@@ -5509,7 +5512,7 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
         speed: speed.map(String::from),
         ..Default::default()
     };
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     db.insert_request(
         &RequestRecord {
             id: "r1".into(),
@@ -5952,13 +5955,16 @@ async fn a_listing_enters_an_added_model_the_cost_model_does_not_weigh_at_the_ch
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
     let h = on_listing_costs(&up, dir.path()).await;
-    h.ledger.note_listed(
-        &[
+    h.ledger.on_catalog_change(&phoebis_relay::CatalogChange {
+        account_id: "unheld".into(),
+        added: vec![
             "claude-opus-9-20260101".to_string(),
             "claude-sonnet-5-20260101".to_string(),
         ],
-        NOW + 60_000,
-    );
+        removed: Vec::new(),
+        count: 2,
+        at: NOW + 60_000,
+    });
     assert_eq!(
         h.ledger.unpriced_served(NOW + 60_000),
         [phoebis_ledger::UnpricedModel {
@@ -5969,7 +5975,7 @@ async fn a_listing_enters_an_added_model_the_cost_model_does_not_weigh_at_the_ch
         "the unweighted model enters at the change's instant, and the weighted one stays out"
     );
     h.ledger
-        .note_listed(&["claude-opus-9-20260101".to_string()], NOW + 120_000);
+        .on_catalog_change(&adding("unheld", "claude-opus-9-20260101", NOW + 120_000));
     assert_eq!(
         h.ledger.unpriced_served(NOW + 120_000),
         [phoebis_ledger::UnpricedModel {
@@ -6015,7 +6021,7 @@ async fn a_listing_leaves_an_unpriced_run_that_counts_requests_with_its_since_an
     })
     .await;
     h.ledger
-        .note_listed(&["claude-opus-9-20260101".to_string()], NOW + 60_000);
+        .on_catalog_change(&adding("unheld", "claude-opus-9-20260101", NOW + 60_000));
     assert_eq!(
         h.ledger.unpriced_served(NOW + 60_000),
         [landed],
@@ -6237,7 +6243,7 @@ fn rewrite_tokens_of(db: &phoebis_ledger::LedgerDb, account_id: &str) -> u64 {
 #[test]
 fn the_first_request_after_a_move_books_its_cache_writes_as_rewrite_tokens_and_the_next_one_does_not(
 ) {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let moved_trace =
         r#"{"strategy":"pace","tier":null,"renewed":false,"moved":"shed","skipped":[]}"#;
     let unmoved_trace =
@@ -6309,7 +6315,7 @@ fn the_first_request_after_a_move_books_its_cache_writes_as_rewrite_tokens_and_t
 
 #[test]
 fn a_retried_pass_of_a_moved_leg_books_the_attempt_that_carries_the_usage() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // Every pass of one leg republishes the same trace; `finish` writes usage onto the serving attempt alone,
     // so the first pass here carries the move but nothing to book, and the second carries both.
     let moved_trace =
@@ -6362,7 +6368,7 @@ fn a_retried_pass_of_a_moved_leg_books_the_attempt_that_carries_the_usage() {
 
 #[test]
 fn a_rate_limit_fail_over_whose_destination_writes_cache_books_its_rewrite_tokens_under_cooldown() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     // A double move: the first attempt's own trace already names one (it is where an earlier shed landed),
     // and its cache write must never be the one booked once a second move, the fail-over to B, follows it.
     let shed_trace =
@@ -6480,7 +6486,7 @@ fn plant_spend(db: &phoebis_ledger::LedgerDb, id: &str, at: i64, input_tokens: u
 
 #[test]
 fn a_member_with_two_budgets_gets_a_spend_row_per_period() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let now = ms(2026, 1, 15, 12, 0);
     plant_spend(&db, "today", ms(2026, 1, 15, 1, 0), 1_000_000);
     plant_spend(&db, "earlier", ms(2026, 1, 5, 1, 0), 2_000_000);
@@ -6588,7 +6594,7 @@ fn plant_every_funding(db: &phoebis_ledger::LedgerDb, member: (&str, AccountKind
 
 #[test]
 fn an_attempt_folds_under_fast_overage_or_plan_funding() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_every_funding(&db, ("a", AccountKind::Oauth));
     let mut rows = db
         .read_blocking(|c| {
@@ -6612,7 +6618,7 @@ fn an_attempt_folds_under_fast_overage_or_plan_funding() {
 
 #[test]
 fn an_api_key_account_s_attempt_folds_under_billed_whatever_its_speed_or_overage_flag() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_every_funding(&db, ("b", AccountKind::ApiKey));
     let mut rows = db
         .read_blocking(|c| {
@@ -6668,7 +6674,8 @@ async fn a_usage_based_seats_attempt_stores_its_class_folds_under_usage_based_an
     else {
         panic!("{} records at completion", records.len());
     };
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     db.insert_request(request, attempts, None).unwrap();
     let stored = db
         .read_blocking(|c| phoebis_ledger::request_by_id(c, "r1"))
@@ -6740,7 +6747,7 @@ async fn a_usage_based_seats_attempt_stores_its_class_folds_under_usage_based_an
 
 #[test]
 fn member_spends_sums_the_metered_rows_alone_when_asked() {
-    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     plant_every_funding(&db, ("a", AccountKind::Oauth));
     let spent = |metered_only| {
         db.read_blocking(|c| {
@@ -8790,7 +8797,8 @@ async fn the_start_row_dates_the_gap_from_the_newest_row_and_counts_the_load() {
 async fn a_budget_reached_at_the_start_lands_behind_the_start_row_and_leaves_its_gap_alone() {
     let up = FakeUpstream::start(vec![]).await;
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     // The previous run seeded the registry and stopped. Its last request spent past a budget the member carries now.
     let previous = harness_on(
         store.clone(),
@@ -8880,11 +8888,14 @@ async fn a_budget_reached_at_the_start_lands_behind_the_start_row_and_leaves_its
     up.shutdown().await;
 }
 
-/// The registry and the ledger a previous run left: the member's last request spent past the monthly budget it
-/// carries now, so the writer's first spend read at the next start crosses it.
-async fn over_budget_after_a_run(up: &FakeUpstream) -> (Arc<Store>, Arc<LedgerDb>) {
+/// The registry and the ledger a previous run left, with the directory of the ledger's file: the member's last request
+/// spent past the monthly budget it carries now, so the writer's first spend read at the next start crosses it.
+async fn over_budget_after_a_run(
+    up: &FakeUpstream,
+) -> (Arc<Store>, Arc<LedgerDb>, tempfile::TempDir) {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, dir) = common::temp_ledger();
+    let db = Arc::new(db);
     let previous = harness_on(
         store.clone(),
         db.clone(),
@@ -8934,7 +8945,7 @@ async fn over_budget_after_a_run(up: &FakeUpstream) -> (Arc<Store>, Arc<LedgerDb
         None,
     )
     .unwrap();
-    (store, db)
+    (store, db, dir)
 }
 
 /// A replay the writer runs on its first turn, ahead of the start row the spawn queued, reads the members' spend and
@@ -8944,7 +8955,7 @@ async fn over_budget_after_a_run(up: &FakeUpstream) -> (Arc<Store>, Arc<LedgerDb
 async fn a_replay_on_the_writers_first_turn_lands_its_budget_row_behind_the_start_row() {
     let up = FakeUpstream::start(vec![]).await;
     for start in 0..30 {
-        let (store, db) = over_budget_after_a_run(&up).await;
+        let (store, db, _dir) = over_budget_after_a_run(&up).await;
         let h = harness_on(
             store,
             db,
@@ -8982,7 +8993,8 @@ async fn a_replay_on_the_writers_first_turn_lands_its_budget_row_behind_the_star
 async fn a_restart_over_a_ledger_holding_the_period_s_crossing_writes_no_second_one() {
     let up = FakeUpstream::start(vec![]).await;
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate(), wall()).unwrap());
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = Arc::new(db);
     let accounts = [api_key("a", C, 0)];
     let run = || {
         harness_on_tables(
@@ -9224,7 +9236,7 @@ fn log_id(row: &phoebis_ledger::RoutingLogRow) -> String {
 
 #[test]
 fn the_routing_log_lists_newest_first_with_decisions_before_events_at_one_instant() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     put_decision(&db, &logged("r1", 1, 1, 100, "placed"));
     db.insert_event(&logged_event(200, "cooldown_set")).unwrap();
     put_decision(&db, &logged("r2", 1, 1, 200, "held"));
@@ -9265,7 +9277,7 @@ fn the_routing_log_lists_newest_first_with_decisions_before_events_at_one_instan
 
 #[test]
 fn the_routing_log_answers_a_cursor_only_past_a_full_page() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     put_decision(&db, &logged("r1", 1, 1, 100, "held"));
     put_decision(&db, &logged("r1", 2, 1, 100, "placed"));
     put_decision(&db, &logged("r2", 1, 1, 100, "placed"));
@@ -9341,7 +9353,7 @@ fn the_routing_log_answers_a_cursor_only_past_a_full_page() {
 
 #[test]
 fn an_absent_kinds_lists_every_kind_and_kinds_names_exactly_its_set() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     put_decision(&db, &logged("r1", 1, 1, 100, "placed"));
     let mut probe = logged("r2", 1, 1, 200, "renewed");
     probe.probe = true;
@@ -9391,7 +9403,7 @@ fn an_absent_kinds_lists_every_kind_and_kinds_names_exactly_its_set() {
 /// its own kind and code.
 #[test]
 fn a_guardrails_refusal_reads_back_through_the_routing_log_with_its_kind_and_code() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let snapshot = phoebis_routing::RegistrySnapshot::from_load(
         phoebis_store::RegistryLoad::default(),
         [0; 32],
@@ -9457,7 +9469,7 @@ fn a_guardrails_refusal_reads_back_through_the_routing_log_with_its_kind_and_cod
 
 #[test]
 fn counts_answer_under_a_request_filter_alone() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     put_decision(&db, &logged("r1", 1, 1, 100, "held"));
     put_decision(&db, &logged("r1", 2, 1, 100, "placed"));
     put_decision(&db, &logged("r2", 1, 1, 200, "placed"));
@@ -9497,7 +9509,7 @@ fn counts_answer_under_a_request_filter_alone() {
 
 #[test]
 fn a_session_prefix_matches() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (n, session) in [(1, "abc-1"), (2, "abd-2")] {
         let mut row = logged(&format!("r{n}"), 1, 1, 100 * n as i64, "placed");
         row.session_id = Some(session.into());
@@ -9521,7 +9533,7 @@ fn a_session_prefix_matches() {
 
 #[test]
 fn an_agent_id_keeps_the_agents_decisions_and_events_and_leaves_a_session_level_event_out() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (n, agent) in [(1, "agent-7"), (2, "main")] {
         let mut row = logged(&format!("r{n}"), 1, 1, 100 * n as i64, "placed");
         row.agent_id = Some(agent.into());
@@ -9563,7 +9575,7 @@ fn an_agent_id_keeps_the_agents_decisions_and_events_and_leaves_a_session_level_
 
 #[test]
 fn a_session_prefix_with_like_metacharacters_matches_literally() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     for (n, session) in [(1, "s_1"), (2, "sx1"), (3, "100%a"), (4, "1000b")] {
         let mut row = logged(&format!("r{n}"), 1, 1, 100 * n as i64, "placed");
         row.session_id = Some(session.into());
@@ -9587,7 +9599,7 @@ fn a_session_prefix_with_like_metacharacters_matches_literally() {
 
 #[test]
 fn accounts_match_a_move_s_source() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let mut moved = logged("r1", 1, 1, 100, "moved");
     moved.account_id = Some("b".into());
     moved.from_account_id = Some("a".into());
@@ -9615,7 +9627,7 @@ fn accounts_match_a_move_s_source() {
 
 #[test]
 fn a_pin_event_and_a_cut_stream_list_under_the_pool_they_ran_in_and_under_no_other() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let created = phoebis_ledger::event_of(&phoebis_routing::RouterEvent::PinCreated {
         pin: phoebis_store::PinKey::new("k", "s1", "main", "claude-sonnet-5"),
         account_id: "a".into(),
@@ -9660,7 +9672,7 @@ fn a_pin_event_and_a_cut_stream_list_under_the_pool_they_ran_in_and_under_no_oth
 
 #[test]
 fn a_pin_move_lists_under_the_account_it_left_and_the_one_it_landed_on() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let moved = phoebis_ledger::event_of(&phoebis_routing::RouterEvent::PinMigrated {
         pin: phoebis_store::PinKey::new("k", "s1", "main", "claude-sonnet-5"),
         from_account: "a".into(),
@@ -9705,7 +9717,7 @@ type CompletionFacts = (
 
 #[test]
 fn a_decision_s_completion_is_the_attempt_that_answered_after_a_retry_in_place() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let content = |mut row: DecisionRow| {
         let rung = phoebis_routing::Placement {
             rung: "content",
@@ -9795,7 +9807,7 @@ type AnsweredFacts = (String, Option<String>, Option<u16>, Option<u64>);
 
 #[test]
 fn a_decision_reads_only_its_own_account_s_answer_before_the_request_s_next_decision() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let on = |mut row: DecisionRow, account: &str| {
         row.account_id = Some(account.into());
         row.record.outcome.account_id = Some(account.into());
@@ -9881,7 +9893,7 @@ fn a_decision_reads_only_its_own_account_s_answer_before_the_request_s_next_deci
 
 #[test]
 fn a_record_read_decodes_the_frame_and_composes_the_completion() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let mut placed = logged("r1", 1, 1, 100, "placed");
     let rung = phoebis_routing::Placement {
         rung: "content",
@@ -9955,7 +9967,7 @@ fn a_record_read_decodes_the_frame_and_composes_the_completion() {
 
 #[test]
 fn a_record_frame_naming_a_size_past_the_reader_s_bound_is_refused_unread() {
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     put_decision(&db, &logged("r1", 1, 1, 100, "placed"));
     // A record of one long string folds to a few kilobytes, so a small frame names a size no record reaches. It is
     // valid JSON, so only the bound refuses it.
@@ -9983,7 +9995,7 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
     // The test table's Haiku 5.5 row, per million: input 1 and output 5 up to 1,000 prompt tokens, 5 and 25 over.
     let revisions = phoebis_ledger::test_tables::api_prices();
     let table = revisions.in_force(phoebis_ledger::test_tables::JANUARY_2026);
-    let db = LedgerDb::open_in_memory().unwrap();
+    let (db, _dir) = common::temp_ledger();
     let attempt = |attempt: u32, input: u64| AttemptRecord {
         request_id: "r1".into(),
         attempt,

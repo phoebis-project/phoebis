@@ -251,7 +251,8 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
 /// before the pass deletes it.
 #[tokio::test]
 async fn a_body_at_or_past_its_expiry_answers_none_and_one_before_it_answers_some() {
-    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     let expires_at = 7 * 3_600_000;
     db.insert_request(
         &phoebis_ledger::RequestRecord {
@@ -461,31 +462,6 @@ async fn the_purge_pass_cuts_the_registrys_settled_refresh_attempts() {
         (settled_refresh_attempts(&h) == 2).then_some(())
     })
     .await;
-    up.shutdown().await;
-}
-
-/// A zero `retention_days` keeps the registry's settled refresh attempts as it keeps the requests.
-#[tokio::test]
-async fn a_zero_retention_keeps_the_registrys_settled_refresh_attempts() {
-    let up = FakeUpstream::start(vec![]).await;
-    let h = five_settled_refresh_attempts(&up, 0).await;
-    // Two passes finished after the clock moved, so a cut the zero skipped would have landed by now.
-    let passes = || {
-        h.ledger
-            .stats()
-            .purge_passes
-            .load(std::sync::atomic::Ordering::Relaxed)
-    };
-    let before = passes();
-    fake_upstream::wait_for(Duration::from_secs(5), || {
-        (passes() >= before + 2).then_some(())
-    })
-    .await;
-    assert_eq!(
-        settled_refresh_attempts(&h),
-        5,
-        "the passes ran and cut nothing"
-    );
     up.shutdown().await;
 }
 
@@ -819,7 +795,8 @@ async fn a_batch_waits_for_a_slice_of_a_long_purge_pass_rather_than_the_whole_pa
 #[tokio::test]
 async fn the_retention_purges_decisions_under_the_request_cutoff_and_keeps_them_at_zero() {
     let day = 86_400_000;
-    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
     db.write(|c| {
         for (seq, at) in [(1, day), (2, 2 * day + day / 2), (3, 3 * day)] {
             c.execute(

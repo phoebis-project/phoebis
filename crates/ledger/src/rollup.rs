@@ -3550,7 +3550,7 @@ mod tests {
     const HOUR: i64 = 3_600_000;
 
     fn folded_by_hour(events: &[EventRecord]) -> BTreeMap<i64, u64> {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         db.write(|c| {
             let tx = c.transaction()?;
             for event in events {
@@ -3587,7 +3587,7 @@ mod tests {
     fn folded_in_bounded_time(events: Vec<EventRecord>) -> (BTreeMap<i64, u64>, Option<i64>) {
         let (done, folded) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let db = crate::LedgerDb::open_in_memory().unwrap();
+            let (db, _dir) = crate::db::open_temp();
             let span = db
                 .write(|c| {
                     let tx = c.transaction()?;
@@ -3659,7 +3659,7 @@ mod tests {
     #[test]
     fn a_cooldown_cleared_seconds_after_its_set_leaves_no_empty_hour_and_keeps_an_hour_with_a_pin()
     {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         // The pin folds before the clear, so the take-back meets an hour that holds more than its cooldown.
         let events = [
             cooldown_set_event(0, 3 * HOUR),
@@ -3723,7 +3723,7 @@ mod tests {
 
     #[test]
     fn folding_two_requests_adds_a_replacement_subtracts_its_old_self_and_the_row_round_trips() {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         // The replaced request is a client's cancel beside a success, its answer dropped a block, and its body marked
         // no cache it read or wrote, so its counts must leave with it.
         let (req, attempts) = (
@@ -4093,7 +4093,7 @@ mod tests {
     #[test]
     fn an_answer_that_reported_no_speed_folds_and_prices_at_the_standard_cells_on_a_fast_request() {
         const OPUS: &str = "claude-opus-5-5";
-        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let r = RequestRecord {
             canonical_model: OPUS.into(),
             requested_speed: Some("fast".into()),
@@ -4226,7 +4226,7 @@ mod tests {
     /// row moves as any replace moves it.
     #[test]
     fn a_replaced_request_leaves_the_counts_another_request_holds_in_the_band_row_they_share() {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let first = RequestRecord {
             canonical_model: HAIKU.into(),
             ..request("succeeded", Some(200), Some("k"))
@@ -4273,7 +4273,7 @@ mod tests {
     /// long-context probe files them under `long` at the probe's hour, and a delta with no band under `standard`.
     #[test]
     fn a_keepalive_delta_files_its_wasted_counts_under_its_own_hour_band_and_tier() {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let settled = KeepaliveDelta {
             at: 7_300_000,
             key_id: "k".into(),
@@ -4364,7 +4364,7 @@ mod tests {
     /// unlabeled request folds under rather than an empty label of its own.
     #[test]
     fn a_keepalive_deltas_client_folds_as_a_request_rows_and_an_empty_one_under_the_reserved_id() {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let long = format!("claude-code/{}", "x".repeat(DIMENSION_MAX_BYTES));
         let credit = |client: &str| KeepaliveDelta {
             at: 7_300_000,
@@ -4532,7 +4532,7 @@ mod tests {
 
     #[test]
     fn a_rollup_row_with_a_distinct_value_in_every_column_reads_back_as_written() {
-        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let (db, _dir) = crate::db::open_temp();
         let row = distinct_row();
         db.write(|c| {
             let tx = c.transaction()?;
