@@ -2409,11 +2409,9 @@ export function PoolDialog({
             </div>
           </div>
           <ReturnRate {...idleReturns} />
-          {warming && shortAffinity && (
-            <Warning>
-              Session affinity is {fmtAffinity(affinity)}, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under <GroupLink id="pinning">Pinning</GroupLink>.
-            </Warning>
-          )}
+          <Warning when={warming && shortAffinity}>
+            Session affinity is {fmtAffinity(affinity)}, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under <GroupLink id="pinning">Pinning</GroupLink>.
+          </Warning>
         </>
       ),
       bodyCapture: (

@@ -2817,6 +2817,26 @@ const resetButtonOf = (label) => resetCardOf(label)?.querySelector('.qcard__use'
     missing: [JSON.stringify({ first, second })],
   });
 }
+{
+  // The use of rg-primary-1 two cases up left primary's Fable week at 100% left, and the refusal of rg-primary-2 since
+  // lowered no window, so the confirmation of rg-primary-2 warns that the reset has nothing to clear. A screen reader
+  // hears that warning only where its region stood before the step from the pick page, so the node must be the one the
+  // pick page drew empty.
+  resetButtonOf('primary')?.click();
+  await m.settle(600);
+  const region = resetDialogs()[0]?.querySelector('[role="status"]') ?? null;
+  const onPick = region === null ? null : region.textContent;
+  resetDialogs()[0]?.querySelector('.reset-dialog__row button[data-grant="rg-primary-2"]')?.click();
+  await m.settle(100);
+  const shown = resetDialogs()[0]?.querySelector('[role="status"]') ?? null;
+  const read = { kept: region !== null && shown === region, onPick, text: shown?.textContent?.trim() ?? null, warning: shown?.classList.contains('callout--warning') ?? false };
+  await escapeOn(m);
+  results.push({
+    name: "/quota the reset dialog's warning takes its text in the region that the pick page drew (seed primary)",
+    ok: read.kept && read.onPick === '' && read.warning && (read.text ?? '').endsWith('so this reset has nothing to clear yet.'),
+    missing: [JSON.stringify(read)],
+  });
+}
 // The card chips' tones by account and window, read before the section switch hides the cards, for the timeline's
 // chips to be read against: the cards and the lanes draw the three windows in one order.
 const cardToneOf = new Map([...m.container.querySelectorAll('.qcard')].map((c) => [c.querySelector('.qcard__name')?.textContent?.trim() ?? '', [...c.querySelectorAll('.qchip')].map((q) => [...q.classList].find((n) => n.startsWith('qchip--'))?.slice('qchip--'.length) ?? 'none')]));

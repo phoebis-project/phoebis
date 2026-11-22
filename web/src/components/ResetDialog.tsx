@@ -122,6 +122,8 @@ export function ResetDialog({
   let title: string;
   let pages: ReactNode;
   let foot: ReactNode = cancel;
+  let refusal: ReactNode = null;
+  let clearsNothing = false;
   if (confirming !== null && page.at === 'confirm') {
     title = `Use reset on ${label}`;
     const shown = answered !== null && answered.grant === confirming.id ? answered.answer : null;
@@ -131,18 +133,15 @@ export function ResetDialog({
     const usable = answered === null || target?.state === 'usable';
     const why = usable ? undefined : target === null ? resetHolds(label, null) : (resetRowNote(target, after?.cooldownUntil ?? null, now) ?? undefined);
     const estimate = resetEstimate(confirming, block?.fableWeekShare ?? null, windowOf(account, '7d'), account.fableWindow, now);
+    refusal = shown !== null && (
+      <Refusal>
+        {shown.sentence}
+        {shown.kind === 'unconfirmed' && ` ${resetHolds(label, target)}`}
+      </Refusal>
+    );
+    clearsNothing = resetClearsNothing(confirming.clears.map((id) => windowOf(account, id)), now);
     pages = (
       <>
-        {shown !== null && (
-          <Refusal>
-            {shown.sentence}
-            {shown.kind === 'unconfirmed' && ` ${resetHolds(label, target)}`}
-          </Refusal>
-        )}
-        {resetClearsNothing(
-          confirming.clears.map((id) => windowOf(account, id)),
-          now,
-        ) && <Warning>{`${clearsWords(confirming.clears)} ${noun(confirming.clears.length, 'reads', 'read')} 100% left now, so this reset has nothing to clear yet.`}</Warning>}
         <p>{confirming.label}</p>
         <div className="reset-dialog__windows">
           {confirming.clears.map((id) => (
@@ -222,6 +221,9 @@ export function ResetDialog({
   return createPortal(
     <Dialog open={open} onClose={close} title={title} width={440} className="reset-dialog" footer={foot}>
       {stale}
+      {refusal}
+      {/* Mounted on the pick page too, so the region stands before a reset that clears nothing fills it. */}
+      <Warning when={clearsNothing}>{confirming !== null && `${clearsWords(confirming.clears)} ${noun(confirming.clears.length, 'reads', 'read')} 100% left now, so this reset has nothing to clear yet.`}</Warning>
       {pages}
     </Dialog>,
     document.body,

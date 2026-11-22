@@ -320,12 +320,19 @@ export function Refusal({ children }: { children: ReactNode }) {
   );
 }
 
-/** A warning callout, announced politely. `Refusal` is its critical twin. */
-export function Warning({ children }: { children: ReactNode }): JSX.Element {
+/**
+ * A warning callout, announced politely. The region stays mounted while `when` is false, empty and out of the flow, so
+ * a screen reader that already knows it announces the text once `when` turns true. `Refusal` is its critical twin.
+ */
+export function Warning({ children, when = true }: { children: ReactNode; when?: boolean }): JSX.Element {
   return (
-    <div className="callout callout--warning" role="status">
-      <IconWarning size={16} />
-      <div>{children}</div>
+    <div className={when ? 'callout callout--warning' : 'sr-only'} role="status">
+      {when && (
+        <>
+          <IconWarning size={16} />
+          <div>{children}</div>
+        </>
+      )}
     </div>
   );
 }

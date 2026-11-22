@@ -18,7 +18,7 @@ window.HTMLDialogElement.prototype.close = function () {
   this.dispatchEvent(new window.Event('close'));
 };
 after(() => window.close());
-const { act, createElement: h, createRoot, Dialog } = await import('./dist/ui.js');
+const { act, createElement: h, createRoot, Dialog, Warning } = await import('./dist/ui.js');
 
 const roots = [];
 afterEach(() => {
@@ -248,4 +248,17 @@ test('an Escape on the question keeps editing', () => {
   assert.equal(question(), null, 'the question closed alone');
   assert.equal(closes.count, 0);
   assert.equal(element.hasAttribute('open'), true);
+});
+
+test('a warning turned on fills the status region that stood empty before it', () => {
+  const container = document.body.appendChild(document.createElement('div'));
+  const root = createRoot(container);
+  roots.push(root);
+  act(() => root.render(h(Warning, { when: false }, 'Bodies are captured.')));
+  const region = container.querySelector('[role="status"]');
+  assert.ok(region !== null);
+  assert.equal(region.textContent, '');
+  act(() => root.render(h(Warning, { when: true }, 'Bodies are captured.')));
+  assert.ok(container.querySelector('[role="status"]') === region, 'the region is the node of the first render');
+  assert.equal(region.textContent, 'Bodies are captured.');
 });

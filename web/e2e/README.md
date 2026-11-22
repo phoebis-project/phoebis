@@ -113,7 +113,11 @@ serving table's sub line at a
 normal weight), the contract member's Tier cell (mock pass: `metered P1` in the text, face, size, weight and ink of the
 all pool's API-key member's), the pool card's serving table and its seven tiles, its attention rows ending with their
 age (the row's last cell, on the detail's line in the detail's ink and size, uncut and inside the card, at the pass's
-viewport and at 400 px), the pool card's head at 400 and 360 px (the Edit and Delete buttons one group on the title's
+viewport and at 400 px), each pool card's tiles and the Pools view's tile row under Dollar equivalent at 1200 by 800
+and 1280 by 800 (in each card and in the tile row the figures of one row of tiles on one top within half a pixel, each
+tile's label, the rows its label takes and the tops of its box and its figure recorded, and in the mock pass a tile
+labeled Dollar equivalent in each card), the pool card's head at 400 and 360 px (the Edit and Delete buttons one group
+on the title's
 line, the group's vertical center within a pixel of the name's, or on a line of their own with the group's right edge at
 the title's, Delete after Edit on one line, both inside the title's box, and in the mock pass the named pools' group on
 the title's line at 400 px), the serving table's columns (Account the fill), the chevron of the pool dialog's Identity

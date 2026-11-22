@@ -1352,6 +1352,19 @@
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
+/* The Pools view's tile row takes the same seat, on the rows of its own grid. A tile's note takes a third row,
+   which stands only while a tile of the row draws a note, since an empty row would still add its gap to each tile.
+   The class is that row's alone, so no other view's tiles move. */
+.stat-grid--fit > .stat {
+  display: grid;
+  grid-row: span 2;
+  grid-template-rows: subgrid;
+}
+
+.stat-grid--fit:has(.stat__note) > .stat {
+  grid-row: span 3;
+}
+
 /* The day's five tiles take the columns that hold the cost tile's common figures on one line, where the auto-fit grid
    would hold five at 1440 px and four at 1280 px. "12.5% of an Ultra week" runs to 185.3 px at 15 px: four tiles hold
    it from a 1224 px viewport (the shell takes 288 px) and two from 493 px (the content's 16 px padding a side), both
@@ -1504,7 +1517,12 @@
   border-bottom: 1px solid var(--hairline);
 }
 
+/* A label that takes two rows would put its figure a row under its neighbors', so each tile lays its label and its
+   figure on two rows of the tiles' grid, and the labels of one row of tiles share a height. */
 .pool__stats > div {
+  display: grid;
+  grid-row: span 2;
+  grid-template-rows: subgrid;
   padding: 10px var(--card-inset);
 }
 

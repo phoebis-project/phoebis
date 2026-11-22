@@ -422,9 +422,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     ),
     capture: (
       <>
-        {effectiveHours > 0 && (
-          <Warning>Bodies contain the prompts, file contents, and tool results of every session using this key, and a session in auto mode sends the machine&apos;s permission rules with their literal text, its working and home directories and its git remotes with every request. Only the admin secret can read them.</Warning>
-        )}
+        <Warning when={effectiveHours > 0}>Bodies contain the prompts, file contents, and tool results of every session using this key, and a session in auto mode sends the machine&apos;s permission rules with their literal text, its working and home directories and its git remotes with every request. Only the admin secret can read them.</Warning>
         <div className="cells">
           {/* Field's frame without its label element, since each choice is a label of its own. */}
           <Field

@@ -29,7 +29,7 @@ export { OptionList } from '@/components/ui/OptionList';
 export { Popover, PopoverHost } from '@/components/ui/Popover';
 export { sumTileOf } from '@/components/ui/Tile';
 export { UnitLegend } from '@/components/ui/UnitControls';
-export { Button, ConfirmDialog, CopyButton, Descriptions, Dialog, Menu, PageLoadFailed } from '@/components/ui/primitives';
+export { Button, ConfirmDialog, CopyButton, Descriptions, Dialog, Menu, PageLoadFailed, Warning } from '@/components/ui/primitives';
 export { installClock } from '@/lib/clock';
 export { getTimeFormat, setTimeFormat, spanText } from '@/lib/format';
 export { useAsync, useCommittedText, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';

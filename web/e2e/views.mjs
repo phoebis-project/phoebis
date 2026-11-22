@@ -2966,6 +2966,80 @@ async function poolCardLayout(theme) {
 }
 
 /**
+ * Each pool card's tiles and the Pools view's tile row under Dollar equivalent at 1200 by 800 and at 1280 by 800, where
+ * the cost tile's label names the unit and can take two rows beside a neighbor's one, which would set its figure a row
+ * under theirs: in each card and in the tile row, the figures of one row of tiles share a top within half a pixel. A
+ * tile records its label, the rows its label takes and the tops of its box and its figure. The rows are the distinct
+ * tops of a range over the label's text, since the label's own box answers one rectangle however its text wraps. The
+ * switch returns to native, the pass's default, and the viewport to the pass's 1280 by 800.
+ */
+async function poolTileFigures(theme) {
+  const say = (what) => failures.push(`${theme} /pools tiles: ${what}`);
+  const unit = page.locator('.topbar select[aria-label="Unit"]');
+  const read = () =>
+    page.evaluate(() => {
+      const tenth = (v) => Math.round(v * 10) / 10;
+      const tileOf = (tile, label, figure) => {
+        const range = document.createRange();
+        if (label) range.selectNodeContents(label);
+        return {
+          figure: figure ? tenth(figure.getBoundingClientRect().top) : null,
+          label: label?.textContent?.trim() ?? '',
+          rows: label ? new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size : 0,
+          top: tenth(tile.getBoundingClientRect().top),
+        };
+      };
+      return {
+        cards: [...document.querySelectorAll('.pool')].map((card) => ({
+          name: card.querySelector('.card__title')?.textContent ?? '',
+          tiles: [...card.querySelectorAll('.pool__stats > div')].map((t) => tileOf(t, t.querySelector('dt'), t.querySelector('dd'))),
+        })),
+        row: [...document.querySelectorAll('.stat-grid--fit > .stat')].map((t) => tileOf(t, t.querySelector('.stat__label'), t.querySelector('.stat__value'))),
+      };
+    });
+  const reads = {};
+  try {
+    await unit.selectOption('equivalent');
+    await settle();
+    for (const width of [1200, 1280]) {
+      await page.setViewportSize({ height: 800, width });
+      await settle();
+      reads[width] = await read();
+      measurements.push(`${theme} /pools the tiles' figures under Dollar equivalent at ${width} by 800 ${JSON.stringify(reads[width])}`);
+    }
+  } finally {
+    await unit.selectOption('native');
+    await settle();
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await atRest();
+  }
+  const sizes = Object.entries(reads);
+  const json = JSON.stringify(reads);
+  const rowsOf = (tiles) => [...new Set(tiles.map((t) => Math.round(t.top)))].map((top) => tiles.filter((t) => Math.round(t.top) === top));
+  const apart = [];
+  for (const [width, at] of sizes) {
+    for (const [where, tiles] of [...at.cards.map((c) => [`the ${c.name} card`, c.tiles]), ['the Pools tile row', at.row]]) {
+      for (const row of rowsOf(tiles)) {
+        const figures = row.map((t) => t.figure);
+        if (figures.includes(null) || Math.max(...figures) - Math.min(...figures) > 0.5) apart.push(`at ${width} px ${where} (${row.map((t) => `${t.label} at ${t.figure}`).join(', ')})`);
+      }
+    }
+  }
+  if (apart.length > 0) say(`the figures of a row of tiles do not share a top within half a pixel: ${apart.join(', ')}. Both sizes read ${json}`);
+  // With no subject the check above passes on nothing, as on a view that draws no card or a switch that did not take.
+  // The mock's story fixes the pools that the view draws, so its pass alone fails there: the router pass draws the
+  // pools of a seed that this file does not fix.
+  const missing = sizes.flatMap(([width, at]) => [
+    ...(at.cards.length === 0 ? [`at ${width} px no pool card`] : []),
+    ...at.cards.filter((c) => c.tiles.length === 0).map((c) => `at ${width} px the ${c.name} card with no tile`),
+    ...at.cards.filter((c) => c.tiles.length > 0 && !c.tiles.some((t) => t.label.startsWith('Dollar equivalent'))).map((c) => `at ${width} px the ${c.name} card with no tile labeled Dollar equivalent`),
+    ...(at.row.length === 0 ? [`at ${width} px no tile in the Pools tile row`] : []),
+  ]);
+  if (mock && missing.length > 0) say(`the read holds no subject to compare: ${missing.join(', ')}. Both sizes read ${json}`);
+}
+
+/**
  * Every pool card's head at 400 and 360 px, where the name, the status, the key count and the two buttons can run out
  * of room. Edit and Delete stand as one group, read as the box around the two buttons: on the title's line, where the
  * title centers its items so the group's vertical center lies within a pixel of the name's, or on a line of their own
@@ -14432,6 +14506,7 @@ try {
         await poolEngineHints(theme);
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
+        await poolTileFigures(theme);
         await poolCardHead(theme);
         await poolMemberPins(theme);
         await poolFormerPins(theme);
