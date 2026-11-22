@@ -11,7 +11,7 @@ use fake_upstream::Respond;
 use http_body_util::BodyExt;
 use phoebis_keepalive::{
     keepalive_router, AgentState, CompanionState, Event, EventError, Lifecycle, Park, ParkKind,
-    Reason, SessionView, EVENTS_PATH,
+    SessionView, EVENTS_PATH,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, RulesMode};
@@ -75,6 +75,40 @@ async fn send(
 
 async fn post(app: &axum::Router, body: Value, key: Option<&str>) -> Answer {
     send(app, Some(JSON), serde_json::to_vec(&body).unwrap(), key).await
+}
+
+/// Posts an agent report under the harness key as the mod sends it: a `stale_request_generation` refusal names the
+/// agent's current generation, and the report goes once more under it and under the same sequence, which the refusal
+/// did not take.
+async fn post_current(app: &axum::Router, mut body: Value) -> Answer {
+    let answer = post(app, body.clone(), Some(KEY)).await;
+    if answer.status == 409 && answer.body["code"] == "stale_request_generation" {
+        body["request_generation"] = answer.body["request_generation"].clone();
+        return post(app, body, Some(KEY)).await;
+    }
+    answer
+}
+
+/// The generation a registration answer lists for an agent is the agent's current one: a report under it is taken,
+/// and the report's answer names the same generation.
+async fn listed_generation_is_current(app: &axum::Router, sequence: u64, listed: &Value) {
+    let facts = report(
+        "agent_facts",
+        "session",
+        "instance",
+        sequence,
+        json!({
+            "agent_id": listed["agent_id"],
+            "request_generation": listed["request_generation"]
+        }),
+    );
+    let answer = post(app, facts, Some(KEY)).await;
+    assert_eq!(
+        (answer.status, &answer.body["request_generation"]),
+        (200, &listed["request_generation"]),
+        "{}",
+        answer.text
+    );
 }
 
 /// A report as the mod sends it: the five members every body carries, then the event's own.
@@ -1160,7 +1194,7 @@ async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_regi
     r.observe("main").await;
     agent_start(&mut r, "worker", None).unwrap();
     r.state("worker", "released");
-    let released = r.status("worker").request_generation;
+    let released = r.request_generation("worker");
     assert_eq!((released, r.engine.stats().agents), (1, 2));
     r.advance_attended(3_599_999);
     assert_eq!(
@@ -1171,9 +1205,7 @@ async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_regi
     r.advance_attended(1);
     r.step().await;
     assert!(
-        r.engine
-            .agent_status("desktop", "session", "worker")
-            .is_none(),
+        r.lifecycle("worker").is_none(),
         "the sweep at the leave removes the record"
     );
     assert_eq!(
@@ -1187,10 +1219,11 @@ async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_regi
         "a report under the id that left answers as for any id the session does not hold"
     );
     agent_start(&mut r, "worker", None).expect("a start after the leave registers anew");
-    let anew = r.status("worker");
+    // The start's answer carries the generation, and the session view words Busy under `AwaitingRequest` as
+    // `registered`.
     assert_eq!(
-        (anew.request_generation, anew.state),
-        (0, AgentState::Busy),
+        (r.request_generation("worker"), r.lifecycle("worker")),
+        (0, Some(Lifecycle::Registered)),
         "a new record, not the released one"
     );
     assert_eq!((r.engine.stats().agents, session_agents(&r)), (2, 2));
@@ -1204,23 +1237,23 @@ async fn a_start_before_a_released_agent_leaves_reuses_its_record_and_clears_the
     r.observe("main").await;
     agent_start(&mut r, "worker", None).unwrap();
     r.state("worker", "released");
-    let released = r.status("worker").request_generation;
+    let released = r.request_generation("worker");
     r.advance_attended(1_000);
     agent_start(&mut r, "worker", Some(released)).expect("the start reuses the released record");
-    let reused = r.status("worker");
+    // Busy under `AwaitingRequest`, which the session view words `registered`.
     assert_eq!(
         (
-            reused.request_generation,
-            reused.state,
+            r.request_generation("worker"),
+            r.lifecycle("worker"),
             r.engine.stats().agents
         ),
-        (released + 1, AgentState::Busy, 2)
+        (released + 1, Some(Lifecycle::Registered), 2)
     );
     r.advance_attended(3_600_000);
     r.step().await;
     assert_eq!(
-        (r.status("worker").state, r.engine.stats().agents),
-        (AgentState::Busy, 2),
+        (r.lifecycle("worker"), r.engine.stats().agents),
+        (Some(Lifecycle::Registered), 2),
         "the reused record stays past the release's leave"
     );
 }
@@ -1241,7 +1274,7 @@ async fn a_released_agent_leaves_after_the_longest_ttl_of_its_pools_cache_ttl_po
     // The record takes its pool from its last real request.
     r.observe("worker").await;
     r.state("worker", "released");
-    let released = r.status("worker").request_generation;
+    let released = r.request_generation("worker");
     r.advance_attended(299_999);
     assert_eq!(
         idle_report(&mut r, "worker", released),
@@ -1304,11 +1337,10 @@ async fn a_released_record_with_a_probe_in_flight_at_its_leave_waits_for_the_res
     r.state("worker", "released");
     r.advance_attended(3_600_000);
     r.engine.step().await;
+    // The probe in flight is the request the upstream still holds, which the wait above saw arrive.
     assert_eq!(
-        r.engine
-            .agent_status("desktop", "session", "worker")
-            .map(|status| (status.state, status.in_flight)),
-        Some((AgentState::Released, true)),
+        r.lifecycle("worker"),
+        Some(Lifecycle::Released),
         "the sweep leaves a record whose probe is still in flight"
     );
     r.up.release();
@@ -1316,9 +1348,7 @@ async fn a_released_record_with_a_probe_in_flight_at_its_leave_waits_for_the_res
     r.pump(None).await;
     r.step().await;
     assert!(
-        r.engine
-            .agent_status("desktop", "session", "worker")
-            .is_none(),
+        r.lifecycle("worker").is_none(),
         "the sweep after the result removes the record"
     );
     let wasted = wait_for(Duration::from_secs(30), || {
@@ -1355,23 +1385,17 @@ async fn a_session_end_keeps_the_leave_of_a_record_the_mod_released_before_it() 
     r.advance(3_599_000);
     r.step().await;
     assert!(
-        r.engine
-            .agent_status("desktop", "session", "worker")
-            .is_none(),
+        r.lifecycle("worker").is_none(),
         "the sweep at the mod's release plus one cache TTL removes the record"
     );
     assert!(
-        r.engine
-            .agent_status("desktop", "session", "main")
-            .is_some(),
+        r.lifecycle("main").is_some(),
         "main stays until its own leave"
     );
     r.advance(1_000);
     r.step().await;
     assert!(
-        r.engine
-            .agent_status("desktop", "session", "main")
-            .is_none(),
+        r.lifecycle("main").is_none(),
         "the sweep at the end plus one cache TTL removes main"
     );
 }
@@ -1379,13 +1403,11 @@ async fn a_session_end_keeps_the_leave_of_a_record_the_mod_released_before_it() 
 #[tokio::test]
 async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_the_clock_alone() {
     let mut r = rig(RigSpec::default()).await;
-    // An idle main probed once, so the presence below meets an idle tick count it must leave alone.
     r.observe("main").await;
     r.state("main", "idle");
     r.advance_attended(270_000);
     r.step().await;
-    assert_eq!(r.status("main").idle_ticks, 1);
-    let generation = r.status("main").request_generation;
+    let generation = r.request_generation("main");
     let base = r.sequence;
     let app = keepalive_router(r.engine.clone());
     let deadline = r.now() + 600_000;
@@ -1397,8 +1419,13 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         report("state", "session", "instance", base + sequence, fields)
     };
     let park = |r: &Rig| {
-        let status = r.status("main");
-        (status.state, status.park)
+        let view = r.view("main");
+        (
+            view.agent_state,
+            view.park_kind,
+            view.deadline,
+            view.wake_at,
+        )
     };
     let background = state(
         2,
@@ -1408,8 +1435,10 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
     assert_eq!(
         park(&r),
         (
-            AgentState::Parked,
-            Some(Park::new(ParkKind::Background, Some(deadline), None))
+            Lifecycle::Parked,
+            Some(ParkKind::Background),
+            Some(deadline),
+            None
         )
     );
     let both = state(
@@ -1420,8 +1449,10 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
     assert_eq!(
         park(&r),
         (
-            AgentState::Parked,
-            Some(Park::new(ParkKind::Both, Some(deadline + 1), Some(wake)))
+            Lifecycle::Parked,
+            Some(ParkKind::Both),
+            Some(deadline + 1),
+            Some(wake)
         )
     );
     assert_eq!(
@@ -1432,7 +1463,7 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
     );
     assert_eq!(
         park(&r),
-        (AgentState::Idle, None),
+        (Lifecycle::Idle, None, None, None),
         "any state but parked clears the park"
     );
     for (fields, expected) in [
@@ -1458,7 +1489,7 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
     }
     assert_eq!(
         park(&r),
-        (AgentState::Idle, None),
+        (Lifecycle::Idle, None, None, None),
         "a refused park records nothing"
     );
     let scheduled = state(
@@ -1475,19 +1506,16 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         json!({"agent_id": "main", "kind": "presence", "request_generation": generation}),
     );
     assert_eq!(post(&app, presence, Some(KEY)).await.status, 200);
-    let status = r.status("main");
     assert_eq!(
+        (r.saved("main").await["last_activity"].clone(), park(&r)),
         (
-            status.last_activity,
-            status.state,
-            status.park,
-            status.idle_ticks
-        ),
-        (
-            r.now(),
-            AgentState::Parked,
-            Some(Park::new(ParkKind::Scheduled, None, Some(wake))),
-            1
+            json!(r.now()),
+            (
+                Lifecycle::Parked,
+                Some(ParkKind::Scheduled),
+                None,
+                Some(wake)
+            )
         ),
         "presence moves the idle clock and nothing else: the agent stays parked"
     );
@@ -1500,8 +1528,8 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
     );
     assert_eq!(post(&app, prompt, Some(KEY)).await.status, 200);
     assert_eq!(
-        r.status("main").state,
-        AgentState::Busy,
+        r.view("main").agent_state,
+        Lifecycle::Busy,
         "a prompt resumes the parked main agent"
     );
 }
@@ -1524,16 +1552,22 @@ async fn a_scheduled_park_ends_whole_when_its_wake_passes_and_the_answer_carries
             "state": "parked",
             "park_kind": "scheduled",
             "wake_at": wake,
-            "request_generation": r.status("worker").request_generation
+            "request_generation": r.request_generation("worker")
         }),
     );
-    assert_eq!(post(&app, park, Some(KEY)).await.status, 200);
+    let parked = post_current(&app, park).await;
+    assert_eq!(parked.status, 200, "{}", parked.text);
     r.advance(11 * MINUTE);
     r.step().await;
-    let worker = r.status("worker");
+    let worker = r.view("worker");
     assert_eq!(
-        (worker.state, worker.park),
-        (AgentState::Parked, None),
+        (
+            worker.agent_state,
+            worker.park_kind,
+            worker.deadline,
+            worker.wake_at
+        ),
+        (Lifecycle::Parked, None, None, None),
         "the passed wake ends the scheduled park whole"
     );
     let again = post(
@@ -1542,18 +1576,13 @@ async fn a_scheduled_park_ends_whole_when_its_wake_passes_and_the_answer_carries
         Some(KEY),
     )
     .await;
+    let listed = &again.body["agents"][1];
     assert_eq!(
-        (again.status, again.body["agents"][1].clone()),
-        (
-            200,
-            json!({
-                "agent_id": "worker",
-                "request_generation": worker.request_generation,
-                "state": "parked"
-            })
-        ),
+        (again.status, without(listed.clone(), "request_generation")),
+        (200, json!({"agent_id": "worker", "state": "parked"})),
         "the registration answer carries no key of the ended park"
     );
+    listed_generation_is_current(&app, base + 3, listed).await;
 }
 
 #[tokio::test]
@@ -1576,18 +1605,26 @@ async fn a_both_park_whose_deadline_passes_first_narrows_to_scheduled_and_keeps_
             "park_kind": "both",
             "wake_at": wake,
             "deadline": deadline,
-            "request_generation": r.status("worker").request_generation
+            "request_generation": r.request_generation("worker")
         }),
     );
-    assert_eq!(post(&app, park, Some(KEY)).await.status, 200);
+    let parked = post_current(&app, park).await;
+    assert_eq!(parked.status, 200, "{}", parked.text);
     r.advance(11 * MINUTE);
     r.step().await;
-    let worker = r.status("worker");
+    let worker = r.view("worker");
     assert_eq!(
-        (worker.state, worker.park),
         (
-            AgentState::Parked,
-            Some(Park::new(ParkKind::Scheduled, None, Some(wake)))
+            worker.agent_state,
+            worker.park_kind,
+            worker.deadline,
+            worker.wake_at
+        ),
+        (
+            Lifecycle::Parked,
+            Some(ParkKind::Scheduled),
+            None,
+            Some(wake)
         ),
         "the passed deadline leaves the wake's part of the park"
     );
@@ -1597,20 +1634,21 @@ async fn a_both_park_whose_deadline_passes_first_narrows_to_scheduled_and_keeps_
         Some(KEY),
     )
     .await;
+    let listed = &again.body["agents"][1];
     assert_eq!(
-        (again.status, again.body["agents"][1].clone()),
+        (again.status, without(listed.clone(), "request_generation")),
         (
             200,
             json!({
                 "agent_id": "worker",
                 "park_kind": "scheduled",
-                "request_generation": worker.request_generation,
                 "state": "parked",
                 "wake_at": wake
             })
         ),
         "the registration answer carries the narrowed park without its deadline"
     );
+    listed_generation_is_current(&app, base + 3, listed).await;
 }
 
 #[tokio::test]
@@ -1633,18 +1671,26 @@ async fn a_both_park_whose_wake_passes_first_narrows_to_background_and_drops_its
             "park_kind": "both",
             "wake_at": wake,
             "deadline": deadline,
-            "request_generation": r.status("worker").request_generation
+            "request_generation": r.request_generation("worker")
         }),
     );
-    assert_eq!(post(&app, park, Some(KEY)).await.status, 200);
+    let parked = post_current(&app, park).await;
+    assert_eq!(parked.status, 200, "{}", parked.text);
     r.advance(11 * MINUTE);
     r.step().await;
-    let worker = r.status("worker");
+    let worker = r.view("worker");
     assert_eq!(
-        (worker.state, worker.park),
         (
-            AgentState::Parked,
-            Some(Park::new(ParkKind::Background, Some(deadline), None))
+            worker.agent_state,
+            worker.park_kind,
+            worker.deadline,
+            worker.wake_at
+        ),
+        (
+            Lifecycle::Parked,
+            Some(ParkKind::Background),
+            Some(deadline),
+            None
         ),
         "the passed wake leaves the deadline's part of the park"
     );
@@ -1654,20 +1700,21 @@ async fn a_both_park_whose_wake_passes_first_narrows_to_background_and_drops_its
         Some(KEY),
     )
     .await;
+    let listed = &again.body["agents"][1];
     assert_eq!(
-        (again.status, again.body["agents"][1].clone()),
+        (again.status, without(listed.clone(), "request_generation")),
         (
             200,
             json!({
                 "agent_id": "worker",
                 "deadline": deadline,
                 "park_kind": "background",
-                "request_generation": worker.request_generation,
                 "state": "parked"
             })
         ),
         "the registration answer carries the narrowed park without its wake"
     );
+    listed_generation_is_current(&app, base + 3, listed).await;
 }
 
 #[tokio::test]
@@ -1967,9 +2014,10 @@ async fn a_revival_inside_the_cache_ttl_keeps_main_and_clears_its_leave() {
     r.reregister();
     r.advance_attended(3_599_000);
     r.step().await;
+    // The revival leaves main busy under `AwaitingRequest`, which the session view words `registered`.
     assert_eq!(
-        (r.status("main").state, r.engine.stats().agents),
-        (AgentState::Busy, 1),
+        (r.lifecycle("main"), r.engine.stats().agents),
+        (Some(Lifecycle::Registered), 1),
         "the revived main stays past the end's leave"
     );
 }
@@ -1984,9 +2032,7 @@ async fn a_revival_after_mains_record_left_registers_main_anew() {
     r.advance(3_600_000);
     r.step().await;
     assert!(
-        r.engine
-            .agent_status("desktop", "session", "main")
-            .is_none(),
+        r.lifecycle("main").is_none(),
         "main's record left one cache TTL after the end"
     );
     assert_eq!(r.engine.stats().agents, 0);
@@ -1996,11 +2042,8 @@ async fn a_revival_after_mains_record_left_registers_main_anew() {
         json!([{"agent_id": "main", "request_generation": 0, "state": "busy"}]),
         "the acknowledgment lists the new main"
     );
-    let main = r.status("main");
-    assert_eq!(
-        (main.request_generation, main.state, main.reason),
-        (0, AgentState::Busy, Reason::AwaitingRequest)
-    );
+    // Busy under `AwaitingRequest`, which the session view words `registered`.
+    assert_eq!(r.lifecycle("main"), Some(Lifecycle::Registered));
     assert_eq!((r.engine.stats().agents, session_agents(&r)), (1, 1));
 }
 
@@ -2031,9 +2074,7 @@ async fn a_revival_that_would_register_main_past_the_agent_cap_answers_agent_lim
     let refused = r.event(session_start("session")).unwrap_err();
     assert_eq!((refused.code, refused.status), ("agent_limit", 429));
     assert!(
-        r.engine
-            .agent_status("desktop", "session", "main")
-            .is_none(),
+        r.lifecycle("main").is_none(),
         "the refused revival registered no main"
     );
     assert_eq!(

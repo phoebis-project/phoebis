@@ -11,8 +11,8 @@ use common::*;
 use fake_upstream::{install, Captured};
 use phoebis_bus::{ClientFacts, Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
-    continues_prefix, idle_age_bucket, AgentState, Event, Guard, IdleReturns, KeepalivePolicy,
-    KeepaliveTiming, PrefixAnchor, Reason,
+    continues_prefix, idle_age_bucket, Event, Guard, IdleReturns, KeepalivePolicy, KeepaliveTiming,
+    Lifecycle, PrefixAnchor, Reason,
 };
 
 const LAPTOP_SECRET: &str = "phoebis-laptop-key";
@@ -197,12 +197,10 @@ async fn tick_silent_to(r: &mut Rig, start: i64, minutes: i64) {
 }
 
 fn activity(r: &mut Rig, kind: &str) {
-    let generation = r.status("main").request_generation;
-    r.event(Event {
+    r.report(Event {
         event: "activity".into(),
         agent_id: Some("main".into()),
         kind: Some(kind.into()),
-        request_generation: Some(generation),
         ..Default::default()
     })
     .unwrap();
@@ -573,8 +571,8 @@ async fn a_clock_that_steps_back_counts_no_bucket_twice() {
         "a return read at 4 minutes counts in the bucket the window had reached"
     );
     assert_eq!(
-        r.status("main").state,
-        AgentState::Busy,
+        r.view("main").agent_state,
+        Lifecycle::Busy,
         "the engine still answers"
     );
 }
@@ -679,7 +677,7 @@ async fn a_released_main_closes_its_window() {
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
     r.state("main", "released");
-    let generation = r.status("main").request_generation;
+    let generation = r.request_generation("main");
     r.event(Event {
         event: "agent_start".into(),
         agent_id: Some("main".into()),
@@ -738,7 +736,7 @@ async fn a_key_that_moves_pools_keeps_the_open_window_in_its_first_pool() {
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 10).await;
     assert_eq!(
-        (r.status("main").reason, retained(&r)),
+        (r.view("main").cause, retained(&r)),
         (Reason::IdleLimit, false)
     );
     move_key_to_warm(&r).await;
@@ -799,7 +797,7 @@ async fn a_changed_prefix_counts_as_no_return_before_and_after_the_recipes_dispo
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 20).await;
     assert_eq!(
-        (r.status("main").reason, retained(&r)),
+        (r.view("main").cause, retained(&r)),
         (Reason::IdleLimit, false)
     );
     r.observe_with("main", &fresh_chain()).await;
@@ -819,7 +817,7 @@ async fn a_changed_prefix_counts_as_no_return_before_and_after_the_recipes_dispo
     observe_classed(&mut r, "main", &fresh_chain()).await;
     assert_eq!(last_guard(&r), Some(Guard::Rearm));
     assert_eq!(
-        (retained(&r), r.status("main").next_probe_at),
+        (retained(&r), r.view("main").next_probe_at),
         (true, Some(r.now() + 270_000)),
         "the class re-armed the recipe on the fresh chain"
     );
@@ -856,7 +854,7 @@ async fn the_boundary_before_the_last_counts_a_return_before_and_after_the_recip
     let start = idle_after_request_with(&mut r, &two_messages()).await;
     tick_to(&mut r, start, 20).await;
     assert_eq!(
-        (r.status("main").reason, retained(&r)),
+        (r.view("main").cause, retained(&r)),
         (Reason::IdleLimit, false)
     );
     r.observe_with("main", &reshaped_after_two_messages()).await;
@@ -1102,7 +1100,7 @@ async fn a_marked_request_whose_recipe_the_engine_refuses_still_reaches_the_watc
         r#""max_tokens":1024,"tool_choice":{"type":"tool","name":"x"},"#,
     );
     arrive(&r, "forced", "main", &forced, |_| {});
-    assert_eq!(r.status("main").reason, Reason::ForcedTool);
+    assert_eq!(r.view("main").cause, Reason::ForcedTool);
     answer(&r, "forced", VERSION, reading(1_800));
     assert_eq!(contradictions(&r), [series(VERSION, 1)]);
 }
@@ -1304,14 +1302,12 @@ async fn the_end_of_a_park_without_a_request_starts_a_new_window() {
         let mut r = rig(RigSpec::default()).await;
         r.observe("main").await;
         let start = r.now();
-        let generation = r.status("main").request_generation;
-        r.event(Event {
+        r.report(Event {
             event: "state".into(),
             agent_id: Some("main".into()),
             state: Some("parked".into()),
             park_kind: Some("background".into()),
             deadline: Some(start + 10 * MINUTE),
-            request_generation: Some(generation),
             ..Default::default()
         })
         .unwrap();
@@ -1529,14 +1525,12 @@ async fn a_park_report_and_a_prompt_inside_the_same_second_count_the_first_bucke
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     let start = r.now();
-    let generation = r.status("main").request_generation;
-    r.event(Event {
+    r.report(Event {
         event: "state".into(),
         agent_id: Some("main".into()),
         state: Some("parked".into()),
         park_kind: Some("background".into()),
         deadline: Some(start + 60 * MINUTE),
-        request_generation: Some(generation),
         ..Default::default()
     })
     .unwrap();
@@ -1583,7 +1577,7 @@ async fn a_presence_report_after_a_backward_clock_step_opens_a_window_that_count
         [0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
         "and its return counts at the window's age"
     );
-    assert_eq!(r.status("main").state, AgentState::Busy);
+    assert_eq!(r.view("main").agent_state, Lifecycle::Busy);
 }
 
 #[tokio::test]

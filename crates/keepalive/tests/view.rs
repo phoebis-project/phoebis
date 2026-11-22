@@ -18,10 +18,8 @@ fn row(r: &Rig, agent: &str) -> RecipeView {
 }
 
 fn report(r: &mut Rig, agent: &str, fields: Event) {
-    let generation = r.status(agent).request_generation;
-    r.event(Event {
+    r.report(Event {
         agent_id: Some(agent.into()),
-        request_generation: Some(generation),
         ..fields
     })
     .unwrap();
@@ -176,23 +174,27 @@ async fn the_day_counters_read_zero_after_midnight_without_a_probe_or_a_credit()
         (0, 0, Some(at)),
         "{after:?}"
     );
-    let status = r.status("main");
+    let saved = r.saved("main").await;
     assert_eq!(
         (
-            status.probes_today,
-            status.credited_today,
-            status.counters_day
+            &saved["probes_today"],
+            &saved["credited_today"],
+            &saved["counters_day"]
         ),
-        (1, 0, 0),
-        "the engine's counters are untouched: {status:?}"
+        (
+            &serde_json::json!(1),
+            &serde_json::json!(0),
+            &serde_json::json!(0)
+        ),
+        "the engine's counters are untouched: {saved}"
     );
     // A tick is no event of the counters, whatever it does to the recipe.
     r.step().await;
-    let status = r.status("main");
+    let saved = r.saved("main").await;
     assert_eq!(
-        (status.probes_today, status.counters_day),
-        (1, 0),
-        "{status:?}"
+        (&saved["probes_today"], &saved["counters_day"]),
+        (&serde_json::json!(1), &serde_json::json!(0)),
+        "{saved}"
     );
     assert_eq!(row(&r, "main").probes_today, 0);
     // The next probe is the event that starts the new day.
@@ -200,11 +202,11 @@ async fn the_day_counters_read_zero_after_midnight_without_a_probe_or_a_credit()
     r.observe("main").await;
     r.advance_attended(270_000);
     r.step().await;
-    let status = r.status("main");
+    let saved = r.saved("main").await;
     assert_eq!(
-        (status.probes_today, status.counters_day),
-        (1, 1),
-        "{status:?}"
+        (&saved["probes_today"], &saved["counters_day"]),
+        (&serde_json::json!(1), &serde_json::json!(1)),
+        "{saved}"
     );
     assert_eq!(row(&r, "main").probes_today, 1);
 }
@@ -322,7 +324,7 @@ async fn a_probe_exhaustion_reads_paused_and_a_gate_hold_reads_held_until_the_ne
 async fn a_recipe_held_on_a_disabled_pool_reads_retained_once_the_pool_is_enabled_again() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    let due = r.status("main").next_probe_at;
+    let due = row(&r, "main").next_probe_at;
     assert!(due.is_some());
     edit_pool(&r, |pool| pool.enabled = false).await;
     r.advance_attended(60_000);
@@ -343,7 +345,7 @@ async fn a_recipe_held_on_a_disabled_pool_reads_retained_once_the_pool_is_enable
         (RecipeState::Retained, Reason::Scheduled, due),
         "{armed:?}"
     );
-    assert_eq!(r.status("main").probes, 0, "no probe was due yet");
+    assert_eq!(row(&r, "main").probes_today, 0, "no probe was due yet");
 }
 
 #[tokio::test]
@@ -399,7 +401,10 @@ async fn a_session_whose_main_holds_no_recipe_reads_the_newest_other_agents_reci
 async fn mains_lifecycle_word_stands_beside_an_empty_summary_while_main_holds_no_recipe() {
     let mut r = rig(RigSpec::default()).await;
     r.state("main", "idle");
-    assert_eq!(r.status("main").reason, Reason::AwaitingRequest);
+    assert_eq!(
+        serde_json::from_value::<Reason>(r.saved("main").await["reason"].clone()).unwrap(),
+        Reason::AwaitingRequest
+    );
     let view = &r.engine.sessions()[0];
     assert_eq!(
         (view.lifecycles.get("main").copied(), view.keepalive.state),
@@ -501,11 +506,11 @@ async fn a_pool_disabled_hold_on_a_recipe_awaiting_its_evidence_ends_awaiting_it
     r.engine.observe(observed);
     let selected = r.selected("r1", "a");
     r.engine.observe(selected);
-    assert_eq!(r.status("main").reason, Reason::AwaitingCacheEvidence);
+    assert_eq!(row(&r, "main").cause, Reason::AwaitingCacheEvidence);
     edit_pool(&r, |pool| pool.enabled = false).await;
     r.advance_attended(10_000);
     r.step().await;
-    assert_eq!(r.status("main").reason, Reason::PoolDisabled);
+    assert_eq!(row(&r, "main").cause, Reason::PoolDisabled);
     edit_pool(&r, |pool| pool.enabled = true).await;
     r.advance_attended(10_000);
     r.step().await;
@@ -540,8 +545,12 @@ async fn a_paused_recipe_keeps_its_cause_through_a_disabled_pool() {
     r.step().await;
     let enabled = row(&r, "main");
     assert_eq!(
-        (enabled.state, enabled.cause, r.status("main").paused),
-        (RecipeState::Paused, Reason::Cooled, true),
+        (
+            enabled.state,
+            enabled.cause,
+            r.saved("main").await["paused"].clone()
+        ),
+        (RecipeState::Paused, Reason::Cooled, serde_json::json!(true)),
         "{enabled:?}"
     );
 }
@@ -562,7 +571,7 @@ async fn a_paused_recipe_drops_its_prompt_at_its_entrys_expiry_and_still_reads_p
         (RecipeState::Paused, Reason::ProbeRetryLimit),
         "{paused:?}"
     );
-    let probes = r.status("main").probes;
+    let probes = paused.probes_today;
     // The request's entry is five minutes long and the failed probe wrote none, so it expires 300 s after the request.
     let now = r.now();
     r.advance_attended(start + 300_000 - 1 - now);
@@ -575,17 +584,24 @@ async fn a_paused_recipe_drops_its_prompt_at_its_entrys_expiry_and_still_reads_p
     r.advance_attended(1);
     r.step().await;
     let cold = row(&r, "main");
-    let status = r.status("main");
+    let saved = r.saved("main").await;
     assert_eq!(
         (
             cold.state,
             cold.cause,
-            status.paused,
+            saved["paused"].clone(),
             r.engine.stats().retained_bytes,
-            status.probes,
+            cold.probes_today,
             cold.next_probe_at
         ),
-        (RecipeState::Paused, warm.cause, true, 0, probes, None),
+        (
+            RecipeState::Paused,
+            warm.cause,
+            serde_json::json!(true),
+            0,
+            probes,
+            None
+        ),
         "{cold:?}"
     );
 }

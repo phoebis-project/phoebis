@@ -21,7 +21,7 @@ use phoebis_bus::{
 };
 use phoebis_keepalive::{
     Ack, Engine, EngineParts, Event, EventError, EventReport, KeepaliveLimits, KeepalivePolicy,
-    KeepaliveTiming,
+    KeepaliveTiming, Lifecycle, RecipeView,
 };
 use phoebis_ledger::{
     spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
@@ -71,6 +71,9 @@ pub struct Rig {
     pub clock: Arc<std::sync::atomic::AtomicI64>,
     pub db: Arc<LedgerDb>,
     pub engine: Arc<Engine>,
+    /// Session id and agent id to the request generation the agent's last answer through `event` carried, as the mod
+    /// adopts it.
+    generations: BTreeMap<(String, String), u64>,
     pub h: relay_common::Harness,
     /// Session id to the instance its last accepted `session_start` through `event` registered.
     instances: BTreeMap<String, String>,
@@ -276,6 +279,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         clock: h.clock.clone(),
         db,
         engine,
+        generations: BTreeMap::new(),
         h,
         instances: BTreeMap::new(),
         ledger,
@@ -439,6 +443,7 @@ impl Rig {
             event.instance_id = self.instance_of(&event.session_id);
         }
         let registers = event.event == "session_start";
+        let (session_id, agent_id) = (event.session_id.clone(), event.agent_id.clone());
         let generation = self.generation("desktop");
         let acked = EventReport::try_from(event)
             .and_then(|report| self.engine.apply_event("desktop", generation, report));
@@ -447,7 +452,76 @@ impl Rig {
             self.instances
                 .insert(ack.session_id.clone(), ack.instance_id.clone());
         }
+        self.adopt(&session_id, agent_id.as_deref(), &acked);
         acked
+    }
+
+    /// Keeps each generation an answer carries: every agent of a registration, the agent an agent event names, main's
+    /// on a session-level answer, and the current one a refusal names.
+    fn adopt(&mut self, session_id: &str, agent_id: Option<&str>, acked: &Result<Ack, EventError>) {
+        match acked {
+            Ok(ack) => {
+                for agent in ack.agents.iter().flatten() {
+                    self.generations.insert(
+                        (session_id.to_string(), agent.agent_id.clone()),
+                        agent.request_generation,
+                    );
+                }
+                let named = match (&ack.agent_id, agent_id) {
+                    (Some(named), _) => Some(named.as_str()),
+                    (None, None) => Some(phoebis_keepalive::MAIN_AGENT),
+                    (None, Some(_)) => None,
+                };
+                if let Some(named) = named {
+                    self.generations.insert(
+                        (session_id.to_string(), named.to_string()),
+                        ack.request_generation,
+                    );
+                }
+            }
+            Err(refusal) => {
+                if let (Some(agent_id), Some(generation)) = (agent_id, refusal.request_generation) {
+                    self.generations
+                        .insert((session_id.to_string(), agent_id.to_string()), generation);
+                }
+            }
+        }
+    }
+
+    /// The request generation the last answer for `agent` of the rig's session carried, 0 before any did.
+    pub fn request_generation(&self, agent: &str) -> u64 {
+        self.request_generation_on("session", agent)
+    }
+
+    /// `request_generation` for an agent of `session_id`.
+    pub fn request_generation_on(&self, session_id: &str, agent: &str) -> u64 {
+        self.generations
+            .get(&(session_id.to_string(), agent.to_string()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// An agent report through `event` under the generation the agent's last answer carried. Where the engine moved
+    /// the generation with no answer in between, the refusal names the current one, and the report goes once more
+    /// under it, as the mod sends it. A case that sends a stale generation on purpose builds its report itself.
+    pub fn report(&mut self, mut event: Event) -> Result<Ack, EventError> {
+        let session_id = if event.session_id.is_empty() {
+            "session".to_string()
+        } else {
+            event.session_id.clone()
+        };
+        let agent = event
+            .agent_id
+            .clone()
+            .expect("an agent report names its agent");
+        event.request_generation = Some(self.request_generation_on(&session_id, &agent));
+        match self.event(event.clone()) {
+            Err(refusal) if refusal.code == "stale_request_generation" => {
+                event.request_generation = refusal.request_generation;
+                self.event(event)
+            }
+            acked => acked,
+        }
     }
 
     /// The instance each session of the rig registered under, kept by `event` from the `session_start` it sent
@@ -481,28 +555,39 @@ impl Rig {
     /// A `parked` word goes out as a background park, the shape the mod sends, since the route refuses a park
     /// without its kind.
     pub fn state(&mut self, agent: &str, state: &str) {
-        let generation = self.agent(agent).request_generation;
-        self.event(Event {
+        self.report(Event {
             event: "state".into(),
             agent_id: Some(agent.into()),
             state: Some(state.into()),
-            request_generation: Some(generation),
             park_kind: (state == "parked").then(|| "background".into()),
             ..Default::default()
         })
         .unwrap();
     }
 
-    /// The engine's own record of one agent of the rig's session, through `Engine::agent_status`.
-    pub fn status(&self, id: &str) -> phoebis_keepalive::AgentStatus {
-        self.engine
-            .agent_status("desktop", "session", id)
-            .unwrap_or_else(|| panic!("no agent {id}"))
+    /// The recipe view's row of one agent of the rig's session, through `Engine::recipes`, which lists an agent once
+    /// it has sent a real request.
+    pub fn view(&self, id: &str) -> RecipeView {
+        view_of(&self.engine, "session", id).unwrap_or_else(|| panic!("no view row for {id}"))
     }
 
-    /// `status` under the name the protocol tests read an agent's state and generation by.
-    pub fn agent(&self, id: &str) -> phoebis_keepalive::AgentStatus {
-        self.status(id)
+    /// The lifecycle word the session view gives one agent record of the rig's session, a registered-only one too.
+    pub fn lifecycle(&self, id: &str) -> Option<Lifecycle> {
+        lifecycle_of(&self.engine, "session", id)
+    }
+
+    /// The payload the registry holds for one agent of the rig's session, read back once a save landed.
+    pub async fn saved(&self, id: &str) -> serde_json::Value {
+        self.engine.flush_persisted().await;
+        saved_of(&self.h.store, "session", id).unwrap_or_else(|| panic!("no saved row for {id}"))
+    }
+
+    /// The probes no request has answered yet in `saved`'s payload: the open chain's and those kept for the next
+    /// request.
+    pub async fn saved_unanswered(&self, id: &str) -> usize {
+        let payload = self.saved(id).await;
+        let count = |member: &str| payload[member].as_array().map_or(0, Vec::len);
+        count("unanswered") + count("kept")
     }
 
     pub fn request(&self, agent: &str) -> Request<Body> {
@@ -811,6 +896,37 @@ impl Rig {
             })
             .await;
     }
+}
+
+/// The recipe view's row of `agent` on `session_id` under the harness key, from any engine of the rig, a restarted one
+/// among them.
+pub fn view_of(engine: &Engine, session_id: &str, agent: &str) -> Option<RecipeView> {
+    engine
+        .recipes()
+        .into_iter()
+        .find(|v| v.key_id == "desktop" && v.session_id == session_id && v.agent_id == agent)
+}
+
+/// The session view's lifecycle word for `agent` on `session_id` under the harness key, from any engine of the rig.
+pub fn lifecycle_of(engine: &Engine, session_id: &str, agent: &str) -> Option<Lifecycle> {
+    engine
+        .sessions()
+        .into_iter()
+        .find(|s| s.key_id == "desktop" && s.session_id == session_id)
+        .and_then(|s| s.lifecycles.get(agent).copied())
+}
+
+/// The saved payload of `agent` on `session_id` as the registry holds it now, with no flush of its own.
+pub fn saved_of(store: &Store, session_id: &str, agent: &str) -> Option<serde_json::Value> {
+    store
+        .load_keepalive()
+        .unwrap()
+        .1
+        .into_iter()
+        .find(|row| {
+            row.key_id == "desktop" && row.session_id == session_id && row.agent_id == agent
+        })
+        .map(|row| serde_json::from_str(&row.payload).unwrap())
 }
 
 /// A report lands on the router task's own queue, and the state it changes is visible once the handle says so.

@@ -9,8 +9,8 @@ use common::*;
 use fake_upstream::{install_at, Captured, Respond};
 use phoebis_bus::Outcome;
 use phoebis_keepalive::{
-    CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, FIVE_MINUTES_MS,
-    MAIN_AGENT, MAX_WORKERS, ONE_HOUR_MS,
+    CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, MAIN_AGENT,
+    MAX_WORKERS, ONE_HOUR_MS,
 };
 use phoebis_relay::Accounting;
 use phoebis_store::{AccountState, Cancellation};
@@ -169,10 +169,14 @@ async fn a_gzip_request_observed_is_replayed_plain_by_its_probe() {
         (Some("hello"), Some(0)),
         "the recipe's own body, edited for a probe"
     );
-    let status = r.status("main");
+    let saved = r.saved("main").await;
     assert_eq!(
-        (status.probes, status.failures, status.probe_usage.read),
-        (1, 0, 2_000),
+        (
+            r.view("main").probes_today,
+            saved["failures"].as_u64(),
+            saved["usage"]["read"].as_u64()
+        ),
+        (1, Some(0), Some(2_000)),
         "the probe was answered 200 and its usage read"
     );
 }
@@ -214,15 +218,16 @@ async fn a_probe_preserves_routing_and_constraints() {
         body.contains(r#""max_tokens":0"#) && body.contains(r#""stream":false"#),
         "{body}"
     );
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = r.saved("main").await;
     assert_eq!(
         (
-            status.probes,
-            status.probe_usage.read,
-            status.probe_usage.output,
-            status.reason
+            status.probes_today,
+            saved["usage"]["read"].as_u64(),
+            saved["usage"]["output"].as_u64(),
+            status.cause
         ),
-        (1, 2_000, 0, Reason::Scheduled)
+        (1, Some(2_000), Some(0), Reason::Scheduled)
     );
     assert_eq!(
         status.next_probe_at,
@@ -230,8 +235,8 @@ async fn a_probe_preserves_routing_and_constraints() {
         "the next probe is due 270 s after the probe's start"
     );
     assert_eq!(
-        status.last_activity,
-        r.now() - 270_000,
+        saved["last_activity"].as_i64(),
+        Some(r.now() - 270_000),
         "a probe does not renew activity"
     );
     assert_eq!(r.engine.sessions()[0].companion, CompanionState::Reporting);
@@ -332,8 +337,8 @@ async fn a_probe_built_from_a_placeholder_request_carries_the_placeholder_and_th
         "the probe carries the placeholder: {}",
         String::from_utf8_lossy(&probe)
     );
-    let status = r.status("main");
-    assert_eq!((status.probes, status.reason), (1, Reason::Scheduled));
+    let status = r.view("main");
+    assert_eq!((status.probes_today, status.cause), (1, Reason::Scheduled));
     let rows = wait_for(std::time::Duration::from_secs(5), || {
         let (rows, _) =
             r.db.read_blocking(|c| {
@@ -373,7 +378,7 @@ async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     .await;
     r.observe("main").await;
     r.state("main", "idle");
-    let original = r.status("main");
+    let original = r.saved("main").await["last_activity"].clone();
     r.advance_attended(270_000);
     r.step().await;
     r.event(Event {
@@ -383,25 +388,23 @@ async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     .unwrap();
     r.advance_attended(270_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
     assert_eq!(
         (
-            status.probes,
-            status.idle_ticks,
-            status.last_activity,
-            status.reason
+            status.probes_today,
+            r.saved("main").await["last_activity"].clone(),
+            status.cause
         ),
-        (1, 1, original.last_activity, Reason::IdleLimit),
+        (1, original, Reason::IdleLimit),
         "{status:?}"
     );
 }
 
-/// A probe the router refused with `503 ledger_behind` gives back the idle tick its dispatch counted, so a ledger
-/// catching up never runs the count up: three refusals in a row and the served probe after them count one tick, and
-/// a second served idle probe counts the second. The refusal is the relay's own, under the rig's accounting reading,
-/// and the probe counts under its own outcome.
+/// A probe the router refused with `503 ledger_behind` holds under `ledger_behind` and goes again after the answer's
+/// wait, so three refusals in a row reach no upstream and the probes after them are served. The refusal is the relay's
+/// own, under the rig's accounting reading, and the probe counts under its own outcome.
 #[tokio::test]
-async fn held_re_sends_spend_no_idle_tick_until_the_router_serves_one() {
+async fn held_re_sends_stop_at_the_router_until_it_serves_one() {
     let behind = Arc::new(AtomicBool::new(false));
     let reading = behind.clone();
     let mut r = rig(RigSpec {
@@ -421,11 +424,11 @@ async fn held_re_sends_spend_no_idle_tick_until_the_router_serves_one() {
         r.advance_attended(5_000);
         r.step().await;
     }
-    let status = r.status("main");
+    let status = r.view("main");
     assert_eq!(
-        (status.probes, status.idle_ticks, status.reason),
-        (3, 0, Reason::LedgerBehind),
-        "three refusals in a row spent no tick: {status:?}"
+        (status.probes_today, status.cause),
+        (3, Reason::LedgerBehind),
+        "three refusals in a row: {status:?}"
     );
     let text = r
         .metrics
@@ -438,19 +441,19 @@ async fn held_re_sends_spend_no_idle_tick_until_the_router_serves_one() {
     behind.store(false, Ordering::SeqCst);
     r.advance_attended(5_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
     assert_eq!(
-        (status.probes, status.idle_ticks, status.reason),
-        (4, 1, Reason::Scheduled),
-        "the served probe counts the one tick: {status:?}"
+        (status.probes_today, status.cause),
+        (4, Reason::Scheduled),
+        "the router serves the probe once its ledger caught up: {status:?}"
     );
     r.advance_attended(270_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
     assert_eq!(
-        (status.probes, status.idle_ticks, status.reason),
-        (5, 2, Reason::Scheduled),
-        "a second served idle probe counts the second tick: {status:?}"
+        (status.probes_today, status.cause),
+        (5, Reason::Scheduled),
+        "a second served idle probe: {status:?}"
     );
     assert_eq!(
         r.up.requests().len(),
@@ -459,11 +462,10 @@ async fn held_re_sends_spend_no_idle_tick_until_the_router_serves_one() {
     );
 }
 
-/// A hold gives back only the tick its own dispatch counted: a `state` report moves the main agent off idle without
-/// resetting the ticks its idle probes counted, and a probe the router refuses while the agent is busy counted none,
-/// so the ticks stay where the idle probes left them.
+/// A probe the router refuses while the main agent is busy counts as sent and holds the recipe under `ledger_behind`,
+/// as one the router refuses while the agent is idle does.
 #[tokio::test]
-async fn a_hold_while_the_main_agent_is_busy_gives_back_no_tick_its_dispatch_never_counted() {
+async fn a_probe_held_while_the_main_agent_is_busy_counts_as_sent_and_holds_under_ledger_behind() {
     let behind = Arc::new(AtomicBool::new(false));
     let reading = behind.clone();
     let mut r = rig(RigSpec {
@@ -480,22 +482,18 @@ async fn a_hold_while_the_main_agent_is_busy_gives_back_no_tick_its_dispatch_nev
         r.advance_attended(270_000);
         r.step().await;
     }
-    assert_eq!(
-        (r.status("main").probes, r.status("main").idle_ticks),
-        (2, 2),
-        "two served idle probes count two ticks"
-    );
+    assert_eq!(r.view("main").probes_today, 2, "two served idle probes");
     r.state("main", "busy");
     behind.store(true, Ordering::SeqCst);
     r.advance_attended(270_000);
     r.step().await;
     r.advance_attended(5_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
     assert_eq!(
-        (status.probes, status.idle_ticks, status.reason),
-        (4, 2, Reason::LedgerBehind),
-        "two holds while busy leave the idle probes' ticks alone: {status:?}"
+        (status.probes_today, status.cause),
+        (4, Reason::LedgerBehind),
+        "two holds while busy: {status:?}"
     );
 }
 
@@ -545,7 +543,7 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
     r.advance(180_000);
     r.step().await;
     assert_eq!(
-        r.status("main").probes,
+        r.view("main").probes_today,
         1,
         "probed as the idle main agent while unattended"
     );
@@ -553,8 +551,8 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
     r.step().await;
     assert_eq!(
         (
-            r.status("main").probes,
-            r.status("main").reason,
+            r.view("main").probes_today,
+            r.view("main").cause,
             r.engine.stats().retained_bytes
         ),
         (1, Reason::IdleLimit, 0),
@@ -569,9 +567,57 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.engine.stats().retained_bytes),
+        (r.view("main").probes_today, r.engine.stats().retained_bytes),
         (0, 0)
     );
+}
+
+/// The members of main's saved payload that the recipe view leaves out.
+#[derive(Debug)]
+struct Saved {
+    cold: u64,
+    failures: u64,
+    paused: bool,
+    /// The probes no request has answered yet, the open chain's and those kept for the next request.
+    unanswered: usize,
+}
+
+/// Main's saved payload, read back once a save landed.
+async fn saved_main(r: &Rig) -> Saved {
+    let payload = r.saved("main").await;
+    let count = |member: &str| payload[member].as_array().map_or(0, Vec::len);
+    Saved {
+        cold: payload["cold"].as_u64().expect("a saved cold count"),
+        failures: payload["failures"].as_u64().expect("a saved failure count"),
+        paused: payload["paused"].as_bool().expect("a saved pause"),
+        unanswered: count("unanswered") + count("kept"),
+    }
+}
+
+/// Arms `agent` with a real request, drives the tick its probe is due at and waits for the upstream to receive that
+/// probe: a record that a finished probe left in flight skips the dispatch, so the count would stay where it was.
+async fn probes_again(r: &mut Rig, agent: &str) {
+    r.observe(agent).await;
+    let sent = r.up.requests().len();
+    r.advance(270_000);
+    r.step().await;
+    wait_for(std::time::Duration::from_secs(5), || {
+        (r.up.requests().len() == sent + 1).then_some(())
+    })
+    .await;
+}
+
+/// Starts the released main again under the generation its release answered, as the mod does, so a real request can
+/// arm the record.
+fn start_main_again(r: &mut Rig) {
+    let generation = r.request_generation("main");
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("main".into()),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .expect("a released agent starts again under the generation its release named");
 }
 
 /// A rig whose first probe of main the upstream has received and holds until `release`.
@@ -603,32 +649,30 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
         0,
         "new_request: no worker leaked"
     );
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = r.saved("main").await;
     assert_eq!(
         (
             status.account_id.as_deref(),
             status.next_probe_at,
-            status.unanswered
+            saved["unanswered"].as_array().map(Vec::len),
+            saved["kept"].as_array().map(Vec::len)
         ),
-        (Some("a"), None, 0),
+        (Some("a"), None, Some(0), Some(0)),
         "new_request: the late result touched no recipe state: {status:?}"
     );
-    assert!(
-        !status.in_flight,
-        "new_request: the orphaned result gave the record's slot back"
-    );
     // The record the orphaned probe left behind is probed again once the new request arms it: a result that
-    // failed the fence must not strand the agent it started on.
+    // failed the fence must not strand the agent it started on, and a record it left in flight would send none.
     r.engine.observe(r.selected("new", "a"));
     r.engine.observe(read_evidence("new", 2_000));
     assert!(
-        r.status("main").next_probe_at.is_some(),
+        r.view("main").next_probe_at.is_some(),
         "the new request armed the record"
     );
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (2, Reason::Scheduled),
         "the re-armed record probes again"
     );
@@ -653,20 +697,21 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
         0,
         "release: no worker leaked"
     );
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = r.saved("main").await;
     assert_eq!(
         (
             status.account_id.as_deref(),
             status.next_probe_at,
-            status.unanswered
+            saved["unanswered"].as_array().map(Vec::len),
+            saved["kept"].as_array().map(Vec::len)
         ),
-        (Some("a"), None, 0),
+        (Some("a"), None, Some(0), Some(0)),
         "release: the late result touched no recipe state: {status:?}"
     );
-    assert!(
-        !status.in_flight,
-        "release: the orphaned result gave the record's slot back"
-    );
+    // The orphaned result gave the record's slot back: started again and armed, the record probes.
+    start_main_again(&mut r);
+    probes_again(&mut r, "main").await;
 }
 
 /// A probe whose recipe a release stopped while it was in flight was still served and its ledger row carries its
@@ -695,10 +740,10 @@ async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
     r.engine.wait_idle().await;
     r.pump(None).await;
     let charged = ledger_probe_cost(&r).await;
-    let status = r.status("main");
+    // The wasted rows below read the late result settled under the release, so it kept nothing unanswered.
+    let status = r.view("main");
     assert_eq!(
-        (status.in_flight, status.next_probe_at, status.unanswered),
-        (false, None, 0),
+        status.next_probe_at, None,
         "the late result touched no recipe state: {status:?}"
     );
     let (wasted, wasted_usd, reasons) = wait_for(std::time::Duration::from_secs(5), || {
@@ -729,6 +774,9 @@ async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
         (wasted_usd - charged).abs() < 1e-12,
         "at the cost its ledger row carries: {wasted_usd} against {charged}"
     );
+    // The late result gave the record's slot back: started again and armed, the record probes.
+    start_main_again(&mut r);
+    probes_again(&mut r, "main").await;
 }
 
 /// A probe still in flight when the idle limit ends its recipe joins the probes the ceiling kept once it is answered:
@@ -761,7 +809,7 @@ async fn a_probe_answered_after_the_idle_limit_stays_pending_until_its_entry_lap
     r.advance(270_000);
     r.engine.step().await;
     assert_eq!(
-        (r.status("main").reason, r.engine.stats().retained_bytes),
+        (r.view("main").cause, r.engine.stats().retained_bytes),
         (Reason::IdleLimit, 0),
         "the ceiling ended the recipe while its probe was in flight"
     );
@@ -794,16 +842,29 @@ async fn a_probe_answered_after_the_idle_limit_stays_pending_until_its_entry_lap
     );
     r.advance(NOW + 570_000 - 1 - r.now());
     r.step().await;
+    // No settlement waits for a save yet, so this save sends nothing to the ledger.
+    let saved = r.saved("main").await;
     assert_eq!(
-        r.status("main").unanswered,
-        1,
+        (
+            saved["unanswered"].as_array().map(Vec::len),
+            saved["kept"].as_array().map(Vec::len)
+        ),
+        (Some(0), Some(1)),
         "still pending a millisecond before its entry ends"
     );
     r.advance(1);
     r.step().await;
-    assert_eq!(r.status("main").unanswered, 0, "settled at its entry's end");
     // The settlement reaches the ledger with the save that drops the probe, which the production flusher runs.
     r.engine.flush_persisted().await;
+    let saved = saved_of(&r.h.store, "session", "main").unwrap();
+    assert_eq!(
+        (
+            saved["unanswered"].as_array().map(Vec::len),
+            saved["kept"].as_array().map(Vec::len)
+        ),
+        (Some(0), Some(0)),
+        "settled at its entry's end"
+    );
     r.ledger.clone().shutdown().await.unwrap();
     let rows = rollups(&r);
     let mut reasons = std::collections::BTreeMap::new();
@@ -847,7 +908,7 @@ async fn a_probe_orphaned_by_a_release_and_then_a_revival_settles_under_the_rele
     })
     .await;
     r.state("main", "released");
-    let generation = r.agent("main").request_generation;
+    let generation = r.request_generation("main");
     r.event(Event {
         event: "agent_start".into(),
         agent_id: Some("main".into()),
@@ -858,17 +919,20 @@ async fn a_probe_orphaned_by_a_release_and_then_a_revival_settles_under_the_rele
     r.up.release();
     r.engine.wait_idle().await;
     r.pump(None).await;
-    let status = r.status("main");
-    assert_eq!(
-        (status.in_flight, status.unanswered),
-        (false, 0),
-        "the late result gave the slot back and kept nothing: {status:?}"
-    );
+    // The late result kept nothing: the wasted rows below read it settled under the release.
     r.observe("main").await;
     assert!(
-        r.status("main").next_probe_at.is_some(),
+        r.view("main").next_probe_at.is_some(),
         "the next request arms the revived record"
     );
+    // The late result gave the slot back: the armed record's probe reaches the upstream when it is due.
+    let sent = r.up.requests().len();
+    r.advance(270_000);
+    r.step().await;
+    wait_for(std::time::Duration::from_secs(5), || {
+        (r.up.requests().len() == sent + 1).then_some(())
+    })
+    .await;
     let reasons = wait_for(std::time::Duration::from_secs(5), || {
         let rows = rollups(&r);
         let mut reasons = std::collections::BTreeMap::new();
@@ -898,11 +962,11 @@ async fn a_replacement_registration_during_a_probe_keeps_the_new_agents_in_fligh
     );
     r.advance(270_000);
     r.engine.step().await;
+    // The probe the upstream holds is the old agent's probe in flight.
     wait_for(std::time::Duration::from_secs(5), || {
         (r.up.requests().len() == 2).then_some(())
     })
     .await;
-    assert!(r.status("main").in_flight);
     // A second instance takes the session: a new main agent under the same ids, its own recipe, its own probe.
     r.engine
         .apply_event(
@@ -928,23 +992,25 @@ async fn a_replacement_registration_during_a_probe_keeps_the_new_agents_in_fligh
     );
     r.advance(270_000);
     r.engine.step().await;
+    // The new agent's probe is in flight: the upstream holds it beside the old agent's.
     wait_for(std::time::Duration::from_secs(5), || {
         (r.up.requests().len() == 4).then_some(())
     })
     .await;
-    assert!(
-        r.status("main").in_flight,
-        "the new agent's probe is in flight"
-    );
     // Both gated probes answer; the old worker's result must leave the new agent's bookkeeping alone.
     r.up.release();
     r.engine.wait_idle().await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = r.saved("main").await;
+    let unanswered = saved["unanswered"].as_array().map_or(0, Vec::len)
+        + saved["kept"].as_array().map_or(0, Vec::len);
     assert_eq!(
-        (status.in_flight, status.probes, status.unanswered),
-        (false, 1, 1),
+        (status.probes_today, unanswered),
+        (1, 1),
         "one probe on the new record: {status:?}"
     );
+    // Neither result left the new record in flight: armed again, it probes.
+    probes_again(&mut r, "main").await;
 }
 
 #[tokio::test]
@@ -970,8 +1036,8 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
     assert_eq!(
         (
             r.engine.stats().running_probes,
-            r.status("main").reason,
-            r.status("main").next_probe_at
+            r.view("main").cause,
+            r.view("main").next_probe_at
         ),
         (0, Reason::InvalidProbeUsage, None)
     );
@@ -1002,7 +1068,7 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
     r.pump(None).await;
     // The transport error's first rung would land at the five-minute entry's expiry, so the ladder pauses at once.
     assert_eq!(
-        (r.status("main").reason, r.status("main").next_probe_at),
+        (r.view("main").cause, r.view("main").next_probe_at),
         (Reason::ProbeRetryLimit, None)
     );
     let text = r
@@ -1065,7 +1131,7 @@ async fn concurrency_is_bounded_by_max_workers_alone() {
     let probes = |r: &Rig| {
         agents
             .iter()
-            .map(|agent| r.status(agent).probes)
+            .map(|agent| r.view(agent).probes_today)
             .sum::<u64>()
     };
     r.advance(270_000);
@@ -1100,9 +1166,10 @@ async fn a_probe_on_its_own_account_that_also_writes_leaves_the_next_probe_the_s
     r.up.push_credential_rule(A, "/v1/messages", probe_answer(2_000, 500));
     r.advance(270_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
-        (status.probes, status.cold, status.paused, status.reason),
+        (status.probes_today, saved.cold, saved.paused, status.cause),
         (1, 0, false, Reason::Scheduled),
         "{status:?}"
     );
@@ -1110,9 +1177,10 @@ async fn a_probe_on_its_own_account_that_also_writes_leaves_the_next_probe_the_s
     r.up.push_credential_rule(A, "/v1/messages", probe_answer(2_000, 0));
     r.advance(270_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
-        (status.probes, status.cold, status.paused, status.reason),
+        (status.probes_today, saved.cold, saved.paused, status.cause),
         (2, 0, false, Reason::Scheduled),
         "the count stays the last request's 2,000 tokens: {status:?}"
     );
@@ -1156,7 +1224,7 @@ async fn each_probe_counts_once_under_its_pool_as_landed_cold_or_failed() {
     r.step().await;
     // The second probe's entry ends at 840 s, where the failure's first rung would land.
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (3, Reason::ProbeRetryLimit)
     );
     assert_eq!(
@@ -1185,7 +1253,7 @@ async fn a_withheld_probe_counts_under_its_pool_and_the_state_that_withheld_it()
     r.advance(1_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").reason, r.status("main").probes),
+        (r.view("main").cause, r.view("main").probes_today),
         (Reason::Budget, 0)
     );
     assert_eq!(
@@ -1196,7 +1264,7 @@ async fn a_withheld_probe_counts_under_its_pool_and_the_state_that_withheld_it()
     r.observe("main").await;
     r.advance(20 * MINUTE);
     r.step().await;
-    assert_eq!(r.status("main").reason, Reason::Expired);
+    assert_eq!(r.view("main").cause, Reason::Expired);
     assert_eq!(
         series(&r, "phoebis_keepalive_skipped_total"),
         [r#"phoebis_keepalive_skipped_total{pool="main",state="ended"} 1"#]
@@ -1221,21 +1289,23 @@ async fn a_rewrite_still_counts_toward_the_cold_probe_limit() {
     r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
     r.advance(270_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
-        (status.probes, status.cold, status.reason),
+        (status.probes_today, saved.cold, status.cause),
         (1, 1, Reason::Scheduled),
         "the first rewrite lands and counts one: {status:?}"
     );
     r.advance(270_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
         (
-            status.probes,
-            status.unanswered,
-            status.cold,
-            status.reason,
+            status.probes_today,
+            saved.unanswered,
+            saved.cold,
+            status.cause,
             status.next_probe_at
         ),
         (2, 2, 2, Reason::RepeatedColdProbe, None),
@@ -1266,9 +1336,10 @@ async fn a_probe_the_relay_refuses_for_the_client_contract_pauses_as_an_unsuppor
         r.up.requests().is_empty(),
         "the relay refused the probe before any account"
     );
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
-        (status.paused, status.reason, status.next_probe_at),
+        (saved.paused, status.cause, status.next_probe_at),
         (true, Reason::UnsupportedProbe, None),
         "{status:?}"
     );
@@ -1339,9 +1410,10 @@ async fn a_probe_exhaustion_pauses_the_recipe_and_a_gate_hold_leaves_it_armed() 
     }
     r.advance(270_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
-        (status.paused, status.next_probe_at, status.reason),
+        (saved.paused, status.next_probe_at, status.cause),
         (true, None, Reason::ProbeRetryLimit),
         "{status:?}"
     );
@@ -1354,9 +1426,10 @@ async fn a_probe_exhaustion_pauses_the_recipe_and_a_gate_hold_leaves_it_armed() 
         "no probe ran again after the ladder's pause"
     );
     r.observe("main").await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
-        (status.paused, status.reason),
+        (saved.paused, status.cause),
         (false, Reason::Scheduled),
         "{status:?}"
     );
@@ -1373,9 +1446,10 @@ async fn a_probe_exhaustion_pauses_the_recipe_and_a_gate_hold_leaves_it_armed() 
     over_budget(&r).await;
     r.advance(270_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
-        (status.paused, status.reason, status.probes),
+        (saved.paused, status.cause, status.probes_today),
         (false, Reason::Budget, 0),
         "{status:?}"
     );
@@ -1408,7 +1482,7 @@ async fn an_exhaustion_503_whose_first_retry_would_reach_the_expiry_pauses_under
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").reason, r.status("main").next_probe_at),
+        (r.view("main").cause, r.view("main").next_probe_at),
         (Reason::ProbeRetryLimit, None)
     );
 }
@@ -1420,7 +1494,7 @@ async fn an_exhaustion_503_whose_first_retry_would_reach_the_expiry_pauses_under
 async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the_pin() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
+    assert_eq!(r.view("main").account_id.as_deref(), Some("a"));
     let due = r.now() + 270_000;
     let sent = r.up.requests().len();
     r.h.store
@@ -1434,9 +1508,9 @@ async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
     assert_eq!(
-        (status.reason, status.next_probe_at, status.probes),
+        (status.cause, status.next_probe_at, status.probes_today),
         (Reason::IneligibleCredential, Some(due), 0),
         "{status:?}"
     );
@@ -1520,10 +1594,7 @@ fn recipe_row(r: &Rig) -> phoebis_keepalive::RecipeView {
 
 /// Moves the clock to the recipe's next probe and runs the tick that sends it.
 async fn step_to_the_next_probe(r: &mut Rig) {
-    let due = r
-        .status("main")
-        .next_probe_at
-        .expect("a probe is scheduled");
+    let due = r.view("main").next_probe_at.expect("a probe is scheduled");
     r.advance(due - r.now());
     r.step().await;
 }
@@ -1533,7 +1604,7 @@ async fn step_to_the_next_probe(r: &mut Rig) {
 /// the expiry, the row reading `held` under `cause`, and the fifth retry's failure, whose 300 s rung would land 150 s
 /// past the expiry, pauses the recipe under `probe_retry_limit` 150 s before it.
 async fn climb_the_ladder(r: &mut Rig, failure: impl Fn() -> Respond, cause: Reason) {
-    let first = r.status("main").next_probe_at.expect("an armed recipe");
+    let first = r.view("main").next_probe_at.expect("an armed recipe");
     let expires = first + 900_000;
     for (failures, wait) in [
         (1, 30_000),
@@ -1544,12 +1615,13 @@ async fn climb_the_ladder(r: &mut Rig, failure: impl Fn() -> Respond, cause: Rea
     ] {
         r.up.push_credential_rule(A, "/v1/messages", failure());
         step_to_the_next_probe(r).await;
-        let status = r.status("main");
+        let status = r.view("main");
+        let saved = saved_main(r).await;
         assert_eq!(
             (
-                status.failures,
-                status.paused,
-                status.reason,
+                saved.failures,
+                saved.paused,
+                status.cause,
                 status.next_probe_at
             ),
             (failures, false, cause, Some(r.now() + wait)),
@@ -1569,12 +1641,13 @@ async fn climb_the_ladder(r: &mut Rig, failure: impl Fn() -> Respond, cause: Rea
         first + 750_000,
         "the fifth retry fails 750 s after the first probe"
     );
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(r).await;
     assert_eq!(
         (
-            status.failures,
-            status.paused,
-            status.reason,
+            saved.failures,
+            saved.paused,
+            status.cause,
             status.next_probe_at
         ),
         (6, true, Reason::ProbeRetryLimit, None),
@@ -1622,18 +1695,19 @@ async fn a_quota_429s_retry_after_longer_than_the_step_replaces_it() {
     r.up.push_credential_rule(A, "/v1/messages", quota_429(1));
     step_to_the_next_probe(&mut r).await;
     assert_eq!(
-        (r.status("main").failures, r.status("main").next_probe_at),
+        (saved_main(&r).await.failures, r.view("main").next_probe_at),
         (1, Some(r.now() + 30_000)),
         "a header shorter than the step leaves the step"
     );
     r.up.push_credential_rule(A, "/v1/messages", quota_429(89));
     step_to_the_next_probe(&mut r).await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
         (
-            status.failures,
-            status.paused,
-            status.reason,
+            saved.failures,
+            saved.paused,
+            status.cause,
             status.next_probe_at
         ),
         (
@@ -1664,13 +1738,13 @@ async fn an_answered_probe_resets_the_ladder_and_a_failed_request_leaves_it_wher
     r.up.push_credential_rule(A, "/v1/messages", server_error());
     step_to_the_next_probe(&mut r).await;
     assert_eq!(
-        (r.status("main").failures, r.status("main").next_probe_at),
+        (saved_main(&r).await.failures, r.view("main").next_probe_at),
         (1, Some(r.now() + 30_000))
     );
     // The standing rule answers the retry.
     step_to_the_next_probe(&mut r).await;
     assert_eq!(
-        (r.status("main").failures, r.status("main").reason),
+        (saved_main(&r).await.failures, r.view("main").cause),
         (0, Reason::Scheduled),
         "the answered probe starts the count over"
     );
@@ -1678,7 +1752,7 @@ async fn an_answered_probe_resets_the_ladder_and_a_failed_request_leaves_it_wher
     step_to_the_next_probe(&mut r).await;
     let rung = r.now() + 30_000;
     assert_eq!(
-        (r.status("main").failures, r.status("main").next_probe_at),
+        (saved_main(&r).await.failures, r.view("main").next_probe_at),
         (1, Some(rung)),
         "the failure after an answered probe waits the first rung"
     );
@@ -1687,13 +1761,14 @@ async fn an_answered_probe_resets_the_ladder_and_a_failed_request_leaves_it_wher
     r.engine.observe(r.selected("failed", "a"));
     r.engine
         .observe(r.complete("failed", Outcome::Failed, None));
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
         (
-            status.failures,
+            saved.failures,
             status.next_probe_at,
-            status.paused,
-            status.reason
+            saved.paused,
+            status.cause
         ),
         (1, Some(rung), false, Reason::RequestFailed),
         "the failed request left the recipe on its rung with its count"
@@ -1701,7 +1776,7 @@ async fn an_answered_probe_resets_the_ladder_and_a_failed_request_leaves_it_wher
     r.up.push_credential_rule(A, "/v1/messages", server_error());
     step_to_the_next_probe(&mut r).await;
     assert_eq!(
-        (r.status("main").failures, r.status("main").next_probe_at),
+        (saved_main(&r).await.failures, r.view("main").next_probe_at),
         (2, Some(r.now() + 60_000)),
         "the count the request left makes the next wait the second rung"
     );
@@ -1721,7 +1796,7 @@ async fn a_probe_the_deadline_ends_retries_on_the_first_rung_under_probe_transpo
             events: vec![],
         },
     );
-    let due = r.status("main").next_probe_at.unwrap();
+    let due = r.view("main").next_probe_at.unwrap();
     r.advance(due - r.now());
     r.engine.step().await;
     wait_for(std::time::Duration::from_secs(5), || {
@@ -1734,12 +1809,13 @@ async fn a_probe_the_deadline_ends_retries_on_the_first_rung_under_probe_transpo
     tokio::time::resume();
     r.engine.wait_idle().await;
     r.pump(None).await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
         (
-            status.failures,
-            status.paused,
-            status.reason,
+            saved.failures,
+            saved.paused,
+            status.cause,
             status.next_probe_at
         ),
         (
@@ -1772,12 +1848,13 @@ async fn an_exhausted_selection_retries_on_the_first_rung_under_probe_pool_exhau
         .unwrap();
     r.h.router.reload().await.unwrap();
     step_to_the_next_probe(&mut r).await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
         (
-            status.failures,
-            status.paused,
-            status.reason,
+            saved.failures,
+            saved.paused,
+            status.cause,
             status.next_probe_at
         ),
         (1, false, Reason::ProbePoolExhausted, Some(r.now() + 30_000))
@@ -1821,7 +1898,7 @@ async fn a_slow_probe_retries_on_the_first_rung_and_pauses_where_that_rung_would
             "/v1/messages",
             Respond::Gated(Box::new(probe_answer(2_000, 0))),
         );
-        let due = r.status("main").next_probe_at.unwrap();
+        let due = r.view("main").next_probe_at.unwrap();
         r.advance(due - r.now());
         r.engine.step().await;
         wait_for(std::time::Duration::from_secs(5), || {
@@ -1832,7 +1909,8 @@ async fn a_slow_probe_retries_on_the_first_rung_and_pauses_where_that_rung_would
         r.up.release();
         r.engine.wait_idle().await;
         r.pump(None).await;
-        let status = r.status("main");
+        let status = r.view("main");
+        let saved = saved_main(&r).await;
         let expected = if paused {
             (1, true, Reason::ProbeRetryLimit, None)
         } else {
@@ -1840,9 +1918,9 @@ async fn a_slow_probe_retries_on_the_first_rung_and_pauses_where_that_rung_would
         };
         assert_eq!(
             (
-                status.failures,
-                status.paused,
-                status.reason,
+                saved.failures,
+                saved.paused,
+                status.cause,
                 status.next_probe_at
             ),
             expected,
@@ -1896,13 +1974,14 @@ async fn a_structural_probe_error_pauses_the_recipe_at_once_with_the_ladder_left
         r.observe_with("main", &hour_body()).await;
         r.up.push_credential_rule(A, "/v1/messages", respond);
         step_to_the_next_probe(&mut r).await;
-        let status = r.status("main");
+        let status = r.view("main");
+        let saved = saved_main(&r).await;
         assert_eq!(
             (
                 name,
-                status.failures,
-                status.paused,
-                status.reason,
+                saved.failures,
+                saved.paused,
+                status.cause,
                 status.next_probe_at
             ),
             (name, 0, true, reason, None),
@@ -1921,17 +2000,18 @@ async fn a_structural_probe_error_pauses_the_recipe_at_once_with_the_ladder_left
     r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
     step_to_the_next_probe(&mut r).await;
     assert_eq!(
-        (r.status("main").cold, r.status("main").reason),
+        (saved_main(&r).await.cold, r.view("main").cause),
         (1, Reason::Scheduled)
     );
     step_to_the_next_probe(&mut r).await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
         (
-            status.cold,
-            status.failures,
-            status.paused,
-            status.reason,
+            saved.cold,
+            saved.failures,
+            saved.paused,
+            status.cause,
             status.next_probe_at
         ),
         (2, 0, true, Reason::RepeatedColdProbe, None),
@@ -1945,20 +2025,21 @@ async fn a_structural_probe_error_pauses_the_recipe_at_once_with_the_ladder_left
 async fn a_tick_past_the_expiry_with_a_rung_still_due_sends_no_probe_and_lapses_the_recipe() {
     let mut r = rig(hour_spec()).await;
     r.observe_with("main", &hour_body()).await;
-    let expires = r.status("main").next_probe_at.unwrap() + 900_000;
+    let expires = r.view("main").next_probe_at.unwrap() + 900_000;
     r.up.push_credential_rule(A, "/v1/messages", server_error());
     step_to_the_next_probe(&mut r).await;
     assert_eq!(
-        (r.status("main").failures, r.status("main").next_probe_at),
+        (saved_main(&r).await.failures, r.view("main").next_probe_at),
         (1, Some(r.now() + 30_000)),
         "a rung is due"
     );
     let sent = r.up.requests().len();
     r.advance(expires + 1_000 - r.now());
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
+    let saved = saved_main(&r).await;
     assert_eq!(
-        (status.reason, status.paused, status.next_probe_at),
+        (status.cause, saved.paused, status.next_probe_at),
         (Reason::Expired, false, None),
         "{status:?}"
     );
@@ -1997,7 +2078,7 @@ async fn a_probe_pause_survives_late_stream_usage() {
     r.engine.wait_idle().await;
     r.engine.observe(chunk);
     assert_eq!(
-        r.status("main").next_probe_at,
+        r.view("main").next_probe_at,
         None,
         "late stream usage did not undo the pause"
     );
@@ -2031,12 +2112,12 @@ async fn shorter_stream_evidence_recomputes_from_the_last_refresh() {
     let start = r.now();
     r.engine.observe(emit("1h"));
     assert_eq!(
-        r.status("main").next_probe_at,
+        r.view("main").next_probe_at,
         Some(start + 3_600_000 - 360_000)
     );
     r.engine.observe(emit("5m"));
     assert_eq!(
-        r.status("main").next_probe_at,
+        r.view("main").next_probe_at,
         Some(start + 270_000),
         "the shorter evidence wins"
     );
@@ -2046,7 +2127,7 @@ async fn shorter_stream_evidence_recomputes_from_the_last_refresh() {
     r.advance(10_000);
     r.engine.observe(emit("5m"));
     assert_eq!(
-        r.status("main").next_probe_at,
+        r.view("main").next_probe_at,
         Some(start + 540_000),
         "late usage did not undo the completed refresh"
     );
@@ -2121,12 +2202,12 @@ async fn a_running_total_without_the_split_keeps_the_hour() {
     r.engine
         .observe(r.complete("one", Outcome::Succeeded, Some(split(0, 51_177))));
     assert_eq!(
-        r.status("main").cache_ttl_ms,
-        ONE_HOUR_MS,
+        r.view("main").ttl_seconds,
+        3_600,
         "the delta's bare total keeps the hour"
     );
     assert_eq!(
-        r.status("main").next_probe_at,
+        r.view("main").next_probe_at,
         Some(first + 3_600_000 - 360_000)
     );
     // The second turn reads the first's prefix beside a smaller one-hour write, and its delta is bare again.
@@ -2149,12 +2230,12 @@ async fn a_running_total_without_the_split_keeps_the_hour() {
     r.engine
         .observe(r.complete("two", Outcome::Succeeded, Some(split(51_177, 11_186))));
     assert_eq!(
-        r.status("main").cache_ttl_ms,
-        ONE_HOUR_MS,
+        r.view("main").ttl_seconds,
+        3_600,
         "a read beside a one-hour write keeps the hour"
     );
     assert_eq!(
-        r.status("main").next_probe_at,
+        r.view("main").next_probe_at,
         Some(second + 3_600_000 - 360_000)
     );
     // The probe at that due time reads nothing back and writes the whole prefix for five minutes.
@@ -2164,11 +2245,11 @@ async fn a_running_total_without_the_split_keeps_the_hour() {
     r.advance(due - r.now());
     r.step().await;
     assert_eq!(
-        r.status("main").cache_ttl_ms,
-        FIVE_MINUTES_MS,
+        r.view("main").ttl_seconds,
+        300,
         "the probe's five-minute write moves the TTL"
     );
-    assert_eq!(r.status("main").next_probe_at, Some(due + 300_000 - 30_000));
+    assert_eq!(r.view("main").next_probe_at, Some(due + 300_000 - 30_000));
     let text = captured.text();
     let lines: Vec<&str> = text
         .lines()
@@ -2224,7 +2305,7 @@ async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, 
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", read_back_at(served));
     r.advance_attended(270_000);
     r.step().await;
-    assert_eq!(r.status("main").probes, 1);
+    assert_eq!(r.view("main").probes_today, 1);
     let cost = phoebis_ledger::PriceRevisions::shipped()
         .in_force(r.now())
         .estimate(

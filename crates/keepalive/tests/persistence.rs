@@ -12,8 +12,8 @@ use common::*;
 use fake_upstream::{install_at, Captured, Respond};
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
-    Ack, AgentState, CompanionState, Engine, Event, EventError, EventReport, KeepaliveLimits,
-    KeepalivePolicy, KeepaliveTiming, Park, ParkKind, Reason, LEASE_MS,
+    Ack, CompanionState, Engine, Event, EventError, EventReport, KeepaliveLimits, KeepalivePolicy,
+    KeepaliveTiming, Lifecycle, Park, ParkKind, Reason, LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
@@ -52,6 +52,15 @@ fn saved_field(r: &Rig, session: &str, agent: &str, field: &str) -> serde_json::
     serde_json::from_str::<serde_json::Value>(&row.payload).unwrap()[field].clone()
 }
 
+/// The probes the registry holds unanswered for `agent` on `session`: the open chain's and those kept for the next
+/// request, read off the saved payload as it stands, with no flush of its own.
+fn saved_unanswered(r: &Rig, session: &str, agent: &str) -> usize {
+    let payload = saved_of(&r.h.store, session, agent)
+        .unwrap_or_else(|| panic!("no saved row for {session} {agent}"));
+    payload["unanswered"].as_array().map_or(0, Vec::len)
+        + payload["kept"].as_array().map_or(0, Vec::len)
+}
+
 /// The sealed body, its nonce and its size as the registry holds them for `agent` of the rig's session, read past the
 /// store.
 fn stored_body(r: &Rig, agent: &str) -> (Option<Vec<u8>>, Option<Vec<u8>>, i64) {
@@ -72,15 +81,15 @@ fn heartbeat() -> Event {
     }
 }
 
-/// A `parked` report of kind `background` with the command's deadline.
-fn parked_until(r: &Rig, deadline: i64) -> Event {
+/// A `parked` report of kind `background` with the command's deadline, for `Rig::report` to send under main's
+/// generation.
+fn parked_until(deadline: i64) -> Event {
     Event {
         event: "state".into(),
         agent_id: Some("main".into()),
         state: Some("parked".into()),
         park_kind: Some("background".into()),
         deadline: Some(deadline),
-        request_generation: Some(r.agent("main").request_generation),
         ..Default::default()
     }
 }
@@ -111,13 +120,14 @@ fn report(r: &mut Rig, key_generation: i64, mut event: Event) -> Result<Ack, Eve
         .and_then(|report| r.engine.apply_event("desktop", key_generation, report))
 }
 
-/// A `state` report for `agent` under its current generation.
+/// A `state` report for `agent` under the generation of the agent's last answer, which the caller holds current, so no
+/// refused send runs beside the flushes it counts.
 fn state_of(r: &Rig, agent: &str, state: &str) -> Event {
     Event {
         event: "state".into(),
         agent_id: Some(agent.into()),
         state: Some(state.into()),
-        request_generation: Some(r.agent(agent).request_generation),
+        request_generation: Some(r.request_generation(agent)),
         park_kind: (state == "parked").then(|| "background".into()),
         ..Default::default()
     }
@@ -154,13 +164,12 @@ async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_lo
         event: "activity".into(),
         agent_id: Some("main".into()),
         kind: Some("presence".into()),
-        request_generation: Some(r.agent("main").request_generation),
         ..Default::default()
     };
-    r.event(presence).unwrap();
+    r.report(presence).unwrap();
     let seen = r.now();
     let deadline = r.now() + 2 * 3_600_000;
-    r.event(parked_until(&r, deadline)).unwrap();
+    r.report(parked_until(deadline)).unwrap();
     r.advance(MINUTE);
     let (sessions, agents) = r.engine.persist_rows();
     let stats = r.engine.stats();
@@ -386,10 +395,18 @@ async fn the_generations_survive_so_the_next_state_report_is_not_a_409() {
     r.observe("main").await;
     r.observe("main").await;
     r.observe("sub").await;
-    let generations = (
-        r.agent("main").request_generation,
-        r.agent("sub").request_generation,
-    );
+    let listed = r
+        .reregister()
+        .agents
+        .expect("a registration lists the session's agents");
+    let generation_of = |agent: &str| {
+        listed
+            .iter()
+            .find(|a| a.agent_id == agent)
+            .map(|a| a.request_generation)
+            .unwrap_or_else(|| panic!("the registration lists {agent}"))
+    };
+    let generations = (generation_of("main"), generation_of("sub"));
     assert!(generations.0 > 0 && generations.1 > 0, "{generations:?}");
     r.engine.flush_persisted().await;
     r.engine = r.restart().await;
@@ -876,10 +893,8 @@ async fn a_body_that_cannot_be_opened_leaves_the_agent_without_a_recipe() {
     let second = r.restart().await;
     second.load_persisted().await;
 
-    let main = second
-        .agent_status("desktop", "session", "main")
-        .expect("the agent keeps its record");
-    assert_eq!(main.reason, Reason::Reset);
+    let main = view_of(&second, "session", "main").expect("the agent keeps its record");
+    assert_eq!(main.cause, Reason::Reset);
     assert!(second.recipes_for("desktop", "session").is_empty());
     assert_eq!(
         (second.stats().agents, second.stats().retained_bytes),
@@ -1165,7 +1180,7 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
         event: "activity".into(),
         agent_id: Some("main".into()),
         kind: Some("presence".into()),
-        request_generation: Some(r.agent("main").request_generation),
+        request_generation: Some(r.request_generation("main")),
         ..Default::default()
     };
     report(&mut r, generation, presence).unwrap();
@@ -1218,7 +1233,6 @@ async fn two_sessions() -> (Rig, usize, usize) {
     // One probe the next request has not answered yet, which a disposal settles as wasted.
     r.advance_attended(270_000);
     r.step().await;
-    assert_eq!(r.status("main").unanswered, 1);
     let older = r.engine.stats().retained_bytes;
     r.engine.flush_persisted().await;
     r.advance(MINUTE);
@@ -1461,10 +1475,6 @@ async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_pr
     r.observe("sub").await;
     r.advance_attended(270_000);
     r.step().await;
-    assert_eq!(
-        (r.status("main").unanswered, r.status("sub").unanswered),
-        (1, 1)
-    );
     let main_bytes = {
         let (_, agents) = r.engine.persist_rows();
         agents
@@ -1474,6 +1484,13 @@ async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_pr
             .unwrap()
     };
     r.engine.flush_persisted().await;
+    assert_eq!(
+        (
+            saved_unanswered(&r, "session", "main"),
+            saved_unanswered(&r, "session", "sub")
+        ),
+        (1, 1)
+    );
     let second = r
         .restart_with_limits(KeepaliveLimits {
             max_agents: 1,
@@ -1493,14 +1510,8 @@ async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_pr
         BTreeMap::from([("evicted".to_string(), 1)]),
         "the subagent's probe is wasted under the eviction, and main's stays unanswered"
     );
-    assert_eq!(
-        second
-            .agent_status("desktop", "session", "main")
-            .unwrap()
-            .unanswered,
-        1
-    );
     second.flush_persisted().await;
+    assert_eq!(saved_unanswered(&r, "session", "main"), 1);
     assert_eq!(
         saved_agents(&r)
             .iter()
@@ -1579,7 +1590,7 @@ async fn a_restart_restores_an_unanswered_probe_with_what_its_credit_and_its_set
     r.observe("main").await;
     r.advance_attended(270_000);
     r.step().await;
-    assert_eq!(r.status("main").unanswered, 1);
+    // The rows read back equal the rows saved, and the payload below holds the one unanswered probe.
     let (_, agents) = r.engine.persist_rows();
     r.engine.flush_persisted().await;
     let second = r.restart().await;
@@ -1650,16 +1661,14 @@ async fn a_restored_released_record_leaves_at_the_first_tick_past_its_saved_leav
     r.advance(3_599_999);
     second.step().await;
     assert_eq!(
-        second
-            .agent_status("desktop", "session", "sub")
-            .map(|status| status.state),
-        Some(AgentState::Released),
+        lifecycle_of(&second, "session", "sub"),
+        Some(Lifecycle::Released),
         "the restored record is held until its leave"
     );
     r.advance(1);
     second.step().await;
     assert!(
-        second.agent_status("desktop", "session", "sub").is_none(),
+        lifecycle_of(&second, "session", "sub").is_none(),
         "the first tick past the leave removes the record"
     );
     assert_eq!(second.stats().agents, 1);
@@ -1698,8 +1707,7 @@ async fn a_saved_released_record_whose_leave_passed_while_the_router_was_down_do
         })
         .await;
     r.engine.load_persisted().await;
-    let loaded =
-        |r: &Rig, agent: &str| r.engine.agent_status("desktop", "session", agent).is_some();
+    let loaded = |r: &Rig, agent: &str| r.lifecycle(agent).is_some();
     assert_eq!(
         (
             loaded(&r, "sub-a"),
@@ -1768,10 +1776,8 @@ async fn a_saved_released_record_without_a_leave_loads_with_none_and_stays() {
     r.advance(3_600_000);
     second.step().await;
     assert_eq!(
-        second
-            .agent_status("desktop", "session", "sub")
-            .map(|status| status.state),
-        Some(AgentState::Released),
+        lifecycle_of(&second, "session", "sub"),
+        Some(Lifecycle::Released),
         "a record with no leave stays"
     );
 }
@@ -1820,9 +1826,10 @@ async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_l
     r.step().await;
     r.advance(270_000);
     r.step().await;
+    // The payload below holds the one probe the idle limit left pending.
     assert_eq!(
-        (r.status("main").reason, r.status("main").unanswered),
-        (Reason::IdleLimit, 1),
+        r.view("main").cause,
+        Reason::IdleLimit,
         "the idle limit left the probe pending"
     );
     let (_, agents) = r.engine.persist_rows();
@@ -1945,8 +1952,8 @@ async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_befo
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").reason, r.status("main").unanswered),
-        (Reason::IdleLimit, 1),
+        r.view("main").cause,
+        Reason::IdleLimit,
         "the idle limit left the probe pending"
     );
     let (sessions, agents) = r.engine.persist_rows();
@@ -1956,6 +1963,7 @@ async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_befo
         "the pending probe keeps the class its answer carried"
     );
     r.engine.flush_persisted().await;
+    assert_eq!(saved_unanswered(&r, "session", "main"), 1);
     let second = r.restart().await;
     second.load_persisted().await;
     assert_eq!(
@@ -1987,9 +1995,9 @@ async fn a_saved_probe_whose_speed_reads_null_restores_and_settles_at_standard()
     r.observe("main").await;
     r.advance_attended(270_000);
     r.step().await;
-    assert_eq!(r.status("main").unanswered, 1);
     let (sessions, mut agents) = r.engine.persist_rows();
     r.engine.flush_persisted().await;
+    assert_eq!(saved_unanswered(&r, "session", "main"), 1);
     let mut payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
     payload["unanswered"][0]["usage"]["speed"] = serde_json::Value::Null;
     agents[0].payload = payload.to_string();
@@ -2002,14 +2010,8 @@ async fn a_saved_probe_whose_speed_reads_null_restores_and_settles_at_standard()
         .unwrap();
     r.engine = r.restart().await;
     r.engine.load_persisted().await;
-    assert_eq!(
-        r.engine
-            .agent_status("desktop", "session", "main")
-            .map(|status| status.unanswered),
-        Some(1),
-        "the probe saved with a null speed came back"
-    );
-    // The companion takes the restored session back and reports main released, which settles the probe as wasted.
+    // The companion takes the restored session back and reports main released, which settles the probe as wasted, so
+    // the one wasted row below is the probe saved with a null speed coming back.
     r.reregister();
     r.state("main", "released");
     r.engine.flush_persisted().await;
@@ -2070,8 +2072,12 @@ async fn a_restored_recipes_settlement_and_skip_key_the_client_and_the_user_agen
         .observe(r.complete("first", Outcome::Succeeded, Some(written)));
     r.advance_attended(270_000);
     r.step().await;
-    assert_eq!(r.status("main").unanswered, 1, "one probe left unanswered");
     r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_unanswered(&r, "session", "main"),
+        1,
+        "one probe left unanswered"
+    );
     r.engine = r.restart().await;
     r.engine.load_persisted().await;
     r.reregister();
@@ -2084,7 +2090,7 @@ async fn a_restored_recipes_settlement_and_skip_key_the_client_and_the_user_agen
     r.advance_attended(270_000);
     r.step().await;
     assert_eq!(
-        r.status("main").reason,
+        r.view("main").cause,
         Reason::PoolDisabled,
         "the restored recipe's due probe was withheld"
     );
@@ -2212,10 +2218,12 @@ async fn a_loaded_recipe_probes_warm_when_due() {
         sent + 1,
         "the restored recipe's probe reached the upstream"
     );
-    let main = second.agent_status("desktop", "session", "main").unwrap();
+    let main = view_of(&second, "session", "main").unwrap();
+    second.flush_persisted().await;
+    let saved = saved_of(&r.h.store, "session", "main").unwrap();
     assert_eq!(
-        (main.probes, main.cold, main.reason),
-        (1, 0, Reason::Scheduled),
+        (main.probes_today, saved["cold"].clone(), main.cause),
+        (1, serde_json::json!(0), Reason::Scheduled),
         "and read the whole prefix back: {main:?}"
     );
 }
@@ -2457,7 +2465,7 @@ async fn a_restored_park_past_the_idle_window_survives_one_lease_length_and_ends
     .await;
     r.observe("main").await;
     let start = r.now();
-    r.event(parked_until(&r, start + 2 * 3_600_000)).unwrap();
+    r.report(parked_until(start + 2 * 3_600_000)).unwrap();
     // Fifteen minutes into the park, past the ten-minute idle window, probed at every due time under the parked
     // ceiling with the lease renewed.
     let end = start + 15 * MINUTE;
@@ -2486,9 +2494,9 @@ async fn a_restored_park_past_the_idle_window_survives_one_lease_length_and_ends
     let loaded = r.now();
     second.step().await;
     second.wait_idle().await;
-    let main = second.agent_status("desktop", "session", "main").unwrap();
+    let main = view_of(&second, "session", "main").unwrap();
     assert_eq!(
-        (second.recipes_for("desktop", "session"), main.reason),
+        (second.recipes_for("desktop", "session"), main.cause),
         (vec!["main".to_string()], Reason::Scheduled),
         "the first tick after the load keeps the park: {main:?}"
     );
@@ -2504,9 +2512,9 @@ async fn a_restored_park_past_the_idle_window_survives_one_lease_length_and_ends
         "still probed a millisecond before the window's end"
     );
     tick_until(&r, &second, loaded + LEASE_MS).await;
-    let main = second.agent_status("desktop", "session", "main").unwrap();
+    let main = view_of(&second, "session", "main").unwrap();
     assert_eq!(
-        (second.recipes_for("desktop", "session"), main.reason),
+        (second.recipes_for("desktop", "session"), main.cause),
         (Vec::new(), Reason::IdleLimit),
         "no registration came, so the silent session's idle window applies at the window's end: {main:?}"
     );
@@ -2518,14 +2526,13 @@ async fn a_restored_both_park_keeps_its_deadline_and_its_wake() {
     r.observe("main").await;
     let deadline = r.now() + 10 * MINUTE;
     let wake = r.now() + 60 * MINUTE;
-    r.event(Event {
+    r.report(Event {
         event: "state".into(),
         agent_id: Some("main".into()),
         state: Some("parked".into()),
         park_kind: Some("both".into()),
         deadline: Some(deadline),
         wake_at: Some(wake),
-        request_generation: Some(r.agent("main").request_generation),
         ..Default::default()
     })
     .unwrap();
@@ -2535,12 +2542,19 @@ async fn a_restored_both_park_keeps_its_deadline_and_its_wake() {
     second.load_persisted().await;
     second.step().await;
     second.wait_idle().await;
-    let main = second.agent_status("desktop", "session", "main").unwrap();
+    let main = view_of(&second, "session", "main").unwrap();
     assert_eq!(
-        (main.state, main.park),
         (
-            AgentState::Parked,
-            Some(Park::new(ParkKind::Both, Some(deadline), Some(wake)))
+            main.agent_state,
+            main.park_kind,
+            main.deadline,
+            main.wake_at
+        ),
+        (
+            Lifecycle::Parked,
+            Some(ParkKind::Both),
+            Some(deadline),
+            Some(wake)
         ),
         "the restored both park keeps its deadline and its wake: {main:?}"
     );
@@ -2639,8 +2653,8 @@ async fn a_loads_settlement_reaches_the_ledger_only_once_the_registry_holds_the_
     r.observe("main").await;
     r.advance_attended(270_000);
     r.step().await;
-    assert_eq!(r.status("main").unanswered, 1);
     r.engine.flush_persisted().await;
+    assert_eq!(saved_unanswered(&r, "session", "main"), 1);
     // The router is down past the entry's expiry, so the load ends the recipe and settles its probe as expired.
     r.advance(400_000);
     let second = r.restart().await;
@@ -2698,8 +2712,8 @@ async fn a_loads_settlement_waits_out_a_failed_save_and_goes_out_with_the_save_t
     r.observe("main").await;
     r.advance_attended(270_000);
     r.step().await;
-    assert_eq!(r.status("main").unanswered, 1);
     r.engine.flush_persisted().await;
+    assert_eq!(saved_unanswered(&r, "session", "main"), 1);
     // The router is down past the entry's expiry, and the registry refuses every agent row when it comes back.
     r.advance(400_000);
     let conn = registry(&r);
@@ -2776,11 +2790,12 @@ async fn a_lapsed_pending_probe_reaches_the_ledger_once_across_a_failed_save_and
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").reason, r.status("main").unanswered),
-        (Reason::IdleLimit, 1),
+        r.view("main").cause,
+        Reason::IdleLimit,
         "the idle limit left the probe pending"
     );
     r.engine.flush_persisted().await;
+    assert_eq!(saved_unanswered(&r, "session", "main"), 1);
     let (_, agents) = r.engine.persist_rows();
     let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
     let lapse = payload["kept"][0]["entry_expires"]
@@ -2793,13 +2808,9 @@ async fn a_lapsed_pending_probe_reaches_the_ledger_once_across_a_failed_save_and
          CREATE TRIGGER refuse_update BEFORE UPDATE ON keepalive_agents BEGIN SELECT RAISE(ABORT, 'refused'); END;",
     )
     .unwrap();
+    // The sweep at the entry's end settles the probe, and the settlement waits for a save that lands.
     r.advance(lapse - r.now());
     r.step().await;
-    assert_eq!(
-        r.status("main").unanswered,
-        0,
-        "the sweep settled the probe at its entry's end"
-    );
     r.engine.flush_persisted().await;
     // The process dies before another save: the next one restores the probe still pending in the registry.
     let second = r.restart().await;

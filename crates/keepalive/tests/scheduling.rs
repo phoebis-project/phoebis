@@ -83,7 +83,7 @@ async fn a_cooled_account_holds_the_probe_until_the_cooldown_clears() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Cooled)
     );
     assert_eq!(r.up.requests().len(), 1, "nothing went upstream");
@@ -93,7 +93,7 @@ async fn a_cooled_account_holds_the_probe_until_the_cooldown_clears() {
         .unwrap();
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (1, Reason::Scheduled),
         "the probe ran once the account was clear"
     );
@@ -106,13 +106,17 @@ async fn a_recipe_whose_entry_lapsed_is_held_under_expired_and_sends_no_probe() 
     let mut r = armed(RigSpec::default()).await;
     r.advance(270_000);
     r.step().await;
-    assert_eq!(r.status("main").probes, 1, "the one probe before the lapse");
+    assert_eq!(
+        r.view("main").probes_today,
+        1,
+        "the one probe before the lapse"
+    );
     let sent = r.up.requests().len();
     r.advance(20 * MINUTE);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
     assert_eq!(
-        (status.probes, status.reason, status.next_probe_at),
+        (status.probes_today, status.cause, status.next_probe_at),
         (1, Reason::Expired, None),
         "{status:?}"
     );
@@ -159,7 +163,7 @@ async fn a_recipe_whose_entry_lapsed_is_held_under_expired_and_sends_no_probe() 
     ));
     r.advance(20 * MINUTE);
     r.step().await;
-    assert_eq!(r.status("main").reason, Reason::Expired);
+    assert_eq!(r.view("main").cause, Reason::Expired);
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
         r.db.read_blocking(|c| {
@@ -194,7 +198,7 @@ async fn a_hold_lifted_after_the_expiry_sends_no_probe() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Cooled)
     );
     // The entry written at the start expired at 300 s; the cooldown lifts after it.
@@ -205,7 +209,7 @@ async fn a_hold_lifted_after_the_expiry_sends_no_probe() {
         .unwrap();
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Expired)
     );
     assert_eq!(r.up.requests().len(), 1, "only the arming request went out");
@@ -241,37 +245,47 @@ async fn a_ledger_behind_hold_lifted_after_the_expiry_sends_no_probe() {
     behind.store(true, Ordering::SeqCst);
     r.advance(270_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
     assert_eq!(
         (
-            status.probes,
-            status.reason,
-            status.failures,
+            status.probes_today,
+            status.cause,
+            r.saved("main").await["failures"].clone(),
             status.next_probe_at
         ),
-        (1, Reason::LedgerBehind, 0, Some(r.now() + 5_000)),
+        (
+            1,
+            Reason::LedgerBehind,
+            serde_json::json!(0),
+            Some(r.now() + 5_000)
+        ),
         "held for the answer's five seconds"
     );
     r.advance(5_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
     assert_eq!(
         (
-            status.probes,
-            status.reason,
-            status.failures,
+            status.probes_today,
+            status.cause,
+            r.saved("main").await["failures"].clone(),
             status.next_probe_at
         ),
-        (2, Reason::LedgerBehind, 0, Some(r.now() + 5_000)),
+        (
+            2,
+            Reason::LedgerBehind,
+            serde_json::json!(0),
+            Some(r.now() + 5_000)
+        ),
         "sent again after the wait, and refused again"
     );
     // The entry written at the start expired at 300 s; the ledger catches up after it.
     r.advance(30_000);
     behind.store(false, Ordering::SeqCst);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
     assert_eq!(
-        (status.probes, status.reason, status.next_probe_at),
+        (status.probes_today, status.cause, status.next_probe_at),
         (2, Reason::Expired, None)
     );
     assert_eq!(
@@ -325,9 +339,9 @@ async fn in_overage_at_the_due_probe(policy: OveragePolicy) -> Rig {
 async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
     for policy in [OveragePolicy::PreferPlan, OveragePolicy::Never] {
         let mut r = in_overage_at_the_due_probe(policy).await;
-        let status = r.status("main");
+        let status = r.view("main");
         assert_eq!(
-            (policy, status.probes, status.reason),
+            (policy, status.probes_today, status.cause),
             (policy, 0, Reason::Overage)
         );
         r.h.router
@@ -354,15 +368,15 @@ async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
         .await;
         r.step().await;
         assert_eq!(
-            r.status("main").probes,
+            r.view("main").probes_today,
             1,
             "{policy:?}: ran once the overage ended"
         );
     }
     let status = in_overage_at_the_due_probe(OveragePolicy::Allow)
         .await
-        .status("main");
-    assert_eq!((status.probes, status.reason), (1, Reason::Scheduled));
+        .view("main");
+    assert_eq!((status.probes_today, status.cause), (1, Reason::Scheduled));
 }
 
 #[tokio::test]
@@ -428,14 +442,14 @@ async fn a_usage_based_member_under_prefer_plan_holds_under_its_budget_and_never
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Budget),
         "the seat's probe holds under its budget as an api_key member's does, and no overage hold reads it"
     );
     raise_budget(&r).await;
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (1, Reason::Scheduled),
         "with the budget raised the probe runs: the head's overage family held nothing"
     );
@@ -530,7 +544,7 @@ async fn after_the_named_reset_passes_the_probe_is_no_longer_held_for_overage_an
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (1, Reason::Scheduled),
         "the named reset has passed, so the probe is no longer held for overage"
     );
@@ -574,7 +588,7 @@ async fn after_the_named_reset_passes_the_probe_is_no_longer_held_for_overage_an
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Overage),
         "the named reset still stands, so the probe holds"
     );
@@ -684,7 +698,7 @@ async fn a_probe_pinned_to_a_member_at_its_budget_holds_until_the_budget_no_long
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Budget)
     );
     assert_eq!(
@@ -696,7 +710,7 @@ async fn a_probe_pinned_to_a_member_at_its_budget_holds_until_the_budget_no_long
     raise_budget(&r).await;
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (1, Reason::Scheduled),
         "the probe ran once the raised budget no longer refused"
     );
@@ -781,22 +795,20 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
         r.up.requests().is_empty(),
         "the selection read the crossed spend, so the probe never reached the upstream"
     );
-    let status = r.status("main");
-    assert_eq!(
-        (status.probes, status.in_flight, status.reason),
-        (1, false, Reason::Budget)
-    );
+    // The held probe left nothing in flight: the probe the raised budget lets through below goes out.
+    let status = r.view("main");
+    assert_eq!((status.probes_today, status.cause), (1, Reason::Budget));
     assert!(named_a(&r).await, "the pin still names a");
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (1, Reason::Budget),
         "the gate holds on the view again with nothing changed: no further probe was dispatched"
     );
     assert!(r.up.requests().is_empty());
     raise_budget(&r).await;
     r.step().await;
-    assert_eq!(r.status("main").reason, Reason::Scheduled);
+    assert_eq!(r.view("main").cause, Reason::Scheduled);
     let sent = r.up.requests();
     assert_eq!(
         sent.len(),
@@ -834,9 +846,13 @@ async fn a_probe_refused_for_an_unknown_budget_retries_once_the_ledger_recovers(
     .await;
     r.advance(270_000);
     r.step().await;
-    let status = r.status("main");
+    let status = r.view("main");
     assert_eq!(
-        (status.probes, status.reason, status.next_probe_at.is_some()),
+        (
+            status.probes_today,
+            status.cause,
+            status.next_probe_at.is_some()
+        ),
         (1, Reason::RetryableProbeError, true),
         "{status:?}"
     );
@@ -855,7 +871,7 @@ async fn a_probe_refused_for_an_unknown_budget_retries_once_the_ledger_recovers(
     r.advance(10_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (2, Reason::Scheduled),
         "the retry ran once the ledger recovered"
     );
@@ -874,7 +890,7 @@ async fn a_paused_or_reauth_marked_account_serves_no_probe() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Paused)
     );
     r.h.store.set_enabled("a", true, "test").unwrap();
@@ -884,7 +900,7 @@ async fn a_paused_or_reauth_marked_account_serves_no_probe() {
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Reauth)
     );
     r.h.store
@@ -892,7 +908,7 @@ async fn a_paused_or_reauth_marked_account_serves_no_probe() {
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
-    assert_eq!(r.status("main").probes, 1);
+    assert_eq!(r.view("main").probes_today, 1);
     assert_eq!(r.engine.reasons().get(&Reason::Paused).copied(), Some(1));
 }
 
@@ -915,7 +931,7 @@ async fn a_probe_whose_interval_passes_the_subscription_end_is_held_and_one_endi
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (1, Reason::Scheduled),
         "the probe whose interval ends at the end went out"
     );
@@ -936,7 +952,7 @@ async fn a_probe_whose_interval_passes_the_subscription_end_is_held_and_one_endi
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::IneligibleCredential),
         "the probe whose interval passes the end was held"
     );
@@ -961,8 +977,11 @@ async fn a_paused_recipe_on_an_account_whose_term_ended_reads_paused_under_ineli
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").paused, r.status("main").reason),
-        (true, Reason::PartialCacheCoverage),
+        (
+            r.saved("main").await["paused"].clone(),
+            r.view("main").cause
+        ),
+        (serde_json::json!(true), Reason::PartialCacheCoverage),
         "the probe's answer paused the recipe"
     );
     r.h.store
@@ -1005,7 +1024,7 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::AffinityTooShort)
     );
     pool.affinity_ttl_seconds = 0;
@@ -1018,7 +1037,7 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
-    assert_eq!(r.status("main").probes, 0);
+    assert_eq!(r.view("main").probes_today, 0);
     pool.affinity_ttl_seconds = 3_600;
     r.h.store
         .update_pool(
@@ -1032,7 +1051,7 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
     // router places the session's pin again as its next request would.
     r.pin("main", "claude-sonnet-4-5", "a").await;
     r.step().await;
-    assert_eq!(r.status("main").probes, 1);
+    assert_eq!(r.view("main").probes_today, 1);
     // The longest TTL a pool can hold outlives every due time, as the router's pin reads it.
     pool.affinity_ttl_seconds = u64::MAX;
     r.h.store
@@ -1046,7 +1065,7 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (2, Reason::Scheduled),
         "the longest TTL probes"
     );
@@ -1067,7 +1086,7 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (2, Reason::KeepaliveOff)
     );
 }
@@ -1108,18 +1127,18 @@ async fn a_one_hour_recipe_holds_under_affinity_too_short_on_a_thirty_minute_pin
         },
     );
     r.observe_with("main", &hour).await;
-    assert_eq!(r.status("main").cache_ttl_ms, 3_600_000);
+    assert_eq!(r.view("main").ttl_seconds, 3_600);
     r.observe("sub").await;
-    assert_eq!(r.status("sub").cache_ttl_ms, 300_000);
+    assert_eq!(r.view("sub").ttl_seconds, 300);
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("sub").probes, r.status("sub").reason),
+        (r.view("sub").probes_today, r.view("sub").cause),
         (1, Reason::Scheduled),
         "the five-minute probe is due 270 s in, inside the pin"
     );
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::AffinityTooShort),
         "the hour recipe's probe is due 3,240 s in, past the pin"
     );
@@ -1135,7 +1154,7 @@ async fn a_one_hour_recipe_holds_under_affinity_too_short_on_a_thirty_minute_pin
     r.h.router.reload().await.unwrap();
     r.advance(3_240_000 - 270_000);
     r.step().await;
-    assert_eq!(r.status("main").probes, 1);
+    assert_eq!(r.view("main").probes_today, 1);
 }
 
 #[tokio::test]
@@ -1144,7 +1163,7 @@ async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        r.status("main").probes,
+        r.view("main").probes_today,
         1,
         "one probe, so the recipe has an unanswered probe to settle"
     );
@@ -1164,8 +1183,8 @@ async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
     );
     assert_eq!(
         (
-            r.status("main").reason,
-            r.status("main").next_probe_at,
+            r.view("main").cause,
+            r.view("main").next_probe_at,
             r.engine.stats().retained_bytes
         ),
         (Reason::KeyOptedOut, None, 0),
@@ -1223,8 +1242,8 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
     // Round robin lands the session's second fresh placement on the pool's other account, so main and its
     // subagent hold two pins on two accounts rather than sharing one.
     r.observe("worker").await;
-    let main_account = r.status("main").account_id.clone().unwrap();
-    let worker_account = r.status("worker").account_id.clone().unwrap();
+    let main_account = r.view("main").account_id.clone().unwrap();
+    let worker_account = r.view("worker").account_id.clone().unwrap();
     assert_ne!(main_account, worker_account);
     let credential_of = |account: &str| if account == "a" { A } else { B };
 
@@ -1282,12 +1301,12 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("worker").probes, r.status("worker").reason),
+        (r.view("worker").probes_today, r.view("worker").cause),
         (1, Reason::Cooled),
         "the subagent's own account is cooled, so its recipe alone holds"
     );
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (2, Reason::Scheduled),
         "the main agent's own account is untouched by its sibling's cooldown"
     );
@@ -1300,7 +1319,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
         ..RigSpec::default()
     })
     .await;
-    let first = r.status("main").account_id.clone().unwrap();
+    let first = r.view("main").account_id.clone().unwrap();
     let (other, other_id) = if first == "a" { (B, "b") } else { (A, "a") };
     let pin =
         r.h.router
@@ -1400,7 +1419,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
         "the router places the freed session on the other account"
     );
     assert_eq!(
-        r.status("main").account_id.as_deref(),
+        r.view("main").account_id.as_deref(),
         Some(first.as_str()),
         "the recipe still names the old account until the tick reads the pin"
     );
@@ -1422,7 +1441,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
         "the probe followed the pin to the new account"
     );
     assert_eq!(
-        r.status("main").account_id.as_deref(),
+        r.view("main").account_id.as_deref(),
         Some(other_id),
         "the account moved with the pin"
     );
@@ -1443,7 +1462,7 @@ async fn the_due_time_follows_the_timings_lead_and_jitter() {
     })
     .await;
     let start = r.now();
-    let due = r.status("main").next_probe_at.unwrap();
+    let due = r.view("main").next_probe_at.unwrap();
     assert!(
         (start + 200_000..=start + 210_000).contains(&due),
         "cache start plus 210 s less at most 10 s of jitter: {}",
@@ -1451,10 +1470,10 @@ async fn the_due_time_follows_the_timings_lead_and_jitter() {
     );
     r.advance(199_000);
     r.step().await;
-    assert_eq!(r.status("main").probes, 0, "not yet due");
+    assert_eq!(r.view("main").probes_today, 0, "not yet due");
     r.advance(11_000);
     r.step().await;
-    assert_eq!(r.status("main").probes, 1);
+    assert_eq!(r.view("main").probes_today, 1);
     // A one-hour entry takes the one-hour lead.
     let r = rig(RigSpec {
         timing,
@@ -1476,7 +1495,7 @@ async fn the_due_time_follows_the_timings_lead_and_jitter() {
         }),
     ));
     assert_eq!(
-        r.status("main").next_probe_at,
+        r.view("main").next_probe_at,
         Some(r.now() + 3_600_000 - 600_000)
     );
 }
@@ -1491,7 +1510,7 @@ async fn the_session_expiry_discards_recipes_and_the_scheduler_ticks() {
     .await;
     r.advance(270_000);
     r.step().await;
-    assert_eq!(r.status("main").probes, 1);
+    assert_eq!(r.view("main").probes_today, 1);
     r.advance(330_000);
     r.step().await;
     assert!(
@@ -1574,7 +1593,7 @@ async fn a_hold_counts_one_skipped_probe_however_many_ticks_it_spans() {
         r.step().await;
     }
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Cooled)
     );
     assert_eq!(
@@ -1594,7 +1613,7 @@ async fn a_hold_counts_one_skipped_probe_however_many_ticks_it_spans() {
         r.step().await;
     }
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Paused)
     );
     assert_eq!(
@@ -1629,7 +1648,7 @@ async fn an_auxiliary_request_mid_hold_leaves_the_skipped_count_at_one() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Overage)
     );
     r.engine.observe(r.observed_with(
@@ -1642,7 +1661,7 @@ async fn an_auxiliary_request_mid_hold_leaves_the_skipped_count_at_one() {
         "claude-sonnet-4-5",
     ));
     assert_eq!(
-        r.status("main").reason,
+        r.view("main").cause,
         Reason::Overage,
         "the auxiliary request left the hold's own reason alone"
     );
@@ -1650,7 +1669,7 @@ async fn an_auxiliary_request_mid_hold_leaves_the_skipped_count_at_one() {
         r.step().await;
     }
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Overage)
     );
     assert_eq!(
@@ -1678,7 +1697,7 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").reason, r.status("main").next_probe_at),
+        (r.view("main").cause, r.view("main").next_probe_at),
         (Reason::ProbeRetryLimit, None),
         "the 429's first rung would land at the entry's expiry, so the ladder paused the recipe and cleared its \
          schedule"
@@ -1692,7 +1711,7 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(
-        (r.status("main").reason, r.engine.stats().retained_bytes),
+        (r.view("main").cause, r.engine.stats().retained_bytes),
         (Reason::KeyOptedOut, 0),
         "the opt-out discarded the paused recipe"
     );
@@ -1708,7 +1727,11 @@ async fn the_retention_rules_reach_a_paused_recipe() {
         "the first step outlasts the session's lease"
     );
     r.step().await;
-    assert_eq!(r.status("main").probes, 1, "one probe to settle as wasted");
+    assert_eq!(
+        r.view("main").probes_today,
+        1,
+        "one probe to settle as wasted"
+    );
     r.up.push_credential_rule(
         A,
         "/v1/messages",
@@ -1716,14 +1739,18 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     );
     r.advance(270_000);
     r.step().await;
-    assert_eq!(r.status("main").next_probe_at, None, "paused by the 429");
+    assert_eq!(r.view("main").next_probe_at, None, "paused by the 429");
     r.advance(3_600_000);
     r.step().await;
+    // No settlement waits for a save yet, so this save sends nothing to the ledger ahead of the lapse below.
+    let saved = r.saved("main").await;
+    let unanswered = saved["unanswered"].as_array().map_or(0, Vec::len)
+        + saved["kept"].as_array().map_or(0, Vec::len);
     assert_eq!(
         (
-            r.status("main").reason,
+            r.view("main").cause,
             r.engine.stats().retained_bytes,
-            r.status("main").unanswered
+            unanswered
         ),
         (Reason::IdleLimit, 0, 1),
         "the ceiling keeps the probe pending"
@@ -1803,7 +1830,7 @@ async fn a_hold_counts_its_skip_when_the_held_probe_comes_due() {
         r.step().await;
     }
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Cooled)
     );
     // Drained rather than polled: what this half asserts is that no skipped row lands at all.
@@ -1834,7 +1861,7 @@ async fn a_hold_counts_its_skip_when_the_held_probe_comes_due() {
         r.step().await;
     }
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Cooled)
     );
     assert_eq!(
@@ -1854,7 +1881,7 @@ async fn a_recipe_retained_before_its_model_resolved_is_held_by_a_cooldown_under
         ..RigSpec::default()
     })
     .await;
-    assert_eq!(r.status("main").canonical_model, "claude-sonnet-4-5");
+    assert_eq!(r.view("main").model, "claude-sonnet-4-5");
     // The refresh lands the dated id; the relay names requests by it only once the router has moved the
     // spelling's pins and cooldowns.
     let listing = relay_common::catalog_rules().remove(0);
@@ -1897,9 +1924,9 @@ async fn a_recipe_retained_before_its_model_resolved_is_held_by_a_cooldown_under
     r.advance(270_000);
     r.step().await;
     assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
+        (r.view("main").probes_today, r.view("main").cause),
         (0, Reason::Cooled),
         "the gate reads the cooldown under the name the router holds, so no probe is dispatched"
     );
-    assert_eq!(r.status("main").canonical_model, DATED);
+    assert_eq!(r.view("main").model, DATED);
 }

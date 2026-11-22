@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use common::*;
-use phoebis_keepalive::{AgentState, Event, KeepalivePolicy, KeepaliveTiming, Reason};
+use phoebis_keepalive::{Event, KeepalivePolicy, KeepaliveTiming, Lifecycle, Reason};
 use phoebis_ledger::{
     hour_of, read_rollups, CostRevisions, PlanTables, PriceRevisions, RollupSelect,
 };
@@ -204,10 +204,8 @@ async fn wasted(r: &Rig, probes: u64) -> BTreeMap<String, u64> {
 }
 
 fn report(r: &mut Rig, agent: &str, fields: Event) {
-    let generation = r.status(agent).request_generation;
-    r.event(Event {
+    r.report(Event {
         agent_id: Some(agent.into()),
-        request_generation: Some(generation),
         ..fields
     })
     .unwrap();
@@ -260,27 +258,26 @@ fn pending_lapse(r: &Rig, agent: &str) -> i64 {
 
 /// The recipe is still retained at `end - 1` and ends with `reason` on the tick at `end`, its unanswered probes
 /// settled under `label`: at once, or under `idle_limit` once the newest entry they wrote has ended, every probe
-/// pending until its own entry's end.
+/// pending until its own entry's end. The wasted rows read every probe since the request under `label`, so a probe
+/// that a ceiling's end did not leave pending fails the last assertion.
 async fn ends_at(r: &mut Rig, agent: &str, end: i64, reason: Reason, label: &str) {
     tick_to(r, end - 1).await;
     assert!(
         retained(r, agent),
         "{agent} is still probed a millisecond before {end}: {:?}",
-        r.status(agent)
+        r.view(agent)
     );
     tick_to(r, end).await;
-    let status = r.status(agent);
+    let view = r.view(agent);
     assert_eq!(
-        (status.reason, retained(r, agent)),
+        (view.cause, retained(r, agent)),
         (reason, false),
-        "{agent} ends at {end}: {status:?}"
+        "{agent} ends at {end}: {view:?}"
     );
-    assert!(status.probes > 0, "{status:?}");
+    // The lifetime count, since a break-even can run past a UTC midnight that the view's day count restarts at.
+    let probes = r.saved(agent).await["probes"].as_u64().unwrap();
+    assert!(probes > 0, "{view:?}");
     if label == "idle_limit" {
-        assert_eq!(
-            status.unanswered as u64, status.probes,
-            "every probe stays pending at the end: {status:?}"
-        );
         let lapse = pending_lapse(r, agent);
         tick_to(r, lapse).await;
         // The sweep's settlements reach the ledger with the save that drops the probes, which the production
@@ -288,8 +285,8 @@ async fn ends_at(r: &mut Rig, agent: &str, end: i64, reason: Reason, label: &str
         r.engine.flush_persisted().await;
     }
     assert_eq!(
-        wasted(r, status.probes).await,
-        BTreeMap::from([(label.to_string(), status.probes)]),
+        wasted(r, probes).await,
+        BTreeMap::from([(label.to_string(), probes)]),
         "every probe since the last real request is wasted under the reason"
     );
 }
@@ -301,11 +298,11 @@ async fn main_idle_is_probed_until_the_window_ends_with_idle_limit() {
     let start = r.now();
     r.state("main", "idle");
     tick_to(&mut r, start + 1_800_000 - 1).await;
-    let status = r.status("main");
+    let view = r.view("main");
     assert_eq!(
-        (status.state, status.reason, status.cache_ttl_ms),
-        (AgentState::Idle, Reason::Scheduled, 300_000),
-        "{status:?}"
+        (view.agent_state, view.cause, view.ttl_seconds),
+        (Lifecycle::Idle, Reason::Scheduled, 300),
+        "{view:?}"
     );
     ends_at(
         &mut r,
@@ -342,16 +339,18 @@ async fn presence_restarts_the_window_and_marks_nothing_busy() {
     r.state("main", "idle");
     tick_to(&mut r, start + 50 * MINUTE).await;
     presence(&mut r);
-    let status = r.status("main");
     assert_eq!(
-        (status.state, status.last_activity),
-        (AgentState::Idle, r.now()),
+        (
+            r.view("main").agent_state,
+            r.saved("main").await["last_activity"].clone()
+        ),
+        (Lifecycle::Idle, serde_json::json!(r.now())),
         "presence moves the idle clock and resumes nothing"
     );
     tick_to(&mut r, start + 110 * MINUTE - 1).await;
     assert_eq!(
-        (r.status("main").state, retained(&r, "main")),
-        (AgentState::Idle, true),
+        (r.view("main").agent_state, retained(&r, "main")),
+        (Lifecycle::Idle, true),
         "probed past the hour the window would have ended at without the presence, and parked by nothing"
     );
     ends_at(
@@ -373,9 +372,9 @@ async fn a_park_on_a_task_is_probed_past_the_window_until_max_parked_seconds_or_
     park(&mut r, "main", "background", Some(start + 2 * HOUR), None);
     tick_to(&mut r, start + HOUR + 5 * MINUTE).await;
     assert!(
-        retained(&r, "main") && r.status("main").state == AgentState::Parked,
+        retained(&r, "main") && r.view("main").agent_state == Lifecycle::Parked,
         "the window ended at an hour and the park goes on: {:?}",
-        r.status("main")
+        r.view("main")
     );
     ends_at(
         &mut r,
@@ -393,13 +392,13 @@ async fn a_park_on_a_task_is_probed_past_the_window_until_max_parked_seconds_or_
     park(&mut r, "main", "background", Some(start + 2 * HOUR), None);
     tick_to(&mut r, start + 2 * HOUR - 1).await;
     assert_eq!(
-        (r.status("main").state, retained(&r, "main")),
-        (AgentState::Parked, true)
+        (r.view("main").agent_state, retained(&r, "main")),
+        (Lifecycle::Parked, true)
     );
     tick_to(&mut r, start + 2 * HOUR).await;
     assert_eq!(
-        (r.status("main").state, retained(&r, "main")),
-        (AgentState::Idle, true),
+        (r.view("main").agent_state, retained(&r, "main")),
+        (Lifecycle::Idle, true),
         "the deadline ends the park and the window restarts"
     );
     ends_at(
@@ -433,8 +432,8 @@ async fn a_deadline_ends_the_park_and_restarts_the_window_in_both_orderings() {
         }
         tick_to(&mut r, start + 30 * MINUTE).await;
         assert_eq!(
-            (r.status("main").state, retained(&r, "main")),
-            (AgentState::Idle, true),
+            (r.view("main").agent_state, retained(&r, "main")),
+            (Lifecycle::Idle, true),
             "mod first: {mod_first}"
         );
         // Never at 60 minutes, the end of a window counted from the request.
@@ -457,16 +456,16 @@ async fn a_scheduled_park_is_probed_to_a_wake_within_the_horizon_and_held_with_h
     let start = r.now();
     park(&mut r, "main", "scheduled", None, Some(start + 90 * MINUTE));
     tick_to(&mut r, start + HOUR).await;
-    let at_hour = r.status("main").probes;
+    let at_hour = r.view("main").probes_today;
     tick_to(&mut r, start + 90 * MINUTE - 1).await;
-    let near = r.status("main");
+    let near = r.view("main");
     assert_eq!(
-        (near.state, near.reason, retained(&r, "main")),
-        (AgentState::Parked, Reason::Scheduled, true),
+        (near.agent_state, near.cause, retained(&r, "main")),
+        (Lifecycle::Parked, Reason::Scheduled, true),
         "{near:?}"
     );
     assert!(
-        near.probes > at_hour,
+        near.probes_today > at_hour,
         "probed past the window's hour: {at_hour} then {near:?}"
     );
     // A wake three days out is past it: probed for the window's hour, then held with its probes written off. Without
@@ -482,32 +481,33 @@ async fn a_scheduled_park_is_probed_to_a_wake_within_the_horizon_and_held_with_h
     park(&mut r, "main", "scheduled", None, Some(start + 72 * HOUR));
     tick_to(&mut r, start + HOUR - 1).await;
     assert_eq!(
-        (r.status("main").reason, r.status("main").next_probe_at),
+        (r.view("main").cause, r.view("main").next_probe_at),
         (Reason::Scheduled, Some(start + HOUR))
     );
     tick_to(&mut r, start + HOUR).await;
-    let held = r.status("main");
+    // Every probe the hold wrote off reads `horizon` in the wasted rows, so a probe the hold left unanswered fails the
+    // read below them.
+    let held = r.view("main");
     assert_eq!(
         (
-            held.reason,
-            held.state,
+            held.cause,
+            held.agent_state,
             retained(&r, "main"),
-            held.unanswered,
             held.next_probe_at
         ),
-        (Reason::Horizon, AgentState::Parked, true, 0, None),
+        (Reason::Horizon, Lifecycle::Parked, true, None),
         "{held:?}"
     );
     assert_eq!(
-        wasted(&r, held.probes).await,
-        BTreeMap::from([("horizon".to_string(), held.probes)])
+        wasted(&r, held.probes_today).await,
+        BTreeMap::from([("horizon".to_string(), held.probes_today)])
     );
     for at in [10_000, 20_000] {
         tick_to(&mut r, start + HOUR + at).await;
     }
     assert_eq!(
-        (r.status("main").reason, r.status("main").probes),
-        (Reason::Horizon, held.probes),
+        (r.view("main").cause, r.view("main").probes_today),
+        (Reason::Horizon, held.probes_today),
         "the hold sends nothing"
     );
     assert_eq!(
@@ -516,21 +516,21 @@ async fn a_scheduled_park_is_probed_to_a_wake_within_the_horizon_and_held_with_h
         "three held ticks are one hold"
     );
     assert_eq!(
-        wasted(&r, held.probes).await,
-        BTreeMap::from([("horizon".to_string(), held.probes)]),
+        wasted(&r, held.probes_today).await,
+        BTreeMap::from([("horizon".to_string(), held.probes_today)]),
         "the hold settles its probes once"
     );
     // A nearer wake re-opens it while the entry the last probe kept is still warm.
     park(&mut r, "main", "scheduled", None, Some(start + 3 * HOUR));
     tick_to(&mut r, start + HOUR + 30_000).await;
-    let reopened = r.status("main");
+    let reopened = r.view("main");
     assert_eq!(
         (
-            reopened.reason,
-            reopened.state,
-            reopened.probes > held.probes
+            reopened.cause,
+            reopened.agent_state,
+            reopened.probes_today > held.probes_today
         ),
-        (Reason::Scheduled, AgentState::Parked, true),
+        (Reason::Scheduled, Lifecycle::Parked, true),
         "{reopened:?}"
     );
 }
@@ -548,11 +548,11 @@ async fn a_horizon_hold_ends_expired_once_its_entry_lapses_and_shows_no_probe_du
     tick_to(&mut r, start + HOUR - 1).await;
     // The probe due at the hour is the one the hold withholds, and the entry the one before it kept expires a lead
     // after that due time.
-    let expires = r.status("main").next_probe_at.unwrap() + 60_000;
+    let expires = r.view("main").next_probe_at.unwrap() + 60_000;
     tick_to(&mut r, start + HOUR).await;
-    let held = r.status("main");
+    let held = r.view("main");
     assert_eq!(
-        (held.reason, held.next_probe_at),
+        (held.cause, held.next_probe_at),
         (Reason::Horizon, None),
         "a held recipe has no probe due: {held:?}"
     );
@@ -560,12 +560,12 @@ async fn a_horizon_hold_ends_expired_once_its_entry_lapses_and_shows_no_probe_du
     assert!(
         retained(&r, "main") && r.engine.stats().retained_bytes > 0,
         "{:?}",
-        r.status("main")
+        r.view("main")
     );
     tick_to(&mut r, expires).await;
     assert_eq!(
         (
-            r.status("main").reason,
+            r.view("main").cause,
             retained(&r, "main"),
             r.engine.stats().retained_bytes
         ),
@@ -573,8 +573,8 @@ async fn a_horizon_hold_ends_expired_once_its_entry_lapses_and_shows_no_probe_du
         "the cold body is freed at its expiry"
     );
     assert_eq!(
-        wasted(&r, held.probes).await,
-        BTreeMap::from([("horizon".to_string(), held.probes)]),
+        wasted(&r, held.probes_today).await,
+        BTreeMap::from([("horizon".to_string(), held.probes_today)]),
         "the hold settled every probe, so the lapse settles none"
     );
     // The ledger takes its rows a moment after the tick, so a second count would land behind the first: the count is
@@ -598,21 +598,21 @@ async fn a_disabled_pool_lapses_a_recipe_at_its_expiry_and_one_enabled_again_ins
     edit_pool(&r, |pool| pool.enabled = false).await;
     tick_to(&mut r, start + 2 * MINUTE).await;
     assert_eq!(
-        (r.status("main").state, r.status("main").reason),
-        (AgentState::Idle, Reason::PoolDisabled),
+        (r.view("main").agent_state, r.view("main").cause),
+        (Lifecycle::Idle, Reason::PoolDisabled),
         "the deadline that passes under the disabled pool ends the park on time"
     );
     tick_to(&mut r, start + 300_000 - 1).await;
     assert_eq!(
-        (r.status("main").reason, retained(&r, "main")),
+        (r.view("main").cause, retained(&r, "main")),
         (Reason::PoolDisabled, true)
     );
     tick_to(&mut r, start + 300_000).await;
     assert_eq!(
         (
-            r.status("main").reason,
+            r.view("main").cause,
             retained(&r, "main"),
-            r.status("main").probes
+            r.view("main").probes_today
         ),
         (Reason::Expired, false, 0)
     );
@@ -625,11 +625,11 @@ async fn a_disabled_pool_lapses_a_recipe_at_its_expiry_and_one_enabled_again_ins
     let start = r.now();
     edit_pool(&r, |pool| pool.enabled = false).await;
     tick_to(&mut r, start + 3 * MINUTE).await;
-    assert_eq!(r.status("main").reason, Reason::PoolDisabled);
+    assert_eq!(r.view("main").cause, Reason::PoolDisabled);
     edit_pool(&r, |pool| pool.enabled = true).await;
     tick_to(&mut r, start + 4 * MINUTE).await;
     assert_eq!(
-        (r.status("main").reason, r.status("main").probes),
+        (r.view("main").cause, r.view("main").probes_today),
         (Reason::Scheduled, 1),
         "enabled again inside the entry's TTL, the recipe probes on"
     );
@@ -676,33 +676,39 @@ async fn a_paused_recipe_held_under_horizon_settles_its_probes_there_and_keeps_i
         },
     );
     tick_to(&mut r, start + 3_600_000).await;
-    let paused = r.status("main");
+    let paused = r.view("main");
+    let saved = r.saved("main").await;
     assert_eq!(
-        (paused.paused, paused.reason),
-        (true, Reason::InvalidProbeUsage),
+        (saved["paused"].clone(), paused.cause),
+        (serde_json::json!(true), Reason::InvalidProbeUsage),
         "{paused:?}"
     );
-    assert!(paused.unanswered > 0, "{paused:?}");
+    let unanswered = saved["unanswered"].as_array().unwrap().len() as u64
+        + saved["kept"].as_array().unwrap().len() as u64;
+    assert!(unanswered > 0, "{saved}");
     tick_to(&mut r, start + 3_630_000).await;
-    let held = r.status("main");
+    // The hold writes off every probe the pause left, which the wasted rows below read whole under `horizon`.
+    let held = r.view("main");
     assert_eq!(
         (
-            held.paused,
-            held.reason,
-            held.unanswered,
+            r.saved("main").await["paused"].clone(),
+            held.cause,
             retained(&r, "main")
         ),
-        (true, Reason::InvalidProbeUsage, 0, true),
+        (serde_json::json!(true), Reason::InvalidProbeUsage, true),
         "the pause keeps its reason and the warm entry its prompt: {held:?}"
     );
     assert_eq!(
-        wasted(&r, paused.unanswered as u64).await,
-        BTreeMap::from([("horizon".to_string(), paused.unanswered as u64)])
+        wasted(&r, unanswered).await,
+        BTreeMap::from([("horizon".to_string(), unanswered)])
     );
     tick_to(&mut r, start + 3_660_000).await;
     assert_eq!(
-        (r.status("main").paused, retained(&r, "main")),
-        (true, false),
+        (
+            r.saved("main").await["paused"].clone(),
+            retained(&r, "main")
+        ),
+        (serde_json::json!(true), false),
         "the cold entry takes the prompt and leaves the pause"
     );
 }
@@ -722,7 +728,7 @@ async fn held_under_a_one_hour_horizon() -> (Rig, i64) {
     );
     tick_to(&mut r, start + HOUR).await;
     assert_eq!(
-        (r.status("main").reason, retained(&r, "main")),
+        (r.view("main").cause, retained(&r, "main")),
         (Reason::Horizon, true)
     );
     (r, start)
@@ -740,7 +746,7 @@ async fn edit_pool(r: &Rig, edit: impl FnOnce(&mut phoebis_store::PoolRow)) {
 #[tokio::test]
 async fn a_raised_horizon_releases_a_held_recipe_and_a_key_opt_out_discards_it() {
     let (mut r, _) = held_under_a_one_hour_horizon().await;
-    let held = r.status("main").probes;
+    let held = r.view("main").probes_today;
     edit_pool(&r, |pool| {
         pool.keepalive_json =
             serde_json::to_string(&policy(|p| p.scheduled_horizon_seconds = Some(7_200))).unwrap()
@@ -749,18 +755,18 @@ async fn a_raised_horizon_releases_a_held_recipe_and_a_key_opt_out_discards_it()
     let now = r.now();
     tick_to(&mut r, now + 1).await;
     assert_eq!(
-        r.status("main").reason,
+        r.view("main").cause,
         Reason::Scheduled,
         "the raised horizon reaches the held recipe on the next tick"
     );
     tick_to(&mut r, now + 5 * MINUTE).await;
     assert!(
-        r.status("main").probes > held,
+        r.view("main").probes_today > held,
         "and probing goes on while the entry is warm: {:?}",
-        r.status("main")
+        r.view("main")
     );
     let (mut r, _) = held_under_a_one_hour_horizon().await;
-    let held = r.status("main").probes;
+    let held = r.view("main").probes_today;
     let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
     key.companion_permissions.keepalive = false;
     r.h.store
@@ -771,7 +777,7 @@ async fn a_raised_horizon_releases_a_held_recipe_and_a_key_opt_out_discards_it()
     tick_to(&mut r, now + 1).await;
     assert_eq!(
         (
-            r.status("main").reason,
+            r.view("main").cause,
             retained(&r, "main"),
             r.engine.stats().retained_bytes
         ),
@@ -788,7 +794,7 @@ async fn a_raised_horizon_releases_a_held_recipe_and_a_key_opt_out_discards_it()
     let now = r.now();
     tick_to(&mut r, now + 1).await;
     assert_eq!(
-        (r.status("main").reason, retained(&r, "main")),
+        (r.view("main").cause, retained(&r, "main")),
         (Reason::PoolDisabled, true),
         "a disabled pool holds the recipe it held under the horizon"
     );
@@ -808,8 +814,8 @@ async fn a_passed_wake_ends_the_park_like_a_deadline_in_both_orderings() {
         }
         tick_to(&mut r, start + 30 * MINUTE).await;
         assert_eq!(
-            (r.status("main").state, retained(&r, "main")),
-            (AgentState::Idle, true),
+            (r.view("main").agent_state, retained(&r, "main")),
+            (Lifecycle::Idle, true),
             "mod first: {mod_first}"
         );
         ends_at(
@@ -838,8 +844,8 @@ async fn both_kinds_are_active_while_any_rule_says_probe() {
     );
     tick_to(&mut r, start + 95 * MINUTE).await;
     assert_eq!(
-        (r.status("main").state, retained(&r, "main")),
-        (AgentState::Parked, true),
+        (r.view("main").agent_state, retained(&r, "main")),
+        (Lifecycle::Parked, true),
         "the near wake keeps it probed past the parked ceiling"
     );
     // The passed wake leaves the command's part alone, whose ceiling has run out: both are exhausted.
@@ -904,7 +910,7 @@ async fn a_subagents_park_follows_the_park_rules_and_no_idle_window_applies_to_i
     // At the deadline nothing says probe for a subagent: it ends at once.
     tick_to(&mut r, start + 90 * MINUTE).await;
     assert_eq!(
-        (r.status("worker").reason, retained(&r, "worker")),
+        (r.view("worker").cause, retained(&r, "worker")),
         (Reason::ParkedLimit, false)
     );
     // A busy subagent has no ceiling of its own.
@@ -918,18 +924,20 @@ async fn a_subagents_park_follows_the_park_rules_and_no_idle_window_applies_to_i
     r.observe_with("worker", &hour_body()).await;
     let start = r.now();
     tick_to(&mut r, start + 24 * HOUR).await;
-    let status = r.status("worker");
+    let view = r.view("worker");
     assert_eq!(
         (
-            status.state,
-            status.reason,
-            status.cache_ttl_ms,
+            view.agent_state,
+            view.cause,
+            view.ttl_seconds,
             retained(&r, "worker")
         ),
-        (AgentState::Busy, Reason::Scheduled, HOUR, true),
-        "{status:?}"
+        (Lifecycle::Busy, Reason::Scheduled, HOUR / 1_000, true),
+        "{view:?}"
     );
-    assert!(status.probes >= 26, "{status:?}");
+    // The lifetime count: the day ran past a UTC midnight, where the view's day count starts again.
+    let probes = r.saved("worker").await["probes"].as_u64().unwrap();
+    assert!(probes >= 26, "{view:?}");
 }
 
 #[tokio::test]
@@ -946,11 +954,11 @@ async fn a_silent_session_is_probed_under_the_window_from_its_last_real_request_
     );
     assert!(retained(&r, "main"));
     tick_silent_to(&mut r, start + HOUR).await;
-    let status = r.status("main");
+    let view = r.view("main");
     assert_eq!(
-        (status.reason, retained(&r, "main")),
+        (view.cause, retained(&r, "main")),
         (Reason::IdleLimit, false),
-        "the park would probe to its deadline, but a silent session reads the window alone: {status:?}"
+        "the park would probe to its deadline, but a silent session reads the window alone: {view:?}"
     );
 }
 
@@ -960,7 +968,7 @@ async fn a_busy_main_past_the_window_ends_with_idle_limit() {
     r.observe("main").await;
     let start = r.now();
     tick_to(&mut r, start + HOUR - 1).await;
-    assert_eq!(r.status("main").state, AgentState::Busy);
+    assert_eq!(r.view("main").agent_state, Lifecycle::Busy);
     ends_at(
         &mut r,
         "main",
@@ -989,10 +997,10 @@ async fn a_price_file_with_no_usable_row_falls_back_to_the_shipped_tightest_row(
     let start = r.now();
     r.state("main", "idle");
     tick_to(&mut r, start + 2_760_000 - 1).await;
-    assert!(retained(&r, "main"), "{:?}", r.status("main"));
+    assert!(retained(&r, "main"), "{:?}", r.view("main"));
     tick_to(&mut r, start + 2_760_000).await;
     assert_eq!(
-        (r.status("main").reason, retained(&r, "main")),
+        (r.view("main").cause, retained(&r, "main")),
         (Reason::IdleLimit, false),
         "a zero idle window resolves to the shipped tightest row's break-even"
     );
@@ -1027,10 +1035,10 @@ async fn funding_and_ttl_pick_the_break_even() {
         let start = r.now();
         r.state("main", "idle");
         tick_to(&mut r, start + window - 1).await;
-        assert!(retained(&r, "main"), "{name}: {:?}", r.status("main"));
+        assert!(retained(&r, "main"), "{name}: {:?}", r.view("main"));
         tick_to(&mut r, start + window).await;
         assert_eq!(
-            (r.status("main").reason, retained(&r, "main")),
+            (r.view("main").cause, retained(&r, "main")),
             (Reason::IdleLimit, false),
             "{name}"
         );

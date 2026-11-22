@@ -2,8 +2,8 @@
 mod common;
 use common::*;
 use phoebis_keepalive::{
-    decode_json_event, AgentState, CompanionState, Event, EventError, KeepaliveLimits, Park,
-    ParkKind, Reason, RecipeState, Reported, SessionFacts,
+    decode_json_event, AgentState, CompanionState, Event, EventError, KeepaliveLimits, Lifecycle,
+    Reason, RecipeState, Reported, SessionFacts,
 };
 
 /// A real request on main of `session` under `key_id`, the first of which gives the session its slot.
@@ -127,22 +127,36 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         })
         .unwrap();
     assert_eq!(renewed.lease_expires_ms, r.now() + r.lease_ms());
+    let worker = renewed
+        .agents
+        .iter()
+        .flatten()
+        .find(|a| a.agent_id == "worker")
+        .expect("the registration answers the worker");
+    let answered = serde_json::to_value(worker).unwrap();
     assert_eq!(
-        (r.agent("worker").state, r.agent("worker").park),
+        (
+            worker.state,
+            &answered["park_kind"],
+            &answered["deadline"],
+            &answered["wake_at"]
+        ),
         (
             AgentState::Parked,
-            Some(Park::new(ParkKind::Background, None, None))
-        )
+            &serde_json::json!("background"),
+            &serde_json::Value::Null,
+            &serde_json::Value::Null
+        ),
+        "{answered}"
     );
     // The lease renews on a heartbeat or a same-instance session_start only; an event about an agent
     // leaves the companion's own lease alone.
     r.advance(1_000);
     let untouched = r
-        .event(Event {
+        .report(Event {
             event: "activity".into(),
             agent_id: Some("worker".into()),
             kind: Some("prompt".into()),
-            request_generation: Some(r.agent("worker").request_generation),
             ..Default::default()
         })
         .unwrap();
@@ -156,7 +170,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     assert_eq!(reheartbeat.lease_expires_ms, r.now() + r.lease_ms());
     // Agents: a restart of a released agent needs the generation its release named.
     r.state("worker", "released");
-    let generation = r.agent("worker").request_generation;
+    let generation = r.request_generation("worker");
     assert_eq!(
         r.event(Event {
             event: "agent_start".into(),
@@ -175,9 +189,10 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
             ..Default::default()
         })
         .unwrap();
+    // Busy under `AwaitingRequest`, which the session view words `registered`.
     assert_eq!(
-        (restarted.agent_id.as_deref(), r.agent("worker").state),
-        (Some("worker"), AgentState::Busy)
+        (restarted.agent_id.as_deref(), r.lifecycle("worker")),
+        (Some("worker"), Some(Lifecycle::Registered))
     );
     // The failed start did not advance the sequence: the next accepted one is one past the last accepted.
     assert_eq!(restarted.sequence, r.sequence);
@@ -196,7 +211,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     );
     assert!(["main", "worker"]
         .iter()
-        .all(|id| r.agent(id).state == AgentState::Released));
+        .all(|id| r.lifecycle(id) == Some(Lifecycle::Released)));
     assert_eq!(
         r.event(Event {
             event: "heartbeat".into(),
@@ -313,7 +328,7 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
 #[tokio::test]
 async fn a_request_of_a_later_generation_arms_nothing_on_the_previous_holders_session() {
     let r = rig(RigSpec::default()).await;
-    let before = r.status("main").reason;
+    let before = r.lifecycle("main");
     let mut observed = r.observed("r1", "main", BODY);
     if let phoebis_bus::Event::RequestObserved(request) = &mut observed {
         request.key_generation += 1;
@@ -324,14 +339,12 @@ async fn a_request_of_a_later_generation_arms_nothing_on_the_previous_holders_se
         "a key id created again finds the previous holder's session, and arms nothing on it"
     );
     assert_eq!(
-        (
-            r.engine.stats().retained_bytes,
-            r.agent("main").state,
-            r.status("main").reason
-        ),
-        (0, AgentState::Busy, before),
+        (r.engine.stats().retained_bytes, r.lifecycle("main")),
+        (0, before),
         "and leaves the agent it names exactly as it was"
     );
+    // Busy under `AwaitingRequest`, which the session view words `registered`.
+    assert_eq!(before, Some(Lifecycle::Registered));
 }
 
 #[tokio::test]
@@ -339,7 +352,7 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     let armed = r.engine.recipes();
-    let reason = r.status("main").reason;
+    let reason = r.view("main").cause;
     assert_eq!(
         (armed.len(), armed[0].state, armed[0].cause),
         (1, RecipeState::Retained, Reason::Scheduled)
@@ -353,7 +366,7 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
     );
     // A silent companion says nothing about the recipe: the lapse is counted, and the views keep reading the
     // reason the recipe's own last probe left.
-    assert_eq!(r.status("main").reason, reason);
+    assert_eq!(r.view("main").cause, reason);
     assert_eq!(r.engine.recipes(), armed);
     assert_eq!(
         r.event(Event {
