@@ -196,10 +196,12 @@ its tier has no capacity on the window (`{plan} 7-day capacity not measured`,
 card reads "No subscription accounts" and "A subscription account reports the window this card draws.". Where no listed
 account carries the window the card reads "No account with a 7-day window." (or "No account with a Fable week.") over
 the named accounts, and where they carry it with none sized "No listed account's tier is sized for the 7-day window."
-(or "for the Fable week."). Under a chosen week whose tier has no 7-day capacity the card reads the week's unpriced
-sentence (`Unpriced: the cost model holds no 7-day capacity for the {plan} week.`) in place of the tier sentence. Each
-account keeps one color across the Dashboard, the Quota view and the Analytics, in the order of its id, the eight colors
-cycling past eight accounts, and an account the registry does not list draws muted.
+(or "for the Fable week."). Where each listed account with a sized tier holds no share of the window, the card reads "No
+listed account with a sized tier reports a share of the 7-day window." (or "of the Fable week."). Under a chosen week
+whose tier has no 7-day capacity the card reads the week's unpriced sentence
+(`Unpriced: the cost model holds no 7-day capacity for the {plan} week.`) in place of the tier sentence. Each account
+keeps one color across the Dashboard, the Quota view and the Analytics, in the order of its id, the eight colors cycling
+past eight accounts, and an account the registry does not list draws muted.
 
 "Accounts" draws one small card per account, linking to its detail, with the status badge, the speed chip beside it on a
 slowed account (`0.5x`, as [Quota](#quota) describes it), the email, the window bars (`No window since the plan ended

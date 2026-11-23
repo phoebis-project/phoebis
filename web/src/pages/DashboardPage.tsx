@@ -265,10 +265,11 @@ function RemainingCard({ title, subtitle, windowId, accounts, costs, now, week, 
         <EmptyState title="No subscription accounts" body="A subscription account reports the window this card draws." />
       ) : figures.rows.length === 0 ? (
         // Where no listed account carries the window, a sentence about unsized tiers would say nothing true. Under a
-        // week whose tier holds no 7-day capacity the week is what lacks a size, so the card names the week.
+        // week whose tier holds no 7-day capacity the week is what lacks a size, so the card names the week. Where a
+        // sized account holds no share, the shares are what the ring lacks.
         <>
           <p className="muted remaining__none">
-            {figures.carried ? (unpriced !== null ? `${unpriced}.` : `No listed account's tier is sized for the ${RING_WINDOW[windowId]}.`) : `No account with a ${RING_WINDOW[windowId]}.`}
+            {figures.carried ? (unpriced !== null ? `${unpriced}.` : figures.unreported ? `No listed account with a sized tier reports a share of the ${RING_WINDOW[windowId]}.` : `No listed account's tier is sized for the ${RING_WINDOW[windowId]}.`) : `No account with a ${RING_WINDOW[windowId]}.`}
           </p>
           <LeftOut accounts={figures.leftOut} />
         </>

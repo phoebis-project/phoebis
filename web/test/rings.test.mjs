@@ -238,6 +238,13 @@ test('an account whose window has no share is left out of the ring and of its ca
   assert.deepEqual([figures.rows.map((r) => r.id), figures.capacity, figures.left, figures.leftOut.map((o) => [o.id, o.reason])], [['read'], 1, 0.5, [['gap', 'share not reported'], ['stale', 'share not reported']]]);
 });
 
+test('an empty ring tells missing shares from unsized tiers', () => {
+  const shareless = d.ringFigures([account('primary', 'default_claude_max_20x', [window('7d', null)])], '7d', COSTS, 'ultra', NOW);
+  const unsized = d.ringFigures([account('seat', 'default_claude_team', [window('7d', 0.2)])], '7d', COSTS, 'ultra', NOW);
+  assert.deepEqual([shareless.rows, shareless.carried, shareless.unreported], [[], true, true], 'a sized account with no share');
+  assert.deepEqual([unsized.rows, unsized.carried, unsized.unreported], [[], true, false], 'a tier with no 7-day capacity');
+});
+
 test('a disconnected account with the windows of its last reading and no profile is on no ring and in no left-out list', () => {
   const accounts = [account('primary', 'default_claude_max_20x', [window('5h', 0.5), window('7d', 0.4)], fable(0.3)), account('spare', null, [window('5h', 0.4), window('7d', 0.02)], { ...fable(0.1), status: 'unpaired' })];
   for (const id of ['7d', '7d_fable']) {

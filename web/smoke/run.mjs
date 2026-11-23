@@ -363,7 +363,8 @@ const speedChips = (root, whereOf) =>
  * window that carries none or whose reset has passed. A bar names its window by its label (`5h` or `5-hour`, `7d` or
  * `7-day`, `Fable`, else the window's key). A window with no share or no reset reads its state in the reset's place,
  * spelled out here rather than read from the console's own rule: `not reported` with no share, with or without a
- * reset, and with no reset `not open` at a utilization of 0, which draws no projection, and `not reported` at any other.
+ * reset, and with no reset `not open` at a utilization of 0, which draws no projection, and `not reported` at any
+ * other.
  */
 const barPhrases = (bars, account, at, compact) =>
   bars

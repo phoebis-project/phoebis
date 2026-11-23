@@ -19,9 +19,10 @@ export interface RingLeftOut { id: string; label: string; reason: string }
  * capacity over the chosen tier's, on the Fable ring its tier's 7-day capacity times the Fable week's capacity factor
  * over the chosen tier's Fable-week capacity. `rows` is empty when every account is left out, and `carried` says
  * whether a listed account carries the window, so an empty ring tells a fleet without the window from one whose tiers
- * are not sized.
+ * are not sized. `unreported` says whether a listed account with a sized tier holds no share of the window, so an empty
+ * ring tells missing shares from unsized tiers too.
  */
-export interface RingFigures { capacity: number; carried: boolean; left: number; leftOut: RingLeftOut[]; rows: RingRow[]; week: WeekPosition; window: RingWindow }
+export interface RingFigures { capacity: number; carried: boolean; left: number; leftOut: RingLeftOut[]; rows: RingRow[]; unreported: boolean; week: WeekPosition; window: RingWindow }
 
 const SPAN: Record<RingWindow, string> = { '7d': '7-day', '7d_fable': 'Fable week' };
 const ABSENT: Record<RingWindow, string> = { '7d': 'no 7-day window', '7d_fable': 'no Fable week' };
@@ -42,6 +43,7 @@ export function ringFigures(accounts: Account[], windowId: RingWindow, costs: Su
   const rows: RingRow[] = [];
   const leftOut: RingLeftOut[] = [];
   let carried = false;
+  let unreported = false;
   for (const a of accounts) {
     if (!isQuotaListed(a) || !a.routingEnabled) continue;
     const w = windowOf(a, windowId);
@@ -73,6 +75,7 @@ export function ringFigures(accounts: Account[], windowId: RingWindow, costs: Su
     const share = remainingOf(w);
     if (share === null) {
       leftOut.push({ id: a.id, label: a.label, reason: 'share not reported' });
+      unreported = true;
       continue;
     }
     // An expired window is full only where it held a share, so it keeps its weight and is not named.
@@ -83,7 +86,7 @@ export function ringFigures(accounts: Account[], windowId: RingWindow, costs: Su
   const left = rows.reduce((s, r) => s + r.weight * r.remaining, 0);
   // The ring's slices and the list beside it read one order, the most of its own window left first, so the legend reads the ring.
   rows.sort((a, b) => b.remaining - a.remaining || a.label.localeCompare(b.label));
-  return { capacity, carried, left, leftOut, rows, week, window: windowId };
+  return { capacity, carried, left, leftOut, rows, unreported, week, window: windowId };
 }
 
 /** The weeks a ring counts in, "Ultra weeks" or "Max Fable weeks", and none on the Fable ring under the Pro week, since
