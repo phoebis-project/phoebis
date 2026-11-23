@@ -18,7 +18,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
 import { DELETED_ACCOUNTS, KEY_REVOKED_AT, RETIRED, WORST_BUCKET, keyById, poolById, storyAccountOf, type PoolSeed } from './pools';
-import { ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, CLIMB_SESSION_ID, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, NO_PIN_DRAWS, OPENING_SESSION_IDS, OPUS_MORNING_SESSION_ID, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, RESERVATION_FABLE_SESSION_ID, RESERVATION_MARKED_SESSION_ID, REWRITE_HELD_ID, ROUTER_RESTARTED_AT, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, pinReadAt, pinStampOf, requestById, resentInPlace, type CooldownRow } from './requests';
+import { ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, CLIMB_SESSION_ID, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, NO_PIN_DRAWS, OPENING_SESSION_IDS, OPUS_MORNING_SESSION_ID, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, RESERVATION_FABLE_SESSION_ID, RESERVATION_MARKED_SESSION_ID, REWRITE_HELD_ID, ROUTER_RESTARTED_AT, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, pinReadAt, pinStampOf, requestById, resentInPlace, sweepAfter, type CooldownRow } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { drawnWindows, droppedThinkingOf, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
@@ -978,6 +978,20 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   if (reserved && !fires) throw new Error(`the story writes no round for ${source.accountId}'s Fable reservation at ${iso(at)}, outside any dwell`);
   // A round the story writes is one the readings fire, as the router runs none on a selection whose tests fire nothing.
   if (spec.round !== undefined && trigger === null && !reserved) throw new Error(`the story writes a round for ${source.accountId} at ${iso(at)} that no window's test and no Fable reservation fires`);
+  // The router stamps a test at the first selection that reads it over, a window past its own ceiling or the room
+  // under the reservation, and keeps the stamp while the account holds a pin of the pool at each sweep.
+  for (const [test, date] of Object.entries(OVER_CEILING_SINCE[source.accountId] ?? {})) {
+    const reading = source.windows[test];
+    const over = test === FABLE_RESERVATION ? shortRead : windows.includes(test) && (reading?.projection ?? 0) > ceilingOn(pool, test);
+    if (date === at && over) readOver.add(`${source.accountId}|${test}|${date}`);
+  }
+  if (spec.round !== undefined && trigger !== null && !trigger.slowed) {
+    const dated = firstReadingOf(source.accountId, trigger.window);
+    if (dated !== undefined) stampHolds(source.accountId, trigger.window, `${trigger.window} window`, dated, at, pool);
+  } else if (spec.round !== undefined && reserved) {
+    const dated = firstReadingOf(source.accountId, FABLE_RESERVATION);
+    if (dated !== undefined) stampHolds(source.accountId, FABLE_RESERVATION, 'Fable reservation', dated, at, pool);
+  }
   // The reservation's test names no rate, so its round writes no excess.
   const fired: { by: string; excess: number | null; window: string } | null =
     trigger !== null ? { by: trigger.slowed ? 'slow_down' : 'projection', excess: trigger.excess, window: trigger.window } : reserved ? { by: 'fable_reservation', excess: null, window: 'seven_day' } : null;
@@ -1380,6 +1394,8 @@ interface PinState {
   epoch: number;
   lastRefreshAt: number;
   lastUsedAt: number;
+  /** The pool of the key that wrote the row, whose sweeps a dated stamp reads. */
+  poolId: string;
   /** The source a shed move or a failover's landing left, which a renewal keeps and any other write clears. */
   shed: { at: number; from: string; reason: string } | null;
   /** The last use the request walks read the row by (`pinStampOf`), which decides a placement's word. */
@@ -1387,6 +1403,44 @@ interface PinState {
 }
 const pins = new Map<string, PinState>();
 let epochs = 0;
+
+/**
+ * The newest purge sweep that found an account with no pin of a pool, by pool and account, read on each account that
+ * `OVER_CEILING_SINCE` dates a stamp for. The router drops an account's stamps at such a sweep, so a round that rests
+ * on a stamp older than the sweep is one the router would not fire.
+ */
+const bareSweeps = new Map<string, number>();
+/** The next sweep `noteSweeps` reads, the first behind the earliest date the story keeps. */
+let nextSweep = sweepAfter(Math.min(...Object.values(OVER_CEILING_SINCE).flatMap((tests) => Object.values(tests))));
+
+/**
+ * Reads each sweep ahead of `until` against the pins the walk holds at it. The decisions run in time order, so the
+ * pins stand as the decisions before the sweep left them, and a sweep keeps a pin whose age is at most its pool's TTL.
+ */
+function noteSweeps(until: number): void {
+  const pools = [...poolById.values()].filter((p) => p.affinityTtlSeconds > 0);
+  for (; nextSweep < until; nextSweep += MINUTE) {
+    const at = nextSweep;
+    const held = new Set([...pins.values()].filter((p) => pinReadAt(p.stamp, (poolById.get(p.poolId)?.affinityTtlSeconds ?? 0) * 1_000, at) === 'live').map((p) => `${p.poolId}|${p.accountId}`));
+    for (const accountId of Object.keys(OVER_CEILING_SINCE)) {
+      for (const pool of pools) if (!held.has(`${pool.id}|${accountId}`)) bareSweeps.set(`${pool.id}|${accountId}`, at);
+    }
+  }
+}
+
+/** The dated stamps whose selection read their test over, each as account, test and date. */
+const readOver = new Set<string>();
+
+/**
+ * Fails the build where a story round rests on a dated stamp that the router would not hold: a date whose selection
+ * did not read the test over, or a purge sweep between the date and the round that found the account with no pin of
+ * the round's pool.
+ */
+function stampHolds(accountId: string, test: string, words: string, since: number, at: number, pool: PoolSeed): void {
+  if (!readOver.has(`${accountId}|${test}|${since}`)) throw new Error(`the story dates ${accountId}'s ${words} stamp at ${iso(since)}, where no selection on ${accountId} read that test over`);
+  const bare = bareSweeps.get(`${pool.id}|${accountId}`);
+  if (bare !== undefined && bare > since) throw new Error(`the story keeps ${accountId}'s ${words} stamp of ${iso(since)} to its round at ${iso(at)}, though the sweep at ${iso(bare)} finds ${accountId} with no pin of ${pool.id}`);
+}
 const recordShedOf = (shed: PinState['shed']): RecordPin['shed'] => (shed === null ? null : { at: iso(shed.at), from: shed.from, reason: shed.reason });
 /** The pin step's facts on the row it read, which follow its `found` fact. */
 const pinFacts = (state: PinState, idleMs: number, refreshAgeMs: number) => [fact('account_id', state.accountId, null, state.accountId), fact('epoch', state.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', refreshAgeMs, 'ms')];
@@ -1501,7 +1555,7 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
   // A drawn trace names where the pin lived. A pin the day's rows last left past its window was used by a request
   // the day does not hold, so the trace's own idle age stands.
   const recent = held !== undefined && held.accountId === on && spec.at - held.lastUsedAt <= pool.affinityTtlSeconds * 1_000;
-  const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, cycleMs: null, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs, shed: null, stamp: spec.at - spec.pin.idleMs };
+  const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, cycleMs: null, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs, poolId: pool.id, shed: null, stamp: spec.at - spec.pin.idleMs };
   pins.set(pinKey, found);
   const idleMs = spec.at - found.lastUsedAt;
   const released = spec.failover ? [spec.failover === 'fast_lane' ? 'fast_rate_limit' : 'cooldown'] : (spec.reasons ?? []);
@@ -1656,7 +1710,7 @@ function pinWriteOf(spec: Spec, pinning: boolean, pinKey: string, stamps: { hash
   // whose request the relay ended before any attempt stamps its selection.
   const own = r.attempts.length > 0 ? pinStampOf(r, action === 'renewed') : spec.at;
   const stamp = action === 'renewed' && prior ? Math.max(prior.stamp, own) : own;
-  pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, cycleMs: spec.pinPace?.cycleMs ?? null, endedAt: dispatched ? attemptEnd(dispatched) : spec.at, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at, shed, stamp });
+  pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, cycleMs: spec.pinPace?.cycleMs ?? null, endedAt: dispatched ? attemptEnd(dispatched) : spec.at, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at, poolId: r.poolId ?? '', shed, stamp });
   return action === 'renewed' ? { action, epoch, hashesStamped: stamps.hashes, lane: laneOf(r), refreshStamped: stamps.refresh } : { action, epoch, hashesStamped: r.kind === 'inference', lane: laneOf(r), refreshStamped: true };
 }
 
@@ -2636,6 +2690,7 @@ function buildDecisions() {
   const messageRows = new Map<string, number>();
   for (const spec of specs) messageRows.set(spec.request.id, Math.max(messageRows.get(spec.request.id) ?? 1, spec.cacheMap?.messages ?? 1));
   for (const spec of specs) {
+    noteSweeps(spec.at);
     // The router reads its live counters at both of a probe's selections, a second apart. It wrote the leg's record
     // ahead of the charge of the probe's own slot, and the leg's 429 dropped that slot again, so a pinned answer
     // carries the counts its leg's decision drew whole.

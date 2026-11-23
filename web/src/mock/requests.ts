@@ -1983,7 +1983,7 @@ const byArrival = () => [...REQUESTS].sort((a, b) => Date.parse(a.at) - Date.par
 export const ROUTER_RESTARTED_AT = clock(6, 12, 40);
 /** The first purge sweep strictly after `at`: the router sweeps once a minute from its start, and a sweep keeps a pin
  *  whose age equals its TTL. */
-const sweepAfter = (at: number): number => ROUTER_RESTARTED_AT + (Math.floor((at - ROUTER_RESTARTED_AT) / MINUTE) + 1) * MINUTE;
+export const sweepAfter = (at: number): number => ROUTER_RESTARTED_AT + (Math.floor((at - ROUTER_RESTARTED_AT) / MINUTE) + 1) * MINUTE;
 /** A session's pin as a request's first selection reads it: `live` inside its pool's affinity window,
  *  `expired_idle` past the window and ahead of the sweep that purges the row, `none` behind that sweep, and `none` on
  *  a pool whose TTL is zero, which pins no session. */
