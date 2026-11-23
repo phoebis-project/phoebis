@@ -17,8 +17,8 @@ use phoebis_ledger::{funding_of, Band, Ledger, Metrics, PlanTables, Pricing, Spe
 use phoebis_oauth::Clock;
 use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
 use phoebis_routing::{
-    budget_deadline, listing, seconds_ms, MemberSpend, PinUsage, RegistrySnapshot, RouterHandle,
-    DAY_MS, SEVEN_DAY,
+    budget_deadline, listing, seconds_ms, Holder, MemberSpend, PinUsage, RegistrySnapshot,
+    RouterHandle, DAY_MS, SEVEN_DAY,
 };
 use phoebis_store::{AccountKind, AccountState, CooldownScope, OveragePolicy, PoolRow, Store};
 #[cfg(any(test, feature = "debug-hooks"))]
@@ -249,6 +249,7 @@ reasons! {
     BusGap => "bus_gap",
     Compacted => "compacted",
     Cooled => "cooled",
+    Credits => "credits",
     Evicted => "evicted",
     Expired => "expired",
     ExpiredAtRestart => "expired_at_restart",
@@ -277,6 +278,7 @@ reasons! {
     ParkedLimit => "parked_limit",
     PartialCacheCoverage => "partial_cache_coverage",
     Paused => "paused",
+    PinMoved => "pin_moved",
     PoolDisabled => "pool_disabled",
     ProbeAuthenticationError => "probe_authentication_error",
     ProbePoolExhausted => "probe_pool_exhausted",
@@ -298,6 +300,7 @@ reasons! {
     SessionExpired => "session_expired",
     SessionLimit => "session_limit",
     SlowProbe => "slow_probe",
+    Spent => "spent",
     StorageLimit => "storage_limit",
     StructuredOutput => "structured_output",
     UnexpectedOutput => "unexpected_output",
@@ -706,6 +709,9 @@ pub(crate) struct Agent {
     pub cold: u32,
     pub failures: u32,
     pub account: Option<String>,
+    /// The incarnation of `account` when the armed recipe was last answered on it. `None` on a record saved before
+    /// agents carried one, which holds under `pin_moved` until the agent's next request arms the recipe.
+    pub account_incarnation: Option<u64>,
     pub pool_id: String,
     /// The canonical model of the request the recipe came from, as the relay resolved it: the price lookups,
     /// the rollup keys, the cooldown scope, and the views read this, never the caller's spelling in the recipe.
@@ -794,6 +800,7 @@ impl Agent {
             cold: 0,
             failures: 0,
             account: None,
+            account_incarnation: None,
             pool_id: String::new(),
             canonical_model: String::new(),
             entrypoint: None,
@@ -1250,6 +1257,8 @@ pub(crate) struct AsideRecipe {
     pub canonical_model: String,
     pub entrypoint: Option<String>,
     pub account: Option<String>,
+    /// The holder's incarnation beside `account`, so a recipe put back stands on the holder it was armed on.
+    pub account_incarnation: Option<u64>,
     pub pool_id: String,
     pub key_generation: i64,
 }
@@ -1842,6 +1851,7 @@ impl Inner {
                     canonical_model: agent.canonical_model.clone(),
                     entrypoint: agent.entrypoint.clone(),
                     account: agent.account.clone(),
+                    account_incarnation: agent.account_incarnation,
                     pool_id: agent.pool_id.clone(),
                     key_generation: agent.key_generation,
                 })
@@ -1888,6 +1898,7 @@ impl Inner {
         agent.canonical_model = aside.canonical_model;
         agent.entrypoint = aside.entrypoint;
         agent.account = aside.account;
+        agent.account_incarnation = aside.account_incarnation;
         agent.pool_id = aside.pool_id;
         agent.key_generation = aside.key_generation;
         // The next save seals the restored body in place of the failed request's.
@@ -3229,6 +3240,9 @@ impl Engine {
             agent.ttl_ms = 0;
         }
         agent.account = Some(selected.account_id);
+        // The event's own incarnation, never the snapshot's above: an id paired again between the selection and this
+        // delivery would label the recipe with the replacement.
+        agent.account_incarnation = Some(selected.incarnation);
         // A key deleted since the arrival leaves the agent's pool as it stood, and the next tick's
         // `drop_sessions_of_dead_keys` ends the whole session under `session_ended`.
         if let Some(pool_id) = pool_id {
@@ -3774,9 +3788,9 @@ impl Engine {
     /// the tests directly.
     pub async fn step(self: &Arc<Self>) {
         let now = self.now();
-        // The five asks behind `router_view` (canonicals, pins, cooldowns, overages, member spends) are a round
-        // trip apiece, and a tick with no retained recipe pays none of them. `drop_sessions_of_dead_keys` reads the
-        // snapshot alone, which `RouterHandle::snapshot` answers without a command.
+        // The six asks behind `router_view` (canonicals, pins, cooldowns, overages, member spends, probe holds) are a
+        // round trip apiece, and a tick with no retained recipe pays none of them. `drop_sessions_of_dead_keys` reads
+        // the snapshot alone, which `RouterHandle::snapshot` answers without a command.
         let snapshot = self.parts.router.snapshot();
         let retained_models = {
             let mut inner = self.lock();
@@ -3806,7 +3820,7 @@ impl Engine {
             }
             let mut lapsed: Vec<Skipped> = Vec::new();
             inner.follow_resolutions(&view.canonical);
-            let mut due: Vec<(i64, SessionKey, String, String)> = Vec::new();
+            let mut due: Vec<(i64, SessionKey, String, Holder)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
                 .sessions
                 .iter()
@@ -3934,16 +3948,15 @@ impl Engine {
                 if inner.lapse(&key, &agent_id, now, &mut lapsed) {
                     continue;
                 }
-                let (held, moved) = {
-                    let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
-                    let before = agent.account.clone();
-                    let held = gate(&view, agent, &key.1, pool, policy, now);
-                    (held, before != agent.account)
-                };
-                if moved {
-                    inner.touch_agent(&key, &agent_id);
-                }
-                let account = match held {
+                let held = gate(
+                    &view,
+                    &inner.sessions[&key].agents[&agent_id],
+                    &key.1,
+                    pool,
+                    policy,
+                    now,
+                );
+                let holder = match held {
                     Err(Gate::Drop(reason, label)) => {
                         inner.discard(&key, &agent_id, reason, Some(label));
                         continue;
@@ -3952,7 +3965,7 @@ impl Engine {
                         inner.hold(&key, &agent_id, reason, now);
                         continue;
                     }
-                    Ok(account) => account,
+                    Ok(holder) => holder,
                 };
                 if !ready || inner.sessions[&key].agents[&agent_id].in_flight {
                     continue;
@@ -3961,12 +3974,12 @@ impl Engine {
                     continue;
                 };
                 if at <= now {
-                    due.push((at, key, agent_id, account));
+                    due.push((at, key, agent_id, holder));
                 }
             }
             due.sort_by(|a, b| (a.0, &a.1, &a.2).cmp(&(b.0, &b.1, &b.2)));
             let mut jobs = Vec::new();
-            for (_, key, agent_id, account) in due {
+            for (_, key, agent_id, holder) in due {
                 if inner.running >= MAX_WORKERS {
                     break;
                 }
@@ -3981,7 +3994,7 @@ impl Engine {
                     generation: agent.generation,
                     attempt: observation.attempt,
                     started: now,
-                    account,
+                    holder,
                     pool_id: agent.pool_id.clone(),
                     canonical_model: agent.canonical_model.clone(),
                     entrypoint: agent.entrypoint.clone(),
@@ -4035,13 +4048,17 @@ pub(crate) struct RouterView {
     pub canonical: HashMap<String, String>,
     /// `(account, scope)` of every live cooldown row to its window, so the gate can tell a plan-window row apart.
     pub cooled: BTreeMap<(String, CooldownScope), String>,
+    /// The accounts whose usage credits block the fast lane: the gate holds a fast probe pinned there.
+    pub credits: BTreeSet<String>,
     pub overage: BTreeSet<String>,
-    /// `(key, session, agent, canonical model)` to the pinned account: the account a probe would actually run
-    /// on, so a sibling's pin never overwrites an agent's own.
-    pub pins: BTreeMap<(String, String, String, String), String>,
+    /// `(key, session, agent, canonical model)` to the pinned account's id and the incarnation the pin was made on:
+    /// the holder a probe would actually run on, so a sibling's pin never overwrites an agent's own.
+    pub pins: BTreeMap<(String, String, String, String), (String, u64)>,
     /// Each pool's keepalive policy, parsed once per tick rather than once per recipe.
     pub policies: HashMap<String, KeepalivePolicy>,
     pub snapshot: Arc<RegistrySnapshot>,
+    /// The usage-based seats at their spend cap: the gate holds a probe pinned there.
+    pub spent: BTreeSet<String>,
 }
 
 /// Every pool's keepalive policy in `snapshot`, by pool id.
@@ -4065,7 +4082,7 @@ pub(crate) enum Gate {
 }
 
 impl Engine {
-    /// Five asks of the router task per tick, whatever the number of recipes: the scheduler must not queue one
+    /// Six asks of the router task per tick, whatever the number of recipes: the scheduler must not queue one
     /// command per agent in front of selection.
     pub(crate) async fn router_view(&self, now: i64, retained_models: Vec<String>) -> RouterView {
         #[cfg(any(test, feature = "debug-hooks"))]
@@ -4080,7 +4097,12 @@ impl Engine {
             .await
             .unwrap_or_default()
             .into_iter()
-            .map(|p| ((p.key_id, p.session_id, p.agent_id, p.model), p.account_id))
+            .map(|p| {
+                (
+                    (p.key_id, p.session_id, p.agent_id, p.model),
+                    (p.account_id, p.incarnation),
+                )
+            })
             .collect();
         let cooled = self
             .parts
@@ -4122,14 +4144,17 @@ impl Engine {
             })
             .map(|(member, _)| member)
             .collect();
+        let holds = self.parts.router.probe_holds().await.unwrap_or_default();
         RouterView {
             budgets,
             canonical,
             cooled,
+            credits: holds.credits.into_iter().collect(),
             overage,
             pins,
             policies: pool_policies(&snapshot),
             snapshot,
+            spent: holds.spent.into_iter().collect(),
         }
     }
 
@@ -4246,19 +4271,20 @@ pub(crate) fn ceilings_for(
 }
 
 /// The spec's "Scheduling against router state" row, in its order, after `refresh_policy` answered `pool`. `Err`
-/// names why the due probe waits, or why the recipe goes. `Ok` lets the probe run on the account it names, the one
-/// the snapshot holds. The pinned account's subscription term holds the probe under `ineligible_credential` once it
-/// ended, and while the probe's due time plus its interval (the TTL less the lead) passes the end, since the cache
-/// that probe writes dies at the end. The end is `term::end_of`'s, the one the router's wind-down reads, so the last
-/// interval before a trial end still ahead holds too and probing resumes once the trial end passes.
+/// names why the due probe waits, or why the recipe goes. `Ok` lets the probe run on the holder it names, the recipe's
+/// holder: the account id with the incarnation the recipe was last answered on. The pinned account's subscription term
+/// holds the probe under `ineligible_credential` once it ended, and while the probe's due time plus its interval (the
+/// TTL less the lead) passes the end, since the cache that probe writes dies at the end. The end is `term::end_of`'s,
+/// the one the router's wind-down reads, so the last interval before a trial end still ahead holds too and probing
+/// resumes once the trial end passes.
 pub(crate) fn gate(
     view: &RouterView,
-    agent: &mut Agent,
+    agent: &Agent,
     session_id: &str,
     pool: &PoolRow,
     policy: &KeepalivePolicy,
     now: i64,
-) -> Result<String, Gate> {
+) -> Result<Holder, Gate> {
     let key_id = agent.key_id.clone();
     // A probe keeps the session on the account it warmed only while the pin outlives the probe's due time:
     // the recipe's own TTL less the lead, so a five-minute recipe needs about four minutes of pin and a
@@ -4270,16 +4296,24 @@ pub(crate) fn gate(
     if !policy.enabled {
         return Err(Gate::Hold(Reason::KeepaliveOff));
     }
-    // The pin is what the probe will follow, so the pin's account is the one to gate: the router may have moved
-    // the agent's own pin between this recipe's last observation and the probe.
+    // A recipe that names no incarnation of its holder cannot tell a re-paired account from the one that answered it,
+    // so it waits for the agent's next request, which arms it.
+    let Some(incarnation) = agent.account_incarnation else {
+        return Err(Gate::Hold(Reason::PinMoved));
+    };
     let pinned = view.pins.get(&(
         key_id.clone(),
         session_id.to_string(),
         agent.id.clone(),
         agent.canonical_model.clone(),
     ));
-    if let Some(pinned) = pinned {
-        agent.account = Some(pinned.clone());
+    // The probe replays the prompt on the holder that last answered the recipe. A pin that names another holder has
+    // moved since, and a probe there would write the whole prompt cold, so the recipe waits for the next request that
+    // arms it on the pin's account.
+    if let Some((pinned, pinned_incarnation)) = pinned {
+        if agent.account.as_deref() != Some(pinned.as_str()) || incarnation != *pinned_incarnation {
+            return Err(Gate::Hold(Reason::PinMoved));
+        }
     }
     let Some(account) = agent
         .account
@@ -4327,14 +4361,25 @@ pub(crate) fn gate(
         return Err(Gate::Hold(Reason::Overage));
     }
     // Read live on every poll like the two holds above: the period's end or a raised budget clears it on the
-    // next tick, and a real request that moves the pin clears it through the pin.
+    // next tick, and a real request that moves the pin clears it, since it arms the recipe on the pin's account.
     if view
         .budgets
         .contains(&(pool.id.clone(), account.id.clone()))
     {
         return Err(Gate::Hold(Reason::Budget));
     }
-    Ok(account.id.clone())
+    // The selector's own two tests on the pin, read live like the holds above, so such a probe writes no rejected
+    // request row at each rung of the ladder. The spend funds every lane, and the credits the fast one alone.
+    if view.spent.contains(&account.id) {
+        return Err(Gate::Hold(Reason::Spent));
+    }
+    if fast && view.credits.contains(&account.id) {
+        return Err(Gate::Hold(Reason::Credits));
+    }
+    Ok(Holder {
+        account_id: account.id.clone(),
+        incarnation,
+    })
 }
 
 #[cfg(test)]
@@ -4591,6 +4636,7 @@ mod tests {
             budgets: BTreeSet::new(),
             canonical: HashMap::new(),
             cooled: BTreeMap::new(),
+            credits: BTreeSet::new(),
             overage: if o_in_overage {
                 BTreeSet::from(["o".to_string()])
             } else {
@@ -4599,6 +4645,7 @@ mod tests {
             pins: BTreeMap::new(),
             policies: pool_policies(&snapshot),
             snapshot,
+            spent: BTreeSet::new(),
         }
     }
 
@@ -4627,14 +4674,15 @@ mod tests {
         }
     }
 
-    /// The gate's answer for `main` pinned on `account`, holding a recipe of that speed.
+    /// The gate's answer for `main` holding a recipe of that speed answered on `account`, with no pin in the view.
     fn gated_at(view: &RouterView, account: &str, fast: bool) -> Option<Gate> {
         let mut agent = Agent::new("main", "k", 1, 0, KeepaliveTiming::default());
         agent.account = Some(account.into());
+        agent.account_incarnation = Some(1);
         agent.canonical_model = "claude-opus-5-5".into();
         agent.current = Some(observation(fast));
         refresh_policy(view, &mut agent)
-            .and_then(|(pool, policy, _)| gate(view, &mut agent, "s", pool, policy, 0))
+            .and_then(|(pool, policy, _)| gate(view, &agent, "s", pool, policy, 0))
             .err()
     }
 
@@ -4748,6 +4796,140 @@ revisions:
                 "{scope} at {window}"
             );
         }
+    }
+
+    /// `main` of session `s` holding a standard recipe last answered on `account` under `incarnation`.
+    fn holding(account: &str, incarnation: Option<u64>) -> Agent {
+        let mut agent = Agent::new("main", "k", 1, 0, KeepaliveTiming::default());
+        agent.account = Some(account.into());
+        agent.account_incarnation = incarnation;
+        agent.canonical_model = "claude-opus-5-5".into();
+        agent.current = Some(observation(false));
+        agent
+    }
+
+    /// `pool_view` with `main`'s pin on `account` under `incarnation`.
+    fn pinned_on(account: &str, incarnation: u64) -> RouterView {
+        RouterView {
+            pins: BTreeMap::from([(
+                (
+                    "k".to_string(),
+                    "s".to_string(),
+                    "main".to_string(),
+                    "claude-opus-5-5".to_string(),
+                ),
+                (account.to_string(), incarnation),
+            )]),
+            ..pool_view(false)
+        }
+    }
+
+    /// The gate's whole answer for `agent` under `view`, after the policy's refresh.
+    fn gate_of(view: &RouterView, agent: &mut Agent) -> Result<Holder, Gate> {
+        refresh_policy(view, agent)
+            .and_then(|(pool, policy, _)| gate(view, agent, "s", pool, policy, 0))
+    }
+
+    fn holder(account: &str, incarnation: u64) -> Holder {
+        Holder {
+            account_id: account.into(),
+            incarnation,
+        }
+    }
+
+    #[test]
+    fn a_due_probe_holds_while_its_pin_stands_on_another_holder() {
+        assert_eq!(
+            gate_of(&pinned_on("o", 1), &mut holding("a", Some(1))),
+            Err(Gate::Hold(Reason::PinMoved)),
+            "a pin on another account holds the recipe rather than writing its prompt cold there"
+        );
+        assert_eq!(
+            gate_of(&pinned_on("a", 1), &mut holding("a", Some(1))),
+            Ok(holder("a", 1)),
+            "a pin on the recipe's own holder lets the probe run there"
+        );
+        assert_eq!(
+            gate_of(&pinned_on("a", 2), &mut holding("a", Some(1))),
+            Err(Gate::Hold(Reason::PinMoved)),
+            "a pin on the same id paired again is another holder"
+        );
+    }
+
+    #[test]
+    fn a_recipe_with_no_holder_incarnation_holds_with_no_pin_in_the_view() {
+        assert_eq!(
+            gate_of(&pool_view(false), &mut holding("a", None)),
+            Err(Gate::Hold(Reason::PinMoved))
+        );
+    }
+
+    #[test]
+    fn a_recipe_put_back_after_a_failed_request_gates_on_its_own_holder() {
+        let key: SessionKey = ("k".into(), "s".into());
+        let mut inner = Inner::empty(KeepaliveTiming::default(), KeepaliveLimits::default(), 0);
+        let mut armed = holding("a", Some(1));
+        armed.expires = Some(300_000);
+        inner.sessions.insert(
+            key.clone(),
+            Session {
+                key_generation: 0,
+                instance: "i".into(),
+                sequence: 0,
+                lease: i64::MAX,
+                attended: true,
+                ended: false,
+                owner_id: None,
+                last_report_at: 0,
+                last_real_at: Some(0),
+                slotted: true,
+                restored_until: None,
+                owner_mismatches: 0,
+                facts: SessionFacts::default(),
+                agents: BTreeMap::from([("main".to_string(), armed)]),
+            },
+        );
+        inner.set_aside(&key, "main", 1_000);
+        // The arrival's selection moved the agent onto the holder of the request that then failed.
+        let agent = agent_mut(&mut inner.sessions, &key, "main").expect(AGENT_HELD);
+        agent.account = Some("o".into());
+        agent.account_incarnation = Some(3);
+        let aside = inner
+            .take_aside(&key, "main")
+            .expect("the arrival set the recipe aside");
+        assert!(inner.rearm_aside(&key, "main", aside, 2_000));
+        let agent = agent_mut(&mut inner.sessions, &key, "main").expect(AGENT_HELD);
+        assert_eq!(gate_of(&pinned_on("a", 1), agent), Ok(holder("a", 1)));
+    }
+
+    #[test]
+    fn a_probe_pinned_on_a_seat_at_its_spend_cap_holds_as_spent() {
+        let spent = RouterView {
+            spent: BTreeSet::from(["a".to_string()]),
+            ..pool_view(false)
+        };
+        assert_eq!(
+            (
+                gated_at(&spent, "a", false),
+                gated_at(&pool_view(false), "a", false)
+            ),
+            (Some(Gate::Hold(Reason::Spent)), None)
+        );
+    }
+
+    #[test]
+    fn a_fast_recipe_holds_on_blocked_credits_and_a_standard_one_passes() {
+        let blocked = RouterView {
+            credits: BTreeSet::from(["a".to_string()]),
+            ..pool_view(false)
+        };
+        assert_eq!(
+            (
+                gated_at(&blocked, "a", true),
+                gated_at(&blocked, "a", false)
+            ),
+            (Some(Gate::Hold(Reason::Credits)), None)
+        );
     }
 
     #[test]

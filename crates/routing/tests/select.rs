@@ -7,14 +7,14 @@ use phoebis_routing::{
     BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts, ClientClass,
     CohortHold, CreditAccount, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion,
     FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldReason, HoldWait,
-    LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, Obstacle, OverageEvidence,
-    PinKeyFacts, PinRef, PinShed, PinUsage, PinnedObstacle, Placement, Portability, RateTable,
-    Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation,
-    RoutingState, SelectRequest, SelectResult, SharePricer, SharedWindows, SlowDownEdge,
-    SlowDownRead, SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause,
-    WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON,
-    FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
-    SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS, WEEK_MS,
+    Holder, LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, Obstacle,
+    OverageEvidence, PinKeyFacts, PinRef, PinShed, PinUsage, PinnedObstacle, Placement,
+    Portability, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot,
+    RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult, SharePricer,
+    SharedWindows, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite, UtilizationSample,
+    WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY,
+    SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -432,6 +432,7 @@ fn select_request(
         fallback_ms: 60_000,
         revision: s.revision,
         probe: false,
+        holder: None,
         count: false,
         request_class: None,
         context_compacted: false,
@@ -6064,6 +6065,79 @@ fn a_probe_whose_pin_idled_past_the_ttl_answers_no_pin_and_leaves_the_row_to_the
         idle,
         "the session's next real request places a fresh pin"
     );
+}
+
+/// A pin on `b`, the first member of `s`'s pool, written by the session's first request at 1_000, then a probe of that
+/// session at 2_000 naming `holder` as its recipe's: the probe's answer and its writes.
+fn probe_naming(s: &RegistrySnapshot, holder: (&str, u64)) -> (SelectResult, Vec<StateWrite>) {
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                s,
+                &request(s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "b",
+        "b serves the session's first request"
+    );
+    let probe = SelectRequest {
+        probe: true,
+        holder: Some(Holder {
+            account_id: holder.0.into(),
+            incarnation: holder.1,
+        }),
+        ..request(s, Some("s1"), "claude-sonnet-5", true, &[], 2_000)
+    };
+    select(&mut st, s, &probe, &mut rng())
+}
+
+fn b_before_a() -> Pool {
+    Pool {
+        members: vec![("b", 0), ("a", 1)],
+        ..Pool::default()
+    }
+}
+
+#[test]
+fn a_probe_that_names_another_holder_than_its_pins_answers_pin_moved() {
+    let s = snapshot(b_before_a());
+    let (result, writes) = probe_naming(&s, ("a", 1));
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Pinned {
+            obstacle: PinnedObstacle::PinMoved
+        }),
+        "a probe whose recipe was answered on a never reaches the pin on b"
+    );
+    assert!(writes.is_empty(), "the probe writes nothing: {writes:?}");
+    let (result, _) = probe_naming(&s, ("b", 1));
+    assert_eq!(
+        picked(&result),
+        "b",
+        "a probe that names its pin's holder renews it"
+    );
+}
+
+#[test]
+fn a_probe_that_names_an_earlier_incarnation_of_its_pins_account_answers_pin_moved() {
+    let mut load = load_of(b_before_a(), &[]);
+    for account in load.accounts.iter_mut().filter(|a| a.id == "b") {
+        account.incarnation = 2;
+    }
+    let s = RegistrySnapshot::from_load(load, [0; 32], 0, 1);
+    let (result, writes) = probe_naming(&s, ("b", 1));
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Pinned {
+            obstacle: PinnedObstacle::PinMoved
+        }),
+        "the pin stands on b paired again since the recipe's answer"
+    );
+    assert!(writes.is_empty(), "the probe writes nothing: {writes:?}");
 }
 
 #[test]

@@ -466,7 +466,8 @@ async fn a_probe_is_not_evaluated() {
     let (h, mut sub) = harness(&up, PoolSpec::default()).await;
     let row = summary(GuardrailMode::Enforce);
     guarded(&h, &row, &["main"], &[]).await;
-    pin_session(&h, "s1", "main", "claude-sonnet-4-5").await;
+    let pinned = pin_session(&h, "s1", "main", "claude-sonnet-4-5").await;
+    let incarnation = h.store.account(&pinned).unwrap().unwrap().incarnation;
     // The engine holds the key's id and replays the request without a credential or a recorded head.
     let mut req = fork();
     req.headers_mut().remove("authorization");
@@ -477,6 +478,10 @@ async fn a_probe_is_not_evaluated() {
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+                holder: phoebis_routing::Holder {
+                    account_id: pinned,
+                    incarnation,
+                },
             },
             req,
         )

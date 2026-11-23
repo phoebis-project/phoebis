@@ -846,6 +846,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
+            holder: None,
             count: false,
             request_class: None,
             context_compacted: false,
@@ -969,6 +970,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
+            holder: None,
             count: false,
             request_class: None,
             context_compacted: false,
@@ -1808,6 +1810,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 fallback_ms: 60_000,
                 revision: snapshot.revision,
                 probe: false,
+                holder: None,
                 count: false,
                 request_class: None,
                 context_compacted: false,
@@ -2108,6 +2111,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 request_id: request_id.clone(),
                 attempt: 1,
                 account_id: account.into(),
+                incarnation: parts.store.account(account).unwrap().unwrap().incarnation,
                 account_kind: if account == "direct" {
                     "api_key"
                 } else {
@@ -2266,6 +2270,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             request_id: "k1".into(),
             attempt: 1,
             account_id: "direct".into(),
+            incarnation: parts.store.account("direct").unwrap().unwrap().incarnation,
             account_kind: "api_key".into(),
             usage_based: false,
             pin_epoch: Some(1),
@@ -3399,6 +3404,7 @@ fn asked(
         fallback_ms: 60_000,
         revision: snapshot.revision,
         probe: false,
+        holder: None,
         count: false,
         request_class: None,
         context_compacted: false,

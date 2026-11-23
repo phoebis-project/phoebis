@@ -22,24 +22,29 @@ set to `0`, `stream` set to `false` and the client's `safeguards` member removed
 mode check on the turn's tool use, which a replayed turn has no use for, whatever the pool's `auto_mode_server` says).
 The request's `anthropic-beta` line travels as kept, and a pool or key set off drops the `dangerous-tool-use-2026-09-03`
 beta from a probe as from any request (see [The betas](relay.md#the-betas)). The probe follows the session's pin and
-renews it, and it never moves the pin. Where the pinned member can serve, the probe goes to it, and a rule that would
-move the pin, a standing shed mark among them, waits for the session's next real request. Where the pinned member cannot
-serve, the probe is answered rather than placed on a sibling, since a sibling would move the session's pin onto a member
-no request asked for. The agent then reads `budget` at a spend budget, `paused` on an account the operator disabled, on
-a deleted account and on one in a state other than ready that the probe did not try, `ineligible_credential` past the
-subscription's end, `retryable_probe_error` on a member this probe already tried or on one with a budget while the
-ledger is degraded (`budget_unknown`), and `probe_quota_exhausted` under a cooldown, a credits block, overage under
-`never` or a seat at its spend cap, with the wait the answer names. With no eligible sibling the probe gets the pool's
-own answer ([When nothing can serve](routing.md#when-nothing-can-serve)), and the wait that answer names holds up to the
-ladder's five-minute cap. A probe whose session holds no pin, because the pin idled out or its account left the pool,
-places nothing either, and the recipe pauses under `no_pin` until the next real request lands. A probe's own 429 cools
-the account and leaves the pin, which the session's next real request then moves. A probe whose pinned account was
-deleted is held as `paused` before it is sent, as one on a disabled account is. A probe whose pinned account's
-subscription ended is held before it is sent too, and so is one due nearer to the end than its own interval, the entry's
-TTL less the lead. The agent reads `ineligible_credential` under that hold as well, and the hold is a live one: it ends
-when the term clears, and the recipe leaves as `expired` once its entry has expired. That last interval falls inside the
-pool's wind-down, or reaches before it where the interval is longer than `wind_down_minutes`, so no probe writes a cache
-the end discards and the pin turns cold at the end ([Subscription end](routing.md#subscription-end)).
+renews it, and it never moves the pin. A probe goes out only while the pin stands on the account that last answered its
+recipe. Once a real request has moved the pin, the recipe reads `pin_moved` under `held` and waits for the session's
+next request that writes the cache on the pin's account. Where the pinned member can serve, the probe goes to it, and a
+rule that would move the pin, a standing shed mark among them, waits for the session's next real request. Where the
+pinned member cannot serve, the probe is answered rather than placed on a sibling, since a sibling would move the
+session's pin onto a member no request asked for. The agent then reads `budget` at a spend budget, `paused` on an
+account the operator disabled, on a deleted account and on one in a state other than ready that the probe did not try,
+`ineligible_credential` past the subscription's end, `retryable_probe_error` on a member this probe already tried or on
+one with a budget while the ledger is degraded (`budget_unknown`), and `probe_quota_exhausted` under a cooldown, a
+credits block, overage under `never` or a seat at its spend cap that the hold below did not read in time, with the wait
+the answer names. With no eligible sibling the probe gets the pool's own answer ([When nothing can
+serve](routing.md#when-nothing-can-serve)), and the wait that answer names holds up to the ladder's five-minute cap. A
+probe whose session holds no pin, because the pin idled out or its account left the pool, places nothing either, and the
+recipe pauses under `no_pin` until the next real request lands. A probe's own 429 cools the account and leaves the pin,
+which the session's next real request then moves. A probe whose pinned account was deleted is held as `paused` before it
+is sent, as one on a disabled account is. A probe whose pinned account's subscription ended is held before it is sent
+too, and so is one due nearer to the end than its own interval, the entry's TTL less the lead. The agent reads
+`ineligible_credential` under that hold as well, and the hold is a live one: it ends when the term clears, and the
+recipe leaves as `expired` once its entry has expired. That last interval falls inside the pool's wind-down, or reaches
+before it where the interval is longer than `wind_down_minutes`, so no probe writes a cache the end discards and the pin
+turns cold at the end ([Subscription end](routing.md#subscription-end)). A probe pinned on a usage-based seat at its
+spend cap is held before it is sent as `spent`, and a fast recipe whose pinned member's usage credits are blocked as
+`credits`, each read at every tick, so neither writes a rejected request row while the state stands.
 
 A usage-based Enterprise seat's probes hold under its member budget as an API-key member's do, and never for overage:
 the router reads no overage on such a seat ([Overage](routing.md#overage)).
@@ -323,9 +328,9 @@ Each state reads these causes:
 
 - `retained`: `awaiting_cache_evidence`, `awaiting_selection`, `lease_expired`, `probing`, `request_canceled`,
   `request_failed`, `scheduled`.
-- `held`: `affinity_too_short`, `budget`, `cooled`, `horizon`, `ineligible_credential`, `keepalive_off`,
-  `ledger_behind`, `no_probe_cache_evidence`, `overage`, `paused`, `pool_disabled`, `probe_pool_exhausted`,
-  `probe_quota_exhausted`, `probe_transport_error`, `reauth`, `retryable_probe_error`, `slow_probe`.
+- `held`: `affinity_too_short`, `budget`, `cooled`, `credits`, `horizon`, `ineligible_credential`, `keepalive_off`,
+  `ledger_behind`, `no_probe_cache_evidence`, `overage`, `paused`, `pin_moved`, `pool_disabled`, `probe_pool_exhausted`,
+  `probe_quota_exhausted`, `probe_transport_error`, `reauth`, `retryable_probe_error`, `slow_probe`, `spent`.
 - `paused`: `invalid_probe_usage`, `missing_account`, `no_pin`, `partial_cache_coverage`, `probe_authentication_error`,
   `probe_retry_limit`, `repeated_cold_probe`, `request_rejected`, `unexpected_output`, `unsupported_probe`.
 - `not_retained`: `agent_limit`, `awaiting_request`, `fixed_thinking`, `forced_tool`, `headers_too_large`,
@@ -394,15 +399,16 @@ that `keepalive.enabled` asks of the pool when it is saved stays the one refusal
 An entry the engine knows has expired is never probed: its recipe ends under `expired`, its probes are written off, each
 at once or, where a probe sent while a request was open keeps its chain alive, at the chain's end, and the engine logs
 one line naming the key, the agent, the expiry and how late the tick was. A recipe held under any other reason, a gate's
-hold among them (`affinity_too_short`, `budget`, `cooled`, `ineligible_credential`, `keepalive_off`, `overage`, `paused`
-or `reauth`), leaves as `expired` once its entry has expired, and the next real request starts a new one. A recipe held
-under `horizon` or on a disabled pool leaves the same way, and one reopened or enabled again while its entry is warm
-probes on. While the request a recipe follows is still open, the lapse waits for its completion. At the retained-bytes
-cap the engine evicts before it refuses: unattended sessions' agents first, oldest activity first, then attended
-sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe reads `ended`, as one
-stopped under `idle_limit` does. An evicted one shows on the wasted counter at once, while the probes of a lapsed one
-reach it at once where their chains have ended and otherwise as their chains' last entries lapse with no real request,
-as the probes of one stopped under `idle_limit` do. A lapse also shows in that log line.
+hold among them (`affinity_too_short`, `budget`, `cooled`, `credits`, `ineligible_credential`, `keepalive_off`,
+`overage`, `paused`, `pin_moved`, `reauth` or `spent`), leaves as `expired` once its entry has expired, and the next
+real request starts a new one. A recipe held under `horizon` or on a disabled pool leaves the same way, and one reopened
+or enabled again while its entry is warm probes on. While the request a recipe follows is still open, the lapse waits
+for its completion. At the retained-bytes cap the engine evicts before it refuses: unattended sessions' agents first,
+oldest activity first, then attended sessions' idle agents, never one with a probe or a request in flight. A lapsed or
+evicted recipe reads `ended`, as one stopped under `idle_limit` does. An evicted one shows on the wasted counter at
+once, while the probes of a lapsed one reach it at once where their chains have ended and otherwise as their chains'
+last entries lapse with no real request, as the probes of one stopped under `idle_limit` do. A lapse also shows in that
+log line.
 
 A quota `429`'s `Retry-After` counts only where it is longer than the ladder's step. A probe answered
 `503 accounts_unavailable` because its key moved to another pool while it was in flight is held under
@@ -513,6 +519,7 @@ The state's cause on the Sessions view reads a label in place of the engine's id
 | bus gap | `bus_gap` |
 | compacted | `compacted` |
 | cooled down | `cooled` |
+| credits blocked | `credits` |
 | evicted | `evicted` |
 | entry expired | `expired` |
 | expired at restart | `expired_at_restart` |
@@ -541,6 +548,7 @@ The state's cause on the Sessions view reads a label in place of the engine's id
 | parked limit | `parked_limit` |
 | partial cache coverage | `partial_cache_coverage` |
 | account paused | `paused` |
+| pin moved | `pin_moved` |
 | pool disabled | `pool_disabled` |
 | probe authentication error | `probe_authentication_error` |
 | pool exhausted | `probe_pool_exhausted` |
@@ -562,6 +570,7 @@ The state's cause on the Sessions view reads a label in place of the engine's id
 | session expired | `session_expired` |
 | session limit | `session_limit` |
 | slow probe | `slow_probe` |
+| spend cap reached | `spent` |
 | storage limit | `storage_limit` |
 | structured output | `structured_output` |
 | unexpected output | `unexpected_output` |

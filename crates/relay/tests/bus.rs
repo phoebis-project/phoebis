@@ -34,6 +34,19 @@ fn split(events: Vec<Event>) -> (Vec<Event>, Vec<ResponseChunk>) {
     (lifecycle, chunks)
 }
 
+/// The engine's probe marker under `key_id` at `key_generation`, its recipe last answered on `account` under the
+/// incarnation the store holds for it.
+fn marker(h: &Harness, key_id: &str, key_generation: i64, account: &str) -> phoebis_relay::Probe {
+    phoebis_relay::Probe {
+        key_id: key_id.into(),
+        key_generation,
+        holder: phoebis_routing::Holder {
+            account_id: account.into(),
+            incarnation: h.store.account(account).unwrap().unwrap().incarnation,
+        },
+    }
+}
+
 fn ev(event: &str, data: &str) -> SseEvent {
     SseEvent {
         event: event.into(),
@@ -2138,10 +2151,12 @@ async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive
     let resp = h
         .relay
         .probe(
-            phoebis_relay::Probe {
-                key_id: "desktop".into(),
-                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-            },
+            marker(
+                &h,
+                "desktop",
+                h.store.api_key("desktop").unwrap().unwrap().created_at,
+                "a",
+            ),
             req,
         )
         .await;
@@ -2192,10 +2207,7 @@ async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive
         "no recorded head, so the credential lands after anthropic-version: {names:?}"
     );
     // An unknown, revoked, or disabled id is the relay's 401 with nothing sent upstream.
-    let probe = |key: &str| phoebis_relay::Probe {
-        key_id: key.into(),
-        key_generation: 0,
-    };
+    let probe = |key: &str| marker(&h, key, 0, "a");
     let refused = h
         .relay
         .probe(probe("nobody"), request_for(KEY, "claude-sonnet-4-5", "s1"))
@@ -2263,10 +2275,7 @@ async fn a_probe_from_an_earlier_generation_of_a_reused_id_is_refused_before_any
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     pin_session(&h, "s1", "main", "claude-sonnet-4-5").await;
     let live = h.store.api_key("desktop").unwrap().unwrap().created_at;
-    let probe = |generation: i64| phoebis_relay::Probe {
-        key_id: "desktop".into(),
-        key_generation: generation,
-    };
+    let probe = |generation: i64| marker(&h, "desktop", generation, "a");
     let refused = h
         .relay
         .probe(probe(live - 1), request_for(KEY, "claude-sonnet-4-5", "s1"))
@@ -2332,10 +2341,12 @@ async fn a_probe_rate_limited_on_its_pinned_account_answers_the_cooldown_and_mov
     let resp = h
         .relay
         .probe(
-            phoebis_relay::Probe {
-                key_id: "desktop".into(),
-                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-            },
+            marker(
+                &h,
+                "desktop",
+                h.store.api_key("desktop").unwrap().unwrap().created_at,
+                "a",
+            ),
             request_for(KEY, "claude-sonnet-4-5", "s1"),
         )
         .await;
@@ -2427,10 +2438,12 @@ async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_si
     let resp = h
         .relay
         .probe(
-            phoebis_relay::Probe {
-                key_id: "desktop".into(),
-                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-            },
+            marker(
+                &h,
+                "desktop",
+                h.store.api_key("desktop").unwrap().unwrap().created_at,
+                "a",
+            ),
             request_for(KEY, "claude-sonnet-4-5", "s1"),
         )
         .await;
@@ -2461,6 +2474,64 @@ async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_si
     up.shutdown().await;
 }
 
+/// A probe whose recipe was answered on another holder than the one its session's pin stands on meets the moved pin at
+/// its own selection, so nothing replays its prompt cold on the pin's account.
+#[tokio::test]
+async fn a_probe_that_names_another_holder_than_its_pins_is_answered_pin_moved_and_reaches_no_upstream(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[
+            api_key("a", "sk-ant-api03-AAAA", 0),
+            api_key("b", "sk-ant-api03-BBBB", 1),
+        ],
+        PoolSpec::default(),
+    )
+    .await;
+    let real = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&real).account_id, "a", "the session pins on a");
+    real.into_body().collect().await.unwrap();
+
+    let resp = h
+        .relay
+        .probe(
+            marker(
+                &h,
+                "desktop",
+                h.store.api_key("desktop").unwrap().unwrap().created_at,
+                "b",
+            ),
+            request_for(KEY, "claude-sonnet-4-5", "s1"),
+        )
+        .await;
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap(),
+            outcome(&resp).obstacle,
+        ),
+        (503, "accounts_unavailable", Some(ProbeObstacle::PinMoved)),
+        "the probe is answered on the moved pin"
+    );
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        up.requests().len(),
+        1,
+        "the real request alone reached the upstream"
+    );
+    up.shutdown().await;
+}
+
 /// The keepalive reads a probe's relay outcome for the relay's own words, so the upstream's word for a forwarded
 /// rejection stays on the completion.
 #[tokio::test]
@@ -2478,10 +2549,12 @@ async fn a_probe_answered_a_forwarded_rejection_reads_no_code_on_its_relay_outco
     let resp = h
         .relay
         .probe(
-            phoebis_relay::Probe {
-                key_id: "desktop".into(),
-                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-            },
+            marker(
+                &h,
+                "desktop",
+                h.store.api_key("desktop").unwrap().unwrap().created_at,
+                "a",
+            ),
             request_for(KEY, "claude-sonnet-4-5", "s1"),
         )
         .await;

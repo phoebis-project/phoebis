@@ -30,10 +30,11 @@ use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, Request
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     cohort_hold, latest_full_reset, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold,
-    ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, HoldReason, JudgedCharge, KeyPermit,
-    LaneFacts, OverageEvidence, PinRef, PinnedObstacle, Portability, PredecessorQuery, Presented,
-    Refusal, RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError, RouterHandle,
-    SelectRequest, SelectResult, Selection, SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
+    ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, HoldReason, Holder, JudgedCharge,
+    KeyPermit, LaneFacts, OverageEvidence, PinRef, PinnedObstacle, Portability, PredecessorQuery,
+    Presented, Refusal, RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError,
+    RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace, BUDGET_WINDOW,
+    MAIN_AGENT,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope, MemoryStore,
@@ -262,12 +263,12 @@ impl RelayOutcome {
 
 /// The obstacle `RelayOutcome` names for a probe the keepalive holds on rather than pausing as an exhausted pool.
 /// The selector's pinned standings (`PinnedObstacle`) keep their words: `attempted`, `budget_unknown`, `no_pin`,
-/// `operator` and `subscription_ended`, each answered untimed since no wait clears it, and `cooldown`, `credits`,
-/// `overage` and `spent`, each answered as a wait. The relay adds three of its own: `budget` for a probe the selector
-/// answered with the pinned member's spend budget window, `pool_moved` for a request whose key moved to another pool
-/// between its admission and its selection, which the keepalive retries since the next probe admits under the new
-/// pool, and `reauth_required` for a probe whose leg marked its account for re-authentication, which the keepalive
-/// pauses under its authentication reason.
+/// `operator`, `pin_moved` and `subscription_ended`, each answered untimed since no wait clears it, and `cooldown`,
+/// `credits`, `overage` and `spent`, each answered as a wait. The relay adds three of its own: `budget` for a probe the
+/// selector answered with the pinned member's spend budget window, `pool_moved` for a request whose key moved to
+/// another pool between its admission and its selection, which the keepalive retries since the next probe admits under
+/// the new pool, and `reauth_required` for a probe whose leg marked its account for re-authentication, which the
+/// keepalive pauses under its authentication reason.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProbeObstacle {
     Attempted,
@@ -278,6 +279,7 @@ pub enum ProbeObstacle {
     NoPin,
     Operator,
     Overage,
+    PinMoved,
     PoolMoved,
     ReauthRequired,
     Spent,
@@ -294,6 +296,7 @@ impl From<PinnedObstacle> for ProbeObstacle {
             PinnedObstacle::NoPin => ProbeObstacle::NoPin,
             PinnedObstacle::Operator => ProbeObstacle::Operator,
             PinnedObstacle::Overage { .. } => ProbeObstacle::Overage,
+            PinnedObstacle::PinMoved => ProbeObstacle::PinMoved,
             PinnedObstacle::Spent { .. } => ProbeObstacle::Spent,
             PinnedObstacle::SubscriptionEnded => ProbeObstacle::SubscriptionEnded,
         }
@@ -309,6 +312,8 @@ pub struct Probe {
     /// The generation of the key the recipe was retained under; the relay refuses a probe whose key now carries
     /// another one, so no probe crosses into a replacement key's pool.
     pub key_generation: i64,
+    /// The holder the recipe was last answered on, which the selection compares with the session's live pin.
+    pub holder: Holder,
 }
 
 pub struct Relay {
@@ -827,6 +832,7 @@ impl Trace {
             request_id: self.request_id.clone(),
             attempt,
             account_id: account.id.clone(),
+            incarnation: account.incarnation,
             account_kind: account.kind.as_str().into(),
             usage_based,
             pin_epoch,
@@ -1280,9 +1286,9 @@ fn restore_with<'a>(
     })
 }
 
-/// Whether a 400 on this request says anything about the account past this leg. A `count_tokens` request
-/// injects nothing at all, so its refusal has nothing to latch; the strip retry still corrects this leg's own
-/// edit.
+/// Whether a 400 on this request says anything about the account past this leg. A `count_tokens` request injects
+/// nothing at all, and a probe replays a recipe on the account's behalf, so the refusal of either has nothing to latch.
+/// The strip retry still corrects this leg's own edit.
 fn latches(trace: &Trace) -> bool {
     trace.kind == Kind::Inference
 }
@@ -2105,6 +2111,7 @@ impl Relay {
             fallback_ms,
             fast: facts.shape.speed.as_deref() == Some("fast"),
             floor_held: AtomicBool::new(false),
+            holder: probe.as_ref().map(|p| p.holder.clone()),
             identity: &identity,
             key: &key,
             lane,
@@ -2217,6 +2224,7 @@ impl Relay {
                     fallback_ms,
                     revision: snapshot.revision,
                     probe: admitted.trace.kind == Kind::Probe,
+                    holder: admitted.holder.clone(),
                     count: admitted.trace.kind == Kind::CountTokens,
                     request_class: hints.request_class.clone(),
                     context_compacted: hints.context_compacted.is_some(),
@@ -5122,6 +5130,8 @@ struct Admitted<'a> {
     /// reference, so no leg needs a parameter for it; atomic because `Admitted` is borrowed across the handler's
     /// awaits and that future has to be `Send`.
     floor_held: AtomicBool,
+    /// The holder that a probe's marker names. `None` for a request that is no probe.
+    holder: Option<Holder>,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
     /// The cache lane the request writes to, composed once at admission since no failover changes the body.

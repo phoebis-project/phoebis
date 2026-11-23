@@ -95,6 +95,7 @@ fn request(s: &RegistrySnapshot, model: &str, now: i64) -> SelectRequest {
         fallback_ms: 60_000,
         revision: s.revision,
         probe: false,
+        holder: None,
         count: false,
         request_class: None,
         context_compacted: false,

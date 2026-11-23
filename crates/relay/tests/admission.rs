@@ -18,6 +18,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event, Outcome, ResponseChunk, QUEUE_DEPTH};
 use phoebis_relay::{Accounting, AccountingSource, Limits, Probe, ProbeObstacle};
+use phoebis_routing::Holder;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -73,6 +74,10 @@ fn probe_of(h: &Harness) -> Probe {
     Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+        holder: Holder {
+            account_id: "a".into(),
+            incarnation: h.store.account("a").unwrap().unwrap().incarnation,
+        },
     }
 }
 

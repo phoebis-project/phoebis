@@ -427,6 +427,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes() {
             request_id: "r1".into(),
             attempt: 1,
             account_id: "direct".into(),
+            incarnation: parts.store.account("direct").unwrap().unwrap().incarnation,
             account_kind: "api_key".into(),
             usage_based: false,
             pin_epoch: Some(1),
@@ -786,6 +787,7 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
             request_id: "r1".into(),
             attempt: 1,
             account_id: "direct".into(),
+            incarnation: parts.store.account("direct").unwrap().unwrap().incarnation,
             account_kind: "api_key".into(),
             usage_based: false,
             pin_epoch: Some(1),
@@ -1192,6 +1194,13 @@ impl<'a> Companion<'a> {
                     request_id: id.into(),
                     attempt: 1,
                     account_id: "direct".into(),
+                    incarnation: self
+                        .parts
+                        .store
+                        .account("direct")
+                        .unwrap()
+                        .unwrap()
+                        .incarnation,
                     account_kind: "api_key".into(),
                     usage_based: false,
                     pin_epoch: Some(1),
@@ -1502,6 +1511,7 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
             request_id: "r3".into(),
             attempt: 1,
             account_id: "direct".into(),
+            incarnation: parts.store.account("direct").unwrap().unwrap().incarnation,
             account_kind: "api_key".into(),
             usage_based: false,
             pin_epoch: Some(1),

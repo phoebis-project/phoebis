@@ -2151,6 +2151,7 @@ async fn a_running_total_without_the_split_keeps_the_hour() {
             request_id: id.into(),
             attempt: 1,
             account_id: "a".into(),
+            incarnation: r.incarnation("a"),
             account_kind: "api_key".into(),
             usage_based: false,
             pin_epoch: Some(1),

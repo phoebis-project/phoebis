@@ -144,6 +144,10 @@ fn probe_of(h: &Harness) -> Probe {
     Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+        holder: phoebis_routing::Holder {
+            account_id: "a".into(),
+            incarnation: h.store.account("a").unwrap().unwrap().incarnation,
+        },
     }
 }
 

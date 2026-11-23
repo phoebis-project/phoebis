@@ -1256,15 +1256,16 @@ with the `overage` claim, the same one an account in overage carries ([Pools](#p
 at its budget is answered with the end of the latest period whose budget is reached as its reset, whatever its siblings
 hold. A probe whose pinned account is disabled, past its subscription's end, or a member with a budget while the ledger
 is degraded is answered `503` `accounts_unavailable` whatever its siblings hold, and so is one whose session holds no
-pin. While a sibling could take it, a probe that already tried its pinned account gets the same `503`, and so does one
-whose pinned account was deleted or is in a state other than ready, under the obstacle `operator`. A probe whose pinned
-account cools, is out of usage credits for a fast request, is in overage under `never` or is a usage-based seat at its
-spend cap is answered `429` `accounts_exhausted` while a sibling could take it, with the wait as its `retry-after` where
-the obstacle names one. Such a probe never moves the pin and creates none, and its request row reads rejected rather
-than exhausted, so the `pool_exhausted` condition of the `phoebis_attention` gauge does not count it. With no sibling to
-take it, a probe that already tried its pinned account, one whose pinned account was deleted or is in a state other than
-ready, and one whose pinned account cools, is out of credits, is in overage or is at its spend cap get the pool's own
-answer above.
+pin. So is a probe whose pin stands on another account than the one that last answered its recipe, or on that account
+created again under its id, under the obstacle `pin_moved`. While a sibling could take it, a probe that already tried
+its pinned account gets the same `503`, and so does one whose pinned account was deleted or is in a state other than
+ready, under the obstacle `operator`. A probe whose pinned account cools, is out of usage credits for a fast request, is
+in overage under `never` or is a usage-based seat at its spend cap is answered `429` `accounts_exhausted` while a
+sibling could take it, with the wait as its `retry-after` where the obstacle names one. Such a probe never moves the pin
+and creates none, and its request row reads rejected rather than exhausted, so the `pool_exhausted` condition of the
+`phoebis_attention` gauge does not count it. With no sibling to take it, a probe that already tried its pinned account,
+one whose pinned account was deleted or is in a state other than ready, and one whose pinned account cools, is out of
+credits, is in overage or is at its spend cap get the pool's own answer above.
 
 Every answer the router commits loses the upstream's rate-limit headers, the `anthropic-ratelimit-*` families and the
 `anthropic-fast-*` token family, so an organization's standing never reads as the key holder's own and a client sees one

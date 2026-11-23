@@ -35,12 +35,12 @@ pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
     cohort_hold, elapsed_share_at, exhaustion_status, feature_ready, lane_key, seconds_ms,
     window_deadline, Banded, ClientClass, CohortHold, CreditAccount, Exhaustion, FailedOver,
-    HoldFacts, HoldReason, HoldWait, Judged, JudgedCharge, MigrateReason, MoveRead, Obstacle,
-    PinHold, PinnedObstacle, Placement, Portability, Refusal, SelectRequest, SelectResult,
-    Selection, SelectionTrace, SharedWindows, Skipped, SlowDownRead, Warmth, WarmthCause,
-    BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MAIN_AGENT, MODEL_REJECTED_REASON,
-    RATE_LIMIT_REASON, REFRESHING_CLASSES, RETRY_AFTER_WINDOW, SLOW_DOWN_MIN_HOLD_MS,
-    SLOW_DOWN_WAIT_MS,
+    HoldFacts, HoldReason, HoldWait, Holder, Judged, JudgedCharge, MigrateReason, MoveRead,
+    Obstacle, PinHold, PinnedObstacle, Placement, Portability, Refusal, SelectRequest,
+    SelectResult, Selection, SelectionTrace, SharedWindows, Skipped, SlowDownRead, Warmth,
+    WarmthCause, BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MAIN_AGENT,
+    MODEL_REJECTED_REASON, RATE_LIMIT_REASON, REFRESHING_CLASSES, RETRY_AFTER_WINDOW,
+    SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use select::{decide, warmth_of, Decided};
@@ -61,7 +61,7 @@ pub use state::{
 pub use task::{
     credits_from_usage, same_reset, sample_from_usage, spawn, under_account_reason, whole_points,
     AccountProjection, AccountSlowDown, BandWeight, BurnRates, LoadCounts, PinSlowDown,
-    PinStanding, RegimeFit, RegimeRates, ReloadError, RenewalEnd, Report, RouterConfig,
+    PinStanding, ProbeHolds, RegimeFit, RegimeRates, ReloadError, RenewalEnd, Report, RouterConfig,
     RouterEvent, RouterGone, RouterHandle, SelectAnswer, SlowDownSpan, WindowProjection,
     WindowRestart, WriterStatus, COMMANDS, PIN_CREATED, PIN_EXPIRED, PIN_MIGRATED, RESET_SLACK_MS,
     SPENT_MARGIN, UNATTRIBUTED_POOL, WINDOW_DROP_POINTS, WRITER_DEPTH,

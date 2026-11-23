@@ -90,6 +90,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
+            holder: None,
             count: false,
             request_class: None,
             context_compacted: false,

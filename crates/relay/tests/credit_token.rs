@@ -692,6 +692,10 @@ async fn a_probe_that_replays_a_subagents_turn_ends_no_agent_though_its_answer_e
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+                holder: phoebis_routing::Holder {
+                    account_id: "a".into(),
+                    incarnation: h.store.account("a").unwrap().unwrap().incarnation,
+                },
             },
             probe,
         )

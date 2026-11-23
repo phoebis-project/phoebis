@@ -2948,11 +2948,15 @@ fn invalid_key() -> Respond {
     }
 }
 
-/// The engine's own probe under the harness key.
+/// The engine's own probe under the harness key, its recipe last answered on `a`, where each case's pin stands.
 fn probe_of(h: &Harness) -> phoebis_relay::Probe {
     phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+        holder: phoebis_routing::Holder {
+            account_id: "a".into(),
+            incarnation: h.store.account("a").unwrap().unwrap().incarnation,
+        },
     }
 }
 
@@ -3425,6 +3429,10 @@ async fn the_renewal_report_carries_the_usage_the_origin_and_the_ttl_and_a_probe
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+                holder: phoebis_routing::Holder {
+                    account_id: "k1".into(),
+                    incarnation: h.store.account("k1").unwrap().unwrap().incarnation,
+                },
             },
             request_for(KEY, "claude-sonnet-4-5", "s1"),
         )

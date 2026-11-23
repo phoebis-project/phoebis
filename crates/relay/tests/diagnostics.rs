@@ -10,7 +10,7 @@ use fake_upstream::{install, Captured, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, DiagnosticsSource, Event, RequestComplete, Subscriber};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_relay::{MemoryKey, CACHE_DIAGNOSIS_BETA};
+use phoebis_relay::{MemoryKey, CACHE_DIAGNOSIS_BETA, EXTENDED_TTL_BETA};
 use phoebis_routing::{
     DecisionRecord, Report, RouterConfig, RouterEvent, UtilizationSample, WindowReading,
     WindowSource, FIVE_HOUR, SEVEN_DAY,
@@ -1376,6 +1376,72 @@ async fn a_400_naming_the_thinking_beta_strips_it_alone_retries_once_on_the_same
     up.shutdown().await;
 }
 
+const REFUSED_TTL_BETA: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unexpected value(s) `extended-cache-ttl-2025-04-11` for the `anthropic-beta` header."}}"#;
+
+/// A probe replays its recipe on the account's behalf, so the refusal of the beta the one-hour TTL injects on its leg
+/// reverts that leg alone and leaves the account's next real request its hour.
+#[tokio::test]
+async fn a_probes_400_on_an_injected_beta_is_retried_without_it_and_latches_nothing() {
+    let carries_ttl_beta = |r: &fake_upstream::RecordedRequest| {
+        beta_header(r).is_some_and(|b| b.split(',').any(|t| t == EXTENDED_TTL_BETA))
+    };
+    // The API-key head names no TTL beta of the client's own, so each beta the upstream sees is the router's.
+    let api_key_turn = || {
+        let mut req = request_from_fixture(
+            inference_head(FixtureKind::ApiKey),
+            body(BodyFixture::ApiKey),
+            KEY,
+        );
+        set_header(&mut req, "x-claude-code-session-id", "s1");
+        req
+    };
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_400(REFUSED_TTL_BETA));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
+    let h = harness(
+        &up,
+        &[api_key("acct", ACCT_SECRET, 0)],
+        // An api_key account always pays, so its writes take the metered set's own `main`.
+        PoolSpec {
+            cache_ttl: r#"{"enabled":true,"metered":{"main":"1h"}}"#,
+            ..Default::default()
+        },
+    )
+    .await;
+    let resp = h.app.clone().oneshot(api_key_turn()).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+
+    let probe = phoebis_relay::Probe {
+        key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+        holder: phoebis_routing::Holder {
+            account_id: "acct".into(),
+            incarnation: h.store.account("acct").unwrap().unwrap().incarnation,
+        },
+    };
+    let resp = h.relay.probe(probe, api_key_turn()).await;
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    let sent = up.requests();
+    assert_eq!(sent.len(), 3, "the probe's strip retries once");
+    assert!(
+        carries_ttl_beta(&sent[1]) && !carries_ttl_beta(&sent[2]),
+        "the probe's first pass carries the beta and its retry does not"
+    );
+
+    let resp = h.app.clone().oneshot(api_key_turn()).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    assert!(
+        carries_ttl_beta(&up.requests()[3]),
+        "the next real request on the account sends the beta again"
+    );
+    up.shutdown().await;
+}
+
 /// A probe replays its recipe's member, which from a chain's second probe on names a message older than the upstream
 /// keeps, so no probe names one, whether the recipe carried the client's member or the router inserts it.
 #[tokio::test]
@@ -1408,6 +1474,10 @@ async fn a_probe_names_no_previous_message_id_and_its_own_answer_is_never_rememb
     let probe = || phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+        holder: phoebis_routing::Holder {
+            account_id: "acct".into(),
+            incarnation: h.store.account("acct").unwrap().unwrap().incarnation,
+        },
     };
     let recipe = first_party_naming(Some("msg_a01"));
     let resp = h

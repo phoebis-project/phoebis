@@ -71,6 +71,10 @@ async fn a_real_request_through_the_relay_arms_a_recipe_and_a_probe_is_ignored()
                 phoebis_keepalive::probe_marker(
                     "desktop",
                     r.h.store.api_key("desktop").unwrap().unwrap().created_at,
+                    phoebis_routing::Holder {
+                        account_id: "a".into(),
+                        incarnation: r.incarnation("a"),
+                    },
                 ),
                 r.request("main"),
             )
@@ -535,6 +539,7 @@ async fn a_later_selection_supersedes_an_earlier_attempts_evidence() {
             request_id: "req".into(),
             attempt: 2,
             account_id: "b".into(),
+            incarnation: r.incarnation("b"),
             account_kind: "api_key".into(),
             usage_based: false,
             pin_epoch: Some(2),

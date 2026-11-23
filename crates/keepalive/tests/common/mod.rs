@@ -429,6 +429,17 @@ impl Rig {
             .unwrap_or_default()
     }
 
+    /// The incarnation the store holds for `account`, the one a selection on its row carries and a pin made on it
+    /// names. An account the store never held answers 0.
+    pub fn incarnation(&self, account: &str) -> u64 {
+        self.h
+            .store
+            .account(account)
+            .unwrap()
+            .map(|row| row.incarnation)
+            .unwrap_or_default()
+    }
+
     /// A report under the harness key, with the next sequence, handed to `Engine::apply_event` as the route hands
     /// it a decoded body. A caller that leaves `session_id` unset gets the rig's one session, and one that leaves
     /// `instance_id` unset gets `instance_of` that session, so `session_end` and `session_start` need only the
@@ -814,6 +825,7 @@ impl Rig {
             request_id: id.into(),
             attempt: 1,
             account_id: account.into(),
+            incarnation: self.incarnation(account),
             account_kind: "api_key".into(),
             usage_based: false,
             pin_epoch: Some(1),

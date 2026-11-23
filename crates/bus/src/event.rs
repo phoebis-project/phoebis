@@ -431,6 +431,8 @@ pub struct AccountSelected {
     pub request_id: String,
     pub attempt: u8,
     pub account_id: String,
+    /// The incarnation of the account row that the attempt used.
+    pub incarnation: u64,
     pub account_kind: String,
     /// The serving account's class at the attempt, the registry's `usage_based` flag as the leg read it.
     pub usage_based: bool,

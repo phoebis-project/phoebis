@@ -629,6 +629,10 @@ async fn nothing_is_restored_for_a_probe_turn() {
     let probe = phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+        holder: phoebis_routing::Holder {
+            account_id: "acct".into(),
+            incarnation: h.store.account("acct").unwrap().unwrap().incarnation,
+        },
     };
     let resp = h.relay.probe(probe, cli_request("s-p", None, None)).await;
     assert_eq!(resp.status(), 200);
@@ -715,6 +719,10 @@ async fn a_probe_on_an_api_key_account_carries_the_empty_uuid_too() {
     let probe = phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+        holder: phoebis_routing::Holder {
+            account_id: "acct".into(),
+            incarnation: h.store.account("acct").unwrap().unwrap().incarnation,
+        },
     };
     let resp = h
         .relay

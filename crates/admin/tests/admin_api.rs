@@ -7891,6 +7891,7 @@ async fn agent_turn(
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
+            holder: None,
             count: false,
             request_class: Some(if main { "main" } else { "subagent" }.into()),
             context_compacted: false,

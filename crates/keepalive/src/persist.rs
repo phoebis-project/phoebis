@@ -116,6 +116,11 @@ pub(crate) struct PersistedAgent {
     pub cold: u32,
     pub failures: u32,
     pub account: Option<String>,
+    /// The incarnation of `account` when the armed recipe was last answered on it. Absent from a row saved before
+    /// agents carried one, which loads as `None`, so the recipe holds under `pin_moved` until the agent's next request
+    /// arms it.
+    #[serde(default)]
+    pub account_incarnation: Option<u64>,
     pub pool_id: String,
     pub canonical_model: String,
     /// Absent from a row saved before agents carried one, which loads as `None`, the base regime, until the next
@@ -532,6 +537,7 @@ impl PersistedAgent {
             cold: agent.cold,
             failures: agent.failures,
             account: agent.account.clone(),
+            account_incarnation: agent.account_incarnation,
             pool_id: agent.pool_id.clone(),
             canonical_model: agent.canonical_model.clone(),
             entrypoint: agent.entrypoint.clone(),
@@ -632,6 +638,7 @@ impl PersistedAgent {
         agent.cold = self.cold;
         agent.failures = self.failures;
         agent.account = self.account;
+        agent.account_incarnation = self.account_incarnation;
         agent.pool_id = self.pool_id;
         agent.canonical_model = self.canonical_model;
         agent.reason = self.reason;

@@ -112,6 +112,8 @@ pub struct SelectRequest {
     /// A keepalive probe's replay of the recipe, from the relay trace's `Kind::Probe`; its headers and body
     /// are the re-arming request's, so it carries no warmth verdict of its own.
     pub probe: bool,
+    /// The holder that a probe's recipe was last answered on. `None` on a request that is no probe.
+    pub holder: Option<Holder>,
     /// A `count_tokens` request, from the relay trace's `Kind::CountTokens`: it writes no cache, so it carries
     /// no warmth verdict either, whatever its messages continue.
     pub count: bool,
@@ -188,6 +190,13 @@ impl SelectRequest {
 /// again under the same id is another account, which the credit does not reach.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreditAccount {
+    pub account_id: String,
+    pub incarnation: u64,
+}
+
+/// The account that last answered a recipe: its id and its incarnation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Holder {
     pub account_id: String,
     pub incarnation: u64,
 }
@@ -708,8 +717,9 @@ pub enum Exhaustion {
 /// No wait clears `attempted` (a member this probe already tried while a sibling could take it), `budget_unknown` (a
 /// budgeted member whose spend the degraded ledger leaves unknown), `operator` (an account the operator paused, or one
 /// deleted or in a state other than ready that the probe did not try while a sibling could take it),
-/// `subscription_ended` (one past its saved end) or `no_pin`, so each answers untimed. `cooldown`, `credits`, `overage`
-/// and `spent` name a wait while a sibling could take the probe, dated where the obstacle names its end.
+/// `subscription_ended` (one past its saved end), `no_pin` or `pin_moved` (a live pin on another holder than the one
+/// the probe names), so each answers untimed. `cooldown`, `credits`, `overage` and `spent` name a wait while a sibling
+/// could take the probe, dated where the obstacle names its end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PinnedObstacle {
     Attempted,
@@ -727,6 +737,8 @@ pub enum PinnedObstacle {
     Overage {
         until: i64,
     },
+    /// The live pin stands on another holder than the one the probe's recipe was last answered on.
+    PinMoved,
     /// The pinned member is a usage-based seat at its spend cap until `until`.
     Spent {
         until: i64,
@@ -736,7 +748,7 @@ pub enum PinnedObstacle {
 
 impl PinnedObstacle {
     /// The word the exhausted decision's `obstacle` fact records: the one `Obstacle::name` gives the selector's own
-    /// obstacle, or `no_pin`.
+    /// obstacle, or `no_pin` and `pin_moved`, which name the pin itself.
     pub fn as_str(self) -> &'static str {
         match self {
             PinnedObstacle::Attempted => "attempted",
@@ -746,6 +758,7 @@ impl PinnedObstacle {
             PinnedObstacle::NoPin => "no_pin",
             PinnedObstacle::Operator => "operator",
             PinnedObstacle::Overage { .. } => "overage",
+            PinnedObstacle::PinMoved => "pin_moved",
             PinnedObstacle::Spent { .. } => "spent",
             PinnedObstacle::SubscriptionEnded => "subscription_ended",
         }
@@ -762,6 +775,7 @@ impl PinnedObstacle {
             | PinnedObstacle::Credits
             | PinnedObstacle::NoPin
             | PinnedObstacle::Operator
+            | PinnedObstacle::PinMoved
             | PinnedObstacle::SubscriptionEnded => None,
         }
     }
@@ -777,6 +791,7 @@ impl PinnedObstacle {
             | PinnedObstacle::BudgetUnknown
             | PinnedObstacle::NoPin
             | PinnedObstacle::Operator
+            | PinnedObstacle::PinMoved
             | PinnedObstacle::SubscriptionEnded => false,
         }
     }
@@ -1298,7 +1313,7 @@ fn spent_windows<'a>(
 
 /// The spend window's reset where a usage-based account's share reads at or above one at `now`: the one read the
 /// candidate's obstacle, the allowance and the spent windows share, so the hold and its deadline never disagree.
-fn spend_spent(
+pub(crate) fn spend_spent(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     account_id: &str,
@@ -2076,6 +2091,22 @@ fn run(
             let exhaustion = Exhaustion::Pinned { obstacle };
             return (SelectResult::Exhausted(exhaustion), writes);
         };
+        // The gate read the pin a moment before this selection, so a request that moved it since meets the probe
+        // here: on another holder the probe would write its whole prompt cold.
+        if request.holder.as_ref().is_some_and(|holder| {
+            holder.account_id != current.account_id || holder.incarnation != current.incarnation
+        }) {
+            let obstacle = PinnedObstacle::PinMoved;
+            rec.step(
+                "probe",
+                "answered",
+                vec![Fact::text("obstacle", obstacle.as_str())],
+            );
+            return (
+                SelectResult::Exhausted(Exhaustion::Pinned { obstacle }),
+                writes,
+            );
+        }
         let mut facts = Vec::new();
         let pinned = obstacles.iter().find(|(id, _)| id == &current.account_id);
         let tried = request.attempted.contains(&current.account_id);
@@ -4051,6 +4082,7 @@ pub(crate) fn fresh_fit(
         fallback_ms: 0,
         revision: 0,
         probe: false,
+        holder: None,
         count: false,
         request_class: None,
         context_compacted: false,
@@ -5884,6 +5916,7 @@ fn standing_request(pin: &PinRow) -> SelectRequest {
         fallback_ms: 0,
         revision: 0,
         probe: false,
+        holder: None,
         count: false,
         request_class: None,
         context_compacted: false,
@@ -9574,6 +9607,7 @@ mod banded_tests {
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
+            holder: None,
             count: false,
             request_class: None,
             context_compacted: false,

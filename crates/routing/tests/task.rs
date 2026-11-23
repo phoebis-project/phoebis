@@ -163,6 +163,7 @@ fn request(
         fallback_ms: 60_000,
         revision: s.revision,
         probe: false,
+        holder: None,
         count: false,
         request_class: None,
         context_compacted: false,
@@ -1134,6 +1135,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             fallback_ms: 60_000,
             revision: s.revision,
             probe: false,
+            holder: None,
             count: false,
             request_class: None,
             context_compacted: false,
@@ -1276,6 +1278,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             fallback_ms: 60_000,
             revision: s.revision,
             probe: false,
+            holder: None,
             count: false,
             request_class: None,
             context_compacted: false,
@@ -7109,6 +7112,34 @@ fn a_spend_head_keeps_its_reset_beside_the_share_and_an_older_reading_moves_neit
         Some((9 * HOUR, 1_000)),
         "a head that names no reset leaves the held one"
     );
+}
+
+/// A seat's spend at its cap also blocks its usage credits, since the selector reads the one share for both, so the
+/// seat stands in both lists.
+#[tokio::test]
+async fn probe_holds_names_a_seat_at_its_spend_cap_under_both_holds_and_a_blocked_account_under_credits_alone(
+) {
+    let store = seeded_oauth(&["a", "b", "c"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(spend_head(1.0, 30 * HOUR, 1_000)).await;
+    handle
+        .report(Report::Credits {
+            account_id: "b".into(),
+            state: CreditsState {
+                enabled: false,
+                disabled_reason: Some("org_level_disabled".into()),
+                utilization: None,
+                observed_at: 1_000,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        })
+        .await;
+    let holds = handle.probe_holds().await.unwrap();
+    assert_eq!(holds.credits, ["a", "b"]);
+    assert_eq!(holds.spent, ["a"]);
 }
 
 #[tokio::test]

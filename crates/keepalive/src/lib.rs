@@ -46,10 +46,16 @@ pub use view::{
 };
 
 /// What a probe declares to the relay when the engine sends it: the key it runs under and the key's generation,
-/// so the relay refuses it once the key id names a replacement.
-pub fn probe_marker(key_id: &str, key_generation: i64) -> phoebis_relay::Probe {
+/// so the relay refuses it once the key id names a replacement, and the holder its recipe was last answered on, so
+/// the selection answers `pin_moved` once the session's pin stands elsewhere.
+pub fn probe_marker(
+    key_id: &str,
+    key_generation: i64,
+    holder: phoebis_routing::Holder,
+) -> phoebis_relay::Probe {
     phoebis_relay::Probe {
         key_id: key_id.into(),
         key_generation,
+        holder,
     }
 }

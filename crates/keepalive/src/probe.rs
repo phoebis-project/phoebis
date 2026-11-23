@@ -11,7 +11,7 @@ use axum::http::{header, Request};
 use bytes::Bytes;
 use phoebis_ledger::{Band, PlanTables, PriceTable, Speed};
 use phoebis_relay::{ProbeObstacle, RelayOutcome};
-use phoebis_routing::{seconds_ms, SEVEN_DAY};
+use phoebis_routing::{seconds_ms, Holder, SEVEN_DAY};
 use serde_json::Value;
 
 use crate::breakeven::Ceilings;
@@ -39,8 +39,9 @@ pub(crate) struct ProbeJob {
     pub generation: u64,
     pub attempt: u8,
     pub started: i64,
-    /// The account the gate admitted the probe on: the one its pin names, or the agent's own where no pin exists.
-    pub account: String,
+    /// The holder that the gate admitted the probe on: the account that last answered the recipe, with its
+    /// incarnation.
+    pub holder: Holder,
     pub pool_id: String,
     pub canonical_model: String,
     /// The agent's entrypoint at dispatch, which the probe's headers carry, so the probe settles under the regime it
@@ -209,7 +210,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
     let request = request
         .header(header::CONTENT_LENGTH, job.recipe.body.len())
         .body(Body::from(std::mem::take(&mut job.recipe.body)));
-    let marker = crate::probe_marker(&job.key.0, job.key_generation);
+    let marker = crate::probe_marker(&job.key.0, job.key_generation, job.holder.clone());
     // Read before the send, so an exchange the relay never answered keys the instant the relay would have received it.
     let sent = engine.now();
     let exchange = match request {
@@ -337,7 +338,7 @@ impl Inner {
     ) -> ProbeRecord {
         let mut record = ProbeRecord {
             charge: ProbeCharge {
-                account: Some(job.account.clone()),
+                account: Some(job.holder.account_id.clone()),
                 at,
                 band: Band::Standard,
                 client: RowClient {
@@ -607,7 +608,9 @@ impl Inner {
     /// `IneligibleCredential` for a subscription that ended between the gate's read and the selection (both read
     /// `paused` in the console), a retry for a member this probe already tried or for one whose budget the degraded
     /// ledger leaves unknown, which the ledger's recovery clears without a real request, and `NoPin` for a session that
-    /// held no pin to renew, paused until its next real request. A pinned member's cooldown, credits block, overage or
+    /// held no pin to renew, paused until its next real request. A probe whose pin stands on another holder than its
+    /// recipe's holds under `pin_moved` without a pause, so the gate reads the pin again at each tick and releases the
+    /// recipe once a request arms it on the pin's account. A pinned member's cooldown, credits block, overage or
     /// spend cap answers a 429, which retries under `probe_quota_exhausted` as above. A pinned member a leg of the
     /// probe marked for re-authentication pauses under the authentication reason. The untimed exhaustion 503, when
     /// every account of the pool was unusable at selection, retries under its own reason. A 5xx forwarded from upstream
@@ -667,6 +670,12 @@ impl Inner {
                 self.pause(key, agent_id, Reason::NoPin);
                 return;
             }
+            // The pin moved between the gate's read and the selection: the hold the gate itself places and reads live
+            // at each tick, so the reason alone leaves the schedule armed rather than pausing the recipe.
+            (true, Some(ProbeObstacle::PinMoved)) => {
+                self.set_reason(key, agent_id, Reason::PinMoved);
+                return;
+            }
             (_, Some(ProbeObstacle::Budget)) if outcome == ProbeOutcome::RateLimited => {
                 // The pinned member reached its spend budget between the gate's read and the selection. A pause
                 // would outlive the budget (nothing but a real request undoes one), and the reason alone leaves
@@ -683,6 +692,7 @@ impl Inner {
                     | ProbeObstacle::BudgetUnknown
                     | ProbeObstacle::NoPin
                     | ProbeObstacle::Operator
+                    | ProbeObstacle::PinMoved
                     | ProbeObstacle::PoolMoved
                     | ProbeObstacle::ReauthRequired
                     | ProbeObstacle::SubscriptionEnded,
@@ -897,7 +907,10 @@ mod tests {
             generation: 0,
             attempt: 1,
             started: 1_000,
-            account: "a".into(),
+            holder: Holder {
+                account_id: "a".into(),
+                incarnation: 1,
+            },
             pool_id: "main".into(),
             canonical_model: "m".into(),
             entrypoint: None,
@@ -973,6 +986,7 @@ mod tests {
             ),
             (ProbeObstacle::Attempted, Reason::RetryableProbeError, false),
             (ProbeObstacle::NoPin, Reason::NoPin, true),
+            (ProbeObstacle::PinMoved, Reason::PinMoved, false),
         ] {
             let (mut inner, key) = one_agent_inner();
             inner.probe_error(

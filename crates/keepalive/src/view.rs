@@ -55,10 +55,10 @@ pub fn recipe_state(reason: Reason, paused: bool) -> RecipeState {
         | UnsupportedShape => RecipeState::NotRetained,
         // A probe's transient failure, and a probe that read no cache, keep the prompt and retry on the ladder until
         // the entry's expiry would come first.
-        AffinityTooShort | Budget | Cooled | Horizon | IneligibleCredential | KeepaliveOff
-        | LedgerBehind | NoProbeCacheEvidence | Overage | Paused | PoolDisabled
-        | ProbePoolExhausted | ProbeQuotaExhausted | ProbeTransportError | Reauth
-        | RetryableProbeError | SlowProbe => RecipeState::Held,
+        AffinityTooShort | Budget | Cooled | Credits | Horizon | IneligibleCredential
+        | KeepaliveOff | LedgerBehind | NoProbeCacheEvidence | Overage | Paused | PinMoved
+        | PoolDisabled | ProbePoolExhausted | ProbeQuotaExhausted | ProbeTransportError
+        | Reauth | RetryableProbeError | SlowProbe | Spent => RecipeState::Held,
         InvalidProbeUsage
         | MissingAccount
         | NoPin

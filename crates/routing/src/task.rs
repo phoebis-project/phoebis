@@ -28,9 +28,9 @@ use crate::record::{
 use crate::select::{
     account_end, budget_facts, burn_unit, decide, fresh_fit, fresh_prior, lane_is_fast,
     mark_cleared_of, obstacle_on, pace_of, projection_of, projections_of, runway, slow_down_ramp,
-    standing_eligible, standing_move_read, zeroes_sums, BurnRead, Decided, FailedOver, FitRead,
-    FitWord, Judged, JudgedCharge, MoveRead, Obstacle, Refusal, SelectRequest, SelectResult,
-    RATE_LIMIT_REASON,
+    spend_spent, standing_eligible, standing_move_read, zeroes_sums, BurnRead, Decided, FailedOver,
+    FitRead, FitWord, Judged, JudgedCharge, MoveRead, Obstacle, Refusal, SelectRequest,
+    SelectResult, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -1286,6 +1286,9 @@ enum Command {
     PinsStanding {
         reply: oneshot::Sender<Vec<PinStanding>>,
     },
+    ProbeHolds {
+        reply: oneshot::Sender<ProbeHolds>,
+    },
     Projections {
         pool_id: String,
         reply: oneshot::Sender<Vec<AccountProjection>>,
@@ -1597,6 +1600,15 @@ pub struct PinSlowDown {
     pub speed: f64,
     /// Whether the entry holds an open slow-down span, the test the account's `span` reads.
     pub slowed: bool,
+}
+
+/// The accounts that `RouterHandle::probe_holds` names, each list sorted by id.
+#[derive(Clone, Debug, Default)]
+pub struct ProbeHolds {
+    /// The accounts whose usage credits block the fast lane.
+    pub credits: Vec<String>,
+    /// The usage-based seats at their spend cap.
+    pub spent: Vec<String>,
 }
 
 /// A plan window of the account started again out of turn: a later reset ahead of the stored one's turn with a fallen
@@ -1942,6 +1954,12 @@ impl RouterHandle {
     /// rather than a copy of the pin table.
     pub async fn pins_by_pool(&self) -> Result<Vec<(String, u64)>, RouterGone> {
         self.ask(|reply| Command::PinsByPool { reply }).await
+    }
+    /// The accounts that the selector holds two states against at the task's clock, by its own tests: the usage-based
+    /// seats at their spend cap and the accounts whose usage credits block the fast lane, each sorted by id. One ask
+    /// for both, so a keepalive tick queues no command per recipe.
+    pub async fn probe_holds(&self) -> Result<ProbeHolds, RouterGone> {
+        self.ask(|reply| Command::ProbeHolds { reply }).await
     }
     pub async fn cooldowns(&self) -> Result<Vec<CooldownRow>, RouterGone> {
         self.ask(|reply| Command::Cooldowns { reply }).await
@@ -3895,6 +3913,26 @@ impl Task {
                     .map(|(pool, count)| (pool.to_string(), count))
                     .collect();
                 let _ = reply.send(counts);
+            }
+            Command::ProbeHolds { reply } => {
+                let now = (self.clock)();
+                let snapshot = self.snapshot();
+                let mut holds = ProbeHolds::default();
+                for account in snapshot.accounts() {
+                    if self
+                        .state
+                        .credits_blocked(&snapshot, &account.id, now)
+                        .is_some()
+                    {
+                        holds.credits.push(account.id.clone());
+                    }
+                    if spend_spent(&self.state, &snapshot, &account.id, now).is_some() {
+                        holds.spent.push(account.id.clone());
+                    }
+                }
+                holds.credits.sort();
+                holds.spent.sort();
+                let _ = reply.send(holds);
             }
             Command::Cooldowns { reply } => {
                 let _ = reply.send(self.state.cooldowns());

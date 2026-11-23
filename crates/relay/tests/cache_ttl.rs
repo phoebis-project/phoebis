@@ -690,6 +690,10 @@ async fn a_probe_writes_with_its_agents_branch_ttl() {
     let probe = || phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+        holder: phoebis_routing::Holder {
+            account_id: "a".into(),
+            incarnation: h.store.account("a").unwrap().unwrap().incarnation,
+        },
     };
     let resp = h
         .relay

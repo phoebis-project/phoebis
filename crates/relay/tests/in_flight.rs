@@ -1312,6 +1312,10 @@ async fn a_probe_and_a_count_take_no_key_permit() {
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+                holder: phoebis_routing::Holder {
+                    account_id: "a".into(),
+                    incarnation: h.store.account("a").unwrap().unwrap().incarnation,
+                },
             },
             probe,
         )
@@ -1385,6 +1389,10 @@ async fn a_probe_takes_no_read_permit_and_no_budget() {
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+                holder: phoebis_routing::Holder {
+                    account_id: "a".into(),
+                    incarnation: h.store.account("a").unwrap().unwrap().incarnation,
+                },
             },
             probe,
         )

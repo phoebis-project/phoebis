@@ -850,6 +850,7 @@ mod tests {
             request_id: id.into(),
             attempt: n,
             account_id: account.into(),
+            incarnation: 1,
             account_kind: "oauth".into(),
             usage_based: false,
             pin_epoch: Some(4),

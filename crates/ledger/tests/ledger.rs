@@ -4657,6 +4657,10 @@ async fn a_probe_through_the_relay_is_ledgered_with_kind_probe_and_origin_keepal
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+                holder: phoebis_routing::Holder {
+                    account_id: "a".into(),
+                    incarnation: h.store.account("a").unwrap().unwrap().incarnation,
+                },
             },
             request_for(KEY, "claude-sonnet-4-5", "s1"),
         )
@@ -4696,6 +4700,7 @@ fn selected_event(id: &str, attempt: u8, account: &str, at: i64) -> BusEvent {
         request_id: id.into(),
         attempt,
         account_id: account.into(),
+        incarnation: 1,
         account_kind: "oauth".into(),
         usage_based: false,
         pin_epoch: None,

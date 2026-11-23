@@ -487,6 +487,7 @@ async fn select_main(r: &Rig) -> SelectResult {
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
+            holder: None,
             count: false,
             request_class: None,
             context_compacted: false,
@@ -759,6 +760,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
             fallback_ms: 60_000,
             revision: snapshot.revision,
             probe: false,
+            holder: None,
             count: false,
             request_class: None,
             context_compacted: false,
@@ -1315,14 +1317,14 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
 }
 
 #[tokio::test]
-async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe() {
+async fn a_pin_the_router_moved_on_the_agents_own_request_holds_the_next_probe_under_pin_moved() {
     let mut r = armed(RigSpec {
         accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
         ..RigSpec::default()
     })
     .await;
     let first = r.view("main").account_id.clone().unwrap();
-    let (other, other_id) = if first == "a" { (B, "b") } else { (A, "a") };
+    let other_id = if first == "a" { "b" } else { "a" };
     let pin =
         r.h.router
             .pins()
@@ -1395,6 +1397,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 fallback_ms: 60_000,
                 revision: snapshot.revision,
                 probe: false,
+                holder: None,
                 count: false,
                 request_class: None,
                 context_compacted: false,
@@ -1424,7 +1427,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
     assert_eq!(
         r.view("main").account_id.as_deref(),
         Some(first.as_str()),
-        "the recipe still names the old account until the tick reads the pin"
+        "the recipe still names the account that answered it"
     );
     r.h.router
         .clear_cooldown(&first, CooldownScope::Account)
@@ -1437,16 +1440,14 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
             .into_iter()
             .filter(|q| q.body.windows(14).any(|w| w == b"\"max_tokens\":0"))
             .collect();
-    assert_eq!(probes.len(), 1);
-    assert_eq!(
-        probes[0].credential(),
-        Some(other),
-        "the probe followed the pin to the new account"
+    assert!(
+        probes.is_empty(),
+        "no probe writes the prompt cold on {other_id}, where the pin moved"
     );
     assert_eq!(
-        r.view("main").account_id.as_deref(),
-        Some(other_id),
-        "the account moved with the pin"
+        (r.view("main").account_id.as_deref(), r.view("main").cause),
+        (Some(first.as_str()), Reason::PinMoved),
+        "the recipe keeps its holder and holds while the pin stands on {other_id}"
     );
 }
 
