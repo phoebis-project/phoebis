@@ -4370,11 +4370,9 @@ async fn a_restored_seven_day_reading_at_one_outside_the_set_reads_spent_beside_
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
+    let base = &a.regime_fits[0].windows;
     assert_eq!(
-        (
-            a.windows.get(FIVE_HOUR).map(|w| w.fit),
-            a.windows.get(SEVEN_DAY).map(|w| w.fit)
-        ),
+        (base.get(FIVE_HOUR).copied(), base.get(SEVEN_DAY).copied()),
         (Some("fits"), Some("spent")),
         "{a:?}"
     );
@@ -16276,6 +16274,71 @@ async fn a_members_projection_answers_its_account_wide_cooldown_and_a_clean_memb
             }),
             None
         ),
+    );
+}
+
+#[tokio::test]
+async fn a_regime_that_a_later_revision_names_joins_the_fits_at_its_instant() {
+    // The instant from which the pricer names the regime `desk`.
+    const T: i64 = AT;
+    let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    // The pool's one warm pin stands on b, so a's own burn is zero and a fresh session's prior on a is that pin's burn
+    // of one input token a second.
+    store
+        .upsert_pin(&PinRow {
+            burn_at: Some(T - 1),
+            last_refresh_at: T - 1_000,
+            ..stored_pin(&store, "s1", "b", 1, 1.0)
+        })
+        .unwrap();
+    // A token a second burns a hundredth of the 5-hour window an hour, ten times that under `desk`, and a thousandth
+    // of the 7-day window an hour.
+    let share = SharePricer::default()
+        .with_rate(|window, entrypoint, _, _, burn, _| {
+            let per_hour = match window {
+                FIVE_HOUR if entrypoint == Some("desk") => 0.1,
+                FIVE_HOUR => 0.01,
+                SEVEN_DAY => 0.001,
+                _ => return None,
+            };
+            Some(burn.input * per_hour / 3_600.0)
+        })
+        .with_regimes(|at| {
+            if at >= T {
+                vec![("desk".to_string(), vec!["desk".to_string()])]
+            } else {
+                Vec::new()
+            }
+        });
+    let now = Arc::new(AtomicI64::new(T - 1));
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            share,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle.report(windows("a", 0.5, 0.1, T - 1)).await;
+    let fits = |projections: Vec<phoebis_routing::AccountProjection>| {
+        projection_of_account(&projections, "a")
+            .regime_fits
+            .into_iter()
+            .map(|entry| (entry.regime, entry.fit))
+            .collect::<Vec<_>>()
+    };
+    // a's 5-hour window has 0.45 of room to its ceiling of 0.95 over the five hours to its horizon. The prior reaches
+    // the ceiling in 45 hours under the base regime and in 4.5 hours under `desk`.
+    assert_eq!(
+        fits(handle.projections("p").await.unwrap()),
+        [(None, "fits")]
+    );
+    now.store(T, Ordering::SeqCst);
+    assert_eq!(
+        fits(handle.projections("p").await.unwrap()),
+        [(None, "fits"), (Some("desk".to_string()), "rewrite_only")]
     );
 }
 

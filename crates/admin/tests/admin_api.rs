@@ -8389,7 +8389,10 @@ async fn a_pool_member_answers_the_worst_fit_of_its_shared_windows_and_the_runwa
     .await;
     let read = |account: &str| {
         let member = pool_member(&pools, account);
-        (member["fit"].clone(), member["runway_ms"].clone())
+        (
+            member["regime_fits"][0]["fit"].clone(),
+            member["regime_fits"][0]["runway_ms"].clone(),
+        )
     };
     let null = serde_json::Value::Null;
     // `roomy` burns ten points an hour, so it reaches the ceiling in (0.95 - 0.10) / 0.10 = 8.5 hours, past its reset.
@@ -8463,8 +8466,8 @@ async fn a_pool_members_fit_reads_its_worst_shared_window_and_no_model_week() {
     .await;
     assert_eq!(
         (
-            &pool_member(&pools, "weekly")["fit"],
-            &pool_member(&pools, "model-week")["fit"]
+            &pool_member(&pools, "weekly")["regime_fits"][0]["fit"],
+            &pool_member(&pools, "model-week")["regime_fits"][0]["fit"]
         ),
         (
             &serde_json::json!("least_bad"),

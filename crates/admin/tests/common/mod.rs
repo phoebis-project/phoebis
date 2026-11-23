@@ -225,8 +225,10 @@ pub async fn admin_parts_full_on_equivalent(
     full_on_equivalent(store, clock_cell, costs, ledger_config, None).await
 }
 
-/// The one build of `admin_parts_full_on_equivalent` and `admin_parts_full_on_polled`, its pricer answering `factor`
-/// for the Fable week where one is given, so the capture's factor leaves the equivalent's harness as it is.
+/// The one build of `admin_parts_full_on_equivalent` and `admin_parts_full_on_polled`. Its pricer wires the equivalent
+/// and the regimes of the revision in force at each call from `costs`, as the router's start wires
+/// `SharePricer::with_equivalent` and `SharePricer::with_regimes`, and answers `factor` for the Fable week where one is
+/// given, so the capture's factor leaves the equivalent's harness as it is.
 async fn full_on_equivalent(
     store: Arc<Store>,
     clock_cell: Arc<AtomicI64>,
@@ -235,9 +237,29 @@ async fn full_on_equivalent(
     factor: Option<f64>,
 ) -> Full {
     let tables = costs.clone();
-    let share =
-        SharePricer::default().with_equivalent(move |window, entrypoint, model, usage, at| {
+    let regime_tables = costs.clone();
+    let share = SharePricer::default()
+        .with_equivalent(move |window, entrypoint, model, usage, at| {
             tables.equivalent_at(window, entrypoint, model, usage, at, at, at)
+        })
+        .with_regimes(move |at| {
+            let rates = regime_tables.regime_rates(phoebis_routing::FIVE_HOUR, at);
+            let mut regimes: Vec<(String, Vec<String>)> = rates
+                .regimes
+                .into_keys()
+                .map(|name| {
+                    let mut entrypoints: Vec<String> = rates
+                        .entrypoints
+                        .iter()
+                        .filter(|(_, regime)| **regime == name)
+                        .map(|(entrypoint, _)| entrypoint.clone())
+                        .collect();
+                    entrypoints.sort();
+                    (name, entrypoints)
+                })
+                .collect();
+            regimes.sort();
+            regimes
         });
     let share = match factor {
         Some(factor) => share.with_week_factor(move |window, _| {

@@ -866,7 +866,8 @@ pub async fn run_until(
 /// turns a model week's share into one of the 7-day window. Every closure that prices does so under the regime of the
 /// entrypoint it is handed, the base one for `None`. The `BurnRates` tables and the measured windows are read at `now`
 /// and fixed for the life of the process, so a pending revision reaches them at the next start, while the two shares,
-/// the equivalent and the model week's factor read at each call's instant under the revision in force then.
+/// the regime list, the equivalent and the model week's factor read at each call's instant under the revision in force
+/// then.
 fn router_config(
     prices: &phoebis_ledger::PriceTable,
     tables: Arc<phoebis_ledger::PlanTables>,
@@ -879,6 +880,7 @@ fn router_config(
     let equivalent_tables = tables.clone();
     let week_tables = tables.clone();
     let segment_tables = tables.clone();
+    let regime_tables = tables.clone();
     phoebis_routing::RouterConfig {
         band: phoebis_routing::BandWeight::new(move |window, entrypoint, at| {
             band.band_factor(window, entrypoint, at)
@@ -905,6 +907,25 @@ fn router_config(
         .with_week_factor(move |window, at| week_tables.week_factor(window, at))
         .with_band_segments(move |window, entrypoint, from, to| {
             segment_tables.band_segments(window, entrypoint, from, to)
+        })
+        .with_regimes(move |at| {
+            let rates = regime_tables.regime_rates(phoebis_routing::FIVE_HOUR, at);
+            let mut regimes: Vec<(String, Vec<String>)> = rates
+                .regimes
+                .into_keys()
+                .map(|name| {
+                    let mut entrypoints: Vec<String> = rates
+                        .entrypoints
+                        .iter()
+                        .filter(|(_, regime)| **regime == name)
+                        .map(|(entrypoint, _)| entrypoint.clone())
+                        .collect();
+                    entrypoints.sort();
+                    (name, entrypoints)
+                })
+                .collect();
+            regimes.sort();
+            regimes
         }),
         cooldown_fallback: Duration::from_secs(routing.cooldown_fallback_seconds),
         funding_retry: Duration::from_secs(300.min(routing.model_rejection_seconds)),
@@ -1833,6 +1854,58 @@ mod tests {
         assert_eq!(
             factor(FEBRUARY_2026),
             Some(0.25),
+            "the entry in force at the call, which took effect after the start"
+        );
+    }
+
+    /// On tables whose second entry names the regime `booth` beside the first entry's `desk`, a start inside the first
+    /// entry reads both regimes once the second entry takes effect, each by name with its entrypoints sorted.
+    #[test]
+    fn the_router_config_reads_the_regimes_under_the_revision_in_force_at_each_call() {
+        use phoebis_ledger::test_tables::{FEBRUARY_2026, JANUARY_2026, SUBSCRIPTION_COSTS};
+        let named = "    regimes:\n";
+        let mut costs = SUBSCRIPTION_COSTS.to_string();
+        let second = costs
+            .rfind(named)
+            .expect("the second entry names its regimes")
+            + named.len();
+        costs.insert_str(
+            second,
+            "      booth: {entrypoints: [kiosk, booth], capacity: {default_claude_ai: {five_hour: 10, seven_day: 62.5}}, \
+             peak: {capacity_factor: {five_hour: 1, seven_day: 1}}}\n",
+        );
+        let tables = phoebis_ledger::PlanTables {
+            revisions: phoebis_ledger::CostRevisions::from_yaml(&costs)
+                .expect("the test cost model parses"),
+            path: None,
+            source: "test".to_string(),
+        };
+        let config = router_config(
+            phoebis_ledger::PriceRevisions::shipped().in_force(START),
+            Arc::new(tables),
+            &RoutingConfig::default(),
+            JANUARY_2026,
+        );
+        assert_eq!(
+            config.share.regimes(JANUARY_2026),
+            [(
+                "desk".to_string(),
+                vec!["desk".to_string(), "pane".to_string()]
+            )],
+            "the entry in force at the start"
+        );
+        assert_eq!(
+            config.share.regimes(FEBRUARY_2026),
+            [
+                (
+                    "booth".to_string(),
+                    vec!["booth".to_string(), "kiosk".to_string()]
+                ),
+                (
+                    "desk".to_string(),
+                    vec!["desk".to_string(), "pane".to_string()]
+                ),
+            ],
             "the entry in force at the call, which took effect after the start"
         );
     }

@@ -15990,8 +15990,18 @@ export const FIXTURES: Record<string, Fixture> = {
               "account_id": "business",
               "priority": 0,
               "eligible": "eligible",
-              "fit": "fits",
-              "runway_ms": null,
+              "regime_fits": [
+                {
+                  "regime": null,
+                  "fit": "fits",
+                  "runway_ms": null
+                },
+                {
+                  "regime": "interactive",
+                  "fit": "fits",
+                  "runway_ms": null
+                }
+              ],
               "kind": "oauth",
               "budget_daily_usd": null,
               "budget_monthly_usd": 30,
@@ -16014,8 +16024,18 @@ export const FIXTURES: Record<string, Fixture> = {
               "account_id": "direct",
               "priority": 1,
               "eligible": "eligible",
-              "fit": "fits",
-              "runway_ms": null,
+              "regime_fits": [
+                {
+                  "regime": null,
+                  "fit": "fits",
+                  "runway_ms": null
+                },
+                {
+                  "regime": "interactive",
+                  "fit": "fits",
+                  "runway_ms": null
+                }
+              ],
               "kind": "api_key",
               "budget_daily_usd": null,
               "budget_monthly_usd": 50,
@@ -16038,8 +16058,18 @@ export const FIXTURES: Record<string, Fixture> = {
               "account_id": "usage-seat",
               "priority": 2,
               "eligible": "eligible",
-              "fit": "fits",
-              "runway_ms": null,
+              "regime_fits": [
+                {
+                  "regime": null,
+                  "fit": "fits",
+                  "runway_ms": null
+                },
+                {
+                  "regime": "interactive",
+                  "fit": "fits",
+                  "runway_ms": null
+                }
+              ],
               "kind": "oauth",
               "budget_daily_usd": null,
               "budget_monthly_usd": null,
@@ -16403,8 +16433,18 @@ export const FIXTURES: Record<string, Fixture> = {
               "account_id": "free-org",
               "priority": 0,
               "eligible": "subscription_ended",
-              "fit": "ending",
-              "runway_ms": null,
+              "regime_fits": [
+                {
+                  "regime": null,
+                  "fit": "ending",
+                  "runway_ms": null
+                },
+                {
+                  "regime": "interactive",
+                  "fit": "ending",
+                  "runway_ms": null
+                }
+              ],
               "kind": "oauth",
               "budget_daily_usd": null,
               "budget_monthly_usd": null,

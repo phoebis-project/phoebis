@@ -1444,9 +1444,9 @@ impl LoadCounts {
     }
 }
 
-/// One account's projection per plan window, read under the state lock at one instant, its Pace score, and the fit a
-/// fresh placement reads on it over the pool's fresh prior with the runway its rung ranks by, all with the settings of
-/// the pool the ask named.
+/// One account's projection per plan window, read under the state lock at one instant, its Pace score, and for each
+/// regime the fit a fresh placement reads on it over the pool's fresh prior with the runway its rung ranks by, all with
+/// the settings of the pool the ask named.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccountProjection {
     pub account_id: String,
@@ -1465,19 +1465,47 @@ pub struct AccountProjection {
     /// What the selector holds against the account for a request on no model in particular, with no account tried
     /// and the fast lane off, `None` where it would place on the account at the ask's instant.
     pub obstacle: Option<Obstacle>,
-    /// The worst word over the member's shared plan windows, by the order `fits`, `rewrite_only`, `least_bad`,
-    /// `ending`, `spent`, for a request that prices no rewrite on a model with no week of its own: `spent` where a
-    /// shared window's prediction stands at 1.0 or past it, else `ending` inside the account's wind-down and past its
-    /// end. The word stands whatever `obstacle` holds. A paid source, a member with no priced tier and a member with
-    /// no reading of a shared window read the verdict of the fit read itself: `fits` or `least_bad` for an api_key
-    /// member, and `fits` for a usage-based seat and for a member with no priced tier.
-    pub fit: &'static str,
-    /// The runway the ladder ranks the member's rung by, over the shared windows: to the ceiling under `fits` and
-    /// `rewrite_only`, to 1.0 under `least_bad`, where a paid source with a full bucket reads 0. None for an unbounded
-    /// runway and for `ending` and `spent`.
-    pub runway_ms: Option<i64>,
+    /// One fit for each regime of the cost revision in force at the projection's instant: the base regime first, then
+    /// each named regime by name.
+    pub regime_fits: Vec<RegimeFit>,
     /// The member's budgets with the spend the ledger last reported over each, as a selection's facts list them.
     pub budget: Vec<BudgetFacts>,
+}
+
+impl AccountProjection {
+    /// The entry of the regime that lists `entrypoint`, the base regime's for `None` and for an unlisted one.
+    pub fn regime_fit(&self, entrypoint: Option<&str>) -> &RegimeFit {
+        entrypoint
+            .and_then(|entrypoint| {
+                self.regime_fits
+                    .iter()
+                    .find(|entry| entry.entrypoints.iter().any(|listed| listed == entrypoint))
+            })
+            .unwrap_or_else(|| &self.regime_fits[0])
+    }
+}
+
+/// The fit a fresh placement reads on a member under one regime of the cost revision in force at the read's instant.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegimeFit {
+    /// The regime's name, `None` for the base regime.
+    pub regime: Option<String>,
+    /// The entrypoints that the regime lists, empty for the base regime, which each other entrypoint reads.
+    pub entrypoints: Vec<String>,
+    /// The worst word over the member's shared plan windows, by the order `fits`, `rewrite_only`, `least_bad`,
+    /// `ending`, `spent`, for a request that prices no rewrite on a model with no week of its own, its prior priced
+    /// under the regime: `spent` where a shared window's prediction stands at 1.0 or past it, else `ending` inside the
+    /// account's wind-down and past its end. The word stands whatever `AccountProjection::obstacle` holds. A paid
+    /// source, a member with no priced tier and a member with no reading of a shared window read the verdict of the
+    /// fit read itself: `fits` or `least_bad` for an api_key member, and `fits` for a usage-based seat and for a member
+    /// with no priced tier.
+    pub fit: &'static str,
+    /// The runway the ladder ranks the member's rung by under the regime, over the shared windows: to the ceiling under
+    /// `fits` and `rewrite_only`, to 1.0 under `least_bad`, where a paid source with a full bucket reads 0. None for an
+    /// unbounded runway and for `ending` and `spent`.
+    pub runway_ms: Option<i64>,
+    /// The word of each plan window under the regime, by the window's id.
+    pub windows: BTreeMap<String, &'static str>,
 }
 
 /// The slow-down entry an account's last pinned selection wrote, with the pool's hold cap: the figures the holds apply.
@@ -1523,11 +1551,6 @@ pub struct WindowProjection {
     /// is: `Some(0)` at or past the ceiling, `None` with no burn or where the runway reaches the earlier of the
     /// reading's reset and the account's end that lies after the ask's instant.
     pub runway_ms: Option<i64>,
-    /// The fit a fresh placement reads on the window for a request that prices no rewrite: `spent`, `ending`,
-    /// `fits`, `rewrite_only` or `least_bad`. A model week reads it on a request for a model that draws the week, a
-    /// member with no priced tier reads `fits`, and a window the account's set no longer holds reads `spent` at a
-    /// prediction of 1.0 or more, else `ending` inside the wind-down and `fits` outside it.
-    pub fit: &'static str,
 }
 
 /// A pin with its burn decayed to now and its runway on its account: the time until the account's projection reaches
@@ -2936,12 +2959,13 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 /// under that pool's settings: the windows from one `projections_of` read on the achieved burn and one on the demand,
 /// so each window is built once per read, the score and the Fable reservation from `pace_of` on `seven_day`, the
 /// window Pace reads for a model without a week of its own, the slow-down entry in force, which the last pinned
-/// selection on the account wrote, the selector's obstacle on the account and the member's budgets. The fit a fresh
-/// placement reads on each member comes from `fresh_fit` over the pool's `fresh_prior`, read once for the pool: one
-/// read on a request whose model draws no week of its own gives the member's word, its runway and the words of the
-/// shared windows, and each model week the account holds a reading of takes its word from a read on that week's model.
-/// Each window's runway to its ceiling comes from `runway`, as a pin's does. Empty for a pool the snapshot does not
-/// hold.
+/// selection on the account wrote, the selector's obstacle on the account and the member's budgets. The fits a fresh
+/// placement reads on each member come from `fresh_fit` over the pool's `fresh_prior`, read once for the pool, one fit
+/// for each regime that `RoutingState::regimes` names at `now`, read with the regime's first entrypoint: one read on a
+/// request whose model draws no week of its own gives the member's word under the regime, its runway and the words of
+/// the shared windows, and each model week the account holds a reading of takes its word from a read on that week's
+/// model. A window joins the projection where the base regime's read gives it a word. Each window's runway to its
+/// ceiling comes from `runway`, as a pin's does. Empty for a pool the snapshot does not hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2960,6 +2984,7 @@ fn projections(
     members.sort();
     members.dedup();
     let prior = fresh_prior(state, snapshot, pool, now);
+    let regimes = state.regimes(now);
     members
         .into_iter()
         .map(|account_id| {
@@ -2986,27 +3011,49 @@ fn projections(
                 BurnRead::Demand,
                 None,
             );
-            // The empty id names no model family, so the read draws the shared windows alone and a model week moves
-            // neither the member's word nor its runway.
-            let shared = fresh_fit(state, snapshot, pool, &prior, account_id, "", now);
-            let fit = member_fit(&shared);
-            let runway_ms = shared.rung_runway_ms(fit);
-            let mut words = shared.words;
-            // A week's family is a model id that `model_week` matches to that week, so the read draws it.
-            for &(family, week) in MODEL_WINDOWS {
-                if !achieved.contains_key(week) {
-                    continue;
-                }
-                let read = fresh_fit(state, snapshot, pool, &prior, account_id, family, now);
-                if let Some(&word) = read.words.get(week) {
-                    words.insert(week.to_string(), word);
-                }
-            }
+            let regime_fits: Vec<RegimeFit> = regimes
+                .iter()
+                .map(|(regime, entrypoints)| {
+                    let entrypoint = entrypoints.first().map(String::as_str);
+                    // The empty id names no model family, so the read draws the shared windows alone and a model week
+                    // moves neither the member's word nor its runway.
+                    let shared = fresh_fit(
+                        state, snapshot, pool, &prior, account_id, "", entrypoint, now,
+                    );
+                    let fit = member_fit(&shared);
+                    let runway_ms = shared.rung_runway_ms(fit);
+                    let mut words = shared.words;
+                    // A week's family is a model id that `model_week` matches to that week, so the read draws it.
+                    for &(family, week) in MODEL_WINDOWS {
+                        if !achieved.contains_key(week) {
+                            continue;
+                        }
+                        let read = fresh_fit(
+                            state, snapshot, pool, &prior, account_id, family, entrypoint, now,
+                        );
+                        if let Some(&word) = read.words.get(week) {
+                            words.insert(week.to_string(), word);
+                        }
+                    }
+                    RegimeFit {
+                        regime: regime.clone(),
+                        entrypoints: entrypoints.clone(),
+                        fit: fit.as_str(),
+                        runway_ms,
+                        windows: words
+                            .into_iter()
+                            .map(|(window, word)| (window, word.as_str()))
+                            .collect(),
+                    }
+                })
+                .collect();
             let windows = all_plan_windows()
                 .filter_map(|window| {
                     let projection = achieved.get(window)?;
                     let demand = demands.get(window)?;
-                    let word = words.get(window).copied()?;
+                    if !regime_fits.first()?.windows.contains_key(window) {
+                        return None;
+                    }
                     let line = ceiling(pool, window);
                     Some((
                         window.to_string(),
@@ -3026,7 +3073,6 @@ fn projections(
                                 projection.reset,
                                 end,
                             ),
-                            fit: word.as_str(),
                         },
                     ))
                 })
@@ -3070,8 +3116,7 @@ fn projections(
                     fallback_ms,
                     false,
                 ),
-                fit: fit.as_str(),
-                runway_ms,
+                regime_fits,
                 budget: budget_facts(state, snapshot, pool_id, account_id),
             }
         })

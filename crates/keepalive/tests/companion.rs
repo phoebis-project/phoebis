@@ -137,6 +137,23 @@ async fn observe_as(r: &mut Rig, secret: &str, session: &str) {
     r.pump(Some(&id)).await;
 }
 
+/// One real request of `agent` on `session` under the rig's key, its user agent naming `entrypoint`, pumped into the
+/// engine.
+async fn observe_on(r: &mut Rig, session: &str, agent: &str, entrypoint: &str) {
+    let mut req = r.request_with(agent, BODY);
+    relay_common::set_header(&mut req, "x-claude-code-session-id", session);
+    relay_common::set_header(
+        &mut req,
+        "user-agent",
+        &format!("claude-cli/2.1.310 (external, {entrypoint})"),
+    );
+    let resp = r.h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
+}
+
 /// A usage-poll reading of `window` on `account`, held by the router task once this returns.
 async fn read_window(r: &Rig, account: &str, window: &str, utilization: f64, reset: i64) {
     r.h.router
@@ -639,6 +656,50 @@ async fn each_window_answers_its_own_fit_and_a_spent_fable_week_holds_no_obstacl
         (json!("fits"), json!("fits"), json!("spent"), json!(null)),
         "{}",
         answer.text
+    );
+}
+
+#[tokio::test]
+async fn the_allowance_read_answers_each_window_under_the_regime_of_the_sessions_newest_pin() {
+    // Every pin burns a tenth of the 5-hour window an hour under `desk`, the one regime, whatever its tokens, and
+    // nothing under the base regime.
+    let share = SharePricer::default()
+        .with_rate(|window, entrypoint, _, _, _, _| {
+            (window == FIVE_HOUR && entrypoint == Some("desk")).then_some(0.1 / 3_600.0)
+        })
+        .with_regimes(|_| vec![("desk".to_string(), vec!["desk".to_string()])]);
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("a", "sk-ant-oat01-AAAA", 0)],
+        router: RouterConfig {
+            share,
+            ..RouterConfig::default()
+        },
+        tier: Some(TIER),
+        ..RigSpec::default()
+    })
+    .await;
+    let app = companion_router(r.engine.clone());
+    // `newest-desk` uses its agent on `sdk-cli`, an entrypoint no regime lists, first and its agent on `desk` last.
+    // `newest-sdk` uses the same two agents in the reverse order.
+    observe_on(&mut r, "newest-desk", "main", "sdk-cli").await;
+    r.advance(1_000);
+    observe_on(&mut r, "newest-desk", "sub", "desk").await;
+    r.advance(1_000);
+    observe_on(&mut r, "newest-sdk", "sub", "desk").await;
+    r.advance(1_000);
+    observe_on(&mut r, "newest-sdk", "main", "sdk-cli").await;
+    read_window(&r, "a", FIVE_HOUR, 0.5, r.now() + 2 * HOUR_MS).await;
+    let fit = |answer: Answer| answer.body["accounts"][0]["windows"][FIVE_HOUR]["fit"].clone();
+    // The window has 0.45 of room to its ceiling of 0.95 before its reset two hours out, and the two pins on `desk`
+    // burn 0.2 of it an hour. A fresh session's prior adds 0.1 an hour under `desk`, which brings the window to the
+    // ceiling in an hour and a half, and nothing under the base regime, which leaves it 2 hours 15 minutes.
+    assert_eq!(
+        [
+            fit(get(&app, Some("newest-desk"), Some(KEY)).await),
+            fit(get(&app, Some("newest-sdk"), Some(KEY)).await),
+            fit(get(&app, Some("no-pin"), Some(KEY)).await),
+        ],
+        [json!("rewrite_only"), json!("fits"), json!("fits")]
     );
 }
 

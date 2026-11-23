@@ -3992,10 +3992,11 @@ fn fit_read(
 }
 
 /// The fit a fresh placement reads on `candidate` at `now` for a request on `model` that prices no rewrite, over the
-/// pool's fresh prior `prior` (`fresh_prior`'s rows, read once for the pool): what the pools route answers for a
-/// member. The request carries no pin, no body, no failover entry, no classifier, probe, count or fast mark and no
-/// candidates, so the read is the gate's own for a fresh session on the windows `model` draws. It names no entrypoint,
-/// so the prior prices under the base regime.
+/// pool's fresh prior `prior` (`fresh_prior`'s rows, read once for the pool): the entry of one regime in the list of
+/// fits that the pools route answers for a member. The request carries no pin, no body, no failover entry, no
+/// classifier, probe, count or fast mark and no candidates, so the read is the gate's own for a fresh session on the
+/// windows `model` draws. The prior prices under the regime that `entrypoint` names, the base one for `None`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn fresh_fit(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -4003,6 +4004,7 @@ pub(crate) fn fresh_fit(
     prior: &[PinRow],
     candidate: &str,
     model: &str,
+    entrypoint: Option<&str>,
     now: i64,
 ) -> FitRead {
     // Every member is written out, as `standing_request` writes them, so a member the type gains states its value here.
@@ -4030,7 +4032,7 @@ pub(crate) fn fresh_fit(
         context_compacted: false,
         boundaries: Arc::from([]),
         client: ClientClass::Other,
-        entrypoint: None,
+        entrypoint: entrypoint.map(String::from),
         static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,

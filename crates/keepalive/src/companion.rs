@@ -157,6 +157,11 @@ async fn allowance(
             continue;
         }
         let companion_key = engine.parts.store.companion_key();
+        // The entrypoint that the session used last names the regime that its next request most likely prices under.
+        let entrypoint = pins
+            .iter()
+            .max_by_key(|standing| standing.pin.last_used_at)
+            .and_then(|standing| standing.pin.entrypoint.clone());
         let body = Allowance {
             protocol: PROTOCOL,
             now: stamp(now),
@@ -169,7 +174,12 @@ async fn allowance(
                 },
                 strategy: pool.strategy.as_str(),
             },
-            accounts: accounts(&companion_key, &snapshot, projections),
+            accounts: accounts(
+                &companion_key,
+                &snapshot,
+                projections,
+                entrypoint.as_deref(),
+            ),
             pins: session_pins(&companion_key, pins, now),
         };
         return json(
@@ -193,18 +203,20 @@ fn refusal(status: StatusCode, code: &'static str) -> Response {
     json(status, serde_json::json!({ "code": code }).to_string())
 }
 
-/// The pool's active members, each under its pseudonym and ordered by it.
+/// The pool's active members, each under its pseudonym and ordered by it, each window's word read under the regime that
+/// `entrypoint` names.
 fn accounts(
     companion_key: &CompanionKey,
     snapshot: &RegistrySnapshot,
     projections: Vec<AccountProjection>,
+    entrypoint: Option<&str>,
 ) -> Vec<AccountView> {
     let mut accounts: Vec<AccountView> = projections
         .into_iter()
         .filter_map(|projection| {
             let row = snapshot.account(&projection.account_id)?;
             active(row, projection.obstacle.as_ref())
-                .then(|| account_view(companion_key, snapshot, row, projection))
+                .then(|| account_view(companion_key, snapshot, row, projection, entrypoint))
         })
         .collect();
     accounts.sort_by(|a, b| a.id.cmp(&b.id));
@@ -222,6 +234,7 @@ fn account_view(
     snapshot: &RegistrySnapshot,
     row: &AccountRow,
     projection: AccountProjection,
+    entrypoint: Option<&str>,
 ) -> AccountView {
     let funding = funding_of(
         Some(row.kind),
@@ -230,10 +243,11 @@ fn account_view(
         Speed::Standard,
     )
     .as_str();
+    let words = &projection.regime_fit(entrypoint).windows;
     let windows = projection
         .windows
-        .into_iter()
-        .map(|(window, w)| {
+        .iter()
+        .filter_map(|(window, w)| {
             let view = WindowView {
                 utilization: w.predicted,
                 horizon_at: w.wall.map(stamp),
@@ -241,10 +255,11 @@ fn account_view(
                 demand_per_hour: w.demand,
                 projected_at_horizon: w.projection,
                 ceiling: w.ceiling,
-                fit: w.fit,
+                // Each regime's read words the windows that the projection holds, so no window is left out here.
+                fit: words.get(window).copied()?,
                 runway_minutes: runway_minutes(w.runway_ms),
             };
-            (window, view)
+            Some((window.clone(), view))
         })
         .collect();
     let spend = projection

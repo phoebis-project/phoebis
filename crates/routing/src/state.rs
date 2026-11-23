@@ -526,6 +526,7 @@ pub struct SharePricer {
     equivalent: Arc<Equivalent>,
     band_segments: Arc<BandSegments>,
     week_factor: Arc<WeekFactor>,
+    regimes: Arc<Regimes>,
 }
 
 type Price = dyn Fn(&str, Option<&str>, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
@@ -534,6 +535,7 @@ type Rate = dyn Fn(&str, Option<&str>, &str, &str, &PinBurn, i64) -> Option<f64>
 type Equivalent = dyn Fn(&str, Option<&str>, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
 type BandSegments = dyn Fn(&str, Option<&str>, i64, i64) -> Vec<BandSegment> + Send + Sync;
 type WeekFactor = dyn Fn(&str, i64) -> Option<f64> + Send + Sync;
+type Regimes = dyn Fn(i64) -> Vec<(String, Vec<String>)> + Send + Sync;
 
 /// One piece of a span as the band weighs it: `[from, to)` in milliseconds at `weight`, one over the regime's capacity
 /// factor inside the band and 1 outside.
@@ -567,6 +569,7 @@ impl SharePricer {
                 }]
             }),
             week_factor: Arc::new(|_, _| None),
+            regimes: Arc::new(|_| Vec::new()),
         }
     }
 
@@ -642,6 +645,23 @@ impl SharePricer {
 
     pub fn week_factor(&self, window: &str, at: i64) -> Option<f64> {
         (self.week_factor)(window, at)
+    }
+
+    /// `regimes(at)`: each named regime of the cost revision in force at `at` with the entrypoints that it lists, the
+    /// regimes by name and each list sorted. No named regime until this is set, so a task spawned without the tables
+    /// reads the base regime alone.
+    pub fn with_regimes(
+        self,
+        regimes: impl Fn(i64) -> Vec<(String, Vec<String>)> + Send + Sync + 'static,
+    ) -> SharePricer {
+        SharePricer {
+            regimes: Arc::new(regimes),
+            ..self
+        }
+    }
+
+    pub fn regimes(&self, at: i64) -> Vec<(String, Vec<String>)> {
+        (self.regimes)(at)
     }
 
     pub fn rate(
@@ -2944,6 +2964,19 @@ impl RoutingState {
 
     pub fn share(&self) -> &SharePricer {
         &self.share
+    }
+
+    /// The regimes of the cost revision in force at `now`, as the share pricer names them: the base regime first, as
+    /// `None` with no entrypoint, then each named regime by name with the entrypoints that it lists, sorted.
+    pub(crate) fn regimes(&self, now: i64) -> Vec<(Option<String>, Vec<String>)> {
+        std::iter::once((None, Vec::new()))
+            .chain(
+                self.share
+                    .regimes(now)
+                    .into_iter()
+                    .map(|(name, entrypoints)| (Some(name), entrypoints)),
+            )
+            .collect()
     }
 
     /// Books under the request's id, replacing a booking the request already holds (a failover's new selection).
