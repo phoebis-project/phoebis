@@ -19,11 +19,13 @@ const PROJECTED: readonly string[] = ['5h', '7d', '7d_fable'];
  * A window as the account routes answer it: `burn` is the share of the window the sessions on the account burn per
  * hour, and the projection runs it to the horizon, the reset on the 5-hour window and the earlier of the reset and five
  * hours out on a weekly one, five hours out on a window with no reset. A null burn is a window the router holds no
- * reading of, which projects nothing, and any other window, which the router does not project, carries none either.
- * The demand is the burn the sessions would reach unslowed, which equals the burn on an account no slow-down holds.
+ * reading of, which projects nothing, and any other window, which the router does not project, carries none either. A
+ * null share is a window the router holds no reading of too, so it carries no burn whatever its caller names, as the
+ * route serves a ledger row with no share. The demand is the burn the sessions would reach unslowed, which equals the
+ * burn on an account no slow-down holds.
  */
-function win(id: WindowId, utilization: number, resetsInMs: number | null, observedAgoMs = 40_000, given: number | null = 0): RateLimitWindow {
-  const burn = PROJECTED.includes(id) ? given : null;
+function win(id: WindowId, utilization: number | null, resetsInMs: number | null, observedAgoMs = 40_000, given: number | null = 0): RateLimitWindow {
+  const burn = PROJECTED.includes(id) && utilization !== null ? given : null;
   const reset = resetsInMs ?? 5 * HOUR;
   const horizonInMs = id === '5h' ? reset : Math.min(5 * HOUR, reset);
   return {
@@ -35,7 +37,7 @@ function win(id: WindowId, utilization: number, resetsInMs: number | null, obser
     lead: null,
     observedAt: ago(observedAgoMs),
     periodHours: periodHoursOf(id),
-    projection: burn === null ? null : round(utilization + (burn * horizonInMs) / HOUR, 3),
+    projection: burn === null || utilization === null ? null : round(utilization + (burn * horizonInMs) / HOUR, 3),
     resetsAt: resetsInMs === null ? null : ahead(resetsInMs),
     utilization,
   };
@@ -617,8 +619,9 @@ const SEEDS = [
     cooldowns: [],
   },
   // A Pro login in no pool whose 5-hour window has not opened, which the router answers with no reset and a projection
-  // of 0 five hours out. After the older seeds, so every seed above keeps its history's draws, and its id sorts last,
-  // so every older account keeps its color: the palette's eight slots put it on reserve's.
+  // of 0 five hours out, and whose 7-day window the router holds no share of, which the route answers with its reset
+  // alone. After the older seeds, so every seed above keeps its history's draws, and its id sorts last, so every older
+  // account keeps its color: the palette's eight slots put it on reserve's.
   {
     ...ACCOUNT_SAMPLE,
     id: 'zephyr',
@@ -627,7 +630,7 @@ const SEEDS = [
     email: 'operator+zephyr@example.com',
     status: 'ready',
     routingEnabled: true,
-    windows: [win('5h', 0, null), win('7d', 0.04, 5 * DAY + 3 * HOUR)],
+    windows: [win('5h', 0, null), win('7d', null, 5 * DAY + 3 * HOUR)],
     fableWindow: null,
     extraUsage: null,
     fastLane: null,
@@ -685,9 +688,10 @@ const READINGS = new Map<string, Pick<Account, 'fableWindow' | 'windows'>>();
 
 export const ACCOUNTS: Account[] = SEEDS.map(({ scopes, ...a }: Seed) => {
   const subscription: Subscription | null = a.subscription && { ...a.subscription, plan: resolvedPlan(a) };
-  // Standing in for the router, which answers each window's lead toward the earlier of its reset and the account's end.
+  // Standing in for the router, which answers each window's lead toward the earlier of its reset and the account's end,
+  // and none for a window with no share.
   const end = endOf({ ...a, subscription }, NOW);
-  const led = (w: RateLimitWindow): RateLimitWindow => ({ ...w, lead: leadOf(w, w.periodHours * HOUR, NOW, end) });
+  const led = (w: RateLimitWindow): RateLimitWindow => ({ ...w, lead: w.utilization === null ? null : leadOf({ resetsAt: w.resetsAt, utilization: w.utilization }, w.periodHours * HOUR, NOW, end) });
   // The poll no longer asks an account whose plan ended, so the route shows no reset of it.
   const limitResets = a.planEndedAt === null ? decodeLimitResets(limitResetsWire(a.id, RESET_BLOCKS, NOW)) : null;
   const reading = { fableWindow: a.planEndedAt === null && a.fableWindow !== null ? led(a.fableWindow) : null, windows: a.planEndedAt === null ? a.windows.map(led) : [] };
@@ -770,7 +774,7 @@ const HISTORY_SPAN = 7 * DAY;
 // Concave climb: usage lands early in a window and tapers as the session cools.
 const climb = (phase: number) => Math.min(1, Math.pow(Math.max(0, phase), 0.75));
 
-function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: number, endMs: number): QuotaSample[] {
+function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: number | null, endMs: number): QuotaSample[] {
   const rng = createRng(seed);
   const samples: QuotaSample[] = [];
   const start = NOW - HISTORY_SPAN;
@@ -784,10 +788,10 @@ function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: nu
       // The live window is the one the samples end in. Its last point is the reading itself at `endMs`, as the router's
       // last reading is, and the points before it climb a peak scaled to meet the reading there, floored so a window
       // read early in its period does not scale its earlier points past what they could reach. Older windows get their
-      // own random shape.
+      // own random shape. A live window read with no share has no reading to meet, so its points carry no figure.
       if (windowIndex === 0) {
         const phaseEnd = (endMs - currentStart) / periodMs;
-        peak = target / Math.max(0.05, climb(phaseEnd));
+        peak = (target ?? 0) / Math.max(0.05, climb(phaseEnd));
       } else {
         peak = rng.float(0.25, 1.0) * (rng.chance(0.15) ? 0.35 : 1);
       }
@@ -796,9 +800,9 @@ function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: nu
     const phase = (t - windowStart) / periodMs;
     const jitter = rng.float(-0.012, 0.012);
     const value = Math.max(0, Math.min(1, peak * climb(phase) + jitter));
-    samples.push({ at: iso(t), utilization: round(value, 3) });
+    samples.push({ at: iso(t), utilization: windowIndex === 0 && target === null ? null : round(value, 3) });
   }
-  samples.push({ at: iso(endMs), utilization: round(target, 3) });
+  samples.push({ at: iso(endMs), utilization: target === null ? null : round(target, 3) });
   return samples;
 }
 
@@ -835,7 +839,7 @@ export const QUOTA_HISTORY: QuotaHistory[] = SEEDS.flatMap((seed, i) =>
     windowId: w.id,
     samples:
       w.resetsAt === null
-        ? [{ at: iso(samplesEndOf(ACCOUNTS[i])), utilization: round(w.utilization, 3) }]
+        ? [{ at: iso(samplesEndOf(ACCOUNTS[i])), utilization: w.utilization === null ? null : round(w.utilization, 3) }]
         : carryLegacyEdges(ACCOUNTS[i], w, sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt), w.periodHours * HOUR, w.utilization, samplesEndOf(ACCOUNTS[i]))),
   })),
 );

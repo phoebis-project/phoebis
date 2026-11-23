@@ -9142,10 +9142,10 @@ async function accountFreeBadge(theme) {
  * The sentence an account whose plan ended reads in its window bars' place. On `/` and `/accounts` the plan-ended
  * account's card or row reads the compact form, from the left edge inside its card of the nearest neighbor's window
  * bars and in the type size and ink of their first label, and on `/` both quota rings name the usage-based seat with
- * its reason, the Fable ring the Pro seeds without a Fable week beside it. On `/accounts/sunset` the Usage card's long
- * form reads in the ink of the Identity card's note, the two sizes recorded, since the sentence keeps the body size of
- * the card's other state sentences. Each text is recorded. The router's seed holds no such account, so only the
- * story's pass reads it.
+ * its reason, the 7-day ring the window with no share behind it and the Fable ring the Pro seeds without a Fable week
+ * beside it. On `/accounts/sunset` the Usage card's long form reads in the ink of the Identity card's note, the two
+ * sizes recorded, since the sentence keeps the body size of the card's other state sentences. Each text is recorded.
+ * The router's seed holds no such account, so only the story's pass reads it.
  */
 async function planEndedLines(theme, path) {
   if (!mock) return;
@@ -9186,7 +9186,7 @@ async function planEndedLines(theme, path) {
   for (const what of compare(read.sentence, read.neighbor, ['fontSize', 'ink', 'left'], `the plan-ended account's ${kind} sentence against the neighboring ${kind}'s window bars and their first label`)) say(what);
   if (path === '/') {
     const seats = ['contract: a usage-based seat', 'zenith: a usage-based seat'];
-    const want = { '7d remaining': seats, 'Fable week remaining': ['secondary: no Fable week', 'reserve: no Fable week', ...seats, 'zephyr: no Fable week'] };
+    const want = { '7d remaining': [...seats, 'zephyr: share not reported'], 'Fable week remaining': ['secondary: no Fable week', 'reserve: no Fable week', ...seats, 'zephyr: no Fable week'] };
     for (const ring of read.rings) if (JSON.stringify(ring.names) !== JSON.stringify(want[ring.title] ?? null)) say(`the "${ring.title}" card names ${JSON.stringify(ring.names)} under its ring, not ${JSON.stringify(want[ring.title] ?? null)}`);
     if (read.rings.length !== 2) say(`${read.rings.length} remaining cards, expected 7d and Fable week`);
   }

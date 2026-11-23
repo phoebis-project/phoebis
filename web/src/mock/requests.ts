@@ -211,6 +211,8 @@ const walkBack = (w: RateLimitWindow, atMs: number, olderFactor: () => number): 
   const resetsAt = Date.parse(w.resetsAt);
   const shift = Math.ceil(Math.max(0, resetsAt - period - atMs) / period);
   const resetThen = resetsAt - shift * period;
+  // A window with no share has no figure to walk back, so its head carried the reset alone.
+  if (w.utilization === null) return { id: w.id, resetsAt: iso(resetThen), utilization: null };
   const phase = 1 - (resetThen - atMs) / period;
   const ceiling = shift === 0 ? 1 : Math.min(1, phase + EARLIER_LEAD);
   const utilization = Math.min(ceiling, Math.max(0.02, w.utilization * (shift === 0 ? phase / Math.max(0.05, 1 - (resetsAt - NOW) / period) : olderFactor())));

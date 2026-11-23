@@ -232,6 +232,12 @@ test('an expired window counts as a full allowance, keeps its weight and is not 
   close(figures.left, 22, 'left');
 });
 
+test('an account whose window has no share is left out of the ring and of its capacity', () => {
+  const tier = 'default_claude_max_20x';
+  const figures = d.ringFigures([account('read', tier, [window('7d', 0.5)]), account('gap', tier, [window('7d', null)]), account('stale', tier, [window('7d', null, -2 * HOUR)])], '7d', COSTS, 'ultra', NOW);
+  assert.deepEqual([figures.rows.map((r) => r.id), figures.capacity, figures.left, figures.leftOut.map((o) => [o.id, o.reason])], [['read'], 1, 0.5, [['gap', 'share not reported'], ['stale', 'share not reported']]]);
+});
+
 test('a disconnected account with the windows of its last reading and no profile is on no ring and in no left-out list', () => {
   const accounts = [account('primary', 'default_claude_max_20x', [window('5h', 0.5), window('7d', 0.4)], fable(0.3)), account('spare', null, [window('5h', 0.4), window('7d', 0.02)], { ...fable(0.1), status: 'unpaired' })];
   for (const id of ['7d', '7d_fable']) {

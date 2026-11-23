@@ -194,7 +194,7 @@ const sonnetUnpriced = unpriced('claude-sonnet-4-5');
 /** The windows an account's reading holds at their limit, in the router's names, as the wall's join reads the poll. */
 const atLimit = (accountId: string): string[] => {
   const a = accountById.get(accountId);
-  return (a ? readWindows(a) : []).filter((w) => w.utilization >= 1).map((w) => windowEntry(WINDOW_KEY, w.id) ?? w.id);
+  return (a ? readWindows(a) : []).filter((w) => w.utilization !== null && w.utilization >= 1).map((w) => windowEntry(WINDOW_KEY, w.id) ?? w.id);
 };
 
 /**

@@ -1637,7 +1637,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // A flagged account, a disconnected one and one that needs re-auth answer no window, so their series read against
     // the readings of their seeds' literals: sunset's `win('5h', 0.12, ...)` and `win('7d', 0.46, ...)`, the last clean
     // poll's before the end, legacy's `win('5h', 0.18, ...)` and `win('7d', 0.52, ...)`, and spare's
-    // `win('5h', 0.4, ...)`, `win('7d', 0.02, ...)` and `win('7d_fable', 0, ...)`.
+    // `win('5h', 0.4, ...)`, `win('7d', 0.02, ...)` and `win('7d_fable', 0, ...)`. A window with no share, zephyr's
+    // `win('7d', null, ...)`, ends on a sample with no figure.
     const SEEDED = { legacy: { '5h': 0.18, '7d': 0.52 }, spare: { '5h': 0.4, '7d': 0.02, '7d_fable': 0 }, sunset: { '5h': 0.12, '7d': 0.46 } };
     const off = [];
     let read = 0;
@@ -1645,9 +1646,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const windows = [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])];
       for (const h of await s.api.getQuotaHistory(a.id)) {
         read += 1;
-        const reading = windows.find((x) => x.id === h.windowId)?.utilization ?? SEEDED[a.id]?.[h.windowId];
+        const answered = windows.find((x) => x.id === h.windowId);
+        const reading = answered === undefined ? SEEDED[a.id]?.[h.windowId] : answered.utilization;
         const last = h.samples.at(-1);
-        if (reading === undefined || !last || last.at !== endOf(a) || Math.abs(last.utilization - reading) > 0.001) off.push(`${a.id} ${h.windowId}: the last sample ${last?.at} at ${last?.utilization}, the reading ${endOf(a)} at ${reading}`);
+        const ends = reading === null ? last?.utilization === null : last !== undefined && Math.abs(last.utilization - reading) <= 0.001;
+        if (reading === undefined || !last || last.at !== endOf(a) || !ends) off.push(`${a.id} ${h.windowId}: the last sample ${last?.at} at ${last?.utilization}, the reading ${endOf(a)} at ${reading}`);
       }
     }
     assert.ok(read > 0, 'the story samples its windows');
@@ -2640,8 +2643,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const a of s.accounts) {
       const end = s.lib.endOf(a, s.now);
       for (const w of [...a.windows, ...(a.fableWindow === null ? [] : [a.fableWindow])]) {
-        const want = s.leadOf(w, w.periodHours * HOUR, s.now, end);
-        assert.ok(typeof w.lead === 'number' && near(w.lead, want), `${a.id}'s ${w.id} leads ${w.lead}, not ${want}`);
+        // The route maps the lead over the share, so a window with no share answers none.
+        const want = w.utilization === null ? null : s.leadOf(w, w.periodHours * HOUR, s.now, end);
+        assert.ok(want === null ? w.lead === null : typeof w.lead === 'number' && near(w.lead, want), `${a.id}'s ${w.id} leads ${w.lead}, not ${want}`);
         read += 1;
       }
     }

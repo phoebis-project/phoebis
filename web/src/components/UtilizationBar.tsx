@@ -3,12 +3,13 @@ import { Legend } from '@/components/charts/Tooltip';
 import { fmtPct } from '@/lib/format';
 import { WINDOW_LABEL } from '@/lib/windows';
 
-/** A member's shared-window readings, null where its row reports no such window. */
+/** A member's shared-window readings, null where its row reports no such window, with a null share where the router
+ *  holds none. */
 export interface MemberReading {
-  fiveHour: { utilization: number } | null;
+  fiveHour: { utilization: number | null } | null;
   id: string;
   label: string;
-  sevenDay: { utilization: number } | null;
+  sevenDay: { utilization: number | null } | null;
 }
 
 interface Threshold {
@@ -68,7 +69,8 @@ function Track({ id, label, max, min, readings, threshold }: { id: '5h' | '7d'; 
   const track = useRef<HTMLDivElement>(null);
   const windows = readings.flatMap((r) => {
     const w = id === '5h' ? r.fiveHour : r.sevenDay;
-    return w === null ? [] : [{ key: `${r.id}-${id}`, label: r.label, used: w.utilization }];
+    // A tick at 0 would read a window with no share as an unused one.
+    return w === null || w.utilization === null ? [] : [{ key: `${r.id}-${id}`, label: r.label, used: w.utilization }];
   });
   return (
     <div className="ubar__track" ref={track}>

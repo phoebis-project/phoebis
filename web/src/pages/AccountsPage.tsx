@@ -31,7 +31,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayMonth, fmtDayShort, f
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, FEATURE_LABEL, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { byWindow, meterGroups } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, isQuotaListed, noWindowSentence, planExtraUsage, planOverage, planWordLabel, readWindows, resetOf, slowedOf } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, isQuotaListed, largestShare, noWindowSentence, planExtraUsage, planOverage, planWordLabel, readWindows, resetOf, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { slowDownChip } from '@/lib/selection';
 import { orderRows, type SortFigure } from '@/lib/sort';
@@ -90,7 +90,7 @@ export function AccountsPage() {
       if (sort === 'reset7d') return resetOf(a, '7d', now);
       if (sort === 'resetFable') return resetOf(a, '7d_fable', now);
       // Most used reads the plan windows alone, so the Fable week's share stays out of it.
-      return sort === 'usage' ? (a.windows.length === 0 ? null : Math.max(...a.windows.map((w) => w.utilization))) : sort === 'status' ? a.status : a.label;
+      return sort === 'usage' ? largestShare(a.windows) : sort === 'status' ? a.status : a.label;
     };
     return orderRows(rows, keyOf, dir, (a) => a.label);
   }, [accounts.data, dir, filters, now]);

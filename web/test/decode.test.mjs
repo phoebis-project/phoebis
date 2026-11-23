@@ -99,6 +99,14 @@ test("an account decodes its slow-down and each window's demand, and an api_key 
   assert.deepEqual([older.slowDown, older.windows[0].demand], [null, null], 'a row without the members reads null');
 });
 
+test("an account's window keeps a share the route serves as null, beside a share of 0", () => {
+  const wire = fixture('account');
+  const five = wire.windows.find((w) => w.id === 'five_hour');
+  const seven = wire.windows.find((w) => w.id === 'seven_day');
+  const account = d.decodeAccount({ ...wire, windows: [{ ...five, utilization: null }, { ...seven, utilization: 0 }] });
+  assert.deepEqual(account.windows.map((w) => [w.id, w.utilization]), [['5h', null], ['7d', 0]]);
+});
+
 test('an account decodes its canceled flag and its saved end', () => {
   const body = fixture('account');
   const canceled = d.decodeAccount({ ...body, canceled: true, subscription: { ...body.subscription, ends_at: 5_000 } });

@@ -186,19 +186,20 @@ control names, the Fable week being one factor of every tier's 7-day window, and
 the most of its window left first. The ring's center reads the share "of capacity left", and the line under it reads
 `{n} of {m} {plan} weeks left` in the chosen week, such as 0.39 of 1.30 Ultra weeks, or `{n} of {m} {plan} Fable weeks
 left` under the Fable ring. Pro has no Fable week, so under the Pro week the Fable ring draws no line, and its ring, its
-center and its rows still draw. A window whose reset has passed with no reading since counts as a full allowance. An
-account is named under the ring with the reason where its poll carries no such window ("no 7-day window", or "no Fable
-week" on a Pro account), where no window has been read yet ("not read yet"), where the router prices no tier for it (a
-free plan, a usage-based seat, or a tier the cost model does not hold, a Team or Enterprise seat on a held tier weighing
-like any other), where its tier has no capacity on the window (`{plan} 7-day capacity not measured`, `{plan} Fable week
-capacity not measured`), or where it has no subscription profile. Without a subscription account the card reads "No
-subscription accounts" and "A subscription account reports the window this card draws.". Where no listed account carries
-the window the card reads "No account with a 7-day window." (or "No account with a Fable week.") over the named
-accounts, and where they carry it with none sized "No listed account's tier is sized for the 7-day window." (or "for the
-Fable week."). Under a chosen week whose tier has no 7-day capacity the card reads the week's unpriced sentence
-(`Unpriced: the cost model holds no 7-day capacity for the {plan} week.`) in place of the tier sentence. Each account
-keeps one color across the Dashboard, the Quota view and the Analytics, in the order of its id, the eight colors cycling
-past eight accounts, and an account the registry does not list draws muted.
+center and its rows still draw. A window that held a share and whose reset has passed with no reading since counts as a
+full allowance. An account is named under the ring with the reason where its poll carries no such window ("no 7-day
+window", or "no Fable week" on a Pro account), where no window has been read yet ("not read yet"), where the router
+holds no share of the window ("share not reported"), where the router prices no tier for it (a free plan, a usage-based
+seat, or a tier the cost model does not hold, a Team or Enterprise seat on a held tier weighing like any other), where
+its tier has no capacity on the window (`{plan} 7-day capacity not measured`,
+`{plan} Fable week capacity not measured`), or where it has no subscription profile. Without a subscription account the
+card reads "No subscription accounts" and "A subscription account reports the window this card draws.". Where no listed
+account carries the window the card reads "No account with a 7-day window." (or "No account with a Fable week.") over
+the named accounts, and where they carry it with none sized "No listed account's tier is sized for the 7-day window."
+(or "for the Fable week."). Under a chosen week whose tier has no 7-day capacity the card reads the week's unpriced
+sentence (`Unpriced: the cost model holds no 7-day capacity for the {plan} week.`) in place of the tier sentence. Each
+account keeps one color across the Dashboard, the Quota view and the Analytics, in the order of its id, the eight colors
+cycling past eight accounts, and an account the registry does not list draws muted.
 
 "Accounts" draws one small card per account, linking to its detail, with the status badge, the speed chip beside it on a
 slowed account (`0.5x`, as [Quota](#quota) describes it), the email, the window bars (`No window since the plan ended
@@ -303,14 +304,16 @@ reset label's place with no projection beside it, on the card's row and on the w
 cards and the Accounts views, and its chip on the timeline reads "not open" in the share's place. A window with a used
 share and no reset reads "not reported" there, followed by its projection where the window carries one, and the bars of
 the Dashboard's account cards and of the Accounts list draw that projection in the word's place. Its chip on the
-timeline keeps its share, with "no reset reported" on hover, and the timeline draws no bar for either window. A card
-with no window yet reads "No quota windows reported yet.", and one whose read failed shows the error with `, next
-attempt {time}` and a "Retry" button in the windows' place. A usage-based seat's Spend row reads the share of its
-monthly spend limit left, `59% left`, over the meter, with the amount spent of the limit in the reading's currency on
-hover and `resets {ago}` under it, and no pace, since the router projects no burn on the seat. With no limit set its
-chip reads the amount spent, `$1,025.00 spent`, and no meter draws, and a seat with no reading yet reads "No spend
-reading yet." in the windows' place. Until a reset header names the spend window's reset, the router estimates it as
-00:00 UTC on the first of the next month, and the line reads `resets {ago}, estimated`, the word in the muted ink, with
+timeline keeps its share, with "no reset reported" on hover, and the timeline draws no bar for either window. A window
+whose share the router does not hold reads "not reported" with an empty bar and stays out of the capacity ring, and an
+account that holds no share on any of its windows stands last in a sort by share. A card with no window yet reads "No
+quota windows reported yet.", and one whose read failed shows the error with `, next attempt {time}` and a "Retry"
+button in the windows' place. A usage-based seat's Spend row reads the share of its monthly spend limit left,
+`59% left`, over the meter, with the amount spent of the limit in the reading's currency on hover and `resets {ago}`
+under it, and no pace, since the router projects no burn on the seat. With no limit set its chip reads the amount spent,
+`$1,025.00 spent`, and no meter draws, and a seat with no reading yet reads "No spend reading yet." in the windows'
+place. Until a reset header names the spend window's reset, the router estimates it as 00:00 UTC on the first of the
+next month, and the line reads `resets {ago}, estimated`, the word in the muted ink, with
 `resets {time} (estimated: no reset header has been seen for this window yet)` on hover. The reset label of every row
 whose reset lies within 60 s of the card's soonest, the slack within which the router reads two resets as one, a seat's
 Spend row among them, reads in the accent ink, its hover adding "the first of this account to recover". The "Extra

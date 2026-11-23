@@ -361,9 +361,9 @@ const speedChips = (root, whereOf) =>
  * The window bars of one account's card with the reset and the phrase each should read: the reset's relative words, and
  * the projection's words at `at`, compact or whole as the bar draws them, from the mock's own windows, null for a
  * window that carries none or whose reset has passed. A bar names its window by its label (`5h` or `5-hour`, `7d` or
- * `7-day`, `Fable`, else the window's key). A window with no reset reads its state in the reset's place, spelled out
- * here rather than read from the console's own rule: `not open` at a utilization of 0, which draws no projection, and
- * `not reported` at any other.
+ * `7-day`, `Fable`, else the window's key). A window with no share or no reset reads its state in the reset's place,
+ * spelled out here rather than read from the console's own rule: `not reported` with no share, with or without a
+ * reset, and with no reset `not open` at a utilization of 0, which draws no projection, and `not reported` at any other.
  */
 const barPhrases = (bars, account, at, compact) =>
   bars
@@ -373,7 +373,7 @@ const barPhrases = (bars, account, at, compact) =>
       const id = { '5-hour': '5h', '5h': '5h', '7-day': '7d', '7d': '7d' }[label] ?? label;
       const w = label === 'Fable' ? account.fableWindow : (account.windows.find((x) => x.id === id) ?? null);
       const expired = w !== null && w.resetsAt !== null && Date.parse(w.resetsAt) < at;
-      const state = w === null || w.resetsAt !== null ? null : w.utilization === 0 ? 'not open' : 'not reported';
+      const state = w === null ? null : w.utilization === null ? 'not reported' : w.resetsAt !== null ? null : w.utilization === 0 ? 'not open' : 'not reported';
       const reset = w === null ? null : (state ?? (compact ? fmtRelative(w.resetsAt, at) : `resets ${fmtRelative(w.resetsAt, at)}`));
       return { compact, label, reset, text: b.querySelector('.wbar__reset')?.textContent ?? '', want: w === null || expired || state === 'not open' ? null : projectionWords(w, at, compact) };
     });
@@ -1238,13 +1238,15 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const onRing = (id) => [...(rings[id]?.querySelectorAll('.remaining__list a, .remaining__left-out li') ?? [])].map((e) => (e.textContent ?? '').split(':')[0]);
   const strays = ['7d', '7d_fable'].flatMap((id) => onRing(id).filter((n) => n === 'legacy' || n === 'spare' || n === 'sunset').map((n) => `${n} on the ${id} ring`));
   // The contract and zenith seeds are usage-based seats, which the router prices no tier for and which report no plan
-  // window, so both rings name them with the gate's word. The Pro seeds carry no Fable week, so the Fable ring names
-  // them too, zephyr last in the list's order.
+  // window, so both rings name them with the gate's word. The zephyr seed's 7-day window holds no share, so the 7-day
+  // ring names it behind them, last in the list's order. The Pro seeds carry no Fable week, so the Fable ring names
+  // them too, zephyr last again.
   const seat = ['contract: a usage-based seat', 'zenith: a usage-based seat'];
+  const sevenNamed = [...seat, 'zephyr: share not reported'];
   const fableNamed = ['secondary: no Fable week', 'reserve: no Fable week', ...seat, 'zephyr: no Fable week'];
   results.push({
-    name: '/ every listed tier is sized on both rings, so the 7-day ring names the usage-based seats alone and the Fable ring the Pro seeds without a Fable week beside them',
-    ok: lineOf('7d') !== '' && lineOf('7d_fable') !== '' && JSON.stringify(named('7d')) === JSON.stringify(seat) && JSON.stringify(named('7d_fable')) === JSON.stringify(fableNamed) && JSON.stringify(fF.leftOut.map((o) => `${o.label}: ${o.reason}`)) === JSON.stringify(fableNamed) && strays.length === 0,
+    name: '/ every listed tier is sized on both rings, so the 7-day ring names the usage-based seats and the window with no share, and the Fable ring the Pro seeds without a Fable week beside the seats',
+    ok: lineOf('7d') !== '' && lineOf('7d_fable') !== '' && JSON.stringify(named('7d')) === JSON.stringify(sevenNamed) && JSON.stringify(named('7d_fable')) === JSON.stringify(fableNamed) && JSON.stringify(fF.leftOut.map((o) => `${o.label}: ${o.reason}`)) === JSON.stringify(fableNamed) && strays.length === 0,
     missing: [`7-day ${JSON.stringify(named('7d'))}`, `Fable ${JSON.stringify(named('7d_fable'))}`, ...strays],
   });
   const titled = (id, weeks) => {
@@ -1449,13 +1451,14 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 {
   // Each remaining list reads in its ring's order, the account with the most of its own window left first, so the
   // shares it prints run down the list. On the story the registry's order runs down on neither ring, which weighs the
-  // seven routable subscription accounts on the 7-day window and the four that carry the Fable week on the other.
+  // six routable subscription accounts whose 7-day window holds a share on that window, zephyr's holding none, and the
+  // four that carry the Fable week on the other.
   const listOf = (title) => {
     const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
     return [...(card?.querySelectorAll('.remaining__list li') ?? [])].map((li) => [li.querySelector('a')?.textContent ?? '', li.querySelector('.num')?.textContent ?? '']);
   };
   const lists = [
-    { count: 7, rows: listOf('7d remaining'), title: '7d remaining' },
+    { count: 6, rows: listOf('7d remaining'), title: '7d remaining' },
     { count: 4, rows: listOf('Fable week remaining'), title: 'Fable week remaining' },
   ];
   const descending = (rows) => rows.every(([, share], i) => i === 0 || Number.parseFloat(share) <= Number.parseFloat(rows[i - 1][1]));
@@ -2878,22 +2881,42 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   // opened draws its lane chip on the grey surface, while its card chip reads the full share in its tone.
   const laneChipTones = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip')].map((c, i) => ({ label: l.querySelector('.lane__name')?.textContent?.trim() ?? '', pct: c.querySelector('.tl-chip__pct')?.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? 'absent', window: ['5h', '7d', 'fable'][i % 3] })));
   // A window that has not opened is read off the account answer as `barPhrases` reads it, no reset at a utilization of
-  // 0, so a chip that prints `not open` for an open window fails both checks.
+  // 0, so a chip that prints `not open` for an open window fails both checks. A window with no share is read off it the
+  // same way.
   const accountOf = new Map((await api.listAccounts()).map((a) => [a.label, a]));
-  const notOpen = (label, window) => {
+  const chipWindow = (label, window) => {
     const a = accountOf.get(label);
-    const w = (window === 'fable' ? a?.fableWindow : a?.windows.find((x) => x.id === window)) ?? null;
+    return (window === 'fable' ? a?.fableWindow : a?.windows.find((x) => x.id === window)) ?? null;
+  };
+  const notOpen = (label, window) => {
+    const w = chipWindow(label, window);
     return w !== null && w.resetsAt === null && w.utilization === 0;
   };
+  const noShare = (label, window) => chipWindow(label, window)?.utilization === null;
   const chipOff = laneChipTones.filter((c) => c.tone !== (notOpen(c.label, c.window) ? 'absent' : cardTone(c.label, c.window))).map((c) => `${c.label} ${c.window}: ${c.tone} where the card chip reads ${cardTone(c.label, c.window)}`);
   results.push({ name: "/quota each timeline chip carries the tone of the same account's card chip for its window, and none where that chip has no share or its window has not opened", ok: laneChipTones.length > 0 && chipOff.length === 0, missing: chipOff });
-  const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
-  results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
+  // The weekly zoom draws each lane's 7-day window, and the live bar of one with no share has no share to name.
+  const live = [...m.container.querySelectorAll('.lane')].flatMap((l) => {
+    const label = l.querySelector('.lane__name')?.textContent?.trim() ?? '';
+    return [...l.querySelectorAll('.lane__bar--live .lane__label')].map((e) => ({ label, shared: !noShare(label, '7d'), text: e.textContent ?? '' }));
+  });
+  results.push({
+    name: '/quota timeline labels the current window with the share left and its reset, and with its reset alone where the window holds no share',
+    ok: live.length >= 3 && live.some((l) => !l.shared) && live.every((l) => (l.shared ? / left · /.test(l.text) : !l.text.includes('%'))),
+    missing: live.map((l) => `${l.label}: ${l.text}`),
+  });
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
-  const shares = laneChipTones.filter((c) => !notOpen(c.label, c.window)).map((c) => c.pct);
-  const liveShares = live.filter((l) => l.includes('%'));
+  // A window with no share prints its state word in the share's place.
+  const unshared = laneChipTones.filter((c) => noShare(c.label, c.window));
+  const shares = laneChipTones.filter((c) => !notOpen(c.label, c.window) && !noShare(c.label, c.window)).map((c) => c.pct);
+  const liveShares = live.map((l) => l.text).filter((t) => t.includes('%'));
   const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset'), ...liveShares].filter((t) => !/\d+% left/.test(t));
-  results.push({ name: '/quota every window share on the timeline reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && liveShares.length > 0 && off.length === 0, missing: [...new Set(off)] });
+  const unsharedOff = unshared.filter((c) => c.pct !== 'not reported').map((c) => `${c.label} ${c.window}: ${c.pct}`);
+  results.push({
+    name: '/quota every window share on the timeline reads N% left, and a window with no share reads not reported in its place',
+    ok: shares.some((t) => /\d+% left/.test(t)) && liveShares.length > 0 && off.length === 0 && unshared.length > 0 && unsharedOff.length === 0,
+    missing: [...new Set(off), ...unsharedOff],
+  });
   const axis = m.container.querySelector('.timeline__axis-label')?.textContent?.trim() ?? 'no axis label';
   results.push({ name: "/quota the timeline's axis reads Account", ok: axis === 'Account', missing: [axis] });
 }
@@ -2945,7 +2968,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     const label = l.querySelector('.lane__name')?.textContent?.trim() ?? '';
     const w = accounts.find((a) => a.label === label)?.windows.find((x) => x.id === '7d') ?? null;
     const bar = l.querySelector('.lane__bar--live');
-    return { classes: bar?.querySelector('.lane__used')?.className ?? null, color: inLaneColor(bar?.querySelector('.lane__used'), l), fills: bar?.querySelectorAll('.lane__used').length ?? null, label, share: w !== null && !expired(w), utilization: w?.utilization ?? null, width: bar?.querySelector('.lane__used')?.style.width ?? null };
+    return { classes: bar?.querySelector('.lane__used')?.className ?? null, color: inLaneColor(bar?.querySelector('.lane__used'), l), fills: bar?.querySelectorAll('.lane__used').length ?? null, label, share: w !== null && !expired(w) && w.utilization !== null, utilization: w?.utilization ?? null, width: bar?.querySelector('.lane__used')?.style.width ?? null };
   });
   const withShare = lanes.filter((l) => l.share);
   const fillOff = withShare.filter((l) => !l.color).map((l) => `${l.label}: ${l.classes ?? 'no fill'}, not on its lane's color variable`);
@@ -32948,7 +32971,7 @@ await forView('/', async () => {
           ring: false,
           sentence: 'No account with a Fable week.',
         },
-        week: { names: ['reserve: not read yet', 'contract: a usage-based seat', 'zenith: a usage-based seat'], ring: true },
+        week: { names: ['reserve: not read yet', 'contract: a usage-based seat', 'zenith: a usage-based seat', 'zephyr: share not reported'], ring: true },
       }),
     missing: [JSON.stringify(drawn)],
   });

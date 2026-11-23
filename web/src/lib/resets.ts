@@ -77,8 +77,11 @@ export const resetMarks = (resets: LimitResets | null): WindowId[] => [...new Se
 
 /** Whether a window's chip prints "100% left" now: live, and full by the printed figure. The printed figure decides, so
  *  a window the chip prints as full carries no mark, and a reset that clears only such windows draws the dialog's
- *  warning that it has nothing to clear. */
-export const readsFull = (window: RateLimitWindow | null, now: number): boolean => window !== null && !isExpired(window, now) && fmtPct(remainingOf(window)) === '100%';
+ *  warning that it has nothing to clear. A window with no share prints no figure, so it never reads full. */
+export const readsFull = (window: RateLimitWindow | null, now: number): boolean => {
+  const left = window === null || isExpired(window, now) ? null : remainingOf(window);
+  return left !== null && fmtPct(left) === '100%';
+};
 
 /** The first page's rows: the usable grants first, each part in the block's order. */
 export function resetRows(resets: LimitResets): ResetGrant[] {
@@ -106,12 +109,13 @@ export function resetEstimate(grant: Pick<ResetGrant, 'clears' | 'kind'>, fableW
   if (grant.kind !== 'fable' || !grant.clears.includes('7d_fable') || grant.clears.includes('7d')) return null;
   const live = (w: RateLimitWindow | null) => (w !== null && !isExpired(w, now) ? w : null);
   const sevenDay = live(week);
-  // An unused Fable week holds no share of the 7-day window.
-  if (sevenDay === null || (live(fable)?.utilization ?? 0) <= 0) return null;
+  // An unused Fable week holds no share of the 7-day window, and a Fable week or a 7-day window with no share gives no
+  // figure to estimate from.
+  if (sevenDay === null || sevenDay.utilization === null || (live(fable)?.utilization ?? 0) <= 0) return null;
   if (fableWeekShare === null) return { figure: null };
   const figure = fmtPct(shareLeft(sevenDay.utilization - fableWeekShare));
   // The printed figures decide: a share that rounds away would print the reading as its own estimate.
-  return figure === fmtPct(remainingOf(sevenDay)) ? null : { figure };
+  return figure === fmtPct(shareLeft(sevenDay.utilization)) ? null : { figure };
 }
 
 /** How the dialog files a use's answer: `used` closes it, and the other two keep it open under `sentence`. */

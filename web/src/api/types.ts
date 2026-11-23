@@ -42,7 +42,8 @@ export interface RateLimitWindow {
   projection: number | null;
   /** Null while the sampler has seen a utilization but no reset time for this window. */
   resetsAt: string | null;
-  utilization: number;
+  /** The share used, null where the router holds no reading of it. */
+  utilization: number | null;
 }
 
 export interface ExtraUsage {

@@ -182,10 +182,11 @@ const lineOf = (pool: Pick<Pool, 'fiveHourCeiling' | 'weeklyCeiling'>, id: strin
 /**
  * Whether an API-key account has room for a moved session: its worst live bucket under 1.0, since a bucket refills
  * within its minute. Its live buckets are its `rpm:`, `itpm:` and `otpm:` ones whose reset is ahead, or which carry
- * none and were read within the minute, as the router's `worst_bucket` reads them.
+ * none and were read within the minute, as the router's `worst_bucket` reads them. A bucket with no share is one the
+ * router holds no reading of, so it takes no part.
  */
 const bucketRoom = (a: Account, now: number) =>
-  Math.max(0, ...a.windows.filter((w) => /^(rpm|itpm|otpm):/.test(w.id) && (w.resetsAt === null ? now - Date.parse(w.observedAt) < 60_000 : Date.parse(w.resetsAt) > now)).map((w) => w.utilization)) < 1;
+  Math.max(0, ...a.windows.filter((w) => /^(rpm|itpm|otpm):/.test(w.id) && (w.resetsAt === null ? now - Date.parse(w.observedAt) < 60_000 : Date.parse(w.resetsAt) > now)).flatMap((w) => (w.utilization === null ? [] : [w.utilization]))) < 1;
 
 /** A member whose projection crosses the round's line, on the first window in the trigger's order that does. */
 export interface ShedHot {
@@ -465,9 +466,10 @@ export function shedPreview(
     if (fired === undefined) {
       // The room to each window's own ceiling ranks them, since the two kinds of window read different ceilings.
       for (const w of read) if (closest === null || ceilingOf(pool, w.id) - w.projection < ceilingOf(pool, closest.window) - closest.projection) closest = { horizon: w.horizon, label: account.label, projection: w.projection, window: w.id };
-      // The reservation's test runs once no window fired, as the router's does.
+      // The reservation's test runs once no window fired, as the router's does, and on a 7-day window with a share
+      // alone, since the router's needs the projection of a window it holds a reading of.
       const week = windowOf(account, '7d');
-      if (!reserving || reservation === null || week === null || week.projection === null || shareLeft(week.utilization) >= reservation) continue;
+      if (!reserving || reservation === null || week === null || week.utilization === null || week.projection === null || shareLeft(week.utilization) >= reservation) continue;
       // Only the Fable week's use is reserved, so the round moves the pins whose model draws none.
       const round = walkOn(
         account,

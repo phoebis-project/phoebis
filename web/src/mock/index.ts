@@ -534,8 +534,10 @@ const matchesFeatureCall = (c: FeatureCall, q: FeatureCallQuery): boolean =>
   (q.from === undefined || Date.parse(c.receivedAt) >= q.from) &&
   (q.to === undefined || Date.parse(c.receivedAt) <= q.to);
 
-/** A window as the poll after a reset reads it: `by` taken off its use, and its lead and projection with it. */
+/** A window as the poll after a reset reads it: `by` taken off its use, and its lead and projection with it. A window
+ *  with no share holds no use to take off, so it reads as it stood. */
 const lowered = (w: RateLimitWindow, by: number, at: number): RateLimitWindow => {
+  if (w.utilization === null) return w;
   const drop = Math.min(by, w.utilization);
   const less = (v: number | null) => (v === null ? null : round(v - drop, 3));
   return { ...w, lead: less(w.lead), observedAt: iso(at), projection: less(w.projection), utilization: round(w.utilization - drop, 3) };
@@ -561,7 +563,7 @@ function dropsAfterReset(a: Account, after: Pick<Account, 'fableWindow' | 'windo
   const read = new Map(readWindows(after).map((w) => [w.id, w.utilization]));
   return readWindows(a).flatMap((w) => {
     const next = read.get(w.id) ?? null;
-    if (w.periodHours !== WINDOW_HOURS['7d'] || w.resetsAt === null || next === null) return [];
+    if (w.periodHours !== WINDOW_HOURS['7d'] || w.resetsAt === null || w.utilization === null || next === null) return [];
     return wholePoints(w.utilization) - wholePoints(next) > wholePoints(WINDOW_DROP_MARGIN) ? [dropDetail(WINDOW_KEY[w.id] ?? w.id, w.utilization, next, Date.parse(w.resetsAt), pair)] : [];
   });
 }

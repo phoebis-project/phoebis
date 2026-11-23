@@ -33,6 +33,16 @@ test('noResetWord reads a window with no reset by its utilization', () => {
   assert.equal(d.noResetWord({ resetsAt: null, utilization: 0.2 }), 'not reported', 'a used share with no reset');
 });
 
+test('noResetWord reads a window with a reset by its share', () => {
+  assert.equal(d.noResetWord({ resetsAt: '2026-10-28T09:00:00Z', utilization: null }), 'not reported', 'no share, so the word stands in the reset line');
+  assert.equal(d.noResetWord({ resetsAt: '2026-10-28T09:00:00Z', utilization: 0.2 }), null, 'a share and a reset, so the reset line draws');
+});
+
+test('the largest share reads the shares that the windows hold, and null where none holds one', () => {
+  assert.equal(d.largestShare([{ utilization: null }, { utilization: 0.4 }, { utilization: 0.1 }]), 0.4);
+  assert.equal(d.largestShare([{ utilization: null }, { utilization: null }]), null, 'no share on any window');
+});
+
 test('a plan word the table lacks reads as sent, a key every plain object carries among them', () => {
   assert.equal(d.planWordLabel('some_new_word'), 'some_new_word');
   assert.equal(d.planWordLabel('constructor'), 'constructor', "the table's own keys alone label a word");

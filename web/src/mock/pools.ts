@@ -36,7 +36,8 @@ function memberFitOf(account: Account, now: number, pool: Pick<Pool, 'fiveHourCe
   if (account.kind === 'api_key') return (lookup(WORST_BUCKET, account.id) ?? 0) < 1 ? { fit: 'fits', runwayMs: null } : { fit: 'least_bad', runwayMs: 0 };
   const shared = SHARED_WINDOWS.flatMap((key) => {
     const window = account.windows.find((w) => w.id === windowKeyId(key));
-    if (window === undefined) return [];
+    // A window with no share is one the router holds no reading of, which its fit does not read.
+    if (window === undefined || window.utilization === null) return [];
     const burn = (key === 'five_hour' && window.demand !== null ? window.demand : (window.burn ?? 0)) + PRIOR_BURN[key];
     // The account route answers no booking on a window, so the prediction is the reading alone.
     return [{ key, read: windowFitOf({ reserved: null, utilization: window.utilization }, ceilingOn(pool, key), 0, burn), window }];
@@ -81,9 +82,10 @@ export function servedFigures(accountId: string, now: number, pool: Pick<Pool, '
   const bucket = lookup(WORST_BUCKET, accountId);
   const pace = paceOf(account, now, null, {
     burns: { seven_day: week?.burn ?? 0, seven_day_fable: fable?.burn ?? 0 },
+    // A window with no share is one the router holds no reading of, which its Pace reads as untouched.
     readings: {
-      seven_day: week === undefined ? undefined : { reset: week.resetsAt, utilization: week.utilization },
-      seven_day_fable: fable === null ? undefined : { reset: fable.resetsAt, utilization: fable.utilization },
+      seven_day: week === undefined || week.utilization === null ? undefined : { reset: week.resetsAt, utilization: week.utilization },
+      seven_day_fable: fable === null || fable.utilization === null ? undefined : { reset: fable.resetsAt, utilization: fable.utilization },
       worst_bucket: account.kind !== 'api_key' || bucket === undefined ? undefined : { reset: null, utilization: bucket },
     },
     reserve: true,

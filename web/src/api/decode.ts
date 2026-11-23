@@ -69,7 +69,7 @@ function decodeWindow(w: Rec): RateLimitWindow | null {
   if (id === null) return null;
   return {
     burn: numOrNull(w.burn), demand: numOrNull(w.demand), horizon: isoOrNull(w.horizon), id, label: windowLabelOf(id), lead: numOrNull(w.lead), observedAt: isoOr(w.observed_at, epoch), periodHours: periodHoursOf(id),
-    projection: numOrNull(w.projection), resetsAt: isoOrNull(w.resets_at), utilization: num(w.utilization),
+    projection: numOrNull(w.projection), resetsAt: isoOrNull(w.resets_at), utilization: numOrNull(w.utilization),
   };
 }
 

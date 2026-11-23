@@ -1,6 +1,6 @@
 import type { Account, RateLimitWindow, Spend } from '@/api/types';
 import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
-import { NO_RESET_TITLE, burnWords, hasSpendReading, meterTone, noResetWord, noWindowSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf, type SlowedDown } from '@/lib/quota';
+import { burnWords, hasSpendReading, meterTone, noResetWord, noWindowSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, stateWordTitle, windowOf, type SlowedDown } from '@/lib/quota';
 import { slowDownChip } from '@/lib/selection';
 import { WINDOW_ORDER, windowTag, windowWord } from '@/lib/windows';
 import { Meter, MeterAbsent } from './primitives';
@@ -8,7 +8,8 @@ import { SpeedChip } from './SpeedChip';
 
 /**
  * `slowDown` is a slowed account's slow-down, which the whole 5-hour bar alone reads: its speed chip follows the label.
- * A window with no reset names its state muted on the reset line, under the hover the Quota card's row gives it.
+ * A window with no reset or no share names its state muted on the reset line, under the hover the Quota card's row
+ * gives it, and one with no share draws no figure and the absent meter.
  */
 export function WindowBar({ window: w, now, soon = false, showLabel = true, compact = false, slowDown = null }: { compact?: boolean; now: number; showLabel?: boolean; slowDown?: SlowedDown | null; soon?: boolean; window: RateLimitWindow }) {
   const remaining = remainingOf(w);
@@ -21,16 +22,16 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
       <div className="wbar__head">
         {showLabel && <span className="wbar__label ellipsis">{w.label}</span>}
         <SpeedChip {...slowDownChip(slowDown, now)} />
-        <span className="wbar__pct num">{fmtPct(remaining)}</span>
+        {remaining !== null && <span className="wbar__pct num">{fmtPct(remaining)}</span>}
       </div>
-      <Meter value={remaining} tone={meterTone(remaining)} thin label={`${w.label} remaining`} />
+      {remaining === null ? <MeterAbsent /> : <Meter value={remaining} tone={meterTone(remaining)} thin label={`${w.label} remaining`} />}
       {/* Three of these share the width of one card, so the compact form drops
           the word and leans on the title for the absolute instant, and a
           window that projects shows the projection in the reset's place, since
           a third of a card holds one of the two, and breaks it between its
           share and its horizon where even that is too wide. A whole bar keeps
           both and breaks between them where it is too narrow. */}
-      <div className={`wbar__reset ${projection !== null ? 'wbar__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={word === null ? `resets ${fmtAbsolute(w.resetsAt)}` : word === 'not open' ? NO_RESET_TITLE[word] : `${NO_RESET_TITLE[word]}${burn ? `, ${burn}` : ''}`}>
+      <div className={`wbar__reset ${projection !== null ? 'wbar__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={word === null ? `resets ${fmtAbsolute(w.resetsAt)}` : word === 'not open' ? stateWordTitle(w, word) : `${stateWordTitle(w, word)}${burn ? `, ${burn}` : ''}`}>
         {projection === null ? (
           word === null ? (
             reset

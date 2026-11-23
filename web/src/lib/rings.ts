@@ -29,8 +29,8 @@ const ABSENT: Record<RingWindow, string> = { '7d': 'no 7-day window', '7d_fable'
 /**
  * The pooled capacity of one weekly window across the routable subscription accounts, each weighed by its tier's
  * capacity over the chosen week's tier's from the subscription cost model, so a Pro account's empty week does not count
- * as much as an Ultra account's full one. An account whose poll lacks the window is named with the reason rather than
- * read as spent or as full.
+ * as much as an Ultra account's full one. An account whose poll lacks the window, or whose window holds no share, is
+ * named with the reason rather than read as spent or as full.
  */
 export function ringFigures(accounts: Account[], windowId: RingWindow, costs: SubscriptionCosts, week: WeekPosition, now: number): RingFigures {
   const span = SPAN[windowId];
@@ -68,8 +68,16 @@ export function ringFigures(accounts: Account[], windowId: RingWindow, costs: Su
       leftOut.push({ id: a.id, label: a.label, reason: `${planLabel(capacity === null ? tier : chosen)} ${span} capacity not measured` });
       continue;
     }
-    // An expired window with no reading since is a full allowance, so it keeps its weight and is not named.
-    rows.push({ id: a.id, label: a.label, remaining: isExpired(w, now) ? 1 : remainingOf(w), weight: capacity / chosenCapacity });
+    // Tested ahead of the passed reset, since a window with no share is one the router holds no reading of, whatever
+    // its reset says.
+    const share = remainingOf(w);
+    if (share === null) {
+      leftOut.push({ id: a.id, label: a.label, reason: 'share not reported' });
+      continue;
+    }
+    // An expired window is full only where it held a share, so it keeps its weight and is not named.
+    const remaining = isExpired(w, now) ? 1 : share;
+    rows.push({ id: a.id, label: a.label, remaining, weight: capacity / chosenCapacity });
   }
   const capacity = rows.reduce((s, r) => s + r.weight, 0);
   const left = rows.reduce((s, r) => s + r.weight * r.remaining, 0);

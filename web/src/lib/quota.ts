@@ -80,7 +80,13 @@ export function meterTone(remaining: number): MeterTone {
 }
 
 export const shareLeft = (utilization: number): number => Math.max(0, Math.min(1, 1 - utilization));
-export const remainingOf = (w: RateLimitWindow) => shareLeft(w.utilization);
+/** A window's share left, null where the router holds no share of it. */
+export const remainingOf = (w: RateLimitWindow): number | null => (w.utilization === null ? null : shareLeft(w.utilization));
+/** The largest share that the windows hold, null where none holds one, which a sort by share places last. */
+export const largestShare = (windows: readonly Pick<RateLimitWindow, 'utilization'>[]): number | null => {
+  const shares = windows.flatMap((w) => (w.utilization === null ? [] : [w.utilization]));
+  return shares.length === 0 ? null : Math.max(...shares);
+};
 /** A spend reading's share left, clamped as a window's is, and null without a share or under no limit. */
 export const spendLeftOf = (spend: Spend): number | null =>
   spend.utilization === null || (spend.amounts !== null && spend.amounts.limitMinor === null) ? null : shareLeft(spend.utilization);
@@ -103,16 +109,23 @@ export const planOverage = (account: Pick<Account, 'overage' | 'usageBased'>): A
 /** A window whose reset has passed with no reading since: the card and the timeline agree on this one test. */
 export const isExpired = (w: Pick<RateLimitWindow, 'resetsAt'>, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
 
-/** The state of a window with no reset: not open at a utilization of exactly 0, since the window never started, not
- *  reported at any other utilization, and null for a window that carries a reset. */
+/** The state of a window: not reported where the router holds no share of it, with or without a reset, else for a
+ *  window with no reset not open at a utilization of exactly 0, since the window never started, and not reported at
+ *  any other utilization, and null for a window that carries a share and a reset. */
 export const noResetWord = (w: Pick<RateLimitWindow, 'resetsAt' | 'utilization'>): 'not open' | 'not reported' | null =>
-  w.resetsAt !== null ? null : w.utilization === 0 ? 'not open' : 'not reported';
+  w.utilization === null ? 'not reported' : w.resetsAt !== null ? null : w.utilization === 0 ? 'not open' : 'not reported';
 
-/** The hover of a window with no reset by its state, which the card's row and the window bars share. */
-export const NO_RESET_TITLE: Readonly<Record<'not open' | 'not reported', string>> = {
+/** The hover of a window with a share and no reset by its state, which `stateWordTitle` reads. */
+const NO_RESET_TITLE: Readonly<Record<'not open' | 'not reported', string>> = {
   'not open': 'this window has not opened, so it has no reset yet',
   'not reported': 'the poll reported no reset for this window',
 };
+/** The hover of "not reported" on a window whose share the router does not hold. */
+const NO_WINDOW_SHARE_TITLE = "the router holds no reading of this window's share";
+/** The hover of a window's state word: the missing share's where the router holds none, with the reset where the
+ *  window carries one, else the missing reset's by its word. */
+export const stateWordTitle = (w: Pick<RateLimitWindow, 'resetsAt' | 'utilization'>, word: 'not open' | 'not reported'): string =>
+  w.utilization !== null ? NO_RESET_TITLE[word] : w.resetsAt === null ? NO_WINDOW_SHARE_TITLE : `${NO_WINDOW_SHARE_TITLE}, resets ${fmtAbsolute(w.resetsAt)}`;
 
 /** A slow-down entry inside its span, as `slowedOf` answers it. */
 export type SlowedDown = AccountSlowDown & { since: string };
@@ -152,9 +165,9 @@ export const paceEnd = (resetsAt: string | null, end: number | null): number | n
 export const toEndWords = (end: number | null, now: number): string => (end === null ? '' : ` to its end at ${instant(end, now)}`);
 
 /** One less the share elapsed, read off the field as the utilization less the lead, so the mark and the words read one
- *  figure. Null without a reset or without a lead. */
+ *  figure. Null without a reset, a lead or a share. */
 export function remainingTimeShare(w: RateLimitWindow): number | null {
-  if (w.resetsAt === null || w.lead === null) return null;
+  if (w.resetsAt === null || w.lead === null || w.utilization === null) return null;
   return Math.min(1, Math.max(0, 1 - (w.utilization - w.lead)));
 }
 
@@ -185,7 +198,7 @@ export function minuteSpan(ms: number): string {
  * (`projection` at 1 or more) reads the instant it runs out instead, `spent in 2 h 10 min` in both forms, the span
  * `(horizon - now) - (projection - 1) / burn` hours through `minuteSpan`, and `0% left now` once that instant has
  * come. With `burn` null or zero it reads `0% left` in the horizon's form, and a utilization already at 1 or more reads
- * `0% left now`. Null without a projection, and for a window past its reset or not yet open.
+ * `0% left now`. Null without a projection or a share, and for a window past its reset or not yet open.
  */
 export function projectionWords(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'projection' | 'resetsAt' | 'utilization'>, now: number, compact = false): string | null {
   const parts = projectionParts(w, now, compact);
@@ -198,7 +211,7 @@ export function projectionWords(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'p
  *  router answers its horizon five hours out. */
 export function projectionParts(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'projection' | 'resetsAt' | 'utilization'>, now: number, compact = false): [string, string] | null {
   if (noResetWord(w) === 'not open' || isExpired(w, now)) return null;
-  if (w.projection === null || w.horizon === null) return null;
+  if (w.projection === null || w.horizon === null || w.utilization === null) return null;
   if (w.utilization >= 1) return ['0% left', 'now'];
   const horizon = Date.parse(w.horizon);
   // The sessions spend the window before its horizon. The projection is the router's forecast, which carries the
