@@ -435,7 +435,7 @@ workflow's does. The assembly writes `build/`, and the build writes `build/site/
 
 - `links` walks the built site for an internal link or an image that resolves to nothing, for a fragment that names no
   heading or anchor on the page it lands on, for a `url()` or an `@import` of a style sheet that resolves to nothing and
-  for a link of a page or a style sheet to one of Google's two font hosts.
+  for the name of one of Google's two font hosts in any file of the built site.
 - `prose` holds the site's prose to its mechanical rules, by path or, with no path, over each page of the build tree and
   the README of `phoebis-docs`: a bare `api_key` outside a code span, an em-dash or an en-dash, a line over 120 columns
   that is not a table row, a semicolon on a prose line, and a word from its list of words no page carries. It reads no
@@ -462,8 +462,8 @@ cannot read rather than dropping it:
   [Commands](installation.md#commands) on Installation.
 - `client` compares the proxy listener's route table with the table on [The client](client.md#what-the-proxy-accepts),
   so a route added or removed in the router fails the workflow until the page follows.
-- `codes` compares the refusal codes the `x-phoebis-error-code` header carries on the proxy listener with the table
-  under [Refusal codes](client.md#refusal-codes) on The client.
+- `codes` compares the refusal codes the `x-phoebis-error-code` header carries on the proxy listener and on the feature
+  listener with the table under [Refusal codes](client.md#refusal-codes) on The client.
 - `example` compares the installation page's quoted example with `deploy/config.example.yaml`.
 - `hrefs` compares each documentation link that the console builds, and the address in `deploy/phoebis.service`, with
   the pages: the page stands in `docs/nav.toml`, and an anchor is the id of a heading on that page.
