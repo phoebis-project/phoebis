@@ -4694,8 +4694,8 @@ async fn a_pin_on_a_paused_account_moves_to_the_sibling_under_paused_and_a_repla
             .iter()
             .find(|member| member.account_id == from)
             .map(|member| member.verdict),
-        Some("out"),
-        "the paused account the pin left stands outside the set, since no rule moved the pin off it"
+        Some("source"),
+        "the paused account the pin left reads source, as the outcome names it"
     );
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinMigrated { from_account, to_account, reason, reasons, cause: None, .. } if from_account == from && to_account == to && reason == "paused" && reasons == vec!["paused"]),

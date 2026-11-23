@@ -1677,8 +1677,8 @@ struct Recorder {
     rule: Option<MigrateReason>,
     source: Option<String>,
     /// A move no rule made, a failover's landing or a live pin replaced on another account: its word and the account
-    /// it left, which the outcome names as its rule and its source. The members' verdicts read `source` alone, so the
-    /// account keeps the verdict its own standing gave it.
+    /// it left, which the outcome names as its rule and its source. The row of that account reads `source`, as the row
+    /// of a rule's source does.
     moved: Option<(&'static str, String)>,
     destinations: Vec<String>,
     pin_written: Option<PinWritten>,
@@ -8865,6 +8865,9 @@ fn finish(
     let settings = pool.map(settings_of);
     let pin = pin.map(|pin| PinFacts { released, ..pin });
     let (moved_word, moved_from) = moved.unzip();
+    // The loop reads this name rather than the outcome's member, which a held decision leaves empty, so a rule's source
+    // keeps `source` where its landing held, since its standing word would read as a member that can serve.
+    let left = source.or(moved_from);
     let mut outcome = Outcome {
         kind: "placed",
         account_id: None,
@@ -8897,7 +8900,7 @@ fn finish(
                 "placed"
             };
             outcome.account_id = Some(selection.account.id.clone());
-            outcome.from_account_id = source.clone().or(moved_from);
+            outcome.from_account_id = left.clone();
             outcome.upstream_model = Some(selection.upstream_model.clone());
             outcome.tier = selection.trace.tier;
             outcome.strategy = selection.trace.strategy;
@@ -8965,7 +8968,7 @@ fn finish(
                 "held" => "held_on",
                 _ => "chosen",
             }
-        } else if source.as_deref() == Some(id) {
+        } else if left.as_deref() == Some(id) {
             "source"
         } else if destinations.iter().any(|d| d == id) {
             "destination"

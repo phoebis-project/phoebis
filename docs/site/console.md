@@ -1881,46 +1881,46 @@ record from before), Tier (`plan P0`, `overage P0`, `paid P1`, with `paid` for a
 seat whose record carries its spend reading one cell across the three, `spend 41%` over its reset with `estimated` under
 it where the router estimated the reset, Projection and Runway, In flight against the cap, the Pace score, Prefix, and
 Verdict. A usage-based seat with no reading, its share lapsed or not yet read, draws the three "not reported" cells as
-an account with no window does. The rows list the chosen, renewed or held-on member first, then a move's source and its
-other destinations, then the ranked members by rank, then the eligible ones the strategy did not rank, then the ones a
-partition or a check dropped with their obstacle. Projection reads one line per window the candidate reports, the
-projection at the window's horizon, `5h 99% at 18:20` where the horizon is the reset and `7d 41% in 5 h` where it falls
-earlier, and Runway a span (`2 h 10 min`), `none` or `unbounded`, each a dash for a candidate the gate did not read. The
-Projection cell's hover names the demand where it differs from the burn the window sees, `demand 12.86 %/h over burn
-6.43 %/h at 0.5x`, with the candidate's slow-down factor. The Pace score stands under a header naming the window it
-read, `Spare rate, 7-day per hour` or `Spare rate, 7-day Fable per hour` (`Pace` where no subscription candidate names
-one, and `Pace, 7-day left per hour` on a version 1 record), each cell's hover reading `{pct} of the 7-day window left
-over {n} h to its reset at {time}, less {burn} of burn: {rate}.` (or `to its subscription's end at {time}`), or `{pct}
-of the 7-day window left, less {share} reserved for Fable, over {n} h to its reset at {time}, less {burn} of burn:
-{rate}.` where the candidate carries a reservation, followed by `Inside its tier, the highest spare rate wins.` The Pick
-station names the accounts whose scores tied, the runway that narrowed them where it did, and whether the draw chose
-among more than one, over a table with a row per scored account. On a request of a model without a week of its own, the
-table carries a "Fable reservation" column, a whole percent such as `12%` on each first-tier member that holds a
-reservation. Verdict carries the one chip that decided it (`429 on 5h until 14:55`, `model 404 until 15:24 for
-claude-opus-5`, `budget $1.10 of $5.00`, `5h spent until 15:42`, `spend cap reached until 00:00`), whose hover says why
-the member was passed over, on a spent member with the reset it waits for (`its 5h window spent until 15:42`, `at its
-spend cap until 00:00`), and beside it a badge for a destination the gate read that did not fit, `rewrite only` or
-`least bad` in the warning tone and `ending` neutral. A cooldown chip names the scope its words leave out after the
-reset, the model a cooldown holds. On the walk's exhausted line a chip reads its member's row words and hover where the
-member's own obstacle carries the chip's name, such as `429 on 5h until 15:42`, a chip whose member's obstacle is
-another reads the partition's word where its name is a partition's, such as `window spent` where a plan window or a
-model's week passed the member over, and the obstacle's label otherwise, and an operator chip reads its member's state
-words whatever the row's obstacle is. Three folds, "Request facts", "Pin and warmth" (a record that pins nothing reads
-why: classifier, not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and `Settings
-in force since {time}` (which a guardrail's attach to or detach from the pool moves too, since the fence re-reads the
-pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account it left,
-`shed from` after a shedding round and `failed over from` after a failover's landing, with the instant. The settings
-fold lists the pool's twenty-five settings in the card's order with Load shedding and Slow-down reading `on` or `off`,
-Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at once` at 0, or "The key and its
-pool had left the registry". A refused record, which no pool setting entered, draws no settings fold, a guardrail
-block's among them, whose Admission line and Answer row carry `guardrail blocked` and the guardrail's name as a second
-chip. A record written before a setting existed reads `not recorded` for it, Load shedding, 5-hour ceiling and Weekly
-ceiling on a version 1 record and the five slow-down and return-to-plan settings on an older version 2 record, and a
-version 1 record lists after the twenty-five, each marked `(then)`, the three settings it carried that a later record
-does not. A record that carries the one ceiling a pool held before its 5-hour and weekly ceilings split reads that
-fraction on both the 5-hour ceiling and the Weekly ceiling rows. "Outcome" lists the pin written, the reservation (the
-account, the share per window and the expiry), the cache-map entries the answer wrote (`pending` until it ends), the
-cache read with the TTL tier of its deepest entry, over the promised prefix where the rung promised one and over the
+an account with no window does. The rows list the chosen, renewed or held-on member first, then the account that a move
+or a failover's landing left and a move's other destinations, then the ranked members by rank, then the eligible ones
+the strategy did not rank, then the ones a partition or a check dropped with their obstacle. Projection reads one line
+per window the candidate reports, the projection at the window's horizon, `5h 99% at 18:20` where the horizon is the
+reset and `7d 41% in 5 h` where it falls earlier, and Runway a span (`2 h 10 min`), `none` or `unbounded`, each a dash
+for a candidate the gate did not read. The Projection cell's hover names the demand where it differs from the burn the
+window sees, `demand 12.86 %/h over burn 6.43 %/h at 0.5x`, with the candidate's slow-down factor. The Pace score stands
+under a header naming the window it read, `Spare rate, 7-day per hour` or `Spare rate, 7-day Fable per hour` (`Pace`
+where no subscription candidate names one, and `Pace, 7-day left per hour` on a version 1 record), each cell's hover
+reading `{pct} of the 7-day window left over {n} h to its reset at {time}, less {burn} of burn: {rate}.` (or `to its
+subscription's end at {time}`), or `{pct} of the 7-day window left, less {share} reserved for Fable, over {n} h to its
+reset at {time}, less {burn} of burn: {rate}.` where the candidate carries a reservation, followed by `Inside its tier,
+the highest spare rate wins.` The Pick station names the accounts whose scores tied, the runway that narrowed them where
+it did, and whether the draw chose among more than one, over a table with a row per scored account. On a request of a
+model without a week of its own, the table carries a "Fable reservation" column, a whole percent such as `12%` on each
+first-tier member that holds a reservation. Verdict carries the one chip that decided it (`429 on 5h until 14:55`,
+`model 404 until 15:24 for claude-opus-5`, `budget $1.10 of $5.00`, `5h spent until 15:42`, `spend cap reached until
+00:00`), whose hover says why the member was passed over, on a spent member with the reset it waits for (`its 5h window
+spent until 15:42`, `at its spend cap until 00:00`), and beside it a badge for a destination the gate read that did not
+fit, `rewrite only` or `least bad` in the warning tone and `ending` neutral. A cooldown chip names the scope its words
+leave out after the reset, the model a cooldown holds. On the walk's exhausted line a chip reads its member's row words
+and hover where the member's own obstacle carries the chip's name, such as `429 on 5h until 15:42`, a chip whose
+member's obstacle is another reads the partition's word where its name is a partition's, such as `window spent` where a
+plan window or a model's week passed the member over, and the obstacle's label otherwise, and an operator chip reads its
+member's state words whatever the row's obstacle is. Three folds, "Request facts", "Pin and warmth" (a record that pins
+nothing reads why: classifier, not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until)
+and `Settings in force since {time}` (which a guardrail's attach to or detach from the pool moves too, since the fence
+re-reads the pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account
+it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with the instant. The
+settings fold lists the pool's twenty-five settings in the card's order with Load shedding and Slow-down reading `on` or
+`off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at once` at 0, or "The key
+and its pool had left the registry". A refused record, which no pool setting entered, draws no settings fold, a
+guardrail block's among them, whose Admission line and Answer row carry `guardrail blocked` and the guardrail's name as
+a second chip. A record written before a setting existed reads `not recorded` for it, Load shedding, 5-hour ceiling and
+Weekly ceiling on a version 1 record and the five slow-down and return-to-plan settings on an older version 2 record,
+and a version 1 record lists after the twenty-five, each marked `(then)`, the three settings it carried that a later
+record does not. A record that carries the one ceiling a pool held before its 5-hour and weekly ceilings split reads
+that fraction on both the 5-hour ceiling and the Weekly ceiling rows. "Outcome" lists the pin written, the reservation
+(the account, the share per window and the expiry), the cache-map entries the answer wrote (`pending` until it ends),
+the cache read with the TTL tier of its deepest entry, over the promised prefix where the rung promised one and over the
 whole prompt, the read, the write and the input, where it promised none, the hold, reading `for the reset at {time}`
 where the request waited for a reset, or `for the slow-down until {time}` with the chips `speed 0.5x`, `stretch 42 min
 of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or `for the rewrite in flight of {request} until
