@@ -1379,6 +1379,7 @@ mod tests {
                     last_input_tokens: 1_000,
                     dropped_thinking_tokens: Some(400),
                     per_rewrite: Some(0.004),
+                    per_drop: Some(0.002),
                     marked: true,
                     rewrite: Some(0.01),
                     rewrite_window: Some("seven_day"),
@@ -1490,7 +1491,7 @@ mod tests {
             json!([{
                 "key_id": "k", "session_id": "s1", "agent_id": "main", "model": "m", "cold": true,
                 "burn": 4.0, "last_input_tokens": 1_000, "dropped_thinking_tokens": 400,
-                "per_rewrite": 0.004, "marked": true,
+                "per_rewrite": 0.004, "per_drop": 0.002, "marked": true,
                 "rewrite": 0.01, "rewrite_window": "seven_day", "planned": "b",
                 "runway_ms": 7_200_000, "skip": null, "note": "current"
             }]),

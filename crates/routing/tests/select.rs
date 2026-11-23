@@ -28986,6 +28986,34 @@ fn the_cold_group_orders_the_pins_that_drop_nothing_by_burn_then_the_rest_by_bur
         0.967,
     );
     assert_eq!(round_order(&round), ["none", "light", "heavy", "small"]);
+    let (heavy, light) = (round_pin(&round, "heavy"), round_pin(&round, "light"));
+    assert!(
+        near(heavy.per_drop, 0.03 / 160_000.0) && near(light.per_drop, 0.02 / 40_000.0),
+        "each row states its burn an hour over its weighted drop, the key that ranked it: {:?} and {:?}",
+        heavy.per_drop,
+        light.per_drop
+    );
+}
+
+#[test]
+fn an_unpriced_cold_pin_ranks_behind_each_priced_cold_pin() {
+    // Three cold pins over a last prompt of 100,000 tokens on Sonnet's bound pair: `none` burns 0.01 of the 5-hour
+    // window an hour and holds a zero sum of a's thinking, `heavy` burns 0.03 over a's 40,000, and `guess` holds no
+    // thinking on a model the pricer does not weigh, so its burn has no price. a at 0.99 projects 1.031 at its reset.
+    let round = thinking_round(
+        vec![
+            thinking_pin("none", 1.0, false, 100_000, 0),
+            thinking_pin("heavy", 3.0, false, 100_000, 40_000),
+            PinRow {
+                model: "claude-guess".into(),
+                ..thinking_pin("guess", 3.0, false, 100_000, 0)
+            },
+        ],
+        &[("claude-sonnet-5", true)],
+        4,
+        0.99,
+    );
+    assert_eq!(round_order(&round), ["none", "heavy", "guess", "small"]);
 }
 
 #[test]

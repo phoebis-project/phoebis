@@ -6746,6 +6746,9 @@ fn shed_round(
                 .or(walked.map(|(_, w)| w.read))
                 .and_then(|moved| moved.dropped_thinking_tokens),
             per_rewrite: walked.zip(burn).map(|((_, w), b)| b / size(w)),
+            per_drop: walked
+                .zip(burn)
+                .and_then(|((_, w), b)| w.read.drop_size.map(|drop| b / drop)),
             marked: destination.is_some() || mark_holds(p),
             rewrite: read.and_then(|read| read.rewrite),
             rewrite_window: read.and_then(|read| read.rewrite_window),

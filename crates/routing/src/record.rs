@@ -736,9 +736,9 @@ pub struct ShedRoundFacts {
 /// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out (a
 /// fast-lane pin, a pin whose model does not draw the trigger's window, under the Fable reservation a pin whose model
 /// draws a model week, a pin whose agent ended, a pin whose session holds account state and a pin with no priced burn
-/// on the window). A pin there under a key of a pool the account left is in no round and is not listed here. `burn`
-/// and `per_rewrite` are shares of the trigger's window, the burn per hour, and `rewrite` the Pro-week figure of the
-/// pin's rewrite.
+/// on the window). A pin there under a key of a pool the account left is in no round and is not listed here. `burn`,
+/// `per_rewrite` and `per_drop` are shares of the trigger's window, the burn per hour, and `rewrite` the Pro-week
+/// figure of the pin's rewrite.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedPinFacts {
     pub key_id: String,
@@ -752,6 +752,12 @@ pub struct ShedPinFacts {
     /// its blocks, where its model has no observation and where the round found no destination.
     pub dropped_thinking_tokens: Option<u64>,
     pub per_rewrite: Option<f64>,
+    /// The pin's burn over the thinking its move would drop at the weight of output, the key a round orders a cold pin
+    /// by outside `warm_sessions` `always`. Null where the move drops no thinking or the cost model gives the drop no
+    /// weight, for a pin with no priced burn and for a pin the round left out. A share of the trigger's window in each
+    /// round, as `burn` and `per_rewrite` are. A round whose `unit` is dollars orders by the dollar burn, so there the
+    /// row's place in the list states the pin's rank.
+    pub per_drop: Option<f64>,
     pub marked: bool,
     /// The pin's rewrite as the Pro-week figure, the share of the Pro 7-day window a Pro account would spend on it,
     /// `None` where the cost model cannot size it, where the pin has no destination, or where the pick never read it.

@@ -731,54 +731,58 @@ move's size is the prompt it rewrites on the destination the gate finds for it b
 a move drops](#what-a-move-drops) sizes it (for a pin no call has renewed with usage yet, the body of the request the
 round runs on for that request's own pin and nothing for any other pin), plus the weighted drop, the thinking times the
 cost model's share of a token as output over its share as a cache write at the pin's TTL. A pin whose burn the cost
-model cannot price follows every priced pin of its group. Each burn is read from the pin's average decayed with
-`burn_average_seconds`, and as its demand under a round the stretch fired, so the round's pins add up to its excess.
-`warm_sessions` bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm
-ones, and `always` orders every pin by burn over its move's size, cold or warm. A pin a former pool left on the account
-is outside the round until it ends. While the account runs on its plan, a pin whose last refreshing request was sent in
-fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no share to shed. In
-dollars, on an API-key account or one in overage, it stays in the round. A session that returns to standard requests
-brings its pin back with the plan burn it still carries. A pin whose model does not draw the window that fired is out of
-the round too (`off_window`), so a 7-day Fable round walks the account's Fable sessions alone and an Opus session on the
-account is neither counted nor moved by it. A pin whose agent ended, a subagent whose last answer stopped with
-`end_turn` or an agent the companion mod released, is out of the round as well and out of every figure the router reads
-an account's pins for (the burn, a fresh session's prior, the model weeks a round tests, a move's fit, the projection
-and the slow-down's shares), and the round's record keeps its row under `ended`. Its pin, its account and its cache
-stay, since the main session can respawn the agent with its whole context, and the agent's next request brings the pin
-back into the walk and into every figure, the projection that fires a round among them (see **The projection**, above).
-The mark is stored with the pin, so a restart keeps such a pin out of every figure until the agent's next request. A pin
-whose session holds account state is out of the round as well (`account_bound`), since no round plans its move. A pin
-with no priced burn on the fired window is out of the round too (`no_burn`), since it has nothing to shed. The round
-then walks the pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A
-pin with a standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The round
-never marks a pin whose mark would leave the account's other unmarked priced pins with less than a tenth of the round's
-burn sum on the window (`last_pin`), so a pool with one session burning there sheds nothing, no round takes all of an
-account's burn, and a pin with almost no burn does not make its heavy neighbor markable. A pin whose burn the cost model
-cannot price counts nothing and is never marked (`unpriced`), so a session is never shed on a guess, and while such a
-pin stands unmarked it is the pin that stays, so the round refuses no mark as `last_pin`. A pin the shed rule's gate
-finds no destination for is skipped as `no_runway` and counts nothing. Every other pin is marked with the destination
-the gate planned for it, and the walk counts that destination's planned rewrite and burn for the pins after it, so two
-marks do not take one sibling's headroom twice. A pin is indivisible, so the order serves a target larger than one pin's
-burn, and once the burn of a pin the walk has not reached covers what the target still asks, the walk picks instead:
-among the pins whose burn covers the rest and for which the gate finds a destination, it marks the one whose move costs
-the least, a warm pin its rewrite on that destination plus the share of the thinking its move drops, counted as output,
-each as the Pro share of the pin's model week, or of the 7-day window where the model has no week, the window the pick
-compares on, and a cold pin the dropped thinking's share alone, since its cache is rewritten wherever it runs next
-(under `warm_sessions` `always` every pin its rewrite and its drop, as the order ignores warmth there), the first in the
-order among equals, and the marking ends there with the target met. A move's cost is the share its rewrite and its
-dropped thinking spend on the scarce weekly windows, since the 5-hour window refills. The pin the pick marked carries
-the note `cheapest` in the round's record and event, every pin the pick read carries the runway the gate read for it,
-unbounded where it passes its window's reset, and its rewrite as the Pro-week figure, the share of the Pro 7-day window
-a Pro account would spend on it, with the window the pick compared on beside it, which the routing log reads in the
-chosen week, and a pick that finds no covering pin with a destination leaves the walk to the order, which marks a pin
-only where its burn covers at least a tenth of what the target still asks, warm or cold. A pin under that share stays as
-it is (`sliver`), since its move relieves too little of the rest, and the round's record names the share as
-`mark_share`. A pin whose burn carries the removed burn past the target stays marked, and the walk stops there. A round
-that marks nothing records why: `no_runway` when no priced pin had a destination, `sliver` when the order left a pin
-under a tenth of the rest, `off_window`, `fable_model`, `ended`, `account_bound` or `no_burn` when it walked no pin and
-a pin it left out carried that word, `unpriced` when no burn was priced, `last_pin` when every pin the target asked for
-would have left too little burn unmarked, and `standing` when every pin walked was a pending move. Either way the round
-is recorded, so the dwell holds.
+model cannot price follows every priced pin of its group. The round's record states both keys on each pin's row,
+`per_rewrite` for the burn over the move's size and `per_drop` for the burn over the weighted drop, the second null
+where the move drops no thinking or the cost model gives the drop no weight, so a cold pin's place can be read from its
+row. A round whose unit is dollars orders by the dollar burn, while the record's `burn`, `per_rewrite` and `per_drop`
+read in shares of the trigger's window in each round, so there a pin's place in the list states its rank. Each burn is
+read from the pin's average decayed with `burn_average_seconds`, and as its demand under a round the stretch fired, so
+the round's pins add up to its excess. `warm_sessions` bounds the order: `never` stops after the cold pins,
+`when_needed` (the default) goes on to the warm ones, and `always` orders every pin by burn over its move's size, cold
+or warm. A pin a former pool left on the account is outside the round until it ends. While the account runs on its plan,
+a pin whose last refreshing request was sent in fast mode is out of the round: fast mode draws usage credits and no plan
+window, so the pin has no share to shed. In dollars, on an API-key account or one in overage, it stays in the round. A
+session that returns to standard requests brings its pin back with the plan burn it still carries. A pin whose model
+does not draw the window that fired is out of the round too (`off_window`), so a 7-day Fable round walks the account's
+Fable sessions alone and an Opus session on the account is neither counted nor moved by it. A pin whose agent ended, a
+subagent whose last answer stopped with `end_turn` or an agent the companion mod released, is out of the round as well
+and out of every figure the router reads an account's pins for (the burn, a fresh session's prior, the model weeks a
+round tests, a move's fit, the projection and the slow-down's shares), and the round's record keeps its row under
+`ended`. Its pin, its account and its cache stay, since the main session can respawn the agent with its whole context,
+and the agent's next request brings the pin back into the walk and into every figure, the projection that fires a round
+among them (see **The projection**, above). The mark is stored with the pin, so a restart keeps such a pin out of every
+figure until the agent's next request. A pin whose session holds account state is out of the round as well
+(`account_bound`), since no round plans its move. A pin with no priced burn on the fired window is out of the round too
+(`no_burn`), since it has nothing to shed. The round then walks the pins in that order while the burn it removed, each
+pin's burn on the fired window, is under the target. A pin with a standing mark counts its burn as removed and is
+skipped as `standing`, since its move is pending. The round never marks a pin whose mark would leave the account's other
+unmarked priced pins with less than a tenth of the round's burn sum on the window (`last_pin`), so a pool with one
+session burning there sheds nothing, no round takes all of an account's burn, and a pin with almost no burn does not
+make its heavy neighbor markable. A pin whose burn the cost model cannot price counts nothing and is never marked
+(`unpriced`), so a session is never shed on a guess, and while such a pin stands unmarked it is the pin that stays, so
+the round refuses no mark as `last_pin`. A pin the shed rule's gate finds no destination for is skipped as `no_runway`
+and counts nothing. Every other pin is marked with the destination the gate planned for it, and the walk counts that
+destination's planned rewrite and burn for the pins after it, so two marks do not take one sibling's headroom twice. A
+pin is indivisible, so the order serves a target larger than one pin's burn, and once the burn of a pin the walk has not
+reached covers what the target still asks, the walk picks instead: among the pins whose burn covers the rest and for
+which the gate finds a destination, it marks the one whose move costs the least, a warm pin its rewrite on that
+destination plus the share of the thinking its move drops, counted as output, each as the Pro share of the pin's model
+week, or of the 7-day window where the model has no week, the window the pick compares on, and a cold pin the dropped
+thinking's share alone, since its cache is rewritten wherever it runs next (under `warm_sessions` `always` every pin its
+rewrite and its drop, as the order ignores warmth there), the first in the order among equals, and the marking ends
+there with the target met. A move's cost is the share its rewrite and its dropped thinking spend on the scarce weekly
+windows, since the 5-hour window refills. The pin the pick marked carries the note `cheapest` in the round's record and
+event, every pin the pick read carries the runway the gate read for it, unbounded where it passes its window's reset,
+and its rewrite as the Pro-week figure, the share of the Pro 7-day window a Pro account would spend on it, with the
+window the pick compared on beside it, which the routing log reads in the chosen week, and a pick that finds no covering
+pin with a destination leaves the walk to the order, which marks a pin only where its burn covers at least a tenth of
+what the target still asks, warm or cold. A pin under that share stays as it is (`sliver`), since its move relieves too
+little of the rest, and the round's record names the share as `mark_share`. A pin whose burn carries the removed burn
+past the target stays marked, and the walk stops there. A round that marks nothing records why: `no_runway` when no
+priced pin had a destination, `sliver` when the order left a pin under a tenth of the rest, `off_window`, `fable_model`,
+`ended`, `account_bound` or `no_burn` when it walked no pin and a pin it left out carried that word, `unpriced` when no
+burn was priced, `last_pin` when every pin the target asked for would have left too little burn unmarked, and `standing`
+when every pin walked was a pending move. Either way the round is recorded, so the dwell holds.
 
 A marked session moves at its next real request, the request that ran the round included, since the mark check follows
 the round. A mark on a pin whose session holds account state moves nothing until a portable turn of the conversation
