@@ -4321,6 +4321,15 @@ test("the story's 14:00 hour counts desktop's token count as uncacheable and the
   assert.deepEqual(desktop && [desktop.uncached, desktop.uncacheable], [3, 1]);
 });
 
+// Catches a row the relay refuses behind its read of the body answered unmarked. The relay publishes the marker it
+// computed from the body before a guardrail blocks it, and the block's session sits on a pool that pins it, so its body
+// marks a breakpoint. A seed's marker reads no clock, so one load holds the case.
+test('a guardrail block carries the marker the relay computed behind its read of the body', async () => {
+  const s = await pinned;
+  const detail = await s.api.getRequest('req_a8f3c6d0-e17');
+  assert.equal(detail?.request.cacheMarker, true);
+});
+
 // An instant whose hour a full day back carries traffic.
 const firstHour = loading.then(() => storyAt('2026-09-16T09:30:00Z'));
 

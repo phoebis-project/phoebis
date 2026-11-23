@@ -57,11 +57,11 @@ test('the mock lists the requests whose serving answer holds a listed dropped bl
     unprobed.filter((r) => dropped(r) === null),
     'whose serving answer carries no map',
   );
-  // The forced move and the next request of its session (`mock/requests.ts`), each of which dropped a block made for
-  // another end user.
-  assert.deepEqual(await listed({ inputTransformations: [key] }), ['req_5b2e8d47-c19', 'req_5d6f1b3a-e27']);
-  // Two listed keys keep a request that holds either, so both rows stay beside a key neither holds.
-  assert.deepEqual(await listed({ inputTransformations: [key, 'thinking_dropped.model_binding_mismatch'] }), ['req_5b2e8d47-c19', 'req_5d6f1b3a-e27']);
+  // The forced move, the next request of its session and the two turns on primary of the conversation the purge takes
+  // twice, whose first turn thought on nightly (`mock/requests.ts`), each dropped a block made for another end user.
+  assert.deepEqual(await listed({ inputTransformations: [key] }), ['req_5b2e8d47-c19', 'req_5d6f1b3a-e27', 'req_8b2f4c71-e05', 'req_d5e17a39-c48']);
+  // Two listed keys keep a request that holds either, so each row stays beside a key none of them holds.
+  assert.deepEqual(await listed({ inputTransformations: [key, 'thinking_dropped.model_binding_mismatch'] }), ['req_5b2e8d47-c19', 'req_5d6f1b3a-e27', 'req_8b2f4c71-e05', 'req_d5e17a39-c48']);
 });
 
 test("the mock keeps a request under its serving attempt's stop reason and refusal category, the dash for none, as the route does", async () => {

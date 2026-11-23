@@ -1260,10 +1260,12 @@ function storyRow(seed: StorySeed): RequestLog {
   // An incomplete stream never reached the message_delta that carries the stop reason either, while the ledger still
   // files its attempt as an upstream error, so the stop reason reads a predicate of its own beside the outcome's.
   const stopless = cut || seed.outcome === 'incomplete';
-  // The relay publishes no marker for a refusal it decides ahead of its read of the body, and the mock reads each
-  // refusal so. The diagnostics gate reads the body's own marker, ahead of the pool's policy.
-  const ownMarker = seed.cacheMarker ?? (!seed.refused && ownMarkerOf({ classifier: seed.classifier ?? null, kind, poolId, sessionId }));
-  const cacheMarker = !seed.refused && markerOf({ kind, poolId, requestClass: seed.requestClass }, ownMarker);
+  // The relay decides a refused key and the client gate on the head ahead of its read of the body, so it publishes no
+  // marker for either, and their codes name them. A refusal it decides behind that read carries the marker it computed
+  // from the body, as an answer does. The diagnostics gate reads the body's own marker, ahead of the pool's policy.
+  const beforeRead = seed.refused === true && (seed.errorCode === 'auth_unknown' || seed.errorCode === 'client_not_allowed');
+  const ownMarker = seed.cacheMarker ?? (!beforeRead && ownMarkerOf({ classifier: seed.classifier ?? null, kind, poolId, sessionId }));
+  const cacheMarker = !beforeRead && markerOf({ kind, poolId, requestClass: seed.requestClass }, ownMarker);
   const source = sourceOf(seed.keyId, poolId, kind, seed.attempts.length > 0, ownMarker);
   const attempts = seed.attempts.map((a, index): Attempt => {
     const windows = oauthWindows(a.accountId, a.at, () => SERVED_FACTOR);
@@ -1825,8 +1827,8 @@ function storySeeds(): StorySeed[] {
     // comes behind the sweep at 13:21:40 that takes that pin and ahead of the wall clock's next minute, finds no row
     // and lands on primary, while its member names the message nightly holds. Its third comes behind the sweep at
     // 13:32:40 that takes the second's pin and lands on primary again, where the cache the second wrote for an hour
-    // still stands.
-    { agentId: 'main', at: t(13, 11), attempts: [{ accountId: 'nightly', at: t(13, 11), ms: 9_000, status: 200 }], id: 'req_3a9d6e14-b72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 39_800, input: 1_700, output: 1_020 } },
+    // still stands. The first turn thought on nightly, so both answers on primary drop that block with no move event.
+    { agentId: 'main', at: t(13, 11), attempts: [{ accountId: 'nightly', at: t(13, 11), ms: 9_000, status: 200 }], id: 'req_3a9d6e14-b72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 39_800, input: 1_700, output: 1_020, thinking: 480 } },
     { agentId: 'main', at: t(13, 21, 50), attempts: [{ accountId: 'primary', at: t(13, 21, 50), ms: 6_000, status: 200 }], id: 'req_8b2f4c71-e05', keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 41_300, input: 1_500, output: 880 } },
     { agentId: 'main', at: t(13, 33, 10), attempts: [{ accountId: 'primary', at: t(13, 33, 10), ms: 5_000, status: 200 }], id: 'req_d5e17a39-c48', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheRead: 41_300, cacheWrite1h: 1_200, input: 1_300, output: 760 } },
     // A new conversation's first turn, which primary's upstream answered 400.
@@ -2905,9 +2907,10 @@ interface ThinkingHistory {
   compacted: boolean;
   /** The account that answered the pin key's last answered inference turn, whatever compaction came between. */
   lastAnswered: string | null;
-  /** The pin key's last move since the compaction: the account it landed on and the blocks it left behind. */
-  move: { accountId: string; blocks: number } | null;
-  /** The serving account of each answered turn that thought since the compaction. */
+  /**
+   * The serving account of each answered turn that thought since the compaction, except the turn that wrote the
+   * carried block.
+   */
   thinkers: string[];
 }
 
@@ -2921,31 +2924,34 @@ interface ThinkingHistory {
  * answered turn ahead of the compaction wrote, or the compaction turn's own where none stands. A report on that account
  * lists the prefix key. Where the model binds its thinking, a report on any other account drops the block under the
  * account reason, so it lists the account key with that block in place of the prefix key, with or without a move
- * between, since the upstream reads the block's account and never the router's events. From a move to the next
- * compaction, a report on the account the move landed on adds to the account key the blocks of the account the move
- * left, where the model binds them: one per earlier answered turn that thought there. A row names the token's sender
- * beside a reported map alone.
+ * between, since the upstream reads the block's account and never the router's events. By the same rule, where the
+ * model binds its thinking, a report adds to the account key one block for each answered turn since the last
+ * compaction that thought on another account than the one that answers, and the turn that wrote the carried block adds
+ * none, since that block counts once. A row names the token's sender beside a reported map alone.
  */
 function fillDroppedBlocks() {
-  const fresh = (): ThinkingHistory => ({ carriedBy: null, compacted: false, lastAnswered: null, move: null, thinkers: [] });
+  const fresh = (): ThinkingHistory => ({ carriedBy: null, compacted: false, lastAnswered: null, thinkers: [] });
   const histories = new Map<string, ThinkingHistory>();
   for (const r of byArrival()) {
     const pin = pinKeyOf(r);
     const history = r.sessionId === null ? fresh() : (histories.get(pin) ?? fresh());
     if (r.sessionId !== null) histories.set(pin, history);
-    if (r.contextCompacted !== null) Object.assign(history, { carriedBy: history.lastAnswered, compacted: true, move: null, thinkers: [] });
+    if (r.contextCompacted !== null) Object.assign(history, { carriedBy: history.lastAnswered, compacted: true, thinkers: [] });
     // Only an answer to a head that carried the token reports, and the rule says whether one did.
     const token = thinkingSourceOf(r.keyId, r.poolId, r.kind);
+    let carries = false;
     for (const a of r.attempts) {
-      const from = migrationAt(r, a)?.detail?.from_account;
-      if (typeof from === 'string') history.move = { accountId: a.accountId, blocks: history.thinkers.filter((id) => id === from).length };
       // A compaction with no answer behind it carries the block the first answer after it writes.
-      if (history.compacted && history.carriedBy === null && a.upstreamStatus === 200) history.carriedBy = a.accountId;
+      if (history.compacted && history.carriedBy === null && a.upstreamStatus === 200) {
+        history.carriedBy = a.accountId;
+        carries = true;
+      }
       let dropped: InputTransformations | null = null;
       if (token !== null && r.kind !== 'count_tokens' && a.upstreamStatus === 200) {
         const binds = bindsThinking(r.canonicalModel);
         const away = binds && history.compacted && history.carriedBy !== a.accountId;
-        const blocks = (away ? 1 : 0) + (binds && history.move?.accountId === a.accountId ? history.move.blocks : 0);
+        const left = binds ? history.thinkers.filter((id) => id !== a.accountId).length : 0;
+        const blocks = (away ? 1 : 0) + left;
         dropped = {};
         if (history.compacted && !away) dropped[PREFIX_KEY] = { blocks: 1, firstMessage: FIRST_BLOCK_MESSAGE };
         if (blocks > 0) dropped[ACCOUNT_KEY] = { blocks, firstMessage: FIRST_BLOCK_MESSAGE };
@@ -2955,7 +2961,7 @@ function fillDroppedBlocks() {
     }
     const serving = servingAttempt(r);
     if (serving?.upstreamStatus === 200 && r.kind === 'inference') history.lastAnswered = serving.accountId;
-    if (serving?.upstreamStatus === 200 && r.usage.thinking > 0) history.thinkers.push(serving.accountId);
+    if (serving?.upstreamStatus === 200 && r.usage.thinking > 0 && !carries) history.thinkers.push(serving.accountId);
     r.thinkingDiagnosticsSource = (serving?.response.inputTransformations ?? null) === null ? null : token;
   }
 }

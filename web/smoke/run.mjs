@@ -15109,7 +15109,9 @@ await forView('/requests', async () => {
   again.unmount();
 
   // The forced move and the next request of its session, `req_5b2e8d47-c19` and `req_5d6f1b3a-e27` at 11:01 in
-  // `web/src/mock/requests.ts`, are the day's two requests whose answer dropped a block made for another end user.
+  // `web/src/mock/requests.ts`, and the turns on primary of the conversation the purge takes twice, `req_8b2f4c71-e05`
+  // at 13:21 and `req_d5e17a39-c48` at 13:33, whose first turn thought on nightly, are the day's four requests whose
+  // answer dropped a block made for another end user.
   const droppedCheck = '/requests filters by a dropped thinking block';
   const droppedPage = await mount('/requests', { now: CLOCK_ORIGIN });
   const droppedSpy = countCalls('listRequests');
@@ -15119,7 +15121,7 @@ await forView('/requests', async () => {
   results.push({
     name: droppedCheck,
     ok:
-      JSON.stringify(droppedRows.sort()) === '["req_5b2e8d47-c19","req_5d6f1b3a-e27"]' &&
+      JSON.stringify(droppedRows.sort()) === '["req_5b2e8d47-c19","req_5d6f1b3a-e27","req_8b2f4c71-e05","req_d5e17a39-c48"]' &&
       param(droppedPage, 'input_transformations') === 'thinking_dropped.end_user_binding_mismatch' &&
       JSON.stringify(droppedSpy.calls.at(-1)?.[0]?.inputTransformations) === '["thinking_dropped.end_user_binding_mismatch"]',
     missing: [droppedPage.location().search, JSON.stringify(droppedSpy.calls.map(([q]) => q?.inputTransformations ?? null)), JSON.stringify(droppedRows)],
