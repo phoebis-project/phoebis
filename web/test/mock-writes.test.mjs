@@ -176,9 +176,10 @@ test('a pool with no member answers exhausted while it is enabled, as the route 
   assert.equal(empty.status, 'exhausted', 'a pool saved as active with no member');
   const disabled = await api.updatePool(empty.id, { ...poolInputOf(empty), status: 'disabled' }, empty.revision);
   assert.equal(disabled.status, 'disabled', 'a disabled pool with no member');
-  await api.createAccount({ id: 'fresh', kind: 'oauth', label: 'fresh', secret: null });
+  // An API-key account is ready from its create, so the pool has a member that takes requests.
+  await api.createAccount({ id: 'fresh', kind: 'api_key', label: 'fresh', secret: 'sk-ant-api03-FAKE' });
   const single = await api.createPool({ ...(await storyPool(api)), members: [{ accountId: 'fresh', priority: 0 }], name: 'single', status: 'active' });
-  assert.equal(single.status, 'active', 'a pool saved as active with a member');
+  assert.deepEqual([single.members[0].eligible, single.status], ['eligible', 'active'], 'a pool saved as active with a member that takes requests');
   await api.deleteAccount('fresh');
   assert.equal((await api.listPools()).find((p) => p.id === single.id)?.status, 'exhausted', 'an account delete that took the last member');
 });

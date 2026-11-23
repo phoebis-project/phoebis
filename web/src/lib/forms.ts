@@ -88,8 +88,8 @@ export const memberField = (column: MemberColumn, accountId: string): string => 
 
 export interface PoolRefusal {
   /**
-   * The refused control's accessible name: `priority:<id>`, `budget_daily:<id>`, `budget_monthly:<id>` or
-   * `member:<id>` for a member row, and `members` for an account list that did not load.
+   * The refused control's accessible name: `budget_daily:<id>`, `budget_monthly:<id>`, `member:<id>` or
+   * `priority:<id>` for a member row, and `members` for an account list that did not load.
    */
   field: string;
   group: PoolGroup;
