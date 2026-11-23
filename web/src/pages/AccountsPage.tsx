@@ -98,12 +98,12 @@ export function AccountsPage() {
   // The row a confirmed pairing created: the read that lists it lands after the URL names it, so the redirect below
   // leaves that URL alone for the span of that read. The phase follows the read's loading flag rather than the list
   // changing, since a failed read keeps the old list and would otherwise hold the guard until the next refresh. A read
-  // that ends without the row keeps its id until the redirect has left its URL, so the note never denies a row the
-  // router holds.
+  // that ends without the row keeps its id until the redirect has left its URL or a later read lists the row, so the
+  // note never denies a row the router holds.
   const [created, setCreated] = useState<{ id: string; phase: 'confirmed' | 'reading' | 'unlisted' } | null>(null);
   if (created !== null) {
     if (created.phase === 'unlisted') {
-      if (accountId !== created.id) setCreated(null);
+      if (accountId !== created.id || accounts.data?.some((a) => a.id === created.id)) setCreated(null);
     } else if (accounts.loading) {
       if (created.phase === 'confirmed') setCreated({ ...created, phase: 'reading' });
     } else if (created.phase === 'reading') setCreated(accounts.data?.some((a) => a.id === created.id) ? null : { ...created, phase: 'unlisted' });
@@ -203,8 +203,9 @@ export function AccountsPage() {
         </aside>
         <section className="accounts__detail">
           {/* The selected account's detail, a skeleton until the list loads, the note for an id the router does not
-              hold, and the words of an empty registry. A bare /accounts and the row a confirm created draw nothing
-              while the redirect above moves them or the read that lists the row is out. */}
+              hold, and the words of an empty registry. A bare /accounts and the row a confirm created draw no note
+              while the redirect above moves them or the read that lists the row is out: they draw nothing, or the words
+              of an empty registry where the list holds no row. */}
           {selected ? (
             <Descriptions>
               {/* Keyed by the account, so a save still running when the operator moves on answers into its own

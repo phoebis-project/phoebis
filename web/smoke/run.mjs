@@ -6136,6 +6136,101 @@ await forView('/accounts', async () => {
     missing: [JSON.stringify(drawn)],
   });
 });
+// A confirm on a router with no other account, whose reload fails: the list from before the confirm holds no row, so no
+// first account stands for the redirect and the address keeps the row's id. The router holds that id, so no note draws,
+// and the id lets go once a read lists the row. A stand-in lists the case's own row alone, so the registry reads empty
+// ahead of the confirm, and the mock's rows go back as the story holds them.
+await forView('/accounts', async () => {
+  const { listAccounts } = api;
+  let drawn;
+  try {
+    api.listAccounts = async (...args) => (await listAccounts.apply(api, args)).filter((a) => a.id === 'solo-loft');
+    const page = await mount('/accounts', { now: CLOCK_ORIGIN });
+    await chooseInterval(page, 'Off');
+    const fieldIn = (dlg, label) => [...(dlg?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input') ?? null;
+    const type = async (input, value) => {
+      if (!input) return;
+      setInput(input, value);
+      await page.settle(120);
+    };
+    [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
+    await page.settle(300);
+    const add = openDialogs(page).pop() ?? null;
+    await type(fieldIn(add, 'Label'), 'Solo loft');
+    buttonIn(add, 'Start pairing')?.click();
+    await page.settle(500);
+    const dlg = openDialogs(page).pop() ?? null;
+    const state = new URLSearchParams((dlg?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
+    await type(dlg?.querySelector('input[placeholder^="http://localhost"]'), `http://localhost:54545/callback?code=abc123&state=${state}`);
+    buttonIn(dlg, 'Submit')?.click();
+    const submitted = await until(page, () => buttonIn(dlg, 'Confirm')?.disabled === false);
+    failNextCall('listAccounts', '/admin/accounts', 'the registry is unavailable', { quiet: true });
+    buttonIn(dlg, 'Confirm')?.click();
+    const landed = await until(page, () => openDialogs(page).length === 0 && page.location().pathname === '/accounts/solo-loft');
+    // The confirm's failed reload lands before the detail's place is read.
+    await page.settle(300);
+    const detail = () => page.container.querySelector('.accounts__detail');
+    const failed = { path: page.location().pathname, text: detail()?.textContent ?? '' };
+    const spy = countCalls('listAccounts');
+    const reads = [];
+    for (let step = 0; step < 3; step += 1) {
+      const from = spy.calls.length;
+      tick(2_000);
+      await page.settle(200);
+      reads.push(spy.calls.length - from);
+    }
+    spy.restore();
+    const usage = [...(detail()?.querySelectorAll('.card') ?? [])].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+    drawn = { failed, hint: (usage?.textContent ?? '').includes('The first quota reading is in flight'), interval: intervalWord(page), landed, reads, submitted, windows: Boolean(usage?.querySelector('.wbars')) };
+    page.unmount();
+  } finally {
+    api.listAccounts = listAccounts;
+    await api.deleteAccount('solo-loft').catch((e) => {
+      if (e?.status !== 404) throw e;
+    });
+  }
+  results.push({
+    name: '/accounts a confirmed pairing on an empty registry whose read failed keeps its address and draws no note',
+    ok: drawn?.submitted === true && drawn.landed && drawn.failed.path === '/accounts/solo-loft' && drawn.failed.text.includes('No account to show') && !drawn.failed.text.includes('No account holds the id'),
+    missing: [`Confirm enabled ${drawn?.submitted}, landed ${drawn?.landed}`, JSON.stringify(drawn?.failed ?? null)],
+  });
+  results.push({
+    name: '/accounts with auto reload off that pairing reads the list again 2 s on, where its row lands with its windows, and then reads no more',
+    ok: drawn?.interval === 'Off' && JSON.stringify(drawn.reads) === JSON.stringify([1, 0, 0]) && drawn.windows && !drawn.hint,
+    missing: [`interval ${drawn?.interval}`, `reads per 2 s ${JSON.stringify(drawn?.reads ?? null)}`, `windows ${drawn?.windows}, hint ${drawn?.hint}`],
+  });
+});
+// A delete of the router's last account: the delete's move reads the list from before the delete, which still holds the
+// row, so the first account passes by it and the address stays bare until the reload lands with no row. A stand-in
+// lists the case's own account alone, and the mock's rows go back as the story holds them.
+await forView('/accounts', async () => {
+  const { listAccounts } = api;
+  let drawn;
+  try {
+    await api.createAccount({ id: 'sole-bench', kind: 'oauth', label: 'Sole bench', secret: null });
+    api.listAccounts = async (...args) => (await listAccounts.apply(api, args)).filter((a) => a.id === 'sole-bench');
+    const page = await mount('/accounts/sole-bench', { now: CLOCK_ORIGIN });
+    const names = () => [...page.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim() ?? '');
+    const listed = JSON.stringify(names()) === '["Sole bench"]';
+    [...(page.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete account')?.click();
+    const ready = await until(page, () => buttonIn(openDialogs(page).pop(), 'Delete')?.disabled === false);
+    buttonIn(openDialogs(page).pop(), 'Delete')?.click();
+    const reloaded = await until(page, () => !names().includes('Sole bench'));
+    await page.settle(200);
+    drawn = { listed, path: page.location().pathname, ready, reloaded, text: page.container.querySelector('.accounts__detail')?.textContent ?? '' };
+    page.unmount();
+  } finally {
+    api.listAccounts = listAccounts;
+    await api.deleteAccount('sole-bench').catch((e) => {
+      if (e?.status !== 404) throw e;
+    });
+  }
+  results.push({
+    name: '/accounts a delete of the last account leaves a bare address and draws the words of an empty registry',
+    ok: drawn?.listed === true && drawn.ready && drawn.reloaded && drawn.path === '/accounts' && drawn.text.includes('No account to show') && !drawn.text.includes('No account holds the id'),
+    missing: [JSON.stringify(drawn ?? null)],
+  });
+});
 await forView('/accounts', async () => {
   // "Meter drift" over the mock's reconciled windows (`RECONCILIATIONS` in mock/analytics.ts), second in the grid beside
   // "Allowance left at reset": primary's newest 5-hour window ended at the 11:44 reset (0.52 over 0.5), its newest 7-day
