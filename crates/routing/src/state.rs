@@ -1118,6 +1118,10 @@ pub struct SlowDownState {
     pub stretch_ms: i64,
     /// The threshold the read compared the stretch to, the pool's `slow_down_stretch_seconds` at the read.
     pub threshold_ms: i64,
+    /// The share the stretch test compared with the ceiling at the read, kept so the pages read the test's own figure
+    /// rather than rebuild it from the banded demand. `None` where the read's horizon less the threshold lay at or
+    /// before the read.
+    pub stretch_projection: Option<f64>,
     /// The 5-hour reading's reset at the read, `None` where the reading named none or its reset had passed: the
     /// window the entry was read in, which the stale test compares `read_at` against once the reset has passed.
     pub reset: Option<i64>,
@@ -3079,6 +3083,7 @@ impl RoutingState {
                 entry.factor = read.factor;
                 entry.stretch_ms = read.stretch_ms;
                 entry.threshold_ms = read.threshold_ms;
+                entry.stretch_projection = read.stretch_projection(now);
                 entry.read_at = now;
                 entry.reset = read.reset;
                 entry.over_since = over.then(|| entry.over_since.unwrap_or(now));
@@ -3122,6 +3127,7 @@ impl RoutingState {
                 holds: 0,
                 stretch_ms: read.stretch_ms,
                 threshold_ms: read.threshold_ms,
+                stretch_projection: read.stretch_projection(now),
             });
         if let Some(edge) = ended {
             self.slow_down_edges

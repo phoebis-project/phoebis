@@ -3558,6 +3558,18 @@ pub struct SlowDownRead {
     pub realized: f64,
 }
 
+impl SlowDownRead {
+    /// The figure the stretch test compares with the ceiling at `now`: the read's utilization plus the banded demand's
+    /// increase until the read's horizon less the threshold. `None` where that instant lies at or before `now`.
+    pub(crate) fn stretch_projection(&self, now: i64) -> Option<f64> {
+        let horizon = self.horizon - self.threshold_ms;
+        if horizon <= now {
+            return None;
+        }
+        Some(self.utilization + self.banded.increase_until(horizon))
+    }
+}
+
 /// One pin's part of the account's plan: the cycle it was sized from and its hold, capped.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinHold {
@@ -5674,12 +5686,9 @@ fn trigger_of(
             let limit = ceiling(pool, window);
             let read = read?;
             over_since.filter(|since| now - since >= SLOW_DOWN_WAIT_MS)?;
+            let projection = read.stretch_projection(now)?;
             let horizon = read.horizon - read.threshold_ms;
-            if horizon <= now {
-                return None;
-            }
             let to_horizon = seconds(horizon - now);
-            let projection = read.utilization + read.banded.increase_until(horizon);
             // A burn of nothing at the ceiling reads a stretch of the whole time to the reset with nothing to remove.
             return (projection > limit).then_some(Trigger {
                 window,

@@ -2459,6 +2459,7 @@ fn slow_down_view(ctx: &AccountContext, account_id: &str) -> Option<AccountSlowD
         ramp: entry.span.map(|s| s.ramp),
         stretch_ms: entry.stretch_ms,
         threshold_ms: entry.threshold_ms,
+        stretch_projection: entry.stretch_projection,
         hold_ms: entry.hold_ms,
     })
 }
@@ -2779,6 +2780,10 @@ pub(crate) struct AccountSlowDownView {
     pub stretch_ms: i64,
     /// The pool's `slow_down_stretch_seconds` at the read, in milliseconds.
     pub threshold_ms: i64,
+    /// The share of the 5-hour window that the stretch test compares with the ceiling: the read's utilization plus the
+    /// demand's increase until the read's horizon less `threshold_ms`. Null where that instant lies at or before the
+    /// read.
+    pub stretch_projection: Option<f64>,
     /// The pool's `slow_down_hold_seconds`, the longest one request waits, in milliseconds.
     pub hold_ms: i64,
 }

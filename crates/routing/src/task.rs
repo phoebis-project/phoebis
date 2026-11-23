@@ -1521,6 +1521,9 @@ pub struct AccountSlowDown {
     pub span: Option<SlowDownSpan>,
     pub stretch_ms: i64,
     pub threshold_ms: i64,
+    /// The share the stretch test compared with the ceiling at the read, `None` where the read's horizon less the
+    /// threshold lay at or before the read.
+    pub stretch_projection: Option<f64>,
     pub hold_ms: i64,
 }
 
@@ -3121,6 +3124,7 @@ fn projections(
                         }),
                         stretch_ms: entry.stretch_ms,
                         threshold_ms: entry.threshold_ms,
+                        stretch_projection: entry.stretch_projection,
                         hold_ms: slow_down_hold_ms(pool),
                     }),
                 obstacle: obstacle_on(

@@ -16554,6 +16554,48 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
 }
 
 #[tokio::test]
+async fn a_slowed_account_answers_the_figure_that_the_stretch_test_compares() {
+    let now = Arc::new(AtomicI64::new(AT));
+    let store = shedding_store(&["a"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.five_hour_ceiling = 0.95;
+    pool.slow_down.slow_down = true;
+    pool.slow_down.slow_down_stretch_seconds = 240;
+    pool.shedding.burn_average_seconds = (SLOWED_AVERAGE_MS / 1_000) as u64;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    with_tier(&store, "a");
+    // s1 burns a tenth of the 5-hour window an hour on `a`, at 0.9 with 40 minutes left: the demand passes the ceiling
+    // half an hour in, before the reset less the threshold of four minutes.
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let handle = spawn(store, clock(&now), priced_config()).unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.9, Some(SLOWED_RESET)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+
+    let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
+    let entry = a.slow_down.expect("the pinned read wrote a's entry");
+    assert!(
+        close(entry.stretch_projection, 0.96),
+        "0.9 and a tenth an hour over the 36 minutes to the reset less the threshold: {entry:?}"
+    );
+    let five_hour = a.windows[FIVE_HOUR];
+    assert!(
+        !close(Some(five_hour.projection), 0.96),
+        "the window's projection runs on to the reset itself: {five_hour:?}"
+    );
+}
+
+#[tokio::test]
 async fn pins_standing_answers_the_speed_and_the_cycle_of_a_pin() {
     use phoebis_routing::FactValue;
     let now = Arc::new(AtomicI64::new(AT));
