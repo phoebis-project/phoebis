@@ -12711,7 +12711,7 @@ fn under_when_cached_a_marker_less_portable_request_neither_reads_nor_creates_a_
     let s = snapshot(Pool {
         mode: AffinityMode::WhenCached,
         // "a" sits behind the priority-0 tier, so the non-portable clause below only reaches it through the
-        // pin: without `|| !request.portable`, the strategy would pick a priority-0 member instead.
+        // pin: without `|| !request.portability.is_portable()`, the strategy would pick a priority-0 member instead.
         members: vec![("a", 1), ("b", 0), ("c", 0)],
         ..Pool::default()
     });
