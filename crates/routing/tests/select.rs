@@ -1847,6 +1847,58 @@ fn a_pin_marked_by_a_reservation_round_never_moves_onto_a_sibling_under_its_rese
     );
 }
 
+/// `reserving_pricer` with no rate for a Fable model's burn on any window, so a Fable pin's burn has no price while
+/// the Fable week's factor still holds a reservation back.
+fn unpriced_fable_pricer() -> SharePricer {
+    hourly_pricer()
+        .with_rate(|window, _, tier, model, burn, _| {
+            (tier == TIER
+                && !model.starts_with("claude-fable")
+                && [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE].contains(&window))
+            .then(|| burn.input / 1_048_576.0)
+        })
+        .with_week_factor(|window, _| (window == SEVEN_DAY_FABLE).then_some(0.5))
+}
+
+#[test]
+fn a_reservation_round_marks_the_one_other_pin_beside_a_live_fable_pin_with_no_priced_burn() {
+    let s = reserving_pool(Strategy::Pace, true);
+    // s1's 4 tokens a second are the round's whole walked burn. f1's burn is unknown, not none, so f1 is the pin that
+    // stays and the last-pin guard refuses nothing.
+    let mut st = loaded_with_hours(
+        vec![fable_hour("a", 99, 0.05)],
+        vec![
+            burning("s1", "a", 4.0, false, RESERVATION_WAITED),
+            fable_burning("f1", "a", 1.0, RESERVATION_WAITED),
+        ],
+        unpriced_fable_pricer(),
+        vec![
+            ("a", reserved_read(0.76, RESERVED_AT)),
+            (
+                "b",
+                refreshing(
+                    0.1,
+                    RESERVED_AT + HOUR,
+                    RESERVED_AT + 24 * HOUR,
+                    RESERVED_AT,
+                ),
+            ),
+        ],
+    );
+    let round = reserved_round(&mut st, &s, "s1")
+        .shed_round
+        .expect("the reservation fires")
+        .facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.planned.as_deref(), p.skip))
+            .collect::<Vec<_>>(),
+        [("s1", Some("b"), None), ("f1", None, Some("fable_model"))]
+    );
+}
+
 #[test]
 fn a_fable_request_skips_a_spent_fable_window_under_every_strategy_and_orders_by_its_reset() {
     let mut st = RoutingState::from_load(RoutingLoad::default());
