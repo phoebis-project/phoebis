@@ -1583,7 +1583,8 @@ pub struct PinStanding {
     /// The pin's cycle from its pace, `None` until two requests of the pin after its placement have measured a gap
     /// under the pool's burn average.
     pub cycle_ms: Option<f64>,
-    /// The round's read of the pin's move at the destination a round's order would plan for it now.
+    /// The round's read of the pin's move at the destination a round's order would plan for it now, with no cost for a
+    /// pin that no round can move.
     pub move_read: MoveRead,
 }
 

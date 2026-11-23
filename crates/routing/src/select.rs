@@ -23,6 +23,7 @@ use crate::record::{
     RequestFacts, ReservationFacts, Score, ShedPinFacts, ShedRoundFacts, SummaryFact, TermFacts,
     WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
+use crate::resolve::pool_candidates;
 use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, keeps_off,
     load_shedding, mark_holds, plan_windows, reservation_shedding, return_to_plan_dwell_ms,
@@ -6028,11 +6029,13 @@ fn standing_request(pin: &PinRow) -> SelectRequest {
 }
 
 /// What a shedding round reads of a pin's move to one destination. The round's order, its pick and the standing
-/// pins take their figures from this one value, so the sessions route answers what a round reads.
+/// pins take their figures from this one value, so the sessions route answers what a round reads, with no cost on a
+/// standing read of a pin that no round can move.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MoveRead {
     /// The cost the pick compares for a warm pin: the Pro share the rewrite spends on the week the pin's model
-    /// draws, plus `drop_cost`. None where neither is priced above zero, as for a pin with no prompt size.
+    /// draws, plus `drop_cost`. None where neither is priced above zero, as for a pin with no prompt size, and on a
+    /// standing read of a pin that no round can move.
     pub cost: Option<f64>,
     /// The size the order divides a warm pin's burn by, in tokens: the rewrite at the destination plus `drop_size`,
     /// never under one token. None where the pin holds no prompt size.
@@ -6225,15 +6228,14 @@ pub(crate) fn standing_eligible(
     now: i64,
     fallback_ms: i64,
 ) -> Vec<Candidate> {
-    snapshot
-        .members(&pool.id)
-        .iter()
-        .filter(|member| {
+    pool_candidates(snapshot, pool, model)
+        .into_iter()
+        .filter(|candidate| {
             obstacle_on(
                 state,
                 snapshot,
                 pool,
-                &member.account_id,
+                &candidate.account_id,
                 model,
                 &[],
                 now,
@@ -6242,18 +6244,13 @@ pub(crate) fn standing_eligible(
             )
             .is_none()
         })
-        .map(|member| Candidate {
-            account_id: member.account_id.clone(),
-            incarnation: snapshot.incarnation(&member.account_id).unwrap_or(0),
-            priority: member.priority,
-            upstream_model: model.to_string(),
-        })
         .collect()
 }
 
 /// A standing pin's `move_read` at the destination a round's order reads for it now among `eligible`, the set
 /// `standing_eligible` answers for the pin's pool, model and lane speed, with no booking planned. `pool` is the pool
-/// of the pin's key, `None` where it left the registry.
+/// of the pin's key, `None` where it left the registry. The read carries no cost where no destination stands for the
+/// pin, where its pool left the registry and where the pin holds account state, since no round plans such a move.
 pub(crate) fn standing_move_read(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -6264,10 +6261,10 @@ pub(crate) fn standing_move_read(
     fallback_ms: i64,
 ) -> MoveRead {
     let request = standing_request(pin);
-    match pool {
+    let (destination, read) = match pool {
         Some(pool) => {
             let eligible: Vec<&Candidate> = eligible.iter().collect();
-            let (_, read) = move_at(
+            move_at(
                 state,
                 snapshot,
                 pool,
@@ -6277,11 +6274,15 @@ pub(crate) fn standing_move_read(
                 &[],
                 now,
                 fallback_ms,
-            );
-            read
+            )
         }
         // A pin whose pool left the registry has no siblings to plan a move among.
-        None => move_read(state, &request, pin, now, None),
+        None => (None, move_read(state, &request, pin, now, None)),
+    };
+    let movable = destination.is_some() && !pin.account_bound;
+    MoveRead {
+        cost: read.cost.filter(|_| movable),
+        ..read
     }
 }
 

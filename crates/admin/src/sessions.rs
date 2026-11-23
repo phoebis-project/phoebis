@@ -132,9 +132,9 @@ pub(crate) struct Session {
     /// its model draws, the Fable week for a model that draws it and the 7-day window otherwise, plus the share of the
     /// thinking its move would drop, `move_drop_cost`. Null where neither is priced above zero, as where the cost model
     /// weighs no rewrite of the model on that week or the pin holds no prompt size, and on a row with no pin. Null too
-    /// for a pin that holds account state, which no round moves. A reader takes a null as 0, as the pick does. The
-    /// figure stands whatever the pin's warmth, where the pick reads a cold pin's move at `move_drop_cost` alone unless
-    /// the pool's `warm_sessions` is `always`.
+    /// for a pin that no round can move: one with no destination, one whose pool left the registry and one that holds
+    /// account state. A reader takes a null as 0, as the pick does. The figure stands whatever the pin's warmth, where
+    /// the pick reads a cold pin's move at `move_drop_cost` alone unless the pool's `warm_sessions` is `always`.
     pub move_cost: Option<f64>,
     /// The size a shedding round's order divides the pin's burn by while the pin is warm, in tokens: the prompt its
     /// move would rewrite on the destination a round would plan for it, plus the thinking the move would drop at the
@@ -273,7 +273,7 @@ pub(crate) struct AgentContext {
     pub account_bound: bool,
     /// The figure a shedding round's pick compares for this pin, as the row's `move_cost`, the dropped thinking's share
     /// included. Null where neither the rewrite nor the dropped thinking is priced above zero. Null too for a pin that
-    /// holds account state, which no round moves.
+    /// no round can move: one with no destination, one whose pool left the registry and one that holds account state.
     pub move_cost: Option<f64>,
     /// The size a shedding round's order divides this pin's burn by while the pin is warm, as the row's `move_size`.
     /// Null where the pin holds no prompt size.
@@ -568,7 +568,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 ended: Some(p.ended),
                 fast: Some(standing.fast()),
                 account_bound: Some(p.account_bound),
-                move_cost: standing.move_read.cost.filter(|_| !p.account_bound),
+                move_cost: standing.move_read.cost,
                 move_size: standing.move_read.size,
                 move_drop_size: standing.move_read.drop_size,
                 move_drop_cost: standing.move_read.drop_cost,
@@ -808,7 +808,7 @@ pub(crate) fn agent_line(standing: &PinStanding, pricing: &BurnPricing) -> Agent
         ended: pin.ended,
         fast: standing.fast(),
         account_bound: pin.account_bound,
-        move_cost: standing.move_read.cost.filter(|_| !pin.account_bound),
+        move_cost: standing.move_read.cost,
         move_size: standing.move_read.size,
         move_drop_size: standing.move_read.drop_size,
         move_drop_cost: standing.move_read.drop_cost,

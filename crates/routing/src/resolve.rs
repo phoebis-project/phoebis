@@ -1,4 +1,4 @@
-use phoebis_store::ApiKeyRow;
+use phoebis_store::{ApiKeyRow, PoolMember, PoolRow};
 
 use crate::rules::{allowed_by, ordered};
 use crate::RegistrySnapshot;
@@ -27,6 +27,36 @@ pub struct Candidate {
     pub upstream_model: String,
 }
 
+impl Candidate {
+    /// A pool's member as a candidate for `upstream_model`, at the incarnation the snapshot holds for its account, 0
+    /// for an account the snapshot holds none of.
+    pub(crate) fn of(
+        snapshot: &RegistrySnapshot,
+        member: &PoolMember,
+        upstream_model: &str,
+    ) -> Candidate {
+        Candidate {
+            account_id: member.account_id.clone(),
+            incarnation: snapshot.incarnation(&member.account_id).unwrap_or(0),
+            priority: member.priority,
+            upstream_model: upstream_model.to_string(),
+        }
+    }
+}
+
+/// Each member of `pool` as a candidate for `upstream_model`, in the membership's order.
+pub(crate) fn pool_candidates(
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    upstream_model: &str,
+) -> Vec<Candidate> {
+    snapshot
+        .members(&pool.id)
+        .iter()
+        .map(|member| Candidate::of(snapshot, member, upstream_model))
+        .collect()
+}
+
 /// Every member of the key's pool, in priority order, once the key's processed list allows `canonical_model`.
 /// `upstream_model` is `folded_model`, the spelling the body carries upstream. No member is an empty list, which
 /// selection reports as untimed exhaustion. The client's class is judged at admission, before the body is read,
@@ -46,14 +76,5 @@ pub fn resolve(
     if !allowed_by(rules.map(|(_, rule)| rule), canonical_model) {
         return Err(ResolveError::ModelNotAllowed);
     }
-    Ok(snapshot
-        .members(&pool.id)
-        .iter()
-        .map(|member| Candidate {
-            account_id: member.account_id.clone(),
-            incarnation: snapshot.incarnation(&member.account_id).unwrap_or(0),
-            priority: member.priority,
-            upstream_model: folded_model.to_string(),
-        })
-        .collect())
+    Ok(pool_candidates(snapshot, pool, folded_model))
 }

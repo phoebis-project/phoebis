@@ -7195,6 +7195,58 @@ async fn a_bound_pin_reads_account_bound_and_no_move_cost_beside_its_move_size()
     );
 }
 
+#[tokio::test]
+async fn a_pin_whose_only_sibling_holds_no_allowance_reads_no_move_cost_beside_its_move_size() {
+    use common::{get, json, login};
+    let now = common::NOW;
+    let tables = phoebis_ledger::PlanTables {
+        revisions: phoebis_ledger::CostRevisions::from_yaml(FABLE_WEEK_COSTS)
+            .expect("the cost model with a Fable week parses"),
+        path: None,
+        source: "test".to_string(),
+    };
+    // The Fable pin whose move this cost model prices, warm with a last prompt of 1,000 tokens and no thinking.
+    let seed = sessions_seed(|generation| {
+        vec![phoebis_store::PinRow {
+            model: "claude-fable-5-1".into(),
+            lane: phoebis_routing::lane_key("claude-fable-5-1", "standard", "none", "-"),
+            ..burning_opus_pin("s1", "business", generation, now, 100.0, 145.0)
+        }]
+    })
+    .await;
+    let parts = common::admin_parts_full_on_equivalent(
+        seed.store.clone(),
+        seed.clock_cell.clone(),
+        tables,
+        phoebis_ledger::LedgerConfig::default(),
+    )
+    .await;
+    // The pin's one sibling, `direct`, holds its request bucket full until a reset half a minute out, so its fit reads
+    // least bad and a round finds the pin no destination.
+    read_windows(
+        &parts,
+        "direct",
+        &[("rpm:claude-fable-5-1", 1.0, Some(now + 30_000))],
+    )
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let row = session_row(
+        &json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await,
+        "s1",
+    );
+    assert_eq!(
+        (row["move_cost"].as_f64(), row["move_size"].as_f64()),
+        (None, Some(1_000.0)),
+        "no round can move the pin, so the row prices no move and keeps the size: {row}"
+    );
+    let line = &row["agent_contexts"][0];
+    assert_eq!(
+        (line["move_cost"].as_f64(), line["move_size"].as_f64()),
+        (None, Some(1_000.0)),
+        "the pin's line reads as the row: {line}"
+    );
+}
+
 /// A cost model that weighs Opus 5.5 at 2 units a token and Sonnet 5.5 at 1, and prices an output token at four times
 /// a five-minute cache write, so the thinking a move drops weighs four tokens of rewrite.
 const DROP_COSTS: &str = "\
