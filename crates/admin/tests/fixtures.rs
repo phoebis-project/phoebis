@@ -2682,12 +2682,25 @@ async fn every_route_is_captured_and_holds_its_shape() {
     .await;
     // `business`'s Fable week fell half an hour ago under its unchanged reset to a figure under the margin, as a reset
     // used outside the router reads, so the routing log holds the kind and the unused allowance capture a `claim` row.
-    // Waited for as the claim is, so both captures and the `written` figure of `system.json` count it.
+    // Its detail lacks `pair_changed`, as an event stored before the detail named the member does, so the captured
+    // `claim` row stands on the read's default and a read that refuses such a detail loses it. Waited for as the claim
+    // is, so both captures and the `written` figure of `system.json` count it.
     parts.ledger.record(Record::Event(EventRecord {
         at: now - 1_800_000,
         kind: "window_dropped".into(),
         account_id: Some("business".into()),
         detail: Some(j!({ "window": "seven_day_fable", "utilization_before": 0.58, "utilization": 0.02, "reset": now + DAY, "plan": "max_20x", "tier": "default_claude_max_20x" }).to_string()),
+        ..Default::default()
+    }));
+    // `business`'s 7-day week fell 45 minutes ago under its unchanged reset to a figure under the margin, before the
+    // Fable week's drop, since that drop names the pair the account holds today. The event names the pair from before a
+    // plan change with `pair_changed` true, and no used claim of the account joins it, so the unused allowance captures
+    // a `plan_changed` row and the routing log a detail that holds the member. The wait below counts both drops.
+    parts.ledger.record(Record::Event(EventRecord {
+        at: now - 2_700_000,
+        kind: "window_dropped".into(),
+        account_id: Some("business".into()),
+        detail: Some(j!({ "window": "seven_day", "utilization_before": 0.64, "utilization": 0.03, "reset": now + DAY, "plan": "max_5x", "tier": "default_claude_max_5x", "pair_changed": true }).to_string()),
         ..Default::default()
     }));
     fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
@@ -2701,7 +2714,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 )?)
             })
             .unwrap();
-        (dropped == 1).then_some(())
+        (dropped == 2).then_some(())
     })
     .await;
     // Five limit reset blocks, each read through the service as a poll slot reads one. The five accounts hold the

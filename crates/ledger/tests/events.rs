@@ -2522,6 +2522,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             reset: 2,
             plan: None,
             tier: None,
+            pair_changed: false,
             at: 1,
         },
         RouterEvent::WindowReset {
@@ -3553,6 +3554,32 @@ fn window_dropped(
         reset,
         plan: None,
         tier: None,
+        pair_changed: false,
+        at,
+    })
+    .expect("a dropped row")
+}
+
+/// `window_dropped` over a reading that carried `pair`, its plan word and its tier, written by a poll under another
+/// pair.
+fn window_dropped_under(
+    account_id: &str,
+    window: &str,
+    utilization_before: f64,
+    utilization: f64,
+    reset: i64,
+    at: i64,
+    pair: (&str, &str),
+) -> EventRecord {
+    event_of(&RouterEvent::WindowDropped {
+        account_id: account_id.into(),
+        window: window.into(),
+        utilization_before,
+        utilization,
+        reset,
+        plan: Some(pair.0.into()),
+        tier: Some(pair.1.into()),
+        pair_changed: true,
         at,
     })
     .expect("a dropped row")
@@ -3742,6 +3769,110 @@ fn a_drop_at_the_range_s_start_joins_a_used_claim_from_before_the_range() {
             from + 300_000,
             "claim"
         )]
+    );
+}
+
+#[test]
+fn a_cleared_drop_under_a_changed_pair_reads_plan_changed_and_one_beside_a_used_claim_reads_claim()
+{
+    let (db, _dir) = common::temp_ledger();
+    let now = 100 * DAY;
+    let reset = now + 2 * DAY;
+    let used = now - DAY;
+    for row in [
+        window_dropped_under(
+            "a",
+            "seven_day",
+            0.70,
+            0.02,
+            reset,
+            now - 2 * DAY,
+            ("max_5x", "default_claude_max_5x"),
+        ),
+        used_claim("b", &["seven_day_fable"], used),
+        // Eleven points left: only the claim's list reads the window cleared.
+        window_dropped("b", "seven_day_fable", 0.70, 0.11, reset, used + 300_000),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    let rows = db
+        .read_blocking(|c| {
+            unused_allowance(
+                c,
+                &["a".into(), "b".into()],
+                now - 30 * DAY,
+                now,
+                &BTreeMap::new(),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            AllowanceReset {
+                plan: Some("max_5x".into()),
+                tier: Some("default_claude_max_5x".into()),
+                ..reset_row(
+                    "a",
+                    "seven_day",
+                    reset,
+                    1.0 - 0.70,
+                    now - 2 * DAY,
+                    "plan_changed"
+                )
+            },
+            reset_row(
+                "b",
+                "seven_day_fable",
+                reset,
+                1.0 - 0.70,
+                used + 300_000,
+                "claim"
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_drop_with_a_changed_pair_that_joins_a_used_claim_reads_claim() {
+    let (db, _dir) = common::temp_ledger();
+    let now = 100 * DAY;
+    let reset = now + 2 * DAY;
+    let used = now - DAY;
+    for row in [
+        used_claim("a", &["seven_day_fable"], used),
+        window_dropped_under(
+            "a",
+            "seven_day_fable",
+            0.70,
+            0.11,
+            reset,
+            used + 300_000,
+            ("max_5x", "default_claude_max_5x"),
+        ),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    let rows = db
+        .read_blocking(|c| {
+            unused_allowance(c, &["a".into()], now - 30 * DAY, now, &BTreeMap::new())
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![AllowanceReset {
+            plan: Some("max_5x".into()),
+            tier: Some("default_claude_max_5x".into()),
+            ..reset_row(
+                "a",
+                "seven_day_fable",
+                reset,
+                1.0 - 0.70,
+                used + 300_000,
+                "claim"
+            )
+        }],
+        "the claim's answer names what cleared the window, whatever the pair"
     );
 }
 

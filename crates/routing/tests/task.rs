@@ -12171,27 +12171,42 @@ async fn a_poll_more_than_five_points_under_the_stored_weekly_reading_under_one_
         .await;
     handle.samples().await.unwrap();
     // Six points under the stored figure on one window and five on the other two, under the reset each stored reading
-    // names. The two figures of 0.55 to 0.50, subtracted as floats, read more than 0.05.
-    handle
-        .report(observed(
-            "a",
-            weekly_poll(
-                2_000,
-                reset,
-                &[
-                    (SEVEN_DAY, 0.44),
-                    (SEVEN_DAY_FABLE, 0.45),
-                    ("seven_day_opus", 0.50),
-                ],
-            ),
-        ))
-        .await;
-    handle.samples().await.unwrap();
+    // names. The two figures of 0.55 to 0.50, subtracted as floats, read more than 0.05. The poll behind it reads the
+    // same figures and writes the event.
+    for at in [2_000, 3_000] {
+        handle
+            .report(observed(
+                "a",
+                weekly_poll(
+                    at,
+                    reset,
+                    &[
+                        (SEVEN_DAY, 0.44),
+                        (SEVEN_DAY_FABLE, 0.45),
+                        ("seven_day_opus", 0.50),
+                    ],
+                ),
+            ))
+            .await;
+        handle.samples().await.unwrap();
+    }
     let event = next_event(&mut events).await;
     assert_eq!(
         dropped_of(&event),
         Some(("a", SEVEN_DAY, 0.50, 0.44, reset)),
         "{event:?}"
+    );
+    assert!(
+        matches!(
+            &event,
+            phoebis_routing::RouterEvent::WindowDropped {
+                plan: None,
+                tier: None,
+                pair_changed: false,
+                ..
+            }
+        ),
+        "an unchanged pair: {event:?}"
     );
     // A fall of five points is no drop.
     no_further_event(&mut events).await;
@@ -12417,6 +12432,8 @@ async fn a_poll_that_writes_no_drop_clears_the_figure_a_head_found() {
         // Three points under the 0.61 the head found: no drop.
         weekly_poll(3_000, reset, &[(SEVEN_DAY, 0.58)]),
         weekly_poll(3_500, reset, &[(SEVEN_DAY, 0.40)]),
+        // The poll behind the first reading of the fall writes the event.
+        weekly_poll(4_000, reset, &[(SEVEN_DAY, 0.40)]),
     ] {
         handle.report(observed("a", report)).await;
         handle.samples().await.unwrap();
@@ -12425,9 +12442,68 @@ async fn a_poll_that_writes_no_drop_clears_the_figure_a_head_found() {
     assert_eq!(
         dropped_of(&event),
         Some(("a", SEVEN_DAY, 0.58, 0.40, reset)),
-        "the last poll compares the figure the poll before it stored: {event:?}"
+        "the poll at 0.40 compares the figure the poll before it stored: {event:?}"
     );
     no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_fall_that_a_poll_reads_first_writes_its_event_at_the_next_poll_with_the_pairs_change() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 7 * 24 * HOUR;
+    let mut drops = || {
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                RouterEvent::WindowDropped {
+                    utilization_before,
+                    utilization,
+                    plan,
+                    tier,
+                    pair_changed,
+                    ..
+                } => Some((utilization_before, utilization, plan, tier, pair_changed)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for report in [
+        weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.60)]),
+        weekly_poll(2_000, reset, &[(SEVEN_DAY, 0.10)]),
+    ] {
+        handle.report(observed("a", report)).await;
+        handle.samples().await.unwrap();
+    }
+    let first = drops();
+    assert!(
+        first.is_empty(),
+        "the poll that first reads the fall: {first:?}"
+    );
+    // The profile read that the fall asked for found the account upgraded.
+    upgraded(&store, "a");
+    handle.reload().await.unwrap();
+    handle
+        .report(observed(
+            "a",
+            weekly_poll(3_000, reset, &[(SEVEN_DAY, 0.12)]),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert_eq!(
+        drops(),
+        vec![(
+            0.60,
+            0.12,
+            Some("max_5x".to_string()),
+            Some(TIER.to_string()),
+            true
+        )],
+        "the poll behind it writes the event with the pair before the fall and its change"
+    );
 }
 
 #[tokio::test]

@@ -1318,8 +1318,8 @@ pub(crate) async fn refusal_categories(
 }
 
 /// The weekly allowance each subscription account left unused at its resets in range, read off the stored
-/// `window_reset` events, and before each used limit reset that cleared a window, read off the stored `window_dropped`
-/// events, both of which the request retention bounds.
+/// `window_reset` events, and before each used limit reset or plan change that cleared a window, read off the stored
+/// `window_dropped` events, both of which the request retention bounds.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UnusedAllowance {
@@ -1359,36 +1359,38 @@ pub(crate) struct UnusedAllowanceWindow {
     pub resets_counted: u64,
 }
 
-/// One reset of the window, a used limit reset that cleared it, or the account's term end read as a reset.
+/// One reset of the window, a used limit reset or a plan change that cleared it, or the account's term end read as a
+/// reset.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UnusedAllowanceReset {
-    /// The window's reset instant, epoch milliseconds: the unchanged reset of the week the use fell in for a `claim`
-    /// row, and the term's end for a `term_ended` row.
+    /// The window's reset instant, epoch milliseconds: the unchanged reset of the week the drop fell in for a `claim`
+    /// or a `plan_changed` row, and the term's end for a `term_ended` row.
     pub reset_at: i64,
-    /// The fraction of the window left unused at the reset, or before the drop for a `claim` row,
+    /// The fraction of the window left unused at the reset, or before the drop for a `claim` or a `plan_changed` row,
     /// `1 - utilization_before` clamped to the unit interval.
     pub share_left: f64,
     /// The instant the share was read: the event's instant for a `sample` or `clock` reset (a clock reading up to one
-    /// poll interval old), the drop's instant, the first poll after the use, for a `claim` row, and the sample's own
-    /// instant for `term_ended`.
+    /// poll interval old), the drop's instant, the poll that wrote its event, for a `claim` or a `plan_changed` row,
+    /// and the sample's own instant for `term_ended`.
     pub observed_at: i64,
-    /// `sample` for a reset a usage sample showed, `clock` for the clock walk's reset (its reading up to one poll
-    /// interval old), `claim` for a used limit reset that cleared the window, and `term_ended` for the account's term
-    /// ending inside the week. A use's drop cleared the window where the newest used `limit_reset_claimed` of the hour
-    /// before the drop names the window in its `cleared` list, or, where no such claim carries a parsed answer, where
-    /// the first poll after the use reads under 5 percent.
+    /// `claim` for a used limit reset that cleared the window, `clock` for the clock walk's reset (its reading up to
+    /// one poll interval old), `plan_changed` for a window that a change of the account's plan or tier cleared,
+    /// `sample` for a reset a usage sample showed, and `term_ended` for the account's term ending inside the week. A
+    /// use's drop cleared the window where the newest used `limit_reset_claimed` of the hour before the drop names the
+    /// window in its `cleared` list, or, where no such claim carries a parsed answer, where the poll that wrote the
+    /// event reads under 5 percent.
     #[schema(example = "sample")]
     pub source: String,
     /// The resolved plan word the reading carried when the reset was observed: the event's for a `sample` or `clock`
-    /// reset and for a `claim` row, null for a row whose event carries none. A `term_ended` row answers the plan of the
-    /// router's stored reading of the week, where it was taken before the account's plan-ended flag or the account
-    /// carries no such flag, null where the router holds no such reading.
+    /// reset and for a `claim` or a `plan_changed` row, null for a row whose event carries none. A `term_ended` row
+    /// answers the plan of the router's stored reading of the week, where it was taken before the account's plan-ended
+    /// flag or the account carries no such flag, null where the router holds no such reading.
     pub plan: Option<String>,
     /// The stored rate-limit tier the reading carried when the reset was observed: the event's for a `sample` or
-    /// `clock` reset and for a `claim` row, null for a row whose event carries none. A `term_ended` row answers the
-    /// tier of the router's stored reading of the week, where it was taken before the account's plan-ended flag or the
-    /// account carries no such flag, null where the router holds no such reading.
+    /// `clock` reset and for a `claim` or a `plan_changed` row, null for a row whose event carries none. A `term_ended`
+    /// row answers the tier of the router's stored reading of the week, where it was taken before the account's
+    /// plan-ended flag or the account carries no such flag, null where the router holds no such reading.
     pub tier: Option<String>,
 }
 

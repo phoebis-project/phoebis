@@ -449,9 +449,11 @@ pub enum RouterEvent {
         at: i64,
     },
     /// A weekly window fell by more than `WINDOW_DROP_POINTS` under the stored reading's reset, the trace a used limit
-    /// reset leaves: the stored figure before, the first poll's figure after, the unchanged reset and the stored
-    /// reading's plan and tier. Dated at that poll, since a head after a use reads 0.00 before the upstream's own
-    /// figure settles.
+    /// reset or a plan change leaves: the stored figure before, the figure of the poll that writes the event, the
+    /// unchanged reset and the stored reading's plan and tier. The poll behind the reading that first showed the fall
+    /// writes and dates it, since a head after a use reads 0.00 before the upstream's own figure settles, and a poll
+    /// that reads the fall first asks for a read of the account's profile, whose pair the poll behind it compares
+    /// where that read ran.
     WindowDropped {
         account_id: String,
         window: String,
@@ -460,6 +462,8 @@ pub enum RouterEvent {
         reset: i64,
         plan: Option<String>,
         tier: Option<String>,
+        /// Whether the plan or the tier of the reading that writes the event differs from the pair before the fall.
+        pair_changed: bool,
         at: i64,
     },
     /// A window's reset passed: the sample's own instant has passed it, within `RESET_SLACK_MS` where the sample names
@@ -5459,14 +5463,15 @@ impl Task {
     }
 
     /// The fall of a weekly window under one reset, read beside `window_edges`. The stored reading has to name a reset
-    /// the new reading still stands under, since without one a fall under one reset reads like a new window. A poll
-    /// that reads a fall of more than `WINDOW_DROP_POINTS` emits `WindowDropped` with its own figure after. A head
-    /// emits nothing, since a head after a use reads 0.00 before the upstream's own figure settles: it keeps the
-    /// stored figure, its reset and its pair as the window's pending drop, which a later head leaves as it is. The next
-    /// poll under that reset reads the pending figure in place of the stored one and clears it whether it emits or
-    /// not, and a reading past the pending reset, or under another, clears it too. Answers whether the reading is the
-    /// first to show the fall, built from the stored reading with no pending drop standing: the head that opens the
-    /// pending drop, or a poll that finds none.
+    /// the new reading still stands under, since without one a fall under one reset reads like a new window. The first
+    /// reading that shows a fall of more than `WINDOW_DROP_POINTS`, a head or a poll, emits nothing: it keeps the
+    /// stored figure, its reset and its pair as the window's pending drop, which a later head leaves as it is. A head
+    /// holds its fall since a head after a use reads 0.00 before the upstream's own figure settles, and a poll holds
+    /// its own so that the poll behind it compares the pair of the account's profile, which the first reading of a fall
+    /// asks to read again. The next poll under that reset reads the pending figure in place of the stored one and
+    /// clears it whether it emits or not, and a reading past the pending reset, or under another, clears it too.
+    /// Answers whether the reading is the first to show the fall, built from the stored reading with no pending drop
+    /// standing: the head that opens the pending drop, or a poll that finds none.
     fn window_drop(
         &mut self,
         account_id: &str,
@@ -5511,10 +5516,11 @@ impl Task {
         {
             return false;
         }
-        if !poll {
+        if first {
             self.pending_drops.insert(key, before);
             return first;
         }
+        let pair_changed = reading.plan != before.plan || reading.tier != before.tier;
         self.emit(RouterEvent::WindowDropped {
             account_id: account_id.to_string(),
             window: window.to_string(),
@@ -5523,6 +5529,7 @@ impl Task {
             reset: before.reset,
             plan: before.plan,
             tier: before.tier,
+            pair_changed,
             at: now,
         });
         first

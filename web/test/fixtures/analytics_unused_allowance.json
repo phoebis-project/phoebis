@@ -13,6 +13,14 @@
             "window": "seven_day",
             "resets": [
               {
+                "reset_at": 1791807400000,
+                "share_left": 0.36,
+                "observed_at": 1791718300000,
+                "source": "plan_changed",
+                "plan": "max_5x",
+                "tier": "default_claude_max_5x"
+              },
+              {
                 "reset_at": 1791116200000,
                 "share_left": 0.38,
                 "observed_at": 1791116200000,
@@ -29,8 +37,8 @@
                 "tier": "default_claude_max_20x"
               }
             ],
-            "total_share_left": 0.53,
-            "resets_counted": 2
+            "total_share_left": 0.89,
+            "resets_counted": 3
           },
           {
             "window": "seven_day_fable",

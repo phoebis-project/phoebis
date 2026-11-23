@@ -378,6 +378,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             reset,
             plan,
             tier,
+            pair_changed,
             at,
         } => EventRecord {
             at: *at,
@@ -391,6 +392,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                     "reset": reset,
                     "plan": plan,
                     "tier": tier,
+                    "pair_changed": pair_changed,
                 })
                 .to_string(),
             ),
@@ -1616,6 +1618,7 @@ mod tests {
             reset: 9_000,
             plan: Some("max_20x".into()),
             tier: None,
+            pair_changed: true,
             at: 4_500,
         })
         .expect("a dropped row");
@@ -1636,7 +1639,7 @@ mod tests {
             detail_of(&row),
             json!({
                 "window": "seven_day", "utilization_before": 0.61, "utilization": 0.11, "reset": 9_000,
-                "plan": "max_20x", "tier": null
+                "plan": "max_20x", "tier": null, "pair_changed": true
             })
         );
 

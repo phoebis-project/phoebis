@@ -1,6 +1,7 @@
 //! The unused weekly allowance: the share of each weekly window an account left unused at its resets, read off the
-//! stored `window_reset` events, with a used limit reset that cleared its window read off the stored `window_dropped`
-//! events as a reset inside its week, and an account's term end read as a reset of the week it cut short.
+//! stored `window_reset` events, with a used limit reset or a plan change that cleared its window read off the stored
+//! `window_dropped` events as a reset inside its week, and an account's term end read as a reset of the week it cut
+//! short.
 
 use std::collections::BTreeMap;
 
@@ -15,33 +16,33 @@ use rusqlite::{params, params_from_iter, Connection, Statement};
 use crate::query::{in_list, LIMIT_RESET_CLAIMED, WINDOW_DROPPED, WINDOW_RESET};
 use crate::LedgerError;
 
-/// How long before a drop a used claim of its account still joins it. The drop is dated at the first poll after the
-/// use, so it stands up to a poll interval behind the claim.
+/// How long before a drop a used claim of its account still joins it. The drop is dated at the poll that writes its
+/// event, the first or the second poll after the use, so it stands up to two poll intervals behind the claim.
 const CLAIM_JOIN_MS: i64 = HOUR_MS;
 
-/// One weekly reset an account met in range, a used limit reset that cleared its window, or its term's end read as a
-/// reset: what the unused allowance route lists.
+/// One weekly reset an account met in range, a used limit reset or a plan change that cleared its window, or its term's
+/// end read as a reset: what the unused allowance route lists.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AllowanceReset {
     pub account_id: String,
     /// `seven_day` or a `seven_day_<model>` key.
     pub window: String,
-    /// The reset's instant, the unchanged reset of the week the use fell in for a `claim` row, and the term's end for
-    /// a `term_ended` row.
+    /// The reset's instant, the unchanged reset of the week the drop fell in for a `claim` or a `plan_changed` row, and
+    /// the term's end for a `term_ended` row.
     pub reset_at: i64,
-    /// The share left unused at the reset, or before the drop for a `claim` row, `1 - utilization_before` clamped to
-    /// the unit interval.
+    /// The share left unused at the reset, or before the drop for a `claim` or a `plan_changed` row,
+    /// `1 - utilization_before` clamped to the unit interval.
     pub share_left: f64,
     /// The instant the share was read: the event's `at` for a `sample` or `clock` reset, since the event's detail
-    /// carries no reading instant, the drop's instant, the first poll after the use, for a `claim` row, and the
-    /// sample's own `observed_at` for `term_ended`.
+    /// carries no reading instant, the drop's instant, the poll that wrote its event, for a `claim` or a
+    /// `plan_changed` row, and the sample's own `observed_at` for `term_ended`.
     pub observed_at: i64,
-    /// `claim`, `clock`, `sample` or `term_ended`.
+    /// `claim`, `clock`, `plan_changed`, `sample` or `term_ended`.
     pub source: String,
-    /// The event's pair for a `sample` or `clock` reset and for a `claim` row, `None` where the event carries none. A
-    /// `term_ended` row carries the pair `unused_allowance` is handed for its window, the router's stored reading of
-    /// the week from before the account's plan-ended flag, or any stored reading where the account carries no such
-    /// flag, `None` where it is handed none.
+    /// The event's pair for a `sample` or `clock` reset and for a `claim` or a `plan_changed` row, `None` where the
+    /// event carries none. A `term_ended` row carries the pair `unused_allowance` is handed for its window, the
+    /// router's stored reading of the week from before the account's plan-ended flag, or any stored reading where the
+    /// account carries no such flag, `None` where it is handed none.
     pub plan: Option<String>,
     pub tier: Option<String>,
 }
@@ -128,6 +129,9 @@ struct DropDetail {
     reset: i64,
     plan: Option<String>,
     tier: Option<String>,
+    // A row written before the detail named the member lacks it, which reads false.
+    #[serde(default)]
+    pair_changed: bool,
 }
 
 /// The members of a `limit_reset_claimed` row's detail the join reads. `result` is null where the router parsed no
@@ -178,20 +182,21 @@ fn events_of<T: serde::de::DeserializeOwned>(
 }
 
 /// The weekly resets of the listed accounts whose event `at` lies in `[from, to]`, read off the stored `window_reset`
-/// events, one `claim` row per stored `window_dropped` event in that span that cleared its window, plus one
-/// `term_ended` row per weekly window with a reading before each account's end in `term_ends` that lies at or after
-/// `from`. The read keeps the listed accounts and answers no row for an empty list, since the ledger holds no account
-/// kind: the caller lists the `oauth` accounts it answers for. A drop joins the newest `used` `limit_reset_claimed` of
-/// its account in the `CLAIM_JOIN_MS` before it: where that claim carries a parsed answer, the drop cleared its window
-/// where the answer's `cleared` list names it, and with no such claim, or one with no parsed answer, where the drop's
-/// figure after reads under 5 points. A drop that only lowered its window lists no row. A term end's row reads the last
-/// reading before the end of a week still open at it (its reset at or after the end), a row stored under
-/// `seven_day_overage_included` folded into `seven_day_fable` with the newer reading standing, and a reading with no
-/// utilization skipped. A reading with no reset instant shows no open week. A reset of an account in `term_ends` at or
-/// after its end is left out, so the week the end cut short counts once, and so is a drop at or after the end. Ordered
-/// by account, window, then `reset_at` and `observed_at`, each newest first, so a week's reset stands ahead of a use
-/// inside that week. No rollup and no stored figure: the history is the events the purge still holds. Each `TermEnd`
-/// holds the account's end and the pairs of its `term_ended` rows.
+/// events, one `claim` or `plan_changed` row per stored `window_dropped` event in that span that cleared its window,
+/// plus one `term_ended` row per weekly window with a reading before each account's end in `term_ends` that lies at or
+/// after `from`. The read keeps the listed accounts and answers no row for an empty list, since the ledger holds no
+/// account kind: the caller lists the `oauth` accounts it answers for. A drop joins the newest `used`
+/// `limit_reset_claimed` of its account in the `CLAIM_JOIN_MS` before it: where that claim carries a parsed answer, the
+/// drop cleared its window where the answer's `cleared` list names it, and with no such claim, or one with no parsed
+/// answer, where the drop's figure after reads under 5 points. A cleared drop reads `plan_changed` where no claim with
+/// a parsed answer joins it and its event's `pair_changed` is true, and `claim` otherwise. A drop that only lowered its
+/// window lists no row. A term end's row reads the last reading before the end of a week still open at it (its reset at
+/// or after the end), a row stored under `seven_day_overage_included` folded into `seven_day_fable` with the newer
+/// reading standing, and a reading with no utilization skipped. A reading with no reset instant shows no open week. A
+/// reset of an account in `term_ends` at or after its end is left out, so the week the end cut short counts once, and
+/// so is a drop at or after the end. Ordered by account, window, then `reset_at` and `observed_at`, each newest first,
+/// so a week's reset stands ahead of a use inside that week. No rollup and no stored figure: the history is the events
+/// the purge still holds. Each `TermEnd` holds the account's end and the pairs of its `term_ended` rows.
 pub fn unused_allowance(
     conn: &Connection,
     accounts: &[String],
@@ -276,13 +281,20 @@ pub fn unused_allowance(
         if !cleared {
             continue;
         }
+        // A claim's parsed answer is the upstream's own word on what cleared the window, so it names the row whatever
+        // the pair.
+        let source = if answered.is_none() && detail.pair_changed {
+            "plan_changed"
+        } else {
+            "claim"
+        };
         rows.push(AllowanceReset {
             account_id,
             window: detail.window,
             reset_at: detail.reset,
             share_left: share_left(detail.utilization_before),
             observed_at: at,
-            source: "claim".into(),
+            source: source.into(),
             plan: detail.plan,
             tier: detail.tier,
         });
