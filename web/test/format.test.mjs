@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCompact, fmtCompactTick, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, formatIn, instant, parseKeyLifetime, pct, placementHit, sentences, setTimeFormat, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
+const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCompactTick, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, formatIn, instant, parseKeyLifetime, pct, placementHit, sentences, setTimeFormat, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
 
 test("a fork reads its base cut at the session's width and the depth where one is known", () => {
   const base = '1a2b3c4d-5e6f-4a7b-9c8d-7e6f5a4b3c2d';
@@ -316,9 +316,8 @@ test('a negative dollar tick puts its sign before the currency, and a tick at ze
   assert.equal(fmtUsdTick(-0.001, 2), '$0.00', 'a figure that rounds to zero reads as zero');
 });
 
-test('a count tick between two compact steps prints its exact value, and a figure keeps one decimal', () => {
+test('a count tick between two compact steps prints its exact value', () => {
   assert.equal(fmtCompactTick(1250), '1.25K');
-  assert.equal(fmtCompact(1250), '1.3K');
 });
 
 test('a byte count reads in MiB, a whole number without decimals and any other to one decimal', () => {

@@ -26,8 +26,8 @@ const usd4 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD'
 
 export const fmtInt = (n: number) => plain.format(Math.round(n));
 export const fmtCompact = (n: number) => (Math.abs(n) < 1000 ? plain.format(Math.round(n)) : compact.format(n));
-/** A count axis's tick: the grid line's own value with up to two decimals, so no two lines of an axis read the same
- *  word. A figure in a card or a hover keeps `fmtCompact`'s one decimal. */
+/** A count axis's tick: the grid line's own value with up to two decimals, so a line at 1,050 reads 1.05K, where
+ *  one decimal reads 1.1K. A figure in a card or a hover keeps `fmtCompact`'s one decimal. */
 export const fmtCompactTick = (n: number) => (Math.abs(n) < 1000 ? plain.format(Math.round(n)) : compactTick.format(n));
 /** What a cut dropped, from the counts the ledger took as it read; a rendered body measures neither side. */
 export const bytesDropped = (seen: number, stored: number) => Math.max(0, seen - stored);
