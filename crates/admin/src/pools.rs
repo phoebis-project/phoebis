@@ -11,7 +11,10 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::{pool_fundings, CeilingInputs, KeepalivePolicy};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy};
-use phoebis_routing::{AccountProjection, MemberSpend, Obstacle, RegistrySnapshot};
+use phoebis_routing::{
+    AccountProjection, BurnRates, BurnUnit, MemberSpend, Obstacle, RegistrySnapshot, FIVE_HOUR,
+    SEVEN_DAY,
+};
 use phoebis_store::{
     stamp_token, AccountRow, AffinityMode, ApiKeyRow, AttachmentSubject, Feature, MemberWrite,
     OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement, StoreError,
@@ -23,13 +26,15 @@ use utoipa::ToSchema;
 use crate::accounts::{check_slug, ACTOR};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{
-    chart_refusal, range_refusal, ErrorBody, RegistryUnavailable, StorageFailure,
+    chart_refusal, range_refusal, ErrorBody, RegistryUnavailable, RouterUnavailable, StorageFailure,
 };
 use crate::routes::{
     double_option, failure, feature_account_refusal, fence_token, parse_object, pool, present,
-    reload_or_no_content, reload_or_refuse, stale_edit, store_failure, AdminQuery, CreatedId,
+    reload_or_no_content, reload_or_refuse, router_unavailable, stale_edit, store_failure,
+    AdminQuery, CreatedId,
 };
 use crate::rules::{parse_rules, RuleInput};
+use crate::sessions::{agent_line, AgentContext, BurnPricing, SessionMark};
 use crate::AdminState;
 
 const DUPLICATE_ID: &str = "a pool with this id exists";
@@ -1280,6 +1285,66 @@ pub(crate) struct PoolTraffic {
     pub buckets: Vec<phoebis_ledger::TrafficBucket>,
 }
 
+/// `GET /admin/pools/{id}/pins`'s answer: each pin under the pool's keys, as a shedding round reads them.
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PoolPinList {
+    /// In the order of the pins' keys, with none of the filters of `GET /admin/sessions`: a pin that only auxiliary
+    /// requests used, an ended agent's pin and a pin idle past the sessions timeout are in.
+    pub pins: Vec<PoolPin>,
+}
+
+/// One pin under the pool's keys, under the names an agent line of `GET /admin/sessions` gives a pin.
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PoolPin {
+    pub key_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub model: String,
+    /// The account the pin sits on. A pin that an account keeps under the pool's key after it left the pool is in.
+    pub account_id: String,
+    /// The pin's session holds account state, as an agent line's `account_bound` on `GET /admin/sessions`.
+    pub account_bound: bool,
+    /// The pin's burn per hour in `burn_unit`, as an agent line's `burn` on `GET /admin/sessions`.
+    pub burn: Option<f64>,
+    /// The instant the pin's burn is decayed to, as an agent line's `burn_at` on `GET /admin/sessions`.
+    pub burn_at: Option<i64>,
+    /// `window_share` or `usd`, as an agent line's `burn_unit` on `GET /admin/sessions`.
+    #[schema(value_type = Option<String>, example = "window_share")]
+    pub burn_unit: Option<BurnUnit>,
+    /// The window `burn` is a share of, as an agent line's `burn_window` on `GET /admin/sessions`.
+    #[schema(example = "five_hour")]
+    pub burn_window: Option<String>,
+    /// The pin's agent ended and its next request has not arrived, as an agent line's `ended` on
+    /// `GET /admin/sessions`.
+    pub ended: bool,
+    /// The pin's lane is the fast lane, as an agent line's `fast` on `GET /admin/sessions`.
+    pub fast: bool,
+    /// The pin's own mark, in the form of a session row's `mark` on `GET /admin/sessions`. Null where the pin holds
+    /// none.
+    pub mark: Option<SessionMark>,
+    /// The figure a shedding round's pick compares for the pin, as an agent line's `move_cost` on
+    /// `GET /admin/sessions`.
+    pub move_cost: Option<f64>,
+    /// The share of the dropped thinking that the pick compares for the pin while it is cold, as an agent line's
+    /// `move_drop_cost` on `GET /admin/sessions`.
+    pub move_drop_cost: Option<f64>,
+    /// The thinking the pin's move would drop at the weight of output, as an agent line's `move_drop_size` on
+    /// `GET /admin/sessions`.
+    pub move_drop_size: Option<f64>,
+    /// The size a shedding round's order divides the pin's burn by while the pin is warm, as an agent line's
+    /// `move_size` on `GET /admin/sessions`.
+    pub move_size: Option<f64>,
+    /// Whether the cache entry the pin warms is still alive at the read, as an agent line's `warm` on
+    /// `GET /admin/sessions`.
+    pub warm: bool,
+    /// The first instant `warm` answers false for the pin, as an agent line's `warm_until` on `GET /admin/sessions`.
+    pub warm_until: i64,
+}
+
 /// One member row. Its own function, beside the pool's own struct literal, so one row's worth of fields reads
 /// clearly on its own rather than nested inline inside the pool's larger one.
 fn member_json(
@@ -1719,6 +1784,99 @@ pub(crate) async fn traffic(
     }
 }
 
+/// Read the pins under the pool's keys.
+#[utoipa::path(
+    get,
+    path = "/admin/pools/{id}/pins",
+    operation_id = "pool_pins",
+    tag = "Pools",
+    params(("id" = String, Path, description = "The pool's id")),
+    responses(
+        (status = 200, description = "Each pin under the pool's keys.", body = PoolPinList),
+        (status = 404, description = "`pool not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
+        (status = 500, response = StorageFailure),
+        (status = 503, response = RouterUnavailable),
+    ),
+)]
+pub(crate) async fn pins(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
+    if let Err(refusal) = pool(&state, &id) {
+        return refusal;
+    }
+    let Ok(standings) = state.router.pins_standing().await else {
+        return router_unavailable();
+    };
+    let snapshot = state.router.snapshot();
+    let now = (state.clock)();
+    let reported = crate::routes::reported_samples(&state).await;
+    let revisions = state.pricing.revisions();
+    let prices = revisions.in_force(now);
+    let rates = BurnRates {
+        dollars: prices.rate_table(),
+        five_hour: state.tables.regime_rates(FIVE_HOUR, now),
+        seven_day: state.tables.regime_rates(SEVEN_DAY, now),
+        fast: prices.fast_rate_table(),
+    };
+    let pricing = BurnPricing {
+        snapshot: &snapshot,
+        reported: &reported,
+        rates: &rates,
+        tables: &state.tables,
+        now,
+    };
+    // A pin counts in its key's pool, the test a shedding round's walk makes.
+    let pins = standings
+        .iter()
+        .filter(|standing| {
+            snapshot
+                .key(&standing.pin.key_id)
+                .is_some_and(|key| key.pool_id == id)
+        })
+        .map(|standing| {
+            let AgentContext {
+                agent_id,
+                model,
+                account_id,
+                account_bound,
+                burn,
+                burn_at,
+                burn_unit,
+                burn_window,
+                ended,
+                fast,
+                move_cost,
+                move_drop_cost,
+                move_drop_size,
+                move_size,
+                warm,
+                warm_until,
+                ..
+            } = agent_line(standing, &pricing);
+            PoolPin {
+                key_id: standing.pin.key_id.clone(),
+                session_id: standing.pin.session_id.clone(),
+                agent_id,
+                model,
+                account_id,
+                account_bound,
+                burn,
+                burn_at,
+                burn_unit,
+                burn_window,
+                ended,
+                fast,
+                mark: standing.pin.mark.as_ref().map(SessionMark::from),
+                move_cost,
+                move_drop_cost,
+                move_drop_size,
+                move_size,
+                warm,
+                warm_until,
+            }
+        })
+        .collect();
+    Json(PoolPinList { pins }).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::openapi::round_trip::{round_trips, round_trips_each};
@@ -1807,6 +1965,7 @@ mod tests {
     fn the_pool_fixtures_round_trip_through_their_declared_types_and_mirrors() {
         round_trips::<PoolListTwin>("pools");
         round_trips::<PoolTrafficTwin>("pool_traffic");
+        round_trips_each::<super::PoolPin>("pool_pins", &["pins", "*"]);
         round_trips_each::<KeepalivePolicyView>("pools", &["pools", "*", "keepalive"]);
         round_trips_each::<CacheTtlPolicyView>("pools", &["pools", "*", "cache_ttl"]);
         round_trips_each::<TrafficBucketView>("pools", &["pools", "*", "traffic_24h", "*"]);

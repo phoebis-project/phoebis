@@ -118,6 +118,7 @@ pub(crate) fn parts() -> (Router<Arc<AdminState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(pools::patch, pools::remove))
         .routes(routes!(pools::set_members))
         .routes(routes!(pools::traffic))
+        .routes(routes!(pools::pins))
         .routes(routes!(pricing::show))
         .routes(routes!(crate::feature_calls::list))
         .routes(routes!(requests::list))

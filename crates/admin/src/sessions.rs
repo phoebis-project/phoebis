@@ -217,6 +217,16 @@ pub(crate) struct SessionMark {
     pub window: String,
 }
 
+impl From<&phoebis_store::PinMark> for SessionMark {
+    fn from(mark: &phoebis_store::PinMark) -> Self {
+        SessionMark {
+            on: mark.on.clone(),
+            at: mark.at,
+            window: mark.window.clone(),
+        }
+    }
+}
+
 /// One conversation pin the row lists as a line, read from this pin alone.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -554,11 +564,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     at: shed.at,
                     reason: shed.reason.clone(),
                 }),
-                mark: p.mark.as_ref().map(|mark| SessionMark {
-                    on: mark.on.clone(),
-                    at: mark.at,
-                    window: mark.window.clone(),
-                }),
+                mark: p.mark.as_ref().map(SessionMark::from),
                 ended: Some(p.ended),
                 fast: Some(standing.fast()),
                 account_bound: Some(p.account_bound),
@@ -692,37 +698,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         let view = engine.get(key);
         entry.agent_contexts = lines
             .into_iter()
-            .map(|standing| {
-                let pin = &standing.pin;
-                let priced = price_pin_burn(pin, standing.burn_unit, &pricing);
-                AgentContext {
-                    agent_id: pin.agent_id.clone(),
-                    model: pin.model.clone(),
-                    account_id: pin.account_id.clone(),
-                    effort: pin.effort.clone(),
-                    last_input_tokens: pin.last_input_tokens,
-                    cache_ttl_ms: pin.cache_ttl_ms,
-                    last_used_at: pin.last_used_at,
-                    warm: phoebis_routing::warm(pin, now),
-                    warm_until: phoebis_routing::warm_until(pin),
-                    burn: priced.burn,
-                    burn_unit: Some(standing.burn_unit),
-                    burn_window: priced.window.map(String::from),
-                    burn_equivalent: priced.equivalent,
-                    burn_usd: priced.usd,
-                    burn_at: priced.at,
-                    pinned_at: pin.created_at,
-                    ended: pin.ended,
-                    fast: standing.fast(),
-                    account_bound: pin.account_bound,
-                    move_cost: standing.move_read.cost.filter(|_| !pin.account_bound),
-                    move_size: standing.move_read.size,
-                    move_drop_size: standing.move_read.drop_size,
-                    move_drop_cost: standing.move_read.drop_cost,
-                    lifecycle: view
-                        .and_then(|view| view.lifecycles.get(&pin.agent_id))
-                        .map(|&lifecycle| lifecycle_word(lifecycle).into()),
-                }
+            .map(|standing| AgentContext {
+                lifecycle: view
+                    .and_then(|view| view.lifecycles.get(&standing.pin.agent_id))
+                    .map(|&lifecycle| lifecycle_word(lifecycle).into()),
+                ..agent_line(standing, &pricing)
             })
             .collect();
     }
@@ -795,12 +775,45 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
 }
 
 /// What every pin's burn is priced through, read once per request.
-struct BurnPricing<'a> {
-    snapshot: &'a phoebis_routing::RegistrySnapshot,
-    reported: &'a std::collections::BTreeMap<String, phoebis_routing::UtilizationSample>,
-    rates: &'a BurnRates,
-    tables: &'a phoebis_ledger::PlanTables,
-    now: i64,
+pub(crate) struct BurnPricing<'a> {
+    pub(crate) snapshot: &'a phoebis_routing::RegistrySnapshot,
+    pub(crate) reported: &'a std::collections::BTreeMap<String, phoebis_routing::UtilizationSample>,
+    pub(crate) rates: &'a BurnRates,
+    pub(crate) tables: &'a phoebis_ledger::PlanTables,
+    pub(crate) now: i64,
+}
+
+/// A pin's agent line priced through `pricing`, which a pool's pins read too, so a pin answers the same members on
+/// both routes. `lifecycle` reads null: the keepalive engine's view is the sessions route's alone.
+pub(crate) fn agent_line(standing: &PinStanding, pricing: &BurnPricing) -> AgentContext {
+    let pin = &standing.pin;
+    let priced = price_pin_burn(pin, standing.burn_unit, pricing);
+    AgentContext {
+        agent_id: pin.agent_id.clone(),
+        model: pin.model.clone(),
+        account_id: pin.account_id.clone(),
+        effort: pin.effort.clone(),
+        last_input_tokens: pin.last_input_tokens,
+        cache_ttl_ms: pin.cache_ttl_ms,
+        last_used_at: pin.last_used_at,
+        warm: phoebis_routing::warm(pin, pricing.now),
+        warm_until: phoebis_routing::warm_until(pin),
+        burn: priced.burn,
+        burn_unit: Some(standing.burn_unit),
+        burn_window: priced.window.map(String::from),
+        burn_equivalent: priced.equivalent,
+        burn_usd: priced.usd,
+        burn_at: priced.at,
+        pinned_at: pin.created_at,
+        ended: pin.ended,
+        fast: standing.fast(),
+        account_bound: pin.account_bound,
+        move_cost: standing.move_read.cost.filter(|_| !pin.account_bound),
+        move_size: standing.move_read.size,
+        move_drop_size: standing.move_read.drop_size,
+        move_drop_cost: standing.move_read.drop_cost,
+        lifecycle: None,
+    }
 }
 
 /// The pin's burn per hour in its unit, its window, its Pro-week figure, its plan dollars and the instant it is decayed

@@ -2915,6 +2915,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         ("keepalive_recipes", "/admin/keepalive/recipes"),
         ("key_models", "/admin/keys/desktop/models"),
         ("keys", "/admin/keys"),
+        ("pool_pins", "/admin/pools/main/pins"),
         ("pool_traffic", "/admin/pools/main/traffic?range=24h"),
         ("pools", "/admin/pools"),
         ("pricing", "/admin/pricing"),

@@ -3525,6 +3525,174 @@ async fn each_pool_member_answers_the_pins_under_the_pools_keys_on_its_account()
     );
 }
 
+/// A pin of `claude-sonnet-4-5` on `business` under `key`, refreshed at its last use.
+fn business_pin(
+    store: &phoebis_store::Store,
+    key: &str,
+    session: &str,
+    agent: &str,
+    last_used_at: i64,
+    auxiliary_only: bool,
+) -> phoebis_store::PinRow {
+    phoebis_store::PinRow {
+        key_id: key.into(),
+        session_id: session.into(),
+        agent_id: agent.into(),
+        model: "claude-sonnet-4-5".into(),
+        account_id: "business".into(),
+        epoch: 1,
+        created_at: common::NOW - 10 * HOUR,
+        last_used_at,
+        key_generation: common::generation(store, key),
+        incarnation: 1,
+        burn: phoebis_store::PinBurn::default(),
+        burn_at: None,
+        burn_banded: phoebis_store::PinBurn::default(),
+        burn_fast: phoebis_store::PinBurn::default(),
+        burn_unmetered: phoebis_store::PinBurn::default(),
+        burn_unmetered_model: None,
+        last_input_tokens: 0,
+        last_refresh_at: last_used_at,
+        cache_ttl_ms: 300_000,
+        shed: None,
+        static_hash: None,
+        tail_hash: None,
+        lane: phoebis_routing::lane_key("claude-sonnet-4-5", "standard", "none", "-"),
+        entrypoint: None,
+        mark: None,
+        auxiliary_only,
+        effort: None,
+        ended: false,
+        thinking_sums: Default::default(),
+        account_bound: false,
+    }
+}
+
+/// The agent ids of the pins the pool's read answers, in its order.
+async fn pinned_agents(app: &axum::Router, cookie: &str, pool: &str) -> Vec<String> {
+    let read = get(app, &format!("/admin/pools/{pool}/pins"), Some(cookie)).await;
+    assert_eq!(read.status(), 200);
+    json(read).await["pins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["agent_id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// A shedding round walks each pin under the pool's keys, so the read keeps the two pins the sessions list leaves out:
+/// one only auxiliary requests used and one idle past the sessions timeout of one hour.
+#[tokio::test]
+async fn a_pools_pins_read_answers_the_pins_that_the_sessions_list_hides() {
+    let (first, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&first, "admin-secret").await;
+    // An affinity of a day keeps the idle pin in the router past the sessions timeout.
+    let created = post(
+        &first,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority","affinity_ttl_seconds":86400}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201, "{}", json(created).await);
+    let created = post(
+        &first,
+        "/admin/keys",
+        r#"{"id":"k","label":"k","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201, "{}", json(created).await);
+    for pin in [
+        business_pin(&store, "k", "s1", "auxiliary", common::NOW - 5, true),
+        business_pin(&store, "k", "s2", "idle", common::NOW - 2 * HOUR, false),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    let (app, _up2, _store, _router2) = common::admin_parts_on(store.clone()).await;
+    let cookie = login(&app, "admin-secret").await;
+    assert_eq!(
+        pinned_agents(&app, &cookie, "main").await,
+        ["auxiliary", "idle"]
+    );
+}
+
+/// A pin under another pool's key is no pin of this pool's rounds, though it stands on a member of this pool.
+#[tokio::test]
+async fn a_pools_pins_read_leaves_out_a_pin_under_another_pools_key() {
+    let (first, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&first, "admin-secret").await;
+    // An account is a member of one pool, so `side` holds none: its key's pin on `business` is the pin an account keeps
+    // under a pool it left until the pin ends.
+    for (pool, key, members) in [
+        ("main", "k", r#"[{"account_id":"business","priority":0}]"#),
+        ("side", "k-side", "[]"),
+    ] {
+        let created = post(
+            &first,
+            "/admin/pools",
+            &format!(
+                r#"{{"id":"{pool}","label":"{pool}","strategy":"priority","members":{members}}}"#
+            ),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(created.status(), 201, "{}", json(created).await);
+        let created = post(
+            &first,
+            "/admin/keys",
+            &format!(r#"{{"id":"{key}","label":"{key}","pool_id":"{pool}"}}"#),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(created.status(), 201, "{}", json(created).await);
+    }
+    for pin in [
+        business_pin(&store, "k", "s1", "main", common::NOW - 5, false),
+        business_pin(&store, "k-side", "s2", "side", common::NOW - 5, false),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    let (app, _up2, _store, _router2) = common::admin_parts_on(store.clone()).await;
+    let cookie = login(&app, "admin-secret").await;
+    assert_eq!(pinned_agents(&app, &cookie, "main").await, ["main"]);
+}
+
+/// An operator who reads an empty pool where the router is gone would take it for a pool with no pin.
+#[tokio::test]
+async fn a_pools_pins_read_refuses_once_the_router_is_gone() {
+    let (app, _up, _store, router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201, "{}", json(created).await);
+    router.shutdown().await.unwrap();
+    let refused = get(&app, "/admin/pools/main/pins", Some(&cookie)).await;
+    assert_eq!(refused.status(), 503);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("the router is not available")
+    );
+}
+
+/// Each read of a pool looks the pool up for itself, so this read's 404 is its own.
+#[tokio::test]
+async fn a_pools_pins_read_answers_404_for_a_pool_the_registry_does_not_hold() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let refused = get(&app, "/admin/pools/nope/pins", Some(&cookie)).await;
+    assert_eq!(refused.status(), 404);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("pool not found")
+    );
+}
+
 #[tokio::test]
 async fn a_member_list_naming_an_account_twice_is_refused_before_any_write_on_post_put_and_patch() {
     let (app, _up) = common::admin_app().await;
