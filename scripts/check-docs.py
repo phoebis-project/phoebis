@@ -4,11 +4,12 @@
 `client` compares the proxy listener's route table with the table on the client page, so a route added or removed
 in the router fails the workflow until the page follows.
 
-`check-config` compares the lines the binary's `check-config` arm prints with the installation page's list,
-`codes` the refusal codes the `x-phoebis-error-code` header carries on the proxy and the feature listener with the
-client page's table, `example` the installation page's quoted example with the file, `schema` the schema versions
-the operations page states with the last step of the registry's and the ledger's migration tables, and `unit` the
-installation page's quoted unit with `deploy/phoebis.service`.
+`check-config` compares the lines the binary's `check-config` arm prints with the installation page's list, `codes` the
+refusal codes the `x-phoebis-error-code` header carries on the proxy and the feature listener with the client page's
+table, `example` the installation page's quoted example with the file, `hrefs` the documentation links that the console
+builds and the address in the unit with the pages of the site, `schema` the schema versions the operations page states
+with the last step of the registry's and the ledger's migration tables, and `unit` the installation page's quoted unit
+with `deploy/phoebis.service`.
 
 The link check over the built site and the prose check over its pages are `scripts/check-site.py` of the
 documentation repository.
@@ -16,6 +17,8 @@ documentation repository.
 import pathlib
 import re
 import sys
+import tomllib
+import unicodedata
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # The proxy listener's route tables: the relay's own router, the keepalive mod's route, and every router the
@@ -34,6 +37,10 @@ UNIT_FILE = ROOT / "deploy/phoebis.service"
 REGISTRY_SCHEMA_RS = ROOT / "crates/store/src/schema.rs"
 LEDGER_SCHEMA_RS = ROOT / "crates/ledger/src/schema.rs"
 OPERATIONS_MD = ROOT / "docs/site/operations.md"
+WEB_SRC = ROOT / "web/src"
+DOCS_TS = ROOT / "web/src/lib/docs.ts"
+NAV_TOML = ROOT / "docs/nav.toml"
+SITE_DIR = ROOT / "docs/site"
 # Every file whose refusals carry a code in the `x-phoebis-error-code` header on the proxy or the feature listener, and
 # the bus constant the body-shape code is spelled by. A file listed here that does not exist fails the check rather
 # than narrowing it.
@@ -716,12 +723,157 @@ def check_codes(code_files, client_md):
     return 1 if findings else 0
 
 
+# The site's address that `docsHref` puts ahead of each page. The unit's address starts with it, and the rest names
+# the page.
+DOCS_SITE_CONST = re.compile(r"\bconst DOCS_SITE\s*=\s*'([^'\\\n]+)'")
+# The declaration matches with its `function` keyword ahead of the name, so the walk passes it by in any file.
+DOCS_HREF_CALL = re.compile(r"(\bfunction\s+)?\bdocsHref\(")
+# The arguments as the console writes them by hand: one or two single-quoted literals, on one line or wrapped with a
+# trailing comma. An escape makes a literal's value differ from its spelling, so a literal with a backslash does not
+# read.
+DOCS_HREF_ARGUMENTS = re.compile(r"\s*'([^'\\\n]+)'\s*(?:,\s*'([^'\\\n]+)'\s*)?(?:,\s*)?\)")
+DOCUMENTATION_LINE = re.compile(r"^Documentation=(.*)$", re.M)
+DOCUMENTATION_PAGE = re.compile(r"([^/#\s]+)/(?:#(\S+))?")
+# A fenced block opens on a run of three or more backticks or tildes, as the documentation repository's prose check
+# reads one. A `#` line inside it is code, so a comment line of a shell block cannot stand in for a renamed heading.
+FENCE_OPEN = re.compile(r"\s*(`{3,}|~{3,})")
+HEADING_LINE = re.compile(r"#{1,6}(.*)")
+CLOSING_HASHES = re.compile(r"#+$")
+EXPLICIT_ID = re.compile(r"\s+\{:?\s*#([^\s{}]+)\s*\}$")
+NOT_IN_ID = re.compile(r"[^\w\s-]")
+ID_GAP = re.compile(r"[\s-]+")
+NUMBERED_ID = re.compile(r"(.*)_([0-9]+)")
+
+
+def nav_pages(entry):
+    """Each string that `entry` holds at any depth of its tables and arrays, which in a nav is each page's file."""
+    if isinstance(entry, str):
+        return {entry}
+    if isinstance(entry, dict):
+        entry = list(entry.values())
+    if not isinstance(entry, list):
+        return set()
+    return set().union(*map(nav_pages, entry))
+
+
+# A heading's id as the toc extension of Python-Markdown derives it, step for step, since the site's builder renders
+# with that extension. The extension reads the heading's rendered text and this reads the raw one, so a heading with a
+# link, an emphasis or inline HTML can get another id here, and a link to it then reads as a finding.
+def heading_slug(text):
+    folded = unicodedata.normalize("NFKD", text.replace("`", "")).encode("ascii", "ignore").decode("ascii")
+    return ID_GAP.sub("-", NOT_IN_ID.sub("", folded).strip().lower())
+
+
+def free_id(slug, taken):
+    """`slug` where it is not empty and `taken` lacks it, else the first `_<n>` form of it that `taken` lacks, counted
+    on from the number that the slug already ends in."""
+    if slug and slug not in taken:
+        return slug
+    numbered = NUMBERED_ID.fullmatch(slug)
+    base, number = (numbered.group(1), int(numbered.group(2)) + 1) if numbered else (slug, 1)
+    while f"{base}_{number}" in taken:
+        number += 1
+    return f"{base}_{number}"
+
+
+def heading_ids(page_md):
+    """The id of each heading of `page_md` outside a fenced block: its explicit `{ #id }`, else the derived one, which
+    steps past each id that the page holds already, the explicit ones among them."""
+    headings, fence = [], None
+    for line in page_md.read_text(encoding="utf-8").splitlines():
+        if fence:
+            run = line.strip()
+            if len(run) >= len(fence) and set(run) == {fence[0]}:
+                fence = None
+            continue
+        opened = FENCE_OPEN.match(line)
+        if opened:
+            fence = opened.group(1)
+            continue
+        heading = HEADING_LINE.match(line)
+        if heading:
+            text = CLOSING_HASHES.sub("", heading.group(1)).strip()
+            explicit = EXPLICIT_ID.search(text)
+            headings.append((text, explicit.group(1) if explicit else None))
+    taken = {explicit for _, explicit in headings if explicit}
+    for text, explicit in headings:
+        if explicit is None:
+            taken.add(free_id(heading_slug(text), taken))
+    return taken
+
+
+def check_hrefs(web_src, docs_ts, unit_file, nav_toml, site_dir):
+    """Every `docsHref` call under the console's source and the unit's `Documentation` address against the pages: the
+    page stands in the nav, and an anchor is the id of a heading on that page. A call the check cannot read is a
+    finding, never a silent pass."""
+    absent = missing([docs_ts, unit_file, nav_toml])
+    if not web_src.is_dir():
+        print(f"{web_src} is missing")
+        absent = True
+    if absent:
+        return 1
+    sites = DOCS_SITE_CONST.findall(docs_ts.read_text(encoding="utf-8"))
+    if len(sites) != 1:
+        print(f"{docs_ts.name}: no DOCS_SITE constant in single quotes that the check reads")
+        return 1
+    site = sites[0]
+    try:
+        pages = nav_pages(tomllib.loads(nav_toml.read_text(encoding="utf-8")).get("nav"))
+    except tomllib.TOMLDecodeError:
+        print(f"{nav_toml.name}: no TOML the check reads")
+        return 1
+    links, findings = [], 0
+    for path in sorted(web_src.rglob("*")):
+        if path.suffix not in (".ts", ".tsx") or not path.is_file():
+            continue
+        shown, text = path.relative_to(ROOT), path.read_text(encoding="utf-8")
+        for call in DOCS_HREF_CALL.finditer(text):
+            if call.group(1):
+                continue
+            line = line_of(text, call.start())
+            arguments = DOCS_HREF_ARGUMENTS.match(text, call.end())
+            if arguments is None:
+                print(f"{shown}:{line}: a docsHref call whose arguments the check cannot read")
+                findings += 1
+                continue
+            links.append((f"{shown}:{line}: docsHref", arguments.group(1), arguments.group(2)))
+    addresses = DOCUMENTATION_LINE.findall(unit_file.read_text(encoding="utf-8"))
+    if not addresses:
+        print(f"{unit_file.name}: no Documentation line")
+        findings += 1
+    for address in map(str.strip, addresses):
+        cut = DOCUMENTATION_PAGE.fullmatch(address, len(site)) if address.startswith(site) else None
+        if cut is None:
+            print(f"{unit_file.name}: a Documentation address the check cannot read")
+            findings += 1
+            continue
+        links.append((f"{unit_file.name}: the Documentation address", cut.group(1), cut.group(2)))
+    nav_shown, ids = nav_toml.relative_to(ROOT), {}
+    for lead, page, anchor in links:
+        if f"{page}.md" not in pages:
+            print(f"{lead} names the page {page}, which {nav_shown} does not hold")
+            findings += 1
+            continue
+        if anchor is None:
+            continue
+        page_md = site_dir / f"{page}.md"
+        if page_md not in ids:
+            ids[page_md] = None if missing([page_md]) else heading_ids(page_md)
+        if ids[page_md] is None:
+            findings += 1
+        elif anchor not in ids[page_md]:
+            print(f"{lead} names #{anchor}, which no heading of {page}.md carries")
+            findings += 1
+    return 1 if findings else 0
+
+
 # name: (check, its paths)
 COMMANDS = {
     "check-config": (check_check_config, (MAIN_RS, INSTALLATION_MD)),
     "client": (check_client, (PROXY_ROUTE_FILES, CLIENT_MD)),
     "codes": (check_codes, (CODE_FILES, CLIENT_MD)),
     "example": (check_example, (EXAMPLE_YAML, INSTALLATION_MD)),
+    "hrefs": (check_hrefs, (WEB_SRC, DOCS_TS, UNIT_FILE, NAV_TOML, SITE_DIR)),
     "schema": (check_schema, (REGISTRY_SCHEMA_RS, LEDGER_SCHEMA_RS, OPERATIONS_MD)),
     "unit": (check_unit, (UNIT_FILE, INSTALLATION_MD)),
 }

@@ -450,6 +450,7 @@ python3 scripts/check-docs.py check-config
 python3 scripts/check-docs.py client
 python3 scripts/check-docs.py codes
 python3 scripts/check-docs.py example
+python3 scripts/check-docs.py hrefs
 python3 scripts/check-docs.py schema
 python3 scripts/check-docs.py unit
 ```
@@ -464,6 +465,8 @@ cannot read rather than dropping it:
 - `codes` compares the refusal codes the `x-phoebis-error-code` header carries on the proxy listener with the table
   under [Refusal codes](client.md#refusal-codes) on The client.
 - `example` compares the installation page's quoted example with `deploy/config.example.yaml`.
+- `hrefs` compares each documentation link that the console builds, and the address in `deploy/phoebis.service`, with
+  the pages: the page stands in `docs/nav.toml`, and an anchor is the id of a heading on that page.
 - `schema` compares the schema versions the operations page states with the last step of the registry's and the ledger's
   migration tables.
 - `unit` compares the installation page's quoted unit with `deploy/phoebis.service`.
@@ -542,11 +545,11 @@ documentation repository, and the job that writes to Pages runs in that reposito
 ## Publishing the site
 
 The `Documentation` workflow runs on every push to `main` and every pull request, in three jobs. `checks` runs
-`scripts/tests/check-docs.sh`, `scripts/tests/launch-script.sh` and the six checks under `scripts/check-docs.py`. `site`
-calls the build workflow of `phoebis-docs`, which checks out this repository at the run's commit, `phoebis-docs` at
-`main`, and the companion and the proxy each at its newest commit on `main` whose `Documentation` run ended green, and
-runs its scripts' cases, the assembly, `zensical build --clean --strict`, the link check and the prose check. The built
-site holds the pages of each product, so the build uploads it as an artifact in one run alone, the `Deploy` run of
+`scripts/tests/check-docs.sh`, `scripts/tests/launch-script.sh` and the seven checks under `scripts/check-docs.py`.
+`site` calls the build workflow of `phoebis-docs`, which checks out this repository at the run's commit, `phoebis-docs`
+at `main`, and the companion and the proxy each at its newest commit on `main` whose `Documentation` run ended green,
+and runs its scripts' cases, the assembly, `zensical build --clean --strict`, the link check and the prose check. The
+built site holds the pages of each product, so the build uploads it as an artifact in one run alone, the `Deploy` run of
 `phoebis-docs` that publishes it. On a pull request the run's commit is GitHub's merge of the pull request into its base
 branch, so the build reads the pages as they stand once merged. `start-deploy` runs on a push to `main` once both passed
 and starts the `Deploy` workflow of `phoebis-docs`.

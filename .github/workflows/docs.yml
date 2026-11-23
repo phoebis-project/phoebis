@@ -22,6 +22,7 @@ jobs:
       - run: python3 scripts/check-docs.py client
       - run: python3 scripts/check-docs.py codes
       - run: python3 scripts/check-docs.py example
+      - run: python3 scripts/check-docs.py hrefs
       - run: python3 scripts/check-docs.py schema
       - run: python3 scripts/check-docs.py unit
   site:

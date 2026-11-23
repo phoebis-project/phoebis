@@ -3,9 +3,10 @@
 # shellcheck disable=SC2016
 # The checker has to fail on what it exists to catch: a route the client page skipped, a row the proxy listener does
 # not serve, and a handler call it cannot consume. Every checker case runs against a throwaway tree, never the real
-# site. The five content checks run against throwaway files in the same way: a page list short a line the binary
-# prints, a code with no row, a quoted example that drifted, a schema figure that differs from its table's last step
-# and a quoted unit that drifted. The favicon case at the end reads the real tree.
+# site. The six content checks run against throwaway files in the same way: a page list short a line the binary prints,
+# a code with no row, a quoted example that drifted, a console link to a page or an anchor that the site lacks, a schema
+# figure that differs from its table's last step and a quoted unit that drifted. The favicon case at the end reads the
+# real tree.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -14,8 +15,8 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 fail() { echo "FAIL $1" >&2; exit 1; }
 
-# tree NAME: a throwaway tree at "$tmp/NAME" with a copy of the checker at scripts/check-docs.py and an empty file
-# at each default path, so a case writes the files that it tests and runs the copy.
+# tree NAME: a throwaway tree at "$tmp/NAME" with a copy of the checker at scripts/check-docs.py and an empty file at
+# each default path that is a file, so a case writes the files that it tests and runs the copy.
 tree() {
   local root="$tmp/$1" path
   mkdir -p "$root/scripts"
@@ -34,9 +35,11 @@ tree() {
     crates/store/src/schema.rs \
     deploy/config.example.yaml \
     deploy/phoebis.service \
+    docs/nav.toml \
     docs/site/client.md \
     docs/site/installation.md \
-    docs/site/operations.md
+    docs/site/operations.md \
+    web/src/lib/docs.ts
   do
     mkdir -p "$root/${path%/*}"
     : > "$root/$path"
@@ -517,6 +520,49 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
 RS
 out=$(python3 "$tmp/schema-unreadable/scripts/check-docs.py" schema 2>&1) \
   && fail "a ledger table whose last entry is no (number, expression) step passed"
+
+# The hrefs check has to fail on a console link to an anchor that no heading of its page carries, on a link to a page
+# that the nav does not hold though the page's file stands, on a call whose arguments it cannot read, on a unit address
+# that names a page outside the nav, and on an anchor that only a line inside a fenced block spells. Each copy of the
+# shared tree adds one of them to a valid site, so each case's exit comes from that case alone. The check's run on the
+# real tree is the passing side.
+tree hrefs
+echo "const DOCS_SITE = 'https://docs.example/router/';" > "$tmp/hrefs/web/src/lib/docs.ts"
+echo 'nav = [ { "Guide" = "guide.md" } ]' > "$tmp/hrefs/docs/nav.toml"
+echo '## Here' > "$tmp/hrefs/docs/site/guide.md"
+echo 'Documentation=https://docs.example/router/guide/' > "$tmp/hrefs/deploy/phoebis.service"
+cp -R "$tmp/hrefs" "$tmp/hrefs-anchor"
+echo "const href = docsHref('guide', 'gone');" > "$tmp/hrefs-anchor/web/src/Page.tsx"
+out=$(python3 "$tmp/hrefs-anchor/scripts/check-docs.py" hrefs 2>&1) \
+  && fail "a link to an anchor that no heading of its page carries passed"
+echo "$out" | grep -qF "web/src/Page.tsx:1: docsHref names #gone, which no heading of guide.md carries" \
+  || fail "the anchor that no heading carries did not report: $out"
+cp -R "$tmp/hrefs" "$tmp/hrefs-nav"
+: > "$tmp/hrefs-nav/docs/site/missing.md"
+echo "const href = docsHref('missing');" > "$tmp/hrefs-nav/web/src/Page.tsx"
+out=$(python3 "$tmp/hrefs-nav/scripts/check-docs.py" hrefs 2>&1) \
+  && fail "a link to a page that the nav does not hold passed"
+echo "$out" | grep -qF "web/src/Page.tsx:1: docsHref names the page missing, which docs/nav.toml does not hold" \
+  || fail "the page that the nav does not hold did not report: $out"
+cp -R "$tmp/hrefs" "$tmp/hrefs-unread"
+echo "const href = docsHref(page);" > "$tmp/hrefs-unread/web/src/Page.tsx"
+out=$(python3 "$tmp/hrefs-unread/scripts/check-docs.py" hrefs 2>&1) \
+  && fail "a docsHref call whose arguments the check cannot read passed"
+echo "$out" | grep -qF "web/src/Page.tsx:1: a docsHref call whose arguments the check cannot read" \
+  || fail "the call the check cannot read did not report: $out"
+cp -R "$tmp/hrefs" "$tmp/hrefs-unit"
+echo 'Documentation=https://docs.example/router/gone/' > "$tmp/hrefs-unit/deploy/phoebis.service"
+out=$(python3 "$tmp/hrefs-unit/scripts/check-docs.py" hrefs 2>&1) \
+  && fail "a unit address to a page that the nav does not hold passed"
+echo "$out" | grep -qF "phoebis.service: the Documentation address names the page gone, which docs/nav.toml does not hold" \
+  || fail "the unit's page that the nav does not hold did not report: $out"
+cp -R "$tmp/hrefs" "$tmp/hrefs-fence"
+printf '## Here\n\n```\n# gone\n```\n' > "$tmp/hrefs-fence/docs/site/guide.md"
+echo "const href = docsHref('guide', 'gone');" > "$tmp/hrefs-fence/web/src/Page.tsx"
+out=$(python3 "$tmp/hrefs-fence/scripts/check-docs.py" hrefs 2>&1) \
+  && fail "a link to an anchor that only a line inside a fenced block spells passed"
+echo "$out" | grep -qF "web/src/Page.tsx:1: docsHref names #gone, which no heading of guide.md carries" \
+  || fail "the anchor that only a fenced line spells did not report: $out"
 
 # Unlike the cases above this reads the real tree: the site's favicon is a copy of the console's, and nothing else
 # keeps the two equal.
