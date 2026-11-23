@@ -239,6 +239,13 @@ struct PendingDrop {
     tier: Option<String>,
 }
 
+/// Whether one side of a pair, the plan or the tier, changed between two readings: both name it and the two differ. A
+/// reading that landed before the account's first profile read names neither side, so a side that either reading does
+/// not name reads as unchanged.
+fn side_changed(before: Option<&str>, after: Option<&str>) -> bool {
+    matches!((before, after), (Some(before), Some(after)) if before != after)
+}
+
 /// The words a pin event's kind is named by, in a decision record's `pin_events` and in the ledger's events table
 /// alike, so the console reads one vocabulary in both.
 pub const PIN_CREATED: &str = "pin_created";
@@ -462,7 +469,8 @@ pub enum RouterEvent {
         reset: i64,
         plan: Option<String>,
         tier: Option<String>,
-        /// Whether the plan or the tier of the reading that writes the event differs from the pair before the fall.
+        /// Whether the plan or the tier of the reading that writes the event differs from the pair before the fall. A
+        /// side that either reading does not name counts as unchanged.
         pair_changed: bool,
         at: i64,
     },
@@ -5518,9 +5526,10 @@ impl Task {
         }
         if first {
             self.pending_drops.insert(key, before);
-            return first;
+            return true;
         }
-        let pair_changed = reading.plan != before.plan || reading.tier != before.tier;
+        let pair_changed = side_changed(before.plan.as_deref(), reading.plan.as_deref())
+            || side_changed(before.tier.as_deref(), reading.tier.as_deref());
         self.emit(RouterEvent::WindowDropped {
             account_id: account_id.to_string(),
             window: window.to_string(),
@@ -5532,7 +5541,7 @@ impl Task {
             pair_changed,
             at: now,
         });
-        first
+        false
     }
 
     /// The sample as the routing reads it. A plan window's reading that names no reset, taken before the stored

@@ -12507,6 +12507,49 @@ async fn a_fall_that_a_poll_reads_first_writes_its_event_at_the_next_poll_with_t
 }
 
 #[tokio::test]
+async fn a_fall_under_a_reading_that_names_no_pair_writes_no_pair_change() {
+    use phoebis_routing::RouterEvent;
+    // No profile read stands for the account, so its first readings name no plan and no tier.
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 7 * 24 * HOUR;
+    for report in [
+        weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.60)]),
+        weekly_poll(2_000, reset, &[(SEVEN_DAY, 0.10)]),
+    ] {
+        handle.report(observed("a", report)).await;
+        handle.samples().await.unwrap();
+    }
+    upgraded(&store, "a");
+    handle.reload().await.unwrap();
+    handle
+        .report(observed(
+            "a",
+            weekly_poll(3_000, reset, &[(SEVEN_DAY, 0.12)]),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let drops: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            RouterEvent::WindowDropped {
+                plan,
+                tier,
+                pair_changed,
+                ..
+            } => Some((plan, tier, pair_changed)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        drops,
+        vec![(None::<String>, None::<String>, false)],
+        "the account's first profile read names a pair where the reading before the fall named none"
+    );
+}
+
+#[tokio::test]
 async fn a_passed_reset_clears_the_figure_a_head_found_so_the_next_week_s_poll_writes_no_drop() {
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);

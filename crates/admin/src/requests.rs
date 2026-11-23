@@ -534,7 +534,7 @@ pub(crate) struct Event {
     /// - `window_dropped`: a weekly window fell by more than 5 points under one reset, as a used limit reset or a plan
     ///   change reads, with `utilization_before`, the stored figure, `utilization`, the figure of the poll that wrote
     ///   the event, the unchanged `reset`, and the `plan` and the `tier` of the stored reading, each null where it
-    ///   names none, and `pair_changed`, whether that poll's plan or tier differs from them.
+    ///   names none, and `pair_changed`, whether that poll's plan or tier differs from them where both name it.
     /// - `window_reset`: a plan window's reset passed, seen by a sample naming a later reset, or naming none once
     ///   read past it (`sample`), or by the clock (`clock`), once per reset, with the `plan` and the `tier` of the
     ///   reading whose reset passed, each null where that reading names none.

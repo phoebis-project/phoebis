@@ -239,19 +239,20 @@ bounds, so a longer retention shows more weeks.
 A weekly window whose reading falls by more than 5 points under an unchanged reset writes a `window_dropped` event on
 the account, the trace that a used limit reset or a plan change leaves, with the figure before, the figure after, the
 reset, the plan and the tier of the reading before, and `pair_changed`, whether the plan or the tier of the reading that
-writes the event differs from them. The test alone compares in whole points, since a poll reads whole percents, and each
-event keeps its figures as read. Two events of one reset can spell it up to a second apart, since a head names its reset
-in whole seconds and a poll in milliseconds. The first reading that shows the fall, a head or a poll, keeps the figure
-it fell from in memory, and the next poll under the same reset writes the event from that figure where it still reads
-more than 5 points under it, so a fall that a poll reads first writes its event one poll later. A restart between the
-first reading and that poll loses the event. A window at its limit that a use clears writes `window_cleared` as well.
-The unused allowance lists each drop that cleared its window as a row: the share left before the drop, the week's
-unchanged reset and the drop's instant, with the plan and the tier the event names, under the source `plan_changed`
-where the event's `pair_changed` is true and no used claim names the window, and under `claim` otherwise. Rows of one
-reset stand newest first, so a week's own reset precedes a use inside it. A drop cleared its window where the newest
-used `limit_reset_claimed` of the account in the hour before it names the window in its `cleared` list, or, for a reset
-used outside the router and a claim with no parsed answer, where the poll that wrote the event reads under 5 percent. A
-drop that only lowered its window lists no row, since its week runs on and gave nothing up.
+writes the event differs from them. A plan or a tier that either reading does not name counts as unchanged. The test
+alone compares in whole points, since a poll reads whole percents, and each event keeps its figures as read. Two events
+of one reset can spell it up to a second apart, since a head names its reset in whole seconds and a poll in
+milliseconds. The first reading that shows the fall, a head or a poll, keeps the figure it fell from in memory, and the
+next poll under the same reset writes the event from that figure where it still reads more than 5 points under it, so a
+fall that a poll reads first writes its event one poll later. A restart between the first reading and that poll loses
+the event. A window at its limit that a use clears writes `window_cleared` as well. The unused allowance lists each drop
+that cleared its window as a row: the share left before the drop, the week's unchanged reset and the drop's instant,
+with the plan and the tier the event names, under the source `plan_changed` where the event's `pair_changed` is true and
+no used claim names the window, and under `claim` otherwise. Rows of one reset stand newest first, so a week's own reset
+precedes a use inside it. A drop cleared its window where the newest used `limit_reset_claimed` of the account in the
+hour before it names the window in its `cleared` list, or, for a reset used outside the router and a claim with no
+parsed answer, where the poll that wrote the event reads under 5 percent. A drop that only lowered its window lists no
+row, since its week runs on and gave nothing up.
 
 Every use of a limit reset that reached the upstream writes a `limit_reset_claimed` event on the account, whatever the
 upstream answered and where it answered nothing. Its detail carries the grant's id and label, the request id the claim
