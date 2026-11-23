@@ -22792,13 +22792,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
     }
     {
-      // Grouped by kind with Include probes off, the probe kind leaves each bucket whose probes the plan paid for alone,
-      // as the breakdown answers it, and the day holds no billed probe, so Probes by outcome draws its bars only while
-      // its own reads count probes. Its legend reads the warming breakdown's probe counts, which a read with probes off
-      // still holds here. The figures are the probe rows of the story's rollups (`ALL_ROLLUPS`, mock/requests.ts) over
-      // the day to 14:30: 3 ok of which 1 migrated, 1 held, 31 skipped and 31 failed, the 30 drawn probes that found no
-      // live pin among them, in 18 hourly buckets that stack 33 nonzero bars. jsdom lays nothing out, so the chart's
-      // container reads a browser's size here.
+      // Grouped by kind with Include probes off, the probe kind leaves each bucket whose probes the plan paid for
+      // alone, as the breakdown answers it, and the day holds no billed probe, so Probes by outcome draws its bars only
+      // while its own reads count probes. Its legend reads the warming breakdown's probe counts, which a read with
+      // probes off still holds here. The figures are the probe rows of the story's rollups (`ALL_ROLLUPS`,
+      // mock/requests.ts) over the day to 14:30: 3 ok of which 1 migrated, 1 held, 31 skipped and 31 failed, the 30
+      // drawn probes that found no live pin among them, in 18 hourly buckets that stack 33 nonzero bars. jsdom lays
+      // nothing out, so the chart's container reads a browser's size here.
       const measure = window.HTMLElement.prototype.getBoundingClientRect;
       window.HTMLElement.prototype.getBoundingClientRect = function () {
         return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);

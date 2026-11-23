@@ -1744,9 +1744,10 @@ function storySeeds(): StorySeed[] {
     // conversation's prefix there afresh.
     { agentId: 'main', at: t(13, 21, 39), attempts: [{ accountId: 'primary', at: t(13, 21, 39), ms: 6_800, status: 200 }], id: REPLACED_PIN_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 1_500, output: 900 } },
     // The conversation the purge takes twice. Its first turn ends at 13:11:09, the held conversation's end. Its second
-    // comes behind the sweep at 13:21:40 that takes that pin and ahead of the wall clock's next minute, finds no row and
-    // lands on primary, while its member names the message nightly holds. Its third comes behind the sweep at 13:32:40
-    // that takes the second's pin and lands on primary again, where the cache the second wrote for an hour still stands.
+    // comes behind the sweep at 13:21:40 that takes that pin and ahead of the wall clock's next minute, finds no row
+    // and lands on primary, while its member names the message nightly holds. Its third comes behind the sweep at
+    // 13:32:40 that takes the second's pin and lands on primary again, where the cache the second wrote for an hour
+    // still stands.
     { agentId: 'main', at: t(13, 11), attempts: [{ accountId: 'nightly', at: t(13, 11), ms: 9_000, status: 200 }], id: 'req_3a9d6e14-b72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 39_800, input: 1_700, output: 1_020 } },
     { agentId: 'main', at: t(13, 21, 50), attempts: [{ accountId: 'primary', at: t(13, 21, 50), ms: 6_000, status: 200 }], id: 'req_8b2f4c71-e05', keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 41_300, input: 1_500, output: 880 } },
     { agentId: 'main', at: t(13, 33, 10), attempts: [{ accountId: 'primary', at: t(13, 33, 10), ms: 5_000, status: 200 }], id: 'req_d5e17a39-c48', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheRead: 41_300, cacheWrite1h: 1_200, input: 1_300, output: 760 } },
@@ -2224,7 +2225,7 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
   // The first eligible row skips the draws below, as it did when it carried the drawer's spent move, so every later
   // row keeps its draws.
   let spentOwed = true;
-  for (const r of REQUESTS) {
+  for (const r of DRAWN_ORDER) {
     if (r.sessionId === null || r.kind === 'probe' || !drawnRow(r)) continue;
     const events: RequestEvent[] = [];
     // The pin the event belongs to: the drawer shows a move only where these match the request's own.
@@ -2782,7 +2783,7 @@ function walkSessionTurns() {
       }
     });
     const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
-    if (ttl > 0 && last !== undefined) {
+    if (r.sessionId !== null && last !== undefined) {
       const renews = row !== undefined && read === 'live' && row.accountId === last.accountId;
       const stamp = pinStampOf(r, renews);
       const released = RELEASING_STATUSES.includes(last.upstreamStatus);
