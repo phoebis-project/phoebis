@@ -18,7 +18,10 @@ use phoebis_attention::{
     SubjectKind, BACKOFF_ATTENTION_AFTER_MS,
 };
 use phoebis_bus::{Kind as RequestKind, Origin, Outcome, QUEUE_DEPTH};
-use phoebis_ledger::{AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord};
+use phoebis_ledger::{
+    read_rollups, AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord,
+    RollupSelect, EXPIRED_BETWEEN_TURNS,
+};
 use phoebis_oauth::PollOutcome;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, AttemptOutcome, Cancellation,
@@ -3209,10 +3212,11 @@ async fn a_bus_gap_holds_its_item_for_a_day_and_clears_after() {
     );
 }
 
-/// A finished request of pool `main` whose serving attempt read nothing from the cache under the miss reason `none`
-/// after a previous request of 1,000 tokens, which the ledger's rollup counts as a cache entry that expired between
-/// turns.
-fn expired_turn(id: &str) -> Record {
+/// A finished request of pool `main` whose marked body found its entry past its lifetime, and whose serving attempt
+/// read nothing from the cache under the miss reason `none` after a previous request of 1,000 tokens, which the
+/// ledger's rollup counts as a cache entry that expired between turns. `released` says whether its agent had been
+/// released.
+fn expired_turn(id: &str, released: bool) -> Record {
     Record::Request {
         request: RequestRecord {
             id: id.into(),
@@ -3226,6 +3230,7 @@ fn expired_turn(id: &str) -> Record {
             origin: "client".into(),
             outcome: "succeeded".into(),
             attempts: 1,
+            cache_marker: Some(true),
             ..Default::default()
         },
         attempts: vec![AttemptRecord {
@@ -3239,6 +3244,8 @@ fn expired_turn(id: &str) -> Record {
             cache_read_tokens: Some(0),
             cache_miss_reason: Some("none".into()),
             previous_input_tokens: Some(1_000),
+            entry_expired: Some(true),
+            agent_released: Some(released),
             ..Default::default()
         }],
         bodies: None,
@@ -3252,10 +3259,10 @@ async fn expiry_item(attention: &Arc<Attention>) -> (bool, serde_json::Value) {
     (item.holds, item.detail.clone())
 }
 
-/// Records `expired_turn("r1")` and waits until the item holds, so a clear read after it is taken with the expiry
-/// landed.
+/// Records `expired_turn("r1", false)` and waits until the item holds, so a clear read after it is taken with the
+/// expiry landed.
 async fn expiry_landed(rig: &Rig, attention: &Arc<Attention>) -> serde_json::Value {
-    rig.ledger.record_request(expired_turn("r1")).await;
+    rig.ledger.record_request(expired_turn("r1", false)).await;
     // The rollup lands after the call returns, so the read waits for the item rather than for the call.
     fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         let (holds, detail) = expiry_item(attention).await;
@@ -3290,6 +3297,40 @@ async fn expiries_between_turns_hold_their_item_only_while_their_pool_warms_cach
         .unwrap()
         .holds,
         "with no pool warming caches the same expiry raises nothing"
+    );
+}
+
+/// Both expiries land on pool `main`, which warms caches, under the seed's key, which holds the `keepalive` permission.
+#[tokio::test]
+async fn an_expiry_of_a_released_agent_raises_no_item_and_one_of_a_live_agent_raises_it() {
+    let rig = rig().await;
+    let standing = Arc::new(Standing::idle());
+    standing.0.lock().unwrap().warming = BTreeSet::from(["main".to_string()]);
+    let (attention, _arm) = rig.attention_with_keepalive(standing);
+    rig.ledger
+        .record_request(expired_turn("r-released", true))
+        .await;
+    // The item never holds for this expiry, so the read waits for the hour's count under the first key instead.
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        let rows = rig
+            .db
+            .read(|c| read_rollups(c, i64::MIN, i64::MAX, &RollupSelect::default()))
+            .await
+            .ok()?;
+        rows.iter()
+            .any(|row| row.cache_miss_reasons.get(EXPIRED_BETWEEN_TURNS) == Some(&1))
+            .then_some(())
+    })
+    .await;
+    assert_eq!(
+        expiry_item(&attention).await,
+        (false, json!({ "expired": 0 })),
+        "the released agent's expiry raises nothing"
+    );
+    assert_eq!(
+        expiry_landed(&rig, &attention).await,
+        json!({ "expired": 1 }),
+        "the live agent's expiry raises the item, and the released one stays out of its count"
     );
 }
 

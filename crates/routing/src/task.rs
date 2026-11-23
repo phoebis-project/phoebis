@@ -3413,6 +3413,10 @@ impl Task {
                     }
                 }
                 let pin_key = request.pin_key();
+                // Read ahead of the clear below, which leaves the row unmarked for the selection. A request held once
+                // finds the row cleared by its first pass, so the fact rides on the hold.
+                request.pin_ended = self.state.pin(&pin_key).is_some_and(|row| row.ended)
+                    || request.holds.iter().any(|hold| hold.pin_ended);
                 // The agent's own request is its return, cleared ahead of the round it may run so that round walks the
                 // pin. A probe replays a request and a classifier call judges a turn, the ended one among them, so
                 // neither is a return.

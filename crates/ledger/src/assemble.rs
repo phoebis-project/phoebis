@@ -407,6 +407,8 @@ fn attempt_row(selected: AccountSelected) -> AttemptRecord {
         outcome: "transport_error".into(),
         selection: selected.selection,
         previous_input_tokens: selected.previous_input_tokens,
+        entry_expired: selected.entry_expired,
+        agent_released: selected.agent_released,
         ..AttemptRecord::default()
     }
 }
@@ -855,6 +857,8 @@ mod tests {
             cache_ttl_ms: None,
             selection: None,
             previous_input_tokens: None,
+            entry_expired: None,
+            agent_released: None,
         })
     }
     fn head(id: &str, n: u8, status: u16, outcome: AttemptOutcome, at: i64) -> Event {

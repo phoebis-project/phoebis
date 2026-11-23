@@ -35,9 +35,9 @@ use crate::rollup::{
     add_counts, deltas_of, detail_json, fold_identifier_of, fold_user_agent_of, hour_end, hour_of,
     last_millisecond, migration_reason, read_account_rollups, read_rollups_paged, row_to_rollup_at,
     trailing_day_hours, visit_rollups, CostSplit, KeySelector, RollupRow, RollupSelect,
-    RoutingKind, COLUMNS as ROLLUP_COLUMNS, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, HIT_SUFFIX,
-    NO_CLASS, NO_EFFORT, NO_PLAN_PROBES, OTHER_DIMENSION, TRANSFORMATIONS_MOVED,
-    TRANSFORMATIONS_NONE, UNATTRIBUTED,
+    RoutingKind, COLUMNS as ROLLUP_COLUMNS, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS,
+    EXPIRED_BETWEEN_TURNS_UNRELEASED, HIT_SUFFIX, NO_CLASS, NO_EFFORT, NO_PLAN_PROBES,
+    OTHER_DIMENSION, TRANSFORMATIONS_MOVED, TRANSFORMATIONS_NONE, UNATTRIBUTED,
 };
 use crate::session_totals::{
     Serving, SessionRequest, FACTS_COLUMNS as SESSION_FACTS_COLUMNS,
@@ -2592,6 +2592,8 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
     let equivalent = plan.equivalent.finish(plan.split);
     let mut reasons = sum.cache_miss_reasons;
     let expired = reasons.remove(EXPIRED_BETWEEN_TURNS).unwrap_or(0);
+    // The attention item's and the overview's count, which no group answers and Misses by reason must not draw.
+    reasons.remove(EXPIRED_BETWEEN_TURNS_UNRELEASED);
     let mut reason_hits = BTreeMap::new();
     reasons.retain(|key, count| match key.strip_suffix(HIT_SUFFIX) {
         Some(reason) => {

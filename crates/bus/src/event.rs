@@ -442,6 +442,10 @@ pub struct AccountSelected {
     pub selection: Option<String>,
     /// The size of the session's previous request as the selection handed it on (`Selection::previous_input_tokens`).
     pub previous_input_tokens: Option<u64>,
+    /// Whether the pin's cache entry was past its lifetime at the selection (`Selection::entry_expired`).
+    pub entry_expired: Option<bool>,
+    /// Whether the pin carried `ended` when the routing task took the request (`Selection::agent_released`).
+    pub agent_released: Option<bool>,
 }
 
 #[derive(Clone, Debug)]

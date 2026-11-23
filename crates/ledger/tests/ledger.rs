@@ -4703,6 +4703,8 @@ fn selected_event(id: &str, attempt: u8, account: &str, at: i64) -> BusEvent {
         cache_ttl_ms: None,
         selection: None,
         previous_input_tokens: None,
+        entry_expired: None,
+        agent_released: None,
     })
 }
 

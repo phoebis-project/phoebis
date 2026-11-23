@@ -776,7 +776,7 @@ ledger's hourly rollups, holds again at the first read.
 | `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours, or an event on its account that refunds its window followed each such round |
 | `slowed_long` | warning | the account | the slow-down's held time of the last 24 hours comes to at most twice the pool's `slow_down_stretch_seconds`, at least an hour |
 | `keepalive_cap` | warning | the crossed cap | the count falls under 90 percent of its max |
-| `expired_between_turns` | warning | the keepalive engine | no expiry between turns on a warming pool under a key with the `keepalive` permission stands in the last 24 hours |
+| `expired_between_turns` | warning | the keepalive engine | no expiry between turns of an agent that the keepalive still held stands in the last 24 hours on a warming pool under a key with the `keepalive` permission |
 
 Of the tones, critical, serious, warning and info, `info` is the mildest, a condition that holds while nothing is
 broken: the dashboard's line draws such an item in the place the route ranks it, and no pool card draws it, since a
@@ -990,16 +990,22 @@ tone, and the item opens the [Sessions](console.md#sessions) view.
 
 **`expired_between_turns`** holds while a request of the last 24 hours missed the cache because its entry expired
 between two turns, the miss probing exists to prevent, and the request ran on a pool whose keepalive policy is on, under
-a key that holds the `keepalive` permission. Such a request read back under half the prompt of the session's previous
-request on the same account and named no miss reason, `none`, `pending`, `not_requested` or `not_returned`. A probe, a
+a key that holds the `keepalive` permission. Such a request carried a cache marker, arrived after the lifetime of the
+entry that the session's previous request on the same account had written, a probe's refresh counted, read back under
+half the prompt of that previous request and named no miss reason, `none`, `pending`, `not_requested` or `not_returned`.
+The lifetime is the TTL that the pool's policy sets, else the longest TTL among the cache markers of that previous
+request, where a marker that names no TTL counts as five minutes and so does a request with no marker, so where a body
+carries markers at two TTLs the count leaves out an expiry of the shorter entry inside the longer lifetime. A probe, a
 token count, a turn the router reads as `compacted`, `lane_changed` or `static_restart`, a landing on another account
-and a reason that names a divergence never count. On any other pool or key such an expiry is the expected course, since
-the keepalive probes nothing there. The reader takes the policy and the permission as they stand at each read, so an
-expiry stops counting at the next read once its pool's policy is switched off or its key's permission withdrawn, and an
-expiry from before a policy was switched on counts for up to a day. The count is the ledger's, from its hourly rollups,
-over those requests alone, while `GET /admin/keepalive/overview` answers every pool's count as
-`expired_between_turns_24h`, so the two figures can differ. The subject is the engine, `keepalive`, and the item dates
-from the first read of this process that saw it. The detail gives the count, which the dashboard's line reads as
+and a reason that names a divergence never count. The item also leaves out the expiry of an agent that had ended or that
+the companion had released, since the keepalive no longer held its entry. On any other pool or key such an expiry is the
+expected course, since the keepalive probes nothing there. The reader takes the policy and the permission as they stand
+at each read, so an expiry stops counting at the next read once its pool's policy is switched off or its key's
+permission withdrawn, and an expiry from before a policy was switched on counts for up to a day. The count is the
+ledger's, from its hourly rollups, over those requests alone, while `GET /admin/keepalive/overview` answers every pool's
+count as `expired_between_turns_24h`, so the two figures can differ, and both leave out a released agent's expiry, which
+the Cache tab's count of expiries between turns keeps. The subject is the engine, `keepalive`, and the item dates from
+the first read of this process that saw it. The detail gives the count, which the dashboard's line reads as
 `Expired between turns: {n} in 24h` in the warning tone, and the item opens the [Sessions](console.md#sessions) view.
 
 A threshold is a Prometheus rule over the gauge:

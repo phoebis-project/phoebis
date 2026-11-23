@@ -820,6 +820,8 @@ impl Trace {
         cache_ttl_ms: Option<i64>,
         trace: Option<&SelectionTrace>,
         previous_input_tokens: Option<u64>,
+        entry_expired: Option<bool>,
+        agent_released: Option<bool>,
     ) {
         self.publish_fact(Event::AccountSelected(AccountSelected {
             request_id: self.request_id.clone(),
@@ -832,6 +834,8 @@ impl Trace {
             cache_ttl_ms,
             selection: trace.and_then(|t| serde_json::to_string(t).ok()),
             previous_input_tokens,
+            entry_expired,
+            agent_released,
         }))
         .await;
     }
@@ -2231,6 +2235,7 @@ impl Relay {
                     marker: admitted.marker,
                     parent_agent_id: identity.parent_agent_id.clone(),
                     failed_over: None,
+                    pin_ended: false,
                     holds: holds.clone(),
                     dialed,
                     held_out,
@@ -2825,6 +2830,8 @@ impl Relay {
                     // choice worth showing on a request drawer.
                     (admitted.trace.kind != Kind::Probe).then_some(&selection.trace),
                     selection.previous_input_tokens,
+                    selection.entry_expired,
+                    selection.agent_released,
                 )
                 .await;
             // `inject_betas` is what this leg asks for; what the caller already sent is the head builder's to

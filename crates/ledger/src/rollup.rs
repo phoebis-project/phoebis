@@ -40,10 +40,15 @@ pub const NO_EFFORT: &str = "none";
 /// The value a request with no `x-claude-code-request-class` header files under, and a keepalive delta's own.
 pub const NO_CLASS: &str = "-";
 
-/// The reserved key of `cache_miss_reasons` that counts a request whose serving attempt read back under half the size
-/// the selection handed on, under no reason or one of the relay's own words: its cache expired between turns. A group
-/// row reads it as a count of its own.
+/// The reserved key of `cache_miss_reasons` that counts a request whose body carried a cache marker and whose serving
+/// attempt found its entry past its lifetime and read back under half the size the selection handed on, under no
+/// reason or one of the relay's own words: its cache expired between turns. A group row reads it as a count of its own.
 pub const EXPIRED_BETWEEN_TURNS: &str = "expired_between_turns";
+
+/// The reserved key of `cache_miss_reasons` that counts the requests of `EXPIRED_BETWEEN_TURNS` whose agent the
+/// keepalive still held: the pin carried no `ended` when the routing task took the request. The attention item and the
+/// keepalive overview read it through `expired_at`, and a group row takes it out of its reasons.
+pub(crate) const EXPIRED_BETWEEN_TURNS_UNRELEASED: &str = "expired_between_turns_unreleased";
 
 /// The share of its prompt, in percent, that an attempt read from the cache to count as a hit under its reason.
 pub const HIT_SHARE_PERCENT: u64 = 90;
@@ -614,23 +619,27 @@ pub const THROUGHPUT_FLOOR_MS: u64 = 500;
 /// pass computes a stored request's old deltas under the rules it was folded under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FoldRules {
+    /// An expiry between turns needs a cache marker on the body and an entry past its lifetime, and the expiries of the
+    /// agents that were not released count under `EXPIRED_BETWEEN_TURNS_UNRELEASED` too.
+    pub expiry_release: bool,
+    /// A request whose serving attempt read `HIT_SHARE_PERCENT` percent or more of its prompt from the cache counts
+    /// under its miss reason's `<reason>/hit` key too.
+    pub hit_split: bool,
+    /// The three millisecond samples leave out the request's slow-down wait.
+    pub slow_down_hold: bool,
     /// A tokens-per-second sample needs a span of at least `THROUGHPUT_FLOOR_MS`.
     pub throughput_floor: bool,
     /// A sample past 100,000 files in its own bucket of the 84 rather than in bucket 63.
     pub wide_edges: bool,
-    /// The three millisecond samples leave out the request's slow-down wait.
-    pub slow_down_hold: bool,
-    /// A request whose serving attempt read `HIT_SHARE_PERCENT` percent or more of its prompt from the cache counts
-    /// under its miss reason's `<reason>/hit` key too.
-    pub hit_split: bool,
 }
 
 impl FoldRules {
     pub const ALL: FoldRules = FoldRules {
+        expiry_release: true,
+        hit_split: true,
+        slow_down_hold: true,
         throughput_floor: true,
         wide_edges: true,
-        slow_down_hold: true,
-        hit_split: true,
     };
 }
 
@@ -772,10 +781,15 @@ pub(crate) fn deltas_under(
                 .or_default() += 1;
         }
     }
-    if counted && last.is_some_and(|a| expired_between_turns(request, a)) {
+    if let Some(a) = last.filter(|a| counted && expired_between_turns(request, a, rules)) {
         *d.cache_miss_reasons
             .entry(EXPIRED_BETWEEN_TURNS.into())
             .or_default() += 1;
+        if rules.expiry_release && a.agent_released != Some(true) {
+            *d.cache_miss_reasons
+                .entry(EXPIRED_BETWEEN_TURNS_UNRELEASED.into())
+                .or_default() += 1;
+        }
     }
     // A request counts once under each key whatever the key's `blocks`, since the readers count requests.
     if let Some((a, dropped)) = last.and_then(|a| Some((a, a.input_transformations.as_ref()?))) {
@@ -871,9 +885,16 @@ const EXPIRY_REASONS: [&str; 4] = phoebis_relay::RELAY_MISS_REASONS;
 
 /// Whether the cache of `request`'s session expired between its previous request and this one: a request that is
 /// neither a probe nor a token count, whose serving attempt carries a usage report and the size the selection handed
-/// on, read back under half that size, and named no reason or one of `EXPIRY_REASONS`. The selection hands on no size
-/// for a landing on another account and for a compacted, lane-changed or restarted turn, so none of them counts.
-fn expired_between_turns(request: &RequestRecord, serving: &AttemptRecord) -> bool {
+/// on, read back under half that size, and named no reason or one of `EXPIRY_REASONS`. Under `expiry_release` the body
+/// also carried a cache marker and the attempt found its entry past its lifetime, so a short read inside a long entry
+/// and an unmarked helper call never count, and neither does an attempt stored before the selection handed the
+/// lifetime on. The selection hands on no size for a landing on another account and for a compacted, lane-changed or
+/// restarted turn, so none of them counts.
+fn expired_between_turns(
+    request: &RequestRecord,
+    serving: &AttemptRecord,
+    rules: FoldRules,
+) -> bool {
     let Some(previous) = serving.previous_input_tokens else {
         return false;
     };
@@ -885,6 +906,8 @@ fn expired_between_turns(request: &RequestRecord, serving: &AttemptRecord) -> bo
             .cache_miss_reason
             .as_deref()
             .is_none_or(|reason| EXPIRY_REASONS.contains(&reason))
+        && (!rules.expiry_release
+            || (request.cache_marker == Some(true) && serving.entry_expired == Some(true)))
 }
 
 /// The delta of `deltas` at `band`, `speed` and `funding`, pushed as `base` at those cells where none is yet.
@@ -2477,9 +2500,11 @@ fn counts_at(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<BTreeMap<Strin
     Ok(serde_json::from_str(r.get_ref(i)?.as_str()?).unwrap_or_default())
 }
 
+/// The count a row's miss reasons at `i` file under `EXPIRED_BETWEEN_TURNS_UNRELEASED`, so a released agent's expiry
+/// stays out of the attention item and the keepalive overview, which both read it here.
 fn expired_at(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<u64> {
     Ok(counts_at(r, i)?
-        .get(EXPIRED_BETWEEN_TURNS)
+        .get(EXPIRED_BETWEEN_TURNS_UNRELEASED)
         .copied()
         .unwrap_or(0))
 }
@@ -2602,8 +2627,9 @@ pub(crate) fn visit_rollups(
     Ok(())
 }
 
-/// The count every row of `[from_hour, to_hour)` files under `EXPIRED_BETWEEN_TURNS`, and the probe and kept-warm rows
-/// among them in no order, since the overview's fold only sums them and lists no other row.
+/// The count every row of `[from_hour, to_hour)` files under `EXPIRED_BETWEEN_TURNS_UNRELEASED`, the expiries of the
+/// agents the keepalive still held, and the probe and kept-warm rows among them in no order, since the overview's fold
+/// only sums them and lists no other row.
 pub fn read_overview_rollups(
     conn: &Connection,
     from_hour: i64,
@@ -2654,8 +2680,8 @@ pub struct ExpiredBetweenTurns {
     pub expired: u64,
 }
 
-/// The expiries between turns of `[from_hour, to_hour)` by the pool and the key their requests ran under, for a
-/// reader that counts some pools and keys alone.
+/// The expiries between turns of `[from_hour, to_hour)` of the agents the keepalive still held, by the pool and the key
+/// their requests ran under, for a reader that counts some pools and keys alone.
 pub fn read_expired_between_turns(
     conn: &Connection,
     from_hour: i64,
@@ -3262,9 +3288,14 @@ mod tests {
         );
         assert_eq!(d.errors.get("upstream_unreachable"), Some(&1));
         let d = one_delta(
-            &request("failed", Some(429), Some("k")),
+            &RequestRecord {
+                cache_marker: Some(true),
+                ..request("failed", Some(429), Some("k"))
+            },
             &[AttemptRecord {
                 previous_input_tokens: Some(1_000),
+                entry_expired: Some(true),
+                agent_released: Some(false),
                 ..attempt(1, "a", None, Some(3), None)
             }],
             &prices(),
@@ -3303,32 +3334,69 @@ mod tests {
         assert_eq!((d.rate_limited, d.failed), (0, 1));
     }
 
-    /// The serving delta's expired count for a request whose one attempt read `read` back after a previous request of
-    /// 1,000 tokens, under `reason`, the request of `kind`.
-    fn expired_after(kind: &str, reason: Option<&str>, read: u64) -> Option<u64> {
-        one_delta(
+    /// The body's cache marker and the two facts the serving attempt carries, as the expiry count reads them.
+    #[derive(Clone, Copy)]
+    struct ExpiryFacts {
+        cache_marker: Option<bool>,
+        entry_expired: Option<bool>,
+        agent_released: Option<bool>,
+    }
+
+    /// A marked body whose entry was past its lifetime, of an agent the keepalive still held: each fact the count asks.
+    const COUNTED: ExpiryFacts = ExpiryFacts {
+        cache_marker: Some(true),
+        entry_expired: Some(true),
+        agent_released: Some(false),
+    };
+
+    /// The serving delta's counts under `EXPIRED_BETWEEN_TURNS` and `EXPIRED_BETWEEN_TURNS_UNRELEASED` for a request
+    /// whose one attempt read `read` back after a previous request of 1,000 tokens, under `reason`, the request of
+    /// `kind` with `facts`.
+    fn expiries_after(
+        kind: &str,
+        reason: Option<&str>,
+        read: u64,
+        facts: ExpiryFacts,
+    ) -> (Option<u64>, Option<u64>) {
+        let d = one_delta(
             &RequestRecord {
                 kind: kind.into(),
+                cache_marker: facts.cache_marker,
                 ..request("succeeded", Some(200), Some("k"))
             },
             &[AttemptRecord {
                 cache_miss_reason: reason.map(String::from),
                 previous_input_tokens: Some(1_000),
+                entry_expired: facts.entry_expired,
+                agent_released: facts.agent_released,
                 ..attempt(1, "a", Some(read), None, Some(20))
             }],
             &prices(),
+        );
+        (
+            d.cache_miss_reasons.get(EXPIRED_BETWEEN_TURNS).copied(),
+            d.cache_miss_reasons
+                .get(EXPIRED_BETWEEN_TURNS_UNRELEASED)
+                .copied(),
         )
-        .cache_miss_reasons
-        .get(EXPIRED_BETWEEN_TURNS)
-        .copied()
+    }
+
+    /// The first of `expiries_after`'s counts, the one each group row reads.
+    fn expired_after(
+        kind: &str,
+        reason: Option<&str>,
+        read: u64,
+        facts: ExpiryFacts,
+    ) -> Option<u64> {
+        expiries_after(kind, reason, read, facts).0
     }
 
     #[test]
     fn a_turn_that_read_under_half_the_previous_size_expired_between_turns() {
         assert_eq!(
             (
-                expired_after("inference", None, 499),
-                expired_after("inference", None, 500)
+                expired_after("inference", None, 499, COUNTED),
+                expired_after("inference", None, 500, COUNTED)
             ),
             (Some(1), None)
         );
@@ -3337,7 +3405,7 @@ mod tests {
     #[test]
     fn a_reason_that_names_a_divergence_leaves_a_turn_under_half_out_of_the_expired_count() {
         assert_eq!(
-            expired_after("inference", Some("messages_changed"), 100),
+            expired_after("inference", Some("messages_changed"), 100, COUNTED),
             None
         );
     }
@@ -3345,11 +3413,50 @@ mod tests {
     #[test]
     fn a_probe_or_a_token_count_under_half_stays_out_of_the_expired_count() {
         assert_eq!(
-            expired_after("count_tokens", None, 100),
+            expired_after("count_tokens", None, 100, COUNTED),
             None,
             "a token count"
         );
-        assert_eq!(expired_after("probe", None, 100), None, "a probe");
+        assert_eq!(expired_after("probe", None, 100, COUNTED), None, "a probe");
+    }
+
+    #[test]
+    fn a_short_read_counts_an_expiry_only_past_the_entrys_lifetime() {
+        let live = ExpiryFacts {
+            entry_expired: Some(false),
+            ..COUNTED
+        };
+        assert_eq!(
+            (
+                expired_after("inference", None, 499, COUNTED),
+                expired_after("inference", None, 499, live)
+            ),
+            (Some(1), None)
+        );
+    }
+
+    #[test]
+    fn a_short_read_of_a_body_with_no_cache_marker_counts_no_expiry() {
+        let unmarked = ExpiryFacts {
+            cache_marker: Some(false),
+            ..COUNTED
+        };
+        assert_eq!(expired_after("inference", None, 499, unmarked), None);
+    }
+
+    #[test]
+    fn a_released_agents_expiry_counts_under_the_first_key_alone() {
+        let released = ExpiryFacts {
+            agent_released: Some(true),
+            ..COUNTED
+        };
+        assert_eq!(
+            (
+                expiries_after("inference", None, 499, released),
+                expiries_after("inference", None, 499, COUNTED)
+            ),
+            ((Some(1), None), (Some(1), Some(1)))
+        );
     }
 
     /// The `messages_changed/hit` count of a request whose one attempt sent `input` uncached tokens, wrote `write` and

@@ -143,11 +143,12 @@ card's "Use reset", and the Dashboard uses no reset. The keepalive engine's thre
 view: `Keepalive bus gaps: {n} since the start` in the serious tone while the engine missed bus events in the last 24
 hours, `Keepalive cap at {pct}: {cap}` in the warning tone while one of its caps (sessions, agent records or retained
 prompts) stands at 90 percent of its max or more, and `Expired between turns: {n} in 24h` in the warning tone while
-prompt caches expired between turns on a pool whose keepalive policy is on, under a key the keepalive may probe for. A
-parked ledger record adds "Replay parked records", which answers `Landed {n}, {n} still parked`. Where the line is too
-narrow for its lead, the "+N more" badge and that button with its answer together, the button and its answer take a
-second row. The line also reads again when the window regains focus, and a tick or a focus that finds its previous read
-still out is skipped, so a slow read lands and the next tick reads again.
+prompt caches of agents that the keepalive still held expired between turns on a pool whose keepalive policy is on,
+under a key the keepalive may probe for. A parked ledger record adds "Replay parked records", which answers
+`Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its
+answer together, the button and its answer take a second row. The line also reads again when the window regains focus,
+and a tick or a focus that finds its previous read still out is skipped, so a slow read lands and the next tick reads
+again.
 
 Five tiles follow, each reading the 24 whole hours before the current hour and the current hour so far, which its
 sparkline draws as the last point, and a note per hour under a tile reads over the hours covered: "Requests, 24h" with

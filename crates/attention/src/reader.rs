@@ -85,8 +85,8 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// among themselves: an account that reached its wall, a move whose destination was spent within the hour, a pool whose
 /// rounds found no destination with runway, and an account whose requests waited past twice its pool's stretch
 /// threshold in the day, a slow-down that worked for long. The keepalive engine's two warnings rank last: a cap filled
-/// to 90 percent or more, then cache entries that expired between turns on a pool that warms caches, under a key the
-/// keepalive may probe for.
+/// to 90 percent or more, then cache entries that expired between turns while the keepalive still held their agent, on
+/// a pool that warms caches, under a key the keepalive may probe for.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,

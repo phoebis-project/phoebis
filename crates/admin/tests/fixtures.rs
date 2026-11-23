@@ -856,6 +856,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             marker: false,
             parent_agent_id: None,
             failed_over: None,
+            pin_ended: false,
             holds: Vec::new(),
             dialed: false,
             held_out: false,
@@ -895,9 +896,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "thinking_dropped.prefix_binding_mismatch": { "blocks": 2, "first_message": 1 }
             }))
             .unwrap(),
-            // A later turn of the session whose read of 500 falls under half the previous request's prompt, so the
-            // captured list carries the size and the day's figures count one expiry between turns.
+            // A later turn of the session whose read of 500 falls under half the previous request's prompt, past its
+            // entry's lifetime and of an agent the keepalive still held, so the captured list carries the size with the
+            // two facts and the day's figures count one expiry between turns.
             previous_input_tokens: Some(4_000),
+            entry_expired: Some(true),
+            agent_released: Some(false),
             ..attempt("r-1", 1, &selection.account.id, 200, "succeeded", now)
         }],
         bodies: None,
@@ -975,6 +979,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             marker: false,
             parent_agent_id: None,
             failed_over: None,
+            pin_ended: false,
             holds: vec![phoebis_routing::HoldFacts {
                 account_id: "direct".into(),
                 cohort: Some("direct".into()),
@@ -985,6 +990,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 reason: HoldReason::Cap,
                 until: None,
                 waits_for: None,
+                pin_ended: false,
             }],
             dialed: false,
             held_out: false,
@@ -1812,6 +1818,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 marker: false,
                 parent_agent_id: (agent != "main").then(|| "main".into()),
                 failed_over: None,
+                pin_ended: false,
                 holds: Vec::new(),
                 dialed: false,
                 held_out: false,
@@ -2113,6 +2120,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 cache_ttl_ms: None,
                 selection: None,
                 previous_input_tokens: None,
+                entry_expired: None,
+                agent_released: None,
             }));
         parts
             .keepalive
@@ -2264,6 +2273,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             cache_ttl_ms: None,
             selection: None,
             previous_input_tokens: None,
+            entry_expired: None,
+            agent_released: None,
         }));
     parts
         .keepalive
@@ -3398,6 +3409,7 @@ fn asked(
         marker: false,
         parent_agent_id: None,
         failed_over: None,
+        pin_ended: false,
         holds: Vec::new(),
         dialed: false,
         held_out: false,

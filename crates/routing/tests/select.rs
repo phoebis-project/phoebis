@@ -438,6 +438,7 @@ fn select_request(
         marker: false,
         parent_agent_id: None,
         failed_over: None,
+        pin_ended: false,
         holds: Vec::new(),
         dialed: false,
         held_out: false,
@@ -8073,6 +8074,7 @@ fn a_held_subagent_is_held_on_its_cohorts_account() {
             reason: HoldReason::Cap,
             until: None,
             waits_for: None,
+            pin_ended: false,
         },
     );
 }
@@ -8415,6 +8417,7 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
                 reason: HoldReason::Cap,
                 until: None,
                 waits_for: None,
+                pin_ended: false,
             }],
             ..subagent(
                 request(&s, Some("session"), "claude-sonnet-5", true, &["a"], 1_500),
@@ -8440,6 +8443,7 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
             reason: HoldReason::Cap,
             until: None,
             waits_for: None,
+            pin_ended: false,
         },
     );
 
@@ -8479,6 +8483,7 @@ fn a_cohort_hold_names_every_account_waited_on_the_last_cohort_and_the_waits_sum
         reason: HoldReason::Cap,
         until: None,
         waits_for: None,
+        pin_ended: false,
     };
     assert_eq!(
         cohort_hold(&[]),
@@ -10366,6 +10371,7 @@ fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
             reason: HoldReason::Cap,
             until: None,
             waits_for: None,
+            pin_ended: false,
         }),
         "b is the one priority would have chosen"
     );
@@ -10414,6 +10420,7 @@ fn a_held_round_robin_selection_leaves_the_turn_with_the_account_it_named() {
             reason: HoldReason::Cap,
             until: None,
             waits_for: None,
+            pin_ended: false,
         }),
         "the round starts at a"
     );
@@ -10486,6 +10493,7 @@ fn the_cap_binds_before_the_fit_so_a_free_account_without_runway_takes_the_place
             reason: HoldReason::Cap,
             until: None,
             waits_for: None,
+            pin_ended: false,
         }),
         "with both at their cap the request is held on the one the fit keeps"
     );
@@ -12837,6 +12845,38 @@ fn a_compacted_turn_hands_on_no_size_on_a_live_pin_or_after_an_idle_expiry() {
     assert_eq!(
         (compacted("s-live"), compacted("s-back")),
         (("a".to_string(), None), ("a".to_string(), None))
+    );
+}
+
+/// Both pins were used a second before `T` under a five-minute TTL: `s-past` was last refreshed six minutes back and
+/// `s-warm` four minutes back.
+#[test]
+fn a_pin_hands_on_its_entrys_expiry_by_its_last_refresh() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![
+        PinRow {
+            last_refresh_at: T - 360_000,
+            ..seeded_pin("s-past", "a", T)
+        },
+        PinRow {
+            last_refresh_at: T - 240_000,
+            ..seeded_pin("s-warm", "a", T)
+        },
+    ]);
+    let mut expired =
+        |session: &str| match select(&mut st, &s, &main_turn(&s, session, T), &mut rng()).0 {
+            SelectResult::Selected(sel) => (sel.account.id, sel.entry_expired),
+            other => panic!("expected a selection, got {other:?}"),
+        };
+    assert_eq!(
+        (expired("s-past"), expired("s-warm")),
+        (
+            ("a".to_string(), Some(true)),
+            ("a".to_string(), Some(false))
+        )
     );
 }
 
@@ -17610,6 +17650,7 @@ fn a_refusal_the_task_records_carries_the_request_s_attempted_accounts_and_holds
         reason: HoldReason::Cap,
         until: None,
         waits_for: None,
+        pin_ended: false,
     };
     let req = SelectRequest {
         seq: 3,
@@ -18301,6 +18342,7 @@ fn a_placement_after_a_cohort_hold_reads_by_cohort_and_the_wait() {
             reason: HoldReason::Cap,
             until: None,
             waits_for: None,
+            pin_ended: false,
         }],
         ..static_req(&s, &["s1"])
     };
@@ -18369,6 +18411,7 @@ fn a_session_pin_placement_after_a_hold_reads_the_wait_beside_the_in_flight_coun
             reason: HoldReason::Cap,
             until: None,
             waits_for: None,
+            pin_ended: false,
         }],
         ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
     };
@@ -18420,6 +18463,7 @@ fn a_session_pin_placement_with_no_wait_reads_the_in_flight_count_alone() {
             reason: HoldReason::Cap,
             until: None,
             waits_for: None,
+            pin_ended: false,
         }],
         ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
     };
@@ -18455,6 +18499,7 @@ fn after_a_wait_on_a(
             reason: HoldReason::Cap,
             until: None,
             waits_for: None,
+            pin_ended: false,
         }],
         held_out: ran_out,
         ..request(s, None, "claude-sonnet-5", true, attempted, T)
@@ -19798,6 +19843,7 @@ fn a_hold_books_nothing_and_the_selection_after_it_books_for_the_request() {
             reason: HoldReason::Cap,
             until: None,
             waits_for: None,
+            pin_ended: false,
         }],
         ..req
     };
@@ -21352,6 +21398,7 @@ fn a_spent_pin_waits_in_place_for_a_reset_inside_the_retry_bound_and_moves_past_
             reason: HoldReason::Reset,
             until: Some(T + 30_000),
             waits_for: None,
+            pin_ended: false,
         }),
         "a reset 30 s out under a bound of 60 s holds the request on its own account"
     );
@@ -24399,6 +24446,7 @@ fn a_pins_cycle_folds_from_its_arrivals_and_an_exempt_class_folds_nothing() {
             reason: HoldReason::SlowDown,
             until: Some(T + 49_000),
             waits_for: None,
+            pin_ended: false,
         }],
         ..main_turn(&s, "s1", T + 49_000)
     };
@@ -24811,6 +24859,7 @@ fn a_slowed_pins_main_turn_is_held_for_its_cycle_over_the_factor_before_the_rene
                 reason: HoldReason::SlowDown,
                 until: Some(until),
                 waits_for: None,
+                pin_ended: false,
             }
         )
     );
@@ -31303,6 +31352,7 @@ fn a_renewal_after_a_rewrite_wait_dates_the_pins_dispatch_at_the_release() {
             reason: HoldReason::Rewrite,
             until: Some(rewrite_bound(moved_at)),
             waits_for: Some("r-1".into()),
+            pin_ended: false,
         }]
     );
     assert_eq!(

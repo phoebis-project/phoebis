@@ -821,6 +821,8 @@ impl Rig {
             cache_ttl_ms: None,
             selection: None,
             previous_input_tokens: None,
+            entry_expired: None,
+            agent_released: None,
         })
     }
 

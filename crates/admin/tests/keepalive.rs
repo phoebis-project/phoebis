@@ -434,6 +434,8 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes() {
             cache_ttl_ms: None,
             selection: None,
             previous_input_tokens: None,
+            entry_expired: None,
+            agent_released: None,
         },
     ));
     parts.keepalive.observe(phoebis_bus::Event::RequestComplete(
@@ -791,6 +793,8 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
             cache_ttl_ms: None,
             selection: None,
             previous_input_tokens: None,
+            entry_expired: None,
+            agent_released: None,
         },
     ));
     parts.keepalive.observe(phoebis_bus::Event::RequestComplete(
@@ -1027,8 +1031,9 @@ async fn the_overviews_expired_count_sums_every_row_of_the_day_the_inference_row
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
-    // A serving attempt under the reason `none` that reads none of the previous request's 1,000 tokens back files one
-    // expiry. The two pools file two rows, the first holding two requests.
+    // A marked body's serving attempt under the reason `none`, past its entry's lifetime and of an agent the keepalive
+    // still held, that reads none of the previous request's 1,000 tokens back files one expiry. The two pools file two
+    // rows, the first holding two requests.
     parts
         .db
         .write(|c| {
@@ -1047,6 +1052,7 @@ async fn the_overviews_expired_count_sums_every_row_of_the_day_the_inference_row
                         kind: "inference".into(),
                         outcome: "succeeded".into(),
                         status: Some(200),
+                        cache_marker: Some(true),
                         ..Default::default()
                     },
                     &[phoebis_ledger::AttemptRecord {
@@ -1057,6 +1063,8 @@ async fn the_overviews_expired_count_sums_every_row_of_the_day_the_inference_row
                         input_tokens: Some(10),
                         cache_miss_reason: Some("none".into()),
                         previous_input_tokens: Some(1_000),
+                        entry_expired: Some(true),
+                        agent_released: Some(false),
                         ..Default::default()
                     }],
                     None,
@@ -1191,6 +1199,8 @@ impl<'a> Companion<'a> {
                     cache_ttl_ms: None,
                     selection: None,
                     previous_input_tokens: None,
+                    entry_expired: None,
+                    agent_released: None,
                 },
             ));
         self.parts
@@ -1499,6 +1509,8 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
             cache_ttl_ms: None,
             selection: None,
             previous_input_tokens: None,
+            entry_expired: None,
+            agent_released: None,
         },
     ));
     parts.keepalive.observe(phoebis_bus::Event::RequestComplete(

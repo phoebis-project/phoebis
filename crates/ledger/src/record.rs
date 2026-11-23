@@ -260,6 +260,12 @@ pub struct AttemptRecord {
     /// The prompt size of the session's previous request as the selection handed it on, the size the expiry count
     /// halves. `None` where the selection handed none on and for an attempt from before the column.
     pub previous_input_tokens: Option<u64>,
+    /// Whether the pin's cache entry was past its lifetime at the selection, as the selection handed it on beside the
+    /// size. `None` where it handed no size on and for an attempt from before the column.
+    pub entry_expired: Option<bool>,
+    /// Whether the pin carried `ended` when the routing task took the request, as the selection handed it on beside the
+    /// size. `None` where it handed no size on and for an attempt from before the column.
+    pub agent_released: Option<bool>,
 }
 
 impl AttemptRecord {

@@ -3589,6 +3589,8 @@ fn headed(
             cache_ttl_ms: None,
             selection: None,
             previous_input_tokens: None,
+            entry_expired: None,
+            agent_released: None,
         }),
         Event::ResponseHead(phoebis_bus::ResponseHead {
             request_id: id.into(),

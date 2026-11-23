@@ -118,6 +118,10 @@ pub struct SelectRequest {
     /// its last use, which the routing task hands to the selection that lands the session again, `None` for every
     /// other request.
     pub failed_over: Option<FailedOver>,
+    /// Whether the request's pin carried `ended` when the routing task took the request, read ahead of the clear that
+    /// the agent's own request makes, or carried by a hold of this request. The routing task sets it, as it sets
+    /// `failed_over`, and each other caller sends false.
+    pub pin_ended: bool,
     /// Whether a leg of this request was already dispatched, as the relay reads it: true once a selection placed a
     /// leg, whether or not that leg reached the wire. `attempted` cannot stand in for it, since an account whose hold
     /// ran out, or one passed over at its cap, is attempted with nothing dialed.
@@ -276,6 +280,10 @@ pub struct HoldFacts {
     /// The request whose head the hold waits for. `Some` under `rewrite`, `None` under the other reasons.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waits_for: Option<String>,
+    /// Whether the held request's pin carried `ended` ahead of the routing task's clear. The relay carries it into the
+    /// selection behind the wait, whose row no longer shows it. The serializer skips it, so no stored record holds it.
+    #[serde(skip)]
+    pub pin_ended: bool,
 }
 
 /// One wait of a request, oldest first: `cap`, `reset`, `slow_down` or `rewrite` and how long it lasted.
@@ -595,6 +603,12 @@ pub struct Selection {
     /// turn is none of `compacted`, `lane_changed` and `static_restart`. `None` in every other case: no pin row at
     /// step 1, a row that has seen no usage report, a landing on another account and the three turns.
     pub previous_input_tokens: Option<u64>,
+    /// Whether the cache entry of the pin row step 1 read was past its lifetime at the request, before the request's
+    /// own refresh. `None` wherever `previous_input_tokens` is `None`.
+    pub entry_expired: Option<bool>,
+    /// Whether that row carried `ended` when the routing task took the request, which `SelectRequest::pin_ended` tells.
+    /// `None` wherever `previous_input_tokens` is `None`.
+    pub agent_released: Option<bool>,
 }
 
 /// A classifier call's standing against the turn it judges: the upstream keeps the call free on the account and
@@ -1776,9 +1790,9 @@ fn run(
     let mut expired: Option<PinKey> = None;
     // The key step 1 reads under, whose row the placement's own fit and Pace score leave out of the account's burn.
     let mut own_key: Option<PinKey> = None;
-    // The account of the row step 1 read, with the size it hands on, whatever its `found`: a turn after an idle expiry
-    // that lands back on the account reads its cache against that size.
-    let mut row_size: Option<(String, u64)> = None;
+    // The account of the row step 1 read, with what it hands on, whatever its `found`: a turn after an idle expiry that
+    // lands back on the account reads its cache against that size.
+    let mut row_size: Option<(String, (u64, bool, bool))> = None;
     let mut row_warmth: Option<(Warmth, WarmthCause)> = None;
     if let Some(session) = session {
         let key = request.pin_key();
@@ -1863,8 +1877,8 @@ fn run(
                 &state.affinity().read().expect("affinity lock poisoned"),
             );
             row_warmth = Some(judged);
-            row_size = handed_size(current.last_input_tokens, judged.1)
-                .map(|size| (current.account_id.clone(), size));
+            row_size = handed_row(&current, request.pin_ended, judged.1, request.now)
+                .map(|handed| (current.account_id.clone(), handed));
             // The row's own key, never `key`: the pace and the head mark read a key as the row spells it.
             let current_key = current.key();
             // A turn of a held class folds its arrival into the pin's cycle under the live row's key, which a move
@@ -2837,6 +2851,9 @@ fn run(
         // placement itself is proof enough that it serves.
         trace_skipped.retain(|s| s.account_id != chosen.account_id);
     }
+    let row_handed = row_size
+        .filter(|(account, _)| *account == chosen.account_id)
+        .map(|(_, handed)| handed);
     (
         SelectResult::Selected(Selection {
             account: selected_row(snapshot, &chosen.account_id),
@@ -2859,9 +2876,9 @@ fn run(
             pool_id: pool.id.clone(),
             left,
             judged: None,
-            previous_input_tokens: row_size
-                .filter(|(account, _)| *account == chosen.account_id)
-                .map(|(_, size)| size),
+            previous_input_tokens: row_handed.map(|(size, _, _)| size),
+            entry_expired: row_handed.map(|(_, expired, _)| expired),
+            agent_released: row_handed.map(|(_, _, released)| released),
         }),
         writes,
     )
@@ -2875,6 +2892,19 @@ fn handed_size(last_input_tokens: u64, cause: WarmthCause) -> Option<u64> {
         WarmthCause::Compacted | WarmthCause::LaneChanged | WarmthCause::StaticRestart => None,
         _ => (last_input_tokens > 0).then_some(last_input_tokens),
     }
+}
+
+/// What a selection that lands on the account of the pin row step 1 read hands on to the expiry count: the size as
+/// `handed_size` answers it, whether the row's entry was past its lifetime at `now`, and `ended`, whether the pin
+/// carried `ended` when the routing task took the request. The row no longer tells that: the task clears it ahead of
+/// the selection. `None` wherever the size is.
+fn handed_row(
+    row: &PinRow,
+    ended: bool,
+    cause: WarmthCause,
+    now: i64,
+) -> Option<(u64, bool, bool)> {
+    handed_size(row.last_input_tokens, cause).map(|size| (size, !warm(row, now), ended))
 }
 
 /// Takes the row step 1 found idle past the TTL or left behind by its pool off the state, ahead of the pin that
@@ -4006,6 +4036,7 @@ pub(crate) fn fresh_fit(
         parent_agent_id: None,
         holds: Vec::new(),
         failed_over: None,
+        pin_ended: false,
         dialed: false,
         held_out: false,
         lane: String::new(),
@@ -5184,6 +5215,7 @@ fn hold_facts(
         reason,
         until,
         waits_for,
+        pin_ended: request.pin_ended,
     }
 }
 
@@ -5837,6 +5869,7 @@ fn standing_request(pin: &PinRow) -> SelectRequest {
         parent_agent_id: None,
         holds: Vec::new(),
         failed_over: None,
+        pin_ended: false,
         dialed: false,
         held_out: false,
         lane: pin.lane.clone(),
@@ -6925,6 +6958,7 @@ fn renew(
     if rec.trigger_windows.is_empty() {
         rec.trigger_windows = trigger_windows(state, snapshot, pool, &current.account_id);
     }
+    let row_handed = handed_row(current, request.pin_ended, cause, now);
     Selection {
         account: selected_row(snapshot, &current.account_id),
         upstream_model: candidate.upstream_model.clone(),
@@ -6943,7 +6977,9 @@ fn renew(
             .filter(|account| *account != current.account_id)
             .map(String::from),
         judged: None,
-        previous_input_tokens: handed_size(current.last_input_tokens, cause),
+        previous_input_tokens: row_handed.map(|(size, _, _)| size),
+        entry_expired: row_handed.map(|(_, expired, _)| expired),
+        agent_released: row_handed.map(|(_, _, released)| released),
     }
 }
 
@@ -9521,6 +9557,7 @@ mod banded_tests {
             parent_agent_id: None,
             holds: Vec::new(),
             failed_over: None,
+            pin_ended: false,
             dialed: false,
             held_out: false,
             lane: lane_key(model, "standard", "none", "-"),

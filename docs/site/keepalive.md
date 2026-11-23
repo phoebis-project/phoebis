@@ -466,8 +466,9 @@ since no account answered it.
 into the probes served, the requests they kept warm and the wasted probes by reason, beside the pool's [idle-age
 counters](#the-return-rate-by-idle-age). It also answers the engine's session count, agent count and retained bytes,
 each beside its cap, and `expired_between_turns_24h`, the requests of the last 24 hours that missed the cache because
-their entry expired between two turns, the misses probing exists to prevent: each read back under half the prompt of the
-session's previous request on the same account, under no miss reason or one of the router's own words
+their entry expired between two turns, the misses probing exists to prevent: each carried a cache marker, arrived after
+its entry's lifetime and read back under half the prompt of the session's previous request on the same account, under no
+miss reason or one of the router's own words, and the count leaves out the agents that had ended or been released
 ([`expired_between_turns`](statistics.md#conditions-and-gauges) names the turns left out). Its `bus_gaps` counts the
 times the engine found it had missed bus events. Each gap discarded every observation still open, so those agents wait
 for their next request while an armed recipe keeps its schedule.
@@ -485,12 +486,12 @@ or `cold` past it, with that summary's state word under it. A row's expanded det
 with the sentence of each on hover, and its Cache warming details read each agent's TTL, last request, last and next
 probe, and the probes sent and the requests they kept warm since midnight UTC (see [Sessions](console.md#sessions)). The
 Dashboard's Sessions card reads the engine under "Keepalive engine": the sessions, the agent records and the retained
-bytes against their caps, the cache probes of the last 24 hours by outcome, and the requests that expired between turns
-in that day beside the bus gaps since the start (see [Dashboard](console.md#dashboard)). A pool card that keeps caches
-warm reads the pool's three resolved ceilings after its `keepalive` chip, and the pool dialog's Keepalive group reads,
-under each field, the break-even a ceiling left off resolves to and the figure in effect under one switched on past it
-(see [Pools](console.md#pools)). The Analytics view's Cache warming tab draws the probes by outcome and the wasted
-probes by reason (see [Analytics](console.md#analytics)).
+bytes against their caps, the cache probes of the last 24 hours by outcome, and the requests whose entry expired between
+turns in that day while the keepalive still held their agent, beside the bus gaps since the start (see
+[Dashboard](console.md#dashboard)). A pool card that keeps caches warm reads the pool's three resolved ceilings after
+its `keepalive` chip, and the pool dialog's Keepalive group reads, under each field, the break-even a ceiling left off
+resolves to and the figure in effect under one switched on past it (see [Pools](console.md#pools)). The Analytics view's
+Cache warming tab draws the probes by outcome and the wasted probes by reason (see [Analytics](console.md#analytics)).
 
 A session's row reads main's conversation pin, the newest by last use where main holds two, else the newest conversation
 pin of another agent of the session, else no pin, and never a pin only auxiliary requests have used, such as the one a

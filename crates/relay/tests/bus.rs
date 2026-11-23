@@ -1239,6 +1239,45 @@ async fn a_second_turn_on_its_pins_account_files_the_first_answers_prompt_size_o
     up.shutdown().await;
 }
 
+/// The first answer reports 1,200 prompt tokens, which the pin row keeps. The companion then releases the session's
+/// agent, and its next turn comes back well inside the entry's lifetime.
+#[tokio::test]
+async fn a_released_agents_next_turn_files_the_release_and_a_live_entry_on_its_attempt() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(
+        A,
+        "/v1/messages",
+        json_answer(
+            200,
+            r#"{"id":"msg_first","type":"message","content":[],"usage":{"input_tokens":1200,"output_tokens":1}}"#,
+        ),
+    );
+    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_second"));
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let turn = || request_for(KEY, "claude-sonnet-4-5", "s-released");
+    served_attempt_of(&h, &mut sub, turn()).await;
+    let pin = wait_for_async(Duration::from_secs(5), || async {
+        let pins = h.router.pins().await.ok()?;
+        pins.into_iter().find(|pin| pin.last_input_tokens == 1_200)
+    })
+    .await;
+    h.router
+        .report(phoebis_routing::Report::AgentEnded {
+            key_id: pin.key_id,
+            session_id: pin.session_id,
+            agent_id: pin.agent_id,
+        })
+        .await;
+    let second = served_attempt_of(&h, &mut sub, turn()).await;
+    assert_eq!(
+        (second.entry_expired, second.agent_released),
+        (Some(false), Some(true))
+    );
+    up.shutdown().await;
+}
+
 /// The fixture body carries its own cache breakpoints, and the same body stripped of them carries none, which the
 /// pool's TTL policy, off by default, adds none to.
 #[tokio::test]

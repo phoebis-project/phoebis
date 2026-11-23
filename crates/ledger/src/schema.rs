@@ -515,8 +515,13 @@ const STEP_5: &str = "CREATE TABLE feature_calls (
 CREATE INDEX feature_calls_received ON feature_calls (received_at, id);
 CREATE INDEX feature_calls_key ON feature_calls (key_id, received_at);";
 
-/// Step 6 drops the migrated probe count of an hour, which no build wrote above zero.
-const STEP_6: &str = "ALTER TABLE rollups_hourly DROP COLUMN probe_migrated";
+/// Step 6 drops the migrated probe count of an hour, which no build wrote above zero. `attempts.entry_expired` and
+/// `attempts.agent_released` hold the two facts the selection hands on beside the size, null on an attempt stored
+/// before the step.
+const STEP_6: &str = "\
+    ALTER TABLE rollups_hourly DROP COLUMN probe_migrated; \
+    ALTER TABLE attempts ADD COLUMN entry_expired INTEGER; \
+    ALTER TABLE attempts ADD COLUMN agent_released INTEGER";
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.

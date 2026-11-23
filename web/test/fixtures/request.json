@@ -97,6 +97,8 @@
           "ttft_ms": null,
           "cache_miss_reason": "none",
           "previous_input_tokens": null,
+          "entry_expired": null,
+          "agent_released": null,
           "service_tier": null,
           "client_drift": null,
           "cooldown_set": {
@@ -166,6 +168,8 @@
           "ttft_ms": null,
           "cache_miss_reason": "not_returned",
           "previous_input_tokens": null,
+          "entry_expired": null,
+          "agent_released": null,
           "service_tier": null,
           "client_drift": null,
           "cooldown_set": null,

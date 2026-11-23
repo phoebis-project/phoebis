@@ -2158,6 +2158,8 @@ async fn a_running_total_without_the_split_keeps_the_hour() {
             cache_ttl_ms: Some(ONE_HOUR_MS),
             selection: None,
             previous_input_tokens: None,
+            entry_expired: None,
+            agent_released: None,
         })
     };
     let phase = |id: &str, phase: phoebis_bus::Phase| {

@@ -644,8 +644,9 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
     );
 }
 
-/// Lands a request of pool `main` under `key` whose serving attempt read nothing back of the previous request's 1,000
-/// tokens under the miss reason `none`, which its rollup row counts as an expiry between turns.
+/// Lands a request of pool `main` under `key` whose marked body found its entry past its lifetime, and whose serving
+/// attempt read nothing back of the previous request's 1,000 tokens under the miss reason `none`, an agent the
+/// keepalive still held: its rollup row counts an expiry between turns.
 fn land_expiry(db: &LedgerDb, id: &str, received_at: i64, key: &str) {
     db.insert_request_at(
         &RequestRecord {
@@ -659,6 +660,7 @@ fn land_expiry(db: &LedgerDb, id: &str, received_at: i64, key: &str) {
             origin: "client".into(),
             outcome: "succeeded".into(),
             attempts: 1,
+            cache_marker: Some(true),
             ..Default::default()
         },
         &[AttemptRecord {
@@ -671,6 +673,8 @@ fn land_expiry(db: &LedgerDb, id: &str, received_at: i64, key: &str) {
             cache_read_tokens: Some(0),
             cache_miss_reason: Some("none".into()),
             previous_input_tokens: Some(1_000),
+            entry_expired: Some(true),
+            agent_released: Some(false),
             ..Default::default()
         }],
         None,
@@ -702,5 +706,31 @@ fn the_expiry_read_sums_a_pool_and_keys_rows_across_hours() {
             (("main".to_string(), "laptop".to_string()), 1),
         ]),
         "the pair with an expiry in each of two hours counts both"
+    );
+}
+
+/// The group reads the expiry as a count of its own, and its miss reasons keep the reason the attempt named alone.
+#[test]
+fn a_group_read_keeps_the_unreleased_key_out_of_the_miss_reasons() {
+    let (db, _dir) = common::temp_ledger();
+    let at = 1_700_000_000_000;
+    land_expiry(&db, "r1", at, "desktop");
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let groups = breakdown(
+        &rows,
+        phoebis_ledger::GroupBy::Pool,
+        false,
+        &LiveKeys::default(),
+        &[],
+        &phoebis_ledger::test_tables::api_prices(),
+        &phoebis_ledger::test_tables::subscription_costs(),
+        at,
+    );
+    let main = groups.iter().find(|g| g.key == "main").unwrap();
+    assert_eq!(
+        (main.expired_between_turns, main.cache_miss_reasons.clone()),
+        (1, BTreeMap::from([("none".to_string(), 1)]))
     );
 }

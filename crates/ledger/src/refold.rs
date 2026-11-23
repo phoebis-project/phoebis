@@ -16,11 +16,12 @@
 //! keep the band they settled or were recorded in, which leaves the waste of a probe whose prompt falls between the old
 //! and the new threshold, inside the retained window, priced at the band it settled in.
 //!
-//! A fold rule (the hits split off under each miss reason, the slow-down's hold left out of the millisecond samples,
-//! the tokens-per-second floor, the wide edge set) changes what a request adds to its hour, so the first start of a
-//! build that holds a rule folds again each retained request that landed before the rule's mark: its deltas under the
-//! rules it was folded under come out and its deltas under every rule go in, at the thresholds its rows stand under.
-//! That pass runs before the band re-fold and resumes from a cursor of its own.
+//! A fold rule (the expiry between turns read against the body's cache marker, the entry's lifetime and the agent's
+//! release, the hits split off under each miss reason, the slow-down's hold left out of the millisecond samples, the
+//! tokens-per-second floor, the wide edge set) changes what a request adds to its hour, so the first start of a build
+//! that holds a rule folds again each retained request that landed before the rule's mark: its deltas under the rules
+//! it was folded under come out and its deltas under every rule go in, at the thresholds its rows stand under. That
+//! pass runs before the band re-fold and resumes from a cursor of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
@@ -50,6 +51,7 @@ pub const FOLD_RULES_REFOLD_KEY: &str = "fold_rules_refold";
 /// A fold rule, named by `as_str` in its `meta` row's key and in a rules cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FoldRule {
+    ExpiryRelease,
     HitSplit,
     SlowDownHold,
     ThroughputFloor,
@@ -57,7 +59,8 @@ enum FoldRule {
 }
 
 impl FoldRule {
-    const EVERY: [FoldRule; 4] = [
+    const EVERY: [FoldRule; 5] = [
+        FoldRule::ExpiryRelease,
         FoldRule::HitSplit,
         FoldRule::SlowDownHold,
         FoldRule::ThroughputFloor,
@@ -66,6 +69,7 @@ impl FoldRule {
 
     fn as_str(self) -> &'static str {
         match self {
+            FoldRule::ExpiryRelease => "expiry_release",
             FoldRule::HitSplit => "hit_split",
             FoldRule::SlowDownHold => "slow_down_hold",
             FoldRule::ThroughputFloor => "throughput_floor",
@@ -83,6 +87,10 @@ impl FoldRule {
     /// The rules a request folded without this one was folded under, from the rules a fold applied.
     fn without(self, rules: FoldRules) -> FoldRules {
         match self {
+            FoldRule::ExpiryRelease => FoldRules {
+                expiry_release: false,
+                ..rules
+            },
             FoldRule::HitSplit => FoldRules {
                 hit_split: false,
                 ..rules
@@ -841,7 +849,9 @@ mod tests {
     use crate::pricing::{Band, PriceTable, Speed};
     use crate::query::{member_spends, BudgetedMember};
     use crate::record::{AttemptRecord, RequestRecord};
-    use crate::rollup::{read_rollups, RollupRow, RollupSelect, LONG_BAND, STANDARD_BAND};
+    use crate::rollup::{
+        read_rollups, RollupRow, RollupSelect, EXPIRED_BETWEEN_TURNS, LONG_BAND, STANDARD_BAND,
+    };
     use phoebis_store::AccountKind;
 
     const HAIKU: &str = "claude-haiku-5-5";
@@ -1532,10 +1542,11 @@ mod tests {
 
     /// The fold of a build that held none of the rules.
     const NO_RULES: FoldRules = FoldRules {
+        expiry_release: false,
+        hit_split: false,
+        slow_down_hold: false,
         throughput_floor: false,
         wide_edges: false,
-        slow_down_hold: false,
-        hit_split: false,
     };
 
     /// `request` written with its landing stamp from `now` and folded under `rules` at the thresholds of `prices`,
@@ -1620,6 +1631,28 @@ mod tests {
         let folded = histograms(row(&db, at, STANDARD_BAND));
         refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
         assert_eq!(histograms(row(&db, at, STANDARD_BAND)), folded);
+    }
+
+    /// A marked request whose attempt read nothing back of the previous request's 1,000 tokens and holds neither fact
+    /// the selection hands on beside the size, as an attempt stored before the two columns does.
+    #[test]
+    fn the_rules_pass_takes_back_an_expiry_that_was_counted_without_the_two_facts() {
+        let (db, _dir) = crate::db::open_temp();
+        let at = NEW_YEAR + DAY;
+        let (mut request, mut attempts) = haiku("r", at, 100);
+        request.cache_marker = Some(true);
+        attempts[0].previous_input_tokens = Some(1_000);
+        store(&db, &(request, attempts), &list(Some(1_000)), NO_RULES, 0);
+        let expired = |db: &LedgerDb| {
+            row(db, at, STANDARD_BAND)
+                .cache_miss_reasons
+                .get(EXPIRED_BETWEEN_TURNS)
+                .copied()
+        };
+        assert_eq!(expired(&db), Some(1), "a fold without the rule counts it");
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
+        assert_eq!(expired(&db), None);
     }
 
     /// One start with a moved threshold and an open rule: the held request's 1,500 prompt tokens fell in the long

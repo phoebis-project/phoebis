@@ -173,6 +173,7 @@ fn request(
         marker: false,
         parent_agent_id: None,
         failed_over: None,
+        pin_ended: false,
         holds: Vec::new(),
         dialed: false,
         held_out: false,
@@ -1143,6 +1144,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             marker: false,
             parent_agent_id: None,
             failed_over: None,
+            pin_ended: false,
             holds: Vec::new(),
             dialed: false,
             held_out: false,
@@ -1284,6 +1286,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             marker: false,
             parent_agent_id: None,
             failed_over: None,
+            pin_ended: false,
             holds: Vec::new(),
             dialed: false,
             held_out: false,
@@ -15991,6 +15994,98 @@ async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_end
             .any(|event| matches!(event, RouterEvent::SlowDownEnded { .. })),
         "the span ends once"
     );
+}
+
+/// Two live pins on `a`, each with 1,000 tokens of prompt: `s-ended`'s row carries the mark of an agent that ended,
+/// `s-live`'s none. Each session's own request is the agent's return, which clears the mark.
+#[tokio::test]
+async fn a_row_that_carries_ended_hands_on_the_release() {
+    let now = Arc::new(AtomicI64::new(AT));
+    let store = seeded(&["a"]);
+    store
+        .upsert_pin(&PinRow {
+            ended: true,
+            ..stored_pin(&store, "s-ended", "a", 1, 0.0)
+        })
+        .unwrap();
+    store
+        .upsert_pin(&stored_pin(&store, "s-live", "a", 2, 0.0))
+        .unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut released = Vec::new();
+    for session in ["s-ended", "s-live"] {
+        match handle
+            .select(request(&handle, Some(session), AT))
+            .await
+            .unwrap()
+            .result
+        {
+            SelectResult::Selected(sel) => released.push((sel.account.id, sel.agent_released)),
+            other => panic!("the pin renews: {other:?}"),
+        }
+    }
+    assert_eq!(
+        released,
+        [
+            ("a".to_string(), Some(true)),
+            ("a".to_string(), Some(false))
+        ]
+    );
+}
+
+/// `slowed_router`'s session takes its two turns, then the companion releases its agent, and the turn after the release
+/// waits its part of the slow-down: the routing task cleared the mark ahead of that first pass, so the second pass,
+/// which carries the hold as the relay does, finds the row unmarked.
+#[tokio::test]
+async fn a_release_rides_a_hold_to_the_landing_behind_it() {
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = slowed_router(&now).await;
+    handle
+        .select(SelectRequest {
+            request_class: Some("quota".into()),
+            ..slowed_turn(&handle, "r-0", AT - SLOWED_AVERAGE_MS)
+        })
+        .await
+        .unwrap();
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+    handle
+        .report(Report::AgentEnded {
+            key_id: "k".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+        })
+        .await;
+    let t2 = AT + 30_000;
+    now.store(t2, Ordering::SeqCst);
+    let req = slowed_turn(&handle, "r-2", t2);
+    let hold = match handle.select(req.clone()).await.unwrap().result {
+        SelectResult::Held(hold) => hold,
+        other => panic!("the pin with a cycle waits: {other:?}"),
+    };
+    assert_eq!(hold.reason, HoldReason::SlowDown);
+    let until = hold
+        .until
+        .expect("a slow-down hold names the pin's deadline");
+    now.store(until, Ordering::SeqCst);
+    let carried = SelectRequest {
+        seq: 2,
+        now: until,
+        holds: vec![HoldFacts {
+            held_ms: (until - t2) as u64,
+            ..hold
+        }],
+        ..req
+    };
+    match handle.select(carried).await.unwrap().result {
+        SelectResult::Selected(sel) => assert_eq!(
+            (sel.account.id.as_str(), sel.agent_released),
+            ("a", Some(true))
+        ),
+        other => panic!("the request that waited renews: {other:?}"),
+    }
 }
 
 #[tokio::test]

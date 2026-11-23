@@ -90,12 +90,13 @@ pub(crate) struct AttentionItem {
     /// `keepalive_bus_gaps` carries `gaps` (the engine's gaps since the start) and `last_at` (the last gap's instant),
     /// `keepalive_cap` carries `cap` (`sessions`, `agents` or `retained`), `count`, `max` and `pct` (`count` over `max`
     /// as a fraction, 0 where `max` is 0), and `expired_between_turns` carries `expired` (the cache entries that
-    /// expired between turns in the trailing 24 hours on a pool whose keepalive policy is on, under a key that holds
-    /// the `keepalive` permission). `feature_account_unavailable` carries `account`, `label`, `obstacle` (`ended` for
-    /// an account past its subscription's end, `unready` for a stored state other than ready) and `selections`, one
-    /// entry per selection that names the account with `feature` (`artifacts` or `connectors`), `key` (the key whose
-    /// own selection it is, null for a pool's) and `pool` (the selecting pool, or the key's pool), ordered by pool, a
-    /// pool's own ahead of its keys', then by key and by feature.
+    /// expired between turns in the trailing 24 hours while the keepalive still held their agent, on a pool whose
+    /// keepalive policy is on, under a key that holds the `keepalive` permission). `feature_account_unavailable`
+    /// carries `account`, `label`, `obstacle` (`ended` for an account past its subscription's end, `unready` for a
+    /// stored state other than ready) and `selections`, one entry per selection that names the account with `feature`
+    /// (`artifacts` or `connectors`), `key` (the key whose own selection it is, null for a pool's) and `pool` (the
+    /// selecting pool, or the key's pool), ordered by pool, a pool's own ahead of its keys', then by key and by
+    /// feature.
     #[schema(value_type = Object)]
     pub detail: Value,
 }

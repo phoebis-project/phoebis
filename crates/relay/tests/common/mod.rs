@@ -1675,6 +1675,7 @@ pub async fn pin_session(h: &Harness, session: &str, agent: &str, model: &str) -
             marker: true,
             parent_agent_id: None,
             failed_over: None,
+            pin_ended: false,
             holds: Vec::new(),
             dialed: false,
             held_out: false,

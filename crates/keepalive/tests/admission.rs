@@ -542,6 +542,8 @@ async fn a_later_selection_supersedes_an_earlier_attempts_evidence() {
             cache_ttl_ms: None,
             selection: None,
             previous_input_tokens: None,
+            entry_expired: None,
+            agent_released: None,
         },
     ));
     // Evidence stamped with the first attempt arrives after the second selection and is ignored.

@@ -7901,6 +7901,7 @@ async fn agent_turn(
             marker: false,
             parent_agent_id: (!main).then(|| "main".into()),
             failed_over: None,
+            pin_ended: false,
             holds: Vec::new(),
             dialed: false,
             held_out: false,

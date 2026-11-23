@@ -293,6 +293,12 @@ pub(crate) struct Attempt {
     /// read as compacted, on another cache lane or restarted, for a pin with no usage report yet, and for an attempt
     /// recorded before the router kept it.
     pub previous_input_tokens: Option<u64>,
+    /// Whether the pin's cache entry was past its lifetime when the selection read it, before the request's own
+    /// refresh. Null where the selection handed no size on and for an attempt recorded before the router kept it.
+    pub entry_expired: Option<bool>,
+    /// Whether the pin's agent had ended or the companion had released it when the router took the request. Null
+    /// where the selection handed no size on and for an attempt recorded before the router kept it.
+    pub agent_released: Option<bool>,
     pub service_tier: Option<String>,
     pub client_drift: Option<String>,
     pub cooldown_set: Option<CooldownSet>,
@@ -810,6 +816,8 @@ fn attempt_json(a: &AttemptRecord, estimated_usd: Option<f64>) -> Attempt {
         ttft_ms: a.ttfc_ms,
         cache_miss_reason: a.cache_miss_reason.clone(),
         previous_input_tokens: a.previous_input_tokens,
+        entry_expired: a.entry_expired,
+        agent_released: a.agent_released,
         service_tier: a.service_tier.clone(),
         client_drift: a.client_drift.clone(),
         cooldown_set: a.cooldown_scope.as_ref().map(|scope| CooldownSet {
