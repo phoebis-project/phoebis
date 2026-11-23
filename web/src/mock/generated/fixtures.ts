@@ -24782,7 +24782,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "deadline": 1791721600000,
             "window": "five_hour",
             "reason": null,
-            "obstacle": null
+            "obstacle": null,
+            "status": 429
           },
           "refusal": null,
           "fast": false,
@@ -24844,7 +24845,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "deadline": null,
             "window": null,
             "reason": null,
-            "obstacle": null
+            "obstacle": null,
+            "status": 429
           },
           "refusal": null,
           "fast": false,

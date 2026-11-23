@@ -185,6 +185,12 @@ impl SelectRequest {
             &self.canonical_model,
         )
     }
+
+    /// Whether the request was held at the cap with no leg dialed, the reading that `exhaustion_status` answers an
+    /// untimed exhaustion by.
+    pub(crate) fn at_cap(&self) -> bool {
+        self.held_out && !self.dialed
+    }
 }
 
 /// The account that issued a fallback credit token, under the incarnation that answered the refusal: a holder created
@@ -2734,7 +2740,7 @@ fn run(
             rec.step(
                 "exhausted",
                 "exhausted",
-                exhausted_facts(&exhaustion, names),
+                exhausted_facts(&exhaustion, request.at_cap(), names),
             );
             return (SelectResult::Exhausted(exhaustion), writes);
         };
@@ -3115,7 +3121,7 @@ fn fenced(
     rec.step(
         "exhausted",
         "exhausted",
-        exhausted_facts(&exhaustion, names),
+        exhausted_facts(&exhaustion, request.at_cap(), names),
     );
     exhaustion
 }
@@ -8387,13 +8393,14 @@ fn weighed_name(account_id: &str, obstacle: &Obstacle) -> String {
     format!("{account_id}:{}", obstacle.name())
 }
 
-fn exhaustion_facts(exhaustion: &Exhaustion) -> ExhaustionFacts {
+fn exhaustion_facts(exhaustion: &Exhaustion, at_cap: bool) -> ExhaustionFacts {
     let facts = |kind: &'static str| ExhaustionFacts {
         kind,
         deadline: None,
         window: None,
         reason: None,
         obstacle: None,
+        status: exhaustion_status(exhaustion, at_cap),
     };
     match exhaustion {
         Exhaustion::ModelRejected => facts("model_rejected"),
@@ -8419,8 +8426,9 @@ fn exhaustion_facts(exhaustion: &Exhaustion) -> ExhaustionFacts {
     }
 }
 
-fn exhausted_facts(exhaustion: &Exhaustion, obstacles: Vec<String>) -> Vec<Fact> {
-    let answer = exhaustion_facts(exhaustion);
+fn exhausted_facts(exhaustion: &Exhaustion, at_cap: bool, obstacles: Vec<String>) -> Vec<Fact> {
+    // The step prints no status, yet the caller's cap goes in so no site builds facts with a status its answer lacks.
+    let answer = exhaustion_facts(exhaustion, at_cap);
     let mut facts = vec![Fact::text("kind", answer.kind)];
     if let Some(deadline) = answer.deadline {
         facts.push(Fact::int("deadline", deadline).unit("time"));
@@ -8952,7 +8960,7 @@ fn finish(
         }
         SelectResult::Exhausted(exhaustion) => {
             outcome.kind = "exhausted";
-            outcome.exhaustion = Some(exhaustion_facts(exhaustion));
+            outcome.exhaustion = Some(exhaustion_facts(exhaustion, request.at_cap()));
         }
         SelectResult::Refused(refusal) => {
             outcome.kind = "refused";

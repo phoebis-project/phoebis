@@ -657,6 +657,9 @@ pub struct ExhaustionFacts {
     pub window: Option<String>,
     pub reason: Option<String>,
     pub obstacle: Option<&'static str>,
+    /// The HTTP status of the exhaustion's answer: what `exhaustion_status` returns for the exhaustion and for whether
+    /// the request was held at the cap with no leg dialed.
+    pub status: u16,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]

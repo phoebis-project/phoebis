@@ -1257,7 +1257,8 @@ where its cohort is.
 ### When nothing can serve
 
 Each answer below has one cause, and this section states the cause. The answer's status, its error type and its message
-are the refusal table's ([Refusal codes](client.md#refusal-codes)).
+are the refusal table's ([Refusal codes](client.md#refusal-codes)). The routing log's record of an exhausted decision
+states the status of its answer, as `status` on its `exhaustion`.
 
 With every account in the pool rate limited, the answer is `429` `accounts_exhausted` with `retry-after`,
 `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset` and

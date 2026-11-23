@@ -268,8 +268,12 @@ pub(crate) struct SummaryExhaustion {
     pub window: Option<String>,
     pub reason: Option<String>,
     /// On a `pinned` exhaustion, the standing a probe was answered on: `attempted`, `budget_unknown`, `cooldown`,
-    /// `credits`, `no_pin`, `operator`, `overage`, `spent` or `subscription_ended`. Null on every other kind.
+    /// `credits`, `no_pin`, `operator`, `overage`, `pin_moved`, `spent` or `subscription_ended`. Null on every other
+    /// kind.
     pub obstacle: Option<String>,
+    /// The HTTP status of the exhaustion's answer. Absent on a row of an earlier build.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -429,9 +433,10 @@ pub(crate) struct DecisionRecord {
     /// `slow_down` the read the hold was sized from, null otherwise: `factor`, `speed` (the speed the account's holds
     /// realize together), `stretch_ms`, `threshold_ms` and `cycle_ms` (the pin's cycle)), `exhaustion` (`kind`,
     /// `deadline`, `window`, `reason`, `obstacle` (on a `pinned` exhaustion the standing a probe was answered on:
-    /// `attempted`, `budget_unknown`, `cooldown`, `credits`, `no_pin`, `operator`, `overage`, `spent` or
-    /// `subscription_ended`, with `deadline` filled on `cooldown`, `overage` and `spent`)), `refusal` (`kind`, `code`,
-    /// `reason`), `cohort_hold` (`waited_on`, `cohort`, `held_ms` (every wait summed), `waits` (each `reason`, `cap`,
+    /// `attempted`, `budget_unknown`, `cooldown`, `credits`, `no_pin`, `operator`, `overage`, `pin_moved`, `spent` or
+    /// `subscription_ended`, with `deadline` filled on `cooldown`, `overage` and `spent`), `status` (the HTTP status
+    /// of the exhaustion's answer, absent on a record of an earlier build)), `refusal` (`kind`, `code`, `reason`),
+    /// `cohort_hold` (`waited_on`, `cohort`, `held_ms` (every wait summed), `waits` (each `reason`, `cap`,
     /// `reset`, `slow_down` or `rewrite`, and its `held_ms`)), `shed_marks`, `mark_cleared` (`reason`, `marked_at`,
     /// `marked_on`, `marked_window`, `projection`, `stretch_ms` and `threshold_ms` (the stretch and the threshold the
     /// heal read where the stretch made the mark), and `limit` (the line the healing projection read under: 1.0 at the

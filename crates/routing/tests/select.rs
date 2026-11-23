@@ -19386,6 +19386,42 @@ fn after_a_dialed_leg_the_exhausted_row_answers_the_untimed_503() {
 }
 
 #[test]
+fn an_untimed_exhaustion_records_429_only_for_a_request_held_at_the_cap_with_no_leg_dialed() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let statuses = |req: &SelectRequest| {
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        let d = decide(&mut st, &s, req, &mut rng());
+        assert_eq!(d.result, SelectResult::Exhausted(Exhaustion::Untimed));
+        (
+            d.record.outcome.exhaustion.as_ref().map(|e| e.status),
+            d.summary.exhaustion.as_ref().map(|e| e.status),
+        )
+    };
+    let held = after_a_wait_on_a(&s, 2, true, &["a", "b"]);
+    assert_eq!(
+        statuses(&held),
+        (Some(429), Some(429)),
+        "a request held at the cap with no leg dialed is answered at the cap"
+    );
+    assert_eq!(
+        statuses(&SelectRequest {
+            dialed: true,
+            ..held
+        }),
+        (Some(503), Some(503)),
+        "a dialed leg makes the untimed exhaustion one only an operator clears"
+    );
+    assert_eq!(
+        statuses(&after_a_wait_on_a(&s, 2, false, &["a", "b"])),
+        (Some(503), Some(503)),
+        "a hold that freed leaves the request off the cap"
+    );
+}
+
+#[test]
 fn a_pace_pick_names_its_gap_over_the_runner_up() {
     let s = snapshot(Pool {
         strategy: Strategy::Pace,
