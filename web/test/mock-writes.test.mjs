@@ -384,11 +384,12 @@ test("a deleted key's session rows read historical with no pin and keep their pl
   assert.deepEqual([...new Set(before.map((s) => s.historical))], [false], "the story's laptop rows read live");
   assert.deepEqual([...new Set(after.map((s) => s.historical))], [true], 'each of them reads historical once the key is gone');
   // With the key's pins gone, the list reads each row's last request alone against the 3,600 s non-companion timeout.
-  // The story's requests 15 m 40 s and 7 m 07 s back keep 5eeed6ce and 7d3e1c20. The other six laptop rows leave:
-  // 1c0f9727, 76ddb35b, c64358b5 and cd9a5904 hold drawn requests at most, which all fall over an hour back, and
-  // 0f1d7c64 and 3e9b7c21 hold no laptop request.
+  // The story's requests 15 m 40 s, 7 m 07 s and 3 m 30 s back keep 5eeed6ce, 7d3e1c20 and c64358b5, the last by its
+  // Haiku 4.5 subagent's turn (`req_e07b3c82-d95` in mock/requests.ts). The other five laptop rows leave: 1c0f9727,
+  // 76ddb35b and cd9a5904 hold drawn requests at most, which all fall over an hour back, and 0f1d7c64 and 3e9b7c21
+  // hold no laptop request.
   const pins = Object.fromEntries(after.map((s) => [s.sessionId, { lines: s.agentContexts.length, pinned: s.pinned }]));
-  const kept = { '5eeed6ce-bf6f-4c62-91f4-775b7fa78f23': { lines: 0, pinned: false }, '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f': { lines: 0, pinned: false } };
+  const kept = { '5eeed6ce-bf6f-4c62-91f4-775b7fa78f23': { lines: 0, pinned: false }, '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f': { lines: 0, pinned: false }, 'c64358b5-b04f-4047-baf2-5e86716ea490': { lines: 0, pinned: false } };
   assert.deepEqual(pins, kept, 'the rows a ledger request inside the timeout keeps, each with no pin and no line');
   const placements = (rows) => Object.fromEntries(rows.map((s) => [s.sessionId, s.placements]));
   assert.deepEqual(placements(after), placements(before.filter((s) => s.sessionId in kept)), 'the delete moves no placement');

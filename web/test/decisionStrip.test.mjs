@@ -426,7 +426,7 @@ test("the Fit station's table reads a row per candidate the gate read with its c
   assert.deepEqual(table.columns.map((c) => c.label), ['projection 5h', 'projection 7d', 'rewrite 5h', 'rewrite 7d', 'reserved 5h', 'reserved 7d', 'runway', 'binding', 'verdict']);
   assert.deepEqual(table.rows.map((r) => r.account.value), ['primary', 'nightly', 'overflow']);
   const cells = (id) => table.columns.map((c) => table.rows.find((r) => r.account.value === id).cells[c.key]?.text ?? '');
-  assert.deepEqual(cells('primary'), ['54%', '42%', '0.264%', '0.031%', '0%', '0%', '2 h 35 min', '5h', 'fits']);
+  assert.deepEqual(cells('primary'), ['54%', '73%', '0.264%', '0.031%', '0%', '0%', '2 h 35 min', '5h', 'fits']);
   assert.deepEqual(cells('nightly').slice(6), ['none', '5h', 'least bad']);
   // An API key has no plan window to project, so its row is its verdict alone.
   assert.deepEqual(cells('overflow'), ['', '', '', '', '', '', '', '', 'fits']);
@@ -980,6 +980,9 @@ test("the pin's three groups hold their keys and the fired shed line reads its t
   assert.deepEqual(rows.chips.map((c) => [c.value, c.href]), [
     ['bcc805b6: unpriced', '/sessions?search=bcc805b6-0588-4fe4-ac9e-62a13a0f6e99&finished=1'],
     ['d7167642: no runway', '/sessions?search=d7167642-751d-475e-b0bf-2f24fe70245e&finished=1'],
+    ['4ef130f1: no runway', '/sessions?search=4ef130f1-90e0-46e3-9a3c-4a000fe854f1&finished=1'],
+    ['0d588de5: unpriced', '/sessions?search=0d588de5-a77c-49ed-a40e-5dcb9d4f7fba&finished=1'],
+    ['d6f1a3c8: unpriced', '/sessions?search=d6f1a3c8-2e94-4b07-8a5d-3c9e7f2b1a64&finished=1'],
     ['d7167642: fast lane', '/sessions?search=d7167642-751d-475e-b0bf-2f24fe70245e&finished=1'],
     ['3c36d663: ended', '/sessions?search=3c36d663-d074-42f6-8738-f54da7c9f026&finished=1'],
   ]);

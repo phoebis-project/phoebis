@@ -1211,11 +1211,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of rows) assert.deepEqual([r.cause, r.state, r.nextProbeAt, r.deadline, r.wakeAt], ['agent_released', 'ended', null, null, null], `${r.agentId} reads as a released agent`);
     const row = s.sessions.find((x) => !x.historical && x.keyId === rows[0].keyId && x.sessionId === rows[0].sessionId);
     assert.ok(row !== undefined, 'the session keeps its row');
+    // Newest first: the last turns of the subagents `2f9d` and `8c1a` (mock/requests.ts), then main's one turn.
     const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === row.keyId && r.sessionId === row.sessionId);
-    assert.equal(own.length, 1, 'the ledger holds the one request the session routed');
-    assert.deepEqual([row.pinned, row.spend.requests, row.lastRequestAt], [true, 1, own[0].at], 'the row reads that request as its activity');
-    // Its one request is past the pool's window, so main's pin stands on the probe that followed it.
-    assert.ok(s.now - Date.parse(own[0].at) > affinityOf(s, main), "the session's request is past the window");
+    assert.deepEqual(own.map((r) => r.agentId), ['2f9d', '8c1a', 'main'], "the ledger holds main's one request and its two subagents' turns");
+    assert.deepEqual([row.pinned, row.spend.requests, row.lastRequestAt], [true, 3, own[0].at], 'the row reads its newest request as its activity');
+    // Main's one request is past the pool's window, so main's pin stands on the probe that followed it.
+    assert.ok(s.now - Date.parse(own[2].at) > affinityOf(s, main), "main's request is past the window");
     assert.ok(s.now - Date.parse(main.lastProbeAt) <= affinityOf(s, main), "main's last probe renewed its pin inside the window");
     const poolId = s.keys.find((k) => k.id === row.keyId).poolId;
     const counted = new Set(pinnedRecipesOf(s, recipes).filter((r) => s.keys.find((k) => k.id === r.keyId)?.poolId === poolId && r.accountId === main.accountId).map(pinOf));
@@ -1573,7 +1574,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const studioRow = { observedAt: iso(s.now - 3 * HOUR), plan: 'max_5x', resetAt: iso(Date.parse(studio.fableWindow.resetsAt)), shareLeft: 0.25, source: 'claim', tier: 'default_claude_max_5x' };
     assert.deepEqual(claimsOf(await s.api.getAnalyticsUnusedAllowance(span)), [['studio', 'seven_day_fable', studioRow]]);
     // A use of primary's Fable reset clears its Fable week from 0.12 and gives the 7-day window back the week's six
-    // points, 0.41 to 0.35, and the log holds both drops. The claim names the Fable week alone, so the answer lists its
+    // points, 0.73 to 0.67, and the log holds both drops. The claim names the Fable week alone, so the answer lists its
     // row, 0.88 left, and none for the 7-day window. A fresh mock, so the use leaves the story the other cases read.
     const api = new s.lib.MockApi();
     await api.login('admin');
@@ -1583,7 +1584,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     try {
       await api.useLimitReset('primary', 'rg-primary-1');
       const drops = (await api.listRoutingLog({ from: iso(s.now - HOUR), kinds: ['window_dropped'], to: iso(s.now) })).rows.filter((e) => e.accountId === 'primary');
-      assert.deepEqual(drops.map((e) => [e.detail.window, e.detail.utilization_before, e.detail.utilization]).sort(), [['seven_day', 0.41, 0.35], ['seven_day_fable', 0.12, 0]]);
+      assert.deepEqual(drops.map((e) => [e.detail.window, e.detail.utilization_before, e.detail.utilization]).sort(), [['seven_day', 0.73, 0.67], ['seven_day_fable', 0.12, 0]]);
       const primaryRow = { observedAt: iso(s.now), plan: 'max_20x', resetAt: iso(Date.parse(primary.fableWindow.resetsAt)), shareLeft: 0.88, source: 'claim', tier: 'default_claude_max_20x' };
       assert.deepEqual(claimsOf(await api.getAnalyticsUnusedAllowance(span, { accountIds: ['primary'] })), [['primary', 'seven_day_fable', primaryRow]]);
     } finally {
@@ -2686,7 +2687,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       return s.leadOf(w, w.periodHours * HOUR, s.now, s.lib.endOf(account, s.now));
     };
     assert.ok(lead('primary', '5h') > 0.05, `primary's 5h window reads ${lead('primary', '5h')}, not ahead of pace`);
-    assert.ok(lead('primary', '7d') < -0.05, `primary's 7d window reads ${lead('primary', '7d')}, not behind pace`);
+    assert.ok(lead('nightly', '7d') < -0.05, `nightly's 7d window reads ${lead('nightly', '7d')}, not behind pace`);
     assert.ok(lead('secondary', '5h') > 0 && lead('secondary', '7d') > 0, `secondary's windows read ${lead('secondary', '5h')} and ${lead('secondary', '7d')}, not both ahead of pace`);
   });
 
@@ -2728,7 +2729,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       }
     }
     // The record is nightly's reset hold at 13:10:21, 79 min 39 s before the story's clock. Primary's walked-back
-    // readings, 0.32 of its 5-hour window and 0.40 of its week, stand against the shares elapsed, 0.2878 and 0.5298,
+    // readings, 0.32 of its 5-hour window and 0.71 of its week, stand against the shares elapsed, 0.2878 and 0.5298,
     // and burn 0.085 and 0.006 an hour: the 5-hour window runs to its reset at 16:44, the week five hours out. Nightly
     // reads its 5-hour window spent 39 s before the reset at 13:11, so its burn of 0.019 an hour adds under a
     // thousandth, and its week reads 0.34 with no burn.
@@ -2742,7 +2743,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       [read('primary', 'five_hour'), read('primary', 'seven_day'), read('nightly', 'five_hour'), read('nightly', 'seven_day')],
       [
         [0.032, iso(s.now + 2 * HOUR + 14 * 60_000), 0.623],
-        [-0.13, fiveHoursOut, 0.43],
+        [0.18, fiveHoursOut, 0.74],
         [0.002, iso(s.now - 79 * 60_000), 1],
         [-0.401, fiveHoursOut, 0.34],
       ],
@@ -2975,10 +2976,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // Each round's burn sum, the priced burn its marks leave and whether an unpriced pin stands unmarked, off the seeds
     // in mock/routingLog.ts, each left figure at least a tenth of its sum: the Fable session's 0.03 of
     // `FABLE_WEEK_BURN`, the 0.0052 and 0.0071 `ROUND_PINS` leave of their 0.0299, the 0.002, 0.026, 0.0206 and 0.025
-    // `STRETCH_PINS` leave of their 0.1286, and the 0.224 of the one priced pin of `NO_RUNWAY_PINS`, which an unpriced
-    // pin stands beside. The afternoon round lists the pin of the session the mod released whole under `ended` with no
-    // burn, so its sum is its priced pin's alone. The one priced pin of `RESERVATION_PINS` takes its whole 0.0016 and
-    // leaves nothing, which its unpriced current pin allows.
+    // `STRETCH_PINS` leave of their 0.1286, and the 0.212 and 0.012 of the two priced pins of `NO_RUNWAY_PINS`, which
+    // unpriced pins stand beside. The afternoon round lists the pin of the session the mod released whole under `ended`
+    // with no burn, so its sum is its priced pins' alone. The one priced pin of `RESERVATION_PINS` takes its whole
+    // 0.0016 and leaves nothing, which its unpriced current pin allows.
     assert.deepEqual(
       {
         ended: rounds.flatMap((e) => e.detail.pins.filter((p) => p.skip === 'ended').map((p) => [e.requestId, p.burn])),

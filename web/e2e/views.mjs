@@ -8071,7 +8071,7 @@ async function refreshControlWidth(theme) {
 
 /**
  * A request that finishes below rows already shown lands between them on the next auto reload in the tint a row that
- * arrives at the top takes. In the mock pass the story's late request, among the rows a page of 50 shows, lands a few
+ * arrives at the top takes. In the mock pass the story's late request, among the rows a page of 100 shows, lands a few
  * seconds after the load: the page reads its list without it, turns auto reload to 5 s and reads the first poll's
  * answer, where the row lands below the first and every cell of it reads the fill a top row's cells read under the same
  * tint, apart from the fill of an untinted row of its own stripe and in the box of the untinted row above it. The
@@ -8084,7 +8084,7 @@ async function lateRowTint(theme) {
     return;
   }
   const say = (what) => failures.push(`${theme} /requests: the late row ${what}`);
-  await loadAtOrigin('/requests?rows=50', '.requests__table');
+  await loadAtOrigin('/requests?rows=100', '.requests__table');
   const rows = page.locator('.requests__table > tbody > tr:not(.table__detail)');
   const ids = () => rows.evaluateAll((trs) => trs.map((tr) => tr.querySelector('.sub.mono')?.getAttribute('title') ?? null));
   const listed = await ids();
@@ -8129,7 +8129,7 @@ async function lateRowTint(theme) {
  * The fresh tint on a log: a row an auto reload poll brings draws every cell in --accent-soft, read over the surface as
  * the cell draws it, a tone more than `TONE_STEP` apart from the row's resting fill, in the row's own box. In the mock
  * pass the story lands one row on each log a few seconds after the load: the request log's late request among the rows
- * a page of 50 shows, and the routing log's late event above the rows the log shows. The page reads its list, turns
+ * a page of 100 shows, and the routing log's late event above the rows the log shows. The page reads its list, turns
  * auto reload to 5 s through the interval menu, steps the clock past the landing and the first poll, and reads the
  * first fresh row that is not the selected one, since a selected row draws the same token, with the story's one row the
  * only one in the tint. The router pass's seed lands no row after the load, so it records the measure as skipped. The
@@ -8142,7 +8142,7 @@ async function freshRowTint(theme, path) {
   }
   const say = (what) => failures.push(`${theme} ${path}: the fresh row ${what}`);
   const table = path === '/requests' ? '.requests__table' : '.routing-log__table';
-  await loadAtOrigin(path === '/requests' ? '/requests?rows=50' : path, table);
+  await loadAtOrigin(path === '/requests' ? '/requests?rows=100' : path, table);
   const choose = async (word) => {
     await page.locator('.filter-bar .refresh-control__part').click();
     await settle();
@@ -10571,19 +10571,24 @@ async function openDecision(row) {
 }
 
 /**
- * The site's Routing log shot shows a decision card open, so the first decision row (in the mock's story the renewal
- * at its newest instant) opens before the shot. A second click shuts a row, so `decisionCard` measures this card after
- * the shot rather than opening it again. The open row's panel spans the table in one cell, which leaves the columns as
- * the bare log draws them: Time, the fill, takes the card less the other drawn columns within 1 px.
+ * The site's Routing log shot shows a decision card open, so a decision row opens before the shot: in the mock pass the
+ * newest renewal of the default hour, found by its Kind cell, and in the router pass the first decision row. A second
+ * click shuts a row, so `decisionCard` measures this card after the shot rather than opening it again. The open row's
+ * panel spans the table in one cell, which leaves the columns as the bare log draws them: Time, the fill, takes the
+ * card less the other drawn columns within 1 px.
  */
 async function firstDecisionOpen(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
-  const first = page.locator(DECISION_ROWS).first();
+  // The open card's measures read a renewal's card, whose Projection cells read a dash, and the story's newest rows
+  // hold placements too, so the mock pass finds the renewal by its kind wherever the newest rows fall.
+  const decisions = page.locator(DECISION_ROWS);
+  const first = mock ? decisions.filter({ has: page.locator('td.routing-log__kind .badge', { hasText: /^renewed$/ }) }).first() : decisions.first();
+  const what = mock ? 'the newest renewal row' : 'the first decision row';
   if ((await first.count()) === 0) {
-    say('no decision row to open');
+    say(`no ${mock ? 'renewal row of the default hour' : 'decision row'} to open`);
     return;
   }
-  if (!(await openDecision(first))) say('the first decision row opened to no card');
+  if (!(await openDecision(first))) say(`${what} opened to no card`);
   await atRest();
   await settle();
   const read = await page.evaluate(() => {
@@ -10596,9 +10601,9 @@ async function firstDecisionOpen(theme) {
     const others = heads.filter((th) => th !== time && getComputedStyle(th).display !== 'none').reduce((n, th) => n + th.getBoundingClientRect().width, 0);
     return { client: wrap.clientWidth, rest: Math.round((wrap.clientWidth - others) * 10) / 10, time: Math.round(time.getBoundingClientRect().width * 10) / 10 };
   });
-  measurements.push(`${theme} /routing-log Time with the first decision open ${JSON.stringify(read)}`);
-  if (read === null) say('no table with a Time column to measure with the first decision open');
-  else if (Math.abs(read.time - read.rest) > 1) say(`with the first decision open the Time column is ${read.time}px against the ${read.rest}px the card leaves past the other columns`);
+  measurements.push(`${theme} /routing-log Time with ${what} open ${JSON.stringify(read)}`);
+  if (read === null) say(`no table with a Time column to measure with ${what} open`);
+  else if (Math.abs(read.time - read.rest) > 1) say(`with ${what} open the Time column is ${read.time}px against the ${read.rest}px the card leaves past the other columns`);
 }
 
 /**
@@ -11229,8 +11234,8 @@ async function decisionCard(theme) {
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
   const rung = decisions.filter({ has: page.locator('td.routing-log__by .chip', { hasText: / rung$/ }) }).first();
-  // The story hour's newer rows hold its rung placements past the default hour's first page.
-  if ((await rung.count()) === 0 && mock) {
+  // The story hour's newer rows hold its rung placements past the default hour's first pages.
+  for (let pages = 1; pages < 4 && mock && (await rung.count()) === 0; pages += 1) {
     await page.locator('button[aria-label="Next page"]').click();
     await advance(LOAD_MS);
   }
@@ -12276,11 +12281,11 @@ async function tableStripes(theme, path) {
 const WRITTEN_SESSION = '7bea4514-4087-4b6a-a410-0dd5cd31cfad';
 
 /**
- * Two addresses that put the written session on a striped and on a plain session row: twentieth under the last
- * activity's order, its last turn hours back while its idle subagent's pin was used seconds back, and third once the
- * search keeps the ids that start with 7, where the two sessions with newer last turns stand before it.
+ * Two addresses that put the written session on a striped and on a plain session row: eighteenth under the last
+ * activity's order, its last turn its subagent 4d1a's half an hour back, and first once the search keeps the ids that
+ * start with 7b, where it stands alone.
  */
-const WRITTEN_PLACES = ['/sessions?sort=activity', '/sessions?search=7&sort=activity'];
+const WRITTEN_PLACES = ['/sessions?sort=activity', '/sessions?search=7b&sort=activity'];
 
 /** The session row an open-row measure opens: the written session's in the mock pass, the router seed's first. */
 const openRowTarget = () => (mock ? page.locator('.sessions-table > tbody > tr.srow', { has: page.locator(`td[title="${WRITTEN_SESSION}"]`) }) : page.locator('.sessions-table > tbody > tr.srow').first());
@@ -14629,7 +14634,7 @@ try {
       if (view.path === '/routing-log') {
         await routingLogColumns(theme);
         await diagnosticsNav(theme, view.path);
-        // Before the first decision opens, since the read leaves the bare log and loads it again.
+        // Before the shot's decision opens, since the read leaves the bare log and loads it again.
         await routingLogDatedTime(theme);
         await routingLogRegistryTarget(theme);
         await routingLogClearedChip(theme);
@@ -14659,7 +14664,7 @@ try {
         await quotaLaneChips(theme);
         await timelinePhone(theme);
       }
-      // After the view's own measures, so the Routing log's first decision is open and its row reads over the stripes.
+      // After the view's own measures, so the Routing log's shot decision is open and its row reads over the stripes.
       await tableStripes(theme, view.path);
       await cutReaders(theme, view.path);
       await hiddenNodes(theme, view.path);

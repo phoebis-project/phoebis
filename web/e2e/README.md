@@ -317,10 +317,10 @@ boxes with the count where the view draws one and the Refresh button inside the 
 filter on the routing log (Select all, the eight presets and the 46 kinds, its popover 8 px inside the window at 1280 by
 800), the split Refresh button on the request log (one width at Off, at 5 s and paused under the drawer, so the count
 beside it never moves), a late row on the request log (in the mock pass, after the view's shot, the story's late request
-landing below the first of the rows a page of 50 shows on the first auto reload at 5 s, every cell of it in the fill a
+landing below the first of the rows a page of 100 shows on the first auto reload at 5 s, every cell of it in the fill a
 top row's cells take under the same tint, apart from the fill of an untinted row of its own stripe and in the box of the
 untinted row above it, recorded as skipped in the router pass), the fresh tint on both logs (in the mock pass, after the
-view's shot, the row the story lands a few seconds after the load, the request log's late request on a page of 50 and
+view's shot, the row the story lands a few seconds after the load, the request log's late request on a page of 100 and
 the routing log's late event, drawn on the first auto reload at 5 s with every cell in `--accent-soft` over the surface,
 apart from the row's resting fill and in its box, the one row in the tint, recorded as skipped in the router pass), the
 traffic cards (Errors by code against Requests by outcome, the Refusals by category card against Refusals by code,
@@ -386,40 +386,41 @@ that row the one drawn active inside the rows in view, the box scrolled off its 
 row's tint and the focus in the dialog's field, in both passes and recorded as skipped where the body holds no such
 line), the wide body view's width floor (mock pass, on a load of its own in the part behind the walks: the page an edge
 answered an upstream 502 with, indented with tabs, opened wide, its block of rows no narrower than its widest row's
-text, which runs wider than the scroll box), the routing log's first decision row, opened before the log's shot (Time
-the card less the other columns with the row's panel open), the routing log's decision card, which opens once the log's
-shot is taken (the strip and the candidate table inside the card at 1280 by 800 and 1440 by 900 with nothing scrolling
-sideways, the table 958 then 1118 px, the strip's drawing as wide as the strip at each width, every station badge in
-the kind badge's box, the station labels clear of the leaf rows and the brackets, every station's and way out's dot,
-the gap to its words and its word taking the pointer for its own button and the line on either side of the dot and a
-station's side of the line away from its label not taking it (in the mock pass on the shed move's card too, and there
-at the strip's 640 px floor for the dots and the line, and on the story's eight cards of the gate and the reservation,
-the spent move held for the reset ending in the fourth way out, Held for the reset), the strip's height from its rows,
-a moved row's badge the Move station's color, the shed move's seventeen stations, the chosen row's Prefix chips on the
-first rung placement the log lists, and a station's popover inside the card and the card's part on screen less 8 px
-either side at both viewports and at 700 by 800 (the Move list, the widest, among them), visible with no transition once
-placed, its width bound the least of 720 px, the window less 16, the card less 16 and the card's part on screen less
-16, its table's heads on at most two lines, its figures on one line outside the Fit table, which wraps them to fit, and
-nothing in it scrolling sideways (the shed move's Fit table among them, its nine columns the projection, the rewrite
-and the reserved share on the 5-hour and the 7-day window, then the runway, the window that binds and the verdict, a
-Fable pin adding its Fable columns and an ending account its end), and the Fit and Pick tables' rows striped as the
-candidate table's are, every station's and way out's word at the card's muted contrast or better on the open row's tint
-in both themes with an idle way out among them, the strip's station count the record's steps and placeholders at both
-viewports, and in the mock pass the fresh placement's Pick station opened by Enter and by Space with the focus inside
-its popover and closed by Escape with the focus back on the station), the tie's pick line (in the mock pass, on a load
-of its own once the log's shot is taken: the story's failover that tied primary and nightly on Pace before nightly's
-overage, its Pick station's rows reading "tied primary", "tied nightly", "by runway primary" and "drawn no", each in the
-type, line height and left edge of the strategy row above it), the subscription end editor (its checkbox label reading
-Canceled in the type of the Ends label beside it), the hint a confirmed pairing draws in the Usage card while the first
-reading is in flight (in the mock pass, after the view's shot, read whole with its closing period against the note of
-the story's API-key account annex in type, ink, line height, margin and place), the catalog popup and its columns (Model
-and Name the fills), the Keys table's columns (Name, Models and Status the fills) and the badges of its fill cells (each
-ending inside its cell and cutting its own label with the ellipsis), the key dialog's Access selects, the key dialog's
-claude.ai features group (mock pass: on the story's `laptop`, the Artifacts and Connectors selects against the Expiry
-select in box and type, reading `contract (contract)` and `Inherit (reserve)`), the Keys bar's pool chip against its
-status chip (26 px, on an address that holds both), the lifetime cost card on the story (mock pass, on a load of its
-own: each key whose requests priced nothing reads a dash beside its billed dollars under the unpriced title, the first
-one's figure in the type and ink of a neighbor's that reads a number and its track as wide),
+text, which runs wider than the scroll box), the routing log's newest renewal of the hour in the mock pass and its first
+decision row in the router pass, opened before the log's shot (Time the card less the other columns with the row's panel
+open), the routing log's decision card, which opens once the log's shot is taken (the strip and the candidate table
+inside the card at 1280 by 800 and 1440 by 900 with nothing scrolling sideways, the table 958 then 1118 px, the strip's
+drawing as wide as the strip at each width, every station badge in the kind badge's box, the station labels clear of the
+leaf rows and the brackets, every station's and way out's dot, the gap to its words and its word taking the pointer for
+its own button and the line on either side of the dot and a station's side of the line away from its label not taking it
+(in the mock pass on the shed move's card too, and there at the strip's 640 px floor for the dots and the line, and on
+the story's eight cards of the gate and the reservation, the spent move held for the reset ending in the fourth way out,
+Held for the reset), the strip's height from its rows, a moved row's badge the Move station's color, the shed move's
+seventeen stations, the chosen row's Prefix chips on the first rung placement the log lists, and a station's popover
+inside the card and the card's part on screen less 8 px either side at both viewports and at 700 by 800 (the Move list,
+the widest, among them), visible with no transition once placed, its width bound the least of 720 px, the window less
+16, the card less 16 and the card's part on screen less 16, its table's heads on at most two lines, its figures on one
+line outside the Fit table, which wraps them to fit, and nothing in it scrolling sideways (the shed move's Fit table
+among them, its nine columns the projection, the rewrite and the reserved share on the 5-hour and the 7-day window, then
+the runway, the window that binds and the verdict, a Fable pin adding its Fable columns and an ending account its end),
+and the Fit and Pick tables' rows striped as the candidate table's are, every station's and way out's word at the card's
+muted contrast or better on the open row's tint in both themes with an idle way out among them, the strip's station
+count the record's steps and placeholders at both viewports, and in the mock pass the fresh placement's Pick station
+opened by Enter and by Space with the focus inside its popover and closed by Escape with the focus back on the station),
+the tie's pick line (in the mock pass, on a load of its own once the log's shot is taken: the story's failover that tied
+primary and nightly on Pace before nightly's overage, its Pick station's rows reading "tied primary", "tied nightly",
+"by runway primary" and "drawn no", each in the type, line height and left edge of the strategy row above it), the
+subscription end editor (its checkbox label reading Canceled in the type of the Ends label beside it), the hint a
+confirmed pairing draws in the Usage card while the first reading is in flight (in the mock pass, after the view's shot,
+read whole with its closing period against the note of the story's API-key account annex in type, ink, line height,
+margin and place), the catalog popup and its columns (Model and Name the fills), the Keys table's columns (Name, Models
+and Status the fills) and the badges of its fill cells (each ending inside its cell and cutting its own label with the
+ellipsis), the key dialog's Access selects, the key dialog's claude.ai features group (mock pass: on the story's
+`laptop`, the Artifacts and Connectors selects against the Expiry select in box and type, reading `contract (contract)`
+and `Inherit (reserve)`), the Keys bar's pool chip against its status chip (26 px, on an address that holds both), the
+lifetime cost card on the story (mock pass, on a load of its own: each key whose requests priced nothing reads a dash
+beside its billed dollars under the unpriced title, the first one's figure in the type and ink of a neighbor's that
+reads a number and its track as wide),
 the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head under the bar's bottom, its height closed
 and open, the button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the lead and
 above the card's top, Cost reference one line at the head's top right), the stripes on every view with a table (the

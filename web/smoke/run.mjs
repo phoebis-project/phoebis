@@ -2183,8 +2183,9 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
     const chip = [...m.container.querySelectorAll('.qcard__windows .qchip')].find((c) => c.textContent?.trim() === label);
     return [...(chip?.classList ?? [])].find((n) => n.startsWith('qchip--')) ?? 'missing';
   };
-  // `7d19% left` is secondary's 7-day seed, 0.808 used (`web/src/mock/accounts.ts`), 0.8 points under the 20% break.
-  results.push({ name: '/quota tone breaks at 50% and 20% remaining', ok: toneOf('7d59% left') === 'qchip--good' && toneOf('5h38% left') === 'qchip--warn' && toneOf('7d19% left') === 'qchip--low', missing: [toneOf('7d59% left'), toneOf('5h38% left'), toneOf('7d19% left')] });
+  // `7d65% left` is nightly's 7-day seed, 0.35 used, 15 points over the 50% break, and `7d19% left` secondary's,
+  // 0.808 used, 0.8 points under the 20% break (`web/src/mock/accounts.ts`).
+  results.push({ name: '/quota tone breaks at 50% and 20% remaining', ok: toneOf('7d65% left') === 'qchip--good' && toneOf('5h38% left') === 'qchip--warn' && toneOf('7d19% left') === 'qchip--low', missing: [toneOf('7d65% left'), toneOf('5h38% left'), toneOf('7d19% left')] });
   const resets = [...m.container.querySelectorAll('.qcard__windows .qwin__reset')].length;
   results.push({ name: '/quota every chip has a reset label beside it', ok: resets === [...m.container.querySelectorAll('.qcard__windows .qchip')].length, missing: [String(resets)] });
   const aligned = chipRows.map((g) => g.querySelectorAll(':scope > .qwin__chip').length);
@@ -2434,13 +2435,13 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   const spentIn = nightly === null ? null : Date.parse(nightly.horizon) - ((nightly.projection - 1) / nightly.burn) * 3_600_000 - at;
   const primaryWall = wallBeforeReset(wOf('primary', '5h'));
   results.push({
-    name: "/quota nightly's 5-hour window reads spent in the 1 h 35 min its forecast leaves from the story's start, primary's spent 32 min before its reset and its 7-day window 56% left in the span to its horizon",
+    name: "/quota nightly's 5-hour window reads spent in the 1 h 35 min its forecast leaves from the story's start, primary's spent 32 min before its reset and its 7-day window 24% left in the span to its horizon",
     ok:
       spentIn !== null && spentIn > 85 * 60_000 && spentIn < 95 * 60_000 &&
       story.nightly5h.endsWith(`, spent in ${minuteSpan(spentIn)}`) &&
       /, spent in .+$/.test(story.primary5h) && primaryWall === PRIMARY_5H_WALL_BEFORE_RESET &&
       weekly !== null &&
-      projectionWords(weekly, at)?.startsWith('56% left in ') === true &&
+      projectionWords(weekly, at)?.startsWith('24% left in ') === true &&
       story.primary7d.endsWith(`, ${projectionWords(weekly, at)}`),
     missing: [JSON.stringify(story), `nightly spent in ${spentIn} ms`, weekly ? String(projectionWords(weekly, at)) : 'no 7-day window on primary'],
   });
@@ -2488,11 +2489,11 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
     ok: marked.length > 0 && rows.some((r) => r.want === null) && off.length === 0,
     missing: off.map((r) => JSON.stringify(r)),
   });
-  const titleOf = (name) => rows.find((r) => r.account === 'primary' && r.name === name)?.title ?? 'no title';
+  const titleOf = (account, name) => rows.find((r) => r.account === account && r.name === name)?.title ?? 'no title';
   results.push({
-    name: "/quota primary's 5h window reads ahead of pace and its 7d window behind",
-    ok: titleOf('5h').endsWith('ahead of pace') && titleOf('7d').endsWith('behind pace'),
-    missing: [titleOf('5h'), titleOf('7d')],
+    name: "/quota primary's 5h window reads ahead of pace and nightly's 7d window behind",
+    ok: titleOf('primary', '5h').endsWith('ahead of pace') && titleOf('nightly', '7d').endsWith('behind pace'),
+    missing: [titleOf('primary', '5h'), titleOf('nightly', '7d')],
   });
   q.unmount();
 }
@@ -3709,7 +3710,8 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     page.unmount();
   }
   {
-    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    // The seat's three rows stand among the day's newest hundred, behind the story's seed rows of the afternoon.
+    const page = await mount('/requests?rows=100', { now: CLOCK_ORIGIN });
     const cells = [...page.container.querySelectorAll('.requests__table tbody td[title^="Billed in dollars: usage-based"]')];
     const words = cells.map((td) => [td.querySelector('.sub')?.textContent ?? null, td.getAttribute('title')?.split('. ')[0] ?? null]);
     const fleet = (await api.listRequests({ keyIds: ['fleet'], limit: 50 })).requests;
@@ -6911,7 +6913,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   {
     // The serving table orders a tier by the score the route serves, so a member whose account row reads more of its
     // week left ranks behind one whose sessions leave it more spare rate: secondary out of its cooldown with a served
-    // score above primary's, though its 7-day window reads 88 % used to primary's 41 %. Both read the one fit, so the
+    // score above primary's, though its 7-day window reads 88 % used to primary's 73 %. Both read the one fit, so the
     // score alone orders them.
     const { listPools } = api;
     api.listPools = async () =>
@@ -15638,10 +15640,10 @@ await forView('/requests', async () => {
   }
   {
     // The ledger writes a request when it finishes, so one that ran long lands below rows the list already shows. The
-    // story's late request, among the rows a page of 50 shows, lands a few seconds after the mock loaded, after this
+    // story's late request, among the rows a page of 100 shows, lands a few seconds after the mock loaded, after this
     // page read its list at the origin: the first poll lands nothing, and the poll after its landing sets it in its
     // place under the fresh tint, every poll reading from the stamp the one before answered.
-    const rows = 50;
+    const rows = 100;
     const page = await mount(`/requests?rows=${rows}`, { now: CLOCK_ORIGIN });
     const listed = requestRows(page).map(idOf);
     const read = (at, limit) => api.listRequests({ from: isoAt(CLOCK_ORIGIN - 24 * HOUR), limit, to: isoAt(at) });
@@ -15727,7 +15729,7 @@ await forView('/requests', async () => {
     // replaces the stand-in: the list's rows drawn untinted, and the next poll reading at the stamp it carried.
     const LATE = 'req_7a3f0c26-d81';
     failNextCall('listRequests', '/admin/requests', 'ledger locked');
-    const page = await mount('/requests?rows=50', { now: CLOCK_ORIGIN });
+    const page = await mount('/requests?rows=100', { now: CLOCK_ORIGIN });
     const failed = page.container.querySelector('.requests__table .empty--error .empty__title')?.textContent ?? null;
     await chooseInterval(page, '5 s');
     const held = deferNextCall('listRequests');
@@ -15765,7 +15767,7 @@ await forView('/requests', async () => {
     results.push({
       name: "/requests the list's late answer replaces the page an auto reload poll stood in for it, and the next poll reads at the list's stamp",
       ok:
-        failed === 'Could not load the request log' && !stood.error && stood.count === '50 shown, more available' && stood.ids.length === 50 && stood.skeleton === 0 && stood.tinted.length === 0 && landed &&
+        failed === 'Could not load the request log' && !stood.error && stood.count === '100 shown, more available' && stood.ids.length === 100 && stood.skeleton === 0 && stood.tinted.length === 0 && landed &&
         !replaced.error && JSON.stringify(replaced.ids) === JSON.stringify(answer.requests.map((r) => r.id)) && replaced.ids.filter((id) => id === LATE).length === 1 && replaced.tinted.length === 0 &&
         sent.length === 1 && sent[0].cursor === undefined && sent[0].landedAfter === answer.landedThrough,
       missing: [String(failed), `stood ${stood.ids.length} rows, ${stood.skeleton} skeleton rows, count ${stood.count}, error ${stood.error}, tinted ${stood.tinted.join(' | ')}`, `landed ${landed} by ${isoAt(at)}`, `replaced ${replaced.ids.length} rows of ${answer.requests.length}, error ${replaced.error}, late ${replaced.ids.filter((id) => id === LATE).length}, tinted ${replaced.tinted.join(' | ')}`, JSON.stringify(sent.map((q) => [q.cursor, q.landedAfter])), `list ${answer.landedThrough}`],
@@ -16039,13 +16041,13 @@ await forView('/requests', async () => {
     // uncapped at that end, so each poll reads at the stamp the answer before it carried. The story's late request
     // arrived inside the range and lands after its end: the poll after its landing brings it under the fresh tint with
     // a stamp past the end, and the poll after that reads from that stamp and brings nothing, so the row is read once.
-    // The range starts two hours back, so the late request, the oldest row of the last hour, sits above the list's last
-    // row: the span holds more rows than the page shows, and under a next cursor a poll leaves a row below it to Next.
+    // The range starts 24 hours back, so the late request sits above the list's last row: the span holds more rows than
+    // a page of 100 shows, and under a next cursor a poll leaves a row below it to Next.
     const LATE = 'req_7a3f0c26-d81';
-    const from = isoAt(CLOCK_ORIGIN - 2 * HOUR);
+    const from = isoAt(CLOCK_ORIGIN - 24 * HOUR);
     const end = isoAt(CLOCK_ORIGIN);
-    const page = await mount(`/requests?rows=50&from=${from}&to=${end}`, { now: CLOCK_ORIGIN });
-    const list = await api.listRequests({ from, limit: 50, to: end });
+    const page = await mount(`/requests?rows=100&from=${from}&to=${end}`, { now: CLOCK_ORIGIN });
+    const list = await api.listRequests({ from, limit: 100, to: end });
     const lateAt = Date.parse(requests.find((r) => r.id === LATE)?.at ?? '');
     await chooseInterval(page, '5 s');
     const polls = [];
@@ -18640,9 +18642,10 @@ await forView('/routing-log', async () => {
   }
   {
     // Primary's Fable reservation round at 11:13:40. Pace holds back half of what primary's Fable week burn of 0.008 an
-    // hour spends over the 80.9 hours to the reset, 0.32376 (`RESERVATION_FABLE_BURN` in mock/routingLog.ts), which a
-    // 7-day reading of 0.7 leaves 0.3 of room for (`RESERVATION_WEEK_USED`). The panel names the reservation as what
-    // fired the round, draws it as a whole percent, and reads the Fable pin as left out under the Fable model.
+    // hour spends over the 80.9 hours to the reset, 0.32376 (`RESERVATION_FABLE_BURN` in mock/routingLog.ts), which
+    // primary's 7-day seed of 0.73 (mock/accounts.ts), walked back to 0.70 at the round, leaves 0.3 of room for. The
+    // panel names the reservation as what fired the round, draws it as a whole percent, and reads the Fable pin as left
+    // out under the Fable model.
     const name = '/routing-log opens a round the Fable reservation fired';
     const id = 'req_5d1f8c3a-b27';
     if ((await api.getDecision(id, 1)) === null) results.push({ name, ok: false, missing: ['no decision of the story at 11:13:40 on primary'] });
@@ -19081,19 +19084,23 @@ await forView('/routing-log', async () => {
         id: 'req_6e1f3b98-a24',
         seq: 1,
         terminus: ['chosen', 'Chosen', 'renewed'],
-        // The round marked nothing, so its Round group names each pin it passed over and why, in the round's order: the
-        // cold Sonnet 4.5 pin unpriced, since its model has no weight of its own, the Sonnet 5.5 pin with no runway on
-        // any sibling, then the two left out before the walk (`NO_RUNWAY_PINS` in mock/routingLog.ts): the parked Opus
-        // pin on the fast lane and the released session's pin whose agent ended.
+        // The round marked nothing, so its Round group names each pin it passed over and why, in the round's order
+        // (`NO_RUNWAY_PINS` in mock/routingLog.ts): the cold Sonnet 4.5 pin unpriced, since its model has no weight of
+        // its own, the Sonnet 5.5 and the Haiku 4.5 pin with no runway on any sibling, the two Sonnet 4.5 pins that
+        // came over from secondary unpriced, then the two left out before the walk: the parked Opus pin on the fast
+        // lane and the released session's pin whose agent ended.
         own: async (card, record, page) => {
           const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
           const skipped = popoverRowOf(round, 'skipped') ?? [];
           return (
-            skipped.length === 4 &&
+            skipped.length === 7 &&
             /^skipped [0-9a-f]{8}: unpriced$/.test(skipped[0]) &&
             /^skipped [0-9a-f]{8}: no runway$/.test(skipped[1]) &&
-            /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[2]) &&
-            /^skipped [0-9a-f]{8}: ended$/.test(skipped[3])
+            /^skipped [0-9a-f]{8}: no runway$/.test(skipped[2]) &&
+            /^skipped [0-9a-f]{8}: unpriced$/.test(skipped[3]) &&
+            /^skipped [0-9a-f]{8}: unpriced$/.test(skipped[4]) &&
+            /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[5]) &&
+            /^skipped [0-9a-f]{8}: ended$/.test(skipped[6])
           );
         },
         what: 'round that marked nothing',
@@ -21394,7 +21401,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '16', '3'], ['ci', '0', '3'], ['laptop', '7', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '240 requests, 16.3% errors',
+      line === '268 requests, 14.6% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -22796,8 +22803,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // alone, as the breakdown answers it, and the day holds no billed probe, so Probes by outcome draws its bars only
       // while its own reads count probes. Its legend reads the warming breakdown's probe counts, which a read with
       // probes off still holds here. The figures are the probe rows of the story's rollups (`ALL_ROLLUPS`,
-      // mock/requests.ts) over the day to 14:30: 3 ok of which 1 migrated, 1 held, 31 skipped and 31 failed, the 30
-      // drawn probes that found no live pin among them, in 18 hourly buckets that stack 33 nonzero bars. jsdom lays
+      // mock/requests.ts) over the day to 14:30: 5 ok of which 3 migrated, 1 held, 40 skipped and 31 failed, the 30
+      // drawn probes that found no live pin among them, in 18 hourly buckets that stack 36 nonzero bars. jsdom lays
       // nothing out, so the chart's container reads a browser's size here.
       const measure = window.HTMLElement.prototype.getBoundingClientRect;
       window.HTMLElement.prototype.getBoundingClientRect = function () {
@@ -22813,7 +22820,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       kinds.unmount();
       results.push({
         name: '/analytics Probes by outcome counts probes with the toggle off',
-        ok: JSON.stringify(legend) === JSON.stringify([['OK', '2'], ['Migrated', '1'], ['Held', '1'], ['Skipped', '31'], ['Failed', '31']]) && bars === 33,
+        ok: JSON.stringify(legend) === JSON.stringify([['OK', '2'], ['Migrated', '3'], ['Held', '1'], ['Skipped', '40'], ['Failed', '31']]) && bars === 36,
         missing: [JSON.stringify(legend), `${bars} bars`],
       });
     }
@@ -22836,7 +22843,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       localStorage.removeItem('phoebis.unit');
       results.push({
         name: '/analytics under Billed dollars Probes by outcome counts the probes of both sides with the toggle off',
-        ok: unit === 'usd' && JSON.stringify(legend) === JSON.stringify([['OK', '2'], ['Migrated', '1'], ['Held', '1'], ['Skipped', '31'], ['Failed', '31']]) && bars === 33,
+        ok: unit === 'usd' && JSON.stringify(legend) === JSON.stringify([['OK', '2'], ['Migrated', '3'], ['Held', '1'], ['Skipped', '40'], ['Failed', '31']]) && bars === 36,
         missing: [`unit ${unit}`, JSON.stringify(legend), `${bars} bars`],
       });
     }
@@ -25348,12 +25355,13 @@ await forView('/analytics', async () => {
     const low = read(page, 'Traffic by model');
     page.unmount();
     const ZERO = ['claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5'];
-    // The day's Sonnet 5.5 rows fail 10 of 67, the turn the upstream answered 400, the bare 502 and the rejection
-    // beside it among them, and its Sonnet 4.5 rows 8 of 74. The Haiku rows fail 7 of 41 with the stream its client
-    // closed left out, still above Opus 5.5's 1 of 6.
+    // The day's Fable rows fail 13 of 47. Its Sonnet 5.5 rows fail 10 of 74, the turn the upstream answered 400, the
+    // bare 502 and the rejection beside it among them, and its Sonnet 4.5 rows 8 of 78. The Haiku rows fail 7 of 42
+    // with the stream its client closed left out, one sixth as Opus 5.5's 1 of 6, so the name orders the two under both
+    // directions.
     const want = {
       high: shown('down', ['claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-4-5', ...ZERO, 'no model'], '?by=model&sort=error_rate', 'Error rate', 'descending'),
-      low: shown('up', [...ZERO, 'claude-sonnet-4-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1', 'no model'], '?by=model&sort=error_rate&dir=asc', 'Error rate', 'ascending'),
+      low: shown('up', [...ZERO, 'claude-sonnet-4-5', 'claude-sonnet-5-5', 'claude-haiku-4-5-20251001', 'claude-opus-5-5', 'claude-fable-5-1', 'no model'], '?by=model&sort=error_rate&dir=asc', 'Error rate', 'ascending'),
     };
     results.push({ name, ok: JSON.stringify({ high, low }) === JSON.stringify(want), missing: [`high ${JSON.stringify(high)}`, `low ${JSON.stringify(low)}`] });
   }
@@ -25836,8 +25844,9 @@ await forView('/sessions', async () => {
     // Its pin used 95 minutes back and its last turn about 16 hours back: the window centers on the last turn and its
     // hour after ended about 15 hours before now.
     '1c0f9727-241e-48a5-9d36-3d241522aaa3': (s) => ({ from: at(s.lastInferenceAt, -HOUR), to: at(s.lastInferenceAt, HOUR) }),
-    // Its pin used 21 seconds back and its last turn about five hours back: the window centers on the last turn.
-    'c64358b5-b04f-4047-baf2-5e86716ea490': (s) => ({ from: at(s.lastInferenceAt, -HOUR), to: at(s.lastInferenceAt, HOUR) }),
+    // Its pin used 21 seconds back and its last turn, its Haiku 4.5 subagent's, 3 minutes 30 seconds back: the clock
+    // caps the window's end at now.
+    'c64358b5-b04f-4047-baf2-5e86716ea490': (s) => ({ from: at(s.lastInferenceAt, -HOUR), to: isoAt(CLOCK_ORIGIN) }),
     // Its last turn 2 minutes 32 seconds back and its pin used 36 minutes back: the clock caps the window's end at now.
     'd7167642-751d-475e-b0bf-2f24fe70245e': (s) => ({ from: at(s.lastInferenceAt, -HOUR), to: isoAt(CLOCK_ORIGIN) }),
     // The registered row holds neither, so the log opens on its default last hour, which the address leaves out.
@@ -26228,11 +26237,11 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
     }
   }
   {
-    // The story's first session (`STORY_AGENTS[0]`) runs main, the fork c21e and e4b7, and c21e's one request of the
-    // default day is req_96461df2-61a, eleven hours back, beside a probe the page leaves out. It is the fork's first
-    // turn, which finds no pin of its own, and its diagnostics member names its parent's last answer, which another
-    // account holds, so it reads previous_message_not_found. The rollups carry no agent, so Add filter offers Agent
-    // under a session alone.
+    // The story's first session (`STORY_AGENTS[0]`) runs main, the fork c21e and e4b7, and c21e's two requests of the
+    // default day are req_96461df2-61a, eleven hours back, and the seed row of its recipe's last request,
+    // req_1a8d4f63-e27 at 13:56, beside a probe the page leaves out. Each is a first turn that finds no pin of its own,
+    // and its diagnostics member names its parent's last answer, which another account holds, so both read
+    // previous_message_not_found. The rollups carry no agent, so Add filter offers Agent under a session alone.
     const name = '/analytics an agent narrows the session view to its requests and its reasons links, and Add filter offers Agent under a session alone';
     const agent = 'c21e';
     const session = requests.find((r) => r.agentId === agent)?.sessionId ?? '';
@@ -26259,7 +26268,7 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
       name,
       ok:
         JSON.stringify(bare) === JSON.stringify(['true', "An agent narrows one session's view, so pick a session first."]) &&
-        JSON.stringify(read) === JSON.stringify({ chips: ['agent: c21e', `session: ${session.slice(0, 8)}…`], requests: 1, row: [null, null] }) &&
+        JSON.stringify(read) === JSON.stringify({ chips: ['agent: c21e', `session: ${session.slice(0, 8)}…`], requests: 2, row: [null, null] }) &&
         JSON.stringify(links) === JSON.stringify([{ agent, reason: 'previous_message_not_found', session }]),
       missing: [JSON.stringify(bare), JSON.stringify(read), JSON.stringify(links)],
     });
@@ -26505,8 +26514,8 @@ await forView('/accounts', async () => {
   const ordered = (rows, compare) => [...rows].sort((a, b) => compare(a, b) || byLabel(a, b)).map((a) => a.id);
   const want = {
     name: ordered(accounts, () => 0),
-    usage: ['secondary', 'nightly', 'studio', 'reserve', 'primary', 'workshop', 'zephyr', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
-    usageAsc: ['zephyr', 'workshop', 'primary', 'reserve', 'studio', 'nightly', 'secondary', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
+    usage: ['secondary', 'nightly', 'studio', 'primary', 'reserve', 'workshop', 'zephyr', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
+    usageAsc: ['zephyr', 'workshop', 'reserve', 'primary', 'studio', 'nightly', 'secondary', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
     status: ordered(accounts, (a, b) => a.status.localeCompare(b.status)),
     reset5h: ['secondary', 'studio', 'primary', 'nightly', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'annex', 'sunset', 'workshop', 'zenith', 'zephyr'],
     reset7d: ['nightly', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'zephyr', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
@@ -26692,8 +26701,9 @@ await forView('/keys', async () => {
   // Laptop's week holds the rejection, the bare 502 and the request sent again after a failed connect of the log's first
   // hour, `req_4c1e8b27-d93`, `req_8f5a2d16-c47` and `req_0e5a7c3b-f92`, each a request the rollups count. Desktop's
   // holds the two turns of the conversation that moved off the deleted retired workspace and the three turns of the
-  // conversation whose pin the purge takes twice.
-  const weeks = ['229 requests, 7d', '122 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
+  // conversation whose pin the purge takes twice. The rounds' chains and the recipes' last requests add 28 seed rows,
+  // 5 on laptop and 23 on desktop.
+  const weeks = ['234 requests, 7d', '145 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
     lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },
@@ -27253,14 +27263,16 @@ await forView('/sessions', async () => {
     const FILTER_CASES = [
       {
         // The last turn decides, whatever the pin's use: story 3 (d7167642) is in by its last turn 3 minutes back, its
-        // pin used 2 back, the story's first session (fa23a6da) and story 5 (0d588de5) are out by their last turns
-        // 129 and 25 minutes back, their pins used 7 minutes and 20 seconds back, and the pinless fork (5eeed6ce),
-        // quiet for 16 minutes, is out. The rows the ledger holds no turn of read their pin's use, the auxiliary-only
-        // session (3e9b7c21) 3 minutes back and the fleet session no mod reports (b7e2d5a9) 2.
-        count: '8 sessions · 11 agents',
+        // pin used 2 back, and the story's first session (fa23a6da) and laptop's c64358b5 are in by their subagents'
+        // last turns 7 minutes and 3 minutes 30 seconds back (the seed rows `req_c62e9b05-a41` and
+        // `req_e07b3c82-d95` in `web/src/mock/requests.ts`). Story 5 (0d588de5) is out by its last turn 25 minutes
+        // back, its pin used 20 seconds back, and the pinless fork (5eeed6ce), quiet for 16 minutes, is out. The rows
+        // the ledger holds no turn of read their pin's use, the auxiliary-only session (3e9b7c21) 3 minutes back and
+        // the fleet session no mod reports (b7e2d5a9) 2.
+        count: '10 sessions · 16 agents',
         name: '/sessions ?active=15m keeps the rows whose last turn is inside 15 minutes',
         query: '?active=15m',
-        rows: ['4ef130f1', 'd7167642', '89cd1c92', '7d3e1c20', '8b1f4c2e', '4a7c2e9b', '3e9b7c21', 'b7e2d5a9'],
+        rows: ['4ef130f1', 'd7167642', 'fa23a6da', '89cd1c92', 'c64358b5', '7d3e1c20', '8b1f4c2e', '4a7c2e9b', '3e9b7c21', 'b7e2d5a9'],
       },
       {
         // The folded version of the newest client request: laptop's three story rows (`sessionSpec[6]` to `[8]`), the
@@ -27301,12 +27313,13 @@ await forView('/sessions', async () => {
       },
       {
         // A line's account is its pin's, else its recipe's: the story's first session on primary is in by c21e and e4b7
-        // on nightly, laptop's unledgered row on nightly is out, since it draws main from the row with no pin, and
-        // studio's four rows are in by pins no recipe stands on.
-        count: '9 sessions · 12 matching agents',
+        // on nightly, laptop's c64358b5 on primary by its Haiku 4.5 subagents' line on nightly, laptop's unledgered row
+        // on nightly is out, since it draws main from the row with no pin, and studio's four rows are in by pins no
+        // recipe stands on.
+        count: '10 sessions · 13 matching agents',
         name: "/sessions ?account=nightly,studio keeps the rows with a line on either account, read off the line's recipe or its pin",
         query: '?account=nightly,studio',
-        rows: ['fa23a6da', '89cd1c92', '1c0f9727', '76ddb35b', '6d2f8b40', '5f8a3c1e', '9c2d7e4a', 'e7a4b2d9', 'c8f4a2e7'],
+        rows: ['fa23a6da', '89cd1c92', '1c0f9727', '76ddb35b', 'c64358b5', '6d2f8b40', '5f8a3c1e', '9c2d7e4a', 'e7a4b2d9', 'c8f4a2e7'],
       },
       {
         // a7f3 on story 2 is a Plan agent (`STORY_AGENTS`), and the fork c21e on the story's first session is not.
@@ -27516,12 +27529,13 @@ await forView('/sessions', async () => {
     // fold over the request seed in `web/src/mock/requests.ts`). The five rows with no spend, `0f1d7c64`, `3e9b7c21`,
     // `6d2f8b40`, `b7e2d5a9` and `cd9a5904`, stand last under Cost either way and read by session id, while their zero
     // requests put them first under Requests ascending. `0d588de5`, with its classifier call of 14:02:40, and
-    // `fa23a6da` tie at eight requests and read by session id under both directions.
+    // `d7167642` tie at eight requests, and `229bf72c` and `7bea4514` at seven, each pair read by session id under both
+    // directions.
     const ORDERS = {
-      cost: ['bcc805b6', '89cd1c92', '0d588de5', '4ef130f1', '7bea4514', 'fa23a6da', '4a7c2e9b', '5f8a3c1e', 'd7167642', '229bf72c', '76ddb35b', 'c8f4a2e7', 'c64358b5', '9c2d7e4a', '1c0f9727', 'e7a4b2d9', '8b1f4c2e', '5eeed6ce', '7d3e1c20', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
-      costAsc: ['7d3e1c20', '5eeed6ce', '8b1f4c2e', 'e7a4b2d9', '1c0f9727', '9c2d7e4a', 'c64358b5', 'c8f4a2e7', '76ddb35b', '229bf72c', 'd7167642', '5f8a3c1e', '4a7c2e9b', 'fa23a6da', '7bea4514', '4ef130f1', '0d588de5', '89cd1c92', 'bcc805b6', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
-      requests: ['bcc805b6', '0d588de5', 'fa23a6da', 'd7167642', '229bf72c', '4ef130f1', '7bea4514', '76ddb35b', '89cd1c92', '5eeed6ce', '5f8a3c1e', '8b1f4c2e', 'c64358b5', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', 'e7a4b2d9', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
-      requestsAsc: ['0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904', 'e7a4b2d9', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', '8b1f4c2e', 'c64358b5', '5eeed6ce', '5f8a3c1e', '76ddb35b', '89cd1c92', '229bf72c', '4ef130f1', '7bea4514', 'd7167642', '0d588de5', 'fa23a6da', 'bcc805b6'],
+      cost: ['bcc805b6', '89cd1c92', '7bea4514', '0d588de5', '4ef130f1', 'fa23a6da', '4a7c2e9b', '5f8a3c1e', 'd7167642', '229bf72c', '76ddb35b', 'c8f4a2e7', 'c64358b5', '9c2d7e4a', '1c0f9727', 'e7a4b2d9', '8b1f4c2e', '5eeed6ce', '7d3e1c20', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      costAsc: ['7d3e1c20', '5eeed6ce', '8b1f4c2e', 'e7a4b2d9', '1c0f9727', '9c2d7e4a', 'c64358b5', 'c8f4a2e7', '76ddb35b', '229bf72c', 'd7167642', '5f8a3c1e', '4a7c2e9b', 'fa23a6da', '4ef130f1', '0d588de5', '7bea4514', '89cd1c92', 'bcc805b6', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      requests: ['bcc805b6', 'fa23a6da', '0d588de5', 'd7167642', '229bf72c', '7bea4514', '4ef130f1', '76ddb35b', '89cd1c92', '5eeed6ce', '5f8a3c1e', 'c64358b5', '8b1f4c2e', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', 'e7a4b2d9', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      requestsAsc: ['0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904', 'e7a4b2d9', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', '8b1f4c2e', '5eeed6ce', '5f8a3c1e', 'c64358b5', '76ddb35b', '89cd1c92', '4ef130f1', '229bf72c', '7bea4514', '0d588de5', 'd7167642', 'fa23a6da', 'bcc805b6'],
     };
     const rowIds = (prefixes) => prefixes.map((p) => listed.find((s) => !s.historical && s.sessionId.startsWith(p))).map((s) => (s === undefined ? 'no session' : idOfRow(s)));
     const read = () => ({
@@ -28132,9 +28146,9 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   }
   {
     // Requests: the session's client requests over its life under its key, set right, its last request's age under it,
-    // and the sentence with the instant on hover. The written session folds six of its seed's requests on desktop (the
-    // probe and the rows under the ci and laptop keys left out), and the laptop row the ledger never saw reads a muted
-    // zero.
+    // and the sentence with the instant on hover. The written session folds seven of its seed's requests on desktop
+    // (the probe and the rows under the ci and laptop keys left out), its subagent 4d1a's turn of 13:59 the last of
+    // them, and the laptop row the ledger never saw reads a muted zero.
     const HINT = "Requests over the session's life";
     const requestsOf = (s) => {
       const td = cellOf(s, 'Requests');
@@ -28144,7 +28158,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const lastAt = subjects.written?.lastRequestAt ?? null;
     const want = {
       unledgered: { count: '0', muted: true, right: true, sub: [], title: HINT },
-      written: { count: '6', muted: false, right: true, sub: [fmtRelative(lastAt, CLOCK_ORIGIN)], title: `${HINT}. Last request ${fmtAbsolute(lastAt)}` },
+      written: { count: '7', muted: false, right: true, sub: [fmtRelative(lastAt, CLOCK_ORIGIN)], title: `${HINT}. Last request ${fmtAbsolute(lastAt)}` },
     };
     results.push({
       name: "/sessions the Requests cell reads the session's lifetime count with its last request's age, a muted zero with none",
@@ -28153,11 +28167,12 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
-    // Cost under the Dollar equivalent position: the written session's six client requests on desktop, the rows the
-    // request seed draws onto its session (`SESSION_IDS[9]` in mock/requests.ts, its probe left out), cost $1.15
-    // together: main's on primary on claude-fable-5-1 ($0.3881), main's on overflow's API key on claude-fable-5-1
-    // ($0.4812), main's ($0.0551) and e7c1's two ($0.0438 and $0.1846) on secondary on claude-sonnet-4-5, and b2d8's
-    // 429 on claude-sonnet-4-5 that no account served ($0). The figure reads the plan rows' $0.67 over "equivalent",
+    // Cost under the Dollar equivalent position: the written session's seven client requests on desktop, the rows the
+    // request seed draws onto its session (`SESSION_IDS[9]` in mock/requests.ts, its probe left out) and its subagent
+    // 4d1a's seed row, cost $1.46 together: main's on primary on claude-fable-5-1 ($0.3881), main's on overflow's API
+    // key on claude-fable-5-1 ($0.4812), main's ($0.0551) and e7c1's two ($0.0438 and $0.1846) on secondary on
+    // claude-sonnet-4-5, b2d8's 429 on claude-sonnet-4-5 that no account served ($0), and 4d1a's on primary on
+    // claude-fable-5-1 (`req_93a5e6f1-c04`, $0.3055). The figure reads the plan rows' $0.98 over "equivalent",
     // since the secondary rows priced no share and the billed row's dollars sit on the badge, then the neutral +$ for
     // the $0.4812 overflow's row billed and the neutral +2 in id order: overflow, whose API key billed that row with no
     // plan share and whose line carries its dollars, and secondary, whose plan windows the three secondary rows spent
@@ -28182,10 +28197,10 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       name: "/sessions the Cost cell reads the written session's dollars over equivalent with its +$ and +N badges under Dollar equivalent, a figure under Native, a muted dash with none, and the pin's burn per hour under it",
       ok:
         absent.length === 0 &&
-        dollars.main === '$0.67' &&
+        dollars.main === '$0.98' &&
         dollars.sub[0] === 'equivalent' &&
         JSON.stringify(dollars.badges) === JSON.stringify([{ cls: 'badge badge--neutral', text: '+$', title: '$0.48 billed in dollars' }, { cls: 'badge badge--neutral', text: '+2', title: 'Other accounts the requests spent on:\nOverflow workspace, $0.48 billed in dollars\nsecondary' }]) &&
-        (dollars.title ?? '').startsWith('6 requests. ') &&
+        (dollars.title ?? '').startsWith('7 requests. ') &&
         native.written.main !== null && native.written.main !== '' && !native.written.skeleton &&
         JSON.stringify({ badges: native.unledgered.badges, main: native.unledgered.main, sub: native.unledgered.sub, title: native.unledgered.title }) === JSON.stringify({ badges: [], main: '-', sub: [], title: 'No ledgered request yet' }) &&
         native.fleet.sub.at(-1) === '$0.31/h' &&
@@ -28269,22 +28284,24 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     // The summary line under the card's title, over the rows the filters keep: the 35 agents the Agents cells count, 11
     // busy, 7 idle and 4 parked among them, nightly's notebook row (`sessionSpec[19]`) idle, since its mod went silent
-    // beside main's idle recipe, the 87 client requests of the last 24 hours the rows' `day` folds and a dash for
+    // beside main's idle recipe, the 93 client requests of the last 24 hours the rows' `day` folds and a dash for
     // their spend, since thirteen of the rows' days hold a plan request the cost model priced nothing for and a partial
-    // sum would read as the whole, then the $1.40 the day billed in dollars, $1.4036 over these rows of the request
+    // sum would read as the whole, then the $1.53 the day billed in dollars, $1.5342 over these rows of the request
     // seed (mock/requests.ts): e4b7's row the seed draws onto
     // the story's first session (`SESSION_IDS[0]`) on desktop, on overflow's API key on claude-fable-5-1 ($0.7747), the
     // written session's row on overflow's API key that the Cost case names ($0.4812), the fleet session's three written
     // rows on the fleet key, on contract's usage-based seat on claude-opus-5-5 and claude-sonnet-5-5 ($0.0554, $0.0174
-    // and $0.0337), 0b7f's written row on story 4's desktop session in nightly's overage on claude-sonnet-5 ($0.0055)
-    // and the failover on story 5's desktop session that ends on overflow's API key on claude-sonnet-4-6
-    // (`REJECTION_STORY_ID`, $0.0357). The card's title carries its sentence on hover.
+    // and $0.0337), 0b7f's written row on story 4's desktop session in nightly's overage on claude-sonnet-5 ($0.0055),
+    // the failover on story 5's desktop session that ends on overflow's API key on claude-sonnet-4-6
+    // (`REJECTION_STORY_ID`, $0.0357), the seed rows of the first session's c21e and e4b7 and of laptop's c64358b5's
+    // e90b in nightly's overage on claude-sonnet-5 and claude-haiku-4-5 ($0.0394, $0.035 and $0.0132), and story 3's
+    // Opus 5 turn on primary's fast lane (`req_b4d92e06-a17`, $0.043). The card's title carries its sentence on hover.
     const card = page.container.querySelector('.card--table');
     const subtitle = card?.querySelector('.card__subtitle')?.textContent ?? '';
     const parts = /^(.*) · (.*) requests and (.*) \+ (\$[\d.]+) in 24 h$/.exec(subtitle);
     results.push({
       name: "/sessions the card's summary line reads the agents by word, the day's requests and spend, and the dollars billed beside it, and the title its sentence on hover",
-      ok: card?.querySelector('.card__title [title]')?.getAttribute('title') === 'One row per session. Open a row for its agents, its routing and its cache warming.' && parts !== null && parts[1] === '35 agents: 11 busy, 7 idle, 4 parked' && parts[2] === '87' && parts[3] === '-' && parts[4] === '$1.40',
+      ok: card?.querySelector('.card__title [title]')?.getAttribute('title') === 'One row per session. Open a row for its agents, its routing and its cache warming.' && parts !== null && parts[1] === '35 agents: 11 busy, 7 idle, 4 parked' && parts[2] === '93' && parts[3] === '-' && parts[4] === '$1.53',
       missing: [subtitle, card?.querySelector('.card__title')?.outerHTML ?? 'no title'],
     });
   }
@@ -28649,11 +28666,13 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     // The Agents table reads each line's own facts beside the session's: the written session's main line first with
     // its own pin (claude-fable-5-1 at high effort, 16,228 tokens), main's two seed rows summed into its Requests, then
-    // the busy subagent 4d1a on its own pin (22,000 tokens), whose one seed row ledgered no request. The table closes
+    // the busy subagent 4d1a on its own pin (22,000 tokens), which its one request wrote, the seed row of 13:59 that
+    // carries the agent's type, a teammate (`STORY_AGENTS` in mock/requests.ts). The table closes
     // on the agent's menu, labeled with the agent. An agent's "+N" counts the accounts other than its line's: on the
     // story's first session, a primary one, e4b7's line sits on nightly and its seed rows spent $0.97, $0.77 of it
     // billed on overflow's API key and $0.20 on secondary's plan, while its token count on primary stores no usage and
-    // prices nothing. So its Cost cell reads the plan rows' $0.20 over equivalent with +$ and +2, for overflow's billed
+    // prices nothing. Its last turn on nightly (`req_c62e9b05-a41`) adds $0.035, billed in nightly's overage. So its
+    // Cost cell reads the plan rows' $0.20 over equivalent with +$ for the billed dollars and +2 for overflow's billed
     // dollars and secondary's plan windows.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     const { heads, rows } = agentsOf(await openRow(page, written));
@@ -28695,9 +28714,9 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         menu: 'Actions for agent 4d1a',
         model: 'fable-5-1',
         modelTitle: 'claude-fable-5-1',
-        requests: '0',
+        requests: '1',
         status: { badge: 'badge badge--accent', muted: false, text: 'busy', title: 'Between model turns, running tools or streaming. Probed like any other agent, and the idle window of the main conversation keeps running.' },
-        type: '-',
+        type: 'teammate',
       },
     };
     const read = { busy: pick(busy), main: pick(main) };

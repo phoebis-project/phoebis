@@ -170,8 +170,9 @@ const sessionSpec: ({
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting', pinnedBy: { requestId: 'req_da52d141-a5a' } },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95, cause: 'idle_limit' },
-  // Its subagents run Haiku 4.5, which the laptop key's list allows beside the main agent's Sonnet 4.5.
-  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' }, cause: 'unsupported_shape', subagentHold: 'affinity_too_short' },
+  // Its subagents run Haiku 4.5, which the laptop key's list allows beside the main agent's Sonnet 4.5. Their pin
+  // stands on nightly, the one member open to Haiku 4.5 since primary refused the model at 14:24:10.
+  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { accountId: 'nightly', model: 'claude-haiku-4-5-20251001' }, cause: 'unsupported_shape', subagentHold: 'affinity_too_short' },
   // A client whose project read failed while its working directory read answered.
   {
     keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting', noEffort: true,
@@ -548,6 +549,19 @@ function storyPinPlaced(placedBy: { renewedBy: string; requestId: string }): { a
 }
 
 /**
+ * The end of the newest request that the main agent of a session had answered on an account. A probe is left out, since
+ * it renews the pin and leaves the cache as it found it.
+ */
+function newestAnswerOn(keyId: string, sessionId: string, accountId: string): string | null {
+  const ends = REQUESTS.flatMap((r) => {
+    const last = r.attempts[r.attempts.length - 1];
+    const answered = r.kind !== 'probe' && r.keyId === keyId && r.sessionId === sessionId && r.agentId === 'main' && last?.accountId === accountId && last.upstreamStatus === 200;
+    return answered ? [Date.parse(last.startedAt) + (last.durationMs ?? 0)] : [];
+  });
+  return ends.length === 0 ? null : iso(Math.max(...ends));
+}
+
+/**
  * Each drawn row's first sighting, which the builders date its pins from: the router keeps it until the session's last
  * pin leaves, so an unpinned row holds none.
  */
@@ -589,6 +603,9 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const burnAtRoll = ago((written ? written.burnAtMinutes : rng.int(2, 40)) * MINUTE);
   const lastInputRoll = written ? written.lastInputTokens : rng.int(500, 20_000);
   const lastRefreshRoll = ago((written ? written.lastRefreshMinutes : rng.int(2, 40)) * MINUTE);
+  // A pin's cache was refreshed no earlier than the pin was written, so a roll that falls ahead of the write a move of
+  // the story made reads the newest answer the pin's requests hold on its account instead.
+  const lastRefresh = pinWrite !== null && Date.parse(lastRefreshRoll) < Date.parse(pinWrite.at) ? (newestAnswerOn(spec.keyId, sessionId, spec.accountId) ?? pinWrite.at) : lastRefreshRoll;
   // A pin on a model without a weight of its own has no burn to rank by, as the route answers it.
   const weighted = pinned && unit === 'window_share' && weightOf(TABLES, spec.model, 'seven_day') !== null;
   const folded = !pinned ? null : unit === 'usd' ? burnUsdRoll : weighted ? burnRoll : null;
@@ -625,7 +642,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     cacheTtlMs: pinned ? 5 * MINUTE : null,
     effort: pinned && !spec.noEffort ? effortAt(i) : null,
     lastInputTokens: pinned ? lastInputRoll : null,
-    lastRefreshAt: pinned ? lastRefreshRoll : null,
+    lastRefreshAt: pinned ? lastRefresh : null,
     // Read off the display pin's line once the lines are written.
     ended: null,
     fast: pinned ? fastPin(spec.keyId, spec.model) : null,

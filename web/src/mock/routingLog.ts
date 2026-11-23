@@ -18,7 +18,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
 import { DELETED_ACCOUNTS, KEY_REVOKED_AT, RETIRED, WORST_BUCKET, keyById, poolById, storyAccountOf, type PoolSeed } from './pools';
-import { ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, NO_PIN_DRAWS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, ROUTER_RESTARTED_AT, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, pinReadAt, pinStampOf, requestById, resentInPlace, type CooldownRow } from './requests';
+import { ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, CLIMB_SESSION_ID, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, NO_PIN_DRAWS, OPENING_SESSION_IDS, OPUS_MORNING_SESSION_ID, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, RESERVATION_FABLE_SESSION_ID, RESERVATION_MARKED_SESSION_ID, REWRITE_HELD_ID, ROUTER_RESTARTED_AT, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, pinReadAt, pinStampOf, requestById, resentInPlace, type CooldownRow } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { drawnWindows, droppedThinkingOf, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
@@ -394,6 +394,20 @@ const ACCOUNT_BURNS = new Map(
  * Primary's 5-hour burn before the afternoon round's current session lands there, the burn of the sessions it carries.
  */
 const PRIMARY_EARLIER_BURN = 0.085;
+/**
+ * The 7-day Fable window's burn on primary while a Fable pin of all stands there through the morning, the pins' demand
+ * as the reservation's test reads it. The desktop Fable conversation's turns are few, so no clock hour of primary's
+ * Fable record holds that rate, and the demand leaves with the pin.
+ */
+const RESERVATION_FABLE_BURN = 0.008;
+/** The desktop Fable conversation's landing on primary, read off its row. */
+const FABLE_PIN_LANDED_AT = ((): number => {
+  const landing = requestById.get('req_2d8f6b14-a79');
+  if (!landing) throw new Error('the story lacks the landing of the Fable conversation whose pin primary reserves its week for');
+  return Date.parse(landing.at);
+})();
+/** The sweep that takes the last Fable pin of the morning off primary, a minute behind the reservation round. */
+const FABLE_PIN_SWEPT_AT = clock(11, 14, 40);
 /** The placement that lands the afternoon round's current session on primary, read off its row. */
 const CURRENT_SESSION_LANDED_AT = ((): number => {
   const landing = requestById.get('req_b2bed817-a58');
@@ -404,14 +418,17 @@ const CURRENT_SESSION_LANDED_AT = ((): number => {
  * The burns a decision read on an account: the story's hand-written decisions read the sessions the accounts carry, and
  * a drawn decision reads none, so it projects its reading. The router sums the pins an account holds at the decision,
  * and a placement reads the sum before its own booking, so primary's 5-hour window reads the round's current session
- * after its placement alone. A burn the decision writes wins.
+ * after its placement alone, and its Fable week the morning's Fable pins behind the first one's landing, while one
+ * stands there. A burn the decision writes wins.
  */
 const burnsOf = (spec: Spec, accountId: string): Record<string, number> => {
   if (!spec.story) return {};
   const written = spec.burns?.[accountId];
   if (written) return written;
   const row = ACCOUNT_BURNS.get(accountId) ?? {};
-  return accountId === 'primary' && spec.at <= CURRENT_SESSION_LANDED_AT ? { ...row, five_hour: PRIMARY_EARLIER_BURN } : row;
+  if (accountId !== 'primary') return row;
+  const fable: Record<string, number> = spec.at > FABLE_PIN_LANDED_AT && spec.at < FABLE_PIN_SWEPT_AT ? { seven_day_fable: RESERVATION_FABLE_BURN } : {};
+  return spec.at <= CURRENT_SESSION_LANDED_AT ? { ...row, ...fable, five_hour: PRIMARY_EARLIER_BURN } : { ...row, ...fable };
 };
 
 /**
@@ -929,23 +946,38 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   }
   // The one trigger: the first plan window, in the windows' order, whose projection at its horizon reads over the line
   // that horizon's bound sets, or on a pool that slows its pins the 5-hour window's stretch past the threshold once the
-  // safety wait has passed, a 5-hour window under the hold yielding to the next. A round the story writes fires on the
-  // story's word, and the builder reads no projection wait for it. A decision inside a round's dwell reads the same
-  // trigger as the round, the first window over its line. Any other window over its line is inside its wait, which
-  // holds the round back and yields to the next window. The line names every projection it read with its horizon, its
-  // wall and its wait, the 5-hour window's age and hold inside the hold, and how long the stretch has read over while
-  // the safety wait holds.
+  // safety wait has passed, a 5-hour window under the hold yielding to the next. A round the story writes fires where
+  // its window has read over its ceiling for the projection's wait, counted from the first reading `OVER_CEILING_SINCE`
+  // dates, and the build fails on one inside it. A decision inside a round's dwell reads the same trigger as the round,
+  // the first window over its line. Any other window over its line is inside its wait, which holds the round back and
+  // yields to the next window. The line names every projection it read with its horizon, its wall and its wait, the
+  // 5-hour window's age and hold inside the hold, and how long the stretch has read over while the safety wait holds.
   const newest = newestRound(source.accountId, at);
   const fires = spec.round !== undefined || (newest !== null && at - newest < pool.shedDwellSeconds * 1_000);
   const stretch = pool.slowDown ? stretchTriggerOf(source, pool, at) : null;
   const { fired: trigger, waits } = stretch === null ? triggerOf(source, pool.slowDown ? windows.filter((w) => w !== 'five_hour') : windows, at, pool, fires) : { fired: stretch, waits: [] };
   // The stretch's safety wait is read apart, so a stretch past it fires a round the story has to write.
   if (trigger !== null && !fires) throw new Error(`the story writes no round for ${source.accountId}'s ${trigger.window} window at ${iso(at)}, outside any dwell`);
-  // The Fable reservation's test runs once no window fired and reads off the 7-day projection, as the router's does. A
-  // round the story writes fires on the story's word, so the builder reads no wait for it either.
+  // The stretch's round waits the safety wait, read above, so the projection's wait is read for every other round.
+  if (spec.round !== undefined && trigger !== null && !trigger.slowed) {
+    const since = firstReadingOf(source.accountId, trigger.window) ?? at;
+    const waitMs = projectionWaitOf(source, trigger.window, since, at, pool);
+    if (at - since < waitMs) throw new Error(roundInsideWait(source.accountId, `${trigger.window} window`, at, since, waitMs));
+  }
+  // The Fable reservation's test runs once no window fired and reads off the 7-day projection, as the router's does.
+  // Its wait runs from the first reading of the room under the reservation, which `OVER_CEILING_SINCE` dates under
+  // `FABLE_RESERVATION`: outside a dwell a short room inside the wait holds the round back and names its stamp and its
+  // wait, and one past it would fire a round the story has to write.
   const short = reservationShort(source, pool, at);
-  const reserved = trigger === null && short !== null && (source.windows.seven_day?.projection ?? null) !== null;
+  const shortRead = trigger === null && short !== null && (source.windows.seven_day?.projection ?? null) !== null;
+  const reservationWait = shortRead && (spec.round !== undefined || !fires) ? reservationWaitOf(source, at, pool) : null;
+  const reservationWaits = reservationWait !== null && spec.round === undefined && at - reservationWait.overSince < reservationWait.waitMs;
+  const reserved = shortRead && !reservationWaits;
+  if (reserved && spec.round !== undefined && reservationWait !== null && at - reservationWait.overSince < reservationWait.waitMs)
+    throw new Error(roundInsideWait(source.accountId, 'Fable reservation', at, reservationWait.overSince, reservationWait.waitMs));
   if (reserved && !fires) throw new Error(`the story writes no round for ${source.accountId}'s Fable reservation at ${iso(at)}, outside any dwell`);
+  // A round the story writes is one the readings fire, as the router runs none on a selection whose tests fire nothing.
+  if (spec.round !== undefined && trigger === null && !reserved) throw new Error(`the story writes a round for ${source.accountId} at ${iso(at)} that no window's test and no Fable reservation fires`);
   // The reservation's test names no rate, so its round writes no excess.
   const fired: { by: string; excess: number | null; window: string } | null =
     trigger !== null ? { by: trigger.slowed ? 'slow_down' : 'projection', excess: trigger.excess, window: trigger.window } : reserved ? { by: 'fable_reservation', excess: null, window: 'seven_day' } : null;
@@ -963,8 +995,10 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   }
   const held = fiveHourHeld(source, pool, at);
   if (held) facts.push(fact('age_five_hour', held.ageMs, 'ms'), fact('hold_five_hour', held.holdMs, 'ms'));
-  // The router names the reservation wherever the room reads short, whether or not a window fired.
+  // The router names the reservation wherever the room reads short, whether or not a window fired, and the stamp and
+  // the wait beside it while the room reads short inside the wait.
   if (short !== null) facts.push(fact('fable_reservation', short, 'percent'));
+  if (reservationWaits && reservationWait !== null) facts.push(fact('over_since_fable_reservation', reservationWait.overSince, 'time'), fact('wait_fable_reservation', reservationWait.waitMs, 'ms'));
   // The line tests windows of both kinds, so the router writes both of the pool's ceilings here, whatever line the
   // trigger reads.
   facts.push(fact('five_hour_ceiling', pool.fiveHourCeiling, 'percent'), fact('weekly_ceiling', pool.weeklyCeiling, 'percent'));
@@ -972,7 +1006,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const stretchWaits = overSince !== null && at - overSince < SLOW_DOWN_WAIT_MS;
   if (stretchWaits) facts.push(fact('over_ms', at - overSince, 'ms'));
   // The hold holds back the round alone, as a wait does, so a held line goes on to the cooldown and the mark.
-  if (fired === null && waits.length === 0 && !stretchWaits && held === null) {
+  if (fired === null && waits.length === 0 && !stretchWaits && held === null && !reservationWaits) {
     no(4, facts);
     return none;
   }
@@ -1042,46 +1076,98 @@ function reservationShort(source: RecordCandidate, pool: PoolSeed, at: number): 
 /** The instant a window's projected burn takes it to its wall, in whole milliseconds as the engine stores it. */
 const wallOf = (x: Pick<RecordCandidate['windows'][string], 'utilization'>, burn: number, at: number): number => Math.round(at + ((1 - x.utilization) / burn) * HOUR);
 
-/**
- * The instant a window the story projects over its line outside a round's dwell first read over its own ceiling,
- * by account and window: secondary's week, which the story's reading dates.
- */
-const OVER_CEILING_SINCE: Readonly<Record<string, Readonly<Record<string, number>>>> = { secondary: { seven_day: SECONDARY_WEEK_OVER_AT } };
+/** The key `OVER_CEILING_SINCE` dates the Fable reservation's stamp under, beside the plan windows' names. */
+const FABLE_RESERVATION = 'fable_reservation';
+
+/** The instant of the selection that set a stamp, read off its request row. */
+const selectionAt = (requestId: string): number => {
+  const row = requestById.get(requestId);
+  if (!row) throw new Error(`the story lacks ${requestId}, the selection that first read a test over`);
+  return Date.parse(row.at);
+};
 
 /**
- * The wait of a window over its line that fired no round, as the router's `trigger_of` reads it: a quarter of the
- * time from its first reading over the ceiling to its wall instant, at most twice the pool's burn average, and the cap
- * alone where its burn reads nothing. A window the story dates no first reading for, or one past its wait, would fire a
- * round the story does not write, so the build fails on it.
+ * The stamp of each test the story waits on, by account and by window, as the router's `note_projection` and
+ * `note_reservation` set it: the instant of the first selection on the account that read the window's projection over
+ * its own ceiling, or under `FABLE_RESERVATION` the 7-day room under the Fable reservation. Each is a renewal the day
+ * holds, read off its row, and secondary's week takes the reading the story dates. The router keeps a stamp only while
+ * the account holds a pin of the pool at every purge sweep, so the rows from each stamp to its round keep one there. A
+ * round on a window with no date here waits from its own instant, as the router's does on a missing stamp.
  */
-function waitOf(source: RecordCandidate, window: string, reading: Pick<RecordCandidate['windows'][string], 'utilization'>, at: number, pool: PoolSeed): { overSince: number; waitMs: number; window: string } {
-  const overSince = lookup(OVER_CEILING_SINCE[source.accountId] ?? {}, window);
-  if (overSince === undefined) throw new Error(`the story dates no reading over the ceiling for ${source.accountId}'s ${window} window, over its line at ${iso(at)}`);
+const OVER_CEILING_SINCE: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  nightly: { seven_day_fable: selectionAt('req_4b9e2c71-a35') },
+  primary: { [FABLE_RESERVATION]: selectionAt('req_8e1d5a36-c92'), five_hour: selectionAt('req_c3a71e58-b46') },
+  secondary: { five_hour: selectionAt('req_5f2c8b19-d73'), seven_day: SECONDARY_WEEK_OVER_AT },
+};
+
+/** The stamp the story dates for a test on an account, and none where it dates no first reading. */
+const firstReadingOf = (accountId: string, window: string): number | undefined => lookup(OVER_CEILING_SINCE[accountId] ?? {}, window);
+
+/**
+ * The wait of a window over its line, as the router's `trigger_of` reads it: a quarter of the time from the stamp to
+ * the wall instant its burn reaches now, at most twice the pool's burn average, and the cap alone where its burn reads
+ * nothing.
+ */
+function projectionWaitOf(source: RecordCandidate, window: string, overSince: number, at: number, pool: PoolSeed): number {
   const cap = 2 * pool.burnAverageSeconds * 1_000;
+  const reading = source.windows[window];
   const burn = source.burn[window] ?? 0;
-  const waitMs = burn > 0 ? Math.min(Math.floor((wallOf(reading, burn, at) - overSince) / 4), cap) : cap;
-  if (at - overSince >= waitMs) throw new Error(`${source.accountId}'s ${window} window is past its wait at ${iso(at)} with no round the story writes`);
-  return { overSince, waitMs, window };
+  return burn > 0 && reading !== undefined ? Math.min(Math.floor((wallOf(reading, burn, at) - overSince) / 4), cap) : cap;
+}
+
+/** What the build says of a round the story writes before its test has read over for the wait. */
+const roundInsideWait = (accountId: string, test: string, at: number, overSince: number, waitMs: number): string =>
+  `the story writes the round on ${accountId}'s ${test} at ${iso(at)}, inside the wait of ${waitMs} ms that runs from its first reading over at ${iso(overSince)}`;
+
+/**
+ * The stamp and the wait of a window over its line that fired no round. A window the story dates no first reading for,
+ * or one past its wait, would fire a round the story does not write, so the build fails on it. A 5-hour window under
+ * the hold reads its wait first, as the router does: inside the wait the line names it beside the age, and past it the
+ * hold alone keeps the round back, so the window names no wait and the build goes on.
+ */
+function waitOf(source: RecordCandidate, window: string, at: number, pool: PoolSeed, held: boolean): { overSince: number; waitMs: number; window: string } | null {
+  const overSince = firstReadingOf(source.accountId, window);
+  if (overSince === undefined) throw new Error(`the story dates no reading over the ceiling for ${source.accountId}'s ${window} window, over its line at ${iso(at)}`);
+  const waitMs = projectionWaitOf(source, window, overSince, at, pool);
+  if (at - overSince < waitMs) return { overSince, waitMs, window };
+  if (held) return null;
+  throw new Error(`${source.accountId}'s ${window} window is past its wait at ${iso(at)} with no round the story writes`);
+}
+
+/**
+ * The stamp and the wait of the Fable reservation's test on a source whose room reads short, as the router's
+ * `reservation_trigger` reads them: a quarter of the time from the stamp to the 7-day window's reset, at most twice the
+ * pool's burn average, and the cap alone where the reading names no reset. A source the story dates no first short
+ * reading for waits from `at`, as the router's does on a missing stamp.
+ */
+function reservationWaitOf(source: RecordCandidate, at: number, pool: PoolSeed): { overSince: number; waitMs: number } {
+  const overSince = firstReadingOf(source.accountId, FABLE_RESERVATION) ?? at;
+  const cap = 2 * pool.burnAverageSeconds * 1_000;
+  const reset = source.windows.seven_day?.reset ?? null;
+  return { overSince, waitMs: reset === null ? cap : Math.min(Math.floor((Date.parse(reset) - overSince) / 4), cap) };
 }
 
 /**
  * The window a round on `source` fires on where `fires` holds, and the excess per hour that lands its projection on the
  * line its horizon read: the wall at a reset or an end horizon, the window's own ceiling at the five-hour bound. Where
  * it does not hold, each window over its line is inside its wait and yields to the next. A 5-hour window under the hold
- * yields to the next window in the order.
+ * yields to the next window in the order, behind its wait where it reads over its line.
  */
-function triggerOf(source: RecordCandidate, windows: string[], at: number, pool: PoolSeed, fires: boolean): { fired: { excess: number; slowed?: true; window: string } | null; waits: ReturnType<typeof waitOf>[] } {
+function triggerOf(source: RecordCandidate, windows: string[], at: number, pool: PoolSeed, fires: boolean): { fired: { excess: number; slowed?: true; window: string } | null; waits: NonNullable<ReturnType<typeof waitOf>>[] } {
   const held = fiveHourHeld(source, pool, at) !== null;
-  const waits: ReturnType<typeof waitOf>[] = [];
+  const waits: NonNullable<ReturnType<typeof waitOf>>[] = [];
   for (const w of windows) {
     const x = source.windows[w];
-    if (x?.projection === null || x?.projection === undefined || x.horizon === null || (w === 'five_hour' && held)) continue;
+    if (x?.projection === null || x?.projection === undefined || x.horizon === null) continue;
     const line = lineOf(source, w, pool, at);
     if (x.projection <= line) continue;
+    const young = w === 'five_hour' && held;
     if (!fires) {
-      waits.push(waitOf(source, w, x, at, pool));
+      const wait = waitOf(source, w, at, pool, young);
+      if (wait !== null) waits.push(wait);
       continue;
     }
+    if (young) continue;
     const hours = Math.max((Date.parse(x.horizon) - at) / HOUR, 1 / 60);
     return { fired: { excess: round5((x.projection - line) / hours), window: w }, waits };
   }
@@ -2040,16 +2126,18 @@ const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWi
  * The 11:00 round's four walked pins on secondary in its order: the cold one, then the warm ones by burn over their
  * prompt. Each holds Sonnet 4.5, the one model secondary serves, and burns its share of the 5-hour window per hour,
  * which sum to the account's burn. The first two cover the target under the cap and plan their moves to primary, where
- * they fit, and the walk stops before the current pin. A fifth pin, the subagent `f2c8`'s, which its first turn placed
- * on secondary at 10:59:40, reads warm under its fresh five-minute cache and holds no prompt size and no burn while
- * that turn runs through the round, so the walk leaves it out before the order. The round is an earlier build's
- * record, which priced Sonnet 4.5 through its fallback weight, so its burns and marks stand as it stored them.
+ * they fit, and the walk stops before the current pin. The fourth is the laptop conversation's, whose renewal of
+ * 10:39:30 stamped the window and whose last turn left its pin on secondary. A fifth pin, the subagent `f2c8`'s, which
+ * its first turn placed on secondary at 10:59:40, reads warm under its fresh five-minute cache and holds no prompt size
+ * and no burn while that turn runs through the round, so the walk leaves it out before the order. The round is an
+ * earlier build's record, which priced Sonnet 4.5 through its fallback weight, so its burns and marks stand as it
+ * stored them.
  */
 const ROUND_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('0d588de5'), skip: null },
   { agentId: 'e90b', burn: 0.0142, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('c64358b5'), skip: null },
   { agentId: 'e90b', burn: 0.0052, cold: false, keyId: 'desktop', lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-4-5', note: 'current', sessionId: sessionId('407dd39b'), skip: null },
-  { agentId: 'c21e', burn: 0.0071, cold: false, keyId: 'desktop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('76ddb35b'), skip: null },
+  { agentId: 'main', burn: 0.0071, cold: false, keyId: 'laptop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: CLIMB_SESSION_ID, skip: null },
   { agentId: 'f2c8', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 0, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('407dd39b'), skip: 'no_burn' },
 ];
 
@@ -2060,17 +2148,23 @@ const ROUND_PINS: RoundPin[] = [
 const parkedOpus = SESSIONS.find((x) => x.sessionId === SESSION_IDS[3] && x.keyId === 'desktop');
 
 /**
- * The afternoon round's pins on primary, cold first. The cold pin holds Sonnet 4.5, which has no weight of its own, so
- * the round prices no burn for it and skips it as unpriced rather than shed a session on a guess. The current pin burns
- * the climb primary's heads draw on its 5-hour window, 0.62 in the 2 h 46 min since the window opened at 11:44, which is
- * primary's own 5-hour burn. No sibling has runway for it, since nightly projects past the ceiling, secondary is spent
- * and cooling, and the Overflow workspace is paused. Two pins leave the round before the order: the parked Opus pin
- * rides the fast lane, so it holds no share of a plan window, and the pin of the session the mod released whole after
- * its one turn at 14:03 belongs to an agent that ended.
+ * The afternoon round's pins on primary, each pin of all that a request row holds there at 14:12:30, cold first. The
+ * three Sonnet 4.5 pins, the cold one of the failover at 14:02:11 and the two that the spent move of 14:05:12 and the
+ * failover of 14:07:51 brought over from secondary, hold a model with no weight of its own, so the round prices no burn
+ * for them and skips each as unpriced rather than shed a session on a guess. The two priced pins share the climb
+ * primary's heads draw on its 5-hour window, 0.62 in the 2 h 46 min since the window opened at 11:44, which is
+ * primary's own 5-hour burn: the current pin and the laptop session's Haiku 4.5 pin, placed at 14:09:41. No sibling
+ * has runway for either, since nightly projects past the ceiling, secondary is spent and cooling, and the Overflow
+ * workspace is paused. Two pins leave the round before the order: the parked session's Opus pin, which its turn of
+ * 14:06 wrote, rides the fast lane, so it holds no share of a plan window, and the pin of the session's main agent
+ * that the mod released after its one turn at 14:03 belongs to an agent that ended.
  */
 const NO_RUNWAY_PINS: RoundPin[] = [
   { agentId: 'main', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('bcc805b6'), skip: 'unpriced' },
-  { agentId: 'main', burn: 0.224, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
+  { agentId: 'main', burn: 0.212, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
+  { agentId: 'main', burn: 0.012, cold: false, keyId: 'laptop', lastInputTokens: 40_800, marked: false, model: HAIKU, note: null, sessionId: sessionId('4ef130f1'), skip: 'no_runway' },
+  { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 47_100, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('0d588de5'), skip: 'unpriced' },
+  { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 56_700, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: 'd6f1a3c8-2e94-4b07-8a5d-3c9e7f2b1a64', skip: 'unpriced' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: parkedOpus?.lastInputTokens ?? 0, marked: false, model: parkedOpus?.model ?? 'claude-opus-5', note: null, sessionId: SESSION_IDS[3], skip: 'fast_lane' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 18_100, marked: false, model: 'claude-sonnet-5', note: null, sessionId: RELEASED_SESSION_ID, skip: 'ended' },
 ];
@@ -2101,31 +2195,37 @@ const FABLE_WEEK_BURN = 0.03;
 /**
  * Nightly's Fable-week round, its two pins as the round lists them: the Fable session's pin, the current one, whose
  * renewal runs standard, so it walks the order on the 7-day Fable window with the window's whole burn, and as the one
- * pin walked it is the last pin, which the engine never marks. Then an Opus pin, whose model draws no 7-day Fable
- * window, so it leaves the round before the order with no burn. The round marks nothing for the last pin.
+ * pin walked it is the last pin, which the engine never marks. Then the laptop conversation's Opus pin, which its turn
+ * of 08:19:05 wrote and whose model draws no 7-day Fable window, so it leaves the round before the order with no burn.
+ * The round marks nothing for the last pin.
  */
 const FABLE_WEEK_PINS: RoundPin[] = [
   { agentId: 'main', burn: FABLE_WEEK_BURN, cold: false, keyId: 'desktop', lastInputTokens: 81_000, marked: false, model: 'claude-fable-5-1', note: 'current', sessionId: sessionId('89cd1c92'), skip: 'last_pin' },
-  { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 61_000, marked: false, model: 'claude-opus-5', note: null, sessionId: 'e3b8d1f6-4a29-4c71-9d05-6b2a8f3c7e14', skip: 'off_window' },
+  { agentId: 'main', burn: null, cold: false, keyId: 'laptop', lastInputTokens: 61_000, marked: false, model: 'claude-opus-5', note: null, sessionId: OPUS_MORNING_SESSION_ID, skip: 'off_window' },
 ];
 
-/** Primary's 7-day reading at its Fable reservation round, which leaves a room of 0.3. */
-const RESERVATION_WEEK_USED = 0.7;
-/** The 7-day Fable window's burn on primary at that round, all the Fable pin's. */
-const RESERVATION_FABLE_BURN = 0.008;
+/** The 7-day Fable window's burn on nightly through the Fable conversation's morning, all that conversation's. */
+const FABLE_MORNING_BURN = 0.033;
+/** Secondary's 5-hour burn at the two renewals that read its window over all's ceiling ahead of the 11:00 round. */
+const SECONDARY_CLIMB_BURN = 0.09;
+/**
+ * Primary's 5-hour burn at the renewal that stamps its window ahead of the afternoon round: the earlier sessions' and
+ * the purged conversation's pin, whose pace the sweep of 13:32:40 takes with it.
+ */
+const PRIMARY_STAMP_BURN = 0.115;
 
 /**
  * Primary's Fable reservation round, its pins as the round lists them. The round walks the pins whose model draws no
  * Fable week on the 7-day window: a cold Sonnet 5.5 pin, whose 0.0016 an hour covers the cap's half of the walked burn,
  * and the current pin, whose Sonnet 4.5 has no weight of its own and so no priced burn, which lifts the guard. The Fable
  * pin leaves the round before the order with no figure, though its 0.008 an hour on the Fable week spends the room the
- * reservation holds. The cold pin is seeded: no row places a pin of a priced model other than Fable on primary inside
- * all's affinity window ahead of the round, so the pin's session holds no row of its own, and none places it elsewhere.
+ * reservation holds. Each pin stands on a row: the cold pin on its session's one turn of 11:05:10, the current pin on
+ * the move of 11:08:30 and the Fable pin on its conversation's renewal of 11:02:40.
  */
 const RESERVATION_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.0016, cold: true, keyId: 'desktop', lastInputTokens: 36_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: 'f6c2a8d4-3b71-4e95-8a0c-5d9e1b7f2c63', skip: null },
+  { agentId: 'main', burn: 0.0016, cold: true, keyId: 'desktop', lastInputTokens: 36_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: RESERVATION_MARKED_SESSION_ID, skip: null },
   { agentId: 'e90b', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: false, model: 'claude-sonnet-4-5', note: 'current', sessionId: sessionId('c64358b5'), skip: 'unpriced' },
-  { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 52_000, marked: false, model: 'claude-fable-5-1', note: null, sessionId: sessionId('7bea4514'), skip: 'fable_model' },
+  { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 52_000, marked: false, model: 'claude-fable-5-1', note: null, sessionId: RESERVATION_FABLE_SESSION_ID, skip: 'fable_model' },
 ];
 
 const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId })), pins });
@@ -2170,6 +2270,14 @@ function storySpecs(): Spec[] {
   const placedStatic: Placement = { depth: 2, prefixTokens: 31_200, rung: 'static' };
   // Secondary's sessions burn its 5-hour window at their sum while the round runs and its marks are pending.
   const roundBurn = { secondary: { five_hour: round5(ROUND_PINS.reduce((n, p) => n + (p.burn ?? 0), 0)) } };
+  // Secondary's 5-hour burn while the laptop conversation works there, ahead of the round's sessions.
+  const climbBurn = { secondary: { five_hour: SECONDARY_CLIMB_BURN } };
+  // Primary's burns while its Fable pin draws the Fable week: the 7-day burn is the walked pin's and the Fable pin's
+  // share of that window, and the 5-hour burn the sessions' before the afternoon.
+  const reservationBurns = { primary: { five_hour: PRIMARY_EARLIER_BURN, seven_day: 0.0056, seven_day_fable: RESERVATION_FABLE_BURN } };
+  // Nightly's burns through the Fable conversation's morning, the 7-day Fable window's all that conversation's. The
+  // window reads 0.62 through the hour, so the burn takes its projection at the five-hour bound to 0.785.
+  const morningBurns = { nightly: { five_hour: 0.03, seven_day_fable: FABLE_MORNING_BURN } };
   // The Overflow workspace sits at its in-flight cap through the round and the move. With a free slot an API-key
   // sibling fits with no end to its runway, the longest of all, so the shed rule would plan and move both marks there.
   const overflowFull = { overflow: 16 };
@@ -2202,7 +2310,7 @@ function storySpecs(): Spec[] {
     const week = oauthWindows(id, tieAt, () => OLDER_FACTOR).find((w) => w.id === '7d');
     return leftPerHour(week?.utilization ?? 0, paceDeadline(accountById.get(id)!, week?.resetsAt ? Date.parse(week.resetsAt) : null, tieAt), tieAt);
   };
-  const TIE_SCORE = 0.006;
+  const TIE_SCORE = 0.003;
   const tieBurns = { nightly: { five_hour: 0.02, seven_day: spareOf('nightly') - TIE_SCORE }, primary: { five_hour: 0.03, seven_day: spareOf('primary') - TIE_SCORE } };
   const overflowStatic = (when: number) => entry(staticBoundary('main', 2), { at: when, depth: 2, prefixTokens: 31_200, ttlMs: FIVE_MINUTES, writtenAt: when - 2 * MINUTE });
   return [
@@ -2210,8 +2318,15 @@ function storySpecs(): Spec[] {
     at('req_e5a1c093-4d7', 1, 1, t(10, 58, 59), 'placed', 'secondary'),
     at('req_f3b6d218-85a', 1, 1, t(10, 59, 10), 'placed', 'secondary'),
     at('req_0b7c2d94-e61', 1, 1, t(10, 59, 30), 'renewed', 'secondary', { pin: live('probe', 31_000, 'untouched') }),
-    // Secondary's 5-hour window opened at 09:55 and runs hot, so its projection to the reset reads past the wall: this
-    // renewal runs the round, which marks two pins.
+    // The laptop conversation's two renewals on secondary while its 5-hour window is under the hold. The first reads
+    // the projection over all's ceiling and under the wall, which stamps the window and names the hold alone. The
+    // second reads it past the wall inside the wait, so its line names the stamp and the wait beside the age and the
+    // hold.
+    at('req_5f2c8b19-d73', 1, 1, t(10, 39, 30), 'renewed', 'secondary', { burns: climbBurn, pin: live('continues_pin', 590_000) }),
+    at('req_b7d43a90-e26', 1, 1, t(10, 49, 10), 'renewed', 'secondary', { burns: climbBurn, pin: live('continues_pin', 580_000) }),
+    // Secondary's 5-hour window opened at 09:55 and runs hot, so its projection to the reset reads past the wall, and
+    // it has read over all's ceiling since the laptop conversation's renewal of 10:39:30, a quarter of the time to its
+    // wall instant and more: this renewal runs the round, which marks two pins.
     at('req_1eaa9bc1-a18', 1, 1, t(11, 0), 'renewed', 'secondary', { burns: roundBurn, inFlight: overflowFull, pin: live('continues_pin', 30_000), round: roundOfPins(ROUND_PINS) }),
     // A marked pin moves at its next request inside the dwell, to the sibling where it fits.
     at('req_868264bc-611', 1, 1, t(11, 8, 30), 'moved', 'primary', {
@@ -2223,16 +2338,28 @@ function storySpecs(): Spec[] {
       prefix: { secondary: { content: message('c64358b5', 10, 72_000, t(11, 8, 30), t(11, 6, 2), FIVE_MINUTES), contentMatch: null } },
       rule: 'shed',
     }),
+    // The desktop Fable conversation's morning on primary, whose week leaves a room of about 0.31 all morning. While
+    // the conversation's pin draws the Fable week at 0.008 an hour, Pace holds back 0.32 of that room for it, so each
+    // of its renewals on primary reads the room under the reservation: the one of 10:13:30 is the first, which stamps
+    // the reservation's test, and it and the five after it name the reservation, the stamp and the hour's wait. The
+    // conversation's landing and the marked session's one turn are placements, which run no shed rule.
+    at('req_2d8f6b14-a79', 1, 1, t(10, 4), 'placed', 'primary'),
+    at('req_8e1d5a36-c92', 1, 1, t(10, 13, 30), 'renewed', 'primary', { burns: reservationBurns, pin: live('continues_pin', 570_000) }),
+    at('req_3f8c1d94-b57', 1, 1, t(10, 23, 20), 'renewed', 'primary', { burns: reservationBurns, pin: live('continues_pin', 590_000) }),
+    at('req_a2c94e7b-f15', 1, 1, t(10, 33, 10), 'renewed', 'primary', { burns: reservationBurns, pin: live('continues_pin', 590_000) }),
+    at('req_d06a4e73-c29', 1, 1, t(10, 43), 'renewed', 'primary', { burns: reservationBurns, pin: live('continues_pin', 590_000) }),
+    at('req_71b5f2c8-e40', 1, 1, t(10, 52, 50), 'renewed', 'primary', { burns: reservationBurns, pin: live('continues_pin', 590_000) }),
+    at('req_f15c7a28-d63', 1, 1, t(11, 2, 40), 'renewed', 'primary', { burns: reservationBurns, pin: live('continues_pin', 590_000) }),
+    at('req_a96e3d52-b18', 1, 1, t(11, 5, 10), 'placed', 'primary'),
     // The moved session's next turn renews its pin on primary, whose row carries the source the move left. Primary's
-    // 7-day reading leaves a room under the Fable reservation Pace holds back for its Fable week, while every window
-    // reads under its line, so this renewal runs the reservation's round. The 7-day burn is the walked pin's and the
-    // Fable pin's, its Fable week burn in the 7-day window's share, and the 5-hour burn the sessions' before the
-    // afternoon. The 7-day reading is written over the request head's own, so on that window the card parts from the
-    // drawer, which `readingsOf` otherwise keeps in step.
+    // 7-day room has read under the Fable reservation since the Fable conversation's renewal of 10:13:30, the hour of
+    // the test's wait and ten seconds more, while every window reads under its line, so this renewal runs the
+    // reservation's round. The 7-day burn is the walked pin's and the Fable pin's, its Fable week burn in the 7-day
+    // window's share, and the 5-hour burn the sessions' before the afternoon. The Fable pin leaves with the sweep of
+    // 11:14:40 and takes its demand with it, so every later selection reads a room that holds the reservation.
     at('req_5d1f8c3a-b27', 1, 1, t(11, 13, 40), 'renewed', 'primary', {
-      burns: { primary: { five_hour: PRIMARY_EARLIER_BURN, seven_day: 0.0056, seven_day_fable: RESERVATION_FABLE_BURN } },
+      burns: reservationBurns,
       pin: live('continues_pin', 310_000),
-      readings: { primary: withReading(requestById.get('req_5d1f8c3a-b27')!.attempts[0].windows, '7d', RESERVATION_WEEK_USED) },
       round: roundOfPins(RESERVATION_PINS),
     }),
     // The hour's sessions placed on secondary before its spent edge.
@@ -2294,16 +2421,20 @@ function storySpecs(): Spec[] {
     // The router placed the laptop turn of the day before on secondary, and the relay rejected it there as it built
     // the body, so the placement sent no attempt and its completion reads no answer.
     at(UNAVAILABLE_TURN_ID, 1, 1, Date.parse(requestById.get(UNAVAILABLE_TURN_ID)!.at), 'placed', 'secondary'),
+    // The keepalive's probes of the session that failed over to primary renew its pin and walk past no rule.
+    at('req_6d0b3f85-a14', 1, 1, t(14, 11, 40), 'renewed', 'primary', { pin: live('probe', 569_000, 'untouched') }),
+    at('req_e4a92c17-b60', 1, 1, t(14, 20, 40), 'renewed', 'primary', { pin: live('probe', 540_000, 'untouched') }),
     // The compacted conversation renews its pin cold.
     at('req_31f0b7c2-6e1', 1, 1, t(14, 17, 52), 'renewed', 'primary', { pin: live('compacted', 491_000, 'cold') }),
     at('req_9a07c4e1-d55', 1, 1, t(14, 19, 2), 'renewed', 'primary', { pin: live('continues_pin', 438_000) }),
-    // A subagent request that carries no cache marker of its own pins nothing. Its cohort's static entry places it.
-    at('req_69e30548-32e', 1, 1, t(14, 21, 12), 'held', 'primary', { hold: { cohort: 'primary', place: 'cohort' }, inFlight: { nightly: 16, primary: 16 }, pin: 'pinning_off', prefix: { primary: { static: cohort(t(14, 21, 12), 'at_cap'), staticMatch: null } } }),
+    // A subagent's first request under all, whose cache markers the router injects, so it carries one whatever its
+    // body marked. Its session and agent hold no pin: the held selection finds none, its cohort's static entry places
+    // it once a slot frees, and the placement writes its pin.
+    at('req_69e30548-32e', 1, 1, t(14, 21, 12), 'held', 'primary', { hold: { cohort: 'primary', place: 'cohort' }, inFlight: { nightly: 16, primary: 16 }, prefix: { primary: { static: cohort(t(14, 21, 12), 'at_cap'), staticMatch: null } } }),
     at('req_69e30548-32e', 2, 1, t(14, 21, 14), 'placed', 'primary', {
       heldBefore: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'], waits: [{ heldMs: 2_000, reason: 'cap' }] },
       holds: [{ accountId: 'primary', attempt: 1, cohort: 'primary', heldMs: 2_000, ranOut: false }],
       inFlight: { nightly: 16, primary: 15 },
-      pin: 'pinning_off',
       prefix: { primary: { static: cohort(t(14, 21, 14)), staticMatch: cohort(t(14, 21, 14)) } },
       rung: { depth: 1, prefixTokens: 18_400, rung: 'static' },
     }),
@@ -2359,13 +2490,27 @@ function storySpecs(): Spec[] {
       readings: { nightly: spentNightly(t(13, 10, 21)) },
     }),
     at('req_9d4c1a73-e58', 3, 2, t(13, 11), 'renewed', 'nightly', { holds: [{ accountId: 'nightly', attempt: 2, cohort: null, heldMs: 39_000, ranOut: false }], inFlight: { primary: 16, secondary: 16 }, pin: live('continues_pin', 40_000) }),
+    // A Fable conversation works on nightly through the hour ahead of the Fable session. Its first turn lands there
+    // while its three siblings sit at their caps: nightly's old 5-hour window reads past all's ceiling, so primary and
+    // the Overflow workspace would take the turn on the ladder, and secondary, which reads past the ceiling too, on
+    // its Pace score. Its renewal of 07:29:30 is the first selection that reads the 7-day Fable window over all's
+    // weekly ceiling at the five-hour bound, which stamps the window, and each renewal after it reads the window over
+    // inside the hour's wait and names the stamp and the wait.
+    at('req_9c4a7e12-f08', 1, 1, t(7, 20), 'placed', 'nightly', { inFlight: { overflow: 16, primary: 16, secondary: 16 } }),
+    at('req_4b9e2c71-a35', 1, 1, t(7, 29, 30), 'renewed', 'nightly', { burns: morningBurns, pin: live('continues_pin', 570_000) }),
+    at('req_d27f5a83-e14', 1, 1, t(7, 39, 20), 'renewed', 'nightly', { burns: morningBurns, pin: live('continues_pin', 590_000) }),
+    at('req_6a1c9e47-b90', 1, 1, t(7, 49, 10), 'renewed', 'nightly', { burns: morningBurns, pin: live('continues_pin', 590_000) }),
+    at('req_e83b2d65-c57', 1, 1, t(7, 59), 'renewed', 'nightly', { burns: morningBurns, pin: live('continues_pin', 590_000) }),
+    at('req_c8f2a61d-b74', 1, 1, t(8, 8, 50), 'renewed', 'nightly', { burns: morningBurns, pin: live('continues_pin', 590_000) }),
     // The Fable session's first turn places it on nightly, and its next turn's renewal runs nightly's Fable-week round,
-    // before the overage begins at the first head after 11:30:12: from then on the pool's overage rule fires on the
+    // an hour and 30 seconds behind the stamp of 07:29:30, which is the cap of the window's wait, and before the
+    // overage begins at the first head after 11:30:12: from then on the pool's overage rule fires on the
     // account's pins ahead of the shed rule. The 5-hour window the story spends at 13:10:21 opened at 08:11, so it is
     // 19 minutes old at the round, under all's hold of an hour, while its burn still carries the previous window's, and
     // its projection reads under the wall at its reset besides: the 7-day Fable window fires in its place, over all's
-    // ceiling at the five-hour bound. The Opus pin draws no 7-day Fable window, so the round lists it and counts
-    // nothing of it. The burns replace the account's, so the 5-hour burn stands beside the 7-day Fable window's.
+    // ceiling at the five-hour bound. The laptop conversation's Opus pin draws no 7-day Fable window, so the round
+    // lists it and counts nothing of it. The burns replace the account's, so the 5-hour burn stands beside the 7-day
+    // Fable window's.
     at('req_3e2b9d47-c18', 1, 1, t(8, 21, 40), 'placed', 'nightly'),
     at('req_3e7a5c19-f84', 1, 1, t(8, 30), 'renewed', 'nightly', {
       burns: { nightly: { five_hour: 0.03, seven_day_fable: FABLE_WEEK_BURN } },
@@ -2382,8 +2527,16 @@ function storySpecs(): Spec[] {
     at('req_2c7d9f15-b63', 1, 1, t(13, 45), 'placed', 'primary', { burns: { secondary: { five_hour: 0.032, seven_day: 0.004 } } }),
     // A fresh placement that books its rewrite on primary until the answer's usage replaces it.
     at('req_7a3f0c26-d81', 1, 1, t(13, 41, 15), 'placed', 'primary'),
+    // The held conversation renews its pin on primary while the purged conversation's pin still stands there, a minute
+    // ahead of the sweep that takes that pin and its pace: primary's sessions burn 0.115 an hour, its 5-hour window
+    // projects over all's ceiling and under the wall at the 16:44 reset, and the reading stamps the window. The
+    // conversation's next turn finds its pin swept and lands on primary again.
+    at('req_c3a71e58-b46', 1, 1, t(13, 31, 30), 'renewed', 'primary', { burns: { primary: { five_hour: PRIMARY_STAMP_BURN, seven_day: 0.006 } }, pin: live('continues_pin', 591_000) }),
+    at('req_7e2b9f40-c81', 1, 1, t(13, 52, 30), 'placed', 'primary'),
     // Primary's sessions burn its 5-hour window at 0.224 an hour from its reading of 0.55, so it projects past the wall
-    // at the 16:44 reset and this renewal runs a round, which finds no sibling with runway.
+    // at the 16:44 reset. The window has read over all's ceiling since the held conversation's renewal of 13:31:30, a
+    // quarter of the time from there to its wall instant of 16:13:02 and 37 seconds more, and no selection on primary
+    // read it in between, so this renewal runs a round, which finds no sibling with runway.
     at('req_6e1f3b98-a24', 1, 1, t(14, 12, 30), 'renewed', 'primary', { pin: live('continues_pin', 46_000), round: roundOfPins(NO_RUNWAY_PINS) }),
     // A session placed on secondary before its spent edge. Its next turn finds the spent rule's one destination full,
     // so it renews on secondary, whose 429 on the spent 5-hour window fails it over to primary once a slot frees.
