@@ -1233,10 +1233,10 @@ async fn build_app_routed(
     .await
 }
 
-/// The harness's two accounts on `store`: `business`, an OAuth slot paired as `identity` where one is given and unpaired
-/// otherwise, and `direct`, an API-key slot. A routing row lands only for an account the store holds, and the router
-/// reads those rows once, at its start, so a caller that writes one ahead of the harness seeds the accounts here first,
-/// and the builder then seeds none.
+/// The harness's two accounts on `store`: `business`, an OAuth slot paired as `identity` where one is given and
+/// unpaired otherwise, and `direct`, an API-key slot. A routing row lands only for an account the store holds, and the
+/// router reads those rows once, at its start, so a caller that writes one ahead of the harness seeds the accounts here
+/// first, and the builder then seeds none.
 pub fn seed_accounts(store: &Store, identity: Option<Identity>) {
     let paired = identity.is_some();
     store

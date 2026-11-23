@@ -1258,7 +1258,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         })
         .await;
     // The router's reading of the Fable week at the ledger sample's figures, which the reservation reads on the pool's
-    // member row and on a Pace pick, while the account rows keep the ledger's 12%.
+    // member row and on a Pace pick. The account rows read this window from the router too, at the same 12%.
     parts
         .router
         .report(phoebis_routing::Report::Sample {
@@ -3260,10 +3260,14 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "the start dates its gap from a row written before it: {started}"
     );
     // A Pace pick's record beside the placement's: its first-tier candidate reads the Fable reservation, which no
-    // candidate of a placement reads.
+    // candidate of a placement reads. The wait reads the completion's cache map, which a later write than the record
+    // adds.
     let pick_route = "/admin/requests/r-warm/decisions/1";
     let pick = wait_json(app, pick_route, &cookie, |record| {
         record["candidates"].is_array()
+            && record["outcome"]["completion"]["cache_map_written"]
+                .as_array()
+                .is_some_and(|map| !map.is_empty())
     })
     .await;
     let failover = json(get(app, "/admin/requests/r-failover", Some(&cookie)).await).await;
@@ -4025,11 +4029,12 @@ async fn routing_stories(
             at: at(32),
         },
         // The round that the Fable reservation fired, a minute ahead of the projection's round, so the log lists it
-        // behind that one. The 7-day reset stands two days out, where the seeded hour's share reads 0.48 of the Fable
-        // week, under the Fable room of 0.88, so `FABLE_FACTOR` holds back 0.12, past the 0.1 of room that 0.9 leaves.
-        // Five hours of the walked pin's burn reach 0.926, under the ceiling, so no window's test fired. The test names
-        // no rate, so the excess is the walked burn and the target is the shed cap's part of it. A mark of the one
-        // walked pin would leave no burn unmarked, so the guard keeps it.
+        // behind that one. At a 7-day reset two days out, which is the round's own and which no seeded reading holds,
+        // the seeded hour's share reads 0.48 of the Fable week, under the Fable room of 0.88, so `FABLE_FACTOR` holds
+        // back 0.12, past the 0.1 of room that 0.9 leaves. Five hours of the walked pin's burn reach 0.926, under the
+        // ceiling, so no window's test fired. The test names no rate, so the excess is the walked burn and the target
+        // is the shed cap's part of it. A mark of the one walked pin would leave no burn unmarked, so the guard keeps
+        // it.
         RouterEvent::SheddingRound {
             account_id: "business".into(),
             pool_id: "main".into(),

@@ -664,7 +664,7 @@ test('a window decodes its projection, horizon and burn and nulls without them',
   const a = d.decodeAccount(wire);
   const read = (w) => [w.projection, w.horizon, w.burn];
   assert.deepEqual(read(a.windows.find((w) => w.id === '5h')), [0.81, new Date(five.resets_at).toISOString(), 0.085]);
-  assert.deepEqual(read(a.windows.find((w) => w.id === '7d')), [null, null, null], 'the capture reads no burn, so nothing is projected');
+  assert.deepEqual(read(a.windows.find((w) => w.id === '7d')), [null, null, null], 'the router holds no 7-day reading of the account, so nothing is projected');
   assert.deepEqual(read(a.fableWindow), [0.12, new Date(1_791_739_000_000).toISOString(), 0]);
   const { burn: _b, horizon: _h, projection: _p, ...unprojected } = five;
   assert.deepEqual(read(d.decodeAccount({ ...body, windows: [unprojected] }).windows[0]), [null, null, null], 'a window without the members reads null');
