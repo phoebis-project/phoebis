@@ -25,6 +25,7 @@ import { accountHref, accountMeterHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, REQUE
 import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, drawnInstant, drawnRows, drawsFreeNote, newestResets, ownShareHover, pairOf, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
+import { confirmedRow, nextCreatedRow, type CreatedRow } from '@/lib/createdRow';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayMonth, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative, messageOf, pct, plural, upperFirst } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, FEATURE_LABEL, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
@@ -98,15 +99,14 @@ export function AccountsPage() {
   // The row a confirmed pairing created: the read that lists it lands after the URL names it, so the redirect below
   // leaves that URL alone for the span of that read. The phase follows the read's loading flag rather than the list
   // changing, since a failed read keeps the old list and would otherwise hold the guard until the next refresh. A read
-  // that ends without the row keeps its id until the redirect has left its URL or a later read lists the row, so the
-  // note never denies a row the router holds.
-  const [created, setCreated] = useState<{ id: string; phase: 'confirmed' | 'reading' | 'unlisted' } | null>(null);
+  // that ends without the row keeps its id until the URL, once it has named the id, leaves it, or a later read lists
+  // the row, so the note never denies a row the router holds. The router commits the confirm's navigation in a
+  // transition, which can land after that read has ended, so until the URL names the id the guard reads another URL as
+  // that navigation still on its way.
+  const [created, setCreated] = useState<CreatedRow | null>(null);
   if (created !== null) {
-    if (created.phase === 'unlisted') {
-      if (accountId !== created.id || accounts.data?.some((a) => a.id === created.id)) setCreated(null);
-    } else if (accounts.loading) {
-      if (created.phase === 'confirmed') setCreated({ ...created, phase: 'reading' });
-    } else if (created.phase === 'reading') setCreated(accounts.data?.some((a) => a.id === created.id) ? null : { ...created, phase: 'unlisted' });
+    const next = nextCreatedRow(created, { accountId, listed: accounts.data?.some((a) => a.id === created.id) === true, loading: accounts.loading });
+    if (next !== created) setCreated(next);
   }
   // The account whose first usage poll a confirm started, whether the pairing created its row or filled a slot, until
   // the list's row for it carries a window or the list no longer holds it. It stands apart from `created`, which the
@@ -248,7 +248,7 @@ export function AccountsPage() {
             notify(`Paired ${preview.email}`);
             if (confirmed.firstPollInFlight) setAwaiting(confirmed.accountId);
             if (start !== null && 'id' in start) {
-              setCreated({ id: start.id, phase: 'confirmed' });
+              setCreated(confirmedRow(start.id));
               navigate(accountAt(location, start.id));
             }
           }}

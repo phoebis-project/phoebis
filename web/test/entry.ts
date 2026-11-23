@@ -43,6 +43,7 @@ export * from '@/lib/chunks';
 export * from '@/lib/client';
 export { installClock } from '@/lib/clock';
 export * from '@/lib/costs';
+export * from '@/lib/createdRow';
 export * from '@/lib/decisionStrip';
 export * from '@/lib/dimensions';
 export * from '@/lib/filterBar';
