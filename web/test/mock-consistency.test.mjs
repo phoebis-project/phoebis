@@ -1530,9 +1530,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           .filter((e) => e.accountId === a.accountId && e.detail.window === w.window)
           .sort((x, y) => y.detail.reset_at - x.detail.reset_at)
           .map((e) => ({ observedAt: e.at, plan: e.detail.plan, resetAt: iso(e.detail.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - e.detail.utilization_before)), source: e.detail.observed, tier: e.detail.tier }));
-        const natural = w.resets.filter((r) => r.source !== 'claim');
-        assert.deepEqual(a.accountId === 'sunset' ? natural.slice(1) : natural, fromLog, `${a.accountId} ${w.window}: the log's resets, newest first`);
-        assert.ok(w.resetsCounted === w.resets.length && near(w.totalShareLeft, sum(w.resets, (r) => r.shareLeft)), `${a.accountId} ${w.window}: the total and the count over the listed resets`);
+        assert.deepEqual(a.accountId === 'sunset' ? w.resets.slice(1) : w.resets, fromLog, `${a.accountId} ${w.window}: the log's resets, newest first`);
+        assert.ok(near(w.totalShareLeft, sum([...w.resets, ...w.claims], (r) => r.shareLeft)), `${a.accountId} ${w.window}: the total over the rows of both lists`);
       }
     }
     // The week the end cut short reads the last sample of sunset's 7-day series before the end, the reading its seed
@@ -1550,7 +1549,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`the allowance answer lists a used reset for the window it cleared alone, at ${at}`, async () => {
     const s = await story;
     const span = s.lib.allowanceSpan(s.now);
-    const claimsOf = (answer) => answer.accounts.flatMap((a) => a.windows.flatMap((w) => w.resets.filter((r) => r.source === 'claim').map((r) => [a.accountId, w.window, r])));
+    const claimsOf = (answer) => answer.accounts.flatMap((a) => a.windows.flatMap((w) => w.claims.map((r) => [a.accountId, w.window, r])));
     // Studio's use three hours back dropped its Fable week from 0.75 (the seed beside its claim in mock/routingLog.ts),
     // so 0.25 of the week was left, under its current pair, at the week's own reset.
     const studio = s.accounts.find((a) => a.id === 'studio');

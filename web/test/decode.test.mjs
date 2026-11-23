@@ -920,33 +920,43 @@ test('the unused allowance answer keeps every account, window and reset as the r
         tier: 'default_claude_ai',
         windows: [
           {
+            claims: [],
             resets: [
               { observedAt: iso(at(30)), plan: null, resetAt: iso(at(24)), shareLeft: 0.54, source: 'term_ended', tier: null },
               { observedAt: iso(at(192)), plan: null, resetAt: iso(at(192)), shareLeft: 0.15000000000000002, source: 'clock', tier: null },
               { observedAt: iso(at(360)), plan: null, resetAt: iso(at(360)), shareLeft: 0.38, source: 'sample', tier: null },
               { observedAt: iso(at(528)), plan: null, resetAt: iso(at(528)), shareLeft: 0.6, source: 'sample', tier: null },
             ],
-            resetsCounted: 4,
             totalShareLeft: 1.67,
             window: 'seven_day',
           },
           {
+            claims: [],
             resets: [
               { observedAt: iso(at(48)), plan: null, resetAt: iso(at(48)), shareLeft: 0.2, source: 'sample', tier: null },
               { observedAt: iso(at(216)), plan: null, resetAt: iso(at(216)), shareLeft: 0.7, source: 'clock', tier: null },
             ],
-            resetsCounted: 2,
             totalShareLeft: 0.9,
             window: 'seven_day_fable',
           },
         ],
       },
-      { accountId: 'unprofiled', plan: null, tier: null, windows: [{ resets: [{ observedAt: iso(at(72)), plan: null, resetAt: iso(at(72)), shareLeft: 1, source: 'replayed', tier: null }], resetsCounted: 1, totalShareLeft: 1, window: 'seven_day' }] },
+      { accountId: 'unprofiled', plan: null, tier: null, windows: [{ claims: [], resets: [{ observedAt: iso(at(72)), plan: null, resetAt: iso(at(72)), shareLeft: 1, source: 'replayed', tier: null }], totalShareLeft: 1, window: 'seven_day' }] },
     ],
     from: iso(at(29 * 24)),
     to: iso(end),
   });
   assert.deepEqual(d.decodeUnusedAllowance({ accounts: [], from: at(24), to: end }), { accounts: [], from: iso(at(24)), to: iso(end) }, 'a range with no weekly reset lists no account');
+});
+
+test('the unused allowance decoder files a claim row apart from the resets of its window', () => {
+  const end = 1_791_633_600_000;
+  const at = (hours) => end - hours * 3_600_000;
+  const row = (hours, source, observedHours = hours) => ({ observed_at: at(observedHours), reset_at: at(hours), share_left: 0.5, source });
+  // The route's order: a use inside the newest week carries that week's reset and stands behind it.
+  const windows = [{ resets: [row(24, 'sample'), row(24, 'claim', 96), row(192, 'sample')], resets_counted: 3, total_share_left: 1.5, window: 'seven_day' }];
+  const [window] = d.decodeUnusedAllowance({ accounts: [{ account_id: 'a', plan: null, tier: null, windows }], from: at(720), to: end }).accounts[0].windows;
+  assert.deepEqual([window.resets.map((r) => r.source), window.claims.map((r) => r.source), window.totalShareLeft], [['sample', 'sample'], ['claim'], 1.5]);
 });
 
 test("an unused allowance reset keeps the plan and the tier of the reading it replaced, beside the account's current pair", () => {

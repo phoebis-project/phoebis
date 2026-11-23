@@ -850,6 +850,16 @@ const decodeAllowanceReset = (v: unknown): AllowanceReset => {
   const r = rec(v);
   return { observedAt: isoOr(r.observed_at, epoch), plan: strOrNull(r.plan), resetAt: isoOr(r.reset_at, epoch), shareLeft: num(r.share_left), source: str(r.source), tier: strOrNull(r.tier) };
 };
+/** A window's rows parted by the source word, each list newest first by the instant a row draws at: the drop's for a
+ *  claim row, the reset's for each other. The sort is stable, so rows of one instant keep the route's order. The keys
+ *  repeat the allowance library's `drawnInstant`, which this module cannot import, since that library imports it. */
+function decodeAllowanceRows(v: unknown): { claims: AllowanceReset[]; resets: AllowanceReset[] } {
+  const claims: AllowanceReset[] = [];
+  const resets: AllowanceReset[] = [];
+  for (const row of list(v).map(decodeAllowanceReset)) (row.source === 'claim' ? claims : resets).push(row);
+  const newest = (key: 'observedAt' | 'resetAt') => (a: AllowanceReset, b: AllowanceReset) => Date.parse(b[key]) - Date.parse(a[key]);
+  return { claims: claims.sort(newest('observedAt')), resets: resets.sort(newest('resetAt')) };
+}
 export const decodeUnusedAllowance = (v: unknown): UnusedAllowanceAnswer => ({
   accounts: list(rec(v).accounts)
     .map(rec)
@@ -859,7 +869,7 @@ export const decodeUnusedAllowance = (v: unknown): UnusedAllowanceAnswer => ({
       tier: strOrNull(a.tier),
       windows: list(a.windows)
         .map(rec)
-        .map((w) => ({ resets: list(w.resets).map(decodeAllowanceReset), resetsCounted: num(w.resets_counted), totalShareLeft: num(w.total_share_left), window: str(w.window) })),
+        .map((w) => ({ ...decodeAllowanceRows(w.resets), totalShareLeft: num(w.total_share_left), window: str(w.window) })),
     })),
   from: isoOr(rec(v).from, epoch),
   to: isoOr(rec(v).to, epoch),

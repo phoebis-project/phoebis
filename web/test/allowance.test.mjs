@@ -38,7 +38,7 @@ const NOW = Date.UTC(2026, 9, 25, 18, 0);
  */
 const windowOf = (window, shares, { newest = NOW - DAY, pairs = [], sources = [], total } = {}) => {
   const resets = shares.map((shareLeft, i) => ({ observedAt: iso(newest - i * WEEK), plan: pairs[i]?.plan ?? null, resetAt: iso(newest - i * WEEK), shareLeft, source: sources[i] ?? 'sample', tier: pairs[i]?.tier ?? null }));
-  return { resets, resetsCounted: resets.length, totalShareLeft: total ?? shares.reduce((s, x) => s + x, 0), window };
+  return { claims: [], resets, totalShareLeft: total ?? shares.reduce((s, x) => s + x, 0), window };
 };
 const accountOf = (accountId, plan, windows) => ({ accountId, ...plan, windows });
 /** The span the answers below carry, which holds every reset their cases build. */
@@ -78,7 +78,7 @@ test("the resets' key moves at a use", () => {
 test("the newest four resets total the answer's figures where it lists four or fewer, and the console's own sum and count over more", () => {
   // Three shares whose sum in floating point is 0.6000000000000001, beside the route's 0.6.
   const three = windowOf('seven_day', [0.1, 0.2, 0.3], { total: 0.6 });
-  assert.deepEqual(d.newestResets(three), { counted: 3, resets: three.resets, total: 0.6, used: 0 });
+  assert.deepEqual(d.newestResets(three), { claims: [], counted: 3, resets: three.resets, total: 0.6, used: 0 });
   const six = windowOf('seven_day', [0.5, 0.25, 0.125, 0.25, 0.75, 1], { total: 2.875 });
   const newest = d.newestResets(six);
   assert.deepEqual([newest.counted, newest.resets, newest.total], [4, six.resets.slice(0, 4), 1.125]);
@@ -93,9 +93,16 @@ test('the four weeks keep four natural resets and the used resets among them', (
   // that week's reset and the route lists it after the week's own.
   const [first, second, third, fourth] = windowOf('seven_day', [0.5, 0.25, 0.25, 0.125]).resets;
   const claim = { observedAt: iso(NOW - DAY - WEEK - 3 * DAY), plan: null, resetAt: second.resetAt, shareLeft: 0.375, source: 'claim', tier: null };
-  const resets = [first, second, claim, third, fourth];
   // The route's total over the five rows: 0.5, 0.25, 0.375, 0.25 and 0.125.
-  assert.deepEqual(d.newestResets({ resets, resetsCounted: 5, totalShareLeft: 1.5, window: 'seven_day' }), { counted: 4, resets, total: 1.5, used: 1 });
+  assert.deepEqual(d.newestResets({ claims: [claim], resets: [first, second, third, fourth], totalShareLeft: 1.5, window: 'seven_day' }), { claims: [claim], counted: 4, resets: [first, second, third, fourth], total: 1.5, used: 1 });
+});
+
+test("a column draws a use under the term's end that cut its week, by its drop and not by its week's reset", () => {
+  // The term ended a day back inside the week of a use two days back, whose row carries that week's reset five days
+  // ahead. The use's week ends after the end's instant, so the route lists the use first.
+  const ended = { observedAt: iso(NOW - DAY), plan: null, resetAt: iso(NOW - DAY), shareLeft: 0.5, source: 'term_ended', tier: null };
+  const claim = { observedAt: iso(NOW - 2 * DAY), plan: null, resetAt: iso(NOW + 5 * DAY), shareLeft: 0.4, source: 'claim', tier: null };
+  assert.deepEqual(d.drawnRows([ended], [claim]), [ended, claim]);
 });
 
 test("a figure is the account's own share priced in the chosen week, a Fable-week reset at half its 7-day figure", () => {
@@ -201,6 +208,17 @@ test("drawsFreeNote reads the drawn resets' pairs", () => {
   assert.equal(d.drawsFreeNote(free([PRO, FREE])), true, 'a week the router recorded under Free');
   const fable = accountOf('free', FREE, [windowOf('seven_day', [0.5, 0.25], { pairs: [PRO, PRO] }), windowOf('seven_day_fable', [0.5], { pairs: [NO_PAIR] })]);
   assert.equal(d.drawsFreeNote(fable), true, "a Fable week the router recorded no pair for prices at the account's own Free");
+  // A use half a day back, newer than the window's reset a day back, so the four weeks keep its row.
+  const reset = { observedAt: iso(NOW - DAY), ...PRO, resetAt: iso(NOW - DAY), shareLeft: 0.5, source: 'sample' };
+  const claimOf = (pair) => ({ observedAt: iso(NOW - DAY / 2), ...pair, resetAt: iso(NOW + 6 * DAY), shareLeft: 0.4, source: 'claim' });
+  const used = (resets, pair, totalShareLeft) => accountOf('free', FREE, [{ claims: [claimOf(pair)], resets, totalShareLeft, window: 'seven_day' }]);
+  assert.equal(d.drawsFreeNote(used([reset], NO_PAIR, 0.9)), true, "a used reset that the router recorded no pair for prices at the account's own Free");
+  assert.equal(d.drawsFreeNote(used([], PRO, 0.4)), false, 'a used reset under Pro is a drawn row, so no total prices at Free');
+});
+
+test("a window whose one row is a used reset prices its total at that row's own pair", () => {
+  const claim = { observedAt: iso(NOW - 2 * DAY), ...MAX_5X, resetAt: iso(NOW + 5 * DAY), shareLeft: 0.5, source: 'claim' };
+  assert.equal(d.weeksFigure({ claims: [claim], resets: [], totalShareLeft: 0.5, window: 'seven_day' }, MAX_20X, QUARTER, 'ultra').text, '12.5% Ultra week');
 });
 
 test('a paid account draws no Free note', () => {
@@ -285,16 +303,16 @@ test("allowanceRows keeps a lead week's reset out of the range's figure", () => 
  * An Ultra account whose 7-day window reset a day before the range's end and a week before that, and one of whose used
  * resets cleared its 7-day window and its Fable week at one poll half a day before that newest reset, so both rows carry
  * that closed week's reset. `later` adds a second use a day after the first, inside the week still open at the range's
- * end, whose rows carry the reset ahead of the end. The rows stand in the route's order.
+ * end, whose rows carry the reset ahead of the end. Each window's two lists stand newest first.
  */
 const usedAnswer = (later) => {
   const claim = (at, resetAt, shareLeft) => ({ observedAt: iso(at), plan: null, resetAt: iso(resetAt), shareLeft, source: 'claim', tier: null });
   const closed = NOW - DAY;
   const open = closed + WEEK;
   const [newest, before] = windowOf('seven_day', [0.5, 0.25]).resets;
-  const seven = [...(later ? [claim(NOW - DAY / 2, open, 0.375)] : []), newest, claim(closed - DAY / 2, closed, 0.125), before];
-  const fable = [...(later ? [claim(NOW - DAY / 2, open, 0.5)] : []), claim(closed - DAY / 2, closed, 0.25)];
-  const windowFrom = (window, resets) => ({ resets, resetsCounted: resets.length, totalShareLeft: resets.reduce((s, r) => s + r.shareLeft, 0), window });
+  const seven = { claims: [...(later ? [claim(NOW - DAY / 2, open, 0.375)] : []), claim(closed - DAY / 2, closed, 0.125)], resets: [newest, before] };
+  const fable = { claims: [...(later ? [claim(NOW - DAY / 2, open, 0.5)] : []), claim(closed - DAY / 2, closed, 0.25)], resets: [] };
+  const windowFrom = (window, { claims, resets }) => ({ claims, resets, totalShareLeft: [...resets, ...claims].reduce((s, r) => s + r.shareLeft, 0), window });
   return { accounts: [accountOf('used', MAX_20X, [windowFrom('seven_day', seven), windowFrom('seven_day_fable', fable)])], from: iso(NOW - 29 * DAY), to: iso(NOW) };
 };
 
@@ -314,7 +332,7 @@ test('a used reset in a window with no natural reset draws its share in the rang
   // An account before its first recorded weekly reset: the route answers the use's row alone, which carries the reset
   // of the week still open, past the range's end.
   const claim = { observedAt: iso(NOW - 2 * DAY), plan: null, resetAt: iso(NOW + 5 * DAY), shareLeft: 0.4, source: 'claim', tier: null };
-  const window = { resets: [claim], resetsCounted: 1, totalShareLeft: 0.4, window: 'seven_day' };
+  const window = { claims: [claim], resets: [], totalShareLeft: 0.4, window: 'seven_day' };
   const [row] = d.allowanceRows({ accounts: [accountOf('early', MAX_20X, [window])], from: iso(NOW - 29 * DAY), to: iso(NOW) }, COSTS, 'ultra', RANGE);
   const { inRange, last } = row.figures.seven_day;
   assert.deepEqual([inRange.text, last], ['40% Ultra week', { kind: 'none', text: '-', title: d.NO_RESET_IN_RANGE }]);
@@ -324,7 +342,7 @@ test('a used reset alone that ran under a pair the cost model prices no capacity
   // The use ran while the account was on Free, so its range figure reads the dash, and the fleet's note names the
   // account among those it leaves out.
   const claim = { observedAt: iso(NOW - 2 * DAY), plan: 'free', resetAt: iso(NOW + 5 * DAY), shareLeft: 0.4, source: 'claim', tier: 'default_claude_ai' };
-  const window = { resets: [claim], resetsCounted: 1, totalShareLeft: 0.4, window: 'seven_day' };
+  const window = { claims: [claim], resets: [], totalShareLeft: 0.4, window: 'seven_day' };
   const [row] = d.allowanceRows({ accounts: [accountOf('early', MAX_20X, [window])], from: iso(NOW - 29 * DAY), to: iso(NOW) }, COSTS, 'ultra', RANGE);
   assert.deepEqual([row.figures.seven_day.inRange.kind, row.unpriced], ['unpriced', true]);
 });

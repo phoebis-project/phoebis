@@ -5875,8 +5875,13 @@ await forView('/accounts', async () => {
     const windows = (await api.getAnalyticsUnusedAllowance(span, { accountIds: ['studio'] })).accounts[0]?.windows ?? [];
     const ranUnder = (r) => (Date.parse(r.resetAt) <= since ? 'default_claude_ai' : studio.subscription.rateLimitTier);
     const ratio = tierCapacity(costs, 'default_claude_ai', 'seven_day') / tierCapacity(costs, studio.subscription.rateLimitTier, 'seven_day');
+    // A window's two lists in the order its column draws them, a claim at its drop and a reset at its own instant.
+    const drawnOf = (window) => {
+      const w = windows.find((x) => x.window === window);
+      return [...(w?.resets ?? []).map((r) => [r, r.resetAt]), ...(w?.claims ?? []).map((r) => [r, r.observedAt])].sort(([, a], [, b]) => Date.parse(b) - Date.parse(a)).map(([r]) => r);
+    };
     const columnWant = (label, window) => {
-      const resets = windows.find((w) => w.window === window)?.resets ?? [];
+      const resets = drawnOf(window);
       const own = resets.map((r) => figureIn(r.shareLeft, ranUnder(r), window));
       const uses = resets.filter((r) => r.source === 'claim').length;
       const used = resets[0]?.source === 'claim';
@@ -5892,7 +5897,7 @@ await forView('/accounts', async () => {
     const drawn = blockOf(upgraded)?.columns.map(({ head, reset, resetBadge, rows, total }) => ({ head, reset, resetBadge, rows, total })) ?? null;
     upgraded.unmount();
     const sevenDay = windows.find((w) => w.window === 'seven_day')?.resets ?? [];
-    const pairs = windows.map((w) => `${w.window} ${w.resets.map((r) => r.plan).join(',')}`);
+    const pairs = windows.map((w) => `${w.window} ${drawnOf(w.window).map((r) => r.plan).join(',')}`);
     const want = [columnWant('7-day', 'seven_day'), columnWant('7-day Fable', 'seven_day_fable')];
     // The week under Pro through the ratio: what its share reads at the newest week's tier, times Pro's capacity over
     // Max's.

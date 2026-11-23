@@ -1057,8 +1057,9 @@ function dropCleared(drop: EventSeed, window: string, utilization: number, event
  * after an end the read has reached is left out, an end before the range's start included, as the ledger drops the
  * resets at or after every end it lists, so the week the end cut short counts once, and so is a drop at or after it.
  * The `term_ended` rows build for an end inside the range alone. The term is read at the range's end capped at the
- * story's now, the windows run in key order, the 7-day window first, and a window's rows by reset and then by the
- * instant read, newest first, so a week's reset stands ahead of a use inside that week.
+ * story's now, the windows run in key order, the 7-day window first, and each window answers two lists as the decoder
+ * parts the route's rows: `claims` by the drop's instant and `resets` by the reset's, each newest first, with two rows
+ * of one instant in the route's order.
  */
 export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], history: QuotaHistory[], span: Range, filters: Pick<AnalyticsQuery, 'accountIds'> = {}): UnusedAllowanceAnswer {
   const fromMs = Date.parse(span.from);
@@ -1106,8 +1107,11 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
       const windows = [...byWindow]
         .sort(([x], [y]) => byteOrder(x, y))
         .map(([window, listedResets]) => {
-          const resets = [...listedResets].sort((x, y) => Date.parse(y.resetAt) - Date.parse(x.resetAt) || Date.parse(y.observedAt) - Date.parse(x.observedAt));
-          return { resets, resetsCounted: resets.length, totalShareLeft: resets.reduce((sum, r) => sum + r.shareLeft, 0), window };
+          const ordered = [...listedResets].sort((x, y) => Date.parse(y.resetAt) - Date.parse(x.resetAt) || Date.parse(y.observedAt) - Date.parse(x.observedAt));
+          const newest = (key: 'observedAt' | 'resetAt') => (x: AllowanceReset, y: AllowanceReset) => Date.parse(y[key]) - Date.parse(x[key]);
+          const claims = ordered.filter((r) => r.source === 'claim').sort(newest('observedAt'));
+          const resets = ordered.filter((r) => r.source !== 'claim').sort(newest('resetAt'));
+          return { claims, resets, totalShareLeft: ordered.reduce((sum, r) => sum + r.shareLeft, 0), window };
         });
       return windows.length === 0 ? [] : [{ accountId: a.id, ...subscriptionPair(a.subscription), windows }];
     });

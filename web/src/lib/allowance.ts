@@ -40,23 +40,21 @@ export const weeklyResetsKey = (accounts: readonly Account[]): string =>
     ])
     .join(',');
 
-const isClaim = (reset: AllowanceReset): boolean => reset.source === 'claim';
-
 /** The uses among an account's claim rows: one poll reads every window of the account, so the rows it saw, by the
  *  minute of `observedAt`, are one use. */
 const usesOf = (claims: readonly AllowanceReset[]): number => new Set(claims.map((r) => Math.floor(Date.parse(r.observedAt) / MINUTE))).size;
 
-/** The rows the four weeks keep: the newest `weeks` resets that are no claim and every claim row newer than the
- *  oldest of them. `counted` counts the kept resets that are no claim, `used` the uses among the kept claim rows, and
- *  `total` sums every kept row: the answer's own total where it keeps every listed row. */
-export function newestResets(window: AllowanceWindow, weeks = ALLOWANCE_WEEKS): { counted: number; resets: AllowanceReset[]; total: number; used: number } {
-  const natural = window.resets.filter((r) => !isClaim(r)).slice(0, weeks);
-  const oldest = natural.at(-1);
+/** The rows the four weeks keep: the newest `weeks` rows of the window's `resets` and every row of its `claims` newer
+ *  than the oldest of them. `counted` counts the kept resets, `used` the uses among the kept claims, and `total` sums
+ *  the kept rows of both lists: the answer's own total where it keeps both lists whole. */
+export function newestResets(window: AllowanceWindow, weeks = ALLOWANCE_WEEKS): { claims: AllowanceReset[]; counted: number; resets: AllowanceReset[]; total: number; used: number } {
+  const resets = window.resets.slice(0, weeks);
+  const oldest = resets.at(-1);
   // A claim row is dated by its drop, since its `resetAt` is the reset of the week the use fell in.
-  const claims = window.resets.filter((r) => isClaim(r) && (oldest === undefined || Date.parse(r.observedAt) > Date.parse(oldest.resetAt)));
-  const resets = window.resets.filter((r) => natural.includes(r) || claims.includes(r));
-  const total = resets.length === window.resets.length ? window.totalShareLeft : resets.reduce((sum, r) => sum + r.shareLeft, 0);
-  return { counted: natural.length, resets, total, used: usesOf(claims) };
+  const claims = window.claims.filter((r) => oldest === undefined || Date.parse(r.observedAt) > Date.parse(oldest.resetAt));
+  const whole = resets.length === window.resets.length && claims.length === window.claims.length;
+  const total = whole ? window.totalShareLeft : [...resets, ...claims].reduce((sum, r) => sum + r.shareLeft, 0);
+  return { claims, counted: resets.length, resets, total, used: usesOf(claims) };
 }
 
 /** A figure in the chosen week: the share of the account's own window priced through the tier's 7-day capacity over
@@ -102,8 +100,9 @@ export const pairOf = (account: Pick<AllowanceAccount, 'plan' | 'tier'>, reset?:
 export const drawsFreeNote = (account: AllowanceAccount): boolean =>
   account.plan === 'free' &&
   allowanceWindows(account).some((w) => {
-    const { resets } = newestResets(w);
-    return resets.length === 0 || resets.some((r) => pairOf(account, r).plan === 'free');
+    const { claims, resets } = newestResets(w);
+    const rows = [...resets, ...claims];
+    return rows.length === 0 || rows.some((r) => pairOf(account, r).plan === 'free');
   });
 
 /** The unpriced dash's hover. It keeps the account's own plan where the figure was priced at the account's pair,
@@ -142,9 +141,10 @@ function summedFigure(resets: readonly AllowanceReset[], window: string, account
  * count fewer weeks than its label names.
  */
 export function weeksFigure(window: AllowanceWindow, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, week: WeekPosition): AllowanceFigure {
-  const { resets, total } = newestResets(window);
-  if (resets.length === 0) return allowanceFigure(total, window.window, account, costs, week);
-  return summedFigure(resets, window.window, account, costs, week);
+  const { claims, resets, total } = newestResets(window);
+  const rows = [...resets, ...claims];
+  if (rows.length === 0) return allowanceFigure(total, window.window, account, costs, week);
+  return summedFigure(rows, window.window, account, costs, week);
 }
 
 /** The block's subtitle, which the week control's position leaves alike. */
@@ -173,7 +173,12 @@ const SOURCE_WORD = new Map([
 ]);
 
 /** The instant a row draws: the drop's for a claim row, whose `resetAt` can be a day still to come, else the reset's. */
-export const drawnInstant = (reset: AllowanceReset): string => (isClaim(reset) ? reset.observedAt : reset.resetAt);
+export const drawnInstant = (reset: AllowanceReset): string => (reset.source === 'claim' ? reset.observedAt : reset.resetAt);
+
+/** The rows of a window's two lists in the order one column draws them: by the drawn instant, newest first, a reset
+ *  ahead of a claim of the same instant. */
+export const drawnRows = (resets: readonly AllowanceReset[], claims: readonly AllowanceReset[]): AllowanceReset[] =>
+  [...resets, ...claims].sort((a, b) => Date.parse(drawnInstant(b)) - Date.parse(drawnInstant(a)));
 
 /** A reset's hover: its absolute instant and where its reading came from, a word the router adds read as sent. */
 export const resetHover = (reset: AllowanceReset): string => `${fmtAbsolute(drawnInstant(reset))}, read from ${SOURCE_WORD.get(reset.source) ?? reset.source}`;
@@ -218,9 +223,9 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
     for (const w of allowanceWindows(account)) {
       // A claim row falls in the range by its drop, since a use in a week still open carries that week's reset, which
       // lies past the range's end.
-      const used = w.resets.filter((r) => isClaim(r) && Date.parse(r.observedAt) >= range.fromMs && Date.parse(r.observedAt) <= range.toMs);
+      const used = w.claims.filter((r) => Date.parse(r.observedAt) >= range.fromMs && Date.parse(r.observedAt) <= range.toMs);
       claims.push(...used.map((reset) => ({ reset, window: w.window })));
-      const ended = w.resets.filter((r) => !isClaim(r) && Date.parse(r.resetAt) <= range.toMs);
+      const ended = w.resets.filter((r) => Date.parse(r.resetAt) <= range.toMs);
       // The route answers a use whatever natural resets the span holds, so an account before its first recorded weekly
       // reset can hold a use alone, which the range's figure keeps.
       if (ended.length === 0 && used.length === 0) continue;

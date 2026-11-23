@@ -2049,8 +2049,11 @@ export interface AllowanceReset {
 }
 
 export interface AllowanceWindow {
+  /** The window's claim rows, each a used limit reset that cleared it, by the drop's instant, newest first. */
+  claims: AllowanceReset[];
+  /** The window's rows that are no claim, by the reset's instant, newest first. */
   resets: AllowanceReset[];
-  resetsCounted: number;
+  /** The route's sum over the rows of both lists. */
   totalShareLeft: number;
   /** `seven_day` or a model week's key, as the route spells it. */
   window: string;

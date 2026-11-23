@@ -22,7 +22,7 @@ import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { accountUses, type AccountUse } from '@/lib/accountUses';
 import { accountHref, accountMeterHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, REQUESTS_CODEC, requestsHref, sortDirOf } from '@/lib/address';
-import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, drawnInstant, drawsFreeNote, newestResets, ownShareHover, pairOf, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
+import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, drawnInstant, drawnRows, drawsFreeNote, newestResets, ownShareHover, pairOf, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
@@ -945,8 +945,8 @@ function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; a
 }
 
 function AllowanceColumn({ account, costs, holder, week, window: w }: { account: AllowanceAccount; costs: SubscriptionCosts | null; holder: Pick<Account, 'subscription'>; week: WeekPosition; window: AllowanceWindow }) {
-  const { counted, resets, used } = newestResets(w);
-  const [latest, ...before] = resets;
+  const { claims, counted, resets, used } = newestResets(w);
+  const [latest, ...before] = drawnRows(resets, claims);
   const figure = (reset: AllowanceReset | undefined) => allowanceFigure(reset?.shareLeft ?? null, w.window, account, costs, week, reset);
   // The figure reads the chosen week, so the hover adds the reset's own share of the account's window under the plan
   // the figure prices at: the reset's pair, named by its word where the router prices no tier for it (a free plan, a
