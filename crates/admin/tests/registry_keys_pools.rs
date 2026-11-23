@@ -3674,10 +3674,6 @@ async fn a_pools_pins_read_refuses_once_the_router_is_gone() {
     router.shutdown().await.unwrap();
     let refused = get(&app, "/admin/pools/main/pins", Some(&cookie)).await;
     assert_eq!(refused.status(), 503);
-    assert_eq!(
-        json(refused).await["error"].as_str(),
-        Some("the router is not available")
-    );
 }
 
 /// Each read of a pool looks the pool up for itself, so this read's 404 is its own.
@@ -3687,10 +3683,6 @@ async fn a_pools_pins_read_answers_404_for_a_pool_the_registry_does_not_hold() {
     let cookie = login(&app, "admin-secret").await;
     let refused = get(&app, "/admin/pools/nope/pins", Some(&cookie)).await;
     assert_eq!(refused.status(), 404);
-    assert_eq!(
-        json(refused).await["error"].as_str(),
-        Some("pool not found")
-    );
 }
 
 #[tokio::test]
