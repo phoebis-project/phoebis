@@ -522,10 +522,11 @@ out=$(python3 "$tmp/schema-unreadable/scripts/check-docs.py" schema 2>&1) \
   && fail "a ledger table whose last entry is no (number, expression) step passed"
 
 # The hrefs check has to fail on a console link to an anchor that no heading of its page carries, on a link to a page
-# that the nav does not hold though the page's file stands, on a call whose arguments it cannot read, on a unit address
-# that names a page outside the nav, and on an anchor that only a line inside a fenced block spells. Each copy of the
-# shared tree adds one of them to a valid site, so each case's exit comes from that case alone. The check's run on the
-# real tree is the passing side.
+# that the nav does not hold though the page's file stands, on a call whose arguments it cannot read, on a use of
+# docsHref as a value, on an import of docsHref under another name, on a unit address that names a page outside the nav,
+# on a unit with no Documentation line, on a unit address outside the documentation site, and on an anchor that only a
+# line inside a fenced block spells. Each copy of the shared tree adds one of them to a valid site, so each case's exit
+# comes from that case alone. The check's run on the real tree is the passing side.
 tree hrefs
 echo "const DOCS_SITE = 'https://docs.example/router/';" > "$tmp/hrefs/web/src/lib/docs.ts"
 echo 'nav = [ { "Guide" = "guide.md" } ]' > "$tmp/hrefs/docs/nav.toml"
@@ -550,12 +551,36 @@ out=$(python3 "$tmp/hrefs-unread/scripts/check-docs.py" hrefs 2>&1) \
   && fail "a docsHref call whose arguments the check cannot read passed"
 echo "$out" | grep -qF "web/src/Page.tsx:1: a docsHref call whose arguments the check cannot read" \
   || fail "the call the check cannot read did not report: $out"
+cp -R "$tmp/hrefs" "$tmp/hrefs-value"
+echo "const hrefs = ['guide'].map(docsHref);" > "$tmp/hrefs-value/web/src/Page.tsx"
+out=$(python3 "$tmp/hrefs-value/scripts/check-docs.py" hrefs 2>&1) \
+  && fail "a use of docsHref as a value passed"
+echo "$out" | grep -qF "web/src/Page.tsx:1: docsHref in a form that the check cannot read" \
+  || fail "the use of docsHref as a value did not report: $out"
+cp -R "$tmp/hrefs" "$tmp/hrefs-alias"
+echo "import { docsHref as href } from '@/lib/docs';" > "$tmp/hrefs-alias/web/src/Page.tsx"
+out=$(python3 "$tmp/hrefs-alias/scripts/check-docs.py" hrefs 2>&1) \
+  && fail "an import of docsHref under another name passed"
+echo "$out" | grep -qF "web/src/Page.tsx:1: docsHref in a form that the check cannot read" \
+  || fail "the import of docsHref under another name did not report: $out"
 cp -R "$tmp/hrefs" "$tmp/hrefs-unit"
 echo 'Documentation=https://docs.example/router/gone/' > "$tmp/hrefs-unit/deploy/phoebis.service"
 out=$(python3 "$tmp/hrefs-unit/scripts/check-docs.py" hrefs 2>&1) \
   && fail "a unit address to a page that the nav does not hold passed"
 echo "$out" | grep -qF "phoebis.service: the Documentation address names the page gone, which docs/nav.toml does not hold" \
   || fail "the unit's page that the nav does not hold did not report: $out"
+cp -R "$tmp/hrefs" "$tmp/hrefs-undocumented"
+: > "$tmp/hrefs-undocumented/deploy/phoebis.service"
+out=$(python3 "$tmp/hrefs-undocumented/scripts/check-docs.py" hrefs 2>&1) \
+  && fail "a unit with no Documentation line passed"
+echo "$out" | grep -qF "phoebis.service: no Documentation line" \
+  || fail "the unit with no Documentation line did not report: $out"
+cp -R "$tmp/hrefs" "$tmp/hrefs-elsewhere"
+echo 'Documentation=https://other.example/guide/' > "$tmp/hrefs-elsewhere/deploy/phoebis.service"
+out=$(python3 "$tmp/hrefs-elsewhere/scripts/check-docs.py" hrefs 2>&1) \
+  && fail "a unit address outside the documentation site passed"
+echo "$out" | grep -qF "phoebis.service: a Documentation address the check cannot read" \
+  || fail "the unit address outside the documentation site did not report: $out"
 cp -R "$tmp/hrefs" "$tmp/hrefs-fence"
 printf '## Here\n\n```\n# gone\n```\n' > "$tmp/hrefs-fence/docs/site/guide.md"
 echo "const href = docsHref('guide', 'gone');" > "$tmp/hrefs-fence/web/src/Page.tsx"

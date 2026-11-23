@@ -726,8 +726,13 @@ def check_codes(code_files, client_md):
 # The site's address that `docsHref` puts ahead of each page. The unit's address starts with it, and the rest names
 # the page.
 DOCS_SITE_CONST = re.compile(r"\bconst DOCS_SITE\s*=\s*'([^'\\\n]+)'")
-# The declaration matches with its `function` keyword ahead of the name, so the walk passes it by in any file.
-DOCS_HREF_CALL = re.compile(r"(\bfunction\s+)?\bdocsHref\(")
+# Each place that spells the name, in a comment too, since the walk knows no comment. The declaration matches with its
+# `function` keyword ahead of the name, so the walk passes it by in any file.
+DOCS_HREF_NAME = re.compile(r"(\bfunction\s+)?\b(docsHref)\b")
+# An import statement, from `import` at a line's start to its `from` and the module's string. A name of its list that
+# `as` follows is reported, since the calls under the other name do not spell docsHref.
+IMPORT_STATEMENT = re.compile(r"^import\b[^;]*?\bfrom\s*(['\"])[^'\"\n]*\1", re.M)
+IMPORT_ALIAS = re.compile(r"\s+as\b")
 # The arguments as the console writes them by hand: one or two single-quoted literals, on one line or wrapped with a
 # trailing comma. An escape makes a literal's value differ from its spelling, so a literal with a backslash does not
 # read.
@@ -805,7 +810,8 @@ def heading_ids(page_md):
 def check_hrefs(web_src, docs_ts, unit_file, nav_toml, site_dir):
     """Every `docsHref` call under the console's source and the unit's `Documentation` address against the pages: the
     page stands in the nav, and an anchor is the id of a heading on that page. A call the check cannot read is a
-    finding, never a silent pass."""
+    finding, never a silent pass, and so is each other place that spells the name outside its declaration and an import
+    list."""
     absent = missing([docs_ts, unit_file, nav_toml])
     if not web_src.is_dir():
         print(f"{web_src} is missing")
@@ -827,16 +833,25 @@ def check_hrefs(web_src, docs_ts, unit_file, nav_toml, site_dir):
         if path.suffix not in (".ts", ".tsx") or not path.is_file():
             continue
         shown, text = path.relative_to(ROOT), path.read_text(encoding="utf-8")
-        for call in DOCS_HREF_CALL.finditer(text):
-            if call.group(1):
+        imports = [statement.span() for statement in IMPORT_STATEMENT.finditer(text)]
+        for place in DOCS_HREF_NAME.finditer(text):
+            called = text.startswith("(", place.end())
+            if place.group(1) and called:
                 continue
-            line = line_of(text, call.start())
-            arguments = DOCS_HREF_ARGUMENTS.match(text, call.end())
-            if arguments is None:
-                print(f"{shown}:{line}: a docsHref call whose arguments the check cannot read")
-                findings += 1
+            line = line_of(text, place.start(2))
+            if called:
+                arguments = DOCS_HREF_ARGUMENTS.match(text, place.end() + 1)
+                if arguments is None:
+                    print(f"{shown}:{line}: a docsHref call whose arguments the check cannot read")
+                    findings += 1
+                    continue
+                links.append((f"{shown}:{line}: docsHref", arguments.group(1), arguments.group(2)))
                 continue
-            links.append((f"{shown}:{line}: docsHref", arguments.group(1), arguments.group(2)))
+            listed = any(start <= place.start(2) < end for start, end in imports)
+            if listed and not IMPORT_ALIAS.match(text, place.end()):
+                continue
+            print(f"{shown}:{line}: docsHref in a form that the check cannot read")
+            findings += 1
     addresses = DOCUMENTATION_LINE.findall(unit_file.read_text(encoding="utf-8"))
     if not addresses:
         print(f"{unit_file.name}: no Documentation line")
