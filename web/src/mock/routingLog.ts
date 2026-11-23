@@ -18,7 +18,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
 import { DELETED_ACCOUNTS, KEY_REVOKED_AT, RETIRED, WORST_BUCKET, keyById, poolById, storyAccountOf, type PoolSeed } from './pools';
-import { ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, requestById, resentInPlace, type CooldownRow } from './requests';
+import { ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, NO_PIN_DRAWS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, ROUTER_RESTARTED_AT, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, pinReadAt, pinStampOf, requestById, resentInPlace, type CooldownRow } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { drawnWindows, droppedThinkingOf, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
@@ -92,6 +92,8 @@ interface Spec {
    * builder derives: the message chain's depth, and the size of each static boundary another key held there.
    */
   cacheMap?: { messages: number; staticSizes: number[] };
+  /** The selections a drawn probe that sent nothing drew, whose in-flight draws its one answer takes. */
+  drawnSelections?: number;
   exhaustion?: Exhaustion | null;
   /** A summary fact the story names where the router's own reading is not what the row tells. */
   fact?: SummaryFact[];
@@ -127,7 +129,7 @@ interface Spec {
    */
   reasons?: string[];
   refusal?: Refusal;
-  /** The expired row a first placement released on another account, with the reasons its release names. */
+  /** The expired row a first placement released, with the reasons its release names. */
   replaced?: { accountId: string; reasons: string[] };
   request: RequestLog;
   round?: ShedRound;
@@ -565,7 +567,10 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
   const r = spec.request;
   const fast = r.shape.requestedSpeed === 'fast';
   const at = spec.at;
-  return membersAt(pool, at).map(({ account: a, member: m }) => {
+  const members = membersAt(pool, at);
+  // A probe that sent nothing takes the draws of each selection its attempts drew, past the one its answer reads.
+  for (let k = 1; k < (spec.drawnSelections ?? 0); k += 1) members.forEach(() => inFlightRng.int(0, 5));
+  return members.map(({ account: a, member: m }) => {
     const overage = inOverageAt(a.id, at);
     const windows: RecordCandidate['windows'] = {};
     const entry = a.kind === 'oauth' ? slowReadAt(a.id, pool, at) : null;
@@ -605,9 +610,9 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const endsAt = sub?.endsAt ? Date.parse(sub.endsAt) : null;
     // Drawn for every member, so a count the story sets moves no later draw. A drawn count stands under the cap, so a
     // member reads full only where the story's own pins or the marks of `fillDrawnRivals` hold it there. A row outside
-    // the seeded streams draws none, and neither does a probe's pinned answer, which reads the counts its leg's
-    // decision drew (`buildDecisions`), so the decisions after it keep their draws.
-    const drawn = UNSEEDED_IDS.has(r.id) || pinnedAnswerOf(spec) ? 0 : inFlightRng.int(0, 5);
+    // the seeded streams draws none, and neither does a probe's pinned answer after its leg, which reads the counts its
+    // leg's decision drew (`buildDecisions`), so the decisions after it keep their draws.
+    const drawn = UNSEEDED_IDS.has(r.id) || (pinnedAnswerOf(spec) && spec.drawnSelections === undefined) ? 0 : inFlightRng.int(0, 5);
     const drawnInFlight = Math.min(drawn, pool.inFlightCap - 1);
     const obstacle = obstacleOf(a, pool, at, r.canonicalModel, fast, spec.attempted);
     const paid = isPaidSource(a);
@@ -1291,6 +1296,8 @@ interface PinState {
   lastUsedAt: number;
   /** The source a shed move or a failover's landing left, which a renewal keeps and any other write clears. */
   shed: { at: number; from: string; reason: string } | null;
+  /** The last use the request walks read the row by (`pinStampOf`), which decides a placement's word. */
+  stamp: number;
 }
 const pins = new Map<string, PinState>();
 let epochs = 0;
@@ -1388,14 +1395,15 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
   }
   if (typeof spec.pin === 'string' && spec.pin !== 'none') return { pin: null, pinReason: spec.pin, steps: spec.kind === 'refused' ? [] : [step('pin', 'none', [fact('reason', spec.pin)])] };
   if (spec.pin === 'none') {
-    // A first placement that replaced the session's row reads the row the purge had not yet taken, idle past the
-    // pool's window, with the reasons its release names. The engine writes no warmth and no mark for a row it releases.
-    if (spec.replaced !== undefined && held?.accountId === spec.replaced.accountId) {
+    // The row's stamp decides the word, as the request walks read it: a row idle past the pool's window that the purge
+    // has not yet taken, with the reasons its release names, or none behind the sweep. The engine writes no warmth and
+    // no mark for a row it releases.
+    if (held !== undefined && pinReadAt(held.stamp, pool.affinityTtlSeconds * 1_000, spec.at) === 'expired_idle') {
       const lastUsedAt = held.endedAt ?? held.lastUsedAt;
       const idleMs = spec.at - lastUsedAt;
       const pin: RecordPin = {
         accountId: held.accountId, createdAt: iso(held.createdAt), cycleMs: null, epoch: held.epoch, found: 'expired_idle', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(held.lastRefreshAt), lastUsedAt: iso(lastUsedAt),
-        marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: spec.at - held.lastRefreshAt, released: spec.replaced.reasons,
+        marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: spec.at - held.lastRefreshAt, released: spec.replaced?.reasons ?? [],
         shed: recordShedOf(held.shed), slowDownUntil: null, warmth: null, warmthCause: null,
       };
       return { pin, pinReason: null, steps: [step('pin', 'none', [fact('found', 'expired_idle'), ...pinFacts(held, idleMs, spec.at - held.lastRefreshAt)])] };
@@ -1407,7 +1415,7 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
   // A drawn trace names where the pin lived. A pin the day's rows last left past its window was used by a request
   // the day does not hold, so the trace's own idle age stands.
   const recent = held !== undefined && held.accountId === on && spec.at - held.lastUsedAt <= pool.affinityTtlSeconds * 1_000;
-  const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, cycleMs: null, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs, shed: null };
+  const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, cycleMs: null, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs, shed: null, stamp: spec.at - spec.pin.idleMs };
   pins.set(pinKey, found);
   const idleMs = spec.at - found.lastUsedAt;
   const released = spec.failover ? [spec.failover === 'fast_lane' ? 'fast_rate_limit' : 'cooldown'] : (spec.reasons ?? []);
@@ -1558,7 +1566,11 @@ function pinWriteOf(spec: Spec, pinning: boolean, pinKey: string, stamps: { hash
   const source = spec.from ?? '';
   const shed = action === 'renewed' ? (prior?.shed ?? null) : spec.failover ? { at: spec.at, from: source, reason: spec.failover } : spec.kind === 'moved' && spec.rule === 'shed' ? { at: spec.at, from: source, reason: 'round' } : null;
   const dispatched = dispatchedAttempt(spec);
-  pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, cycleMs: spec.pinPace?.cycleMs ?? null, endedAt: dispatched ? attemptEnd(dispatched) : spec.at, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at, shed });
+  // A renewal's stamp never moves back, where it arrives while an earlier request of its pin still streams. A write
+  // whose request the relay ended before any attempt stamps its selection.
+  const own = r.attempts.length > 0 ? pinStampOf(r, action === 'renewed') : spec.at;
+  const stamp = action === 'renewed' && prior ? Math.max(prior.stamp, own) : own;
+  pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, cycleMs: spec.pinPace?.cycleMs ?? null, endedAt: dispatched ? attemptEnd(dispatched) : spec.at, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at, shed, stamp });
   return action === 'renewed' ? { action, epoch, hashesStamped: stamps.hashes, lane: laneOf(r), refreshStamped: stamps.refresh } : { action, epoch, hashesStamped: r.kind === 'inference', lane: laneOf(r), refreshStamped: true };
 }
 
@@ -1642,10 +1654,12 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   }
   const member = (id: string | null | undefined) => candidates.find((c) => c.accountId === id);
   // A probe warms the pin it was sent for: the line names that member's obstacle, if any, and whether this probe
-  // already tried it. A pinned answer ends the walk there, the reserve station aside.
+  // already tried it, or `no_pin` where the session holds no live pin. A pinned answer ends the walk there, the reserve
+  // station aside.
   if (r.kind === 'probe') {
     const pinned = pin?.found === 'live' ? member(pin.accountId) : undefined;
-    const facts = pinned ? [...(pinned.obstacle ? [fact('obstacle', pinned.obstacle.name)] : []), fact('tried', spec.attempted.includes(pinned.accountId))] : [];
+    const noPin = spec.exhaustion?.obstacle === 'no_pin' ? [fact('obstacle', 'no_pin')] : [];
+    const facts = pinned ? [...(pinned.obstacle ? [fact('obstacle', pinned.obstacle.name)] : []), fact('tried', spec.attempted.includes(pinned.accountId))] : noPin;
     walk.push(step('probe', pinnedAnswerOf(spec) ? 'answered' : 'passed', facts));
   }
   const { gateFits, movedAmong, steps: moveSteps } = moveWalkOf(spec, candidates, pool, pin, portable);
@@ -1945,6 +1959,13 @@ function derivedSpecs(r: RequestLog): Spec[] {
     // The builder names the exhaustion off the members' obstacles, which a block among them dates or explains.
     specs.push({ ...base, accountId: null, at: answeredAt, attempt, attempted: passedOver, fact: [summaryFact('held', bound, 'ms'), summaryFact('answer', 429, 'count')], holds: [...holds], inFlight: allAtCap(), kind: 'exhausted', pin: noPin, seq: seq + waitedOn.length });
   };
+  // A probe that found no live pin sent nothing: the selector answers the pinned obstacle `no_pin` at its selection.
+  const noPinDraws = NO_PIN_DRAWS.get(r.id);
+  if (noPinDraws !== undefined) {
+    const drawnSelections = noPinDraws.filter((_, i) => !resentInPlace({ attempts: noPinDraws }, i)).length + (failsOver(noPinDraws[noPinDraws.length - 1]) ? 1 : 0);
+    specs.push({ ...base, accountId: null, at, attempt: 1, drawnSelections, exhaustion: { deadline: null, kind: 'pinned', obstacle: 'no_pin', reason: null, window: null }, kind: 'exhausted', pin: noPin, seq: 1 });
+    return specs;
+  }
   if (r.attempts.length === 0) {
     if (r.errorCode === 'accounts_at_cap') ranOut(1, 1, at, []);
     else specs.push({ ...base, accountId: null, at, attempt: 1, kind: 'exhausted', pin: noPin, seq: 1 });
@@ -1976,9 +1997,9 @@ function derivedSpecs(r: RequestLog): Spec[] {
     const rule = moved !== null && failover === undefined ? moved : undefined;
     // A request that can hold no pin renews none and moves none: it is placed.
     const kind: DecisionKind = !pinning ? 'placed' : s?.renewed ? 'renewed' : rule && reasons === undefined ? 'moved' : 'placed';
-    // A first placement that released an expired pin on another account carries that account and the release's reasons
-    // for its Pin step.
-    const expired = i === 0 && kind === 'placed' ? REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_expired' && e.accountId !== a.accountId) : undefined;
+    // A first placement that released an expired pin at its selection carries that account and the release's reasons
+    // for its Pin step. A 400's release follows the answer, so it is none of these.
+    const expired = i === 0 && kind === 'placed' ? REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_expired' && Date.parse(e.at) <= start) : undefined;
     const replacedOn = expired?.accountId ?? null;
     const replaced = replacedOn === null ? undefined : { accountId: replacedOn, reasons: releasedReasons(expired) };
     const from = failover ? attempted[attempted.length - 1] : rule ? (String(REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_migrated')?.detail?.from_account ?? '') || undefined) : undefined;
@@ -3281,7 +3302,7 @@ function buildEvents(): RoutingEvent[] {
     { accountId: RETIRED.account.id, actor: 'admin', at: iso(RETIRED.deletedAt), detail: { diff: {}, kind: 'account_deleted', target: RETIRED.account.id }, kind: 'registry_changed' },
     { accountId: RETIRED.account.id, at: iso(RETIRED.deletedAt), detail: { cause: 'deleted', detail: null, from: 'ready', to: 'deleted' }, kind: 'account_state_changed' },
     { accountId: 'primary', at: iso(t(9, 0, 41)), detail: { added: ['claude-opus-5-5'], count: 12, removed: [] }, kind: 'catalog_changed' },
-    { accountId: null, at: iso(t(6, 12, 40)), detail: { affinity_entries_loaded: 34, down_since: t(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, kind: 'router_started' },
+    { accountId: null, at: iso(ROUTER_RESTARTED_AT), detail: { affinity_entries_loaded: 34, down_since: t(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, kind: 'router_started' },
     // Once each outside the hour.
     // The sweep's expiry names no request, so it reads its pool off its key.
     { accountId: 'primary', agentId: 'main', at: iso(t(13, 13, 40)), detail: { agent_id: 'main', reasons: ['expired'] }, keyId: 'laptop', kind: 'pin_expired', model: HAIKU, poolId: keyById.get('laptop')?.poolId ?? null, sessionId: sessionId('5eeed6ce') },

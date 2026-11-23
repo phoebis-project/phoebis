@@ -24,7 +24,7 @@ import { RETIRED, keyById, poolById, storyAccountOf } from './pools';
 import { createRng, type Rng } from './rng';
 import { round } from './round';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES, tablesFor } from './samples';
-import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, daysAgo, iso, startOfHour } from './time';
+import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, OVERFLOW_PAUSED_AT, RESEARCH_BUDGET_AT, clock, daysAgo, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
 // The upstream's own ids draw from a stream of their own, so they move no draw of the rows.
@@ -1100,10 +1100,10 @@ interface StorySeed {
    * the drawn rows read, so it keeps its written class and instants and every drawn figure stays where it was: the
    * contract seat's rows on fleet, the approved Ultra's rows on bench, the last turns of the desktop session the mod
    * ended, the one turn of story 4's Explore subagent, the classifier call its judged account could not take, the turn
-   * whose placement replaced an expired row, the two turns of the conversation the Overflow workspace's lapse moves,
-   * the two subagent turns the laptop session's classifier calls judge, the first turn of the subagent `f2c8` that the
-   * 11:00 round reads, the turn the upstream answered 400 and the two turns of the conversation that moves off the
-   * deleted account.
+   * whose placement replaced an expired row, the three turns of the conversation whose pin the purge takes twice, the
+   * two turns of the conversation the Overflow workspace's lapse moves, the two subagent turns the laptop session's
+   * classifier calls judge, the first turn of the subagent `f2c8` that the 11:00 round reads, the turn the upstream
+   * answered 400 and the two turns of the conversation that moves off the deleted account.
    */
   unseeded?: true;
   usage?: Partial<Usage>;
@@ -1169,6 +1169,12 @@ const RESET_HELD_SESSION_ID = 'f19a6c2e-8b4d-4e73-a5c0-3d2b7e1f9a08';
  * The story writes it by hand, since no drawn turn's idle gap falls inside the purge's minute past its pool's window.
  */
 const REPLACED_PIN_ID = 'req_6f3e1b84-d29';
+/**
+ * A desktop conversation whose pin the purge takes twice, written by hand since the drawn rows pick their session from
+ * `SESSION_IDS`. Its first turn ends on nightly when the held conversation's does, so both pins reach one deadline, and
+ * its later turns each come behind the sweep that takes the pin before them.
+ */
+const PURGED_SESSION_ID = 'b9e3a1f7-4c28-4d65-8e10-2f7a6c9d3b54';
 /**
  * The desktop conversation the Overflow workspace answers before its credit balance runs out at 11:30:12. The story
  * writes its two turns by hand, since no drawn session holds a live pin across the lapse.
@@ -1737,6 +1743,13 @@ function storySeeds(): StorySeed[] {
     // nightly's overage under all's preference for a plan, and lands on primary, which holds its plan tier, writing the
     // conversation's prefix there afresh.
     { agentId: 'main', at: t(13, 21, 39), attempts: [{ accountId: 'primary', at: t(13, 21, 39), ms: 6_800, status: 200 }], id: REPLACED_PIN_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 1_500, output: 900 } },
+    // The conversation the purge takes twice. Its first turn ends at 13:11:09, the held conversation's end. Its second
+    // comes behind the sweep at 13:21:40 that takes that pin and ahead of the wall clock's next minute, finds no row and
+    // lands on primary, while its member names the message nightly holds. Its third comes behind the sweep at 13:32:40
+    // that takes the second's pin and lands on primary again, where the cache the second wrote for an hour still stands.
+    { agentId: 'main', at: t(13, 11), attempts: [{ accountId: 'nightly', at: t(13, 11), ms: 9_000, status: 200 }], id: 'req_3a9d6e14-b72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 39_800, input: 1_700, output: 1_020 } },
+    { agentId: 'main', at: t(13, 21, 50), attempts: [{ accountId: 'primary', at: t(13, 21, 50), ms: 6_000, status: 200 }], id: 'req_8b2f4c71-e05', keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 41_300, input: 1_500, output: 880 } },
+    { agentId: 'main', at: t(13, 33, 10), attempts: [{ accountId: 'primary', at: t(13, 33, 10), ms: 5_000, status: 200 }], id: 'req_d5e17a39-c48', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheRead: 41_300, cacheWrite1h: 1_200, input: 1_300, output: 760 } },
     // A new conversation's first turn, which primary's upstream answered 400.
     { agentId: 'main', at: t(12, 58, 14), attempts: [{ accountId: 'primary', at: t(12, 58, 14), ms: 640, status: 400 }], errorCode: 'invalid_request_error', id: CLIENT_ERROR_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: CLIENT_ERROR_SESSION_ID, unseeded: true },
     // A new conversation the Overflow workspace takes with the plan accounts full, while its balance still holds.
@@ -1885,6 +1898,74 @@ export const pinKeyOf = (r: RequestLog) => `${r.keyId}|${r.sessionId}|${r.agentI
 const byArrival = () => [...REQUESTS].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 
 /**
+ * The story router's restart, which its event in the routing log and the phase of its purge sweeps both read. The
+ * process before the restart swept on the same phase.
+ */
+export const ROUTER_RESTARTED_AT = clock(6, 12, 40);
+/** The first purge sweep strictly after `at`: the router sweeps once a minute from its start, and a sweep keeps a pin
+ *  whose age equals its TTL. */
+const sweepAfter = (at: number): number => ROUTER_RESTARTED_AT + (Math.floor((at - ROUTER_RESTARTED_AT) / MINUTE) + 1) * MINUTE;
+/** A session's pin as a request's first selection reads it: `live` inside its pool's affinity window,
+ *  `expired_idle` past the window and ahead of the sweep that purges the row, `none` behind that sweep, and `none` on
+ *  a pool whose TTL is zero, which pins no session. */
+type PinRead = 'expired_idle' | 'live' | 'none';
+export const pinReadAt = (lastUsedAt: number, ttlMs: number, at: number): PinRead =>
+  ttlMs === 0 ? 'none' : at - lastUsedAt <= ttlMs ? 'live' : at < sweepAfter(lastUsedAt + ttlMs) ? 'expired_idle' : 'none';
+/** The client errors that release a pin the request's own selection placed, as the relay answers them. */
+const RELEASING_STATUSES: readonly (number | null)[] = [400, 401, 403, 404];
+/**
+ * The instant a request leaves its pin's last use at, where `renews` says the pin stood before the request: the end of
+ * its last attempt where the request is no token count and that attempt answered 200, or answered a releasing client
+ * error on a pin it did not place, since the router stamps the pin again with the renewal the relay reports at the
+ * stream's end, and the start of its last attempt otherwise, the selection's own stamp. A count sends no report.
+ */
+export const pinStampOf = (r: Pick<RequestLog, 'attempts' | 'kind'>, renews: boolean): number => {
+  const last = r.attempts[r.attempts.length - 1];
+  const reported = r.kind !== 'count_tokens' && (last.upstreamStatus === 200 || (renews && RELEASING_STATUSES.includes(last.upstreamStatus)));
+  return reported ? attemptEnd(last) : Date.parse(last.startedAt);
+};
+
+/**
+ * The shortest lifetime of a cache entry, the router's and the upstream's: no entry ends inside it, so a turn that
+ * reads its cache expired stands at least that far behind the report that wrote the entry.
+ */
+const SHORTEST_CACHE_LIFETIME = 5 * MINUTE;
+/** The rows in the order the streams drew them, which the passes that draw per row walk, so a seated row keeps its
+ *  draws. */
+const DRAWN_ORDER: readonly RequestLog[] = [...REQUESTS];
+/**
+ * The drawn turns seated inside their pin's window, by id. A drawn answered turn of one attempt on a pool that pins
+ * longer than `SHORTEST_CACHE_LIFETIME`, with no compaction, whose cache read falls under half the size its pin key's
+ * last report under the same key holder left on the account it lands on, sits that lifetime behind the report's stamp
+ * plus the part of its drawn gap past whole spans of the window less that lifetime, where the account could take it
+ * there: the turn the router finds its pin live for and hands that size, so its expiry between turns is one the router
+ * counts. Its attempt moves with it and reads its windows at the new instant, and no stream draws for the seat.
+ */
+const SEATED = new Set<string>();
+{
+  const reports = new Map<string, { accountId: string; at: number; generation: number; size: number }>();
+  for (const r of byArrival()) {
+    const key = pinKeyOf(r);
+    const ttl = (poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) * 1_000;
+    const report = reports.get(key);
+    const head = r.attempts[0] as Attempt | undefined;
+    if (drawnRow(r) && head !== undefined && report !== undefined && report.generation === r.keyGeneration && ttl > SHORTEST_CACHE_LIFETIME && r.sessionId !== null && r.kind === 'inference' && r.status === 200 && r.attempts.length === 1 && r.contextCompacted === null && head.accountId === report.accountId && 2 * r.usage.cacheRead < report.size) {
+      const start = Date.parse(head.startedAt);
+      const seat = report.at + SHORTEST_CACHE_LIFETIME + ((start - report.at) % (ttl - SHORTEST_CACHE_LIFETIME));
+      if (start - report.at > ttl && holdableAt(r, head.accountId, seat)) {
+        r.at = iso(Date.parse(r.at) + seat - start);
+        r.attempts = [{ ...onAccount({ ...head, startedAt: iso(seat) }, head.accountId, seat), cacheMissReason: head.cacheMissReason }];
+        r.costUsd = round(costOf(r.model, r.usage, r.shape.requestedSpeed === 'fast', Date.parse(r.at)), 4);
+        SEATED.add(r.id);
+      }
+    }
+    const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
+    if (r.sessionId !== null && last?.upstreamStatus === 200 && r.kind !== 'probe' && r.kind !== 'count_tokens') reports.set(key, { accountId: last.accountId, at: pinStampOf(r, false), generation: r.keyGeneration, size: promptOf(r.usage) });
+  }
+  REQUESTS.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+}
+
+/**
  * The story's late request, an arrival among the rows a page of 50 shows that ran long, so the ledger writes it a few
  * seconds after the load, below rows a page read at the load already shows.
  */
@@ -1928,12 +2009,15 @@ interface LivePin {
 }
 
 /**
- * Walks the requests oldest first, handing `visit` the pin each one's first selection found live: where the pin's last
- * use left it within the pool's affinity window. A request leaves its pin on its last attempt's account unless that
- * answer cooled the account, which releases the pin. A token count renews a live pin and creates none. The pin moves
- * after the visit, so an attempt the visit moves takes the pin along.
+ * Walks the requests oldest first, handing `visit` the pin each one's first selection found live, where the pin's
+ * stamp (`pinStampOf`) left it within the pool's affinity window, with the selection's read of the row (`pinReadAt`)
+ * and the account of a row it found at all. A sweep past the window takes the row. A request leaves its pin on its
+ * last attempt's account unless that answer cooled the account, which releases the pin, or answered a releasing client
+ * error on a pin it placed. A token count renews a live pin and creates none, and a renewal keeps the later of its
+ * stamp and the one before it. The pin moves after the visit, so an attempt the visit moves takes the pin along, and a
+ * request the visit leaves with no attempt leaves it alone.
  */
-function walkLivePins(visit: (r: RequestLog, live: LivePin | undefined) => void) {
+function walkLivePins(visit: (r: RequestLog, live: LivePin | undefined, read: PinRead, rowOn: string | undefined) => void) {
   const pins = new Map<string, LivePin & { at: number }>();
   for (const r of byArrival()) {
     const ttl = (poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) * 1_000;
@@ -1941,13 +2025,17 @@ function walkLivePins(visit: (r: RequestLog, live: LivePin | undefined) => void)
     if (ttl === 0 || r.sessionId === null || first === undefined) continue;
     const key = pinKeyOf(r);
     const held = pins.get(key);
-    const live = held !== undefined && Date.parse(first.startedAt) - held.at <= ttl ? held : undefined;
-    visit(r, live && { accountId: live.accountId, createdAt: live.createdAt });
-    const last = r.attempts[r.attempts.length - 1];
-    const at = Date.parse(last.startedAt);
-    if (failsOver(last)) pins.delete(key);
-    else if (live?.accountId === last.accountId) pins.set(key, { ...live, at });
-    else if (r.kind !== 'count_tokens') pins.set(key, { accountId: last.accountId, at, createdAt: at });
+    const read = held === undefined ? 'none' : pinReadAt(held.at, ttl, Date.parse(first.startedAt));
+    if (read === 'none') pins.delete(key);
+    const live = read === 'live' ? held : undefined;
+    visit(r, live && { accountId: live.accountId, createdAt: live.createdAt }, read, read === 'none' ? undefined : held?.accountId);
+    const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
+    if (last === undefined) continue;
+    const at = pinStampOf(r, live?.accountId === last.accountId);
+    const placed = live?.accountId !== last.accountId && r.kind !== 'count_tokens';
+    if (failsOver(last) || (placed && RELEASING_STATUSES.includes(last.upstreamStatus))) pins.delete(key);
+    else if (live?.accountId === last.accountId) pins.set(key, { ...live, at: Math.max(live.at, at) });
+    else if (placed) pins.set(key, { accountId: last.accountId, at, createdAt: Date.parse(last.startedAt) });
   }
 }
 
@@ -1970,12 +2058,30 @@ function stepFourMoves(r: RequestLog, live: LivePin, at: number, overageFrom: nu
 }
 
 /**
+ * The attempts each drawn probe drew that found no live pin and so sent none, by request id: its trace and its record
+ * take their draws over them, so every later row keeps its own.
+ */
+export const NO_PIN_DRAWS = new Map<string, Attempt[]>();
+
+/**
+ * Answers a drawn probe whose session holds no live pin as the selector does: the pinned obstacle `no_pin`, which no
+ * wait clears, so the relay answers 503 with no attempt, in the form of the story's turn no account answered
+ * (`UNAVAILABLE_TURN_ID`). The probe counts file it under failed.
+ */
+function answerNoPin(r: RequestLog) {
+  NO_PIN_DRAWS.set(r.id, r.attempts);
+  CHAIN_FROM.delete(r.id);
+  Object.assign(r, { ...unservedAnswer(), capturedBodies: false, diagnosticsSource: null, errorCode: 'accounts_unavailable', outcome: 'rejected', responseTruncated: false, status: 503 });
+}
+
+/**
  * The drawn requests moved onto the pin their first selection found live on another account, by id, each with the
  * account its draw had chosen. The router renews a live pin on an account that can take the request ahead of any
  * placement, where step 4 moves the pin nowhere, so the request's one attempt lands there with the answer it drew. A
  * request whose answer cooled its account keeps its draw, since that cooldown and the failover after it belong to the
- * drawn account. The move runs ahead of nightly's overage instant and the live pins below, which read the moved
- * attempts.
+ * drawn account. A drawn probe warms the pin it was sent for, so it stands on its live pin's account whatever it drew,
+ * and one whose session holds no live pin sends nothing. The move runs ahead of nightly's overage instant and the live
+ * pins below, which read the moved attempts.
  */
 export const RENEWED_ON_PIN: ReadonlyMap<string, string> = (() => {
   const renewed = new Map<string, string>();
@@ -1983,6 +2089,15 @@ export const RENEWED_ON_PIN: ReadonlyMap<string, string> = (() => {
   const overageFrom = drawnHeads.length ? Math.min(...drawnHeads) : NIGHTLY_CAP_RAISED + MINUTE;
   walkLivePins((r, live) => {
     const head = r.attempts[0];
+    if (drawnRow(r) && r.kind === 'probe') {
+      if (live === undefined) answerNoPin(r);
+      else if (r.attempts.some((a) => a.accountId !== live.accountId)) {
+        r.attempts = r.attempts.map((a) => onAccount(a, live.accountId, Date.parse(a.startedAt)));
+        r.accountId = live.accountId;
+        renewed.set(r.id, head.accountId);
+      }
+      return;
+    }
     if (!drawnRow(r) || live === undefined || live.accountId === head.accountId || r.attempts.length > 1 || head.cooldownSet !== null) return;
     const to = live.accountId;
     const at = Date.parse(head.startedAt);
@@ -1994,6 +2109,9 @@ export const RENEWED_ON_PIN: ReadonlyMap<string, string> = (() => {
     else r.attempts = diagnosed([{ ...moved, cacheMissReason: null }], r.kind);
     renewed.set(r.id, head.accountId);
   });
+  // A seated turn renews the pin its drawn placement stood beside, so it takes that placement's draws as a moved row
+  // does.
+  for (const id of SEATED) renewed.set(id, requestById.get(id)?.attempts[0].accountId ?? '');
   return renewed;
 })();
 
@@ -2012,15 +2130,26 @@ for (const a of REQUESTS.flatMap((r) => r.attempts)) if (a.accountId === 'nightl
 
 /**
  * The pin each request's first selection found live, by request id, so a renewal or a move rests on a request the day
- * holds.
+ * holds, and the account of the row each one found idle past its window and not yet purged, which its placement
+ * releases.
  */
-const LIVE_PIN: Map<string, LivePin> = (() => {
-  const out = new Map<string, LivePin>();
-  walkLivePins((r, live) => {
-    if (live) out.set(r.id, live);
-  });
-  return out;
-})();
+const LIVE_PIN = new Map<string, LivePin>();
+const EXPIRED_ROW = new Map<string, string>();
+/**
+ * Each drawn request whose first attempt stands off the live pin its first selection found, by id, with the pin's
+ * account and the router's cause for taking the request off it: the pin's account cannot serve or hold the request
+ * (`obstacle`), step 4 moves the pin (`move`), or no cause the router holds (`none`).
+ */
+const DECLINED = new Map<string, { kind: 'move' | 'none' | 'obstacle'; pinOn: string }>();
+walkLivePins((r, live, read, rowOn) => {
+  if (live) LIVE_PIN.set(r.id, live);
+  if (read === 'expired_idle' && rowOn !== undefined) EXPIRED_ROW.set(r.id, rowOn);
+  const head = r.attempts[0];
+  if (!drawnRow(r) || r.kind === 'probe' || live === undefined || live.accountId === head.accountId) return;
+  const at = Date.parse(head.startedAt);
+  const kind = !serves(live.accountId, r.canonicalModel) || !holdableAt(r, live.accountId, at) ? 'obstacle' : stepFourMoves(r, live, at, OVERAGE_FROM) ? 'move' : 'none';
+  DECLINED.set(r.id, { kind, pinOn: live.accountId });
+});
 
 /**
  * The move rule that takes a pin on `from` to the row's account in the engine's order, or null where none would. The
@@ -2061,6 +2190,34 @@ const MIGRATION_REASONS: { value: PinMigrationReason; weight: number }[] = [
   { value: 'spent', weight: 3 },
 ];
 
+/**
+ * The reasons the router's release names for the row on `accountId` a request's first selection read, in the router's
+ * order, as the story's account facts give them: the row idle past its pool's window, an account that does not serve
+ * the model, the operator's pause, the account's state, a cooldown that holds the request, the usage credits a fast
+ * request lacks, a reached budget, plan overage under a pool that does not allow it, and a spent plan window. A row
+ * that none of them holds is `released`.
+ */
+function releaseReasonsOf(r: RequestLog, accountId: string, idle: boolean): string[] {
+  const at = Date.parse(r.attempts[0].startedAt);
+  const fast = r.shape.requestedSpeed === 'fast';
+  const overage = accountId === 'nightly' && at >= OVERAGE_FROM && poolById.get(r.poolId ?? '')?.overagePolicy !== 'allow';
+  const reasons = [
+    ...(idle ? ['expired'] : []),
+    ...(serves(accountId, r.canonicalModel) ? [] : ['unserved']),
+    ...(accountId === 'overflow' && at >= OVERFLOW_PAUSED_AT ? ['paused'] : []),
+    ...(accountId === 'overflow' && at >= OVERFLOW_LAPSED_AT ? ['funding_required'] : []),
+    ...(coolingAt(accountId, at, r.canonicalModel, fast) ? ['cooldown'] : []),
+    ...(fast && accountId === 'nightly' && at < NIGHTLY_CAP_RAISED ? ['fast_credits'] : []),
+    ...(accountId === 'research' && at >= RESEARCH_BUDGET_AT ? ['budget'] : []),
+    ...(!fast && overage ? ['overage'] : []),
+    ...(!fast && spentWindows(oauthWindows(accountId, at, () => SERVED_FACTOR)).length > 0 ? ['spent'] : []),
+  ];
+  return reasons.length > 0 ? reasons : ['released'];
+}
+
+/** The order that picks the one word a live pin's forced move carries out of its release's reasons, as the router's. */
+const MOVE_CAUSE_ORDER = ['deleted', 'paused', 'disconnected', 'funding_required', 'reauth_required', 'unpaired', 'subscription_ended', 'unserved', 'cooldown', 'fast_rate_limit', 'fast_credits', 'budget_unknown', 'budget', 'overage', 'attempted', 'spent', 'released'];
+
 function buildRequestEvents(): Map<string, RequestEvent[]> {
   const h = createRng(8_080);
   const out = new Map<string, RequestEvent[]>();
@@ -2095,6 +2252,21 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
       const reason = supportedRule(r, from);
       if (reason) events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, epoch: 2, from_account: from, reason }, kind: 'pin_migrated' });
       spentOwed = false;
+    }
+    // A placement that finds its row idle past the window and not yet purged releases it first. A token count places
+    // no pin, so it releases none. The release and the moves below join after the draws above, which read the events a
+    // drawn row holds.
+    const expiredOn = EXPIRED_ROW.get(r.id);
+    if (expiredOn !== undefined && r.kind !== 'count_tokens') events.unshift({ ...pin, accountId: expiredOn, at: r.at, detail: { agent_id: r.agentId, reasons: releaseReasonsOf(r, expiredOn, true) }, kind: 'pin_expired' });
+    // A row off its live pin takes the router's cause where one holds: the pin's account standing against the request
+    // forces the move with the release's whole list, and step 4 moves it under the rule it reads.
+    const declined = DECLINED.get(r.id);
+    const head = r.attempts[0];
+    if (declined !== undefined && declined.kind !== 'none' && !events.some((e) => e.kind === 'pin_migrated' && e.at === head.startedAt)) {
+      const reasons = releaseReasonsOf(r, declined.pinOn, false);
+      const word = declined.kind === 'obstacle' ? (MOVE_CAUSE_ORDER.find((w) => reasons.includes(w)) ?? 'released') : declined.pinOn === 'nightly' ? 'overage' : 'return_to_plan';
+      const detail = { agent_id: r.agentId, epoch: 0, from_account: declined.pinOn, reason: word, ...(declined.kind === 'obstacle' ? { reasons } : {}) };
+      events.unshift({ ...pin, accountId: head.accountId, at: head.startedAt, detail, kind: 'pin_migrated' });
     }
     if (events.length) out.set(r.id, events);
   }
@@ -2245,7 +2417,7 @@ function traceRequests() {
   // The placements draw from a stream of their own, so every trace drawn before them keeps its values.
   const p = createRng(4_111);
   const w = createRng(3_119);
-  for (const r of REQUESTS) {
+  for (const r of DRAWN_ORDER) {
     // The routing log's records write the story's traces, so no obstacle is drawn against what its cards show.
     if (STORY_IDS.has(r.id)) continue;
     if (UNSEEDED_IDS.has(r.id)) {
@@ -2262,7 +2434,9 @@ function traceRequests() {
     r.requestClass = drawnClass;
     // The pool's policy adds no marker to an auxiliary class, so the marker waits for the class drawn here.
     r.cacheMarker = markerOf(r, ownMarkerOf(r));
-    r.attempts = r.attempts.map((a, i, all): Attempt => {
+    // A probe that sent nothing traces the attempts it drew and keeps none, so every later row keeps its draws.
+    const drawnAttempts = NO_PIN_DRAWS.get(r.id);
+    const traced = (drawnAttempts ?? r.attempts).map((a, i, all): Attempt => {
       const moved = migrationAt(r, a)?.detail?.reason;
       // The ledger folds the cache read into the trace of the attempt that answered, and only once it did.
       const cacheRead = i === all.length - 1 && r.status === 200 ? r.usage.cacheRead : null;
@@ -2296,6 +2470,7 @@ function traceRequests() {
       }
       return { ...a, selection: { ...undrawnTrace(r, a, i === all.length - 1), cohortHold, moved: typeof moved === 'string' ? moved : null, skipped } };
     });
+    if (drawnAttempts === undefined) r.attempts = traced;
   }
 }
 
@@ -2503,7 +2678,7 @@ function storedTokensOf(r: RequestLog, last: Attempt | null): RequestLog['stored
  * content or close on a token count, and no close on a JSON answer.
  */
 function phaseRequests() {
-  for (const r of REQUESTS) {
+  for (const r of DRAWN_ORDER) {
     const atMs = Date.parse(r.at);
     const first = r.attempts[0] as Attempt | undefined;
     const last = servingAttempt(r);
@@ -2532,39 +2707,56 @@ function phaseRequests() {
 
 /**
  * The session's turns as the router and the relay see them, over the rows' last fields, since the passes above move
- * arrivals. A first attempt takes its previous size as the selection hands it on: the size of the last usage report
- * under the request's pin key (key, session, agent and canonical model), where the attempt lands on that report's
- * account, and none on a compacted turn, on a pin's first turn, on a pin whose last report was empty, off that account
- * and on a row with no session. A probe's usage is the keepalive's cost and renews no size, and a token count stores no
- * report. A failover's leg finds no row of its own, since the failover took it, so it takes no size, and a resend in
- * place goes out under the decision of the attempt it repeats, its size and the account it left included.
+ * arrivals. Each pin key (key, session, agent and canonical model) holds the router's row: its account, its stamp
+ * (`pinStampOf`) and the size of its last usage report. A request's first selection reads the row as `pinReadAt` does,
+ * and a row a sweep has taken is gone, so a pool that pins nothing holds none. A first attempt takes its previous size
+ * as the selection hands it on: the row's size, live or idle past the window, where the attempt lands on the row's
+ * account, a token count's renewal among them, and none on a compacted turn, on a row whose last report was empty or
+ * absent, off that account and on a request with no row. A probe's usage is the keepalive's cost and renews no size,
+ * and a token count stores no report. A failover's leg finds no row of its own, since the failover took it, so it takes
+ * no size, and a resend in place goes out under the decision of the attempt it repeats, its size and the account it
+ * left included.
  *
- * The account a first attempt leaves is its agent's newest landing under the key and session, whatever the model, as
- * each selection moves it: a placement, a renewal and a probe's renewal stamp the pin they land on. An auxiliary call
- * reads its own pin's account, and its pins answer no other request. A token count creates no pin, and an answer of 400
- * releases the pin it placed. A failover's leg of a row with a session leaves the account of the leg before it, since
- * the router gives a request that takes no pin no failover entry.
+ * The account a first attempt leaves is its agent's newest landing under the key and session, whatever the model, while
+ * the sweeps have not taken it: a placement, a renewal and a probe's renewal stamp the pin they land on. An auxiliary
+ * call reads its own pin's account, and its pins answer no other request. A token count creates no pin: one that finds
+ * its pin live stamps it and becomes the agent's newest landing. A releasing client error releases the pin its
+ * placement created, while a renewal that answered one keeps its pin, its landing and its stamp. A failover's leg of a
+ * row with a session leaves the account of the leg before it, since the router gives a request that takes no pin no
+ * failover entry.
  *
  * A body's member names the message its agent's last answer carried, a fork's its parent's while it has none of its
  * own, so an agent's first answered turn that is no fork names none. The relay detaches the member's message on an
  * attempt that lands off the account it leaves and on every probe. An answered attempt whose body carried a member and
  * named no message files `not_returned`. One the build left unfiled (a leg, a placement after the session's row
  * expired) that named one draws the comparison a turn that stayed draws, `none` on a story row, which draws nothing. A
- * row stored before the relay filed its words keeps its null.
+ * turn behind a sweep leaves no account, so its member travels as sent, and where it lands off the account that
+ * answered its agent's last turn, that account alone holds the message it names: it files `previous_message_not_found`,
+ * the comparison drawn and set aside so every later draw keeps its place. A row stored before the relay filed its words
+ * keeps its null.
  */
 function walkSessionTurns() {
-  const reports = new Map<string, { accountId: string; size: number }>();
-  const newest = new Map<string, string>();
-  const pinned = new Map<string, string>();
-  const answered = new Set<string>();
+  const rows = new Map<string, { accountId: string; at: number; size: number | null }>();
+  const newest = new Map<string, { accountId: string; at: number }>();
+  const answered = new Map<string, string>();
   for (const r of byArrival()) {
     const pin = pinKeyOf(r);
-    const report = r.sessionId === null ? undefined : reports.get(pin);
+    const ttl = r.sessionId === null ? 0 : (poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) * 1_000;
+    const first = r.attempts[0] as Attempt | undefined;
+    const selectedAt = Date.parse(first?.startedAt ?? r.at);
+    const held = rows.get(pin);
+    const read = held === undefined ? 'none' : pinReadAt(held.at, ttl, selectedAt);
+    if (read === 'none') rows.delete(pin);
+    const row = read === 'none' ? undefined : held;
     const landing = `${r.keyId}|${r.sessionId}|${r.agentId}`;
     const auxiliary = r.requestClass === 'auxiliary';
     const agent = `${r.sessionId}|${r.agentId}`;
     const turn = r.sessionId !== null && r.kind === 'inference';
-    const firstTurn = turn && !answered.has(agent) && r.agentType !== 'fork' && r.forkedFrom === null;
+    const forked = r.agentType === 'fork' || r.forkedFrom !== null;
+    const firstTurn = turn && !answered.has(agent) && !forked;
+    const parent = r.agentType === 'fork' ? `${r.sessionId}|main` : r.forkedFrom === null ? undefined : `${r.forkedFrom}|main`;
+    const lastAnswer = answered.get(agent) ?? (parent === undefined ? undefined : answered.get(parent));
+    const prior = newest.get(landing);
     let left: string | undefined;
     r.attempts.forEach((a, i) => {
       if (resentInPlace(r, i)) {
@@ -2573,12 +2765,8 @@ function walkSessionTurns() {
         if (r.sessionId !== null) left = r.attempts[i - 1].accountId;
         a.previousInputTokens = null;
       } else if (r.sessionId !== null) {
-        left = auxiliary ? pinned.get(pin) : newest.get(landing);
-        a.previousInputTokens = report !== undefined && r.contextCompacted === null && report.size > 0 && a.accountId === report.accountId ? report.size : null;
-      }
-      if (r.sessionId !== null && r.kind !== 'count_tokens' && a.upstreamStatus !== 400) {
-        pinned.set(pin, a.accountId);
-        if (!auxiliary) newest.set(landing, a.accountId);
+        left = auxiliary ? row?.accountId : prior !== undefined && pinReadAt(prior.at, ttl, selectedAt) !== 'none' ? prior.accountId : undefined;
+        a.previousInputTokens = row !== undefined && r.contextCompacted === null && (row.size ?? 0) > 0 && a.accountId === row.accountId ? row.size : null;
       }
       if (a.upstreamStatus !== 200 || r.kind === 'count_tokens' || UNFILED_IDS.has(r.id)) return;
       const named = !firstTurn && r.kind !== 'probe' && (left === undefined || left === a.accountId);
@@ -2588,11 +2776,26 @@ function walkSessionTurns() {
       // on a probe, whose member the relay detaches whoever put it there.
       if (r.diagnosticsSource === null) a.cacheMissReason = 'not_requested';
       else if (!named || a.accountKind !== 'oauth') a.cacheMissReason = 'not_returned';
-      else if (a.cacheMissReason === null) a.cacheMissReason = drawnRow(r) ? compare() : 'none';
+      else {
+        if (a.cacheMissReason === null) a.cacheMissReason = drawnRow(r) ? compare() : 'none';
+        if (i === 0 && read === 'none' && lastAnswer !== undefined && lastAnswer !== a.accountId) a.cacheMissReason = 'previous_message_not_found';
+      }
     });
+    const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
+    if (ttl > 0 && last !== undefined) {
+      const renews = row !== undefined && read === 'live' && row.accountId === last.accountId;
+      const stamp = pinStampOf(r, renews);
+      const released = RELEASING_STATUSES.includes(last.upstreamStatus);
+      const places = !renews && r.kind !== 'count_tokens' && !released;
+      if (failsOver(last) || (!renews && r.kind !== 'count_tokens' && released)) rows.delete(pin);
+      else if (renews) row.at = Math.max(row.at, stamp);
+      else if (places) rows.set(pin, { accountId: last.accountId, at: stamp, size: null });
+      if (!auxiliary && (renews || places)) newest.set(landing, { accountId: last.accountId, at: renews ? row.at : stamp });
+    }
     const serving = servingAttempt(r);
-    if (turn && serving?.upstreamStatus === 200) answered.add(agent);
-    if (r.sessionId !== null && serving !== null && r.kind !== 'probe' && r.storedTokens.input !== null) reports.set(pin, { accountId: serving.accountId, size: promptOf(r.usage) });
+    if (turn && serving?.upstreamStatus === 200) answered.set(agent, serving.accountId);
+    const written = rows.get(pin);
+    if (written !== undefined && serving !== null && written.accountId === serving.accountId && r.kind !== 'probe' && r.storedTokens.input !== null) written.size = promptOf(r.usage);
   }
 }
 
@@ -2982,9 +3185,10 @@ function sampled(h: Rng, n: number, median: number, spread: number): number[] {
  * client's or the router's, so an hour whose answers draw no comparison (`compares` false) files each under
  * `not_returned`, as the day's rows do: an hour on an API-key account, which answers without the beta, and a probe
  * hour, whose member the relay detaches. Such an hour still `draws` its split and keeps its expiries, so every later
- * draw keeps its place, but on the `ci` lane, whose hours never drew one.
+ * draw keeps its place, but on the `ci` lane, whose hours never drew one. A probe hour holds no turn, and the ledger
+ * counts an expiry between turns for a turn alone, so it answers none and still takes the draw.
  */
-function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean, draws = true): { cacheMissReasons: Record<CacheMissReason, number>; expiredBetweenTurns: number } {
+function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean, draws = true, turns = true): { cacheMissReasons: Record<CacheMissReason, number>; expiredBetweenTurns: number } {
   const uncompared = () => Object.assign(emptyCacheMissReasons(), { not_returned: ok });
   if (!draws) return { cacheMissReasons: uncompared(), expiredBetweenTurns: 0 };
   const cacheMissReasons = emptyCacheMissReasons();
@@ -3001,8 +3205,8 @@ function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean, draws = t
   cacheMissReasons.previous_message_not_found = take(hm.chance(0.2) ? 1 : 0);
   cacheMissReasons.unavailable = take(hm.chance(0.1) ? 1 : 0);
   cacheMissReasons.none = left;
-  const expiredBetweenTurns = Math.min(cacheMissReasons.none, hm.chance(0.35) ? hm.int(1, 2) : 0);
-  return { cacheMissReasons: compares ? cacheMissReasons : uncompared(), expiredBetweenTurns };
+  const expired = Math.min(cacheMissReasons.none, hm.chance(0.35) ? hm.int(1, 2) : 0);
+  return { cacheMissReasons: compares ? cacheMissReasons : uncompared(), expiredBetweenTurns: turns ? expired : 0 };
 }
 
 /**
@@ -3207,7 +3411,7 @@ function historicalRollups(): HourlyRollup[] {
           tokens: { uncachedInput: 0, cacheRead: probeUsage.cacheRead, cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS },
           cacheHits: probes,
           cacheMisses: 0,
-          ...synthesizeMissReasons(hm, probes, false),
+          ...synthesizeMissReasons(hm, probes, false, true, false),
           ...synthesizeDropped(hd, lane, 'probe', probes),
           cacheMissReasonHits: emptyCounts(),
           uncacheable: 0,

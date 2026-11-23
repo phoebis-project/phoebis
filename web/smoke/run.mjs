@@ -875,13 +875,14 @@ await forView('/', async () => {
     ],
     // The engine's retained prompts at 92 percent of their cap, the mock overview's retained bytes.
     ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
-    // The expiries between turns rank last: 14 of the day's 16 sit on a pool that warms caches under a key the
-    // keepalive may probe for (`ATTENTION` in mock/attention.ts over the request seed's rows), the other two on ci.
+    // The expiries between turns rank last: the day's six, the drawn turns the mock seats inside their pin's window,
+    // each sit on a pool that warms caches under a key the keepalive may probe for (`ATTENTION` in mock/attention.ts
+    // over the request seed's rows).
     [
-      'Expired between turns: 14 in 24h',
+      'Expired between turns: 6 in 24h',
       'badge--warning',
       '/sessions',
-      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 14'],
+      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 6'],
     ],
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
@@ -1309,13 +1310,14 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 19
   // sessions the engine holds and its 33 agent records, one per recipe the story writes, against the bootstrap file's
   // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (207
-  // ok of 277, since its `ok` of 225 holds the 18 migrated), the 16 expiries between turns the ledger rows of the day
-  // hold and the three bus gaps, the last two hours back. The expired part takes the warning ink while the attention
-  // item `expired_between_turns` holds, which the mock holds over its expiries on the pools that warm caches under
-  // keys that may be probed for (`ATTENTION` in mock/attention.ts), and with an attention answer that lacks the item
-  // it takes none, the overview's count of 16 standing. The last gap is inside the day, so the bus gaps part takes the
-  // warning ink with that gap's instant on its hover. The card is read at the story's own instant, which the mock
-  // anchors as it loads, a moment past the clock's origin, so the gap lies two hours back.
+  // ok of 277, since its `ok` of 225 holds the 18 migrated), the 6 expiries between turns the ledger rows of the day
+  // hold, the drawn turns the mock seats inside their pin's window, and the three bus gaps, the last two hours back.
+  // The expired part takes the warning ink while the attention item `expired_between_turns` holds, which the mock holds
+  // over its expiries on the pools that warm caches under keys that may be probed for (`ATTENTION` in
+  // mock/attention.ts), and with an attention answer that lacks the item it takes none, the overview's count of 6
+  // standing. The last gap is inside the day, so the bus gaps part takes the warning ink with that gap's instant on its
+  // hover. The card is read at the story's own instant, which the mock anchors as it loads, a moment past the clock's
+  // origin, so the gap lies two hours back.
   const overview = await api.getKeepaliveOverview();
   const storyNow = Date.parse(overview.lastBusGapAt) + 2 * 3_600_000;
   // The attention poll is one for every reader, and the dashboard this block mounted first holds it open, so a mount
@@ -1356,9 +1358,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       ['Retained', '235.5 MiB of 256 MiB', null],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
-    line: 'expired between turns 16 · bus gaps 3',
+    line: 'expired between turns 6 · bus gaps 3',
     parts: [
-      { text: 'expired between turns 16', title: null, warning: true },
+      { text: 'expired between turns 6', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
     probes: '207 ok (75%) of 277',
@@ -4872,8 +4874,8 @@ expect('/accounts/secondary', m.text(), [
   });
 }
 await m.navigate('/accounts/nightly');
-// Overage started with nightly's head at 11:35:39, so the label reads 2h 54m or 2h 55m while the clock runs.
-expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
+// Overage started with nightly's head at 12:07:17, so the label reads 2h 22m or 2h 23m while the clock runs.
+expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 2']);
 {
   // The funding flag is an API key's state, so this OAuth account in overage reads ready and offers no clear.
   const badges = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
@@ -21368,7 +21370,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // `req_8c41f2d7-a93`, which answered on its second attempt, the contract seat's three rows on fleet, the approved
   // Ultra's two rows on bench, the four turns of the desktop session the mod ended, story 4's Explore turn, the
   // classifier call that ran on primary, `req_7c2e9f41-d03`, the held conversation's turn that replaced its expired
-  // row, `req_6f3e1b84-d29`, the two turns of the conversation the Overflow workspace's lapse moved,
+  // row, `req_6f3e1b84-d29`, the three turns of the conversation whose pin the purge takes twice, `req_3a9d6e14-b72`,
+  // `req_8b2f4c71-e05` and `req_d5e17a39-c48`, the two turns of the conversation the Overflow workspace's lapse moved,
   // `req_5f2a9c64-b18` and `req_c7e41d93-a26`, the two turns of the conversation that moved off the deleted retired
   // workspace, `req_9e4b2d71-c35` and `req_d71c5a3e-f48`, the two subagent turns the laptop session's classifier
   // calls judge, `req_a5e17c42-d19` and `req_d8f3b6e0-a74`, and the first turn of the subagent f2c8,
@@ -21391,7 +21394,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '16', '3'], ['ci', '0', '3'], ['laptop', '7', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '237 requests, 16.5% errors',
+      line === '240 requests, 16.3% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -22470,7 +22473,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // Sonnet 4.5, which price nothing, so the reads are stood in for with every group priced, as a range of
       // weighted models would answer. A stand-in figure is linear in the group's own plan requests, upstream probes and
       // kept-warm tokens, and every group takes one, so a series' buckets sum to the breakdown's group as the route's
-      // figures do.
+      // figures do. The page reads the week, since each probe of the day ran on a plan, and the week's earlier hours
+      // hold the billed probes whose dollars the probe figures stack under the plan's.
       localStorage.removeItem('phoebis.unit');
       const breakdownRead = api.getAnalyticsBreakdown;
       const seriesRead = api.getAnalyticsSeries;
@@ -22483,7 +22487,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       api.getAnalyticsBreakdown = async (q) => (await breakdownRead.call(api, q)).map(pricedGroup);
       api.getAnalyticsSeries = async (q) => (await seriesRead.call(api, q)).map((p) => ({ ...p, groups: p.groups.map(pricedGroup) }));
       const asked = countCalls('getAnalyticsBreakdown');
-      const native = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
+      const native = await mount('/analytics?range=7d#cache', { now: CLOCK_ORIGIN });
       // The last of the page's reads that matches, read again from the mock as the page read it.
       const answerOf = async (match) => {
         const q = asked.calls.map(([x]) => x).filter((x) => x?.keyIds !== undefined && match(x)).pop();
@@ -22762,10 +22766,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     }
     {
       // Grouped by kind with Include probes off, the page's own read by kind leaves probes out, while the tile
-      // reads the probe kind's plan figure and billed dollars off the Cache warming reads, which count probes.
+      // reads the probe kind's plan figure and billed dollars off the Cache warming reads, which count probes. The page
+      // reads the week, whose earlier hours hold the billed probes the day lacks.
       localStorage.removeItem('phoebis.unit');
       const asked = countCalls('getAnalyticsBreakdown');
-      const kinds = await mount('/analytics?by=kind#cache-warming', { now: CLOCK_ORIGIN });
+      const kinds = await mount('/analytics?by=kind&range=7d#cache-warming', { now: CLOCK_ORIGIN });
       asked.restore();
       const q = asked.calls.map(([x]) => x).find((x) => x?.groupBy === 'kind' && x.funding === undefined && x.keyIds !== undefined);
       const answer = async (over) => (q === undefined ? [] : await api.getAnalyticsBreakdown({ ...q, ...over }));
@@ -22787,13 +22792,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
     }
     {
-      // Grouped by kind with Include probes off, the probe kind leaves each bucket whose probes the plan paid for alone
-      // and stays, for its dollars, in the five hours a billed probe ran, as the breakdown answers it, so Probes by
-      // outcome draws all its bars only while its own reads count probes. Its legend reads the warming breakdown's
-      // probe counts, which a read with probes off still holds here. The figures are the probe rows of the story's
-      // rollups (`ALL_ROLLUPS`, mock/requests.ts) over the day to 14:30: 29 ok of which 12 migrated, 1 held, 36 skipped
-      // and 5 failed, in 18 hourly buckets that stack 38 nonzero bars. jsdom lays nothing out, so the chart's container
-      // reads a browser's size here.
+      // Grouped by kind with Include probes off, the probe kind leaves each bucket whose probes the plan paid for alone,
+      // as the breakdown answers it, and the day holds no billed probe, so Probes by outcome draws its bars only while
+      // its own reads count probes. Its legend reads the warming breakdown's probe counts, which a read with probes off
+      // still holds here. The figures are the probe rows of the story's rollups (`ALL_ROLLUPS`, mock/requests.ts) over
+      // the day to 14:30: 3 ok of which 1 migrated, 1 held, 31 skipped and 31 failed, the 30 drawn probes that found no
+      // live pin among them, in 18 hourly buckets that stack 33 nonzero bars. jsdom lays nothing out, so the chart's
+      // container reads a browser's size here.
       const measure = window.HTMLElement.prototype.getBoundingClientRect;
       window.HTMLElement.prototype.getBoundingClientRect = function () {
         return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
@@ -22808,7 +22813,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       kinds.unmount();
       results.push({
         name: '/analytics Probes by outcome counts probes with the toggle off',
-        ok: JSON.stringify(legend) === JSON.stringify([['OK', '17'], ['Migrated', '12'], ['Held', '1'], ['Skipped', '36'], ['Failed', '5']]) && bars === 38,
+        ok: JSON.stringify(legend) === JSON.stringify([['OK', '2'], ['Migrated', '1'], ['Held', '1'], ['Skipped', '31'], ['Failed', '31']]) && bars === 33,
         missing: [JSON.stringify(legend), `${bars} bars`],
       });
     }
@@ -22831,16 +22836,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       localStorage.removeItem('phoebis.unit');
       results.push({
         name: '/analytics under Billed dollars Probes by outcome counts the probes of both sides with the toggle off',
-        ok: unit === 'usd' && JSON.stringify(legend) === JSON.stringify([['OK', '17'], ['Migrated', '12'], ['Held', '1'], ['Skipped', '36'], ['Failed', '5']]) && bars === 38,
+        ok: unit === 'usd' && JSON.stringify(legend) === JSON.stringify([['OK', '2'], ['Migrated', '1'], ['Held', '1'], ['Skipped', '31'], ['Failed', '31']]) && bars === 33,
         missing: [`unit ${unit}`, JSON.stringify(legend), `${bars} bars`],
       });
     }
     {
       // A dollar side reads its own rows in the cost cells while the token columns keep every row, and the two sides
-      // partition the rows by who paid, so their figures add up to All in dollars' within a cent.
+      // partition the rows by who paid, so their figures add up to All in dollars' within a cent. The page reads the
+      // week, whose earlier hours hold the billed probes the day lacks.
       localStorage.removeItem('phoebis.unit');
       const asked = countCalls('getAnalyticsBreakdown');
-      const page = await mount('/analytics?unit=all#cache', { now: CLOCK_ORIGIN });
+      const page = await mount('/analytics?unit=all&range=7d#cache', { now: CLOCK_ORIGIN });
       const usdOf = (v) => Number(String(v).replace(/[$,]/g, ''));
       const tableOf = (t) => [...page.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
       const rowsOf = (t) => Object.fromEntries([...(tableOf(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', [...tr.querySelectorAll('td.num')].map((td) => td.textContent?.trim() ?? '')]));
@@ -24019,10 +24025,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const columnSum = (i) => cells.reduce((n, row) => n + Number(((row[i + 1].firstElementChild ?? row[i + 1]).textContent ?? '').trim().replace(/,/g, '')), 0);
     results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
     // The ci key's client sends its own member, and its one account, an API key, answers without the beta, so each
-    // answer files No reason returned. Its two turns that read under half their pin's last prompt, req_f0d5174c-6eb and
-    // req_52f62e67-839, count as expired between turns.
+    // answer files No reason returned. Its pool pins nothing, so no turn of it is handed a previous size and none
+    // counts as expired between turns.
     const ci = body.find((row) => row[0] === 'ci') ?? [];
-    results.push({ name: '/analytics a key whose member an API-key account answers without the beta reads No reason returned alone', ok: ci.length > 0 && ci.slice(1, 9).every((v) => v === '0') && Number(ci[9]) > 0 && ci[10] === '0' && ci[11] === '2', missing: ci });
+    results.push({ name: '/analytics a key whose member an API-key account answers without the beta reads No reason returned alone', ok: ci.length > 0 && ci.slice(1, 9).every((v) => v === '0') && Number(ci[9]) > 0 && ci[10] === '0' && ci[11] === '0', missing: ci });
     const meta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
     const metaExpired = Number(/([\d,]+) expired between turns/.exec(meta)?.[1].replace(/,/g, '') ?? -1);
     // The expired column follows the reason columns.
@@ -26223,9 +26229,10 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
   }
   {
     // The story's first session (`STORY_AGENTS[0]`) runs main, the fork c21e and e4b7, and c21e's one request of the
-    // default day is req_96461df2-61a, a history edited miss eleven hours back, beside a probe the page leaves out. It
-    // is the fork's first turn, whose diagnostics member names its parent's last answer, so it keeps the reason the
-    // upstream compared. The rollups carry no agent, so Add filter offers Agent under a session alone.
+    // default day is req_96461df2-61a, eleven hours back, beside a probe the page leaves out. It is the fork's first
+    // turn, which finds no pin of its own, and its diagnostics member names its parent's last answer, which another
+    // account holds, so it reads previous_message_not_found. The rollups carry no agent, so Add filter offers Agent
+    // under a session alone.
     const name = '/analytics an agent narrows the session view to its requests and its reasons links, and Add filter offers Agent under a session alone';
     const agent = 'c21e';
     const session = requests.find((r) => r.agentId === agent)?.sessionId ?? '';
@@ -26253,7 +26260,7 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
       ok:
         JSON.stringify(bare) === JSON.stringify(['true', "An agent narrows one session's view, so pick a session first."]) &&
         JSON.stringify(read) === JSON.stringify({ chips: ['agent: c21e', `session: ${session.slice(0, 8)}…`], requests: 1, row: [null, null] }) &&
-        JSON.stringify(links) === JSON.stringify([{ agent, reason: 'messages_changed', session }]),
+        JSON.stringify(links) === JSON.stringify([{ agent, reason: 'previous_message_not_found', session }]),
       missing: [JSON.stringify(bare), JSON.stringify(read), JSON.stringify(links)],
     });
   }
@@ -26684,8 +26691,9 @@ await forView('/keys', async () => {
   const ascending = shown('up', ['batch', 'from-pool', 'fleet', 'bench', 'ci', 'notebook', 'laptop', 'desktop'], '?sort=cost&dir=asc', 'Cost, 7d', 'ascending');
   // Laptop's week holds the rejection, the bare 502 and the request sent again after a failed connect of the log's first
   // hour, `req_4c1e8b27-d93`, `req_8f5a2d16-c47` and `req_0e5a7c3b-f92`, each a request the rollups count. Desktop's
-  // holds the two turns of the conversation that moved off the deleted retired workspace.
-  const weeks = ['229 requests, 7d', '119 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
+  // holds the two turns of the conversation that moved off the deleted retired workspace and the three turns of the
+  // conversation whose pin the purge takes twice.
+  const weeks = ['229 requests, 7d', '122 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
     lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },
@@ -27245,8 +27253,8 @@ await forView('/sessions', async () => {
     const FILTER_CASES = [
       {
         // The last turn decides, whatever the pin's use: story 3 (d7167642) is in by its last turn 3 minutes back, its
-        // pin used 36 back, the story's first session (fa23a6da) and story 5 (0d588de5) are out by their last turns
-        // 129 and 25 minutes back, their pins used 7 minutes and 37 seconds back, and the pinless fork (5eeed6ce),
+        // pin used 2 back, the story's first session (fa23a6da) and story 5 (0d588de5) are out by their last turns
+        // 129 and 25 minutes back, their pins used 7 minutes and 20 seconds back, and the pinless fork (5eeed6ce),
         // quiet for 16 minutes, is out. The rows the ledger holds no turn of read their pin's use, the auxiliary-only
         // session (3e9b7c21) 3 minutes back and the fleet session no mod reports (b7e2d5a9) 2.
         count: '8 sessions · 11 agents',

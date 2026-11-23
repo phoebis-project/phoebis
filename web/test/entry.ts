@@ -84,6 +84,7 @@ export { SESSIONS, insideSessionExpiry, refusalOnlyRows, sessionsListedAt, withi
 export { poolById } from '@/mock/pools';
 export { ALL_ROLLUPS, REQUESTS, requestById, rollups } from '@/mock/requests';
 export { GUARDRAIL_STORY_IDS, NIGHTLY_CAP_RAISED, SESSION_IDS, STORY_IDS, UNSEEDED_IDS } from '@/mock/requests';
+export { ROUTER_RESTARTED_AT, pinReadAt } from '@/mock/requests';
 export { partitionsOf, placementFactOf, stretchTriggerOf } from '@/mock/routingLog';
 export { rewriteOf, runwayTiesOf } from '@/mock/routingLog';
 export { budgetsAt, obstacleOf } from '@/mock/routingLog';

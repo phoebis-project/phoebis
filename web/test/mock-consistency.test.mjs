@@ -369,6 +369,23 @@ test("the burn answer keeps an unregistered account's plan row in its share and 
   assert.equal(units['gone-billed'], 'usd', 'a plan row with no token leaves the unit of the billed rows');
 });
 
+// Catches a sweep rounded up to the deadline's own instant: the pin's last use plus its TTL falls on a sweep, so the
+// row stands a millisecond past that sweep and is gone behind the next one. The case of the purged conversation's turns
+// misses it, since their deadlines lie between two sweeps.
+test('a pin whose window ends on a purge sweep stands until the sweep behind it', async () => {
+  const d = await import('./dist/api.js');
+  const TTL = 5 * 60_000;
+  const sweep = d.ROUTER_RESTARTED_AT + 10 * 60_000;
+  assert.deepEqual([d.pinReadAt(sweep - TTL, TTL, sweep + 1), d.pinReadAt(sweep - TTL, TTL, sweep + 60_001)], ['expired_idle', 'none']);
+});
+
+// Catches a read with no test of the TTL, which finds a pin live at its own instant on a pool that pins nothing, and,
+// by the second read, one that answers none for every TTL.
+test('a pool that pins nothing holds no pin to read', async () => {
+  const d = await import('./dist/api.js');
+  assert.deepEqual([d.pinReadAt(d.ROUTER_RESTARTED_AT, 0, d.ROUTER_RESTARTED_AT), d.pinReadAt(d.ROUTER_RESTARTED_AT, 1, d.ROUTER_RESTARTED_AT)], ['none', 'live']);
+});
+
 // One load at a time, since each pins the clock its bundle reads while it loads.
 let loading = Promise.resolve();
 
@@ -2248,6 +2265,42 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
     assert.ok(seen > 0, 'a drawn row finds a live pin');
     assert.deepEqual(fresh, []);
+  });
+
+  // Catches a purge at the turn's own instant, a purge on another phase than the story router's sweeps, and a walk with
+  // no purge, which hands a turn the size of a report the sweep took. The held conversation's next turn comes past its
+  // pin's window and ahead of the sweep that takes the row (`REPLACED_PIN_ID` in mock/requests.ts), the purged
+  // conversation's second turn behind that sweep and ahead of the wall clock's next minute, and its third behind the
+  // sweep that takes the second's pin, on the second's account.
+  test(`a turn past its pin's window reads the row idle ahead of the sweep that purges it, and no row and no size behind it, at ${at}`, async () => {
+    const s = await story;
+    const [replaced, second] = await Promise.all([s.api.getDecision('req_6f3e1b84-d29', 1), s.api.getDecision('req_8b2f4c71-e05', 1)]);
+    const third = s.requests.find((r) => r.id === 'req_d5e17a39-c48');
+    assert.deepEqual([replaced?.pin?.found, second?.pin?.found, third?.attempts[0]?.previousInputTokens], ['expired_idle', 'none', null]);
+  });
+
+  // Catches a walk that files the reason by the purge alone: both later turns of the purged conversation come behind a
+  // sweep, the second onto another account than the one that answered the first, the third back onto the second's.
+  test(`a turn behind a purge that lands off its last answer's account reads previous_message_not_found, and one that lands back reads none, at ${at}`, async () => {
+    const s = await story;
+    const reasonOf = (id) => s.requests.find((r) => r.id === id)?.attempts[0]?.cacheMissReason;
+    assert.deepEqual([reasonOf('req_8b2f4c71-e05'), reasonOf('req_d5e17a39-c48')], ['previous_message_not_found', 'none']);
+  });
+
+  // Catches a draw that sends a probe whose session holds no live pin and places a pin for it: the selector answers
+  // such a probe the pinned obstacle `no_pin` with no attempt, so no record of a probe places or moves a pin.
+  test(`no probe places a pin, and a probe that sent nothing reads the no_pin answer, at ${at}`, async () => {
+    const s = await story;
+    const records = (await decisionsOf(s)).filter((r) => r.request.flags.probe);
+    const placed = records.filter((r) => r.outcome.kind === 'placed' || r.outcome.kind === 'moved').map((r) => `${r.requestId}/${r.seq}`);
+    const answers = s.requests
+      .filter((r) => r.kind === 'probe' && r.attempts.length === 0)
+      .map((r) => {
+        const own = records.filter((x) => x.requestId === r.id);
+        return [r.id, r.status, r.errorCode, r.outcome, own.map((x) => [x.outcome.kind, x.outcome.exhaustion?.kind, x.outcome.exhaustion?.obstacle])];
+      });
+    assert.deepEqual(placed, [], 'a probe record that places or moves a pin');
+    for (const [id, ...answer] of answers) assert.deepEqual(answer, [503, 'accounts_unavailable', 'rejected', [['exhausted', 'pinned', 'no_pin']]], id);
   });
 
   test(`a scripted pick comes from the highest tier that holds an eligible member, and every record's instant follows its request's, at ${at}`, async () => {

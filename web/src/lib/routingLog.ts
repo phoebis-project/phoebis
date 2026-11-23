@@ -267,6 +267,7 @@ const OBSTACLE_WORD: Record<string, string> = {
   budget_unknown: INELIGIBLE_LABEL.budget_unknown,
   cooldown: INELIGIBLE_LABEL.cooldown,
   credits: 'credits unavailable',
+  no_pin: 'no pin',
   operator: INELIGIBLE_LABEL.unavailable,
   overage: INELIGIBLE_LABEL.overage,
   spent: INELIGIBLE_LABEL.spent,

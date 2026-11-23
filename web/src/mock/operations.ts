@@ -77,7 +77,8 @@ const ENDED_SUBAGENT = WRITTEN_SUBAGENTS[2];
 // later of its last request and that move, since the write of a pin stamps its
 // last use, and one whose pin a placement wrote (`placedBy`) the later of its last
 // request and the renewal it names, since a renewal, a probe's among them, stamps it
-// too. `released` marks a session whose every agent, main included, the mod
+// too. Every pinned row then takes its main recipe's last probe where the router sent
+// that probe later still. `released` marks a session whose every agent, main included, the mod
 // released. `sessionId` writes out the id of a session past the story's ids whose
 // story row names it.
 const sessionSpec: ({
@@ -225,13 +226,14 @@ const sessionSpec: ({
     agents: 1,
     companion: 'none',
     // Idle for two hours, past all's one-hour max idle as the 95-minute laptop row is, so its recipe ends, and the
-    // engine's figures keep it while the route's list leaves the row out.
+    // engine's figures keep it while the route's list leaves the row out. Its last probe is its last refresh, ahead of
+    // its last request, since a probe stamps the pin and refreshes it at once.
     cause: 'idle_limit',
     fixed: true,
     idleMinutes: 120,
     sessionId: 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58',
     figures: {
-      agents: [{ agentId: 'main', lastRequestMinutes: 120, nextProbeSeconds: null }],
+      agents: [{ agentId: 'main', lastProbeMinutes: 121, lastRequestMinutes: 120, nextProbeSeconds: null }],
       burn: 0.09,
       burnAtMinutes: 121,
       burnUsd: 0.21,
@@ -242,7 +244,8 @@ const sessionSpec: ({
   },
   // A pin under the work pool's key on nightly, an account the pool held before, so the pool's figure counts it and
   // no member's does. Its mod went silent beside its idle recipe, as the engine sends such a session, at the presence
-  // age its place gives a silent row, written so the row draws nothing.
+  // age its place gives a silent row, written so the row draws nothing. Its last probe is its last refresh, since a
+  // probe stamps the pin and refreshes it at once.
   {
     keyId: 'notebook',
     accountId: 'nightly',
@@ -254,7 +257,7 @@ const sessionSpec: ({
     idleMinutes: 20,
     sessionId: '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61',
     figures: {
-      agents: [{ agentId: 'main', lastRequestMinutes: 20, nextProbeSeconds: 240 }],
+      agents: [{ agentId: 'main', lastProbeMinutes: 21, lastRequestMinutes: 20, nextProbeSeconds: 240 }],
       burn: 0.04,
       burnAtMinutes: 21,
       burnUsd: 0.11,
@@ -854,6 +857,16 @@ for (const pin of SESSIONS) {
   // registered-only session's `registered`, none elsewhere.
   pin.lifecycle = RECIPES.find((r) => r.sessionId === pin.sessionId && r.agentId === 'main')?.agentState ?? pin.lifecycle;
 }
+
+// The router stamps a pin at a probe's selection, in flight or answered, so a pinned row takes its main recipe's last
+// probe where that came later than its last use, rolled or read off its rows. A line on the retry ladder took its last
+// probe's answer from the selector, which sent nothing and stamped nothing, so such a row keeps its last use.
+SESSIONS.forEach((pin) => {
+  if (!pin.pinned || pin.lastUsedAt === null) return;
+  const main = RECIPES.find((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId && r.agentId === 'main');
+  if (!main?.lastProbeAt || LADDER_CAUSES.has(main.cause) || main.accountId !== pin.accountId) return;
+  if (Date.parse(main.lastProbeAt) > Date.parse(pin.lastUsedAt)) pin.lastUsedAt = main.lastProbeAt;
+});
 
 /**
  * A subagent pin's tokens, set from its session's index and its line's place rather than drawn, so the rows after it
