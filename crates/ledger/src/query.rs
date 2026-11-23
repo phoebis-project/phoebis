@@ -5773,9 +5773,9 @@ pub fn held_series(
     Ok(points)
 }
 
-/// The moves of the range by reason, then by destination fit (`fits`, `rewrite_only`, `least_bad`, `unknown`), from
-/// the rollups' `{reason}/{fit}` key, so a chart can split each reason by its own fits. A key without `/` reads fit
-/// `unknown`.
+/// The moves of the range by reason, then by destination fit (`ending`, `fits`, `least_bad`, `rewrite_only`, `spent`,
+/// `unknown`), from the rollups' `{reason}/{fit}` key, so a chart can split each reason by its own fits. A key without
+/// `/` reads fit `unknown`.
 pub fn moves_by_reason_and_fit(
     conn: &Connection,
     filter: &SeriesFilter,

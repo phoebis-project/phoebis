@@ -300,12 +300,15 @@ pub struct CandidateFacts {
     pub score: Option<f64>,
     /// `chosen`, `renewed`, `held_on`, `source`, `destination`, `eligible`, `ranked`, `out`, `not_needed`.
     pub verdict: &'static str,
-    /// The request's fit on the member, filled where a move's gate read it or, for a placement, where the `no_fit`
-    /// partition read it: the runway on the binding window (`None` for an unbounded one), the verdict (`ending`,
-    /// `fits`, `least_bad`, `rewrite_only`) and the window that binds. On a landing a `least_bad` row states the
-    /// runway to 1.0 and its window.
+    /// The runway on the window that `binding` names, filled where `fit` is: `None` for an unbounded one and on a
+    /// `spent` row, which states none. On a placement a `least_bad` row states the runway to 1.0.
     pub runway_ms: Option<i64>,
+    /// The request's fit on the member, filled where a move's gate read it or, for a placement, where the `no_fit`
+    /// partition read it: `ending`, `fits`, `least_bad`, `rewrite_only` or `spent`. On a placement, `spent` for a
+    /// member that holds no allowance, which stands on the last rung and states no runway and no window. A move's gate
+    /// writes its own verdict.
     pub fit: Option<&'static str>,
+    /// The window that binds `runway_ms`, `None` where none binds it, as on a `spent` row.
     pub binding: Option<String>,
     /// The burn of the pool's pins on the member: share per hour per plan window, the unit the record states as
     /// `percent_per_hour`. Empty for an api_key member and an untiered one, which price no burn.

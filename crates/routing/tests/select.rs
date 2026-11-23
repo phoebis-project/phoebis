@@ -21945,6 +21945,17 @@ fn with_no_member_holding_allowance_the_landing_stands_on_the_whole_set() {
         "the fit is a preference, so a spent week answers no exhaustion"
     );
     assert_eq!(ladder_of(&d.record), Some(&FactValue::Text("every".into())));
+    // The fit reads a past the ceiling and b inside its wind-down, and with no allowance the ladder refused each of
+    // them that rung, so neither row names it or a runway toward it.
+    let (a, b) = (candidate(&d.record, "a"), candidate(&d.record, "b"));
+    assert_eq!(
+        (
+            (a.fit, a.runway_ms, a.binding.as_deref()),
+            (b.fit, b.runway_ms, b.binding.as_deref())
+        ),
+        ((Some("spent"), None, None), (Some("spent"), None, None)),
+        "a member that holds no allowance reads spent on its row"
+    );
 }
 
 #[test]

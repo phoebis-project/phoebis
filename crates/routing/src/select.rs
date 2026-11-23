@@ -2571,31 +2571,34 @@ fn run(
                 Judge::Placement,
                 own_key.as_ref(),
             );
-            // A `least_bad` row states the runway to 1.0, the one its rung ranks by.
-            let (runway_ms, binding) = if read.verdict == FitWord::LeastBad {
-                (read.wall_shown_ms, read.wall_binding.clone())
+            // The ladder refuses a `least_bad` or winding-down member with no allowance its rung, so its row reads
+            // `spent` with no runway toward the rung it was refused. A `least_bad` row states the runway to 1.0, the
+            // one its rung ranks by.
+            let no_allowance = matches!(read.verdict, FitWord::LeastBad | FitWord::Ending)
+                && !read_of(&allowances, &c.account_id).unwrap_or_else(|| {
+                    holds_allowance(state, snapshot, &c.account_id, window, request.now)
+                });
+            let (fit, runway_ms, binding) = if no_allowance {
+                (FitWord::Spent, None, None)
+            } else if read.verdict == FitWord::LeastBad {
+                (read.verdict, read.wall_shown_ms, read.wall_binding.clone())
             } else {
-                (read.runway_ms, read.binding.clone())
+                (read.verdict, read.runway_ms, read.binding.clone())
             };
             if let Some(member) = rec.candidate_mut(&c.account_id) {
                 member.runway_ms = runway_ms;
-                member.fit = Some(read.verdict.as_str());
+                member.fit = Some(fit.as_str());
                 member.binding = binding;
             }
             verdicts.push((&c.account_id, read.verdict));
-            let holds = || {
-                read_of(&allowances, &c.account_id).unwrap_or_else(|| {
-                    holds_allowance(state, snapshot, &c.account_id, window, request.now)
-                })
-            };
             match read.verdict {
                 FitWord::Fits => {
                     fitting.push(c);
                     reads.push((c.account_id.clone(), read));
                 }
                 FitWord::RewriteOnly => rewrite_only.push((c, read)),
-                FitWord::LeastBad if holds() => least_bad.push((c, read)),
-                FitWord::Ending if holds() => ending.push(c),
+                FitWord::LeastBad if !no_allowance => least_bad.push((c, read)),
+                FitWord::Ending if !no_allowance => ending.push(c),
                 _ => {}
             }
         }

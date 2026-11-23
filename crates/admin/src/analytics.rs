@@ -1506,8 +1506,8 @@ pub(crate) struct Rewrites {
     pub points: Vec<RewritePoint>,
     /// Move counts by reason, summed over the range: each reason's sum over its fits.
     pub moves: BTreeMap<String, u64>,
-    /// Move counts by reason, then by the destination's fit (`fits`, `rewrite_only`, `least_bad`, or `unknown` for a
-    /// move the fit gate did not read), summed over the range.
+    /// Move counts by reason, then by the destination's fit (`ending`, `fits`, `least_bad`, `rewrite_only`, `spent`,
+    /// or `unknown` for a move the fit gate did not read), summed over the range.
     pub moves_by_reason_and_fit: BTreeMap<String, BTreeMap<String, u64>>,
     /// The slow-down's held time per bucket: the milliseconds the requests of the bucket waited and how many waited.
     pub held: Vec<HeldPoint>,
