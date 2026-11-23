@@ -744,7 +744,7 @@ Accounts page." The rules are on [Moves](routing.md#moves).
 The pool routes answer each pool with its warnings on every list, create and save: static checks on settings that work
 against each other, none of which blocks a save. The dialog draws the saved pool's warnings above its groups, one line
 per warning with its sentence and `Go to {group}.` naming the group of its first field, and a new pool shows none until
-it is saved. The card's Warnings fact counts them. The eleven checks, by code:
+it is saved. The card's Warnings fact counts them. The twelve checks, by code:
 
 | Code | Holds when | Sentence |
 | --- | --- | --- |
@@ -754,6 +754,7 @@ it is saved. The card's Warnings fact counts them. The eleven checks, by code:
 | `five_hour_ceiling_low` | `five_hour_ceiling` is under 0.8 | "A 5-hour ceiling under 80 percent moves sessions that would have finished the window warm." |
 | `five_hour_ceiling_without_margin` | `five_hour_ceiling` is 1.0 | "A ceiling at 100 percent leaves no margin for a stale reading or a large turn, so a session can reach the wall before the round or the gate reads it." |
 | `hold_over_window` | `slow_down_hold_seconds` is over 150 | "A hold over 150 seconds leaves under 30 seconds of the client's first-byte window for the upstream's head, so a slowed request can time out at the client and be sent again." |
+| `reservation_shedding_idle` | `fable_reservation_shedding` is on, and `strategy` is not `pace` or `load_shedding` is off | "The option to shed on the Fable reservation does nothing here, since its rounds run on a Pace pool with load shedding on." |
 | `return_at_once` | `return_to_plan` is `always` and `return_to_plan_dwell_seconds` is 0 | "A return dwell of zero returns every warm session on its first request at the metered member, so the member serves one turn per session and the move's rewrite is paid each time." |
 | `shedding_off` | `load_shedding` is off and `slow_down` is off | "With load shedding off no round marks sessions on a member whose window would pass the ceiling, so a session stays until its window is spent or its account refuses it." |
 | `spent_moves_off` | `migrate_when_spent` is off | "With spent moves off a session stays on a spent account until the upstream refuses it, so the destination gate never runs for that move." |
