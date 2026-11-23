@@ -1580,9 +1580,12 @@ pub(crate) struct LogStatement {
 }
 
 impl LogStatement {
-    fn new(alias: &str, filter: &RoutingLogFilter) -> LogStatement {
+    /// `kind` is the one kind whose rows fill `from_account_id` on the table, or `None` where rows of several kinds
+    /// fill it.
+    fn new(alias: &str, kind: Option<&str>, filter: &RoutingLogFilter) -> LogStatement {
         let mut args: Vec<rusqlite::types::Value> = vec![filter.from.into(), filter.to.into()];
-        let mut clauses = vec![format!("{alias}.at BETWEEN ?1 AND ?2")];
+        let range = format!("{alias}.at BETWEEN ?1 AND ?2");
+        let mut clauses = vec![range.clone()];
         if let Some(request) = &filter.request {
             args.push(request.clone().into());
             clauses.push(format!("{alias}.request_id = ?{}", args.len()));
@@ -1620,9 +1623,19 @@ impl LogStatement {
         );
         if !filter.accounts.is_empty() {
             let marks = bind_all(&filter.accounts, &mut args);
-            clauses.push(format!(
-                "({alias}.account_id IN ({marks}) OR {alias}.from_account_id IN ({marks}))"
-            ));
+            // No index leads with `from_account_id`, so an arm on that column alone walks the whole range. A move is
+            // the one event that fills it, and with its kind named the arm seeks the index on `(kind, at)`. Each arm
+            // repeats the range, since the planner binds the outer range to neither arm's seek, and a seek without it
+            // reads each event of the account, or each move, that the ledger holds.
+            clauses.push(match kind {
+                Some(kind) => format!(
+                    "(({alias}.account_id IN ({marks}) AND {range}) OR ({alias}.kind = '{kind}' \
+                     AND {alias}.from_account_id IN ({marks}) AND {range}))"
+                ),
+                None => format!(
+                    "({alias}.account_id IN ({marks}) OR {alias}.from_account_id IN ({marks}))"
+                ),
+            });
         }
         LogStatement { clauses, args }
     }
@@ -1634,7 +1647,7 @@ impl LogStatement {
 
 /// `None` when the kinds name no decision, so the statement is never run.
 pub(crate) fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
-    let mut statement = LogStatement::new("d", filter);
+    let mut statement = LogStatement::new("d", None, filter);
     if let Some(kinds) = &filter.kinds {
         let of_kind = (!kinds.decisions.is_empty()).then(|| {
             format!(
@@ -1655,7 +1668,7 @@ pub(crate) fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStateme
 
 /// `None` when the kinds name no event kind, so the statement is never run.
 fn event_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
-    let mut statement = LogStatement::new("e", filter);
+    let mut statement = LogStatement::new("e", Some(PIN_MIGRATED), filter);
     if let Some(kinds) = &filter.kinds {
         if kinds.events.is_empty() {
             return None;
@@ -1828,14 +1841,14 @@ fn decision_rows(
         .collect()
 }
 
-/// Up to `page` events past `cursor`, each with its detail decoded.
-fn event_rows(
-    conn: &Connection,
+/// The routing log's event page statement and its binds, spelled once so the plan case explains the statement the
+/// read runs, its binds and its order included.
+fn event_rows_statement(
     mut statement: LogStatement,
     dir: Direction,
     cursor: Option<&RoutingLogCursor>,
     page: i64,
-) -> Result<Vec<EventListRow>, LedgerError> {
+) -> (String, Vec<rusqlite::types::Value>) {
     let n = statement.args.len() + 1;
     let past = dir.past();
     match cursor {
@@ -1862,8 +1875,20 @@ fn event_rows(
         statement.sql(),
         statement.args.len()
     );
+    (sql, statement.args)
+}
+
+/// Up to `page` events past `cursor`, each with its detail decoded.
+fn event_rows(
+    conn: &Connection,
+    statement: LogStatement,
+    dir: Direction,
+    cursor: Option<&RoutingLogCursor>,
+    page: i64,
+) -> Result<Vec<EventListRow>, LedgerError> {
+    let (sql, args) = event_rows_statement(statement, dir, cursor, page);
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(&statement.args), |r| {
+    let rows = stmt.query_map(params_from_iter(args), |r| {
         Ok(EventListRow {
             id: r.get(0)?,
             at: r.get(1)?,
@@ -6753,6 +6778,59 @@ mod tests {
         assert!(
             !plan.iter().any(|step| step.starts_with("SCAN")),
             "a poll never walks the whole history: {plan:?}"
+        );
+    }
+
+    /// Each arm of the Account filter seeks an index of its own within the range and no step walks the range, on an
+    /// empty ledger and on statistics shaped like a live file's, where an account holds hundreds of events and a kind
+    /// fewer. The move's arm names its kind for that seek, since no index leads with `from_account_id`, and each arm
+    /// repeats the range, since the planner binds the outer range to neither seek.
+    #[test]
+    fn the_event_page_under_an_account_filter_seeks_both_arms_and_scans_no_range() {
+        let filter = RoutingLogFilter {
+            from: 0,
+            to: 3_600_000,
+            accounts: vec!["a".into()],
+            ..RoutingLogFilter::default()
+        };
+        let statement = event_statement(&filter).expect("no kind is named, so events are read");
+        let (sql, binds) = event_rows_statement(statement, Direction::Desc, None, 51);
+        let seeks_both_arms = |read: &str, plan: &[String]| {
+            assert!(
+                plan.iter().any(|step| step.starts_with("SEARCH e ")
+                    && step.contains("events_kind_at")
+                    && step.contains("at>?")
+                    && step.contains("at<?")),
+                "{read}: {plan:?}"
+            );
+            assert!(
+                plan.iter().any(|step| step.starts_with("SEARCH e ")
+                    && step.contains("events_account")
+                    && step.contains("at>?")
+                    && step.contains("at<?")),
+                "{read}: {plan:?}"
+            );
+            assert!(
+                !plan.iter().any(|step| step.starts_with("SCAN")),
+                "{read}: {plan:?}"
+            );
+            assert!(
+                !plan.iter().any(|step| step.contains("events_at")),
+                "{read}: {plan:?}"
+            );
+        };
+        seeks_both_arms("an empty ledger", &plan_of(&sql, binds.clone()));
+        seeks_both_arms(
+            "a live file's statistics",
+            &plan_under(
+                &sql,
+                binds,
+                &[
+                    ("events", "events_account", "12000 500 2"),
+                    ("events", "events_at", "12000 2"),
+                    ("events", "events_kind_at", "12000 150 1"),
+                ],
+            ),
         );
     }
 
