@@ -94,10 +94,13 @@ fn rename(
 }
 
 /// The tenth step taken back on a file this build wrote, which every case that takes a file back past version 10
-/// runs first, since the step refuses its column as a duplicate on reopen.
+/// runs first, since the step refuses its columns as duplicates on reopen.
 fn tenth_step_taken_back(conn: &rusqlite::Connection) {
-    conn.execute_batch("ALTER TABLE pins DROP COLUMN account_bound;")
-        .unwrap();
+    conn.execute_batch(
+        "ALTER TABLE pins DROP COLUMN account_bound;
+         ALTER TABLE pins DROP COLUMN marked_source;",
+    )
+    .unwrap();
 }
 
 /// The ninth step taken back on a file this build wrote, which every case that takes a file back past version 9
@@ -721,6 +724,7 @@ fn a_pin_with_a_distinct_value_in_every_integer_field_and_every_optional_group_s
             at: 7,
             on: "a".into(),
             window: "five_hour".into(),
+            source: Some("fable_reservation".into()),
         }),
         entrypoint: Some("cli".into()),
         effort: Some("high".into()),

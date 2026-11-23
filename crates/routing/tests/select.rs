@@ -1427,6 +1427,7 @@ fn a_standing_seven_day_mark_moves_while_the_fable_reservations_test_waits() {
                     at: RESERVED_AT - HOUR,
                     on: "a".into(),
                     window: SEVEN_DAY.into(),
+                    source: None,
                 }),
                 ..burning("s1", "a", 4.0, false, RESERVATION_WAITED)
             },
@@ -1482,6 +1483,7 @@ fn a_fable_pins_seven_day_mark_heals_on_the_projection_while_the_room_reads_shor
                     at: RESERVED_AT - HOUR,
                     on: "a".into(),
                     window: SEVEN_DAY.into(),
+                    source: None,
                 }),
                 ..burning("s1", "a", 4.0, false, RESERVATION_WAITED)
             },
@@ -1502,6 +1504,346 @@ fn a_fable_pins_seven_day_mark_heals_on_the_projection_while_the_room_reads_shor
         Some("healed"),
         "the reservation holds no Fable pin's mark: {:?}",
         line(&d.record, "move:shed").facts
+    );
+}
+
+/// `burning`'s cold pin of `session` on the Fable model and its lane.
+fn fable_burning(session: &str, account: &str, burn: f64, now: i64) -> PinRow {
+    PinRow {
+        model: "claude-fable-5-1".into(),
+        lane: lane_key("claude-fable-5-1", "standard", "none", "-"),
+        ..burning(session, account, burn, false, now)
+    }
+}
+
+/// A Fable turn of `session` whose class says nothing about its cache, as `auxiliary` is for a Sonnet one.
+fn fable_auxiliary(s: &RegistrySnapshot, session: &str, now: i64) -> SelectRequest {
+    with_facts(
+        request(s, Some(session), "claude-fable-5-1", true, &[], now),
+        Some("quota"),
+        false,
+        None,
+        &[],
+    )
+}
+
+/// `reserving_pool`'s Pace pool with the option on, over `a`, `b` and `c`.
+fn reserving_trio() -> RegistrySnapshot {
+    tiered(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 1), ("c", 2)],
+        shedding: Shedding {
+            fable_reservation_shedding: true,
+            burn_average_seconds: 600,
+            ..Shedding::default()
+        },
+        ..Pool::default()
+    })
+}
+
+/// `pins` on the state with `a` as `reserving` reads it at `seven_day`, `b` short of its own reservation as `a` is at
+/// 0.76, its 5-hour window at a tenth fitting every pin, and `c` at a tenth of its 5-hour window and its week.
+fn reserving_siblings(seven_day: f64, pins: Vec<PinRow>) -> RoutingState {
+    let five_hour = WindowReading {
+        utilization: 0.1,
+        reset: Some(RESERVED_AT + HOUR),
+        observed_at: RESERVED_AT,
+        source: WindowSource::Poll,
+        plan: None,
+        tier: None,
+    };
+    loaded_with_hours(
+        vec![fable_hour("a", 99, 0.05), fable_hour("b", 99, 0.05)],
+        pins,
+        reserving_pricer(),
+        vec![
+            ("a", reserved_read(seven_day, RESERVED_AT)),
+            (
+                "b",
+                reserved_read(0.76, RESERVED_AT).with(FIVE_HOUR, five_hour),
+            ),
+            (
+                "c",
+                refreshing(
+                    0.1,
+                    RESERVED_AT + HOUR,
+                    RESERVED_AT + 24 * HOUR,
+                    RESERVED_AT,
+                ),
+            ),
+        ],
+    )
+}
+
+#[test]
+fn a_reservation_fires_no_round_over_fable_pins_alone_and_stamps_no_dwell() {
+    let s = reserving_pool(Strategy::Pace, true);
+    let mut st = reserving(
+        0.76,
+        vec![
+            fable_burning("f1", "a", 1.0, RESERVATION_WAITED),
+            fable_burning("f2", "a", 1.0, RESERVATION_WAITED),
+        ],
+    );
+    let no_other_model = FactValue::Text("no_other_model".into());
+    let d = decide(
+        &mut st,
+        &s,
+        &fable_auxiliary(&s, "f1", RESERVED_AT),
+        &mut rng(),
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(
+        (
+            fact(shed, "over_since_fable_reservation"),
+            fact(shed, "wait_fable_reservation")
+        ),
+        (&FactValue::Int(RESERVED_AT), &FactValue::Int(20 * MINUTE)),
+        "inside its wait the test names its stamp and its wait"
+    );
+    assert!(
+        shed.facts.iter().all(|f| f.value != no_other_model),
+        "{:?}",
+        shed.facts
+    );
+    // A minute on a's 5-hour window reads 0.96 with no reset, over the ceiling of 0.95 at the five-hour bound, and the
+    // Fable pins' burn puts its wall hours out, so its wait is twice the burn average and ends a minute past the
+    // reservation's.
+    let five_hour_over = RESERVED_AT + MINUTE;
+    st.record_sample(
+        "a",
+        reserved_read(0.76, five_hour_over).with(
+            FIVE_HOUR,
+            WindowReading {
+                utilization: 0.96,
+                reset: None,
+                observed_at: five_hour_over,
+                source: WindowSource::Poll,
+                plan: None,
+                tier: None,
+            },
+        ),
+        0,
+    );
+    decide(
+        &mut st,
+        &s,
+        &fable_auxiliary(&s, "f1", five_hour_over),
+        &mut rng(),
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &fable_auxiliary(&s, "f1", RESERVATION_WAITED),
+        &mut rng(),
+    );
+    let shed = line(&d.record, "move:shed");
+    let reservation: Vec<&FactValue> = shed
+        .facts
+        .iter()
+        .filter(|f| f.key == "fable_reservation")
+        .map(|f| &f.value)
+        .collect();
+    assert_eq!(
+        reservation,
+        [&FactValue::Number(0.25), &no_other_model],
+        "the round would walk no pin, so the test fires nothing: {:?}",
+        shed.facts
+    );
+    assert!(
+        no_fact(shed, "round") && d.shed_round.is_none(),
+        "{:?}",
+        shed.facts
+    );
+    assert_eq!(st.last_shed("p", "a"), None);
+    let d = decide(
+        &mut st,
+        &s,
+        &fable_auxiliary(&s, "f1", RESERVATION_WAITED + MINUTE),
+        &mut rng(),
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(
+        (fact(shed, "trigger"), fact(shed, "round")),
+        (
+            &FactValue::Text("five_hour".into()),
+            &FactValue::Text("ran".into())
+        ),
+        "no dwell holds back the 5-hour round"
+    );
+}
+
+#[test]
+fn a_reservation_round_marks_the_one_other_pin_beside_fable_pins_that_keep_burning() {
+    let s = reserving_pool(Strategy::Pace, true);
+    // s1's 4 tokens a second are the round's whole walked burn, and the Fable pins' 1 and 1 stay on the account, more
+    // than the tenth of s1's burn that the last-pin guard asks to stay.
+    let mut st = reserving(
+        0.76,
+        vec![
+            burning("s1", "a", 4.0, false, RESERVATION_WAITED),
+            fable_burning("f1", "a", 1.0, RESERVATION_WAITED),
+            fable_burning("f2", "a", 1.0, RESERVATION_WAITED),
+        ],
+    );
+    let round = reserved_round(&mut st, &s, "s1")
+        .shed_round
+        .expect("the reservation fires")
+        .facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == "s1")
+            .map(|p| (p.planned.as_deref(), p.skip)),
+        Some((Some("b"), None)),
+        "{round:?}"
+    );
+
+    // With no Fable pin beside it, s1 is the account's whole burn.
+    let mut st = reserving(
+        0.76,
+        vec![burning("s1", "a", 4.0, false, RESERVATION_WAITED)],
+    );
+    let round = reserved_round(&mut st, &s, "s1")
+        .shed_round
+        .expect("the reservation fires")
+        .facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.skip))
+            .collect::<Vec<_>>(),
+        [("s1", Some("last_pin"))]
+    );
+}
+
+#[test]
+fn a_reservation_round_reads_last_pin_for_the_one_other_pin_beside_ended_fable_pins() {
+    let s = reserving_pool(Strategy::Pace, true);
+    // Both Fable agents ended, and each pin keeps its stored burn of 1 token a second on the week: the 2 together are
+    // over the tenth of s1's 4 that the last-pin guard asks to stay, so the agents' end alone leaves s1 the account's
+    // whole live burn.
+    let ended = |session: &str| PinRow {
+        ended: true,
+        ..fable_burning(session, "a", 1.0, RESERVATION_WAITED)
+    };
+    let mut st = reserving(
+        0.76,
+        vec![
+            burning("s1", "a", 4.0, false, RESERVATION_WAITED),
+            ended("f1"),
+            ended("f2"),
+        ],
+    );
+    let round = reserved_round(&mut st, &s, "s1")
+        .shed_round
+        .expect("the reservation fires")
+        .facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("s1", Some("last_pin")),
+            ("f1", Some("fable_model")),
+            ("f2", Some("fable_model"))
+        ]
+    );
+    assert!(round.marks.is_empty(), "{round:?}");
+}
+
+#[test]
+fn a_reservation_round_plans_no_move_onto_a_sibling_under_its_own_reservation() {
+    // s2 and s3 burn beside s1, so the last-pin guard lets s1's mark through and its gate alone decides.
+    let s1_row = |s: &RegistrySnapshot| {
+        let mut st = reserving_siblings(0.76, reserved_pins());
+        let round = reserved_round(&mut st, s, "s3")
+            .shed_round
+            .expect("the reservation fires")
+            .facts;
+        round
+            .pins
+            .into_iter()
+            .find(|p| p.session_id == "s1")
+            .map(|p| (p.planned, p.skip))
+    };
+    assert_eq!(
+        s1_row(&reserving_trio()),
+        Some((Some("c".into()), None)),
+        "b's own room is short of its reservation, so the round plans s1's move to c"
+    );
+    assert_eq!(
+        s1_row(&reserving_pool(Strategy::Pace, true)),
+        Some((None, Some("no_runway"))),
+        "with b the one sibling, s1 has no destination"
+    );
+}
+
+#[test]
+fn a_pin_marked_by_a_reservation_round_never_moves_onto_a_sibling_under_its_reservation() {
+    let trio = reserving_trio();
+    let pair = reserving_pool(Strategy::Pace, true);
+    let mark = |st: &RoutingState| st.pin(&pin_key("s1")).and_then(|p| p.mark.clone());
+    let next = |st: &mut RoutingState, s: &RegistrySnapshot| {
+        landed(
+            decide(
+                st,
+                s,
+                &auxiliary(s, "s1", RESERVATION_WAITED + SECOND),
+                &mut rng(),
+            )
+            .result,
+        )
+    };
+    // The reservation's round marks s1 toward c. b, short of its own reservation, fits s1 too and ranks ahead of c on
+    // its priority.
+    let reserved = || {
+        let mut st = reserving_siblings(0.76, reserved_pins());
+        reserved_round(&mut st, &trio, "s3");
+        st
+    };
+    let mut st = reserved();
+    assert_eq!(
+        mark(&st),
+        Some(PinMark {
+            at: RESERVATION_WAITED,
+            on: "a".into(),
+            window: SEVEN_DAY.into(),
+            source: Some("fable_reservation".into()),
+        })
+    );
+    assert_eq!(
+        next(&mut st, &trio),
+        ("c".into(), Some(MigrateReason::Shed))
+    );
+    let mut st = reserved();
+    assert_eq!(
+        next(&mut st, &pair),
+        ("a".into(), None),
+        "with c gone, s1 renews in place"
+    );
+    assert!(marked(&st, "s1"), "and keeps its mark");
+
+    // a's week at 0.90 projects 1.04 at its horizon, over the ceiling of 0.95, so the 7-day window fires ahead of the
+    // reservation, and its round marks s1 toward b, the one sibling.
+    let mut st = reserving_siblings(0.90, reserved_pins());
+    reserved_round(&mut st, &pair, "s3");
+    assert_eq!(
+        mark(&st),
+        Some(PinMark {
+            at: RESERVATION_WAITED,
+            on: "a".into(),
+            window: SEVEN_DAY.into(),
+            source: Some("projection".into()),
+        })
+    );
+    assert_eq!(
+        next(&mut st, &pair),
+        ("b".into(), Some(MigrateReason::Shed))
     );
 }
 
@@ -15663,6 +16005,7 @@ fn from_load_restores_each_pools_round_time_and_the_marks_from_the_pin_rows() {
                     at: T - 60_000,
                     on: "a".into(),
                     window: FIVE_HOUR.into(),
+                    source: None,
                 }),
                 ..seeded_pin("s1", "a", T)
             },
@@ -15673,6 +16016,7 @@ fn from_load_restores_each_pools_round_time_and_the_marks_from_the_pin_rows() {
                     at: T - 60_000,
                     on: "b".into(),
                     window: FIVE_HOUR.into(),
+                    source: None,
                 }),
                 ..seeded_pin("s3", "a", T)
             },
@@ -17505,6 +17849,7 @@ fn a_horizon_at_the_end_or_the_window_s_own_reset_fires_a_round_and_keeps_a_mark
             at: T - 963_000,
             on: "a".into(),
             window: FIVE_HOUR.into(),
+            source: None,
         });
         let mut st = rounding(vec![
             PinRow {
@@ -20086,6 +20431,7 @@ fn a_classifier_call_on_its_judged_pin_under_a_standing_mark_lands_on_the_judged
                 at: T - 60_000,
                 on: "a".into(),
                 window: FIVE_HOUR.into(),
+                source: None,
             }),
             ..burning("s1", "a", 4.0, false, T)
         }]);
@@ -23018,6 +23364,7 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
                 at: T - 1_000_000,
                 on: "a".into(),
                 window: FIVE_HOUR.into(),
+                source: None,
             }),
             ..burning("s1", "a", 16.0, false, T)
         },
@@ -23075,6 +23422,7 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
                 at: T - 1_000_000,
                 on: "a".into(),
                 window: FIVE_HOUR.into(),
+                source: None,
             }),
             ..burning("s3", "a", 12.0, false, T)
         },
@@ -23110,6 +23458,7 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
                 at: T - 1_000_000,
                 on: "a".into(),
                 window: FIVE_HOUR.into(),
+                source: None,
             }),
             ..burning("s1", "a", 4.0, false, T)
         },
@@ -23173,6 +23522,7 @@ fn a_pool_with_load_shedding_off_runs_no_round_releases_its_marks_and_still_move
                     at: marked_at,
                     on: "a".into(),
                     window: FIVE_HOUR.into(),
+                    source: None,
                 }),
                 ..burning("s1", "a", 4.0, false, T)
             },
@@ -23248,6 +23598,7 @@ fn a_mark_holds_past_the_dwell_heals_when_the_projection_reads_under_the_wall_an
                         at: marked_at,
                         on: "a".into(),
                         window: FIVE_HOUR.into(),
+                        source: None,
                     }),
                     last_used_at: marked_at,
                     ..burning("s1", "a", 4.0, false, marked_at)
@@ -23375,6 +23726,7 @@ fn a_mark_on_the_week_heals_when_the_seven_day_projection_reads_under_the_ceilin
                         at: marked_at,
                         on: "a".into(),
                         window: SEVEN_DAY.into(),
+                        source: None,
                     }),
                     last_used_at: marked_at,
                     ..burning("s1", "a", burn, false, T)
@@ -27825,6 +28177,7 @@ fn marked_s1(s1_burn: f64, s0_burn: f64, five_hour: f64) -> RoutingState {
                     at: marked_at,
                     on: "a".into(),
                     window: FIVE_HOUR.into(),
+                    source: None,
                 }),
                 last_used_at: marked_at,
                 ..burning("s1", "a", s1_burn, false, T)

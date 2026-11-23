@@ -4908,6 +4908,20 @@ fn move_of<'a>(
             now,
         ),
     };
+    // A reservation's round walks the account's pins of another model alone. Where it would walk none it marks
+    // nothing, and its dwell would hold back the round a window fires right after, so its test fires nothing. The
+    // wait above runs first, so its stamp and its wait still name a short room on an account of Fable pins alone.
+    let no_other_model = trigger.as_ref().is_some_and(|trigger| {
+        matches!(trigger.source, TriggerSource::FableReservation { .. }) && {
+            let unit = burn_unit(state, snapshot, source, now, fallback_ms);
+            let current_key = current.key();
+            state
+                .pins_on(source, &in_pool(snapshot, pool))
+                .into_iter()
+                .all(|p| left_out_as(p, trigger, unit, &current_key, fast).is_some())
+        }
+    });
+    let trigger = trigger.filter(|_| !no_other_model);
     let mut facts = Vec::new();
     for window in &windows {
         let (Some(projection), Some(at), Some(until)) = (
@@ -4937,6 +4951,9 @@ fn move_of<'a>(
     }
     if let Some(read) = reservation.as_ref().filter(|read| read.over()) {
         facts.push(Fact::number("fable_reservation", read.reservation).unit("percent"));
+    }
+    if no_other_model {
+        facts.push(Fact::text("fable_reservation", "no_other_model"));
     }
     if let Some(waits) = &reservation_waits {
         facts.push(Fact::int("over_since_fable_reservation", waits.over_since).unit("time"));
@@ -4986,7 +5003,7 @@ fn move_of<'a>(
             ));
             facts.push(Fact::list("skipped", round.skipped));
             for mark in &round.marks {
-                state.mark_pin(&mark.key, now, trigger.window);
+                state.mark_pin(&mark.key, now, trigger.window, trigger.source.as_str());
             }
             rec.shed_round = Some(ShedRoundRecord {
                 account_id: source.to_string(),
@@ -5038,9 +5055,14 @@ fn move_of<'a>(
         rule_line(rec, MigrateReason::Shed, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;
     }
-    // The shed rule's keep is the no-return test alone: a pin never returns inside the dwell to the account that
-    // shed it. With nothing fitting the pin renews in place and its mark stands, rather than landing on an account
-    // the next round would shed it from again.
+    // The shed rule's keep is the no-return test: a pin never returns inside the dwell to the account that shed it.
+    // A mark of a reservation's round also keeps the pin off a sibling whose own room reads short of its reservation,
+    // as the round's plan did. With nothing fitting the pin renews in place and its mark stands, rather than landing
+    // on an account the next round would shed it from again.
+    let reserved_mark = state
+        .pin(key)
+        .and_then(standing_mark)
+        .is_some_and(|mark| mark.source.as_deref() == Some(TriggerSource::FABLE_RESERVATION));
     let gate = gate(
         state,
         snapshot,
@@ -5049,7 +5071,11 @@ fn move_of<'a>(
         current,
         eligible,
         window,
-        &|c| !keeps_off(current, &c.account_id, pool, now),
+        &|c| {
+            !(keeps_off(current, &c.account_id, pool, now)
+                || (reserved_mark
+                    && short_of_reservation(state, snapshot, pool, &c.account_id, now)))
+        },
         true,
         rec,
     );
@@ -5491,9 +5517,12 @@ pub(crate) enum TriggerSource {
 }
 
 impl TriggerSource {
+    /// The Fable reservation's word, which a mark of its round carries as its source.
+    pub(crate) const FABLE_RESERVATION: &'static str = "fable_reservation";
+
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            TriggerSource::FableReservation { .. } => "fable_reservation",
+            TriggerSource::FableReservation { .. } => Self::FABLE_RESERVATION,
             TriggerSource::Projection { .. } => "projection",
             TriggerSource::SlowDown { .. } => "slow_down",
         }
@@ -5769,6 +5798,18 @@ fn reservation_read(
         room: pace.remaining,
         reservation,
     })
+}
+
+/// Whether `account_id`'s own 7-day room reads under its Fable reservation, the sibling that a reservation's round
+/// plans no move onto and that a pin it marked never moves onto.
+fn short_of_reservation(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    account_id: &str,
+    now: i64,
+) -> bool {
+    reservation_read(state, snapshot, pool, account_id, now).is_some_and(|read| read.over())
 }
 
 /// What the Fable reservation's test fires once every window's test fired nothing: a round on `seven_day` once the
@@ -6235,6 +6276,61 @@ pub(crate) fn standing_move_read(
     }
 }
 
+/// The words `left_out_as` answers, in the order it tests them, which a round's record lists its left-out pins in.
+const LEFT_OUT: [&str; 5] = [
+    "fast_lane",
+    "off_window",
+    "fable_model",
+    "ended",
+    "account_bound",
+];
+
+/// The word a round on `trigger` in `unit` leaves `pin` out of its walk under, `None` for a pin it walks. A pin takes
+/// the first word whose cause holds, in `LEFT_OUT`'s order. `current` is the request's pin key, whose lane speed
+/// `current_fast` names and whose own row the request frees of `account_bound`, every other pin read off its row. The
+/// shed rule asks it of the account's pins ahead of a reservation's round, so the test and the round cannot part.
+fn left_out_as(
+    pin: &PinRow,
+    trigger: &Trigger,
+    unit: BurnUnit,
+    current: &PinKey,
+    current_fast: bool,
+) -> Option<&'static str> {
+    let is_current = pin.key_parts() == current.parts();
+    let on_fast_lane = if is_current {
+        current_fast
+    } else {
+        lane_is_fast(&pin.lane)
+    };
+    if unit == BurnUnit::WindowShare && on_fast_lane {
+        return Some("fast_lane");
+    }
+    // A pin whose model does not draw the trigger's window burns nothing there whatever the pricer answers, since
+    // the projection that fired summed the burn of the drawing models alone: it has no share to shed and none the burn
+    // guard counts as left unmarked, so it leaves before the order under both units. A fast-lane pin leaves first,
+    // since it has no plan share at all.
+    if !plan_windows(&pin.model).any(|window| window == trigger.window) {
+        return Some("off_window");
+    }
+    // A round the Fable reservation fired sheds the 7-day room that the account's Fable use is expected to need, so a
+    // pin whose model draws a model week is that use and stays, though it draws the 7-day window too.
+    if matches!(trigger.source, TriggerSource::FableReservation { .. })
+        && model_week(&pin.model).is_some()
+    {
+        return Some("fable_model");
+    }
+    // The keep left a pin whose agent ended out of every figure, so the round lists it for its record and walks it
+    // nowhere, its pin and cache kept for a respawn. A fast-lane pin, a pin off the window and the Fable pin of a
+    // reservation's round keep their words whatever their agent did.
+    if pin.ended {
+        return Some("ended");
+    }
+    // A pin whose session holds account state stays on its account until a portable turn of the conversation, so no
+    // round plans its move. The request's own pin is free behind this selection: a request that follows a bound pin
+    // runs no round, so its own row carries no flag, or the request is the portable turn that clears it.
+    (!is_current && pin.account_bound).then_some("account_bound")
+}
+
 /// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's
 /// keys, ordered in a window-share round by the span's average share of the trigger's window the walk prices them by,
 /// and in a `usd` round by the dollar burn at `now` (cold first, those whose move drops no thinking by burn and then
@@ -6252,11 +6348,12 @@ pub(crate) fn standing_move_read(
 /// share of the thinking its move drops, and a cold pin's share of that thinking alone. Where no covering pin has a
 /// destination, the walk marks the pin at its position only where its burn covers `SHED_MARK_SHARE` of the rest,
 /// `sliver` otherwise. A standing mark is a move pending, so its burn counts as removed and the pin is skipped. A pin
-/// whose mark would leave the account's other unmarked priced pins under `SHED_MARK_SHARE` of the burn sum is never
-/// marked, `last_pin` before its gate is read, while no unpriced pin stands unmarked. An unpriced pin is never marked,
-/// and a pin with no fitting destination counts nothing. Each mark plans a reservation on its destination, which the
-/// next pin's fit counts, so a sibling's headroom is taken once. The current pin's warmth, lane and `account_bound`
-/// are this request's, every other pin's the stored ones.
+/// whose mark would leave the account's other unmarked priced pins, with the live Fable pins of a reservation's round,
+/// under `SHED_MARK_SHARE` of the burn sum is never marked, `last_pin` before its gate is read, while no unpriced pin
+/// stands unmarked. An unpriced pin is never marked, and a pin with no fitting destination counts nothing. A
+/// reservation's round plans no move onto a sibling whose own room reads short of its reservation. Each mark plans a
+/// reservation on its destination, which the next pin's fit counts, so a sibling's headroom is taken once. The current
+/// pin's warmth, lane and `account_bound` are this request's, every other pin's the stored ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
@@ -6307,45 +6404,16 @@ fn shed_round(
     };
     // The only place a left-out pin's skip word is written, so the record and the strip read one spelling.
     let mut left_out: Vec<(PinRow, &'static str)> = Vec::new();
-    let mut leave_out =
-        |pins: Vec<(PinRow, Option<f64>)>, word: &'static str, out: &dyn Fn(&PinRow) -> bool| {
-            let (left, kept): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| out(p));
-            left_out.extend(left.into_iter().map(|(p, _)| (p, word)));
-            kept
-        };
-    if unit == BurnUnit::WindowShare {
-        let on_fast_lane = |p: &PinRow| {
-            if is_current(p) {
-                current_fast
-            } else {
-                lane_is_fast(&p.lane)
-            }
-        };
-        pins = leave_out(pins, "fast_lane", &on_fast_lane);
+    let mut walked = Vec::new();
+    for (p, burn) in pins {
+        match left_out_as(&p, trigger, unit, &current_key, current_fast) {
+            Some(word) => left_out.push((p, word)),
+            None => walked.push((p, burn)),
+        }
     }
-    // A pin whose model does not draw the trigger's window burns nothing there whatever the pricer answers, since
-    // the projection that fired summed the burn of the drawing models alone: it has no share to shed and none the burn
-    // guard counts as left unmarked, so it leaves before the order under both units. A fast-lane pin leaves first,
-    // since it has no plan share at all.
-    let off_window = |p: &PinRow| !plan_windows(&p.model).any(|window| window == trigger.window);
-    pins = leave_out(pins, "off_window", &off_window);
-    // A round the Fable reservation fired sheds the 7-day room that the account's Fable use is expected to need, so a
-    // pin whose model draws a model week is that use and stays, though it draws the 7-day window too.
-    if matches!(trigger.source, TriggerSource::FableReservation { .. }) {
-        pins = leave_out(pins, "fable_model", &|p: &PinRow| {
-            model_week(&p.model).is_some()
-        });
-    }
-    // The keep left a pin whose agent ended out of every figure, so the round lists it for its record and walks it
-    // nowhere, its pin and cache kept for a respawn. A fast-lane pin, a pin off the window and the Fable pin of a
-    // reservation's round keep their words whatever their agent did.
-    pins = leave_out(pins, "ended", &|p: &PinRow| p.ended);
-    // A pin whose session holds account state stays on its account until a portable turn of the conversation, so no
-    // round plans its move. The request's own pin is free behind this selection: a request that follows a bound pin
-    // runs no round, so its own row carries no flag, or the request is the portable turn that clears it.
-    pins = leave_out(pins, "account_bound", &|p: &PinRow| {
-        !is_current(p) && p.account_bound
-    });
+    let pins = walked;
+    // A stable sort, so each cause keeps the pins' own order inside it.
+    left_out.sort_by_key(|(_, word)| LEFT_OUT.iter().position(|w| w == word));
 
     // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
     // does not weight, the one case left once the partition above took the pins whose model does not draw the window,
@@ -6362,6 +6430,30 @@ fn shed_round(
         .filter(|speed| matches!(trigger.source, TriggerSource::SlowDown { .. }) && *speed > 0.0)
         .unwrap_or(1.0);
     let horizon = trigger.horizon.max(now.saturating_add(1_000));
+    let share_of = |p: &PinRow| {
+        state
+            .share()
+            .rate(
+                trigger.window,
+                p.entrypoint.as_deref(),
+                tier,
+                &p.model,
+                &p.burn,
+                now,
+            )
+            .map(|rate| {
+                let segments = state.share().band_segments(
+                    trigger.window,
+                    p.entrypoint.as_deref(),
+                    now,
+                    horizon,
+                );
+                Banded::of(burn_decayed(rate, p.burn_at, now, average_ms), &segments)
+                    .divided(speed)
+                    .increase()
+                    / seconds(horizon - now)
+            })
+    };
     // A walked pin beside its figures: `burn` the order sorts by, `share` the walk's figure, `read` its move at the
     // destination its own next request would take, and `destination` that account with its fit's runway.
     struct RoundPin {
@@ -6374,28 +6466,7 @@ fn shed_round(
     let pins: Vec<(PinRow, Option<f64>, Option<f64>)> = pins
         .into_iter()
         .map(|(p, burn)| {
-            let share = state
-                .share()
-                .rate(
-                    trigger.window,
-                    p.entrypoint.as_deref(),
-                    tier,
-                    &p.model,
-                    &p.burn,
-                    now,
-                )
-                .map(|rate| {
-                    let segments = state.share().band_segments(
-                        trigger.window,
-                        p.entrypoint.as_deref(),
-                        now,
-                        horizon,
-                    );
-                    Banded::of(burn_decayed(rate, p.burn_at, now, average_ms), &segments)
-                        .divided(speed)
-                        .increase()
-                        / seconds(horizon - now)
-                });
+            let share = share_of(&p);
             // A window-share round orders its pins by the figure the walk prices, so on a span the band crosses the
             // record lists the rows in the order of the figures it shows. A `usd` round keeps the dollar burn at
             // `now`, which counts the fast and classifier usage the account pays for beside the row's copy.
@@ -6413,6 +6484,20 @@ fn shed_round(
         .into_iter()
         .partition(|(_, _, share)| share.is_some_and(|share| share == 0.0));
     left_out.extend(burnless.into_iter().map(|(p, _, _)| (p, "no_burn")));
+    // A reservation's round sheds the room the account's Fable use is expected to need, so a sibling whose own room
+    // reads short of its reservation is no destination, since the move would spend that room in turn. The filter runs
+    // once, so the order and the plan read one list and each sibling's reservation once.
+    let unreserved: Vec<&Candidate>;
+    let eligible = if matches!(trigger.source, TriggerSource::FableReservation { .. }) {
+        unreserved = eligible
+            .iter()
+            .copied()
+            .filter(|c| !short_of_reservation(state, snapshot, pool, &c.account_id, now))
+            .collect();
+        unreserved.as_slice()
+    } else {
+        eligible
+    };
     // The order reads each walked pin's move where the pin's own next request would land it, with no booking planned,
     // since what a move rewrites and drops depends on the destination.
     let pins: Vec<RoundPin> = pins
@@ -6501,10 +6586,19 @@ fn shed_round(
     let dwell_ms = shed_dwell_ms(pool);
     // The round never takes nearly all of an account's burn: a mark is refused where the other unmarked priced pins
     // would hold under `SHED_MARK_SHARE` of the round's burn sum. An unpriced pin's burn is unknown and not none, so
-    // while one stands unmarked it is the pin that stays and the guard refuses nothing.
+    // while one stands unmarked it is the pin that stays and the guard refuses nothing. A reservation's round leaves
+    // the account's Fable pins out, and the burn of those whose agent has not ended stays on the account, so it counts
+    // on the left.
+    let fable_stays: Vec<Option<f64>> = left_out
+        .iter()
+        .filter(|(p, word)| *word == "fable_model" && !p.ended)
+        .map(|(p, _)| share_of(p))
+        .collect();
     let unpriced_stays = ordered
         .iter()
-        .any(|p| p.share.is_none() && !mark_holds(&p.row));
+        .any(|p| p.share.is_none() && !mark_holds(&p.row))
+        || fable_stays.iter().any(Option::is_none);
+    let fable_burn: f64 = fable_stays.iter().flatten().sum();
     let leaves_too_little = |candidate: usize, marks: &[Mark]| {
         if unpriced_stays {
             return false;
@@ -6518,7 +6612,8 @@ fn shed_round(
                     && !marks.iter().any(|m| is_pin(&p.row, &m.key))
             })
             .filter_map(|(_, p)| p.share)
-            .sum();
+            .sum::<f64>()
+            + fable_burn;
         left < SHED_MARK_SHARE * burn_sum
     };
     // A standing mark is a move pending, so its burn counts as removed before the walk marks anything else.

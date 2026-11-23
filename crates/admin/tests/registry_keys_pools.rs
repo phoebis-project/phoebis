@@ -3372,6 +3372,60 @@ async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() 
     );
 }
 
+#[tokio::test]
+async fn the_reservation_option_warns_where_it_does_nothing() {
+    let (app, _up, _store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let created = |body: &'static str| {
+        let (app, cookie) = (&app, cookie.as_str());
+        async move {
+            let created = post(app, "/admin/pools", body, Some(cookie)).await;
+            assert_eq!(created.status(), 201, "{body}");
+            json(created).await["warnings"].clone()
+        }
+    };
+    let codes = |warnings: &serde_json::Value| {
+        warnings
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["code"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        created(
+            r#"{"id":"ranked","label":"Ranked","strategy":"priority","fable_reservation_shedding":true}"#
+        )
+        .await,
+        serde_json::json!([warning(
+            "reservation_shedding_idle",
+            &["fable_reservation_shedding", "load_shedding", "strategy"],
+            "The option to shed on the Fable reservation does nothing here, since its rounds run on a Pace pool with \
+             load shedding on."
+        )]),
+        "only Pace holds a reservation back"
+    );
+    assert_eq!(
+        codes(
+            &created(
+                r#"{"id":"unshed","label":"Unshed","strategy":"pace","fable_reservation_shedding":true,
+                    "load_shedding":false}"#
+            )
+            .await
+        ),
+        ["reservation_shedding_idle", "shedding_off"],
+        "the option adds a test to the round that load shedding runs"
+    );
+    assert_eq!(
+        created(
+            r#"{"id":"reserving","label":"Reserving","strategy":"pace","fable_reservation_shedding":true}"#
+        )
+        .await,
+        serde_json::json!([]),
+        "on a Pace pool with load shedding on the option sheds"
+    );
+}
+
 /// Each member counts the pins under the pool's keys on its own account, so the members' counts sum to the pool's.
 #[tokio::test]
 async fn each_pool_member_answers_the_pins_under_the_pools_keys_on_its_account() {

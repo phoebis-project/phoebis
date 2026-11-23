@@ -57,13 +57,16 @@ pub struct ShedStamp {
     pub reason: Option<String>,
 }
 
-/// The round's mark: when it was made, the account it was made on and the window whose trigger made it. It stands
-/// while `on` is the pin's account, and nothing but a move, a release or a heal clears it.
+/// The round's mark: when it was made, the account it was made on, the window whose trigger made it and the test that
+/// fired the round. It stands while `on` is the pin's account, and nothing but a move, a release or a heal clears it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinMark {
     pub at: i64,
     pub on: String,
     pub window: String,
+    /// The word of the test that fired the mark's round, as `TriggerSource::as_str` spells it. `None` on a mark stored
+    /// before the column, which is a projection round's.
+    pub source: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -901,7 +904,7 @@ const PIN_COLUMNS: &str = "key_id, session_id, agent_id, model, account_id, epoc
      burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
      burn_unmetered_write_5m, burn_unmetered_model, \
      marked_at, marked_on, marked_window, entrypoint, shed_reason, auxiliary_only, effort, ended, thinking_sums, \
-     account_bound";
+     account_bound, marked_source";
 
 // Each burn copy's columns, in `PinBurn`'s field order: `burn_from` takes them by position.
 const BURN_COLUMNS: [&str; 5] = [
@@ -967,7 +970,12 @@ fn mark_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<PinMark>> {
             r.get("marked_on")?,
             r.get("marked_window")?,
         ) {
-            (Some(at), Some(on), Some(window)) => Some(PinMark { at, on, window }),
+            (Some(at), Some(on), Some(window)) => Some(PinMark {
+                at,
+                on,
+                window,
+                source: r.get("marked_source")?,
+            }),
             _ => None,
         },
     )
@@ -1052,7 +1060,8 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
         pin.effort.as_deref().unwrap_or_default(),
         pin.ended,
         serde_json::to_string(&pin.thinking_sums)?,
-        pin.account_bound
+        pin.account_bound,
+        pin.mark.as_ref().and_then(|mark| mark.source.as_ref())
     ])?;
     Ok(())
 }

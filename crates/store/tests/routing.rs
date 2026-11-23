@@ -826,6 +826,7 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
         "ALTER TABLE pins DROP COLUMN account_bound;
+         ALTER TABLE pins DROP COLUMN marked_source;
          ALTER TABLE pools DROP COLUMN feature_accounts_json;
          ALTER TABLE api_keys DROP COLUMN feature_accounts_json;
          ALTER TABLE accounts DROP COLUMN state_changed_at;
@@ -1410,6 +1411,7 @@ fn a_pins_mark_round_trips_leaves_with_the_pin_and_the_round_row_stays() {
             at: 900,
             on: "a".into(),
             window: "five_hour".into(),
+            source: None,
         }),
         ..pin("k", "s1", "claude-sonnet-5", "a")
     };

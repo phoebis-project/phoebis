@@ -174,7 +174,8 @@ pub(crate) struct PoolInput {
     #[serde(default)]
     load_shedding: Option<bool>,
     /// Default `false`. On a `pace` pool with `load_shedding` on, a round also fires on an account whose 7-day room has
-    /// stood under its Fable reservation for the projection's wait, and walks the account's non-Fable pins alone.
+    /// stood under its Fable reservation for the projection's wait, and walks the account's non-Fable pins alone. It
+    /// fires no round where it would walk no pin.
     #[serde(default)]
     fable_reservation_shedding: Option<bool>,
     /// `0.1` to `1.0`, default `0.5`.
@@ -940,7 +941,7 @@ pub(crate) struct Pool {
     /// `shed_dwell_seconds`, `migrate_when_spent` and `warm_sessions`.
     pub load_shedding: bool,
     /// Whether a round also fires on an account whose 7-day room stands under its Fable reservation, on a `pace` pool
-    /// with `load_shedding` on.
+    /// with `load_shedding` on, where it would walk a pin of another model.
     pub fable_reservation_shedding: bool,
     pub shed_cap: f64,
     pub burn_average_seconds: u64,
@@ -1025,8 +1026,8 @@ pub(crate) struct Pool {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PoolWarning {
     /// `affinity_under_cache_ttl`, `cap_under_cohort`, `cap_under_quarter`, `five_hour_ceiling_low`,
-    /// `five_hour_ceiling_without_margin`, `hold_over_window`, `return_at_once`, `shedding_off`, `spent_moves_off`,
-    /// `warm_never`, or `weekly_ceiling_low`.
+    /// `five_hour_ceiling_without_margin`, `hold_over_window`, `reservation_shedding_idle`, `return_at_once`,
+    /// `shedding_off`, `spent_moves_off`, `warm_never`, or `weekly_ceiling_low`.
     #[schema(example = "five_hour_ceiling_low")]
     pub code: String,
     /// The pool fields the check reads.
@@ -1147,6 +1148,18 @@ fn warnings_of(row: &PoolRow, cache_ttl: &CacheTtlPolicy, cohort: usize) -> Vec<
             &["slow_down_hold_seconds"],
             "A hold over 150 seconds leaves under 30 seconds of the client's first-byte window for the upstream's \
              head, so a slowed request can time out at the client and be sent again."
+                .into(),
+        ));
+    }
+    // The option adds a test to the round that load shedding runs, and only Pace holds a reservation back.
+    if row.shedding.fable_reservation_shedding
+        && !(row.strategy == Strategy::Pace && row.shedding.load_shedding)
+    {
+        warnings.push(warning(
+            "reservation_shedding_idle",
+            &["fable_reservation_shedding", "load_shedding", "strategy"],
+            "The option to shed on the Fable reservation does nothing here, since its rounds run on a Pace pool with \
+             load shedding on."
                 .into(),
         ));
     }

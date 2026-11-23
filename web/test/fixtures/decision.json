@@ -77,6 +77,7 @@
       "five_hour_ceiling": 0.95,
       "weekly_ceiling": 1.0,
       "load_shedding": true,
+      "fable_reservation_shedding": false,
       "migrate_when_spent": true,
       "overage_move_grace_minutes": 30,
       "wind_down_minutes": 30,

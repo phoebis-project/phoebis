@@ -10239,6 +10239,7 @@ fn marked(pin: PinRow, at: i64) -> PinRow {
             at,
             on: pin.account_id.clone(),
             window: FIVE_HOUR.into(),
+            source: None,
         }),
         ..pin
     }
@@ -10893,6 +10894,7 @@ async fn a_heals_event_names_the_wall_at_the_windows_reset_and_the_pools_ceiling
                 at: AT - 60_000,
                 on: "a".into(),
                 window: SEVEN_DAY.into(),
+                source: None,
             }),
             ..stored_pin(&store, "s2", "a", 2, 0.0)
         },
@@ -11326,6 +11328,7 @@ async fn the_load_counts_name_the_standing_marks_and_the_stale_round_rows() {
                 at: AT - 60_000,
                 on: "z".into(),
                 window: FIVE_HOUR.into(),
+                source: None,
             }),
             ..stored_pin(&store, "s2", "a", 2, 0.0)
         },

@@ -3775,14 +3775,21 @@ impl RoutingState {
         pins
     }
 
-    /// Marks the pin under the key on the account it sits on, at `at`, for the trigger's `window`, and answers the row
-    /// as marked for the write.
-    pub(crate) fn mark_pin(&mut self, key: &PinKey, at: i64, window: &str) -> Option<PinRow> {
+    /// Marks the pin under the key on the account it sits on, at `at`, for the trigger's `window` and the `source` that
+    /// fired its round, and answers the row as marked for the write.
+    pub(crate) fn mark_pin(
+        &mut self,
+        key: &PinKey,
+        at: i64,
+        window: &str,
+        source: &str,
+    ) -> Option<PinRow> {
         let pin = self.pins.get_mut(key)?;
         pin.mark = Some(PinMark {
             at,
             on: pin.account_id.clone(),
             window: window.to_string(),
+            source: Some(source.to_string()),
         });
         Some(pin.clone())
     }

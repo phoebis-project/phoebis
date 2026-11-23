@@ -774,7 +774,7 @@ test("every record version decodes its settings, a version 1 record's three remo
   const v3 = d.decodeDecisionRecord(body);
   const s = body.settings;
   assert.equal(v3.version, 3);
-  assert.equal(Object.keys(s).length, 26, 'the route answers twenty-six settings');
+  assert.equal(Object.keys(s).length, 27, 'the route answers twenty-seven settings');
   assert.deepEqual(Object.keys(v3.settings).filter((k) => k !== 'legacy').length, 26);
   assert.deepEqual(shedding(v3.settings), SHEDDING_FIELDS.map((f) => s[f]), 'a version 3 record reads the new names');
   assert.equal(v3.settings.legacy, null);
