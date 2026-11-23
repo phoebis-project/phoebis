@@ -225,13 +225,13 @@ unreported agent in none of the three. Under the grid, "Keepalive engine" reads 
 {max}`: Sessions, Agent records, whose hover says that a released record that held a slot keeps it for one cache TTL
 after the release, and Retained in MiB. "Cache probes, 24h" reads `{ok} ok ({pct}) of {total}` over a bar of the day's
 probes by outcome (ok, held, skipped and failed), and a line reads `expired between turns {n} · bus gaps {n}`. The
-expired part takes the warning ink while the attention item `expired_between_turns` holds, which counts the expiries on
-pools that warm caches under keys the keepalive may probe for, so the part's own count, the keepalive overview's over
-every pool, can stand above zero in the plain ink. The bus gaps part takes the ink while `keepalive_bus_gaps` holds, the
-last gap's instant on hover. Where the keepalive overview's first read fails, the caps, the probes and the line read a
-dash each under `Could not load the keepalive overview: {error}` and a "Try again" button. A failed recipes read draws
-in the card as a failed keepalive overview does, under a notice of its own. What each figure means is on
-[Statistics](statistics.md).
+expired part takes the warning ink while the attention item `expired_between_turns` holds, which counts the expiries of
+agents that the keepalive still held on pools that warm caches under keys the keepalive may probe for, so the part's own
+count, the keepalive overview's over every pool, can stand above zero in the plain ink. The bus gaps part takes the ink
+while `keepalive_bus_gaps` holds, the last gap's instant on hover. Where the keepalive overview's first read fails, the
+caps, the probes and the line read a dash each under `Could not load the keepalive overview: {error}` and a "Try again"
+button. A failed recipes read draws in the card as a failed keepalive overview does, under a notice of its own. What
+each figure means is on [Statistics](statistics.md).
 
 ## Quota
 

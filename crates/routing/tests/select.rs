@@ -12880,6 +12880,33 @@ fn a_pin_hands_on_its_entrys_expiry_by_its_last_refresh() {
     );
 }
 
+/// The row idled out two hours before `T` and was last refreshed at its last use, under a five-minute TTL, and the
+/// request carries no release. `b` sits behind `a`, so the placement after the idle expiry lands back on the row's
+/// account.
+#[test]
+fn a_placement_back_on_an_idle_rows_account_hands_on_its_expired_entry_and_no_release() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![PinRow {
+        last_refresh_at: T - 2 * HOUR,
+        ..idled_out("s-back", "a")
+    }]);
+    match select(&mut st, &s, &main_turn(&s, "s-back", T), &mut rng()).0 {
+        SelectResult::Selected(sel) => assert_eq!(
+            (
+                sel.account.id.as_str(),
+                sel.trace.renewed,
+                sel.entry_expired,
+                sel.agent_released
+            ),
+            ("a", false, Some(true), Some(false))
+        ),
+        other => panic!("expected a selection, got {other:?}"),
+    }
+}
+
 const MINUTE: i64 = 60_000;
 const SECOND: i64 = 1_000;
 
