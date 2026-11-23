@@ -1287,7 +1287,6 @@ pub(crate) struct PoolTraffic {
 
 /// `GET /admin/pools/{id}/pins`'s answer: each pin under the pool's keys, as a shedding round reads them.
 #[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PoolPinList {
     /// In the order of the pins' keys, with none of the filters of `GET /admin/sessions`: a pin that only auxiliary
