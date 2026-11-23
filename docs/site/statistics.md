@@ -245,14 +245,14 @@ of one reset can spell it up to a second apart, since a head names its reset in 
 milliseconds. The first reading that shows the fall, a head or a poll, keeps the figure it fell from in memory, and the
 next poll under the same reset writes the event from that figure where it still reads more than 5 points under it, so a
 fall that a poll reads first writes its event one poll later. A restart between the first reading and that poll loses
-the event. A window at its limit that a use clears writes `window_cleared` as well. The unused allowance lists each drop
-that cleared its window as a row: the share left before the drop, the week's unchanged reset and the drop's instant,
-with the plan and the tier the event names, under the source `plan_changed` where the event's `pair_changed` is true and
-no used claim names the window, and under `claim` otherwise. Rows of one reset stand newest first, so a week's own reset
-precedes a use inside it. A drop cleared its window where the newest used `limit_reset_claimed` of the account in the
-hour before it names the window in its `cleared` list, or, for a reset used outside the router and a claim with no
-parsed answer, where the poll that wrote the event reads under 5 percent. A drop that only lowered its window lists no
-row, since its week runs on and gave nothing up.
+the event. A window at its limit that a use or a plan change clears writes `window_cleared` as well. The unused
+allowance lists each drop that cleared its window as a row: the share left before the drop, the week's unchanged reset
+and the drop's instant, with the plan and the tier the event names, under the source `plan_changed` where the event's
+`pair_changed` is true and no used claim names the window, and under `claim` otherwise. Rows of one reset stand newest
+first, so a week's own reset precedes a drop inside it. A drop cleared its window where the newest used
+`limit_reset_claimed` of the account in the hour before it names the window in its `cleared` list, or, for a reset used
+outside the router, a plan change and a claim with no parsed answer, where the poll that wrote the event reads under 5
+percent. A drop that only lowered its window lists no row, since its week runs on and gave nothing up.
 
 Every use of a limit reset that reached the upstream writes a `limit_reset_claimed` event on the account, whatever the
 upstream answered and where it answered nothing. Its detail carries the grant's id and label, the request id the claim

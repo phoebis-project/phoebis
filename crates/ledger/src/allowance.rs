@@ -195,7 +195,7 @@ fn events_of<T: serde::de::DeserializeOwned>(
 /// reading standing, and a reading with no utilization skipped. A reading with no reset instant shows no open week. A
 /// reset of an account in `term_ends` at or after its end is left out, so the week the end cut short counts once, and
 /// so is a drop at or after the end. Ordered by account, window, then `reset_at` and `observed_at`, each newest first,
-/// so a week's reset stands ahead of a use inside that week. No rollup and no stored figure: the history is the events
+/// so a week's reset stands ahead of a drop inside that week. No rollup and no stored figure: the history is the events
 /// the purge still holds. Each `TermEnd` holds the account's end and the pairs of its `term_ended` rows.
 pub fn unused_allowance(
     conn: &Connection,

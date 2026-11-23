@@ -1325,8 +1325,8 @@ pub(crate) async fn refusal_categories(
 pub(crate) struct UnusedAllowance {
     pub from: i64,
     pub to: i64,
-    /// One entry per subscription account with at least one row in range, a weekly reset, a used reset or a term end,
-    /// ordered by `account_id`.
+    /// One entry per subscription account with at least one row in range, a weekly reset, a used reset, a plan change
+    /// or a term end, ordered by `account_id`.
     pub accounts: Vec<UnusedAllowanceAccount>,
 }
 
@@ -1377,9 +1377,9 @@ pub(crate) struct UnusedAllowanceReset {
     /// `claim` for a used limit reset that cleared the window, `clock` for the clock walk's reset (its reading up to
     /// one poll interval old), `plan_changed` for a window that a change of the account's plan or tier cleared,
     /// `sample` for a reset a usage sample showed, and `term_ended` for the account's term ending inside the week. A
-    /// use's drop cleared the window where the newest used `limit_reset_claimed` of the hour before the drop names the
-    /// window in its `cleared` list, or, where no such claim carries a parsed answer, where the poll that wrote the
-    /// event reads under 5 percent.
+    /// drop cleared the window where the newest used `limit_reset_claimed` of the hour before the drop names the window
+    /// in its `cleared` list, or, where no such claim carries a parsed answer, where the poll that wrote the event
+    /// reads under 5 percent.
     #[schema(example = "sample")]
     pub source: String,
     /// The resolved plan word the reading carried when the reset was observed: the event's for a `sample` or `clock`
