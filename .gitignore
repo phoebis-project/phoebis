@@ -12,7 +12,9 @@ __pycache__/
 /config.yaml
 /data/
 /deploy/*.env
+/deploy/config.yaml
 /deploy/storage.key
+/deploy/tls/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
