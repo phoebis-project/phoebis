@@ -1,4 +1,4 @@
-import { fmtCompact } from '@/lib/format';
+import { fmtCompactTick } from '@/lib/format';
 
 // Chart colors are read from the CSS custom properties so both themes stay in
 // one place. Recharts needs literal values, so they are resolved at render time.
@@ -117,4 +117,4 @@ export const BAR_GAP = `${BAR_GAP_PERCENT}%`;
  *  fraction of a pixel just above that width. */
 export const PAIRED_BAR_GAPS = { barCategoryGap: `${2 * BAR_GAP_PERCENT}%`, barGap: BAR_GAP };
 /** A count axis: compact ticks in the token axes' width, since the chart's box clips a tick wider than its axis. */
-export const COUNT_AXIS = { allowDecimals: false, axisLine: false, tickFormatter: (v: number) => fmtCompact(v), tickLine: false, width: 44 };
+export const COUNT_AXIS = { allowDecimals: false, axisLine: false, tickFormatter: (v: number) => fmtCompactTick(v), tickLine: false, width: 44 };

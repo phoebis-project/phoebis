@@ -24,7 +24,7 @@ import { SectionBar, sectionPanel } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { NO_RESET_IN_RANGE, allowanceRows, fleetFigures, rangeAllowanceSpan, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure, type AllowanceRow, type FleetFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, coveredWindow, dollarsOf, equivalentOrDash, errorRateOf, failureHead, firstBucketPartial, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, probeParts, readBurn, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, coveredWindow, dollarsOf, equivalentOrDash, errorRateOf, failureHead, firstBucketPartial, foldBurn, heldBars, heldHover, heldSpan, hitRatioOf, hitRatioText, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, probeParts, readBurn, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { ignoredNote, type AnalyticsControl } from '@/lib/analyticsControls';
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
@@ -100,11 +100,6 @@ const pctOrDash = (rate: number | null) => (rate === null ? '-' : fmtPct(rate, 1
 const rateCell = (rate: number | null): ReactNode => (rate === null ? <span className="muted">-</span> : fmtPct(rate, 1));
 
 const inputOf = (g: AnalyticsGroup) => g.tokens.uncachedInput + g.tokens.cacheRead + g.tokens.cacheWrite5m + g.tokens.cacheWrite1h;
-// A token count and a request with no cache breakpoint could never hit, so they leave the base.
-const hitRatioOf = (g: AnalyticsGroup) => {
-  const base = g.cacheHits + g.cacheMisses + g.uncached - g.uncacheable;
-  return base > 0 ? g.cacheHits / base : null;
-};
 const cachedShareOf = (g: AnalyticsGroup) => (inputOf(g) ? g.tokens.cacheRead / inputOf(g) : null);
 const usdOrDash = (v: number | null) => (v === null ? '-' : fmtUsd(v));
 /** A figure per counted unit, scaled, and null where the figure or the count is unknown or the count is not positive. */
@@ -926,7 +921,7 @@ export function AnalyticsPage() {
         )}
 
         {tab === 'cache' && (
-          <Section id="cache" shown={shown} title="Cache" meta={sourced(loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`)}>
+          <Section id="cache" shown={shown} title="Cache" meta={sourced(loading ? undefined : `${hitRatioText(totals)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`)}>
             <div className="grid-2">
               <ChartCard title="Tokens" subtitle="Per bucket, stacked by kind" loading={loading} legend={TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(totals.tokens[s.key]) }))}>
                 <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
@@ -943,7 +938,7 @@ export function AnalyticsPage() {
                 subtitle="Share of requests that read the cache, and share of input tokens served from it"
                 loading={loading}
                 legend={[
-                  { color: ink.series[0], label: 'Cache hit ratio', shape: 'line', value: fmtPct(hitRatioOf(totals) ?? 0) },
+                  { color: ink.series[0], label: 'Cache hit ratio', shape: 'line', value: hitRatioText(totals) },
                   { color: ink.series[2], label: 'Cached share of input', shape: 'line', value: fmtPct(cachedShareOf(totals) ?? 0) },
                 ]}
               >
@@ -954,7 +949,7 @@ export function AnalyticsPage() {
                   <Tooltip
                     cursor={{ stroke: ink.axis }}
                     content={timeTip<Bucket>((p) => [
-                      { color: ink.series[0], label: 'cache hit ratio', value: pct(pct100(hitRatioOf(p))) },
+                      { color: ink.series[0], label: 'cache hit ratio', value: hitRatioText(p, (r) => pct(r * 100)) },
                       { color: ink.series[2], label: 'cached share of input', value: pct(pct100(cachedShareOf(p))) },
                     ])}
                   />
@@ -1978,7 +1973,7 @@ function CacheByModel({ failure, funded, groups, loading, reading, unit }: { fai
           : rows.map((g) => ({
               key: g.key,
               label: g.label,
-              cells: [fmtCompact(g.tokens.cacheRead), fmtCompact(g.tokens.cacheWrite5m), fmtCompact(g.tokens.cacheWrite1h), fmtPct(hitRatioOf(g) ?? 0), fmtPct(cachedShareOf(g) ?? 0), ...costsOf(g, factor)],
+              cells: [fmtCompact(g.tokens.cacheRead), fmtCompact(g.tokens.cacheWrite5m), fmtCompact(g.tokens.cacheWrite1h), hitRatioText(g), fmtPct(cachedShareOf(g) ?? 0), ...costsOf(g, factor)],
             }))
       }
     />
@@ -2234,16 +2229,18 @@ const spanWords = (w: { fromMs: number; toMs: number }): string => `${fmtAbsolut
 /**
  * The range pill's sentence: the window the open tab's cards read, by the tab first and the view second. The burn read
  * and the account rollups send no session, so Burn and Accounts name their route's window in a session view too, where
- * three Traffic cards read their routes beside the folded ones. Burn names the window of the answer its cards draw,
- * whose first bucket the route chose, so it names none until that answer holds a point. `burnFirstAt` is that answer's
- * earliest point, null where it holds none.
+ * three Traffic cards read their routes beside the folded ones. Accounts also names the reach of Unused allowance by
+ * account, which reads its resets from a week before the range's start. Burn names the window of the answer its cards
+ * draw, whose first bucket the route chose, so it names none until that answer holds a point. `burnFirstAt` is that
+ * answer's earliest point, null where it holds none.
  */
 function rangeSentenceOf(tab: SectionId, session: boolean, wholeHours: { fromMs: number; toMs: number }, burn: Stamped<{ points: BurnPoint[] }> | null, burnFirstAt: number | null): string | undefined {
   if (tab === 'burn') {
     if (burn === null || burnFirstAt === null) return undefined;
     return `Reads from the first bucket's start: ${spanWords(coveredWindow('burn', { fromMs: burn.fromMs, toMs: burn.endMs }, burn.readAt, burnFirstAt))}`;
   }
-  if (tab === 'accounts' || !session) return `Reads whole hours: ${spanWords(wholeHours)}`;
+  if (tab === 'accounts') return `Reads whole hours: ${spanWords(wholeHours)}. Unused allowance by account reads its resets from a week before the range's start.`;
+  if (!session) return `Reads whole hours: ${spanWords(wholeHours)}`;
   if (tab === 'traffic') return `Reads the range itself. ${REFUSAL_CATEGORIES_TITLE}, ${MIGRATION_REWRITES_TITLE} and ${GUARDRAILS_TITLE} read whole hours: ${spanWords(wholeHours)}`;
   return 'Reads the range itself';
 }

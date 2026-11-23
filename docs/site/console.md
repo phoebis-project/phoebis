@@ -1352,27 +1352,29 @@ Dropped thinking blocks, Write cost vs read cost, the per-group tables of Misses
 blocks, Cache by model (Reads, Writes 5m, Writes 1h, Hit ratio, Cached share, Read cost, Write cost) and Placements by
 rung (Rung, Placements, Hits, Hit share, Tokens read, Tokens promised). The hit ratio counts the requests that read the
 cache over the requests that could read one: a token count, and a request whose body marked no cache breakpoint and that
-read and wrote nothing, stay out of its base. Write cost vs read cost and Cache by model's Read cost and Write cost read
-in the top bar's unit. Under Native they read the subscription requests' figure in the chosen week under every grouping,
-the card's subtitle naming the billed requests' dollars and each Cache by model cell carrying them on a line under it,
-and the card draws the billed dollars while no subscription request is in range. Under the three dollar positions they
-read the position's dollars. A null diagnostics member on a request that named a message is recorded as "No divergence",
-and the per-group table lists Pending after Not requested. Pending: the upstream's comparison was still running when the
-answer went out. An answered request whose answer named no reason counts under Not requested where its body carried no
-diagnostics member and under No reason returned where it carried one. In the hours the router stored before it filed
-these two words such a request counts under no reason, so those hours' bars add up to less than their requests. A bar
-draws apart the requests under its reason that read 90 % or more of their prompt from the cache, and the per-group table
-shows the same split. A bar's share is of the sum of the card's reasons, the answered requests that drew one, which the
-card's subtitle names. Every count in Misses by reason but the expired column links to the Requests view on those
-requests with the page's filters carried over, and a count the Requests view cannot list exactly stays plain with the
-reason on hover. The Dropped thinking blocks card counts the requests whose answer listed a thinking block the upstream
-dropped or let pass, one bar per kind with its count as a link to those requests in the Requests view, a request counted
-once under each kind its answer lists. A bar's share is of the requests whose answer reported its dropped blocks, which
-the subtitle names. Over a range that reaches an hour whose requests the ledger no longer held when the router first
-kept that count, the card draws its counts and no share. Under the bars it reads two plain figures, the moved requests
-whose answer listed a block dropped for the account (the reasons `end_user_binding_mismatch` and
-`organization_binding_mismatch`) and the answers that listed nothing, and it counts no block. Cache follows every filter
-of the bar, and Placements by rung the Account, Key, Model, Pool, Client and User agent filters.
+read and wrote nothing, stay out of its base. Where no request could read one, the hit ratio reads a dash: in the head,
+in the legend and the hover of Hit ratio and cached share, and in Cache by model. Write cost vs read cost and Cache by
+model's Read cost and Write cost read in the top bar's unit. Under Native they read the subscription requests' figure in
+the chosen week under every grouping, the card's subtitle naming the billed requests' dollars and each Cache by model
+cell carrying them on a line under it, and the card draws the billed dollars while no subscription request is in range.
+Under the three dollar positions they read the position's dollars. A null diagnostics member on a request that named a
+message is recorded as "No divergence", and the per-group table lists Pending after Not requested. Pending: the
+upstream's comparison was still running when the answer went out. An answered request whose answer named no reason
+counts under Not requested where its body carried no diagnostics member and under No reason returned where it carried
+one. In the hours the router stored before it filed these two words such a request counts under no reason, so those
+hours' bars add up to less than their requests. A bar draws apart the requests under its reason that read 90 % or more
+of their prompt from the cache, and the per-group table shows the same split. A bar's share is of the sum of the card's
+reasons, the answered requests that drew one, which the card's subtitle names. Every count in Misses by reason but the
+expired column links to the Requests view on those requests with the page's filters carried over, and a count the
+Requests view cannot list exactly stays plain with the reason on hover. The Dropped thinking blocks card counts the
+requests whose answer listed a thinking block the upstream dropped or let pass, one bar per kind with its count as a
+link to those requests in the Requests view, a request counted once under each kind its answer lists. A bar's share is
+of the requests whose answer reported its dropped blocks, which the subtitle names. Over a range that reaches an hour
+whose requests the ledger no longer held when the router first kept that count, the card draws its counts and no share.
+Under the bars it reads two plain figures, the moved requests whose answer listed a block dropped for the account (the
+reasons `end_user_binding_mismatch` and `organization_binding_mismatch`) and the answers that listed nothing, and it
+counts no block. Cache follows every filter of the bar, and Placements by rung the Account, Key, Model, Pool, Client and
+User agent filters.
 
 Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscription requests' figure in the chosen week
 over the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output tokens
@@ -1448,8 +1450,10 @@ used reset that cleared its window counting among the resets as its `claim` row,
 account, and two fleet figures over the rows, "7-day, fleet total" and "Fable, fleet total", the priced accounts'
 figures added with the unpriced accounts named. The card reads the resets from a week before the range's start, 400 days
 before the range's end at the most, so a range shorter than a week still shows an account's newest reset, with a note
-that the range holds none, and the Accounts detail's "Allowance left at reset" keeps its four weeks. The card waits on
-the cost model, so a failed settings read draws its error state in place of the rows and the figures.
+that the range holds none, and the Accounts detail's "Allowance left at reset" keeps its four weeks. The range's hover
+on this tab says so: "Reads whole hours: {from} to {to}. Unused allowance by account reads its resets from a week before
+the range's start." The card waits on the cost model, so a failed settings read draws its error state in place of the
+rows and the figures.
 
 ## Sessions
 

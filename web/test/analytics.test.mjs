@@ -988,6 +988,11 @@ test("the error rate is the requests that did not succeed over the requests, the
   assert.equal(d.errorRateOf({ clientCanceled: 1, requests: 2, succeeded: 0 }), 0.5, 'one failed request and one the client canceled');
 });
 
+test('a cache hit ratio reads a dash where no request could hit, and 0% where none did', () => {
+  assert.equal(d.hitRatioText({ cacheHits: 0, cacheMisses: 0, uncacheable: 3, uncached: 3 }), '-');
+  assert.equal(d.hitRatioText({ cacheHits: 0, cacheMisses: 4, uncacheable: 0, uncached: 0 }), '0%');
+});
+
 test('sumGroups sums refused and the refusals map', () => {
   const row = fixture('analytics_breakdown').rows[0];
   const sum = d.sumGroups([d.decodeAnalyticsGroup({ ...row, refused: 2, refusals: { guardrail_blocked: 2 } }), d.decodeAnalyticsGroup({ ...row, refused: 1, refusals: { auth_unknown: 1 } })]);

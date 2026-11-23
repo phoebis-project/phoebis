@@ -8282,6 +8282,37 @@ async function trafficCards(theme) {
 }
 
 /**
+ * The widest tick of a count axis against the room the chart leaves it, on Traffic as the view loads it at 1280 by 800.
+ * A count axis starts at 0 and draws five ticks of a step that Recharts rounds to two significant digits, so a tick
+ * holds three digits at the most with a point and a unit letter, and 8.88M is the widest. The label is drawn in the
+ * place and type of a tick of Requests by outcome's count axis, a clone of the tick's text removed after the read, and
+ * the room runs from the left edge of the chart's svg, which clips a label, to the tick's right edge.
+ */
+async function countAxisTick(theme) {
+  const read = await page.evaluate(() => {
+    const card = [...document.querySelectorAll('#traffic .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Requests by outcome');
+    const svg = card?.querySelector('svg.recharts-surface');
+    const tick = card?.querySelector('.recharts-yAxis .recharts-cartesian-axis-tick text');
+    if (!svg || !tick) return null;
+    const probe = tick.cloneNode(false);
+    probe.textContent = '8.88M';
+    tick.after(probe);
+    try {
+      return { label: Math.round(probe.getBoundingClientRect().width * 10) / 10, room: Math.round((tick.getBoundingClientRect().right - svg.getBoundingClientRect().left) * 10) / 10 };
+    } finally {
+      probe.remove();
+    }
+  });
+  if (read === null) {
+    failures.push(`${theme} /analytics: Requests by outcome draws no count axis tick on Traffic`);
+    return;
+  }
+  const { label, room } = read;
+  measurements.push(`${theme} /analytics a two-decimal count tick at 1280 by 800 ${JSON.stringify({ label, room })}`);
+  if (label > room + 1) failures.push(`${theme} /analytics: a two-decimal count tick takes ${label} px of the count axis's ${room} px, so the chart's box clips it`);
+}
+
+/**
  * The Cost split under a fresh browser's native position at the pass's 1280 by 800: a ring per funding side by side on
  * one row, and each ring's center figure inside the ring's box, so a percent is never clipped. The story's range holds a
  * request on Sonnet 4.5, which the cost model has no weight for, so its plan side prices nothing and the mock pass draws
@@ -14526,6 +14557,7 @@ try {
         if (mock) await analyticsAllowanceTable(theme);
         await analyticsColumns(theme);
         await trafficCards(theme);
+        await countAxisTick(theme);
         await errorsSubtitle(theme);
         await costSplitRings(theme);
         await nativeCostTable(theme);

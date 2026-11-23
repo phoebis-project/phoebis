@@ -19,12 +19,16 @@ export const messageOf = (e: unknown): string => (e instanceof Error ? e.message
 const hourCycle = () => (timeFormat === '12h' ? 'h12' : 'h23');
 
 const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+const compactTick = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 });
 const plain = new Intl.NumberFormat('en-US');
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const usd4 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 4, maximumFractionDigits: 4 });
 
 export const fmtInt = (n: number) => plain.format(Math.round(n));
 export const fmtCompact = (n: number) => (Math.abs(n) < 1000 ? plain.format(Math.round(n)) : compact.format(n));
+/** A count axis's tick: the grid line's own value with up to two decimals, so no two lines of an axis read the same
+ *  word. A figure in a card or a hover keeps `fmtCompact`'s one decimal. */
+export const fmtCompactTick = (n: number) => (Math.abs(n) < 1000 ? plain.format(Math.round(n)) : compactTick.format(n));
 /** What a cut dropped, from the counts the ledger took as it read; a rendered body measures neither side. */
 export const bytesDropped = (seen: number, stored: number) => Math.max(0, seen - stored);
 // `n + 0` folds a negative zero onto a positive one: an empty sum of f64 costs reaches the wire as -0.0 and

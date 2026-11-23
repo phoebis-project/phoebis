@@ -325,7 +325,9 @@ the routing log's late event, drawn on the first auto reload at 5 s with every c
 apart from the row's resting fill and in its box, the one row in the tint, recorded as skipped in the router pass), the
 traffic cards (Errors by code against Requests by outcome, the Refusals by category card against Refusals by code,
 Failovers beside Migration rewrites and Effort levels beside Requests by speed, and each Analytics check opens the tab
-it reads and returns to Traffic), the Refusals by category card under a client pattern (mock pass, on loads of its own:
+it reads and returns to Traffic), the widest count axis tick (8.88M in the place and type of a Requests by outcome tick
+on Traffic at 1280 by 800, at most 1 px wider than its room from the left edge of the svg that clips it to the tick's
+right edge, with both recorded), the Refusals by category card under a client pattern (mock pass, on loads of its own:
 under `claude-code/cli` the first row's count against the next row's in font size, weight and right edge with its link
 carrying the pattern as `client`, and under `claude-code/sdk*` a count below the bare page's, each read recorded beside
 the bare page's), the Client filter's typed field and a picked value's chip (mock pass, on an address with the Account

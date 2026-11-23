@@ -25469,31 +25469,38 @@ await forView('/analytics', async () => {
   // A token count and a request whose body marked no cache breakpoint could never read a cache, so the hit ratio's base
   // leaves them out. The stub answers every breakdown read with two groups that a story group lends its shape: 100 hits
   // and 25 uncached requests between them, all 25 uncacheable, read 100%, where a base that kept them reads 80%. A
-  // second answer of uncacheable requests alone leaves a base of nothing, which the head draws as 0%.
+  // second answer of uncacheable requests alone leaves a base of nothing, which the head, the legend and each row of
+  // Cache by model draw as a dash.
   const breakdownRead = api.getAnalyticsBreakdown;
-  const headWith = async (classes) => {
+  const ratiosWith = async (classes) => {
     api.getAnalyticsBreakdown = async (q) => {
       const [template] = await breakdownRead.call(api, q);
       return template === undefined ? [] : classes.map((c, i) => ({ ...template, key: `group-${i}`, label: `group-${i}`, ...c }));
     };
     const page = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
-    const meta = page.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
+    const cardOf = (t) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+    const head = page.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
+    const entry = [...(cardOf('Hit ratio and cached share')?.querySelectorAll('.legend li') ?? [])].find((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('') === 'Cache hit ratio');
+    const legend = entry?.querySelector('.legend__value')?.textContent?.trim() ?? null;
+    const table = cardOf('Cache by model');
+    const column = [...(table?.querySelectorAll('thead th') ?? [])].findIndex((th) => th.textContent?.trim() === 'Hit ratio');
+    const cells = [...(table?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length > 1).map((tr) => tr.children[column]?.textContent?.trim() ?? null);
     page.unmount();
-    return meta;
+    return { cells, head, legend };
   };
-  const kept = await headWith([
+  const kept = await ratiosWith([
     { cacheHits: 60, cacheMisses: 0, uncacheable: 10, uncached: 10 },
     { cacheHits: 40, cacheMisses: 0, uncacheable: 15, uncached: 15 },
   ]);
-  const none = await headWith([
+  const none = await ratiosWith([
     { cacheHits: 0, cacheMisses: 0, uncacheable: 10, uncached: 10 },
     { cacheHits: 0, cacheMisses: 0, uncacheable: 15, uncached: 15 },
   ]);
   api.getAnalyticsBreakdown = breakdownRead;
   results.push({
     name: '/analytics the hit ratio leaves the uncacheable requests out of its base',
-    ok: kept.startsWith('100% hit ratio,') && none.startsWith('0% hit ratio,'),
-    missing: [kept, none],
+    ok: kept.head.startsWith('100% hit ratio,') && none.head.startsWith('- hit ratio,') && none.legend === '-' && none.cells.length > 0 && none.cells.every((c) => c === '-'),
+    missing: [`kept head ${kept.head}`, `none head ${none.head}`, `none legend ${none.legend}`, `none cells ${JSON.stringify(none.cells)}`],
   });
 });
 

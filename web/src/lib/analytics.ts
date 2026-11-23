@@ -325,6 +325,17 @@ export const planRowsRequired = (g: AnalyticsGroup): boolean => (g.planRequests 
  *  count, and the client's cancels leave the failures, since a client that hangs up is no fault of the route. */
 export const errorRateOf = (g: Pick<AnalyticsGroup, 'clientCanceled' | 'requests' | 'succeeded'>): number | null =>
   g.requests > 0 ? (g.requests - g.succeeded - g.clientCanceled) / g.requests : null;
+/** A token count and a request with no cache breakpoint could never hit, so they leave the base. */
+export const hitRatioOf = (g: Pick<AnalyticsGroup, 'cacheHits' | 'cacheMisses' | 'uncacheable' | 'uncached'>): number | null => {
+  const base = g.cacheHits + g.cacheMisses + g.uncached - g.uncacheable;
+  return base > 0 ? g.cacheHits / base : null;
+};
+/** A cache hit ratio's text: a dash for a group in which no request could hit, since a ratio over no base has no
+ *  value, and `print`'s percent otherwise, 0% for a base with no hit. */
+export const hitRatioText = (g: Pick<AnalyticsGroup, 'cacheHits' | 'cacheMisses' | 'uncacheable' | 'uncached'>, print: (ratio: number) => string = fmtPct): string => {
+  const ratio = hitRatioOf(g);
+  return ratio === null ? '-' : print(ratio);
+};
 /**
  * The answered and the failed probes, the count a side's probe cost latches on and the Cache warming notes print as
  * the probes sent. The wire's `failed` count also holds the exhausted and rejected probes the relay refuses itself. A
