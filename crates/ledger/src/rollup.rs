@@ -288,7 +288,6 @@ pub struct RollupRow {
     /// any other in `kept_warm_5m_tokens`, which also holds the whole count of a row folded before the split.
     pub kept_warm_5m_tokens: u64,
     pub kept_warm_1h_tokens: u64,
-    pub probe_migrated: u64,
     pub wasted_probes: u64,
     /// The wasted probes' own five token counts, priced when read at the cells the row's band names.
     pub wasted_input_tokens: u64,
@@ -415,7 +414,6 @@ impl RollupRow {
         f(&mut self.kept_warm_requests, o.kept_warm_requests);
         f(&mut self.kept_warm_5m_tokens, o.kept_warm_5m_tokens);
         f(&mut self.kept_warm_1h_tokens, o.kept_warm_1h_tokens);
-        f(&mut self.probe_migrated, o.probe_migrated);
         f(&mut self.wasted_probes, o.wasted_probes);
         f(&mut self.wasted_input_tokens, o.wasted_input_tokens);
         f(
@@ -448,7 +446,6 @@ impl RollupRow {
             failed: self.failed,
             funding: self.funding_kind(),
             incomplete: self.incomplete,
-            probe_migrated: self.probe_migrated,
             probes_held: self.probes_held,
             probes_skipped: self.probes_skipped,
             rate_limited: self.rate_limited,
@@ -511,10 +508,10 @@ impl RollupRow {
 
     /// Whether every count the fold adds is zero: the request counters (`requests`, `probes_held`, `slow_down_held`),
     /// `attempts`, the five token counts, `thinking_tokens`, `web_search_requests`, `web_fetch_requests`, the keepalive
-    /// counters (`kept_warm_requests`, `kept_warm_5m_tokens`, `kept_warm_1h_tokens`, `probe_migrated`,
-    /// `probes_skipped`, `wasted_probes`), the five wasted counts and the refusals map, since a row of refusals alone
-    /// is a row a reader must list. `fold_request` deletes a row it subtracted from only when this holds: a
-    /// non-serving band row has `requests == 0` while another request's attempts still sit in it.
+    /// counters (`kept_warm_requests`, `kept_warm_5m_tokens`, `kept_warm_1h_tokens`, `probes_skipped`,
+    /// `wasted_probes`), the five wasted counts and the refusals map, since a row of refusals alone is a row a reader
+    /// must list. `fold_request` deletes a row it subtracted from only when this holds: a non-serving band row has
+    /// `requests == 0` while another request's attempts still sit in it.
     pub fn holds_nothing(&self) -> bool {
         let usage = self.usage();
         let wasted = self.wasted_usage();
@@ -534,7 +531,6 @@ impl RollupRow {
             self.kept_warm_requests,
             self.kept_warm_5m_tokens,
             self.kept_warm_1h_tokens,
-            self.probe_migrated,
             self.probes_skipped,
             self.wasted_probes,
             wasted.input,
@@ -939,9 +935,9 @@ fn slow_down_held_ms(held: Option<&str>) -> Option<u64> {
     (!slowed.is_empty()).then(|| slowed.iter().sum())
 }
 
-/// The 16 columns of a probe or kept-warm rollup row the keepalive overview folds, which `read_overview_rollups`
+/// The 15 columns of a probe or kept-warm rollup row the keepalive overview folds, which `read_overview_rollups`
 /// answers. The overview reads a day of every row on each poll and holds a reader connection through the decode, so it
-/// reads these alone in place of all 61 a `RollupRow` decodes, the four histograms among them.
+/// reads these alone in place of all 60 a `RollupRow` decodes, the four histograms among them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OverviewRollupRow {
     pub kind: String,
@@ -955,7 +951,6 @@ pub struct OverviewRollupRow {
     pub rejected: u64,
     pub incomplete: u64,
     pub probes_held: u64,
-    pub probe_migrated: u64,
     pub probes_skipped: u64,
     pub kept_warm_requests: u64,
     pub wasted_probes: u64,
@@ -969,7 +964,6 @@ impl OverviewRollupRow {
             failed: self.failed,
             funding: Funding::of_rollup(&self.funding),
             incomplete: self.incomplete,
-            probe_migrated: self.probe_migrated,
             probes_held: self.probes_held,
             probes_skipped: self.probes_skipped,
             rate_limited: self.rate_limited,
@@ -1222,12 +1216,12 @@ fn reread_utilization(
     Ok(())
 }
 
-/// The keepalive engine's own delta: one row of its key, holding a kept-warm request's credit, a probe's migration
-/// mark, a skip, and the counts a stopped recipe wasted. The delta keys the client and the user agent of the probe's
-/// own request row, or of the credited request on a credit, each folded as `deltas_of` folds that row's, so the
-/// Client and User agent filters and groupings reach the keepalive's figures and a row prices under its client's
-/// regime. The row keys the delta's own instant, band and account tier, so a settlement filed after its probe sits in
-/// the probe's hour and prices at the cells and the revision the probe ran at.
+/// The keepalive engine's own delta: one row of its key, holding a kept-warm request's credit, a skip, and the counts a
+/// stopped recipe wasted. The delta keys the client and the user agent of the probe's own request row, or of the
+/// credited request on a credit, each folded as `deltas_of` folds that row's, so the Client and User agent filters and
+/// groupings reach the keepalive's figures and a row prices under its client's regime. The row keys the delta's own
+/// instant, band and account tier, so a settlement filed after its probe sits in the probe's hour and prices at the
+/// cells and the revision the probe ran at.
 pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<(), LedgerError> {
     let key = RollupRow::key(
         hour_of(delta.at),
@@ -1269,7 +1263,6 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
             kept_warm_requests: delta.kept_warm_requests,
             kept_warm_5m_tokens: delta.kept_warm_5m_tokens,
             kept_warm_1h_tokens: delta.kept_warm_1h_tokens,
-            probe_migrated: delta.probe_migrated,
             probes_skipped: delta.probes_skipped,
             wasted_probes: delta.wasted_probes,
             wasted_input_tokens: delta.wasted_input_tokens,
@@ -2233,7 +2226,7 @@ pub fn open_cooldown_remainders(
     Ok(remainders)
 }
 
-pub(crate) const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json, client_canceled, input_transformations_json, uncacheable";
+pub(crate) const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json, client_canceled, input_transformations_json, uncacheable";
 const ACCOUNT_COLUMNS: &str = "hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms";
 
 /// The rollup key, the table's primary key in its order: the upsert's conflict target, the order a read answers in and
@@ -2372,7 +2365,6 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
         r.web_fetch_requests as i64,
         r.kept_warm_requests as i64,
         r.kept_warm_5m_tokens as i64,
-        r.probe_migrated as i64,
         r.wasted_probes as i64,
         map_json(&r.wasted_probe_reasons),
         r.probes_skipped as i64,
@@ -2436,7 +2428,7 @@ pub(crate) fn row_to_rollup_at(
         succeeded: u(16)?,
         rate_limited: u(17)?,
         failed: u(18)?,
-        client_canceled: u(58)?,
+        client_canceled: u(57)?,
         exhausted: u(19)?,
         rejected: u(20)?,
         attempts: u(21)?,
@@ -2444,7 +2436,7 @@ pub(crate) fn row_to_rollup_at(
         cache_hits: u(23)?,
         cache_misses: u(24)?,
         uncached_requests: u(25)?,
-        uncacheable: u(60)?,
+        uncacheable: u(59)?,
         input_tokens: u(26)?,
         cache_read_tokens: u(27)?,
         cache_write_5m_tokens: u(28)?,
@@ -2455,29 +2447,28 @@ pub(crate) fn row_to_rollup_at(
         web_fetch_requests: u(33)?,
         kept_warm_requests: u(34)?,
         kept_warm_5m_tokens: u(35)?,
-        probe_migrated: u(36)?,
-        wasted_probes: u(37)?,
-        wasted_probe_reasons: counts(38)?,
-        probes_skipped: u(39)?,
-        wasted_input_tokens: u(40)?,
-        wasted_cache_read_tokens: u(41)?,
-        wasted_cache_write_5m_tokens: u(42)?,
-        wasted_cache_write_1h_tokens: u(43)?,
-        wasted_output_tokens: u(44)?,
-        ttfb_hist: hist(45)?,
-        ttfc_hist: hist(46)?,
-        duration_hist: hist(47)?,
-        output_tps_hist: hist(48)?,
-        errors: counts(49)?,
-        cache_miss_reasons: counts(50)?,
-        incomplete: u(51)?,
-        probes_held: u(52)?,
-        slow_down_held_ms: u(53)?,
-        slow_down_held: u(54)?,
-        kept_warm_1h_tokens: u(55)?,
-        classifier: r.get(offset + 56)?,
-        refusals: counts(57)?,
-        input_transformations: counts(59)?,
+        wasted_probes: u(36)?,
+        wasted_probe_reasons: counts(37)?,
+        probes_skipped: u(38)?,
+        wasted_input_tokens: u(39)?,
+        wasted_cache_read_tokens: u(40)?,
+        wasted_cache_write_5m_tokens: u(41)?,
+        wasted_cache_write_1h_tokens: u(42)?,
+        wasted_output_tokens: u(43)?,
+        ttfb_hist: hist(44)?,
+        ttfc_hist: hist(45)?,
+        duration_hist: hist(46)?,
+        output_tps_hist: hist(47)?,
+        errors: counts(48)?,
+        cache_miss_reasons: counts(49)?,
+        incomplete: u(50)?,
+        probes_held: u(51)?,
+        slow_down_held_ms: u(52)?,
+        slow_down_held: u(53)?,
+        kept_warm_1h_tokens: u(54)?,
+        classifier: r.get(offset + 55)?,
+        refusals: counts(56)?,
+        input_transformations: counts(58)?,
     })
 }
 
@@ -2620,7 +2611,7 @@ pub fn read_overview_rollups(
 ) -> Result<(u64, Vec<OverviewRollupRow>), LedgerError> {
     let mut stmt = conn.prepare_cached(
         "SELECT kind, kept_warm_requests, cache_miss_reasons_json, funding, pool_id, account_id, succeeded, failed, \
-         rate_limited, exhausted, rejected, incomplete, probes_held, probe_migrated, probes_skipped, wasted_probes, \
+         rate_limited, exhausted, rejected, incomplete, probes_held, probes_skipped, wasted_probes, \
          wasted_probe_reasons_json FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2",
     )?;
     let mut rows = stmt.query(params![from_hour, to_hour])?;
@@ -2646,11 +2637,10 @@ pub fn read_overview_rollups(
             rejected: u(10)?,
             incomplete: u(11)?,
             probes_held: u(12)?,
-            probe_migrated: u(13)?,
-            probes_skipped: u(14)?,
+            probes_skipped: u(13)?,
             kept_warm_requests,
-            wasted_probes: u(15)?,
-            wasted_probe_reasons: counts_at(r, 16)?,
+            wasted_probes: u(14)?,
+            wasted_probe_reasons: counts_at(r, 15)?,
         });
     }
     Ok((expired, kept))
@@ -4367,7 +4357,6 @@ mod tests {
         r.kept_warm_requests = 33;
         r.kept_warm_5m_tokens = 34;
         r.kept_warm_1h_tokens = 35;
-        r.probe_migrated = 37;
         r.wasted_probes = 38;
         r.wasted_input_tokens = 50;
         r.wasted_cache_read_tokens = 51;

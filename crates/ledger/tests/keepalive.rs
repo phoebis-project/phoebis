@@ -77,13 +77,6 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         fold_keepalive(
             &tx,
             &KeepaliveDelta {
-                probe_migrated: 1,
-                ..delta(at + 2_000, "probe")
-            },
-        )?;
-        fold_keepalive(
-            &tx,
-            &KeepaliveDelta {
                 probes_skipped: 2,
                 ..delta(at + 3_000, "probe")
             },
@@ -129,12 +122,11 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     let probe = rows.iter().find(|r| r.kind == "probe").unwrap();
     assert_eq!(
         (
-            probe.probe_migrated,
             probe.probes_skipped,
             probe.wasted_probes,
             (probe.wasted_input_tokens, probe.wasted_output_tokens)
         ),
-        (1, 2, 3, (100, 20)),
+        (2, 3, (100, 20)),
         "the settlement's counts fold beside the probe counters"
     );
     assert_eq!(
@@ -267,10 +259,9 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         (
             desktop.probes.ok,
             desktop.probes.failed,
-            desktop.probes.migrated,
             desktop.probes.skipped
         ),
-        (1, 1, 1, 2)
+        (1, 1, 2)
     );
     assert_eq!(
         desktop.requests, 3,
@@ -298,10 +289,9 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
         (
             desktop.probes.ok,
             desktop.probes.failed,
-            desktop.probes.migrated,
             desktop.probes.skipped
         ),
-        (1, 1, 1, 2)
+        (1, 1, 2)
     );
     // The probe's own request row's counts and the settlement's, each priced when read on the case's list, in force
     // before its date: Sonnet 5 reads cache at $0.10 per million, so the probe's 2,000 read tokens cost $0.0002, and

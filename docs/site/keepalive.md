@@ -451,26 +451,26 @@ prices the saving from the two counts at read time, and the console reads it: th
 rate less the read it paid. The credit row is keyed under the client of the request it credits, so the saving prices
 under that client's regime as the request's own row does. It also files under the account tier of the request's own row,
 the one the router's snapshot holds when the credit is booked. A probe's cost is its own request row's counts priced
-when read, and `probe_migrated` counts no probe, since a probe never moves the pin. `wasted_probes` counts the probes
-settled wasted by one of the reasons above, and `wasted_probe_reasons` counts them by the reason. The wasted probes'
-five token counts sit on the hourly rollup beside their count, priced the same way. Each wasted probe files beside its
-own cost row, in the hour the relay received the probe and under the funding that row took (the kind of the account that
-served it, whether that account is a usage-based seat, the speed its answer reported and whether its answer reported
-overage in use), so the wasted part of the probes' figure, read in the chosen week, is the plan-funded probes' waste
-against their own cost. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than sending, for
-example because a cooldown already held the recipe. `probes_held` counts a probe the router refused with
-`503 ledger_behind` while its ledger caught up and sent again, outside the failed probes since no account answered it.
+when read. `wasted_probes` counts the probes settled wasted by one of the reasons above, and `wasted_probe_reasons`
+counts them by the reason. The wasted probes' five token counts sit on the hourly rollup beside their count, priced the
+same way. Each wasted probe files beside its own cost row, in the hour the relay received the probe and under the
+funding that row took (the kind of the account that served it, whether that account is a usage-based seat, the speed its
+answer reported and whether its answer reported overage in use), so the wasted part of the probes' figure, read in the
+chosen week, is the plan-funded probes' waste against their own cost. `probes_skipped` counts a due probe a gate or a
+lapsed entry withheld rather than sending, for example because a cooldown already held the recipe. `probes_held` counts
+a probe the router refused with `503 ledger_behind` while its ledger caught up and sent again, outside the failed probes
+since no account answered it.
 
-`GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
-`plan_ok`, `skipped`, where `migrated` and `plan_ok` lie inside `ok`, the second counting the answered probes a
-subscription window paid for), and per pool into the probes served, the requests they kept warm and the wasted probes by
-reason, beside the pool's [idle-age counters](#the-return-rate-by-idle-age). It also answers the engine's session count,
-agent count and retained bytes, each beside its cap, and `expired_between_turns_24h`, the requests of the last 24 hours
-that missed the cache because their entry expired between two turns, the misses probing exists to prevent: each read
-back under half the prompt of the session's previous request on the same account, under no miss reason or one of the
-router's own words ([`expired_between_turns`](statistics.md#conditions-and-gauges) names the turns left out). Its
-`bus_gaps` counts the times the engine found it had missed bus events. Each gap discarded every observation still open,
-so those agents wait for their next request while an armed recipe keeps its schedule.
+`GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `ok`, `plan_ok`,
+`skipped`, where `plan_ok` lies inside `ok` and counts the answered probes a subscription window paid for), and per pool
+into the probes served, the requests they kept warm and the wasted probes by reason, beside the pool's [idle-age
+counters](#the-return-rate-by-idle-age). It also answers the engine's session count, agent count and retained bytes,
+each beside its cap, and `expired_between_turns_24h`, the requests of the last 24 hours that missed the cache because
+their entry expired between two turns, the misses probing exists to prevent: each read back under half the prompt of the
+session's previous request on the same account, under no miss reason or one of the router's own words
+([`expired_between_turns`](statistics.md#conditions-and-gauges) names the turns left out). Its `bus_gaps` counts the
+times the engine found it had missed bus events. Each gap discarded every observation still open, so those agents wait
+for their next request while an armed recipe keeps its schedule.
 
 Prometheus carries `phoebis_keepalive_agents`, the agents holding a recipe by the mod's lifecycle word,
 `phoebis_keepalive_chain_contradictions_total`, the [chain contradictions](#the-return-rate-by-idle-age) by client

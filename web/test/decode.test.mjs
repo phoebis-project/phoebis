@@ -200,7 +200,7 @@ test("a group decodes the kept-warm tokens per TTL with their plan-funded parts 
 
 test('a group decodes the plan-funded answered probes, and a sum adds them', () => {
   const row = fixture('analytics_breakdown').rows[0];
-  assert.deepEqual(Object.keys(row.probes).sort(), ['failed', 'held', 'migrated', 'ok', 'plan_ok', 'skipped'], 'the capture answers the plan-funded part beside the five outcomes');
+  assert.deepEqual(Object.keys(row.probes).sort(), ['failed', 'held', 'ok', 'plan_ok', 'skipped'], 'the capture answers the plan-funded part beside the four outcomes');
   const captured = d.decodeAnalyticsGroup(row);
   assert.equal(captured.probes.planOk, 0);
   assert.deepEqual(Object.keys(captured.probes).sort(), ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'], 'the probes decode to the five outcomes and the plan-funded part');

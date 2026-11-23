@@ -2078,7 +2078,6 @@ pub struct KeptWarm {
 pub struct ProbeCounts {
     pub failed: u64,
     pub held: u64,
-    pub migrated: u64,
     pub ok: u64,
     /// The answered probes a plan account served.
     pub plan_ok: u64,
@@ -2093,7 +2092,6 @@ pub struct ProbeView {
     pub failed: u64,
     pub funding: Funding,
     pub incomplete: u64,
-    pub probe_migrated: u64,
     pub probes_held: u64,
     pub probes_skipped: u64,
     pub rate_limited: u64,
@@ -2108,7 +2106,6 @@ impl ProbeCounts {
         self.failed +=
             row.failed + row.rate_limited + row.exhausted + row.rejected + row.incomplete;
         self.held += row.probes_held;
-        self.migrated += row.probe_migrated;
         self.ok += row.succeeded;
         if row.funding == Funding::Plan {
             self.plan_ok += row.succeeded;

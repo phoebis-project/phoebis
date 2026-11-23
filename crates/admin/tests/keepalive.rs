@@ -931,6 +931,7 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
             phoebis_ledger::fold_keepalive(
                 &tx,
                 &phoebis_ledger::KeepaliveDelta {
+                    probes_skipped: 2,
                     wasted_probes: 1,
                     wasted_probe_reasons: [("expired".to_string(), 1)].into(),
                     ..delta("", "solo", "probe")
@@ -975,6 +976,11 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
         overview["probes_24h"]["ok"].as_u64(),
         Some(2),
         "the router-wide count reads the same window"
+    );
+    assert_eq!(
+        overview["probes_24h"]["skipped"].as_u64(),
+        Some(2),
+        "the skipped count reads its own column beside the day's four wasted probes"
     );
     // An ended session keeps its entry until the expiry and holds no slot, so the count beside the cap leaves it out.
     let s2 = |event: &str, sequence: u64| {

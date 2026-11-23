@@ -223,14 +223,14 @@ main among them where no line names it, and Busy, Idle and Parked count them by 
 unreported agent in none of the three. Under the grid, "Keepalive engine" reads the engine's three caps as `{n} of
 {max}`: Sessions, Agent records, whose hover says that a released record that held a slot keeps it for one cache TTL
 after the release, and Retained in MiB. "Cache probes, 24h" reads `{ok} ok ({pct}) of {total}` over a bar of the day's
-probes by outcome (ok, migrated, held, skipped and failed), where ok is the answered probes less the migrated ones,
-which draw as their own part, and a line reads `expired between turns {n} · bus gaps {n}`. The expired part takes the
-warning ink while the attention item `expired_between_turns` holds, which counts the expiries on pools that warm caches
-under keys the keepalive may probe for, so the part's own count, the keepalive overview's over every pool, can stand
-above zero in the plain ink. The bus gaps part takes the ink while `keepalive_bus_gaps` holds, the last gap's instant on
-hover. Where the keepalive overview's first read fails, the caps, the probes and the line read a dash each under `Could
-not load the keepalive overview: {error}` and a "Try again" button. A failed recipes read draws in the card as a failed
-keepalive overview does, under a notice of its own. What each figure means is on [Statistics](statistics.md).
+probes by outcome (ok, held, skipped and failed), and a line reads `expired between turns {n} · bus gaps {n}`. The
+expired part takes the warning ink while the attention item `expired_between_turns` holds, which counts the expiries on
+pools that warm caches under keys the keepalive may probe for, so the part's own count, the keepalive overview's over
+every pool, can stand above zero in the plain ink. The bus gaps part takes the ink while `keepalive_bus_gaps` holds, the
+last gap's instant on hover. Where the keepalive overview's first read fails, the caps, the probes and the line read a
+dash each under `Could not load the keepalive overview: {error}` and a "Try again" button. A failed recipes read draws
+in the card as a failed keepalive overview does, under a notice of its own. What each figure means is on
+[Statistics](statistics.md).
 
 ## Quota
 
@@ -1391,29 +1391,27 @@ bar.
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-dark.png#only-dark)
 
 Cache warming draws the tiles Probe cost, Saved by probes, Net saving and Kept warm, whose note splits the tokens read
-warm between five minutes and an hour, then Probes by outcome (OK, Migrated, Held, Skipped, Failed), Wasted probes
-(Wasted probes, Wasted cost, Share of probe cost), Saved by probes, Kept-warm requests, Kept-warm tokens and Cache
-warming by pool (Probes OK, Held, Skipped, Failed, Kept-warm requests, Kept-warm tokens, Probe cost, Saved). Probes by
-outcome draws OK as the answered probes less the migrated ones, never under zero in a bucket, since a probe's mark and
-its request row can fall in different hours. The probe counts on the Probe cost tile and the Wasted probes card read the
-probes sent, and Probes by outcome names the held and the skipped ones apart. Saved by probes is what the kept-warm
-requests saved, the cache write each avoided at its TTL's rate less the read it paid. Net saving is that saving less the
-probe cost, in the critical ink while the probes cost more than they saved, which under Native the plan side alone
-decides. A held or skipped probe never reached the upstream and costs nothing, so a range whose probes were all held or
-skipped reads a zero Probe cost and its whole saving as its Net saving. A Saved by probes chart draws the gross saving
-and the probe cost per bucket with the net on hover. The by-pool table's Saved column reads each pool's saving beside
-its Probe cost. Probe cost, Saved by probes, Net saving, Wasted cost, Share of probe cost and the by-pool Probe cost and
-Saved read in the top bar's unit: under Native the plan side's figure in the chosen week over the billed side's dollars,
-with no hint, and under the three dollar positions the position's figures in dollars. The chart draws dollars under the
-three dollar positions and the figure in the chosen week under Native, with the billed dollars on hover, and the billed
-dollars alone under Native where the range holds no plan side. The tab's keepalive figures follow the Client and User
-agent filters from the hours folded by this build on. In an hour folded before it the kept-warm, saved, migrated,
-skipped and wasted figures stand under no user agent, and all but the kept-warm and saved ones under no client, so there
-the User agent filter drops those figures and the Client filter drops the migrated, skipped and wasted ones. Probe cost
-and the OK, Held and Failed counts read the probes' own request rows, which follow both filters in every hour. What a
-probe is and when it counts as wasted is on [Keepalive](keepalive.md). Cache warming counts the probes whatever Include
-probes says, which its head states, on Probes by outcome and the by-pool table's probe columns as on its tiles. That
-toggle is the one control its figures ignore.
+warm between five minutes and an hour, then Probes by outcome (OK, Held, Skipped, Failed), Wasted probes (Wasted probes,
+Wasted cost, Share of probe cost), Saved by probes, Kept-warm requests, Kept-warm tokens and Cache warming by pool
+(Probes OK, Held, Skipped, Failed, Kept-warm requests, Kept-warm tokens, Probe cost, Saved). The probe counts on the
+Probe cost tile and the Wasted probes card read the probes sent, and Probes by outcome names the held and the skipped
+ones apart. Saved by probes is what the kept-warm requests saved, the cache write each avoided at its TTL's rate less
+the read it paid. Net saving is that saving less the probe cost, in the critical ink while the probes cost more than
+they saved, which under Native the plan side alone decides. A held or skipped probe never reached the upstream and costs
+nothing, so a range whose probes were all held or skipped reads a zero Probe cost and its whole saving as its Net
+saving. A Saved by probes chart draws the gross saving and the probe cost per bucket with the net on hover. The by-pool
+table's Saved column reads each pool's saving beside its Probe cost. Probe cost, Saved by probes, Net saving, Wasted
+cost, Share of probe cost and the by-pool Probe cost and Saved read in the top bar's unit: under Native the plan side's
+figure in the chosen week over the billed side's dollars, with no hint, and under the three dollar positions the
+position's figures in dollars. The chart draws dollars under the three dollar positions and the figure in the chosen
+week under Native, with the billed dollars on hover, and the billed dollars alone under Native where the range holds no
+plan side. The tab's keepalive figures follow the Client and User agent filters from the hours folded by this build on.
+In an hour folded before it the kept-warm, saved, skipped and wasted figures stand under no user agent, and all but the
+kept-warm and saved ones under no client, so there the User agent filter drops those figures and the Client filter drops
+the skipped and wasted ones. Probe cost and the OK, Held and Failed counts read the probes' own request rows, which
+follow both filters in every hour. What a probe is and when it counts as wasted is on [Keepalive](keepalive.md). Cache
+warming counts the probes whatever Include probes says, which its head states, on Probes by outcome and the by-pool
+table's probe columns as on its tiles. That toggle is the one control its figures ignore.
 
 Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the three
 windows the router reads, 5-hour, 7-day and 7-day Fable. Pace reads "The lead over pace per bucket: above zero ahead,

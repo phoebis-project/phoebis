@@ -485,8 +485,8 @@ pub struct ExtraUsageSampleRecord {
     pub spend_exponent: Option<u8>,
 }
 
-/// What the keepalive engine adds to one rollup row: the credit of a kept-warm request, a probe's migration mark, or
-/// the settlement of a stopped recipe. Never a request counter: those come from the request rows alone.
+/// What the keepalive engine adds to one rollup row: the credit of a kept-warm request, a skip or the settlement of a
+/// stopped recipe. Never a request counter: those come from the request rows alone.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KeepaliveDelta {
     /// The row's instant. On a settlement it is the probe's exchange instant rather than the settlement's clock, so
@@ -498,12 +498,12 @@ pub struct KeepaliveDelta {
     pub account_id: String,
     pub canonical_model: String,
     pub kind: String,
-    /// The client label the row keys under, that of the probe's own request row on a mark, a settlement and a skip, and
-    /// of the credited request on a credit, so the row prices under that client's regime as its request row does. An
-    /// empty value folds under the reserved id.
+    /// The client label the row keys under, that of the probe's own request row on a settlement and a skip, and of the
+    /// credited request on a credit, so the row prices under that client's regime as its request row does. An empty
+    /// value folds under the reserved id.
     pub client: String,
-    /// The user agent of the probe's own request row on a mark, a settlement and a skip, and of the credited request
-    /// on a credit.
+    /// The user agent of the probe's own request row on a settlement and a skip, and of the credited request on a
+    /// credit.
     pub user_agent: Option<String>,
     /// The request the credit is for, marked `kept_warm` by id.
     pub kept_warm_request_id: Option<String>,
@@ -513,7 +513,6 @@ pub struct KeepaliveDelta {
     /// `kept_warm_5m_tokens`.
     pub kept_warm_5m_tokens: u64,
     pub kept_warm_1h_tokens: u64,
-    pub probe_migrated: u64,
     pub probes_skipped: u64,
     pub wasted_probes: u64,
     /// The wasted probe's five token counts, what `wasted_probe_usd` priced, priced when read.
@@ -532,19 +531,18 @@ pub struct KeepaliveDelta {
     /// skip.
     pub band: crate::pricing::Band,
     /// The serving account's kind as the engine read it, which files an api_key account's row under `billed` beside
-    /// its request row. Set on every delta the savings code records (the migration mark, the kept-warm credit, the
-    /// settlement and the skip), `None` there where the registry no longer holds the account, and `None` on a delta
-    /// built by default.
+    /// its request row. Set on every delta the savings code records (the kept-warm credit, the settlement and the
+    /// skip), `None` there where the registry no longer holds the account, and `None` on a delta built by default.
     pub account_kind: Option<AccountKind>,
     /// The serving account's class beside its kind, which files a usage-based account's row under `usage_based`
     /// beside its request row. False on a delta built by default.
     pub usage_based: bool,
     /// Whether the serving answer reported overage in use, the fact its request row files under, so the row keys the
-    /// same funding. Set on every delta the savings code records (the migration mark, the kept-warm credit, the
-    /// settlement and the skip), and false on a delta built by default.
+    /// same funding. Set on every delta the savings code records (the kept-warm credit, the settlement and the skip),
+    /// and false on a delta built by default.
     pub overage_in_use: bool,
-    /// The speed that keys the credit row, the recipe's for a credit, a skip or a migration mark and the probe answer's
-    /// for a settlement, standard on a delta built by default.
+    /// The speed that keys the credit row, the recipe's for a credit or a skip and the probe answer's for a settlement,
+    /// standard on a delta built by default.
     pub speed: crate::pricing::Speed,
 }
 

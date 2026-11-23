@@ -3425,7 +3425,7 @@ async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_und
             &tx,
             &KeepaliveDelta {
                 overage_in_use: true,
-                probe_migrated: 1,
+                kept_warm_requests: 1,
                 ..delta()
             },
         )?;
@@ -3453,7 +3453,7 @@ async fn an_overage_probe_s_cost_files_under_billed_and_its_settlement_rides_und
     };
     assert_eq!(
         (
-            funding_of(|r| r.probe_migrated > 0),
+            funding_of(|r| r.kept_warm_requests > 0),
             funding_of(|r| r.wasted_probes > 0)
         ),
         (OVERAGE_FUNDING, PLAN_FUNDING),
@@ -3519,7 +3519,7 @@ fn a_fast_recipe_s_credit_files_under_fast_whatever_its_overage_flag() {
                 account_id: "a".into(),
                 canonical_model: "claude-fable-5-1".into(),
                 kind: "probe".into(),
-                probe_migrated: 1,
+                kept_warm_requests: 1,
                 overage_in_use: true,
                 speed: Speed::Fast,
                 ..Default::default()

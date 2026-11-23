@@ -270,7 +270,6 @@ pub(crate) struct AgentCountsView {
 pub(crate) struct ProbeCountsView {
     pub failed: u64,
     pub held: u64,
-    pub migrated: u64,
     pub ok: u64,
     /// The plan-funded answered probes, a part of `ok`, so a reader tells a zero plan saving from an unavailable
     /// price.
@@ -759,8 +758,8 @@ pub(crate) struct BreakdownRow {
     pub histograms: HistogramsView,
     pub percentiles: PercentilesView,
     pub kept_warm: KeptWarmView,
-    /// `ok`, `plan_ok`, `failed`, `held`, `migrated`, and `skipped`, where `held` counts the probes the router refused
-    /// with `503 ledger_behind` while its ledger caught up, outside `failed`, the row's `requests` and its error codes.
+    /// `ok`, `plan_ok`, `failed`, `held`, and `skipped`, where `held` counts the probes the router refused with
+    /// `503 ledger_behind` while its ledger caught up, outside `failed`, the row's `requests` and its error codes.
     pub probes: ProbeCountsView,
     pub probe_cost_usd: f64,
     pub wasted_probes: u64,

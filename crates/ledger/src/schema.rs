@@ -1,8 +1,7 @@
 //! The ledger schema at version 1: `account_rollups_hourly`, `attempts`, `bodies`, `cooldown_segments`,
 //! `cooldown_spans`, `decisions`, `events`, `extra_usage_samples`, `kept_warm_marks`, `parked_records`,
 //! `quota_samples`, `request_guardrails`, `requests`, `rollups_hourly`, `routing_conditions` and
-//! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 5, the last step
-//! adding `feature_calls`, the rows of the claude.ai feature calls sent upstream under an account.
+//! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 6.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -245,7 +244,9 @@ CREATE TABLE IF NOT EXISTS "extra_usage_samples" (
 -- once per key whatever the blocks, beside the reserved keys moved and none, uncacheable (a column of the same
 -- migration) the uncached requests that are no token count and whose body marked no cache, a part of
 -- uncached_requests the read adds a token count's row to, and refusals_json the refusals by error code apart from every
--- other figure, so a reader that sums the row sees none of them.
+-- other figure, so a reader that sums the row sees none of them. Every open runs this baseline, so it keeps
+-- probe_migrated, which no build wrote above zero, and the migration to version 6 drops it from a fresh file as from a
+-- stamped one.
 CREATE TABLE IF NOT EXISTS "rollups_hourly" (
   hour INTEGER NOT NULL,
   key_id TEXT NOT NULL,
@@ -514,6 +515,9 @@ const STEP_5: &str = "CREATE TABLE feature_calls (
 CREATE INDEX feature_calls_received ON feature_calls (received_at, id);
 CREATE INDEX feature_calls_key ON feature_calls (key_id, received_at);";
 
+/// Step 6 drops the migrated probe count of an hour, which no build wrote above zero.
+const STEP_6: &str = "ALTER TABLE rollups_hourly DROP COLUMN probe_migrated";
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.
 pub const MIGRATIONS: &[(u32, &str)] = &[
@@ -524,4 +528,5 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (3, STEP_3),
     (4, STEP_4),
     (5, STEP_5),
+    (6, STEP_6),
 ];

@@ -1496,7 +1496,7 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_nulls_the_p
                 "requests": 2, "tokens_5m": 1_000, "tokens_1h": 500,
                 "plan_requests": 2, "plan_tokens_5m": 1_000, "plan_tokens_1h": 500
             }),
-            &serde_json::json!({"failed": 0, "held": 0, "migrated": 0, "ok": 2, "plan_ok": 2, "skipped": 0})
+            &serde_json::json!({"failed": 0, "held": 0, "ok": 2, "plan_ok": 2, "skipped": 0})
         ),
         "every credit and answered probe of the plan account counts as plan-served: {business}"
     );
@@ -1512,7 +1512,7 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_nulls_the_p
                 "requests": 1, "tokens_5m": 300, "tokens_1h": 0,
                 "plan_requests": 0, "plan_tokens_5m": 0, "plan_tokens_1h": 0
             }),
-            &serde_json::json!({"failed": 0, "held": 0, "migrated": 0, "ok": 1, "plan_ok": 0, "skipped": 0}),
+            &serde_json::json!({"failed": 0, "held": 0, "ok": 1, "plan_ok": 0, "skipped": 0}),
             &serde_json::json!({"cost": 0.0, "wasted": 0.0})
         ),
         "the API key account's credit and probe count as billed, and its probe figure reads the zero of no plan \
@@ -6408,10 +6408,9 @@ async fn the_overview_counts_a_probe_the_router_held_under_held_and_not_as_faile
             probes["held"].as_u64(),
             probes["failed"].as_u64(),
             probes["ok"].as_u64(),
-            probes["migrated"].as_u64(),
             probes["skipped"].as_u64()
         ),
-        (Some(1), Some(0), Some(0), Some(0), Some(0)),
+        (Some(1), Some(0), Some(0), Some(0)),
         "{overview}"
     );
 }

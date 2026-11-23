@@ -1681,7 +1681,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "probes": {
             "failed": 0,
             "held": 0,
-            "migrated": 0,
             "ok": 0,
             "plan_ok": 0,
             "skipped": 0
@@ -2140,7 +2139,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "probes": {
             "failed": 0,
             "held": 0,
-            "migrated": 0,
             "ok": 0,
             "plan_ok": 0,
             "skipped": 0
@@ -2624,7 +2622,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "probes": {
             "failed": 0,
             "held": 0,
-            "migrated": 0,
             "ok": 0,
             "plan_ok": 0,
             "skipped": 0
@@ -3084,7 +3081,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "probes": {
             "failed": 0,
             "held": 0,
-            "migrated": 0,
             "ok": 0,
             "plan_ok": 0,
             "skipped": 0
@@ -3550,7 +3546,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "probes": {
             "failed": 0,
             "held": 0,
-            "migrated": 0,
             "ok": 0,
             "plan_ok": 0,
             "skipped": 0
@@ -4015,7 +4010,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "probes": {
             "failed": 0,
             "held": 0,
-            "migrated": 0,
             "ok": 0,
             "plan_ok": 0,
             "skipped": 0
@@ -4490,7 +4484,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "probes": {
             "failed": 0,
             "held": 0,
-            "migrated": 0,
             "ok": 0,
             "plan_ok": 0,
             "skipped": 0
@@ -4967,7 +4960,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "probes": {
             "failed": 0,
             "held": 0,
-            "migrated": 0,
             "ok": 0,
             "plan_ok": 0,
             "skipped": 0
@@ -8064,7 +8056,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "probes": {
                 "failed": 0,
                 "held": 0,
-                "migrated": 0,
                 "ok": 0,
                 "plan_ok": 0,
                 "skipped": 0
@@ -8547,7 +8538,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "probes": {
                 "failed": 0,
                 "held": 0,
-                "migrated": 0,
                 "ok": 0,
                 "plan_ok": 0,
                 "skipped": 0
@@ -9014,7 +9004,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "probes": {
                 "failed": 0,
                 "held": 0,
-                "migrated": 0,
                 "ok": 0,
                 "plan_ok": 0,
                 "skipped": 0
@@ -9491,7 +9480,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "probes": {
                 "failed": 0,
                 "held": 0,
-                "migrated": 0,
                 "ok": 0,
                 "plan_ok": 0,
                 "skipped": 0
@@ -10048,7 +10036,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "probes": {
                 "failed": 0,
                 "held": 0,
-                "migrated": 0,
                 "ok": 0,
                 "plan_ok": 0,
                 "skipped": 0
@@ -10531,7 +10518,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "probes": {
                 "failed": 0,
                 "held": 0,
-                "migrated": 0,
                 "ok": 0,
                 "plan_ok": 0,
                 "skipped": 0
@@ -10999,7 +10985,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "probes": {
                 "failed": 0,
                 "held": 0,
-                "migrated": 0,
                 "ok": 0,
                 "plan_ok": 0,
                 "skipped": 0
@@ -11465,7 +11450,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "probes": {
                 "failed": 0,
                 "held": 0,
-                "migrated": 0,
                 "ok": 0,
                 "plan_ok": 0,
                 "skipped": 0
@@ -11930,7 +11914,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "probes": {
                 "failed": 0,
                 "held": 0,
-                "migrated": 0,
                 "ok": 0,
                 "plan_ok": 0,
                 "skipped": 0
@@ -12405,7 +12388,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "probes": {
                 "failed": 0,
                 "held": 0,
-                "migrated": 0,
                 "ok": 0,
                 "plan_ok": 0,
                 "skipped": 0
@@ -12862,7 +12844,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "probes": {
                 "failed": 0,
                 "held": 0,
-                "migrated": 0,
                 "ok": 0,
                 "plan_ok": 0,
                 "skipped": 0
@@ -15404,7 +15385,6 @@ export const FIXTURES: Record<string, Fixture> = {
       "probes_24h": {
         "failed": 0,
         "held": 0,
-        "migrated": 0,
         "ok": 0,
         "plan_ok": 0,
         "skipped": 0
@@ -28586,7 +28566,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 5,
+        "schema_version": 6,
         "written": 71,
         "dropped": 0,
         "write_failures": 0,

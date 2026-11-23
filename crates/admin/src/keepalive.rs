@@ -37,9 +37,8 @@ pub(crate) struct KeepaliveOverview {
     /// `max` the bootstrap file's `keepalive` block sets.
     pub limits: OverviewLimits,
     pub pools: Vec<PoolKeepalive>,
-    /// `ok`, `plan_ok`, `failed`, `held`, `migrated`, `skipped`, where `plan_ok` counts the plan-funded probes of
-    /// `ok` and `held` the probes the router refused with `503 ledger_behind` while its ledger caught up, outside
-    /// `failed`.
+    /// `ok`, `plan_ok`, `failed`, `held`, `skipped`, where `plan_ok` counts the plan-funded probes of `ok` and `held`
+    /// the probes the router refused with `503 ledger_behind` while its ledger caught up, outside `failed`.
     #[schema(value_type = crate::openapi::ProbeCountsView)]
     pub probes_24h: phoebis_ledger::ProbeCounts,
 }
