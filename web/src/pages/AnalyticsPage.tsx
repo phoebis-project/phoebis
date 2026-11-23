@@ -359,9 +359,10 @@ export function AnalyticsPage() {
   const byPool = useGatedRead(tab === 'cache-warming' && sessionId === null, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'pool', includeProbes: true }), [query, sessionId, tab, generation], reload);
   // The log's last answer with the deps it answers, so an auto reload of the same deps reads the first page alone and
   // the later pages stand as the walk loaded them. Other deps walk the pages again. The ref names the current deps from
-  // the moment a read starts, so a read under earlier deps that settles later keeps nothing.
+  // the moment a read starts, so a read under earlier deps that settles later keeps nothing. The log lists the probe
+  // rows whatever the toggle says and the folds apply it, so a flip folds the held rows again and walks no page.
   const heldLog = useRef<{ answer: SessionRequests | null; deps: string } | null>(null);
-  const logKey = [sessionAgent, logClient, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation];
+  const logKey = [sessionAgent, logClient, filters, fromIso, sessionId, sessionKey, toIso, generation];
   const logDeps = JSON.stringify(logKey);
   // The load runs unscoped as well, so its reset drops the held answer there and a session view entered again walks its
   // pages again.
@@ -373,7 +374,7 @@ export function AnalyticsPage() {
       return loadSessionRequests(
         (cursor) =>
           api
-            .listRequests({ accountIds: filters.accountId, agentId: sessionAgent ?? undefined, client: logClient, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, session: sessionId, to: toIso })
+            .listRequests({ accountIds: filters.accountId, agentId: sessionAgent ?? undefined, client: logClient, cursor, from: fromIso, includeProbes: true, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, session: sessionId, to: toIso })
             // The route reads one key list, so a lifetime beside a key filter is applied here as well.
             .then((page) => ({ ...page, requests: page.requests.filter((r) => sessionKey === null || (r.keyId !== null && keyLifetime(r.keyId, r.keyGeneration) === sessionKey)) })),
         SESSION_PAGE_LIMIT,
@@ -556,7 +557,7 @@ export function AnalyticsPage() {
   // rows alone would label an earlier key holder as the live key.
   const kept = useMemo(() => keptRows(rows, patternOptions), [rows, patternOptions]);
   const latest = useMemo(() => latestGenerations(rows), [rows]);
-  const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups }, latest)), [stale, sessionId, series.data, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, latest]);
+  const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups, includeProbes }, latest)), [stale, sessionId, series.data, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, includeProbes, latest]);
   const buckets = useMemo(() => bucketsOf(points), [points]);
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
@@ -581,18 +582,18 @@ export function AnalyticsPage() {
     const ends = all.length <= 3 ? all : [all[0], all[1], all[all.length - 1]];
     return partialEndsOf(ends.map((p) => ({ at: Date.parse(p.at) })), { fromMs: read.fromMs, toMs: read.endMs }, read.readAt, true);
   };
-  const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, { agentGroups }, latest)), [stale, sessionId, breakdown.data, kept, groupBy, agentGroups, latest]);
+  const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, { agentGroups, includeProbes }, latest)), [stale, sessionId, breakdown.data, kept, groupBy, agentGroups, includeProbes, latest]);
   // Every group table but Traffic leaves out a group of refused requests alone.
   const requestGroups = useMemo(() => groups.filter(countsRequest), [groups]);
   const byPoolAnswer = byPool.current;
-  const poolGroups = useMemo(() => (sessionId === null ? (byPoolAnswer ?? []) : tab === 'cache-warming' ? foldGroups(kept, 'pool', { agentGroups }, latest) : []), [sessionId, byPoolAnswer, tab, kept, agentGroups, latest]);
+  const poolGroups = useMemo(() => (sessionId === null ? (byPoolAnswer ?? []) : tab === 'cache-warming' ? foldGroups(kept, 'pool', { agentGroups, includeProbes }, latest) : []), [sessionId, byPoolAnswer, tab, kept, agentGroups, includeProbes, latest]);
   const bySpeedAnswer = bySpeed.current?.answer;
   const speedPoints = useMemo(
-    () => (sessionId === null ? (bySpeedAnswer ?? []) : tab === 'traffic' || tab === 'cost' ? foldRequests(kept, rangeBucketMs, fromIso, toIso, 'speed', { agentGroups }, latest) : []),
-    [sessionId, bySpeedAnswer, tab, kept, rangeBucketMs, fromIso, toIso, agentGroups, latest],
+    () => (sessionId === null ? (bySpeedAnswer ?? []) : tab === 'traffic' || tab === 'cost' ? foldRequests(kept, rangeBucketMs, fromIso, toIso, 'speed', { agentGroups, includeProbes }, latest) : []),
+    [sessionId, bySpeedAnswer, tab, kept, rangeBucketMs, fromIso, toIso, agentGroups, includeProbes, latest],
   );
   const byEffortAnswer = byEffort.current;
-  const effortGroups = useMemo(() => (sessionId === null ? (byEffortAnswer ?? []) : tab === 'traffic' ? foldGroups(kept, 'effort', { agentGroups }, latest) : []), [sessionId, byEffortAnswer, tab, kept, agentGroups, latest]);
+  const effortGroups = useMemo(() => (sessionId === null ? (byEffortAnswer ?? []) : tab === 'traffic' ? foldGroups(kept, 'effort', { agentGroups, includeProbes }, latest) : []), [sessionId, byEffortAnswer, tab, kept, agentGroups, includeProbes, latest]);
   const totals = useMemo(() => totalsOf(groups), [groups]);
   // A session fold has no warming facts, so those figures read unavailable rather than zero.
   const { keptWarm } = totals;
@@ -601,14 +602,14 @@ export function AnalyticsPage() {
   // the whole, and in a session view the rows folded by who paid for them.
   const costSeriesAnswer = costSeries.current?.answer;
   const costPoints = useMemo(() => {
-    if (sessionId !== null) return funding === undefined ? points : stale || !fundedTab ? [] : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups, funding }, latest);
+    if (sessionId !== null) return funding === undefined ? points : stale || !fundedTab ? [] : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups, funding, includeProbes }, latest);
     return funded ? (costSeriesAnswer ?? []) : points;
-  }, [sessionId, funding, funded, points, stale, fundedTab, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, latest, costSeriesAnswer]);
+  }, [sessionId, funding, funded, points, stale, fundedTab, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, includeProbes, latest, costSeriesAnswer]);
   const costBreakdownAnswer = costBreakdown.current;
   const costGroups = useMemo(() => {
-    if (sessionId !== null) return funding === undefined ? groups : stale || !fundedTab ? [] : foldGroups(kept, groupBy, { agentGroups, funding }, latest);
+    if (sessionId !== null) return funding === undefined ? groups : stale || !fundedTab ? [] : foldGroups(kept, groupBy, { agentGroups, funding, includeProbes }, latest);
     return funded || warming ? (costBreakdownAnswer ?? []) : groups;
-  }, [sessionId, funding, funded, warming, groups, stale, fundedTab, kept, groupBy, agentGroups, latest, costBreakdownAnswer]);
+  }, [sessionId, funding, funded, warming, groups, stale, fundedTab, kept, groupBy, agentGroups, includeProbes, latest, costBreakdownAnswer]);
   // With Include probes off the route answers a group of billed probes alone for its dollars beside no request, so each
   // Cost table keeps a group whose dollars it draws are above zero, as the total and the Cost by chart keep them: the
   // native table's billed dollars and the dollar table's cost.
@@ -616,9 +617,8 @@ export function AnalyticsPage() {
   const dollarCostGroups = useMemo(() => costGroups.filter((g) => countsRequest(g) || g.costUsd > 0), [costGroups]);
   const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
   const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
-  // A session view folds the request log, which the page reads with the toggle, so its figure holds no probe while the
-  // toggle is off. Dollar equivalent reads the plan rows, which hold no billed probe.
-  const costHead = costHeadOf(unit, costTotals, week, scale, !includeProbes && sessionId === null && unit !== 'equivalent');
+  // Dollar equivalent reads the plan rows, which hold no billed probe.
+  const costHead = costHeadOf(unit, costTotals, week, scale, !includeProbes && unit !== 'equivalent');
   // A session view's figures come from the request log, so a head that draws them names that source after them.
   const sourced = (meta: string | undefined): string | undefined => (meta === undefined || sessionId === null ? meta : sentences([meta, SESSION_SOURCE]));
   const nativeRatios = scale === null ? null : nativeRatiosOf(costTotals, week, scale);

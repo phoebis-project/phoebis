@@ -146,6 +146,9 @@ export interface FoldOptions {
   agentGroups?: string[];
   /** The side the kept rows were paid on, read off each row's serving attempt. Absent keeps every row. */
   funding?: FundingFilter;
+  /** The Include probes toggle. False keeps a probe's request and tokens out and counts a billed probe's dollars, as
+   *  the rollups do under the toggle off. Absent counts a probe row whole. */
+  includeProbes?: boolean;
 }
 
 export interface PatternOptions {
@@ -285,14 +288,25 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
   const agentGroups = options.agentGroups ?? [];
   // The `user_agent` key reads the header alone, so each distinct header is folded and matched once.
   const agentKeys = new Map<string | null, string>();
-  const groups = new Map<string, { group: AnalyticsGroup; rows: RequestLog[] }>();
+  const groups = new Map<string, { group: AnalyticsGroup; rows: RequestLog[]; sawNonProbe: boolean }>();
   for (const r of funding === undefined ? rows : rows.filter((row) => onSide(row, funding))) {
     const key = by === 'user_agent' ? once(agentKeys, r.userAgent, () => keyOf(r, by, agentGroups)) : keyOf(r, by, agentGroups);
-    const entry = groups.get(key) ?? { group: emptyFolded(key, labelOf(r, key, by, latest)), rows: [] };
+    const entry = groups.get(key) ?? { group: emptyFolded(key, labelOf(r, key, by, latest)), rows: [], sawNonProbe: false };
     groups.set(key, entry);
     const g = entry.group;
+    // Set ahead of every arm, so a group of refused rows alone stays under the toggle off, as the route keeps one.
+    if (r.kind !== 'probe') entry.sawNonProbe = true;
     if (heldProbe(r)) {
       g.probes.held += 1;
+      continue;
+    }
+    // The rollups' rule under the toggle off: a probe's request and tokens stay out, and a billed probe's dollars
+    // count.
+    if (options.includeProbes === false && r.kind === 'probe') {
+      if (!onSide(r, 'plan')) {
+        g.costUsd += r.costUsd;
+        g.billedUsd += r.costUsd;
+      }
       continue;
     }
     // The ledger's rule once more: a refused request counts under the map and `refused` and under nothing else.
@@ -311,7 +325,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     else if (r.outcome === 'rejected') g.rejected += 1;
     else if (r.outcome === 'incomplete') g.incomplete += 1;
     else if (left) g.clientCanceled += 1;
-    else if (r.status === 429) g.rateLimited += 1;
+    else if (r.outcome === 'failed' && r.status === 429) g.rateLimited += 1;
     else g.failed += 1;
     if (r.errorCode && !left) addCount(g.errors, r.errorCode);
     g.attempts += r.attempts.length;
@@ -363,7 +377,11 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     // Shares of one account's windows add, and a group of any other dimension spans accounts, whose windows do not.
     if (by === 'account') foldShares(g, list);
   }
-  return [...groups.values()].map((e) => e.group).sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
+  // Under the toggle off the route leaves out a group whose rows are all probes, unless its billed probes hold dollars.
+  return [...groups.values()]
+    .filter((e) => options.includeProbes !== false || e.sawNonProbe || e.group.billedUsd > 0)
+    .map((e) => e.group)
+    .sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
 }
 
 /** Request rows bucketed and summed per bucket, `latest` taken over every row of the range as `foldGroups` takes it. */

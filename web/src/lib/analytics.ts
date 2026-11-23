@@ -427,12 +427,13 @@ export function nativeCellOf(equivalent: number | null | undefined, billed: numb
  * The two sides of a sum over both fundings: the plan rows' Pro-week figure and the billed rows' dollars, in
  * `nativeCellOf`'s vocabulary: undefined leaves out a side with no rows, and a null figure reads a dash for plan rows
  * the route priced nothing on. The route and the session fold count the plan requests, and a group that carries no
- * count tells the sides apart by their figures. A sum with no row on either side reads both, so an empty range reads
- * its zero in each unit rather than nothing.
+ * count tells the sides apart by their figures. Billed dollars above zero draw the billed side with no billed request
+ * counted too, since a billed probe's dollars count while the Include probes toggle keeps its request out. A sum with
+ * no row and no billed dollar reads both sides, so an empty range reads its zero in each unit rather than nothing.
  */
 export function sidesOf(g: Pick<AnalyticsGroup, 'billedUsd' | 'costEquivalent' | 'planRequests' | 'requests'>): { billed: number | undefined; equivalent: number | null | undefined } {
   const plan = g.planRequests === null ? g.costEquivalent !== 0 : g.planRequests > 0;
-  const billed = g.planRequests === null ? g.billedUsd > 0 : g.requests > g.planRequests;
+  const billed = g.planRequests === null ? g.billedUsd > 0 : g.requests > g.planRequests || g.billedUsd > 0;
   return plan || billed ? { billed: billed ? g.billedUsd : undefined, equivalent: plan ? g.costEquivalent : undefined } : { billed: g.billedUsd, equivalent: g.costEquivalent ?? 0 };
 }
 
@@ -504,8 +505,9 @@ export function unpricedNote(labels: readonly string[], buckets: number): string
   const named = labels.length > 3 ? `${fmtInt(labels.length)} groups` : labels.join(' · ');
   return `${named} unpriced in ${plural(buckets, 'bucket, drawn as a gap', 'buckets, drawn as gaps')}`;
 }
-/** The Cost head's sentence above a figure of the routes' sums over rows that can hold a billed probe while the Include
- *  probes toggle is off: the routes add a billed probe's dollars to the cost and billed sums whatever the flag says. */
+/** The Cost head's sentence above a figure of the routes' sums, or the session fold's, over rows that can hold a billed
+ *  probe while the Include probes toggle is off: both add a billed probe's dollars to the cost and billed sums whatever
+ *  the toggle says. */
 const BILLED_PROBE_NOTE = "A billed probe's dollars count whatever the Include probes toggle says";
 /** The Cost section's head under a position, as `costHeadOf` reads it. */
 export interface CostHead {
@@ -523,8 +525,8 @@ export interface CostHead {
  * pairs the plan rows' figure in the chosen week with the billed dollars, a side with no rows left out and a dash
  * where the route priced none. It waits on `scale`, so null answers native while the scale is out, which the section
  * draws as its skeleton. A dollar position reads its dollars under its own words, and reads no scale. `billedProbeNote`
- * says the figure is the routes' sums read with probes off over rows that can hold a billed probe, so a dollar
- * position's meta closes on `BILLED_PROBE_NOTE`.
+ * says the figure is the routes' sums, or the session fold's, read with probes off over rows that can hold a billed
+ * probe, so a dollar position's meta closes on `BILLED_PROBE_NOTE`.
  */
 export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup, week: WeekPosition, scale: number | null, billedProbeNote: boolean): CostHead | null {
   if (unit === 'native') {

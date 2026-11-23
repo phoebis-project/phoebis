@@ -21902,8 +21902,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [`all ${wholeUsd}`, `billed ${billedUsd}`, `equivalent ${equivalentUsd}`],
     });
     {
-      // A session view's head folds the request log, which the page reads with the toggle, so with Include probes off
-      // its figure holds no probe, and the position's word runs straight into the sentence that names the source.
+      // A session view's head folds the request log by the toggle's rule, so with Include probes off its figure can
+      // hold a billed probe's dollars, and the note stands between the position's word and the source sentence.
       const row = requests.find((r) => r.kind !== 'probe' && r.sessionId !== null && !r.refused);
       localStorage.removeItem('phoebis.unit');
       const session = await mount(`/analytics?session=${encodeURIComponent(row.sessionId)}&key=${encodeURIComponent(`${row.keyId}@${row.keyGeneration}`)}&unit=usd#cost`);
@@ -21912,8 +21912,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       session.unmount();
       localStorage.removeItem('phoebis.unit');
       results.push({
-        name: "/analytics a session view under Billed dollars with Include probes off follows the Cost head's position word with the request log as its source, and no probe note",
-        ok: /^\$[\d,.]+ in range, billed\. From the request log, since rollups carry no session$/.test(meta),
+        name: "/analytics a session view under Billed dollars with Include probes off follows the Cost head's position word with the probe note and then the request log as its source",
+        ok: /^\$[\d,.]+ in range, billed\. A billed probe's dollars count whatever the Include probes toggle says\. From the request log, since rollups carry no session$/.test(meta),
         missing: [`${row.sessionId} on ${row.keyId}: ${meta}`],
       });
     }
@@ -22276,7 +22276,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // the billed ring alone. A range of plan rows alone, stood in for, reads the dash alone and a dash for the split.
       const breakdownOf = api.getAnalyticsBreakdown;
       const unpricedRead = async (plan) => {
-        if (plan) api.getAnalyticsBreakdown = async (q) => (await breakdownOf.call(api, q)).map((g) => ({ ...g, cacheEquivalent: null, costEquivalent: null, equivalentSplit: null, planRequests: g.requests }));
+        if (plan) api.getAnalyticsBreakdown = async (q) => (await breakdownOf.call(api, q)).map((g) => ({ ...g, billed: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 }, billedUsd: 0, cacheEquivalent: null, costEquivalent: null, equivalentSplit: null, planRequests: g.requests }));
         const page = await mount('/analytics#cost', { now: CLOCK_ORIGIN });
         const metaOf = page.container.querySelector('#cost .analytics-section__meta');
         const splitOf = [...page.container.querySelectorAll('#cost .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost split');
@@ -22483,7 +22483,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // Each model's cost cells: the figure in the chosen week's short form with the billed dollars on a line under it,
       // a side with no rows left out, and the full reading on the cell's title.
       const cacheCellOf = (g, side) => {
-        const sides = sidesIn(g.planRequests > 0, g.requests > g.planRequests);
+        const sides = sidesIn(g.planRequests > 0, g.requests > g.planRequests || g.billedUsd > 0);
         const equivalent = g.cacheEquivalent;
         const dollars = g.billed[side === 'read' ? 'cacheRead' : 'cacheWrite'];
         const shown = [
@@ -24617,7 +24617,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await groupBy('Effort');
     const perEffort = trafficRows('effort');
     const counted = perEffort.reduce((n, row) => n + num(row[1]), 0);
-    // Include probes is off, so the session view lists the session's other rows alone, as the route does.
+    // Include probes is off, so the session fold counts the session's other rows alone, as the route does.
     const own = requests.filter((r) => r.sessionId === session && r.kind !== 'probe').length;
     results.push({
       name: '/analytics a session groups on the effort each of its requests asked for',
@@ -25441,7 +25441,7 @@ await forView('/analytics', async () => {
   read.nativeCost = keysOf(nativeTable);
   const nativeHeads = [...(nativeTable?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
   const nativeProbe = [...(nativeTable?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === 'billed-probe');
-  read.nativeProbe = nativeProbe?.children[nativeHeads.indexOf('Cost')]?.querySelector('.sub')?.textContent?.trim() ?? null;
+  read.nativeProbe = nativeProbe?.children[nativeHeads.indexOf('Cost')]?.textContent?.trim() ?? null;
   await chooseUnit(page, 'all');
   const dollarTable = tableOf('Cost by key');
   read.dollarCost = keysOf(dollarTable);
@@ -25456,8 +25456,8 @@ await forView('/analytics', async () => {
   localStorage.removeItem('phoebis.unit');
   const KEYS = ['ci', 'failed-only', 'laptop'];
   // The probe's ratios have no request and no output token to divide by. Under Native its Cost cell draws the billed
-  // dollars under the plan figure.
-  const want = { traffic: ['0', '4'], latency: KEYS, misses: KEYS, dropped: KEYS, cacheByModel: ['claude-fable-5-1', 'claude-sonnet-5-5', 'failed-only'], nativeCost: ['billed-probe', ...KEYS], nativeProbe: '$0.25 billed', dollarCost: ['billed-probe', ...KEYS], billedProbe: ['0', '$0.25', '-', '-'], legend: ['billed-probe', ...KEYS] };
+  // dollars alone, since the group holds no plan row.
+  const want = { traffic: ['0', '4'], latency: KEYS, misses: KEYS, dropped: KEYS, cacheByModel: ['claude-fable-5-1', 'claude-sonnet-5-5', 'failed-only'], nativeCost: ['billed-probe', ...KEYS], nativeProbe: '$0.25', dollarCost: ['billed-probe', ...KEYS], billedProbe: ['0', '$0.25', '-', '-'], legend: ['billed-probe', ...KEYS] };
   results.push({
     name: '/analytics a group of refused requests alone draws in the Traffic table only, and one of billed probes alone keeps its Cost row under Native and in dollars',
     ok: JSON.stringify(read) === JSON.stringify(want),
@@ -30097,17 +30097,21 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const byId = new Map();
     for (const [q] of spy.calls) if (q?.session === sessionId) for (const r of (await api.listRequests(q)).requests) byId.set(r.id, r);
     const rows = [...byId.values()];
-    const plan = rows.filter((r) => costUnitOf(r, 'native', null).kind !== 'dollars');
-    const billed = rows.filter((r) => costUnitOf(r, 'native', null).kind === 'dollars');
+    // Include probes is off, so the fold leaves a probe's request and tokens out, while a billed probe's dollars join
+    // the billed side's and draw it.
+    const counted = rows.filter((r) => r.kind !== 'probe');
+    const paid = rows.filter((r) => costUnitOf(r, 'native', null).kind === 'dollars');
+    const plan = counted.filter((r) => costUnitOf(r, 'native', null).kind !== 'dollars');
+    const billed = counted.filter((r) => costUnitOf(r, 'native', null).kind === 'dollars');
     const sum = (list, read) => list.reduce((n, r) => n + read(r), 0);
     const per = (equivalent, planCount, usd, billedCount, scale) => [
       ...(plan.length ? [[planCount > 0 && equivalent !== null ? weekFull((equivalent / planCount) * scale) : '-', 'subscription']] : []),
-      ...(billed.length ? [[billedCount > 0 ? fmtUsd((usd / billedCount) * scale) : '-', 'billed']] : []),
+      ...(billed.length || usd > 0 ? [[billedCount > 0 ? fmtUsd((usd / billedCount) * scale) : '-', 'billed']] : []),
     ];
     // A plan row with tokens that priced nothing nulls the session's figure, as the fold sums it.
     const tokensOf = (r) => r.usage.input + r.usage.output + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h;
     const sevenDay = plan.some((r) => r.costEquivalent === null && tokensOf(r) > 0) ? null : sum(plan, (r) => r.costEquivalent ?? 0);
-    const usd = sum(billed, (r) => r.costUsd);
+    const usd = sum(paid, (r) => r.costUsd);
     const want = [per(sevenDay, plan.length, usd, billed.length, 1), per(sevenDay, sum(plan, (r) => r.usage.output), usd, sum(billed, (r) => r.usage.output), 1000)];
     const figureOf = (line) => {
       const figure = line.cloneNode(true);

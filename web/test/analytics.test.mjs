@@ -632,6 +632,14 @@ test("the session fold counts a client's cancel whose head answered 429 under cl
   assert.deepEqual([folded.clientCanceled, folded.rateLimited], [1, 0]);
 });
 
+test("the session fold counts a 429 as rate limited under a failed outcome alone, and the router's cut as failed", () => {
+  const [row] = d.decodeRequestPage(fixture('requests')).requests;
+  const cut = { ...row, errorCode: 'router_shutdown', id: 'r-cut', kind: 'inference', outcome: 'canceled', status: 429 };
+  const limited = { ...row, errorCode: 'rate_limit_error', id: 'r-limited', kind: 'inference', outcome: 'failed', status: 429 };
+  const [folded] = d.foldGroups([cut, limited], 'all');
+  assert.deepEqual([folded.failed, folded.rateLimited], [1, 1]);
+});
+
 test('the cooldown move reason reads failed over', () => {
   assert.equal(d.moveLabel('cooldown'), 'failed over', 'every reader of the map takes the word through moveLabel');
 });
@@ -805,6 +813,29 @@ test('the session fold counts the plan requests and output tokens of a mixed-fun
   const [folded] = d.foldGroups(rows, 'account');
   assert.equal(folded.requests, 3, 'the overage row counts as a request');
   assert.deepEqual([folded.planRequests, folded.planOutputTokens], [2, 400], 'and widens no plan count');
+});
+
+test("the session fold under Include probes off adds a billed probe's dollars and leaves its request and tokens out", () => {
+  const plan = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const billed = { ...plan, attempts: [{ ...plan.attempts[plan.attempts.length - 1], overageInUse: true }], costShares: null };
+  const rows = [
+    { ...plan, costUsd: 2, id: 'i-1', kind: 'inference', usage: { ...plan.usage, output: 100 } },
+    { ...billed, costUsd: 0.5, id: 'p-1', kind: 'probe', usage: { ...plan.usage, output: 40 } },
+    { ...plan, costUsd: 0.25, id: 'p-2', kind: 'probe', usage: { ...plan.usage, output: 10 } },
+  ];
+  const [folded] = d.foldGroups(rows, 'all', { includeProbes: false });
+  assert.deepEqual([folded.requests, folded.planRequests, folded.tokens.output, folded.costUsd, folded.billedUsd], [1, 1, 100, 2.5, 0.5]);
+  const { figures } = d.costHeadOf('native', folded, 'ultra', 0.1, false).tile;
+  assert.deepEqual(figures.filter((f) => f.word === 'billed'), [{ text: '$0.50', word: 'billed' }]);
+});
+
+test('the session fold under Include probes off drops a group of plan-funded probes alone and keeps one of billed probes or of refused rows', () => {
+  const plan = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const billed = { ...plan, attempts: [{ ...plan.attempts[plan.attempts.length - 1], overageInUse: true }], costShares: null };
+  const inference = { ...plan, id: 'i-1', kind: 'inference' };
+  assert.deepEqual(d.foldGroups([inference, { ...plan, id: 'p-1', kind: 'probe' }], 'kind', { includeProbes: false }).map((g) => g.key), ['inference']);
+  assert.deepEqual(d.foldGroups([inference, { ...billed, costUsd: 0.5, id: 'p-1', kind: 'probe' }], 'kind', { includeProbes: false }).map((g) => g.key), ['inference', 'probe']);
+  assert.deepEqual(d.foldGroups([{ ...plan, id: 'x-1', kind: 'inference', refused: true }], 'all', { includeProbes: false }).map((g) => g.refused), [1]);
 });
 
 test("a plan-funded row with no token joins the session fold's plan count and not its share total, as the ledger sums it", () => {

@@ -1377,17 +1377,17 @@ counts no block. Cache follows every filter of the bar, and Placements by rung t
 User agent filters.
 
 Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscription requests' figure in the chosen week
-over the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output tokens
-the same two ways. Where one account is named in the Accounts filter, the Cost tile's hover carries the hint the
-Requests view's Cost column describes, and each row's Cost cell does under the account grouping, or under any grouping
-while one account is named, since every row is then that account's, while a figure that sums several accounts carries
-none. Cost by the chosen group stacks the figure per bucket with "Billed by {group}" beside it in dollars, the Cost
-split draws a ring per side by token kind, the subscription requests' with its figure in the chosen week in the center
-(each token kind's figure in full on hover) and the billed requests' in dollars, and the table reads Requests, Cost, Per
-request and Per 1k output, each with the billed dollars on a line under the figure. A subscription side the route could
-not price, as when a request ran on a model without a weight in the cost model, reads a dash, its bucket on the Cost by
-chart a gap, and the Cost split draws no ring for it. The Cost tile's dash carries the Dashboard's hover, and the Cost
-by chart names the groups it draws that read unpriced on a line under its subtitle,
+over the billed requests' dollars, a side with no requests and no dollars left out, and Cost per request and Cost per 1k
+output tokens the same two ways. Where one account is named in the Accounts filter, the Cost tile's hover carries the
+hint the Requests view's Cost column describes, and each row's Cost cell does under the account grouping, or under any
+grouping while one account is named, since every row is then that account's, while a figure that sums several accounts
+carries none. Cost by the chosen group stacks the figure per bucket with "Billed by {group}" beside it in dollars, the
+Cost split draws a ring per side by token kind, the subscription requests' with its figure in the chosen week in the
+center (each token kind's figure in full on hover) and the billed requests' in dollars, and the table reads Requests,
+Cost, Per request and Per 1k output, each with the billed dollars on a line under the figure. A subscription side the
+route could not price, as when a request ran on a model without a weight in the cost model, reads a dash, its bucket on
+the Cost by chart a gap, and the Cost split draws no ring for it. The Cost tile's dash carries the Dashboard's hover,
+and the Cost by chart names the groups it draws that read unpriced on a line under its subtitle,
 `{group} unpriced in {m} buckets, drawn as gaps` for one group (`research unpriced in 1 bucket, drawn as a gap`), the
 groups' labels joined by middle dots for up to three, and `{n} groups unpriced in {m} buckets, drawn as gaps` past
 three. Under the Max and Ultra weeks the figures wait on the settings, so the section draws its placeholders until they
@@ -1397,7 +1397,7 @@ request and Cost per 1k output tokens, then Cost by the chosen group as a chart 
 Cache read, Cache write, Output, Per request, Per 1k output) and the Cost split as one ring in dollars (Input, Cache
 read, Cache write, Output). Every position draws Fast mode spend. A billed keepalive probe's dollars count in the cost
 and the billed dollars, while its request and its tokens follow the Include probes toggle, and under All in dollars and
-Billed dollars with the toggle off the tab's head says so outside a session view: "A billed probe's dollars count
+Billed dollars with the toggle off the tab's head says so, in a session view as well: "A billed probe's dollars count
 whatever the Include probes toggle says". The prices behind the dollars are on [Pricing](statistics.md#pricing), and the
 cost model behind the subscription figures on [Plan meter](statistics.md#plan-meter). Cost follows every filter of the
 bar.
