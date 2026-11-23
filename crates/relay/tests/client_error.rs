@@ -13,7 +13,8 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event, Outcome};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_routing::{
-    lane_key, resolve, ClientClass, RouterEvent, SelectRequest, SelectResult, SelectionTrace,
+    lane_key, resolve, ClientClass, Portability, RouterEvent, SelectRequest, SelectResult,
+    SelectionTrace,
 };
 use phoebis_store::{AccountState, PinKey};
 use tokio::sync::broadcast;
@@ -81,7 +82,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             canonical_model: canonical,
             folded_model: MODEL.into(),
             candidates,
-            portable: true,
+            portability: Portability::Portable,
             credit_account: None,
             attempted: Vec::new(),
             now: h.clock.load(std::sync::atomic::Ordering::SeqCst),

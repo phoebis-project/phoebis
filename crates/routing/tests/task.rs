@@ -8,13 +8,13 @@ use phoebis_routing::{
     credits_from_usage, decide, lane_key, resolve, sample_from_usage, shed_dwell_ms, spawn,
     AffinityReport, BandWeight, BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState,
     DecisionRecord, DecisionSummary, Exhaustion, HoldFacts, HoldReason, Judged, JudgedCharge,
-    KeyRefusal, LongContextRates, MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery,
-    Presented, RateTable, Rates, Refusal, RefusalFacts, RefusedKey, RefusedRequest, RegimeRates,
-    ReloadError, RenewalEnd, Report, ResolveError, RouterConfig, RouterHandle, RoutingState,
-    SelectAnswer, SelectRequest, SelectResult, SharePricer, SpendResetSource, SpendWindow,
-    UtilizationSample, WindowReading, WindowRestart, WindowSource, WriterStatus, COMMANDS,
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, RESET_SLACK_MS,
-    SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
+    KeyRefusal, LongContextRates, MemberSpend, MoveCause, PinRef, PinUsage, Portability,
+    PredecessorQuery, Presented, RateTable, Rates, Refusal, RefusalFacts, RefusedKey,
+    RefusedRequest, RegimeRates, ReloadError, RenewalEnd, Report, ResolveError, RouterConfig,
+    RouterHandle, RoutingState, SelectAnswer, SelectRequest, SelectResult, SharePricer,
+    SpendResetSource, SpendWindow, UtilizationSample, WindowReading, WindowRestart, WindowSource,
+    WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
+    IN_FLIGHT_RECLAIM_MS, RESET_SLACK_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, Cancellation,
@@ -155,7 +155,7 @@ fn request(
             "claude-sonnet-5",
         )
         .unwrap(),
-        portable: true,
+        portability: Portability::Portable,
         credit_account: None,
         attempted: vec![],
         now,
@@ -1126,7 +1126,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
                 "claude-sonnet-4-5",
             )
             .unwrap(),
-            portable: true,
+            portability: Portability::Portable,
             credit_account: None,
             attempted: vec![],
             now,
@@ -1268,7 +1268,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
                 "claude-sonnet-4-5",
             )
             .unwrap(),
-            portable: true,
+            portability: Portability::Portable,
             credit_account: None,
             attempted: vec![],
             now: 1_000,
@@ -10409,7 +10409,7 @@ async fn every_set_of_an_ended_agents_mark_and_its_clear_by_an_exhausted_request
     now.store(2_000, Ordering::SeqCst);
     let answer = handle
         .select(SelectRequest {
-            portable: false,
+            portability: Portability::Hold,
             attempt: 2,
             attempted: vec![home.clone()],
             ..subagent(&handle, "r-2", 2_000)

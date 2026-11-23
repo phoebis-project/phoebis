@@ -166,7 +166,7 @@ impl RequestFlags {
             fast: request.fast,
             count: request.count,
             probe: request.probe,
-            portable: request.portable,
+            portable: request.portability.is_portable(),
             marker: request.marker,
             context_compacted: request.context_compacted,
         }

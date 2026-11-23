@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use phoebis_routing::{
-    decide, lane_key, resolve, ClientClass, DecisionRecord, PaceFacts, RegistrySnapshot,
-    RoutingState, SelectRequest, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    decide, lane_key, resolve, ClientClass, DecisionRecord, PaceFacts, Portability,
+    RegistrySnapshot, RoutingState, SelectRequest, UtilizationSample, WindowReading, WindowSource,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     AccountKind, AccountRow, ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, PoolMember,
@@ -87,7 +87,7 @@ fn request(s: &RegistrySnapshot, model: &str, now: i64) -> SelectRequest {
         canonical_model: model.into(),
         folded_model: model.into(),
         candidates: resolve(s, key, model, model).unwrap(),
-        portable: true,
+        portability: Portability::Portable,
         credit_account: None,
         attempted: Vec::new(),
         now,

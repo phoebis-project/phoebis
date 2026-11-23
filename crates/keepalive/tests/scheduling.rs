@@ -8,8 +8,8 @@ use phoebis_ledger::{
 };
 use phoebis_relay::Accounting;
 use phoebis_routing::{
-    lane_key, resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
-    SelectResult,
+    lane_key, resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Portability, Report,
+    SelectRequest, SelectResult,
 };
 use phoebis_store::{
     AccountState, BudgetPeriod, Cancellation, CooldownRow, CooldownScope, MemberWrite,
@@ -479,7 +479,7 @@ async fn select_main(r: &Rig) -> SelectResult {
             canonical_model: model.clone(),
             folded_model: model,
             candidates,
-            portable: true,
+            portability: Portability::Portable,
             credit_account: None,
             attempted: Vec::new(),
             now: r.now(),
@@ -751,7 +751,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
             canonical_model: "claude-sonnet-4-5".into(),
             folded_model: "claude-sonnet-4-5".into(),
             candidates,
-            portable: true,
+            portability: Portability::Portable,
             credit_account: None,
             attempted: Vec::new(),
             now: r.now(),
@@ -1387,7 +1387,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 canonical_model: pin.model.clone(),
                 folded_model: pin.model.clone(),
                 candidates: resolve(&snapshot, key, &pin.model, &pin.model).unwrap(),
-                portable: true,
+                portability: Portability::Portable,
                 credit_account: None,
                 attempted: vec![],
                 now: r.now(),

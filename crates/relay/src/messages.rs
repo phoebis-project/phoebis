@@ -31,9 +31,9 @@ use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     cohort_hold, latest_full_reset, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold,
     ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, HoldReason, JudgedCharge, KeyPermit,
-    LaneFacts, OverageEvidence, PinRef, PinnedObstacle, PredecessorQuery, Presented, Refusal,
-    RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError, RouterHandle, SelectRequest,
-    SelectResult, Selection, SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
+    LaneFacts, OverageEvidence, PinRef, PinnedObstacle, Portability, PredecessorQuery, Presented,
+    Refusal, RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError, RouterHandle,
+    SelectRequest, SelectResult, Selection, SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope, MemoryStore,
@@ -2073,7 +2073,7 @@ impl Relay {
                 .thinking_type
                 .as_deref()
                 .is_some_and(|kind| kind != "disabled");
-        let portable = facts.portable;
+        let portability = facts.portability;
         let target = target_of(&parts);
         let fallback_ms = self.limits.cooldown_fallback.as_millis() as i64;
         tracing::debug!(
@@ -2112,10 +2112,10 @@ impl Relay {
             markerless,
             markers_ttl_ms: facts.markers_ttl_ms,
             memory_key,
-            moves_pins: portable && trace.kind != Kind::Probe,
+            moves_pins: portability.is_portable() && trace.kind != Kind::Probe,
             original,
             pool_id: pool.map(|p| p.id.clone()),
-            portable,
+            portability,
             raw: &raw,
             restore,
             retry_in_place: Duration::from_secs(failover.retry_in_place_seconds),
@@ -2207,7 +2207,7 @@ impl Relay {
                     canonical_model: identity.canonical_model.clone(),
                     folded_model: identity.folded_model.clone(),
                     candidates: candidates.clone(),
-                    portable,
+                    portability,
                     credit_account: facts
                         .credit_digest
                         .and_then(|digest| self.credits.issuer(&digest, now)),
@@ -3589,7 +3589,7 @@ impl Relay {
         // A held stream cannot be rewound onto another connection, so the only way not to commit it is to drop
         // it unread; a request bound to its account takes it as it came.
         if let Some(held) = held {
-            if ctx.admitted.portable {
+            if ctx.admitted.portability.is_portable() {
                 drop(reader);
                 return Next::FailOver {
                     auth_marked: ctx.auth_marked,
@@ -3620,7 +3620,7 @@ impl Relay {
                 .await,
             );
         }
-        if ctx.admitted.portable {
+        if ctx.admitted.portability.is_portable() {
             return Next::FailOver {
                 auth_marked: ctx.auth_marked,
             };
@@ -3825,7 +3825,7 @@ impl Relay {
         now: i64,
     ) -> Option<Duration> {
         let cooldown = cooldown?;
-        if !ctx.admitted.portable
+        if !ctx.admitted.portability.is_portable()
             || mark.is_some()
             || !ctx.can_retry_in_place
             || cooldown.window != phoebis_routing::RETRY_AFTER_WINDOW
@@ -5146,7 +5146,7 @@ struct Admitted<'a> {
     /// The pool the key was in at admission, whose policy this request was admitted under; `None` for a key whose
     /// pool the snapshot did not hold.
     pool_id: Option<String>,
-    portable: bool,
+    portability: Portability,
     raw: &'a Bytes,
     /// The first-party fields to restore, absent for anything but a `claude-cli/` inference request.
     restore: Option<RestoreContext>,

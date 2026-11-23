@@ -36,9 +36,9 @@ pub use select::{
     cohort_hold, elapsed_share_at, exhaustion_status, feature_ready, lane_key, seconds_ms,
     window_deadline, Banded, ClientClass, CohortHold, CreditAccount, Exhaustion, FailedOver,
     HoldFacts, HoldReason, HoldWait, Judged, JudgedCharge, MigrateReason, MoveRead, Obstacle,
-    PinHold, PinnedObstacle, Placement, Refusal, SelectRequest, SelectResult, Selection,
-    SelectionTrace, SharedWindows, Skipped, SlowDownRead, Warmth, WarmthCause, BUDGET_WINDOW,
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MAIN_AGENT, MODEL_REJECTED_REASON,
+    PinHold, PinnedObstacle, Placement, Portability, Refusal, SelectRequest, SelectResult,
+    Selection, SelectionTrace, SharedWindows, Skipped, SlowDownRead, Warmth, WarmthCause,
+    BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MAIN_AGENT, MODEL_REJECTED_REASON,
     RATE_LIMIT_REASON, REFRESHING_CLASSES, RETRY_AFTER_WINDOW, SLOW_DOWN_MIN_HOLD_MS,
     SLOW_DOWN_WAIT_MS,
 };

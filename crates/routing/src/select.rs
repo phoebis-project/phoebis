@@ -52,6 +52,27 @@ impl ClientClass {
     }
 }
 
+/// How a request's body binds the request to the account that holds the state it references, ordered by the
+/// strength of the bind, so a walk over a body keeps the strongest class that a block gives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Portability {
+    /// The body references no account state.
+    Portable,
+    /// Each block that binds the body is a `web_search_tool_result`, which a second account refuses once and the
+    /// client then drops, so a move costs the search content and no more.
+    Release,
+    /// The body holds a top-level `container`, a block with a `file_id` itself or in its `source`, or a block
+    /// whose type ends in `_tool_result` and is neither a web search nor a web fetch result.
+    Hold,
+}
+
+impl Portability {
+    /// Whether the body references no account state, so the request can land on any account.
+    pub fn is_portable(self) -> bool {
+        self == Portability::Portable
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectRequest {
     /// The request this decision belongs to and the wire attempt it dispatches, numbered from 1 as the bus and the
@@ -76,7 +97,8 @@ pub struct SelectRequest {
     /// admission resolved no candidate to copy it from.
     pub folded_model: String,
     pub candidates: Vec<Candidate>,
-    pub portable: bool,
+    /// The class of the body's account-state references, as the relay's walk reads it.
+    pub portability: Portability,
     /// The account that issued the fallback credit token the body carries, as the relay's store remembers it, `None`
     /// for a body without a token or a token the store does not hold.
     pub credit_account: Option<CreditAccount>,
@@ -1759,7 +1781,9 @@ fn run(
     let session = Some(request.session_id.as_str()).filter(|_| {
         !request.classifier
             && ttl_ms > 0
-            && (pool.affinity.mode == AffinityMode::Always || request.marker || !request.portable)
+            && (pool.affinity.mode == AffinityMode::Always
+                || request.marker
+                || !request.portability.is_portable())
     });
     // The task hands a failover's entry on until a selection lands the session. A request that takes no pin lands
     // nothing, so it reads no entry, and the entry waits for the session's next request that takes a pin. The copy
@@ -1841,7 +1865,7 @@ fn run(
             let idle = request.now - current.last_used_at > ttl_ms;
             let found = if idle {
                 "expired_idle"
-            } else if !serves && request.portable {
+            } else if !serves && request.portability.is_portable() {
                 "left_pool"
             } else {
                 "live"
@@ -2104,7 +2128,7 @@ fn run(
     // Step 3: a non-portable request is bound to the pin it holds. The client's classifier call holds none, so it goes
     // where the direction read above or the placement sends it.
     if let (false, Some(((current, current_key), warmth))) =
-        (request.portable, pin.as_ref().zip(warmth))
+        (request.portability.is_portable(), pin.as_ref().zip(warmth))
     {
         if let Some(candidate) = candidate_in(&eligible, &current.account_id) {
             if let Some(hold) = rewrite_answer(state, pool, request, current, current_key) {
@@ -3638,7 +3662,7 @@ pub(crate) fn slowable(request: &SelectRequest, kind: Option<AccountKind>) -> bo
         .as_deref()
         .is_none_or(|class| class == "main" || class == "subagent");
     held_class
-        && request.portable
+        && request.portability.is_portable()
         && !(request.fast || request.probe || request.count)
         && kind != Some(AccountKind::ApiKey)
 }
@@ -4019,7 +4043,7 @@ pub(crate) fn fresh_fit(
         canonical_model: model.to_string(),
         folded_model: model.to_string(),
         candidates: Vec::new(),
-        portable: false,
+        portability: Portability::Hold,
         credit_account: None,
         attempted: Vec::new(),
         now,
@@ -5852,7 +5876,7 @@ fn standing_request(pin: &PinRow) -> SelectRequest {
         canonical_model: pin.model.clone(),
         folded_model: pin.model.clone(),
         candidates: Vec::new(),
-        portable: false,
+        portability: Portability::Hold,
         credit_account: None,
         attempted: Vec::new(),
         now: 0,
@@ -7166,7 +7190,7 @@ fn credit_candidate<'a>(
     pool: &PoolRow,
 ) -> Option<&'a Candidate> {
     let credit = request.credit_account.as_ref()?;
-    if request.count || request.probe || !request.portable {
+    if request.count || request.probe || !request.portability.is_portable() {
         return None;
     }
     let candidate = candidate_in(eligible, &credit.account_id)
@@ -7399,7 +7423,7 @@ fn placement_of<'a>(
         none(rec, "rung:static", "policy_off");
         return None;
     }
-    if !request.marker && request.portable {
+    if !request.marker && request.portability.is_portable() {
         none(rec, "rung:static", "cache_gate");
         return None;
     }
@@ -7540,7 +7564,7 @@ fn subagent_cohort<'a>(
 ) -> Option<&'a Candidate> {
     if request.agent_id == MAIN_AGENT
         || pool.affinity.subagent_placement != SubagentPlacement::ByCohort
-        || (!request.marker && request.portable)
+        || (!request.marker && request.portability.is_portable())
     {
         return None;
     }
@@ -9310,7 +9334,9 @@ mod banded_tests {
         SubscriptionTerm,
     };
 
-    use super::{fit_of, lane_key, runway, slow_down_of, Banded, Figures, Judge, SelectRequest};
+    use super::{
+        fit_of, lane_key, runway, slow_down_of, Banded, Figures, Judge, Portability, SelectRequest,
+    };
     use crate::state::{
         BandSegment, Reservation, RoutingState, SharePricer, UtilizationSample, WindowReading,
         WindowSource, FIVE_HOUR,
@@ -9540,7 +9566,7 @@ mod banded_tests {
             canonical_model: model.into(),
             folded_model: model.into(),
             candidates: Vec::new(),
-            portable: true,
+            portability: Portability::Portable,
             credit_account: None,
             attempted: Vec::new(),
             now: T,

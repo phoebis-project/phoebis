@@ -160,7 +160,7 @@ pub fn make_recipe(
     // A reference to account-scoped state belongs to the account that served the request, while a probe
     // follows a pin a sibling's request may have moved since. The relay checks portability against the pin it
     // finds, so such a body must never be retained in the first place.
-    if !phoebis_relay::portable_of(&root) {
+    if !phoebis_relay::portable_of(&root).is_portable() {
         return Err(Reason::UnsupportedShape);
     }
     let thinking = root

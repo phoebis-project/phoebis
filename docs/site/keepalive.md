@@ -10,10 +10,11 @@ reads, what the ledger records for every probe, where the console shows all of i
 ## How a probe works
 
 A request is eligible for a replayable copy when its thinking is adaptive or disabled, its tool choice is not forced,
-and its output is neither structured nor bound to a strict tool. A request that fails one of those checks, whose body
-runs over `proxy.max_request_bytes`, or whose header block runs over the replay's budget (8192 bytes for one value,
-16384 for the block) is never retained, and the Sessions view reads it `not_retained` with the check it failed as the
-cause (see [The five states](#the-five-states)).
+and its output is neither structured nor bound to a strict tool, and its body references no account state
+([Selection](routing.md#selection) lists the references). A request that fails one of those checks, whose body runs over
+`proxy.max_request_bytes`, or whose header block runs over the replay's budget (8192 bytes for one value, 16384 for the
+block) is never retained, and the Sessions view reads it `not_retained` with the check it failed as the cause (see [The
+five states](#the-five-states)).
 
 Shortly before the retained request's prompt cache would expire, the router sends a probe built from it through the same
 failover loop a real request takes, under the headers the bus published for the request: the same body with `max_tokens`

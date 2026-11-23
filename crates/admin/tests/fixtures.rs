@@ -838,7 +838,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             canonical_model: "claude-sonnet-5".into(),
             folded_model: "claude-sonnet-5".into(),
             candidates,
-            portable: true,
+            portability: phoebis_routing::Portability::Portable,
             credit_account: None,
             attempted: Vec::new(),
             now,
@@ -961,7 +961,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "claude-sonnet-5-5",
             )
             .expect("the pool's model rules allow claude-sonnet-5-5"),
-            portable: true,
+            portability: phoebis_routing::Portability::Portable,
             credit_account: None,
             attempted: Vec::new(),
             now,
@@ -1800,7 +1800,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 canonical_model: model.into(),
                 folded_model: model.into(),
                 candidates,
-                portable: true,
+                portability: phoebis_routing::Portability::Portable,
                 credit_account: None,
                 attempted: Vec::new(),
                 now: placed_at,
@@ -3391,7 +3391,7 @@ fn asked(
             "claude-sonnet-5",
         )
         .expect("the pool's model rules allow claude-sonnet-5"),
-        portable: true,
+        portability: phoebis_routing::Portability::Portable,
         credit_account: None,
         attempted: Vec::new(),
         now: common::NOW,
@@ -3472,7 +3472,7 @@ async fn routing_stories(
     baseline: u64,
     planted: &[String],
 ) {
-    use phoebis_routing::{Report, RouterEvent, SelectRequest, SelectResult};
+    use phoebis_routing::{Portability, Report, RouterEvent, SelectRequest, SelectResult};
     let app = &parts.app;
     let now = common::NOW;
     let hour_ago = now - 3_600_000;
@@ -3524,7 +3524,7 @@ async fn routing_stories(
         .router
         .select(SelectRequest {
             static_boundaries: Arc::from([static_hash.to_string()]),
-            portable: false,
+            portability: Portability::Hold,
             marker: true,
             ..asked(parts, key_generation, "r-static", 1, Some("s-static"))
         })

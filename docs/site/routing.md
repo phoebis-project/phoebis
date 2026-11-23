@@ -440,9 +440,15 @@ is refunded and reads as untouched, with no share of the router's own. Ties are 
 read no sample at all. A usage-based seat is a paid source beside the API-key accounts: it sorts in their group with the
 flag on, and `pace` scores it as an API-key account, untouched since it reads no bucket.
 
-A non-portable request, one whose body references a `file_id`, a `container` or a server-tool result, is answered by its
-live pin's account or not at all. With affinity off or no live pin, it runs the normal selection instead, and the
-account-scoped reference it carries may then not resolve.
+A non-portable request, one whose body references account state, is answered by its live pin's account or not at all. A
+body references account state where it carries a top-level `container`, or where a block of `messages` holds a `file_id`
+itself or in its `source` or is a server tool's result (its `type` ends in `_tool_result`). A web fetch result
+(`web_fetch_tool_result`) is the one such result that binds nothing by its type. The router reads blocks alone, in a
+message's `content`, in a block's own `content` and in a document's content source, so the input of a tool call, a tool
+definition and a string bind nothing. It sorts a non-portable request into one of two classes: a request whose
+references are all web search results (`web_search_tool_result`), and a request that holds any other reference, beside a
+web search result or not. With affinity off or no live pin, it runs the normal selection instead, and the account-scoped
+reference it carries may then not resolve.
 
 Every decision is recorded in full, with what the engine read in the order it read it, and read in the console's
 [routing log](console.md#routing-log). The log's words for the rules, the rungs, the partitions and the strategies are

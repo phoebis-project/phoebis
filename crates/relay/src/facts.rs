@@ -4,6 +4,7 @@
 use axum::http::HeaderMap;
 use phoebis_bus::RequestShape;
 use phoebis_cch::TopLevelMembers;
+use phoebis_routing::Portability;
 use serde_json::Value;
 
 use crate::cache_ttl::CacheTtl;
@@ -39,8 +40,9 @@ pub struct BodyFacts {
     pub chains: Option<Chains>,
     /// The largest `cache_control.ttl` at the API's marker positions, `None` without a marker there.
     pub markers_ttl_ms: Option<i64>,
-    /// The body references no account-scoped state (`container`, `file_id`, a server-tool result).
-    pub portable: bool,
+    /// How the body binds the request to an account: the portable class where it references no account-scoped state,
+    /// else the class of its references (`Portability`).
+    pub portability: Portability,
     /// The digest of a top-level `fallback_credit_token` string, `None` without one.
     pub credit_digest: Option<CreditDigest>,
 }
@@ -142,7 +144,7 @@ impl BodyFacts {
                 // Fails open: a body no reader parses carries no reference the router could prove, and the upstream
                 // refuses it anyway. The keepalive reads `portable_of` on its own parsed tree and refuses such a body
                 // before it gets that far.
-                portable: true,
+                portability: Portability::Portable,
                 credit_digest: None,
             };
             return (facts, None);
@@ -239,7 +241,7 @@ impl BodyFacts {
             top_level_effort,
             chains,
             markers_ttl_ms,
-            portable: crate::portability::portable_of(&root),
+            portability: crate::portability::portable_of(&root),
             credit_digest: root
                 .get("fallback_credit_token")
                 .and_then(Value::as_str)
@@ -923,18 +925,20 @@ mod tests {
 
     #[test]
     fn portability_is_read_off_the_one_parse_and_a_body_no_reader_parses_fails_open() {
-        assert!(
+        assert_eq!(
             BodyFacts::read(br#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#)
-                .portable
+                .portability,
+            Portability::Portable
         );
-        assert!(
-            !BodyFacts::read(
+        assert_eq!(
+            BodyFacts::read(
                 br#"{"model":"m","container":"c","messages":[{"role":"user","content":"cut \ud83d"}]}"#
             )
-            .portable
+            .portability,
+            Portability::Hold
         );
         let unread = BodyFacts::read(b"not json");
-        assert!(unread.portable);
+        assert_eq!(unread.portability, Portability::Portable);
         assert_eq!(unread.line, AttributionLine::NoSystemArray);
     }
 

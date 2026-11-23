@@ -7883,7 +7883,7 @@ async fn agent_turn(
             canonical_model: model.into(),
             folded_model: model.into(),
             candidates,
-            portable: true,
+            portability: phoebis_routing::Portability::Portable,
             credit_account: None,
             attempted: Vec::new(),
             now: at,

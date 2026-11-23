@@ -24,8 +24,8 @@ use phoebis_relay::{
     ShutdownMark, UpstreamGzip,
 };
 use phoebis_routing::{
-    lane_key, resolve, spawn, ClientClass, DecisionRecord, DecisionSummary, RefusalFacts, Report,
-    RouterConfig, RouterEvent, RouterHandle, SelectRequest, SelectResult,
+    lane_key, resolve, spawn, ClientClass, DecisionRecord, DecisionSummary, Portability,
+    RefusalFacts, Report, RouterConfig, RouterEvent, RouterHandle, SelectRequest, SelectResult,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountUpdate, ApiKeyRow, CompanionPermissions, Failover, Identity,
@@ -1657,7 +1657,7 @@ pub async fn pin_session(h: &Harness, session: &str, agent: &str, model: &str) -
                 .expect("the pool's model rules allow the model"),
             canonical_model: canonical.clone(),
             folded_model: folded,
-            portable: true,
+            portability: Portability::Portable,
             credit_account: None,
             attempted: Vec::new(),
             now,

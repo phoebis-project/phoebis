@@ -8,8 +8,8 @@ use phoebis_routing::{
     CohortHold, CreditAccount, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion,
     FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldReason, HoldWait,
     LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, Obstacle, OverageEvidence,
-    PinKeyFacts, PinRef, PinShed, PinUsage, PinnedObstacle, Placement, RateTable, Rates,
-    RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation,
+    PinKeyFacts, PinRef, PinShed, PinUsage, PinnedObstacle, Placement, Portability, RateTable,
+    Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation,
     RoutingState, SelectRequest, SelectResult, SharePricer, SharedWindows, SlowDownEdge,
     SlowDownRead, SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause,
     WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON,
@@ -420,7 +420,11 @@ fn select_request(
         canonical_model: model.into(),
         folded_model: model.into(),
         candidates: resolve(s, key, model, model).unwrap(),
-        portable,
+        portability: if portable {
+            Portability::Portable
+        } else {
+            Portability::Hold
+        },
         credit_account: None,
         attempted: attempted.iter().map(|a| a.to_string()).collect(),
         now,
@@ -31312,7 +31316,7 @@ fn a_request_that_waited_for_the_rewrite_is_not_held_for_the_slow_down() {
 fn a_non_portable_request_of_the_moved_pin_is_held_for_the_rewrite() {
     let (s, mut st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1)]);
     let bound = SelectRequest {
-        portable: false,
+        portability: Portability::Hold,
         ..turn_of(&s, "r-2", moved_at + 200)
     };
     let d = decide(&mut st, &s, &bound, &mut rng());
@@ -31338,7 +31342,7 @@ fn a_non_portable_request_of_the_moved_pin_is_held_for_the_rewrite() {
     );
     let count = SelectRequest {
         count: true,
-        portable: false,
+        portability: Portability::Hold,
         ..turn_of(&s, "r-3", moved_at + 300)
     };
     let (result, _) = select(&mut st, &s, &count, &mut rng());
@@ -31774,7 +31778,7 @@ fn a_classifier_call_follows_the_sessions_turn_that_ended_last_onto_its_account(
     );
     // A call that is not portable holds no pin to be bound to, so it takes the same direction.
     let bound = SelectRequest {
-        portable: false,
+        portability: Portability::Hold,
         ..classifier_call(&s, "s1", 2_600)
     };
     let call = decide(&mut st, &s, &bound, &mut r);
