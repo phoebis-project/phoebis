@@ -16596,6 +16596,54 @@ async fn a_slowed_account_answers_the_figure_that_the_stretch_test_compares() {
 }
 
 #[tokio::test]
+async fn a_slowed_account_read_again_answers_the_figure_of_its_newest_read() {
+    let now = Arc::new(AtomicI64::new(AT));
+    let store = shedding_store(&["a"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.five_hour_ceiling = 0.95;
+    pool.slow_down.slow_down = true;
+    pool.slow_down.slow_down_stretch_seconds = 240;
+    pool.shedding.burn_average_seconds = (SLOWED_AVERAGE_MS / 1_000) as u64;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    with_tier(&store, "a");
+    // s1's burn was never folded, so both reads take its tenth of the 5-hour window an hour undecayed. The first read
+    // at `AT` writes 0.96: 0.9 and a tenth an hour over the 36 minutes to the reset less the threshold.
+    store
+        .upsert_pin(&PinRow {
+            burn_at: None,
+            ..stored_pin(&store, "s1", "a", 1, 10.0)
+        })
+        .unwrap();
+    let handle = spawn(store, clock(&now), priced_config()).unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.9, Some(SLOWED_RESET)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    handle
+        .select(slowed_turn(&handle, "r-1", AT))
+        .await
+        .unwrap();
+    // Twelve minutes on, inside the same window, the second read changes the standing entry.
+    let second = AT + 12 * 60_000;
+    now.store(second, Ordering::SeqCst);
+    handle
+        .select(slowed_turn(&handle, "r-2", second))
+        .await
+        .unwrap();
+
+    let entry = projection_of_account(&handle.projections("p").await.unwrap(), "a")
+        .slow_down
+        .expect("the pinned reads wrote a's entry");
+    assert!(
+        close(entry.stretch_projection, 0.94),
+        "0.9 and a tenth an hour over the 24 minutes from the second read to the reset less the threshold: {entry:?}"
+    );
+}
+
+#[tokio::test]
 async fn pins_standing_answers_the_speed_and_the_cycle_of_a_pin() {
     use phoebis_routing::FactValue;
     let now = Arc::new(AtomicI64::new(AT));
