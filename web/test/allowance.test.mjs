@@ -33,8 +33,8 @@ const WEEKS = ['ultra', 'max', 'pro'];
 
 const NOW = Date.UTC(2026, 9, 25, 18, 0);
 /**
- * A window's resets, newest first, a week apart back from `newest`, with the route's total and count over them, each
- * carrying the pair `pairs` names for it and the decoded nulls otherwise.
+ * A window's resets, newest first, a week apart back from `newest`, with the route's total over them, each carrying the
+ * pair `pairs` names for it and the decoded nulls otherwise.
  */
 const windowOf = (window, shares, { newest = NOW - DAY, pairs = [], sources = [], total } = {}) => {
   const resets = shares.map((shareLeft, i) => ({ observedAt: iso(newest - i * WEEK), plan: pairs[i]?.plan ?? null, resetAt: iso(newest - i * WEEK), shareLeft, source: sources[i] ?? 'sample', tier: pairs[i]?.tier ?? null }));
