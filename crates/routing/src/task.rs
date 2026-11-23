@@ -4983,7 +4983,8 @@ impl Task {
 
     /// A failover's invalidation of the pin under `key` on `account_id`: the row leaves the state with the `released`
     /// mark it carried, and its entry stands for the session's landing under `reason` and `cause`. Answers the pin's
-    /// delete where the invalidation took a row.
+    /// delete where the invalidation took a row. A row whose session holds account state stays, and the function
+    /// answers none.
     fn invalidate_failover(
         &mut self,
         pin: &PinRef,
@@ -4992,6 +4993,11 @@ impl Task {
         reason: &'static str,
         cause: Option<MoveCause>,
     ) -> Option<StateWrite> {
+        // The session holds account state, so the failover leaves its pin: the retry's selection reads the row and
+        // places a request that carries no conversation for itself.
+        if self.state.pin(&key).is_some_and(|row| row.account_bound) {
+            return None;
+        }
         let row = self.state.invalidate_pin(pin, account_id)?;
         let now = (self.clock)();
         if let Some(event) = released_mark(&self.snapshot(), &row, now) {
@@ -6344,6 +6350,7 @@ mod tests {
             effort: None,
             ended: false,
             thinking_sums: Default::default(),
+            account_bound: false,
         };
         assert_eq!(
             rates.price_pin(BurnUnit::Usd, &pin, FIVE_HOUR),
@@ -6399,6 +6406,7 @@ mod tests {
             effort: None,
             ended: false,
             thinking_sums: Default::default(),
+            account_bound: false,
         };
         assert_eq!(
             rates.price_pin(BurnUnit::Usd, &pin, FIVE_HOUR),
@@ -6766,6 +6774,7 @@ mod tests {
                 effort: None,
                 ended: false,
                 thinking_sums: Default::default(),
+                account_bound: false,
             }],
             ..RoutingLoad::default()
         });

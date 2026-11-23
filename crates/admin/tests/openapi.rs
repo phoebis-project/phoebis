@@ -787,6 +787,7 @@ async fn a_session_row_answers_its_effort_and_its_agent_lines() {
     assert_eq!(
         properties,
         BTreeSet::from([
+            "account_bound",
             "account_id",
             "agent_id",
             "burn",

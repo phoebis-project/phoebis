@@ -47,6 +47,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         effort: None,
         ended: false,
         thinking_sums: Default::default(),
+        account_bound: false,
     }
 }
 
@@ -824,7 +825,8 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     // The file as a version-2 build left it.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "ALTER TABLE pools DROP COLUMN feature_accounts_json;
+        "ALTER TABLE pins DROP COLUMN account_bound;
+         ALTER TABLE pools DROP COLUMN feature_accounts_json;
          ALTER TABLE api_keys DROP COLUMN feature_accounts_json;
          ALTER TABLE accounts DROP COLUMN state_changed_at;
          ALTER TABLE pools DROP COLUMN fable_reservation_shedding;

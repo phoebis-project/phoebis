@@ -2185,6 +2185,254 @@ fn a_credit_token_naming_the_live_pins_account_renews_the_pin_with_the_moves_not
     assert_eq!(fact_of(pin, "credit", "b"), &FactValue::Text("b".into()));
 }
 
+/// `seeded_pin` of a session whose newest conversation turn read non-portable, so the row carries the flag.
+fn bound_pin(session: &str, account: &str, now: i64) -> PinRow {
+    PinRow {
+        account_bound: true,
+        ..seeded_pin(session, account, now)
+    }
+}
+
+/// The pool of the bound pin's move cases under Pace: `a` holds the pin with its 5-hour window spent, so the spent rule
+/// moves a pin that takes the move rules, and `c`, the emptier sibling, is where such a move lands.
+fn bound_on_spent_a(session: &str) -> (RegistrySnapshot, RoutingState, PinRow) {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0), ("c", 0)],
+        ..Pool::default()
+    });
+    let pin = bound_pin(session, "a", T);
+    let mut st = loaded(vec![pin.clone()]);
+    st.record_sample("a", sample(1.0, 0.1, T - 500), 0);
+    st.record_sample("b", sample(0.5, 0.5, T - 500), 0);
+    st.record_sample("c", sample(0.2, 0.2, T - 500), 0);
+    (s, st, pin)
+}
+
+/// Whether the selection wrote or removed any pin.
+fn touches_a_pin(writes: &[StateWrite]) -> bool {
+    writes
+        .iter()
+        .any(|w| matches!(w, StateWrite::UpsertPin(_) | StateWrite::DeletePin(_)))
+}
+
+#[test]
+fn a_portable_auxiliary_request_leaves_a_bound_pin_on_its_spent_account() {
+    let (s, mut st, _) = bound_on_spent_a("s-bound");
+    let d = decide(
+        &mut st,
+        &s,
+        &auxiliary(&s, "s-bound", T + 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "the request follows the pin, so the next non-portable turn still finds its references on a"
+    );
+    for rule in [
+        "move:spent",
+        "move:overage",
+        "move:return_to_plan",
+        "move:drain",
+        "move:shed",
+    ] {
+        let step = line(&d.record, rule);
+        assert_eq!(
+            (step.verdict, keyed(step)),
+            (
+                "not_run",
+                vec![("reason", &FactValue::Text("account_bound".into()))]
+            ),
+            "{rule}"
+        );
+    }
+    assert_eq!(pinned(&st, "s-bound").account_id, "a");
+}
+
+#[test]
+fn a_portable_main_turn_clears_the_flag_and_takes_the_move() {
+    let (s, mut st, _) = bound_on_spent_a("s-cleared");
+    let d = decide(
+        &mut st,
+        &s,
+        &main_turn(&s, "s-cleared", T + 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::Spent)),
+        "the turn sends a conversation with no reference, so the spent rule moves the pin"
+    );
+    let row = pinned(&st, "s-cleared");
+    assert_eq!(
+        (row.account_id.as_str(), row.account_bound),
+        ("c", false),
+        "the row the move writes carries the portable turn's flag"
+    );
+}
+
+#[test]
+fn a_portable_auxiliary_request_lands_on_a_sibling_and_leaves_a_cooled_bound_pins_row() {
+    let s = snapshot(Pool::default());
+    let pin = bound_pin("s-cooled-bound", "a", T);
+    let mut st = loaded(vec![pin.clone()]);
+    st.record_cooldown(cooled("a", "account", T + HOUR, "five_hour", "rate_limit"));
+    let d = decide(
+        &mut st,
+        &s,
+        &auxiliary(&s, "s-cooled-bound", T + 1_000),
+        &mut rng(),
+    );
+    assert_ne!(
+        picked(&d.result),
+        "a",
+        "the request is placed for itself on a sibling"
+    );
+    assert!(!touches_a_pin(&d.writes), "{:?}", d.writes);
+    assert_eq!(
+        st.pin(&pin_key("s-cooled-bound")),
+        Some(&pin),
+        "the row stays on a for the session's next non-portable turn"
+    );
+}
+
+#[test]
+fn a_round_marks_a_free_pin_and_lists_the_bound_one_as_account_bound() {
+    let s = tiered(shedding_pool(Shedding::default()));
+    // Three warm pins on a of equal burn, 0.04 of the 5-hour window an hour each: s0 holds account state, and the round
+    // walks s1 and s2 alone, so the last-pin guard lets one of them take the mark.
+    let mut st = rounding(vec![
+        PinRow {
+            account_bound: true,
+            ..burning("s0", "a", 4.0, true, T)
+        },
+        burning("s1", "a", 4.0, true, T),
+        burning("s2", "a", 4.0, true, T),
+    ]);
+    st.record_sample("a", sample(0.9, 0.1, T - 500), 0);
+    st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(round.outcome, "marked 1");
+    let row = |session: &str| {
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == session)
+            .map(|p| (p.marked, p.skip))
+            .unwrap_or_else(|| panic!("no row of {session}"))
+    };
+    assert_eq!(
+        row("s0"),
+        (false, Some("account_bound")),
+        "the bound pin is out of the round under its cause"
+    );
+    assert_eq!(
+        [row("s1").0, row("s2").0].iter().filter(|m| **m).count(),
+        1,
+        "one free pin takes the mark: {:?}",
+        round.pins
+    );
+    assert!(!st.shed_marked(&pin_key("s0")));
+}
+
+#[test]
+fn a_round_walks_the_pin_of_the_portable_turn_that_clears_its_flag() {
+    let s = tiered(shedding_pool(Shedding::default()));
+    // The request's own pin s1 carries the flag that its portable main turn clears, beside two free pins of equal burn.
+    let mut st = rounding(vec![
+        PinRow {
+            account_bound: true,
+            ..burning("s1", "a", 4.0, true, T)
+        },
+        burning("s2", "a", 4.0, true, T),
+        burning("s3", "a", 4.0, true, T),
+    ]);
+    st.record_sample("a", sample(0.9, 0.1, T - 500), 0);
+    st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    let mut listed: Vec<(&str, bool)> = round
+        .pins
+        .iter()
+        .map(|p| (p.session_id.as_str(), p.skip == Some("account_bound")))
+        .collect();
+    listed.sort();
+    assert_eq!(
+        listed,
+        [("s1", false), ("s2", false), ("s3", false)],
+        "the turn that ends the state can be shed at that turn"
+    );
+}
+
+#[test]
+fn a_portable_count_with_no_class_leaves_a_bound_pins_flag() {
+    let s = snapshot(Pool::default());
+    let mut st = loaded(vec![bound_pin("s1", "a", T)]);
+    let d = decide(&mut st, &s, &count_of(&s, true, T + 1_000), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let written: Vec<(&str, bool)> = d
+        .writes
+        .iter()
+        .filter_map(|w| match w {
+            StateWrite::UpsertPin(p) => Some((p.account_id.as_str(), p.account_bound)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        written,
+        [("a", true)],
+        "a count carries no conversation, so its renewal keeps the flag"
+    );
+}
+
+#[test]
+fn a_portable_auxiliary_request_leaves_a_bound_pin_whose_account_left_the_pool() {
+    let s = snapshot(Pool::default());
+    let pin = bound_pin("s-left-bound", "a", T);
+    let mut st = loaded(vec![pin.clone()]);
+    let mut req = auxiliary(&s, "s-left-bound", T + 1_000);
+    req.candidates.retain(|c| c.account_id != "a");
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_ne!(
+        picked(&d.result),
+        "a",
+        "the request is placed for itself on a sibling"
+    );
+    assert!(!touches_a_pin(&d.writes), "{:?}", d.writes);
+    assert_eq!(
+        st.pin(&pin_key("s-left-bound")),
+        Some(&pin),
+        "the row stays for the session's next non-portable turn, which the fence answers"
+    );
+}
+
+#[test]
+fn a_portable_auxiliary_request_on_a_bound_pin_reads_no_credit_of_another_account() {
+    let (s, _) = credit_pool();
+    let mut st = loaded(vec![bound_pin("s-bound-credit", "a", T)]);
+    st.record_sample("a", sample(0.1, 0.1, T - 500), 0);
+    st.record_sample("b", sample(0.5, 0.5, T - 500), 0);
+    let req = credited(auxiliary(&s, "s-bound-credit", T + 1_000), "b", 1);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let SelectResult::Selected(sel) = &d.result else {
+        panic!("expected a selection, got {:?}", d.result)
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.renewed),
+        ("a", true),
+        "the request follows its pin as a count does"
+    );
+    assert!(
+        no_fact(line(&d.record, "pin"), "credit"),
+        "the record names no account the request never reached: {:?}",
+        line(&d.record, "pin").facts
+    );
+}
+
 #[test]
 fn a_round_with_no_fitting_destination_marks_nothing_and_records_no_runway() {
     let s = tiered(Pool {
@@ -9402,6 +9650,7 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         effort: None,
         ended: false,
         thinking_sums: BTreeMap::new(),
+        account_bound: false,
     };
     // A decision writes into its state and the state is no `Clone`, so each read decides on a state built again.
     let past_reset = || {
@@ -12704,6 +12953,7 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         effort: None,
         ended: false,
         thinking_sums: BTreeMap::new(),
+        account_bound: false,
     }
 }
 

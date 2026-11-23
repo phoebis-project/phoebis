@@ -726,8 +726,8 @@ pub struct ShedRoundFacts {
     /// `marked N` or `nothing_to_mark`.
     pub outcome: String,
     /// `None` after marks, else the deepest skip class any walked pin reached (`last_pin`, `no_runway`, `sliver`,
-    /// `standing` or `unpriced`), or where no pin was walked the word a left-out pin carries (`ended`, `fable_model`,
-    /// `no_burn` or `off_window`), else `unpriced`.
+    /// `standing` or `unpriced`), or where no pin was walked the word a left-out pin carries (`account_bound`, `ended`,
+    /// `fable_model`, `no_burn` or `off_window`), else `unpriced`.
     pub reason: Option<&'static str>,
     pub dwell_seconds: u64,
     pub dwell_until: i64,
@@ -735,9 +735,10 @@ pub struct ShedRoundFacts {
 
 /// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out (a
 /// fast-lane pin, a pin whose model does not draw the trigger's window, under the Fable reservation a pin whose model
-/// draws a model week, a pin whose agent ended and a pin with no priced burn on the window). A pin there under a key
-/// of a pool the account left is in no round and is not listed here. `burn` and `per_rewrite` are shares of the
-/// trigger's window, the burn per hour, and `rewrite` the Pro-week figure of the pin's rewrite.
+/// draws a model week, a pin whose agent ended, a pin whose session holds account state and a pin with no priced burn
+/// on the window). A pin there under a key of a pool the account left is in no round and is not listed here. `burn`
+/// and `per_rewrite` are shares of the trigger's window, the burn per hour, and `rewrite` the Pro-week figure of the
+/// pin's rewrite.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedPinFacts {
     pub key_id: String,
@@ -762,8 +763,8 @@ pub struct ShedPinFacts {
     /// The destination the round found for the pin.
     pub planned: Option<String>,
     pub runway_ms: Option<i64>,
-    /// `ended`, `fable_model`, `fast_lane`, `last_pin`, `no_burn`, `no_runway`, `off_window`, `sliver`, `standing` or
-    /// `unpriced`.
+    /// `account_bound`, `ended`, `fable_model`, `fast_lane`, `last_pin`, `no_burn`, `no_runway`, `off_window`,
+    /// `sliver`, `standing` or `unpriced`.
     pub skip: Option<&'static str>,
     /// `cheapest` for the pin the round marked as the cheapest one whose burn covers what the target still asked,
     /// else `current` for the request's own pin.

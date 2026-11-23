@@ -7990,6 +7990,65 @@ async fn a_late_fast_429_from_the_lane_the_session_left_never_deletes_its_standa
 }
 
 #[tokio::test]
+async fn a_cooldown_reported_with_a_bound_pins_ref_leaves_the_pin() {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let pin = selected_pin(
+        handle
+            .select(SelectRequest {
+                portability: Portability::Hold,
+                ..turn(&handle, false, 1_000)
+            })
+            .await
+            .unwrap(),
+    );
+    let before = handle.pins().await.unwrap();
+    assert_eq!(
+        before.iter().map(|p| p.account_bound).collect::<Vec<_>>(),
+        [true],
+        "the non-portable turn's row carries the flag"
+    );
+    let account = before[0].account_id.clone();
+    // The relay hands the pin's ref with the refusal of a portable request that fails over.
+    handle
+        .report(Report::Cooldown {
+            account_id: account.clone(),
+            row: CooldownRow {
+                account_id: account.clone(),
+                scope: CooldownScope::Account,
+                until: 1_000 + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(pin),
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+        })
+        .await;
+    assert_eq!(
+        handle
+            .cooldowns()
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| (row.account_id.as_str(), row.until))
+            .collect::<Vec<_>>(),
+        [(account.as_str(), 1_000 + HOUR)],
+        "the cooldown stands"
+    );
+    assert_eq!(
+        handle.pins().await.unwrap(),
+        before,
+        "the row stays, so the session's retry finds its pin and no landing moves it"
+    );
+}
+
+#[tokio::test]
 async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_probes_usage_never_counts(
 ) {
     let store = averaged(seeded(&["a"]));
@@ -10169,6 +10228,7 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         effort: None,
         ended: false,
         thinking_sums: Default::default(),
+        account_bound: false,
     }
 }
 

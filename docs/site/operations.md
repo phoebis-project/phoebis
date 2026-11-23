@@ -422,7 +422,7 @@ replacement means for each user is under [The CA over time](claude-ai-features.m
 
 Schema migrations run when the new binary opens each database, every migration above the stored version in order, each
 inside its own transaction, so a crash leaves the last version that landed. The registry's migrations may drop or
-rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 9 and the
+rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 10 and the
 ledger at schema 6. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
 {found} is newer than the {supported} this build opens: restore the backup taken before the upgrade, or recreate a
 registry a pre-release build wrote with phoebis init`, and the ledger with the same words, `ledger` in place of

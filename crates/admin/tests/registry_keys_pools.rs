@@ -762,6 +762,7 @@ async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
                 effort: None,
                 ended: false,
                 thinking_sums: Default::default(),
+                account_bound: false,
             })
             .unwrap();
     }
@@ -835,6 +836,7 @@ async fn a_main_agents_two_pins_show_whichever_it_used_last_even_when_the_older_
                 effort: None,
                 ended: false,
                 thinking_sums: Default::default(),
+                account_bound: false,
             })
             .unwrap();
     }
@@ -914,6 +916,7 @@ async fn a_main_pin_beside_a_newer_subagent_pin_still_shows_the_main_pin_and_cou
                 effort: None,
                 ended: false,
                 thinking_sums: Default::default(),
+                account_bound: false,
             })
             .unwrap();
     }
@@ -1014,6 +1017,7 @@ async fn sessions_list_live_pins_and_leave_out_a_pin_older_than_the_expiry() {
             effort: None,
             ended: false,
             thinking_sums: Default::default(),
+            account_bound: false,
         })
         .unwrap();
     store
@@ -1047,6 +1051,7 @@ async fn sessions_list_live_pins_and_leave_out_a_pin_older_than_the_expiry() {
             effort: None,
             ended: false,
             thinking_sums: Default::default(),
+            account_bound: false,
         })
         .unwrap();
     // A second app over the same store: its router task loads the pins the first one never saw.
@@ -3099,6 +3104,7 @@ async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() 
                 effort: None,
                 ended: false,
                 thinking_sums: Default::default(),
+                account_bound: false,
             })
             .unwrap();
     }
@@ -3438,6 +3444,7 @@ async fn each_pool_member_answers_the_pins_under_the_pools_keys_on_its_account()
                 effort: None,
                 ended: false,
                 thinking_sums: Default::default(),
+                account_bound: false,
             })
             .unwrap();
     }

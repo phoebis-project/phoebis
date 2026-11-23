@@ -6798,6 +6798,7 @@ fn burning_opus_pin(
         effort: None,
         ended: false,
         thinking_sums: Default::default(),
+        account_bound: false,
     }
 }
 
@@ -7137,6 +7138,60 @@ async fn a_fable_pins_move_cost_reads_its_rewrites_pro_share_of_the_fable_week_o
     assert!(
         close(line["move_cost"].as_f64()),
         "the pin's line answers the row's figure: {line}"
+    );
+}
+
+#[tokio::test]
+async fn a_bound_pin_reads_account_bound_and_no_move_cost_beside_its_move_size() {
+    use common::{get, json, login};
+    let now = common::NOW;
+    let tables = phoebis_ledger::PlanTables {
+        revisions: phoebis_ledger::CostRevisions::from_yaml(FABLE_WEEK_COSTS)
+            .expect("the cost model with a Fable week parses"),
+        path: None,
+        source: "test".to_string(),
+    };
+    // The Fable pin whose move this cost model prices, warm with a last prompt of 1,000 tokens and no thinking, so its
+    // move rewrites 1,000 tokens. Its session holds account state.
+    let seed = sessions_seed(|generation| {
+        vec![phoebis_store::PinRow {
+            model: "claude-fable-5-1".into(),
+            lane: phoebis_routing::lane_key("claude-fable-5-1", "standard", "none", "-"),
+            account_bound: true,
+            ..burning_opus_pin("s1", "business", generation, now, 100.0, 145.0)
+        }]
+    })
+    .await;
+    let parts = common::admin_parts_full_on_equivalent(
+        seed.store.clone(),
+        seed.clock_cell.clone(),
+        tables,
+        phoebis_ledger::LedgerConfig::default(),
+    )
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let row = session_row(
+        &json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await,
+        "s1",
+    );
+    assert_eq!(
+        (
+            row["account_bound"].as_bool(),
+            row["move_cost"].as_f64(),
+            row["move_size"].as_f64()
+        ),
+        (Some(true), None, Some(1_000.0)),
+        "no round moves the pin, so the row prices no move and keeps the size: {row}"
+    );
+    let line = &row["agent_contexts"][0];
+    assert_eq!(
+        (
+            line["account_bound"].as_bool(),
+            line["move_cost"].as_f64(),
+            line["move_size"].as_f64()
+        ),
+        (Some(true), None, Some(1_000.0)),
+        "the pin's line reads as the row: {line}"
     );
 }
 
@@ -9162,6 +9217,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             effort: None,
             ended: false,
             thinking_sums: Default::default(),
+            account_bound: false,
         })
         .unwrap();
     // A live pin the ledger has never recorded a request for at all, not merely one older than the cutoff:
@@ -9204,6 +9260,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             effort: None,
             ended: false,
             thinking_sums: Default::default(),
+            account_bound: false,
         })
         .unwrap();
     // The router task loads its pins at spawn, so the pins above need the store written before this call.
@@ -9409,6 +9466,7 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin() {
             effort: None,
             ended: false,
             thinking_sums: Default::default(),
+            account_bound: false,
         })
         .unwrap();
     let parts = common::admin_parts_full_on(seed.store.clone(), seed.clock_cell.clone()).await;
@@ -9651,6 +9709,7 @@ fn agent_line(
         "pinned_at": common::NOW - 10,
         "ended": false,
         "fast": false,
+        "account_bound": false,
         "move_cost": null,
         "move_size": (last_input_tokens > 0).then_some(last_input_tokens as f64),
         "move_drop_size": null,

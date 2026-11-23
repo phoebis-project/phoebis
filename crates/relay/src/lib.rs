@@ -58,7 +58,6 @@ pub use messages::{
     RelayOutcome, ShutdownMark, MEMORY_FLUSH_INTERVAL,
 };
 pub use observe::RELAY_MISS_REASONS;
-pub use portability::portable_of;
 pub use ratelimit::{retry_after, UnifiedHeaders, FAST_INPUT, FAST_OUTPUT};
 pub use serve::{
     accept_loop, http1_builder, serve, serve_features, Accepted, Limits as ListenLimits,

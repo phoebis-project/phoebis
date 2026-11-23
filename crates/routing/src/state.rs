@@ -4594,6 +4594,7 @@ mod tests {
             effort: None,
             ended: false,
             thinking_sums: Default::default(),
+            account_bound: false,
         };
         (pin, Some(burn))
     }

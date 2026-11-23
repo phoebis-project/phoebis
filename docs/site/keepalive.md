@@ -10,11 +10,11 @@ reads, what the ledger records for every probe, where the console shows all of i
 ## How a probe works
 
 A request is eligible for a replayable copy when its thinking is adaptive or disabled, its tool choice is not forced,
-and its output is neither structured nor bound to a strict tool, and its body references no account state
-([Selection](routing.md#selection) lists the references). A request that fails one of those checks, whose body runs over
-`proxy.max_request_bytes`, or whose header block runs over the replay's budget (8192 bytes for one value, 16384 for the
-block) is never retained, and the Sessions view reads it `not_retained` with the check it failed as the cause (see [The
-five states](#the-five-states)).
+and its output is neither structured nor bound to a strict tool. A request that fails one of those checks, whose body
+runs over `proxy.max_request_bytes`, or whose header block runs over the replay's budget (8192 bytes for one value,
+16384 for the block) is never retained, and the Sessions view reads it `not_retained` with the check it failed as the
+cause (see [The five states](#the-five-states)). A request whose body references account state is retained like any
+other, and its probe goes out only while the session's pin stands on the account that served it.
 
 Shortly before the retained request's prompt cache would expire, the router sends a probe built from it through the same
 failover loop a real request takes, under the headers the bus published for the request: the same body with `max_tokens`
@@ -36,15 +36,16 @@ the answer names. With no eligible sibling the probe gets the pool's own answer 
 serve](routing.md#when-nothing-can-serve)), and the wait that answer names holds up to the ladder's five-minute cap. A
 probe whose session holds no pin, because the pin idled out or its account left the pool, places nothing either, and the
 recipe pauses under `no_pin` until the next real request lands. A probe's own 429 cools the account and leaves the pin,
-which the session's next real request then moves. A probe whose pinned account was deleted is held as `paused` before it
-is sent, as one on a disabled account is. A probe whose pinned account's subscription ended is held before it is sent
-too, and so is one due nearer to the end than its own interval, the entry's TTL less the lead. The agent reads
-`ineligible_credential` under that hold as well, and the hold is a live one: it ends when the term clears, and the
-recipe leaves as `expired` once its entry has expired. That last interval falls inside the pool's wind-down, or reaches
-before it where the interval is longer than `wind_down_minutes`, so no probe writes a cache the end discards and the pin
-turns cold at the end ([Subscription end](routing.md#subscription-end)). A probe pinned on a usage-based seat at its
-spend cap is held before it is sent as `spent`, and a fast recipe whose pinned member's usage credits are blocked as
-`credits`, each read at every tick, so neither writes a rejected request row while the state stands.
+which the session's next real request then moves, unless the session holds account state
+([Selection](routing.md#selection)). A probe whose pinned account was deleted is held as `paused` before it is sent, as
+one on a disabled account is. A probe whose pinned account's subscription ended is held before it is sent too, and so is
+one due nearer to the end than its own interval, the entry's TTL less the lead. The agent reads `ineligible_credential`
+under that hold as well, and the hold is a live one: it ends when the term clears, and the recipe leaves as `expired`
+once its entry has expired. That last interval falls inside the pool's wind-down, or reaches before it where the
+interval is longer than `wind_down_minutes`, so no probe writes a cache the end discards and the pin turns cold at the
+end ([Subscription end](routing.md#subscription-end)). A probe pinned on a usage-based seat at its spend cap is held
+before it is sent as `spent`, and a fast recipe whose pinned member's usage credits are blocked as `credits`, each read
+at every tick, so neither writes a rejected request row while the state stands.
 
 A usage-based Enterprise seat's probes hold under its member budget as an API-key member's do, and never for overage:
 the router reads no overage on such a seat ([Overage](routing.md#overage)).

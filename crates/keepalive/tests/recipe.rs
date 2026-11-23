@@ -600,10 +600,11 @@ fn malformed_usage_is_refused_and_the_bus_shape_is_read() {
     );
 }
 
-/// A reference to account-scoped state belongs to the account that served the request, and a probe follows a
-/// pin a sibling request may have moved, so such a body can never become a recipe.
+/// A reference to account-scoped state belongs to the account that served the request. The pin of such a session
+/// stays on that account, and a probe goes out only while the pin stands on the holder that served the body, so
+/// such a body becomes a recipe as any other does.
 #[test]
-fn a_body_bound_to_its_account_is_refused() {
+fn a_body_bound_to_its_account_is_retained() {
     let document = json!([{"role": "user", "content": [{"type": "document", "source": {"type": "file", "file_id": "file_1"}}]}]);
     let server_tool = json!([{"role": "user", "content": [{"type": "code_execution_tool_result", "tool_use_id": "x", "content": {}}]}]);
     for (label, body) in [
@@ -612,8 +613,8 @@ fn a_body_bound_to_its_account_is_refused() {
         ("a server-side tool result", with("messages", server_tool)),
     ] {
         assert_eq!(
-            make_recipe(&headers(), &body, "routing-alias", 1 << 20).unwrap_err(),
-            Reason::UnsupportedShape,
+            make_recipe(&headers(), &body, "routing-alias", 1 << 20).err(),
+            None,
             "{label}"
         );
     }

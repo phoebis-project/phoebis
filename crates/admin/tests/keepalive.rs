@@ -1663,6 +1663,7 @@ async fn a_session_row_on_a_usage_based_seat_reads_its_burn_in_dollars() {
             effort: None,
             ended: false,
             thinking_sums: Default::default(),
+            account_bound: false,
         })
         .unwrap();
     let parts = common::admin_parts_full_on(seed.store.clone(), seed.clock_cell.clone()).await;
@@ -1715,6 +1716,7 @@ fn line_pin(session: &str, agent: &str, model: &str, key_generation: i64) -> pho
         effort: None,
         ended: false,
         thinking_sums: Default::default(),
+        account_bound: false,
     }
 }
 
@@ -1864,6 +1866,7 @@ fn line(agent: &str, model: &str, last_used_at: i64, lifecycle: Option<&str>) ->
         "pinned_at": common::NOW - 10,
         "ended": false,
         "fast": false,
+        "account_bound": false,
         "move_cost": null,
         "move_size": 100_000.0,
         "move_drop_size": null,

@@ -550,6 +550,12 @@ fn placed_auxiliary_only(request: &SelectRequest) -> bool {
         .is_some_and(|class| !REFRESHING_CLASSES.contains(&class))
 }
 
+/// Whether the request carries its session's conversation: a class in `REFRESHING_CLASSES`, or no class. A token
+/// count and a probe never do, whatever class they name: both follow the pin.
+fn carries_conversation(request: &SelectRequest) -> bool {
+    !(request.count || request.probe || placed_auxiliary_only(request))
+}
+
 /// The request's two hashes, for a pin it refreshed, colded or created: the static prefix and the last message
 /// boundary, which the next continuation's boundaries contain.
 fn stamp_hashes(pin: &mut PinRow, request: &SelectRequest) {
@@ -1833,6 +1839,11 @@ fn run(
     // lands back on the account reads its cache against that size.
     let mut row_size: Option<(String, (u64, bool, bool))> = None;
     let mut row_warmth: Option<(Warmth, WarmthCause)> = None;
+    // The row's session holds account state and this request carries no conversation, so the request follows the pin
+    // as a token count does: it reads no credit, no move rule runs for it, and where the pin's account cannot serve it,
+    // it is placed for itself and writes no pin. Read off the row whatever `found` names it, so a row whose account
+    // left the pool binds as a live one does, and a row that idled out binds nothing.
+    let mut follows_bound = false;
     if let Some(session) = session {
         let key = request.pin_key();
         // A slot wait ends at the admission, the request's dispatch, which the relay names as the cap hold's end, so
@@ -1878,6 +1889,7 @@ fn run(
                 .iter()
                 .any(|c| c.account_id == current.account_id);
             let idle = request.now - current.last_used_at > ttl_ms;
+            follows_bound = !idle && current.account_bound && !carries_conversation(request);
             let found = if idle {
                 "expired_idle"
             } else if !serves && request.portability.is_portable() {
@@ -2056,6 +2068,7 @@ fn run(
     // the upstream keeps it free, else to the account that turn's pin stands on now.
     let credit = credit_candidate(
         request,
+        follows_bound,
         &eligible,
         pin.as_ref().map(|(current, _)| current.account_id.as_str()),
         state,
@@ -2194,7 +2207,9 @@ fn run(
     // Step 4: the moves, for a portable request with a live pin. A pin on an account past its saved end never
     // reaches them: step 5 releases it as it releases a cooled account's. A token count follows its pin: it
     // creates no pin (step 7), so a move it made would leave the session with none. A probe follows its pin too,
-    // so a rule that would move it, a standing mark's among them, waits for the session's next real request.
+    // so a rule that would move it, a standing mark's among them, waits for the session's next real request. So does
+    // a request that carries no conversation on the pin of a session that holds account state, since the session's
+    // next non-portable turn finds its references on the pin's account alone.
     let mut migrated = None;
     let mut shed_from = None;
     // The row a move takes off its source, whose burn and last prompt the new row carries.
@@ -2218,11 +2233,13 @@ fn run(
         current = as_written(current);
         let mut moved_off = false;
         let ended = subscription_ended(snapshot, &current.account_id, request.now);
-        if request.count || request.probe || ended {
+        if request.count || request.probe || follows_bound || ended {
             let reason = if request.count {
                 "count"
             } else if request.probe {
                 "probe"
+            } else if follows_bound {
+                "account_bound"
             } else {
                 "subscription_ended"
             };
@@ -2822,8 +2839,10 @@ fn run(
         })
         .filter(|account| account != &chosen.account_id);
     // Step 7: a fresh pin with a fresh epoch. A token count touches no cache, so it creates none: a pin it left
-    // on an account at its cap would carry the agent's next message past the cap, since a renewal never reads it.
-    let handed = session.filter(|_| !request.count).map(|session| {
+    // on an account at its cap would carry the agent's next message past the cap, since a renewal never reads it. A
+    // request that follows a bound pin creates none either, so the row stays for the session's next non-portable turn.
+    let creates = !request.count && !follows_bound;
+    let handed = session.filter(|_| creates).map(|session| {
         let epoch = state.fresh_epoch();
         // A failover's landing carries the row its source lost and remembers the source as a shed move does, and a
         // deleted account's landing carries the row alone.
@@ -3041,6 +3060,9 @@ fn fresh_pin(
         thinking_sums: replaced
             .map(|r| handed_sums(r, request, snapshot))
             .unwrap_or_default(),
+        // No row's flag carries over: a request that carries no conversation never moves or replaces a flagged live
+        // row, and each other row it replaces names an account whose state the new account does not hold.
+        account_bound: carries_conversation(request) && !request.portability.is_portable(),
     };
     stamp_hashes(&mut row, request);
     row
@@ -6204,19 +6226,21 @@ pub(crate) fn standing_move_read(
 /// weighted drop, each move read at the pin's own destination, bounded by `warm_sessions`, a fast-lane pin out of a
 /// window-share round, and a pin whose model does not draw the trigger's window and a pin with no priced burn on it out
 /// of any round, since none of them has a share of it to shed, a pin whose model draws a model week out of a round the
-/// Fable reservation fired (`fable_model`), since its use is what the reservation keeps room for, and a pin whose agent
-/// ended out of any round too, since its agent sends no new turn and marking its decayed burn relieves nothing), then
-/// walked while the removed burn is under the target, `min(excess, shed_cap x burn_sum)` on the trigger's window, and
-/// `shed_cap x burn_sum` under the reservation, whose test names no excess. Once one pin's burn covers what the
-/// target still asks, the walk marks the covering pin whose move costs the least, `cheapest` on the record, rather than
-/// the next in the order: a warm pin's rewrite plus the share of the thinking its move drops, and a cold pin's share of
-/// that thinking alone. Where no covering pin has a destination, the walk marks the pin at its position only where its
-/// burn covers `SHED_MARK_SHARE` of the rest, `sliver` otherwise. A standing mark is a move pending, so its burn counts
-/// as removed and the pin is skipped. A pin whose mark would leave the account's other unmarked priced pins under
-/// `SHED_MARK_SHARE` of the burn sum is never marked, `last_pin` before its gate is read, while no unpriced pin stands
-/// unmarked. An unpriced pin is never marked, and a pin with no fitting destination counts nothing. Each mark plans a
-/// reservation on its destination, which the next pin's fit counts, so a sibling's headroom is taken once. The current
-/// pin's warmth and lane are this request's, every other pin's the stored ones.
+/// Fable reservation fired (`fable_model`), since its use is what the reservation keeps room for, a pin whose agent
+/// ended out of any round too, since its agent sends no new turn and marking its decayed burn relieves nothing, and a
+/// pin whose session holds account state out of any round (`account_bound`), since it stays on its account until a
+/// portable turn of the conversation), then walked while the removed burn is under the target,
+/// `min(excess, shed_cap x burn_sum)` on the trigger's window, and `shed_cap x burn_sum` under the reservation, whose
+/// test names no excess. Once one pin's burn covers what the target still asks, the walk marks the covering pin whose
+/// move costs the least, `cheapest` on the record, rather than the next in the order: a warm pin's rewrite plus the
+/// share of the thinking its move drops, and a cold pin's share of that thinking alone. Where no covering pin has a
+/// destination, the walk marks the pin at its position only where its burn covers `SHED_MARK_SHARE` of the rest,
+/// `sliver` otherwise. A standing mark is a move pending, so its burn counts as removed and the pin is skipped. A pin
+/// whose mark would leave the account's other unmarked priced pins under `SHED_MARK_SHARE` of the burn sum is never
+/// marked, `last_pin` before its gate is read, while no unpriced pin stands unmarked. An unpriced pin is never marked,
+/// and a pin with no fitting destination counts nothing. Each mark plans a reservation on its destination, which the
+/// next pin's fit counts, so a sibling's headroom is taken once. The current pin's warmth, lane and `account_bound`
+/// are this request's, every other pin's the stored ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
@@ -6300,6 +6324,12 @@ fn shed_round(
     // nowhere, its pin and cache kept for a respawn. A fast-lane pin, a pin off the window and the Fable pin of a
     // reservation's round keep their words whatever their agent did.
     pins = leave_out(pins, "ended", &|p: &PinRow| p.ended);
+    // A pin whose session holds account state stays on its account until a portable turn of the conversation, so no
+    // round plans its move. The request's own pin is free behind this selection: a request that follows a bound pin
+    // runs no round, so its own row carries no flag, or the request is the portable turn that clears it.
+    pins = leave_out(pins, "account_bound", &|p: &PinRow| {
+        !is_current(p) && p.account_bound
+    });
 
     // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
     // does not weight, the one case left once the partition above took the pins whose model does not draw the window,
@@ -6651,10 +6681,10 @@ fn shed_round(
         reads[index] = read;
     }
     let (outcome, reason) = if marks.is_empty() {
-        // The deepest class in the order `no_runway`, `sliver`, `off_window`, `fable_model`, `ended`, `no_burn`,
-        // `unpriced`, `last_pin`, `standing`: a walked pin's skip, or where no pin was walked a left-out pin's own
-        // word. `unpriced` where neither names a class, since no priced burn was there to remove. `no_runway` leads,
-        // the word the attention list's shed condition reads.
+        // The deepest class in the order `no_runway`, `sliver`, `off_window`, `fable_model`, `ended`, `account_bound`,
+        // `no_burn`, `unpriced`, `last_pin`, `standing`: a walked pin's skip, or where no pin was walked a left-out
+        // pin's own word. `unpriced` where neither names a class, since no priced burn was there to remove.
+        // `no_runway` leads, the word the attention list's shed condition reads.
         let mut skips: Vec<&'static str> = reads.iter().filter_map(|read| read.skip).collect();
         if ordered.is_empty() {
             // `fast_lane` names no class of the list.
@@ -6666,6 +6696,7 @@ fn shed_round(
             "off_window",
             "fable_model",
             "ended",
+            "account_bound",
             "no_burn",
             "unpriced",
             "last_pin",
@@ -6678,8 +6709,8 @@ fn shed_round(
     } else {
         (format!("marked {}", marks.len()), None)
     };
-    // A left-out pin's row (`fast_lane`, `off_window`, `fable_model`, `ended` or `no_burn`) carries no share and no
-    // read, so its figures follow the partition's word and never what the pricer answers for it.
+    // A left-out pin's row (`fast_lane`, `off_window`, `fable_model`, `ended`, `account_bound` or `no_burn`) carries no
+    // share and no read, so its figures follow the partition's word and never what the pricer answers for it.
     let pin_facts = |p: &PinRow, walked: Option<(usize, &RoundPin)>, left: Option<&'static str>| {
         let position = walked.map(|(i, _)| i);
         let read = position.map(|i| &reads[i]);
@@ -6933,9 +6964,10 @@ fn fast_credits_row<'a>(
 /// hashes, a cold one zeroes the refresh and stamps its hashes so the next continuation re-warms the pin, and
 /// a foreign one leaves both alone. A request that carries no chain has no hashes to stamp, so the pin keeps
 /// the last conversation it was judged against; its lane is stamped all the same, or a chainless body on a new
-/// lane would leave the pin cold for good. `previous_landing` is the account step 1 read the session's previous
-/// request landed on, which the selection names as `left` where it is another account than the pin's: a return to
-/// the pin after a turn elsewhere refers to a message the pin's account cannot find.
+/// lane would leave the pin cold for good. A request that carries the conversation stamps whether its body holds
+/// account state, and a count, a probe and an auxiliary call leave the flag. `previous_landing` is the account step 1
+/// read the session's previous request landed on, which the selection names as `left` where it is another account
+/// than the pin's: a return to the pin after a turn elsewhere refers to a message the pin's account cannot find.
 #[allow(clippy::too_many_arguments)]
 fn renew(
     state: &mut RoutingState,
@@ -6958,6 +6990,9 @@ fn renew(
         .pin_mut(key)
         .expect("a renewed pin is the row its selection read from the state");
     renewed.last_used_at = now;
+    if carries_conversation(request) {
+        renewed.account_bound = !request.portability.is_portable();
+    }
     match verdict {
         Warmth::Refresh => {
             renewed.last_refresh_at = now;
@@ -7214,16 +7249,18 @@ fn subscription_ended(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -
 /// The candidate a fallback credit token places the request on: the issuer `credit_account` names, among the eligible
 /// set under the incarnation that answered the refusal, and under its in-flight cap unless the live pin is already
 /// there, since a renewal reads no cap. A count creates no pin and follows its pin, a probe warms the pin it was sent
-/// for, and a non-portable request keeps its binding, so none of them reads a credit.
+/// for, a request that `follows_bound` follows the pin of a session that holds account state as a count does, and a
+/// non-portable request keeps its binding, so none of them reads a credit.
 fn credit_candidate<'a>(
     request: &SelectRequest,
+    follows_bound: bool,
     eligible: &[&'a Candidate],
     pinned: Option<&str>,
     state: &RoutingState,
     pool: &PoolRow,
 ) -> Option<&'a Candidate> {
     let credit = request.credit_account.as_ref()?;
-    if request.count || request.probe || !request.portability.is_portable() {
+    if request.count || request.probe || follows_bound || !request.portability.is_portable() {
         return None;
     }
     let candidate = candidate_in(eligible, &credit.account_id)

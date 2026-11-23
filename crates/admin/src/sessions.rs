@@ -125,12 +125,16 @@ pub(crate) struct Session {
     pub ended: Option<bool>,
     /// The display pin's lane is the fast lane, as a shedding round tests it. Null on a row with no pin.
     pub fast: Option<bool>,
+    /// The display pin's session holds account state, so the pin stays on its account until a portable turn of the
+    /// conversation. Null on a row with no pin.
+    pub account_bound: Option<bool>,
     /// The figure a shedding round's pick compares for the display pin: the Pro share its rewrite spends on the week
     /// its model draws, the Fable week for a model that draws it and the 7-day window otherwise, plus the share of the
     /// thinking its move would drop, `move_drop_cost`. Null where neither is priced above zero, as where the cost model
-    /// weighs no rewrite of the model on that week or the pin holds no prompt size, and on a row with no pin. A reader
-    /// takes a null as 0, as the pick does. The figure stands whatever the pin's warmth, where the pick reads a cold
-    /// pin's move at `move_drop_cost` alone unless the pool's `warm_sessions` is `always`.
+    /// weighs no rewrite of the model on that week or the pin holds no prompt size, and on a row with no pin. Null too
+    /// for a pin that holds account state, which no round moves. A reader takes a null as 0, as the pick does. The
+    /// figure stands whatever the pin's warmth, where the pick reads a cold pin's move at `move_drop_cost` alone unless
+    /// the pool's `warm_sessions` is `always`.
     pub move_cost: Option<f64>,
     /// The size a shedding round's order divides the pin's burn by while the pin is warm, in tokens: the prompt its
     /// move would rewrite on the destination a round would plan for it, plus the thinking the move would drop at the
@@ -255,8 +259,11 @@ pub(crate) struct AgentContext {
     pub ended: bool,
     /// The pin's lane is the fast lane, as the row's `fast`.
     pub fast: bool,
+    /// This pin's session holds account state, as the row's `account_bound` reads it for the display pin.
+    pub account_bound: bool,
     /// The figure a shedding round's pick compares for this pin, as the row's `move_cost`, the dropped thinking's share
-    /// included. Null where neither the rewrite nor the dropped thinking is priced above zero.
+    /// included. Null where neither the rewrite nor the dropped thinking is priced above zero. Null too for a pin that
+    /// holds account state, which no round moves.
     pub move_cost: Option<f64>,
     /// The size a shedding round's order divides this pin's burn by while the pin is warm, as the row's `move_size`.
     /// Null where the pin holds no prompt size.
@@ -554,7 +561,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 }),
                 ended: Some(p.ended),
                 fast: Some(standing.fast()),
-                move_cost: standing.move_read.cost,
+                account_bound: Some(p.account_bound),
+                move_cost: standing.move_read.cost.filter(|_| !p.account_bound),
                 move_size: standing.move_read.size,
                 move_drop_size: standing.move_read.drop_size,
                 move_drop_cost: standing.move_read.drop_cost,
@@ -706,7 +714,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     pinned_at: pin.created_at,
                     ended: pin.ended,
                     fast: standing.fast(),
-                    move_cost: standing.move_read.cost,
+                    account_bound: pin.account_bound,
+                    move_cost: standing.move_read.cost.filter(|_| !pin.account_bound),
                     move_size: standing.move_read.size,
                     move_drop_size: standing.move_read.drop_size,
                     move_drop_cost: standing.move_read.drop_cost,

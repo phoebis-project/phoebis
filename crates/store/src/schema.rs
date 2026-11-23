@@ -377,6 +377,11 @@ ALTER TABLE pools ADD COLUMN feature_accounts_json TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE api_keys ADD COLUMN feature_accounts_json TEXT NOT NULL DEFAULT '{}';
 "#;
 
+/// A pin whose session holds account state, which stays on its account until a portable turn of the conversation.
+const V10: &str = r#"
+ALTER TABLE pins ADD COLUMN account_bound INTEGER NOT NULL DEFAULT 0;
+"#;
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
 /// rebuild a table, so an older build refuses a newer registry rather than misreading it.
 pub const MIGRATIONS: &[(u32, &str)] = &[
@@ -388,6 +393,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (7, V7),
     (8, V8),
     (9, V9),
+    (10, V10),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it

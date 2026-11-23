@@ -447,8 +447,11 @@ itself or in its `source` or is a server tool's result (its `type` ends in `_too
 message's `content`, in a block's own `content` and in a document's content source, so the input of a tool call, a tool
 definition and a string bind nothing. It sorts a non-portable request into one of two classes: a request whose
 references are all web search results (`web_search_tool_result`), and a request that holds any other reference, beside a
-web search result or not. With affinity off or no live pin, a non-portable request runs the normal selection instead,
-and the account-scoped reference it carries may then not resolve.
+web search result or not. The pin of such a session stays on its account while the session's newest turn holds a
+reference: no request of the session moves it, no shedding round plans its move, and a portable side request that the
+account cannot serve is placed for that one request and leaves the pin. A portable turn of the conversation ends that,
+and the pin moves again by the rules below. With affinity off or no live pin, a non-portable request runs the normal
+selection instead, and the account-scoped reference it carries may then not resolve.
 
 Every decision is recorded in full, with what the engine read in the order it read it, and read in the console's
 [routing log](console.md#routing-log). The log's words for the rules, the rungs, the partitions and the strategies are
@@ -591,13 +594,14 @@ the wait ends at once when the first request ends without a head.
 
 ### Moves
 
-A live pin on a portable request moves only when its session sends a request, and only by one of five rules, checked in
-this order: spent, overage, return to plan, drain and shed. The first rule that finds a destination moves the pin and
-names the move after itself. A keepalive probe reaches none of the five rules, as a token count reaches none, and the
-move waits for the session's next real request. A pin on an account past its subscription end reaches none of them: the
-`subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin. A request sent fast takes
-neither the spent nor the overage rule, since it draws usage credits and no plan window. What a move drops of a
-session's thinking, and how a move and a shedding round weigh it, is under [What a move drops](#what-a-move-drops).
+A live pin moves only when its session sends a portable request while the session holds no account state, and only by
+one of five rules, checked in this order: spent, overage, return to plan, drain and shed. The first rule that finds a
+destination moves the pin and names the move after itself. A keepalive probe reaches none of the five rules, as a token
+count reaches none, and the move waits for the session's next real request. A pin on an account past its subscription
+end reaches none of them: the `subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin.
+A request sent fast takes neither the spent nor the overage rule, since it draws usage credits and no plan window. What
+a move drops of a session's thinking, and how a move and a shedding round weigh it, is under [What a move
+drops](#what-a-move-drops).
 
 Every rule takes its destination through one gate, the destination gate. It leaves out the source, the siblings the
 rule's own test refuses and every sibling inside `wind_down_minutes` of its subscription end (see **Subscription end**,
@@ -743,6 +747,7 @@ and the slow-down's shares), and the round's record keeps its row under `ended`.
 stay, since the main session can respawn the agent with its whole context, and the agent's next request brings the pin
 back into the walk and into every figure, the projection that fires a round among them (see **The projection**, above).
 The mark is stored with the pin, so a restart keeps such a pin out of every figure until the agent's next request. A pin
+whose session holds account state is out of the round as well (`account_bound`), since no round plans its move. A pin
 with no priced burn on the fired window is out of the round too (`no_burn`), since it has nothing to shed. The round
 then walks the pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A
 pin with a standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The round
@@ -770,30 +775,31 @@ only where its burn covers at least a tenth of what the target still asks, warm 
 it is (`sliver`), since its move relieves too little of the rest, and the round's record names the share as
 `mark_share`. A pin whose burn carries the removed burn past the target stays marked, and the walk stops there. A round
 that marks nothing records why: `no_runway` when no priced pin had a destination, `sliver` when the order left a pin
-under a tenth of the rest, `off_window`, `fable_model`, `ended` or `no_burn` when it walked no pin and a pin it left out
-carried that word, `unpriced` when no burn was priced, `last_pin` when every pin the target asked for would have left
-too little burn unmarked, and `standing` when every pin walked was a pending move. Either way the round is recorded, so
-the dwell holds.
+under a tenth of the rest, `off_window`, `fable_model`, `ended`, `account_bound` or `no_burn` when it walked no pin and
+a pin it left out carried that word, `unpriced` when no burn was priced, `last_pin` when every pin the target asked for
+would have left too little burn unmarked, and `standing` when every pin walked was a pending move. Either way the round
+is recorded, so the dwell holds.
 
 A marked session moves at its next real request, the request that ran the round included, since the mark check follows
-the round. It moves only to a sibling it fits, the one the strategy ranks first with the longest runway among its ties,
-never within `shed_dwell_seconds` back to an account that shed it, and with none it renews in place and keeps its mark.
-A mark from a round on plan quota moves a standard request alone: a fast-mode request of the marked session stays where
-it is. A pin on an account cooling for the session's model, marked or not, is replaced rather than renewed, with
-`cooldown` among its reasons: the selection's renew step does not renew it, and the placement that takes its place on
-another account moves the session, its mark clearing as `moved`. The round on the account still runs, since a cooldown
-can hold one model alone. An unmarked pin never moves for utilization. A mark holds until the pin moves, is released or
-expires, or its account heals: when the account's projection on the marked window reads under the line its horizon sets
-(the wall at the account's end or the window's own reset, the window's own ceiling at the five-hour bound) at the pin's
-next request, or, for a mark the stretch made, when the stretch reads at or under `slow_down_stretch_seconds`, the mark
-clears and the pin stays. On a pool that sheds on the Fable reservation, a `seven_day` mark on a pin whose model draws
-no model week heals only once the account's 7-day room also reads at or above its reservation, so a mark of the
-reservation's round stands while either test reads over and does not clear on the projection alone before its pin moves.
-A later round adds its marks beside the standing ones. `shed_dwell_seconds` (default 900) thus has two roles, the pause
-between two rounds on one account and the time a shed session keeps off the account that shed it. The marks live on the
-pins' rows in the registry, beside each account's last round, so a restart neither forgets a mark nor starts a fresh
-round inside the dwell. A held request does not survive one (the relay's open connection closes and the client retries),
-and the routing log's router started row says so.
+the round. A mark on a pin whose session holds account state moves nothing until a portable turn of the conversation
+ends that state. A marked session moves only to a sibling it fits, the one the strategy ranks first with the longest
+runway among its ties, never within `shed_dwell_seconds` back to an account that shed it, and with none it renews in
+place and keeps its mark. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the
+marked session stays where it is. A pin on an account cooling for the session's model, marked or not, is replaced rather
+than renewed, with `cooldown` among its reasons: the selection's renew step does not renew it, and the placement that
+takes its place on another account moves the session, its mark clearing as `moved`. The round on the account still runs,
+since a cooldown can hold one model alone. An unmarked pin never moves for utilization. A mark holds until the pin
+moves, is released or expires, or its account heals: when the account's projection on the marked window reads under the
+line its horizon sets (the wall at the account's end or the window's own reset, the window's own ceiling at the
+five-hour bound) at the pin's next request, or, for a mark the stretch made, when the stretch reads at or under
+`slow_down_stretch_seconds`, the mark clears and the pin stays. On a pool that sheds on the Fable reservation, a
+`seven_day` mark on a pin whose model draws no model week heals only once the account's 7-day room also reads at or
+above its reservation, so a mark of the reservation's round stands while either test reads over and does not clear on
+the projection alone before its pin moves. A later round adds its marks beside the standing ones. `shed_dwell_seconds`
+(default 900) thus has two roles, the pause between two rounds on one account and the time a shed session keeps off the
+account that shed it. The marks live on the pins' rows in the registry, beside each account's last round, so a restart
+neither forgets a mark nor starts a fresh round inside the dwell. A held request does not survive one (the relay's open
+connection closes and the client retries), and the routing log's router started row says so.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
@@ -1151,10 +1157,10 @@ their own bounds, as the paragraph after the steps says. Each attempt goes throu
 2. Acquire the account's credential, apply its body edits, and send on its dispatch path.
 3. Classify the head. A short throttle on a portable request is waited out on the same account ([retry in
    place](#retry-in-place)). Any other failover row on a portable request records the cooldown, invalidates the matching
-   pin, and returns to step 1. On a non-portable request it records the cooldown and commits the failed response
-   instead. An authentication failure is the exception: it is never committed (see the paragraph after these steps), and
-   the failover leaves the pin of an account it marks for the next selection to replace. Any other row commits and
-   relays the response.
+   pin unless its session holds account state, and returns to step 1. On a non-portable request it records the cooldown
+   and commits the failed response instead. An authentication failure is the exception: it is never committed (see the
+   paragraph after these steps), and the failover leaves the pin of an account it marks for the next selection to
+   replace. Any other row commits and relays the response.
 4. Once the committed response ends, renew the pin with the usage it carried: the served account is final for this
    request. A pin this request created and whose answer is `400`, `403` or `404` is released instead, since it never
    served, unless another turn of the session renewed it meanwhile, and so is one a non-portable request created before

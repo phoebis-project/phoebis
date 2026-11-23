@@ -142,8 +142,7 @@ impl BodyFacts {
                 chains: None,
                 markers_ttl_ms: None,
                 // Fails open: a body no reader parses carries no reference the router could prove, and the upstream
-                // refuses it anyway. The keepalive reads `portable_of` on its own parsed tree and refuses such a body
-                // before it gets that far.
+                // refuses it anyway. The keepalive's own parse refuses such a body, so it retains no recipe of it.
                 portability: Portability::Portable,
                 credit_digest: None,
             };

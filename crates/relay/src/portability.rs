@@ -5,8 +5,8 @@ use phoebis_routing::Portability;
 use serde_json::Value;
 
 /// The class of the parsed body's references to account state: the hold class for a top-level `container`, else the
-/// strongest class that a block of `messages` gives. The relay's `BodyFacts::portability` and the keepalive's recipe
-/// check each read it off the parse they already ran.
+/// strongest class that a block of `messages` gives. The relay's `BodyFacts::portability` reads it off the parse it
+/// already ran.
 pub fn portable_of(root: &Value) -> Portability {
     let Some(object) = root.as_object() else {
         return Portability::Portable;
