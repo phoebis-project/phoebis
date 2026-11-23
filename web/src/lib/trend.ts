@@ -2,7 +2,7 @@ import type { QuotaHistory } from '@/api/types';
 import { MINUTE } from './time';
 
 /** Percents. A value is null before its series' first sample, after its last one and from a sample with no figure to
- *  the series' next sample, and every Fable value is null for an account without a Fable window. */
+ *  the series' next sample. */
 export interface TrendPoint {
   at: number;
   u5: number | null;
@@ -22,7 +22,7 @@ export const bucketOf = (iso: string) => Math.floor(Date.parse(iso) / BUCKET_MS)
  * A sample with no figure carries its null, so the line breaks where the upstream reported none.
  * `every` thins the joint base: 7 days of buckets is 2,016 points, and every third is plenty for a 900px plot.
  */
-export function joinTrend(history: QuotaHistory[], hasFable: boolean, every = 3): TrendPoint[] {
+export function joinTrend(history: QuotaHistory[], every = 3): TrendPoint[] {
   const series = (id: string) => (history.find((h) => h.windowId === id)?.samples ?? []).map((s) => ({ bucket: bucketOf(s.at), value: s.utilization === null ? null : s.utilization * 100 }));
   const h5 = series('5h');
   const h7 = series('7d');
@@ -43,5 +43,5 @@ export function joinTrend(history: QuotaHistory[], hasFable: boolean, every = 3)
   const buckets = [...new Set([...h5, ...h7, ...hF].map((s) => s.bucket))].sort((a, b) => a - b);
   return buckets
     .filter((_, i) => i % every === 0)
-    .map((bucket) => ({ at: bucket * BUCKET_MS, u5: at5(bucket), u7: at7(bucket), uf: hasFable ? atF(bucket) : null }));
+    .map((bucket) => ({ at: bucket * BUCKET_MS, u5: at5(bucket), u7: at7(bucket), uf: atF(bucket) }));
 }

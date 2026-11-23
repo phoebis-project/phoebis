@@ -23,8 +23,10 @@ still loading, unless its last read failed. When a wait ends or the interval cha
 answer, the view reads at once, unless a read is still in flight, which leaves the read to the next tick. A read with no
 answer after a minute fails as if the router never answered, and the next tick reads again. The filters, the search and
 the range live in the view's address, so a reload or a shared link keeps them, and the interval stays with the open
-page. An Accounts address that names no account, or names one the router no longer holds, opens the first account the
-router lists among the rows the list shows, or the router's first account where the filters hide every row.
+page. An Accounts address that names no account opens the first account the router lists among the rows the list shows,
+or the router's first account where the filters hide every row. An address that names an id the router does not hold
+keeps its address: the list selects no row, and the detail's place reads "No account holds the id" with that id and "The
+ledger keeps its requests.", with the link "Open its requests" to the Requests view filtered to that id.
 
 ## The shell
 
@@ -470,11 +472,11 @@ ended), or "The first quota reading is in flight." from a pairing's confirm that
 its first reading lands, where a usage-based seat reads "No spend reading yet". On an account whose plan ended the
 plan-ended sentence stands first, and it stands too on a subscription account that is not paired or needs re-auth and
 whose canceled end has passed. "7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the 7-day
-window of a subscription account, its Fable 7-day window where the account carries one and its 5-hour window only where
-the week holds a 5-hour sample, each line ending at its own last sample. A week with no sample reads "No samples yet"
-with "Quota samples appear after the first successful quota fetch.", or "No samples in the last 7 days" over the Usage
-card's sentence on an account whose plan ended, that is not paired or that needs re-auth. A usage-based seat's detail
-draws no trend card.
+window of a subscription account, its Fable 7-day window where the account carries one or the week holds a Fable sample,
+and its 5-hour window only where the week holds a 5-hour sample, each line ending at its own last sample. A week with no
+sample reads "No samples yet" with "Quota samples appear after the first successful quota fetch.", or "No samples in the
+last 7 days" over the Usage card's sentence on an account whose plan ended, that is not paired or that needs re-auth. A
+usage-based seat's detail draws no trend card.
 
 "Allowance left at reset" draws, for a subscription account that is not a usage-based seat, one column per weekly window
 (the 7-day window, then each model week): the share left unused at the latest reset with "left at the reset of {date}"

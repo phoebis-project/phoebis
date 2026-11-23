@@ -2,7 +2,7 @@ import { iso } from '@/api/decode';
 import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } from '@/lib/costs';
 import { byteOrder, fmtAbsolute, fmtDated, fmtShare, plural, weekShort } from '@/lib/format';
-import { pricedTier, readWindows } from '@/lib/quota';
+import { planWordLabel, pricedTier, readWindows } from '@/lib/quota';
 import { DAY, MINUTE } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
 import { WINDOW_HOURS, inWindowOrder, windowHint } from '@/lib/windows';
@@ -64,10 +64,9 @@ export function newestResets(window: AllowanceWindow, weeks = ALLOWANCE_WEEKS): 
  *  the router prices no capacity for the plan or the cost model sizes none for the tier on that window. */
 export type AllowanceFigure = { kind: 'equivalent'; share: number; text: string } | { kind: 'unpriced'; text: '-'; title: string } | { kind: 'none'; text: '-'; title: string };
 
-/** The dash's hover where the plan prices no capacity. Named apart from `lib/analytics.ts`'s `UNPRICED_TITLE`, whose
- *  words differ, so the test bundle's star exports keep both. */
-export const ALLOWANCE_UNPRICED_TITLE = "Unpriced: the cost model holds no capacity for this account's plan";
-export const NO_READING_TITLE = 'no reading at this reset';
+/** The dash's hover where the account's own plan prices no capacity. */
+const ALLOWANCE_UNPRICED_TITLE = "Unpriced: the cost model holds no capacity for this account's plan";
+const NO_READING_TITLE = 'no reading at this reset';
 /** The Analytics card's dash for a window with no reset to draw: a row's range figure where the window never reset
  *  inside the range, its last figure where only a use ended, the cell of a window the account carries no entry for,
  *  and a fleet figure where no account counts a reset in the range. */
@@ -107,6 +106,11 @@ export const drawsFreeNote = (account: AllowanceAccount): boolean =>
     return resets.length === 0 || resets.some((r) => pairOf(account, r).plan === 'free');
   });
 
+/** The unpriced dash's hover. It keeps the account's own plan where the figure was priced at the account's pair,
+ *  its plan and its tier, and names the plan of each other pair by its label. */
+const unpricedTitle = (account: Pick<AllowanceAccount, 'plan' | 'tier'>, pair: Pick<AllowanceAccount, 'plan' | 'tier'>): string =>
+  pair.plan === null || (pair.plan === account.plan && pair.tier === account.tier) ? ALLOWANCE_UNPRICED_TITLE : `Unpriced: the cost model holds no capacity for the ${planWordLabel(pair.plan)} plan`;
+
 /** With no cost model a figure reads the unpriced dash, an arm the pages never draw, since they hold the skeleton
  *  while the model loads. */
 export function allowanceFigure(share: number | null, window: string, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, week: WeekPosition, reset?: Pick<AllowanceReset, 'plan' | 'tier'>): AllowanceFigure {
@@ -114,8 +118,9 @@ export function allowanceFigure(share: number | null, window: string, account: P
   const scale = weekScale(costs, week);
   // No figure reads in a week whose tier the cost model does not size, so the dash names that week, not the plan.
   if (costs !== null && scale === null) return { kind: 'unpriced', text: '-', title: weekUnpricedTitle(week) };
-  const weight = capacityWeight(pairOf(account, reset), window, costs);
-  if (weight === null || scale === null) return { kind: 'unpriced', text: '-', title: ALLOWANCE_UNPRICED_TITLE };
+  const pair = pairOf(account, reset);
+  const weight = capacityWeight(pair, window, costs);
+  if (weight === null || scale === null) return { kind: 'unpriced', text: '-', title: unpricedTitle(account, pair) };
   const figure = share * weight * scale;
   return { kind: 'equivalent', share: figure, text: weekShort(figure, week) };
 }

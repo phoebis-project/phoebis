@@ -21,7 +21,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, E
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { accountUses, type AccountUse } from '@/lib/accountUses';
-import { accountHref, accountMeterHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, sortDirOf } from '@/lib/address';
+import { accountHref, accountMeterHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, REQUESTS_CODEC, requestsHref, sortDirOf } from '@/lib/address';
 import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, drawnInstant, drawsFreeNote, newestResets, ownShareHover, pairOf, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
@@ -96,13 +96,17 @@ export function AccountsPage() {
 
   const selected = accounts.data?.find((a) => a.id === accountId) ?? null;
   // The row a confirmed pairing created: the read that lists it lands after the URL names it, so the redirect below
-  // leaves that URL alone for the span of that read. The guard follows the read's loading flag rather than the list
-  // changing, since a failed read keeps the old list and would otherwise hold the guard until the next refresh.
-  const [created, setCreated] = useState<{ id: string; reading: boolean } | null>(null);
+  // leaves that URL alone for the span of that read. The phase follows the read's loading flag rather than the list
+  // changing, since a failed read keeps the old list and would otherwise hold the guard until the next refresh. A read
+  // that ends without the row keeps its id until the redirect has left its URL, so the note never denies a row the
+  // router holds.
+  const [created, setCreated] = useState<{ id: string; phase: 'confirmed' | 'reading' | 'unlisted' } | null>(null);
   if (created !== null) {
-    if (accounts.loading) {
-      if (!created.reading) setCreated({ ...created, reading: true });
-    } else if (created.reading) setCreated(null);
+    if (created.phase === 'unlisted') {
+      if (accountId !== created.id) setCreated(null);
+    } else if (accounts.loading) {
+      if (created.phase === 'confirmed') setCreated({ ...created, phase: 'reading' });
+    } else if (created.phase === 'reading') setCreated(accounts.data?.some((a) => a.id === created.id) ? null : { ...created, phase: 'unlisted' });
   }
   // The account whose first usage poll a confirm started, whether the pairing created its row or filled a slot, until
   // the list's row for it carries a window or the list no longer holds it. It stands apart from `created`, which the
@@ -128,13 +132,18 @@ export function AccountsPage() {
     timer = clock.setTimeout(step, FIRST_READING_EVERY_MS);
     return () => clock.clearTimeout(timer);
   }, [awaiting, intervalMs, reread]);
-  // A bare /accounts, and a deleted account's URL that names a row the reloaded list no longer holds, lead to the
-  // router's first account the list shows, so the detail never opens on a row the filters hide. Where they hide every
-  // row it is the router's first.
-  const first = accounts.data?.find((a) => list.includes(a)) ?? accounts.data?.[0];
+  // The row this page's delete removed, until a loaded list no longer holds it, since the delete's move reads the list
+  // from before the delete.
+  const [deleted, setDeleted] = useState<string | null>(null);
+  if (deleted !== null && accounts.data !== null && !accounts.data.some((a) => a.id === deleted)) setDeleted(null);
+  // A bare /accounts leads to the router's first account the list shows, so the detail never opens on a row the filters
+  // hide. Where they hide every row it is the router's first. A row that this page just deleted is passed by, since the
+  // list holds it until the reload lands. The row of a confirmed pairing whose read failed lands there too, since the
+  // router holds that id and the note would deny it. Each other id the list lacks keeps its URL for the note.
+  const first = accounts.data?.find((a) => a.id !== deleted && list.includes(a)) ?? accounts.data?.find((a) => a.id !== deleted);
   useEffect(() => {
-    if (created !== null && accountId === created.id) return;
-    if (accounts.data && !selected && first !== undefined) navigate(accountAt(location, first.id), { replace: true });
+    if (!accounts.data || selected || first === undefined) return;
+    if (accountId === undefined || (created?.phase === 'unlisted' && accountId === created.id)) navigate(accountAt(location, first.id), { replace: true });
   }, [accounts.data, accountId, created, first, location, navigate, selected]);
 
   return (
@@ -193,15 +202,23 @@ export function AccountsPage() {
           </ul>
         </aside>
         <section className="accounts__detail">
-          {/* Accounts with none selected is a bare or stale URL the redirect above is about to replace, so nothing draws. */}
+          {/* The selected account's detail, a skeleton until the list loads, the note for an id the router does not
+              hold, and the words of an empty registry. A bare /accounts and the row a confirm created draw nothing
+              while the redirect above moves them or the read that lists the row is out. */}
           {selected ? (
             <Descriptions>
               {/* Keyed by the account, so a save still running when the operator moves on answers into its own
                   unmounted detail and never moves the token of an editor another account opened. */}
-              <AccountDetail key={selected.id} account={selected} awaitingReading={awaiting === selected.id} generation={generation} now={now} onToast={notify} onPair={(repair) => setPairing({ start: { accountId: selected.id }, label: selected.label, repair })} onChanged={accounts.reload} settings={settings} />
+              <AccountDetail key={selected.id} account={selected} awaitingReading={awaiting === selected.id} generation={generation} now={now} onToast={notify} onPair={(repair) => setPairing({ start: { accountId: selected.id }, label: selected.label, repair })} onChanged={accounts.reload} onDeleted={setDeleted} settings={settings} />
             </Descriptions>
           ) : accounts.data === null ? (
             <Skeleton height={400} />
+          ) : accountId !== undefined && accountId !== created?.id ? (
+            <EmptyState
+              title={`No account holds the id ${accountId}`}
+              body="The ledger keeps its requests."
+              action={<Link to={requestsHref({ ...REQUESTS_CODEC.defaults, accounts: [accountId] })}>Open its requests</Link>}
+            />
           ) : accounts.data.length === 0 ? (
             <EmptyState title="No account to show" body="Add an account to see its detail here." />
           ) : null}
@@ -230,7 +247,7 @@ export function AccountsPage() {
             notify(`Paired ${preview.email}`);
             if (confirmed.firstPollInFlight) setAwaiting(confirmed.accountId);
             if (start !== null && 'id' in start) {
-              setCreated({ id: start.id, reading: false });
+              setCreated({ id: start.id, phase: 'confirmed' });
               navigate(accountAt(location, start.id));
             }
           }}
@@ -268,7 +285,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
   );
 }
 
-function AccountDetail({ account, awaitingReading, generation, now, onToast, onPair, onChanged, settings }: { account: Account; awaitingReading: boolean; generation: number; now: number; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void; settings: Loaded<Settings> }) {
+function AccountDetail({ account, awaitingReading, generation, now, onToast, onPair, onChanged, onDeleted, settings }: { account: Account; awaitingReading: boolean; generation: number; now: number; onChanged: () => void; onDeleted: (id: string) => void; onPair: (repair: boolean) => void; onToast: (m: string) => void; settings: Loaded<Settings> }) {
   const navigate = useNavigate();
   const { week } = useAppSettings();
   // An API-key account and a usage-based seat report no plan window, so neither draws the allowance block or the trend,
@@ -772,6 +789,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
         onDelete={() =>
           void run(async () => {
             await api.deleteAccount(account.id);
+            onDeleted(account.id);
             navigate('/accounts');
           }, 'Deleted')
         }
@@ -978,13 +996,15 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
 // account or the clock.
 const TrendChart = memo(function TrendChart({ emptyBody, emptyTitle, history, loading, hasFable }: { emptyBody: string; emptyTitle: string; hasFable: boolean; history: QuotaHistory[] | null; loading: boolean }) {
   const ink = useChartInk();
-  const data = useMemo(() => (history ? joinTrend(history, hasFable) : []), [history, hasFable]);
+  const data = useMemo(() => (history ? joinTrend(history) : []), [history]);
+  // The Fable line draws for the history's own samples too, so a row whose windows the route withholds keeps it.
+  const fable = hasFable || (history ?? []).some((h) => h.windowId === '7d_fable' && h.samples.length > 0);
   if (loading || !history) return <Skeleton height={CHART_HEIGHT} />;
   if (data.length === 0) return <EmptyState title={emptyTitle} body={emptyBody} />;
   const series: { color: string; dashed?: boolean; key: 'u5' | 'u7' | 'uf'; name: string; type: 'linear' | 'monotone'; width: number }[] = [
     ...(data.some((p) => p.u5 !== null) ? [{ color: ink.series[0], key: 'u5' as const, name: '5-hour', type: 'linear' as const, width: 1.5 }] : []),
     { color: ink.series[1], key: 'u7', name: '7-day', type: 'monotone', width: 2 },
-    ...(hasFable ? [{ color: ink.series[2], dashed: true, key: 'uf' as const, name: 'Fable 7-day', type: 'monotone' as const, width: 2 }] : []),
+    ...(fable ? [{ color: ink.series[2], dashed: true, key: 'uf' as const, name: 'Fable 7-day', type: 'monotone' as const, width: 2 }] : []),
   ];
   return (
     <>

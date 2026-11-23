@@ -3148,6 +3148,20 @@ await forView('/accounts', async () => {
   api.listAccounts = listAccounts;
 });
 
+// The route withholds every window of spare, which is not paired, while its seed's week of samples holds a Fable series
+// (`QUOTA_HISTORY` in mock/accounts.ts). The shared block below deletes spare, so the read stands ahead of it.
+await forView('/accounts', async () => {
+  const page = await mount('/accounts/spare', { now: CLOCK_ORIGIN });
+  const card = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === '7-day trend');
+  const legend = card ? [...card.querySelectorAll('.legend li')].map((li) => li.textContent?.trim() ?? '') : null;
+  page.unmount();
+  results.push({
+    name: "/accounts a row whose windows the router withholds lists the Fable line of its week's samples",
+    ok: legend?.includes('Fable 7-day window') === true,
+    missing: [JSON.stringify(legend)],
+  });
+});
+
 // A block's error can stand beside windows the ledger sampled, as before the poll's first read after a restart; the
 // card draws what it holds.
 await forView('/quota', async () => {
@@ -6044,6 +6058,82 @@ await forView('/accounts', async () => {
     name: '/accounts a seat draws no trend and an account without a 5-hour window lists no 5-hour line',
     ok: contract.legend === null && contract.reads === 0 && annex.reads === 0 && primary.legend?.includes('5-hour window') === true && primary.reads === 1 && workshop.legend?.includes('7-day window') === true && !workshop.legend.includes('5-hour window'),
     missing: [JSON.stringify(seen)],
+  });
+  // primary holds the Fable window, so its legend keeps the Fable line over a week that a stand-in answers with no
+  // Fable series, as before the window's first sample.
+  const historyRead = api.getQuotaHistory;
+  let bare;
+  try {
+    api.getQuotaHistory = async (...args) => (await historyRead.apply(api, args)).filter((h) => h.windowId !== '7d_fable');
+    const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+    bare = legendOf(page);
+    page.unmount();
+  } finally {
+    api.getQuotaHistory = historyRead;
+  }
+  results.push({
+    name: '/accounts an account that holds the Fable window lists its line over a week with no Fable sample',
+    ok: bare?.includes('Fable 7-day window') === true,
+    missing: [JSON.stringify(bare)],
+  });
+});
+// The ledger keeps the requests of an id the registry no longer holds, so the address stays and the detail's place
+// links to them. The list's rows are links too, so the link is read inside the detail.
+await forView('/accounts', async () => {
+  const page = await mount('/accounts/no-such-desk', { now: CLOCK_ORIGIN });
+  const detail = page.container.querySelector('.accounts__detail');
+  const links = [...(detail?.querySelectorAll('a') ?? [])].map((a) => ({ href: a.getAttribute('href') ?? '', text: a.textContent?.trim() ?? '' }));
+  const drawn = { active: page.container.querySelector('a.account-row.is-active')?.getAttribute('href') ?? null, links, path: page.location().pathname, text: detail?.textContent ?? '' };
+  page.unmount();
+  const target = links.length === 1 ? new URL(links[0].href, 'http://console.test') : null;
+  results.push({
+    name: '/accounts an id the registry lacks keeps its address and draws a note with a link to its requests',
+    ok:
+      drawn.path === '/accounts/no-such-desk' &&
+      drawn.text.includes('No account holds the id no-such-desk') &&
+      drawn.text.includes('The ledger keeps its requests.') &&
+      links[0]?.text === 'Open its requests' &&
+      target?.pathname === '/requests' &&
+      JSON.stringify(target.searchParams.getAll('accounts')) === '["no-such-desk"]' &&
+      drawn.active === null,
+    missing: [JSON.stringify(drawn)],
+  });
+});
+// The delete's move is a bare /accounts, read on the list from before the delete, so where the deleted row is the
+// router's first that list still names it. A stand-in lists the case's own account ahead of the story's rows, which
+// makes it the router's first, and the mock's registry goes back as the story holds it.
+await forView('/accounts', async () => {
+  const { listAccounts } = api;
+  let drawn;
+  try {
+    await api.createAccount({ id: 'foremost', kind: 'oauth', label: 'Foremost', secret: null });
+    api.listAccounts = async () => {
+      const rows = await listAccounts.call(api);
+      return [...rows.filter((a) => a.id === 'foremost'), ...rows.filter((a) => a.id !== 'foremost')];
+    };
+    const page = await mount('/accounts/foremost', { now: CLOCK_ORIGIN });
+    const names = () => [...page.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim() ?? '');
+    const listed = names().includes('Foremost');
+    [...(page.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete account')?.click();
+    const ready = await until(page, () => buttonIn(openDialogs(page).pop(), 'Delete')?.disabled === false);
+    buttonIn(openDialogs(page).pop(), 'Delete')?.click();
+    const reloaded = await until(page, () => !names().includes('Foremost'));
+    await page.settle(200);
+    const detail = page.container.querySelector('.accounts__detail');
+    drawn = { listed, path: page.location().pathname, ready, reloaded, text: detail?.textContent ?? '', title: detail?.querySelector('.detail__title')?.textContent?.trim() ?? null };
+    page.unmount();
+  } finally {
+    api.listAccounts = listAccounts;
+    await api.deleteAccount('foremost').catch((e) => {
+      if (e?.status !== 404) throw e;
+    });
+  }
+  const labels = new Map((await api.listAccounts()).map((a) => [a.id, a.label]));
+  const landed = drawn?.path.startsWith('/accounts/') ? decodeURIComponent(drawn.path.slice('/accounts/'.length)) : null;
+  results.push({
+    name: '/accounts a delete of the first row the list shows leaves for another account and draws no note',
+    ok: drawn?.listed === true && drawn.ready && drawn.reloaded && landed !== 'foremost' && labels.has(landed) && drawn.title === labels.get(landed) && !drawn.text.includes('No account holds the id'),
+    missing: [JSON.stringify(drawn)],
   });
 });
 await forView('/accounts', async () => {

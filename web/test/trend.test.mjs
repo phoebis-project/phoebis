@@ -21,15 +21,10 @@ test('samples on one bucket at different instants join', () => {
       [at(5, 0), 0.15],
     ]),
   ];
-  assert.deepEqual(joinTrend(history, true, 1), [
+  assert.deepEqual(joinTrend(history, 1), [
     { at: Date.parse(at(0)), u5: 20, u7: 50, uf: 10 },
     { at: Date.parse(at(5)), u5: 30, u7: 60, uf: 15 },
   ]);
-  // Without a Fable window the series stays out of the points even where samples exist.
-  assert.deepEqual(
-    joinTrend(history, false, 1).map((p) => p.uf),
-    [null, null],
-  );
 });
 
 test('a missing Fable bucket carries the previous value forward', () => {
@@ -49,7 +44,7 @@ test('a missing Fable bucket carries the previous value forward', () => {
       [at(10), 0.125],
     ]),
   ];
-  const points = joinTrend(history, true, 1);
+  const points = joinTrend(history, 1);
   assert.deepEqual(
     points.map((p) => p.uf),
     [12, 12, 12.5],
@@ -75,7 +70,7 @@ test('a sample the route answers with no figure draws a gap up to the next figur
     ],
   });
   assert.deepEqual(
-    joinTrend(history, false, 1).map((p) => p.u7),
+    joinTrend(history, 1).map((p) => p.u7),
     [40, null, 42],
   );
 });
@@ -94,7 +89,7 @@ test('a series that starts late is null before its first sample', () => {
     ]),
     series('7d_fable', [[at(15), 0.75]]),
   ];
-  const points = joinTrend(history, true, 1);
+  const points = joinTrend(history, 1);
   assert.deepEqual(
     points.map((p) => [p.u7, p.uf]),
     [
@@ -106,7 +101,7 @@ test('a series that starts late is null before its first sample', () => {
   );
   // The default keeps every third bucket of the joint base, the first among them.
   assert.deepEqual(
-    joinTrend(history, true).map((p) => p.at),
+    joinTrend(history).map((p) => p.at),
     [Date.parse(at(0)), Date.parse(at(15))],
   );
 });
@@ -125,7 +120,7 @@ test('a 5-hour series that stops ends there while the 7-day series runs on', () 
       [at(8640), 0.6],
     ]),
   ];
-  assert.deepEqual(joinTrend(history, false, 1), [
+  assert.deepEqual(joinTrend(history, 1), [
     { at: Date.parse(at(0)), u5: 20, u7: 41, uf: null },
     { at: Date.parse(at(1440)), u5: 30, u7: 42, uf: null },
     { at: Date.parse(at(4320)), u5: null, u7: 50, uf: null },

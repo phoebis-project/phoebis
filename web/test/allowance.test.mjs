@@ -122,12 +122,15 @@ test("a figure is the account's own share priced in the chosen week, a Fable-wee
 test('a figure reads a dash where the plan is Free, the cost model sizes no capacity for the tier or no reading stands, and never an estimate', () => {
   for (const week of WEEKS) {
     const free = d.allowanceFigure(0.33, 'seven_day', FREE, COSTS, week);
-    assert.deepEqual(free, { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${week}: a Free plan reads its Pro tier's capacity no more`);
+    assert.deepEqual([free.kind, free.text], ['unpriced', '-'], `${week}: a Free plan reads its Pro tier's capacity no more`);
+    assert.match(free.title, /this account's plan/, `${week}: a figure priced at the account's own pair keeps its own plan`);
     assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', { plan: 'max_20x', tier: 'default_claude_team' }, COSTS, week).kind, 'unpriced', `${week}: a tier the cost model lacks`);
     assert.deepEqual(d.allowanceFigure(0.33, 'seven_day_fable', { plan: 'pro', tier: null }, COSTS, week).kind, 'unpriced', `${week}: no stored tier`);
-    assert.deepEqual(d.allowanceFigure(null, 'seven_day', PRO, COSTS, week), { kind: 'none', text: '-', title: d.NO_READING_TITLE }, week);
+    const none = d.allowanceFigure(null, 'seven_day', PRO, COSTS, week);
+    assert.deepEqual([none.kind, none.text], ['none', '-'], week);
     // An arm the pages never draw, since they hold the skeleton while the cost model loads.
-    assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', PRO, null, week), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${week}: no cost model`);
+    const modelless = d.allowanceFigure(0.33, 'seven_day', PRO, null, week);
+    assert.deepEqual([modelless.kind, modelless.text], ['unpriced', '-'], `${week}: no cost model`);
   }
   const texts = [0, 0.004, 0.33, 0.999].flatMap((share) => WEEKS.flatMap((week) => [PRO, MAX_5X, FREE].flatMap((plan) => ['seven_day', 'seven_day_fable'].map((w) => d.allowanceFigure(share, w, plan, COSTS, week).text))));
   assert.deepEqual(texts.filter((t) => t.includes('~')), [], 'no model is priced here, so no figure is estimated');
@@ -151,7 +154,10 @@ test('a Team or Enterprise seat prices through its tier where the cost model hol
   }
   // The file's costs hold no Team row, so an Enterprise seat on that tier prices nothing, as the router's does.
   const unheld = { plan: 'enterprise', tier: 'default_claude_team' };
-  for (const week of WEEKS) assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', unheld, COSTS, week), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${week}: a tier the cost model lacks`);
+  for (const week of WEEKS) {
+    const figure = d.allowanceFigure(0.5, 'seven_day', unheld, COSTS, week);
+    assert.deepEqual([figure.kind, figure.text], ['unpriced', '-'], `${week}: a tier the cost model lacks`);
+  }
   // The Team account leaves three of its Ultra weeks against the Ultra account's one, so it ranks first.
   const answer = {
     accounts: [accountOf('max', MAX_20X, [windowOf('seven_day', [0.25, 0.25, 0.25, 0.25])]), accountOf('team', { plan: 'team', tier: 'default_claude_max_20x' }, [windowOf('seven_day', [0.75, 0.75, 0.75, 0.75])])],
@@ -178,7 +184,12 @@ test("a reset prices at the plan and the tier it ran under, and at the account's
     const earlier = d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, week, MAX_5X);
     assert.equal(earlier.kind, 'equivalent', week);
     assert.ok(near(earlier.share, bare.share / 4), `${week}: a week under Max reads a quarter of the same share at Ultra, ${earlier.share}`);
-    assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, week, FREE), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${week}: a week whose own pair prices nothing, though the account's would`);
+    const freeWeek = d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, week, FREE);
+    assert.deepEqual([freeWeek.kind, freeWeek.text], ['unpriced', '-'], `${week}: a week whose own pair prices nothing, though the account's would`);
+    assert.match(freeWeek.title, /\bFree\b/, `${week}: a week whose own pair prices nothing names that pair's plan`);
+    const otherTier = d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, week, { plan: 'max_20x', tier: 'default_claude_unsized' });
+    assert.deepEqual([otherTier.kind, otherTier.text], ['unpriced', '-'], week);
+    assert.match(otherTier.title, /\bUltra\b/, `${week}: a pair that parts from the account's by its tier names its plan`);
   }
   assert.equal(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, 'ultra', MAX_5X).text, '12.5% Ultra week');
 });
@@ -377,7 +388,9 @@ test("the four weeks' figure, the rows and the fleet total add each week's figur
   const freed = accountOf('freed', MAX_20X, [windowOf('seven_day', [0.5, 0.5], { pairs: [NO_PAIR, FREE] })]);
   const answer = { ...MIXED, accounts: [...MIXED.accounts, freed] };
   for (const week of WEEKS) {
-    assert.deepEqual(d.weeksFigure(freed.windows[0], freed, QUARTER, week), { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, week);
+    const freedWeeks = d.weeksFigure(freed.windows[0], freed, QUARTER, week);
+    assert.deepEqual([freedWeeks.kind, freedWeeks.text], ['unpriced', '-'], week);
+    assert.match(freedWeeks.title, /\bFree\b/, `${week}: the week on Free names its plan`);
     const rows = d.allowanceRows(answer, QUARTER, week, RANGE);
     const freedRow = rows.find((r) => r.accountId === 'freed');
     assert.deepEqual([freedRow.figures.seven_day.last.kind, freedRow.figures.seven_day.inRange.kind, freedRow.unpriced], ['equivalent', 'unpriced', true], week);
