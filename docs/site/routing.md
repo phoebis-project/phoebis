@@ -967,11 +967,11 @@ warning `hold_over_window` fires above 150 seconds. [When the client waits](clie
 relation and the operator's choice.
 
 Probes, token counts, compactions, auxiliary requests (any `x-claude-code-request-class` outside `compaction`, `main`
-and `subagent`), requests sent fast, requests on an API-key account and non-portable requests are never held for the
-slow-down, and the burn of each counts, so the holds of the main and subagent turns are sized to cover it. A probe has
-to land before the cache expires, a count costs nothing on the window, a compaction lowers the burn that follows it, and
-a fast request draws usage credits and no plan window. A request a guardrail blocks never reaches the selection, so it
-is never held, refreshes no pin and adds no burn ([Guardrails](guardrails.md)).
+and `subagent`), requests sent fast and requests on an API-key account are never held for the slow-down, and the burn
+of each counts, so the holds of the main and subagent turns are sized to cover it. A probe has to land before the cache
+expires, a count costs nothing on the window, a compaction lowers the burn that follows it, and a fast request draws
+usage credits and no plan window. A request a guardrail blocks never reaches the selection, so it is never held,
+refreshes no pin and adds no burn ([Guardrails](guardrails.md)).
 
 The handover to the round: with `load_shedding` on as well, the 5-hour window's trigger is the stretch in place of the
 projection. The round fires when the stretch has read over `slow_down_stretch_seconds` at a pinned selection and still

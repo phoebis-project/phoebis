@@ -2175,7 +2175,24 @@ fn run(
         (request.portability.is_portable(), pin.as_ref().zip(warmth))
     {
         if let Some(candidate) = candidate_in(&eligible, &current.account_id) {
+            // As at step 4, a count, a probe and a request that follows a bound pin read nothing, since the read writes
+            // the account's entry and can open its slowed span.
+            if !(request.count || request.probe || follows_bound) {
+                rec.slow_down =
+                    slow_down_read(state, snapshot, pool, &current.account_id, request.now);
+            }
+            // Step 1 read the pace before the read above could drop its deadline at a passed reset.
+            if let Some(facts) = rec.pin.as_mut() {
+                facts.slow_down_until = state
+                    .pin_pace(current_key)
+                    .and_then(|pace| pace.standing_deadline(request.now));
+            }
             if let Some(hold) = rewrite_answer(state, pool, request, current, current_key) {
+                return (SelectResult::Held(hold), writes);
+            }
+            if let Some(hold) =
+                slow_down_answer(state, snapshot, pool, request, current, current_key, rec)
+            {
                 return (SelectResult::Held(hold), writes);
             }
             rec.step("bound", "renewed", vec![account_fact(&current.account_id)]);
@@ -3707,15 +3724,14 @@ pub(crate) fn slow_down_ramp(
 }
 
 /// Whether the slow-down may hold this request on a pin whose account is of `kind`: a main or subagent turn, or one
-/// with no class header, portable, and on an account with a 5-hour window. An auxiliary request, a compaction, a fast
-/// request, a probe and a token count are never held, and their burn counts.
+/// with no class header, on an account with a 5-hour window. An auxiliary request, a compaction, a fast request, a
+/// probe and a token count are never held, and their burn counts.
 pub(crate) fn slowable(request: &SelectRequest, kind: Option<AccountKind>) -> bool {
     let held_class = request
         .request_class
         .as_deref()
         .is_none_or(|class| class == "main" || class == "subagent");
     held_class
-        && request.portability.is_portable()
         && !(request.fast || request.probe || request.count)
         && kind != Some(AccountKind::ApiKey)
 }
@@ -5141,9 +5157,9 @@ fn slow_down_facts(
     facts
 }
 
-/// Step 4's read of the pinned account's slow-down and the write of its entry, `None` where the account has no read.
-/// The speed the read's plan realizes is the one figure the selection folds into the entry: the hold reads its pin's
-/// part of the plan and writes no speed, so no second write lands at the same instant.
+/// Step 3's and step 4's read of the pinned account's slow-down and the write of its entry, `None` where the account
+/// has no read. The speed the read's plan realizes is the one figure the selection folds into the entry: the hold
+/// reads its pin's part of the plan and writes no speed, so no second write lands at the same instant.
 fn slow_down_read(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
@@ -5225,14 +5241,14 @@ fn rewrite_answer(
     ))
 }
 
-/// Step 5's slow-down hold for a pin step 4 left in place on an eligible account, `None` where the pin renews. Only a
-/// request of a held class that carries no hold is held: the second selection after any wait goes on. A deadline
-/// standing on the pin is rejoined to the same instant, whatever the pool's switch reads now, since the hold was
-/// answered under the setting then in force: no hold is sized, nothing is folded and the span counts the wait once.
-/// The exception is a 5-hour reset passed since the deadline stood: step 4's read that replaces the old window's
-/// entry, or the purge tick that removed it first, has dropped the deadline, so the request is read afresh. Otherwise
-/// the pin waits its part of the read's plan while the read slows the account, the deadline standing on the pin for
-/// the requests that follow.
+/// The slow-down hold of step 3 for a bound pin and of step 5 for a pin step 4 left in place, on an eligible account,
+/// `None` where the pin renews. Only a request of a held class that carries no hold is held: the second selection
+/// after any wait goes on. A deadline standing on the pin is rejoined to the same instant, whatever the pool's switch
+/// reads now, since the hold was answered under the setting then in force: no hold is sized, nothing is folded and the
+/// span counts the wait once. The exception is a 5-hour reset passed since the deadline stood: the read of step 3 or
+/// step 4 that replaces the old window's entry, or the purge tick that removed it first, has dropped the deadline, so
+/// the request is read afresh. Otherwise the pin waits its part of the read's plan while the read slows the account,
+/// the deadline standing on the pin for the requests that follow.
 fn slow_down_answer(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,

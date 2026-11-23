@@ -25593,6 +25593,79 @@ fn a_request_carrying_its_slow_down_hold_renews_and_is_not_held_again() {
 }
 
 #[test]
+fn a_non_portable_turn_on_a_slowed_account_is_held_and_then_renews_on_its_pin() {
+    let (off, on) = held_pools(120);
+    let mut st = slowed_s1(0.80);
+    // Ahead of the bound turns: an auxiliary turn on the pin they flag follows it and reads no slow-down.
+    stamped(&mut st, &on, "s1", T + 20 * SECOND);
+    let bound = |s: &RegistrySnapshot, now: i64| SelectRequest {
+        portability: Portability::Hold,
+        ..main_turn(s, "s1", now)
+    };
+    for now in [T, T + 10 * SECOND] {
+        let d = decide(&mut st, &off, &bound(&off, now), &mut rng());
+        assert!(
+            matches!(d.result, SelectResult::Selected(_)),
+            "a turn on the switched-off pool is never held: {:?}",
+            d.result
+        );
+    }
+    let first = bound(&on, T + 20 * SECOND);
+    let (account_id, hold) = held_on(&decide(&mut st, &on, &first, &mut rng()));
+    assert_eq!(
+        (account_id.as_str(), hold.reason),
+        ("a", HoldReason::SlowDown)
+    );
+    let until = hold.until.expect("the pin's deadline");
+    let waited = u64::try_from(until - first.received_at).expect("a positive wait");
+    let again = SelectRequest {
+        seq: 2,
+        now: until,
+        holds: vec![HoldFacts {
+            held_ms: waited,
+            ..hold
+        }],
+        ..first
+    };
+    let d = decide(&mut st, &on, &again, &mut rng());
+    let SelectResult::Selected(sel) = &d.result else {
+        panic!("the turn back from its hold renews: {:?}", d.result)
+    };
+    assert_eq!((sel.account.id.as_str(), sel.trace.renewed), ("a", true));
+}
+
+#[test]
+fn a_non_portable_count_on_a_slowed_account_writes_no_slow_down_entry() {
+    let (_, on) = held_pools(120);
+    let mut st = slowed_s1(0.80);
+    let at = T + 20 * SECOND;
+    let slowed_since = |st: &RoutingState| {
+        st.slow_down_state("p", "a")
+            .and_then(|entry| entry.slowed_since)
+    };
+    let count = SelectRequest {
+        count: true,
+        portability: Portability::Hold,
+        ..main_turn(&on, "s1", at)
+    };
+    assert_eq!(
+        landed(decide(&mut st, &on, &count, &mut rng()).result),
+        ("a".into(), None)
+    );
+    assert_eq!(slowed_since(&st), None, "the count opens no slowed span");
+    // The control: the session's bound turn at the same instant reads the account and opens the span.
+    let turn = SelectRequest {
+        portability: Portability::Hold,
+        ..main_turn(&on, "s1", at)
+    };
+    assert_eq!(
+        landed(decide(&mut st, &on, &turn, &mut rng()).result),
+        ("a".into(), None)
+    );
+    assert_eq!(slowed_since(&st), Some(at));
+}
+
+#[test]
 fn a_decision_past_the_pins_slow_down_deadline_records_no_deadline() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);
@@ -25731,6 +25804,23 @@ fn the_first_selection_after_a_reset_drops_the_deadlines_the_accounts_pins_stood
         "the sibling pin's deadline dropped at the same selection"
     );
     assert_eq!(d.record.pin.as_ref().and_then(|p| p.slow_down_until), None);
+}
+
+#[test]
+fn a_non_portable_turns_record_names_no_deadline_that_a_passed_reset_dropped() {
+    let (on, mut st) = held_past_a_moved_reset();
+    let bound = SelectRequest {
+        request_id: "r-2".into(),
+        portability: Portability::Hold,
+        ..main_turn(&on, "s1", T + 60 * SECOND)
+    };
+    let d = decide(&mut st, &on, &bound, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    assert_eq!(
+        d.record.pin.as_ref().and_then(|p| p.slow_down_until),
+        None,
+        "the turn's own read dropped the deadline at the reset, so the record names none"
+    );
 }
 
 #[test]
@@ -26088,11 +26178,6 @@ fn the_exempt_classes_are_never_held() {
         0.262_124_973_601
     ));
     on_a(&mut st, "fast", fast(main_turn(&on, "s6", at)));
-    on_a(
-        &mut st,
-        "non-portable",
-        request(&on, Some("s7"), "claude-sonnet-5", false, &[], at),
-    );
     // An api_key member's pin has no cycle at all: none of its turns is of a held class.
     let d = renewed(&mut st, "api_key", "c", main_turn(&on, "s8", at));
     assert_eq!(
@@ -31633,6 +31718,41 @@ fn a_request_that_waited_for_the_rewrite_is_not_held_for_the_slow_down() {
         d.record.pin.as_ref().and_then(|pin| pin.slow_down_until),
         None,
         "no slow-down deadline stands for it"
+    );
+}
+
+#[test]
+fn a_non_portable_request_of_a_moved_pin_on_a_slowed_account_waits_for_the_rewrite_first() {
+    let (off, on) = held_pools(120);
+    // The state of `a_request_that_waited_for_the_rewrite_is_not_held_for_the_slow_down`: s1's move lands it on b,
+    // which reads a factor of about a half.
+    let mut st = rounding(vec![
+        burning("s1", "a", 15.0, true, T),
+        burning("s0", "b", 15.0, true, T),
+    ]);
+    reading(&mut st, "a", 0.1, 2 * HOUR, T);
+    reading(&mut st, "b", 0.80, 2 * HOUR, T);
+    let at = T + 20 * SECOND;
+    stamped(&mut st, &on, "s0", at);
+    cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-sonnet-5",
+        T + 10 * MINUTE,
+        "retry_after",
+        "rate_limit",
+    ));
+    let moved = decide(&mut st, &on, &turn_of(&on, "r-1", at), &mut rng());
+    assert_eq!(picked(&moved.result), "b");
+    let bound = SelectRequest {
+        portability: Portability::Hold,
+        ..turn_of(&on, "r-2", at + 200)
+    };
+    let (account_id, hold) = held_on(&decide(&mut st, &on, &bound, &mut rng()));
+    assert_eq!(
+        (account_id.as_str(), hold.reason, hold.waits_for.as_deref()),
+        ("b", HoldReason::Rewrite, Some("r-1")),
+        "the rewrite's hold comes first"
     );
 }
 
