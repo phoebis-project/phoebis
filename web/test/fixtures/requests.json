@@ -119,7 +119,7 @@
               "cleared_input_tokens": null,
               "inference_geo": "us",
               "input_transformations": {
-                "thinking.prefix_binding_mismatch": {
+                "thinking_dropped.prefix_binding_mismatch": {
                   "blocks": 2,
                   "first_message": 1
                 }

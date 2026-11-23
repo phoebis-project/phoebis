@@ -998,6 +998,7 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("request", "200"),
     fixture!("request_bodies", "200"),
     fixture!("decision", "200"),
+    fixture!("decision_pick", "200"),
     fixture!("routing_log", "200"),
     fixture!("sessions", "200"),
     fixture!("sessions_costs", "200"),

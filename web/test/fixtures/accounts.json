@@ -55,6 +55,17 @@
         },
         "windows": [
           {
+            "id": "seven_day_fable",
+            "utilization": 0.12,
+            "resets_at": 1791807400000,
+            "observed_at": 1791720900000,
+            "projection": 0.12,
+            "horizon": 1791739000000,
+            "burn": 0.0,
+            "demand": 0.0,
+            "lead": -0.7371428571428571
+          },
+          {
             "id": "five_hour",
             "utilization": 0.62,
             "resets_at": 1791724600000,
@@ -75,17 +86,6 @@
             "burn": null,
             "demand": null,
             "lead": -0.4471428571428571
-          },
-          {
-            "id": "seven_day_fable",
-            "utilization": 0.12,
-            "resets_at": 1791807400000,
-            "observed_at": 1791720900000,
-            "projection": null,
-            "horizon": null,
-            "burn": null,
-            "demand": null,
-            "lead": -0.7371428571428571
           },
           {
             "id": "seven_day_opus",

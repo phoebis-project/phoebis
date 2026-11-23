@@ -135,6 +135,18 @@
             "horizon": null,
             "demand": null,
             "reserved": 0.0
+          },
+          "seven_day_fable": {
+            "utilization": 0.12,
+            "reset": 1791807400000,
+            "source": "head",
+            "observed_at": 1791720900000,
+            "age_ms": 100000,
+            "ahead": null,
+            "projection": 0.12,
+            "horizon": 1791739000000,
+            "demand": null,
+            "reserved": 0.0
           }
         },
         "allowance_known": false,
@@ -430,7 +442,7 @@
       "in_overage": false,
       "pin_written": {
         "action": "created",
-        "epoch": 10,
+        "epoch": 11,
         "lane": "claude-sonnet-5|standard|none|-",
         "refresh_stamped": true,
         "hashes_stamped": true

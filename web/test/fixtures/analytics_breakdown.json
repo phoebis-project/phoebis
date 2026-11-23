@@ -60,7 +60,7 @@
           "none": 1
         },
         "input_transformations": {
-          "thinking.prefix_binding_mismatch": 1
+          "thinking_dropped.prefix_binding_mismatch": 1
         },
         "input_transformations_moved": 0,
         "input_transformations_none": 0,

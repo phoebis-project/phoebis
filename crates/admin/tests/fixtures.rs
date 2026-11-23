@@ -28,11 +28,12 @@ fn dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/fixtures")
 }
 
-/// One line per value, depth first in key order: the path and the JSON kind (`null`, `boolean`, `integer`, `float`,
-/// `string`, `array`, `object`). The first element stands for an array. Values are not compared: a value change is
-/// the decoder tests' business. The order and the kinds are compared, since an answer rebuilt from a struct could
-/// move a key, turn an absence into a `null` or an integer into a float and still hold the key set. A backslash, a
-/// `.` or a `[` in a key is escaped with a backslash, so a key cannot read as a nested path.
+/// One line per path and kind, depth first in key order: the path and the JSON kind (`null`, `boolean`, `integer`,
+/// `float`, `string`, `array`, `object`). Each element of an array is walked under one path, and a line is written
+/// once. Values are not compared: a value change is the decoder tests' business. The order and the kinds are compared,
+/// since an answer rebuilt from a struct could move a key, turn an absence into a `null` or an integer into a float and
+/// still hold the key set. A backslash, a `.` or a `[` in a key is escaped with a backslash, so a key cannot read as a
+/// nested path.
 fn shape(v: &Value) -> Vec<String> {
     fn walk(v: &Value, path: &str, out: &mut Vec<String>) {
         let kind = match v {
@@ -56,8 +57,11 @@ fn shape(v: &Value) -> Vec<String> {
                 }
             }
             Value::Array(a) => {
-                if let Some(first) = a.first() {
-                    walk(first, &format!("{path}[0]"), out);
+                let mut seen = std::collections::HashSet::new();
+                for element in a {
+                    let mut lines = Vec::new();
+                    walk(element, &format!("{path}[]"), &mut lines);
+                    out.extend(lines.into_iter().filter(|line| seen.insert(line.clone())));
                 }
             }
             _ => {}
@@ -99,6 +103,20 @@ fn shape_tells_a_moved_key_a_null_for_an_absence_and_a_float_for_an_integer_but_
         shape(&j!({ "a": 1, "b": { "c": ["x"] }, "d": null })),
         shape(&j!({ "a": 2, "b": { "c": ["y", "z"] }, "d": null })),
         "the same keys, order and kinds differ in shape"
+    );
+}
+
+#[test]
+fn shape_reads_a_member_that_only_a_later_element_of_an_array_carries() {
+    assert_ne!(
+        shape(&j!({ "a": [{ "b": 1 }, { "b": 1 }] })),
+        shape(&j!({ "a": [{ "b": 1 }, { "b": 1, "c": "x" }] })),
+        "a member that only the second element carries leaves the shape unchanged"
+    );
+    assert_ne!(
+        shape(&j!({ "a": [{ "b": null }, { "b": null }] })),
+        shape(&j!({ "a": [{ "b": null }, { "b": 1 }] })),
+        "a kind that the second element gives a member the first holds as null leaves the shape unchanged"
     );
 }
 
@@ -405,6 +423,13 @@ const FIXTURE_STORAGE_KEY: &str =
 /// milliseconds where the default's tick costs 5 s.
 const MIRROR_POLL: Duration = Duration::from_millis(10);
 
+/// The capture pricer's factor for the Fable week: the part of `business`'s expected Fable use that a reservation holds
+/// back from its 7-day room.
+const FABLE_FACTOR: f64 = 0.25;
+
+/// The share of the Fable week in `business`'s one seeded clock hour, the peak hour that a reservation reads.
+const FABLE_HOUR_SHARE: f64 = 0.01;
+
 /// Waits until the ledger's mirror has copied the newest registry change past `baseline`, the store's newest change id
 /// when the rig built its parts. The mirror copies on a tick of its own, so without the wait the rows a later write
 /// lands take their ids from the host's speed. The newest change is matched by its `at`, `kind` and `target`, and the
@@ -451,7 +476,23 @@ async fn every_route_is_captured_and_holds_its_shape() {
     let key = StorageKey::from_file(&key_file).unwrap();
     let clock_cell = Arc::new(AtomicI64::new(common::NOW));
     let store = Arc::new(Store::open_in_memory(&key, common::clock_of(&clock_cell)).unwrap());
-    let parts = common::admin_parts_full_on_polled(store, clock_cell, MIRROR_POLL).await;
+    // The hour lands only for an account the store holds, and the router reads the hours once, at its start inside the
+    // builder, so the accounts and the hour stand ahead of it and the builder seeds no account of its own.
+    common::seed_accounts(&store, None);
+    let hour_landed = store
+        .write_routing(|tx| {
+            tx.upsert_model_week_hour(&phoebis_store::ModelWeekHourRow {
+                account_id: "business".into(),
+                incarnation: 1,
+                window: phoebis_routing::SEVEN_DAY_FABLE.into(),
+                hour: common::NOW / 3_600_000 - 1,
+                share: FABLE_HOUR_SHARE,
+            })
+        })
+        .unwrap();
+    assert!(hour_landed, "the Fable hour lands on the seeded account");
+    let parts =
+        common::admin_parts_full_on_polled(store, clock_cell, MIRROR_POLL, FABLE_FACTOR).await;
     // The mirror's own starting point, since the harness writes the registry before it spawns the ledger and never
     // after.
     let baseline = parts
@@ -851,7 +892,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             account_kind: selection.account.kind,
             // The first row of the request list, so the captured list carries a dropped-blocks key.
             input_transformations: serde_json::from_value(j!({
-                "thinking.prefix_binding_mismatch": { "blocks": 2, "first_message": 1 }
+                "thinking_dropped.prefix_binding_mismatch": { "blocks": 2, "first_message": 1 }
             }))
             .unwrap(),
             // A later turn of the session whose read of 500 falls under half the previous request's prompt, so the
@@ -1212,6 +1253,31 @@ async fn every_route_is_captured_and_holds_its_shape() {
             }
             .with(phoebis_relay::FAST_INPUT, fast_reading(0.42))
             .with(phoebis_relay::FAST_OUTPUT, fast_reading(0.08)),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    // The router's reading of the Fable week at the ledger sample's figures, which the reservation reads on the pool's
+    // member row and on a Pace pick, while the account rows keep the ledger's 12%.
+    parts
+        .router
+        .report(phoebis_routing::Report::Sample {
+            account_id: "business".into(),
+            sample: phoebis_routing::UtilizationSample {
+                observed_at: now - 100_000,
+                ..Default::default()
+            }
+            .with(
+                phoebis_routing::SEVEN_DAY_FABLE,
+                phoebis_routing::WindowReading {
+                    utilization: 0.12,
+                    reset: Some(now + 86_400_000),
+                    observed_at: now - 100_000,
+                    source: phoebis_routing::WindowSource::Head,
+                    plan: None,
+                    tier: None,
+                },
+            ),
             incarnation: 1,
             source_request_id: None,
         })
@@ -2721,6 +2787,55 @@ async fn every_route_is_captured_and_holds_its_shape() {
         let read = parts.usage.limit_resets(id).await.unwrap();
         assert!(read.is_some(), "{id}: the fake answers its block");
     }
+    // A Fable pin of `business` beside its pins of other models, the use that the reservation holds room for and that
+    // a reservation's round leaves out. It is placed at the companion's pins' instant, before the routing log's hour,
+    // and renewed at the capture's, inside the pool's TTL. Its id sorts after `s-fixture`, which stays the list's first
+    // row.
+    let fable_model = "claude-fable-5-1";
+    let fable = parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            canonical_model: fable_model.into(),
+            folded_model: fable_model.into(),
+            candidates: phoebis_routing::resolve(
+                &parts.router.snapshot(),
+                &key_row,
+                fable_model,
+                fable_model,
+            )
+            .expect("the pool's model rules allow the Fable model"),
+            now: placed_at,
+            received_at: placed_at,
+            lane: lane_key(fable_model, "standard", "none", "-"),
+            ..asked(&parts, key_generation, "r-reserved", 1, Some("s-reserved"))
+        })
+        .await
+        .unwrap();
+    let fable_pin = match &fable.result {
+        phoebis_routing::SelectResult::Selected(selection) => {
+            assert_eq!(
+                selection.account.id, "business",
+                "the Fable session lands on the plan account"
+            );
+            selection.pin.clone()
+        }
+        other => panic!("the Fable session answers a selection, not {other:?}"),
+    };
+    drop(fable);
+    parts
+        .router
+        .report(phoebis_routing::Report::PinRenewed {
+            pin: fable_pin.expect("a session's selection holds a pin"),
+            now,
+            usage: None,
+            keepalive: false,
+            cache_ttl_ms: 300_000,
+            fast: false,
+            turn_end: phoebis_routing::RenewalEnd::Turn,
+            thinking_tokens: None,
+            input_transformations: None,
+        })
+        .await;
     for (name, route) in [
         ("account", "/admin/accounts/business"),
         ("account_catalog", "/admin/accounts/business/catalog"),
@@ -3144,6 +3259,13 @@ async fn every_route_is_captured_and_holds_its_shape() {
         started["detail"]["down_since"].as_i64().unwrap() < started["at"].as_i64().unwrap(),
         "the start dates its gap from a row written before it: {started}"
     );
+    // A Pace pick's record beside the placement's: its first-tier candidate reads the Fable reservation, which no
+    // candidate of a placement reads.
+    let pick_route = "/admin/requests/r-warm/decisions/1";
+    let pick = wait_json(app, pick_route, &cookie, |record| {
+        record["candidates"].is_array()
+    })
+    .await;
     let failover = json(get(app, "/admin/requests/r-failover", Some(&cookie)).await).await;
     let phases = &failover["request"]["phases"];
     assert!(
@@ -3152,6 +3274,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     );
     for (name, route, body) in [
         ("decision", decision_route.to_string(), decision),
+        ("decision_pick", pick_route.to_string(), pick),
         ("routing_log", log_route, log),
     ] {
         hold(&planted, name, &format!("GET {route}"), body);
@@ -3900,6 +4023,84 @@ async fn routing_stories(
             held_ms: 240_000,
             holds: 2,
             at: at(32),
+        },
+        // The round that the Fable reservation fired, a minute ahead of the projection's round, so the log lists it
+        // behind that one. The 7-day reset stands two days out, where the seeded hour's share reads 0.48 of the Fable
+        // week, under the Fable room of 0.88, so `FABLE_FACTOR` holds back 0.12, past the 0.1 of room that 0.9 leaves.
+        // Five hours of the walked pin's burn reach 0.926, under the ceiling, so no window's test fired. The test names
+        // no rate, so the excess is the walked burn and the target is the shed cap's part of it. A mark of the one
+        // walked pin would leave no burn unmarked, so the guard keeps it.
+        RouterEvent::SheddingRound {
+            account_id: "business".into(),
+            pool_id: "main".into(),
+            request_id: "r-failover".into(),
+            pin: PinKey::new("desktop", "s1", "main", "claude-sonnet-5-5"),
+            round: Box::new(phoebis_routing::ShedRoundFacts {
+                window: "seven_day".into(),
+                utilization: 0.9,
+                projection: 0.926,
+                horizon: at(1) + 18_000_000,
+                ceiling: 1.0,
+                trigger: "fable_reservation",
+                stretch_ms: None,
+                threshold_ms: None,
+                fable_reservation: Some(0.12),
+                factor: None,
+                unit: "window_share",
+                rewrite_unit: "pro_week",
+                burn_average_seconds: 1_800,
+                shed_cap: 0.2,
+                burn_sum: 0.0052,
+                excess: 0.0052,
+                target: 0.00104,
+                mark_share: 0.1,
+                removed: 0.0,
+                warm_sessions: "when_needed",
+                pins: vec![
+                    phoebis_routing::ShedPinFacts {
+                        key_id: "desktop".into(),
+                        session_id: "s1".into(),
+                        agent_id: "main".into(),
+                        model: "claude-sonnet-5-5".into(),
+                        cold: true,
+                        burn: Some(0.0052),
+                        last_input_tokens: 52_000,
+                        dropped_thinking_tokens: None,
+                        per_rewrite: Some(1e-7),
+                        marked: false,
+                        rewrite: None,
+                        rewrite_window: None,
+                        planned: None,
+                        runway_ms: None,
+                        skip: Some("last_pin"),
+                        note: Some("current"),
+                    },
+                    phoebis_routing::ShedPinFacts {
+                        key_id: "desktop".into(),
+                        session_id: "s-reserved".into(),
+                        agent_id: "main".into(),
+                        model: "claude-fable-5-1".into(),
+                        cold: true,
+                        burn: None,
+                        last_input_tokens: 0,
+                        dropped_thinking_tokens: None,
+                        per_rewrite: None,
+                        marked: false,
+                        rewrite: None,
+                        rewrite_window: None,
+                        planned: None,
+                        runway_ms: None,
+                        skip: Some("fable_model"),
+                        note: None,
+                    },
+                ],
+                marks: Vec::new(),
+                outcome: "nothing_to_mark".into(),
+                reason: Some("last_pin"),
+                dwell_seconds: 900,
+                dwell_until: at(1) + 900_000,
+            }),
+            at: at(1),
         },
     ];
     for event in &routed {

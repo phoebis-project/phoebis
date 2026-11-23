@@ -14,7 +14,7 @@
         "overage_seconds": 0,
         "cooldown_seconds": 0,
         "pins": {
-          "created": 4,
+          "created": 5,
           "migrated_in": 1,
           "migrated_out": 0
         },
@@ -42,7 +42,7 @@
             "utilization_7d_oi_max": null,
             "overage_seconds": 0,
             "cooldown_seconds": 0,
-            "pins_created": 3,
+            "pins_created": 4,
             "pins_migrated_in": 1,
             "pins_migrated_out": 0,
             "windows": {

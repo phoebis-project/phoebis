@@ -59,7 +59,7 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   assert.equal(a.subscription.plan, 'max_20x');
   assert.ok(isIso(a.subscription.since));
   assert.equal(a.subscription.trialEndsAt, null);
-  assert.deepEqual(fixture('account').windows.map((w) => w.id), ['five_hour', 'seven_day', 'seven_day_fable', 'seven_day_opus'], 'the route passes the ledger\'s one spelling through, in the ledger order');
+  assert.deepEqual(fixture('account').windows.map((w) => w.id), ['seven_day_fable', 'five_hour', 'seven_day', 'seven_day_opus'], 'the route passes the ledger\'s one spelling through, in the route\'s order');
   assert.deepEqual(a.windows.map((w) => w.id), ['5h', '7d', 'seven_day_opus'], 'the endpoint keys fold onto the UI ids, a week no row names keeps its key, and the order is the drawn one');
   assert.equal(a.fableWindow.id, '7d_fable');
   assert.ok(isIso(a.windows[0].resetsAt) && isIso(a.windows[0].observedAt));
@@ -78,16 +78,16 @@ test('an account decodes with its windows, plan, pool, and models', () => {
 test("an account decodes its slow-down and each window's demand, and an api_key account reads null", () => {
   const body = fixture('account');
   const since = 1_791_717_520_000;
-  const [five, ...rest] = body.windows;
+  const five = body.windows.find((w) => w.id === 'five_hour');
   const wire = {
     ...body,
     slow_down: { factor: 0.5, hold_ms: 120_000, since, speed: 0.6, stretch_ms: 2_520_000, threshold_ms: 1_800_000 },
-    windows: [{ ...five, burn: 0.085, demand: 0.17, horizon: five.resets_at, projection: 0.81 }, ...rest],
+    windows: body.windows.map((w) => (w === five ? { ...five, burn: 0.085, demand: 0.17, horizon: five.resets_at, projection: 0.81 } : w)),
   };
   const slowed = d.decodeAccount(wire);
   assert.deepEqual(slowed.slowDown, { factor: 0.5, holdMs: 120_000, ramp: null, since: new Date(since).toISOString(), speed: 0.6, stretchMs: 2_520_000, thresholdMs: 1_800_000 });
   assert.deepEqual(slowed.windows.map((w) => [w.id, w.demand]), [['5h', 0.17], ['7d', null], ['seven_day_opus', null]], 'the demand where the route projects one');
-  assert.equal(slowed.fableWindow.demand, null);
+  assert.equal(slowed.fableWindow.demand, 0);
   assert.equal(d.decodeAccount({ ...wire, slow_down: { ...wire.slow_down, since: null } }).slowDown.since, null, 'an entry outside a span names no start');
   const captured = d.decodeAccount(body);
   assert.deepEqual([captured.slowDown, captured.windows.map((w) => w.demand)], [null, [null, null, null]], 'the captured account is read by no pinned selection');
@@ -659,14 +659,13 @@ test("a pool decodes its warnings and a member's pace score, burn, Fable reserva
 
 test('a window decodes its projection, horizon and burn and nulls without them', () => {
   const body = fixture('account');
-  const [five] = body.windows;
-  assert.equal(five.id, 'five_hour');
-  const wire = { ...body, windows: [{ ...five, burn: 0.085, horizon: five.resets_at, projection: 0.81 }, ...body.windows.slice(1)] };
+  const five = body.windows.find((w) => w.id === 'five_hour');
+  const wire = { ...body, windows: body.windows.map((w) => (w === five ? { ...five, burn: 0.085, horizon: five.resets_at, projection: 0.81 } : w)) };
   const a = d.decodeAccount(wire);
   const read = (w) => [w.projection, w.horizon, w.burn];
   assert.deepEqual(read(a.windows.find((w) => w.id === '5h')), [0.81, new Date(five.resets_at).toISOString(), 0.085]);
   assert.deepEqual(read(a.windows.find((w) => w.id === '7d')), [null, null, null], 'the capture reads no burn, so nothing is projected');
-  assert.deepEqual(read(a.fableWindow), [null, null, null]);
+  assert.deepEqual(read(a.fableWindow), [0.12, new Date(1_791_739_000_000).toISOString(), 0]);
   const { burn: _b, horizon: _h, projection: _p, ...unprojected } = five;
   assert.deepEqual(read(d.decodeAccount({ ...body, windows: [unprojected] }).windows[0]), [null, null, null], 'a window without the members reads null');
 });
@@ -1861,7 +1860,7 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual(r.walk[5].facts[0], { accountId: null, key: 'depth', unit: 'count', value: 1 });
   assert.deepEqual(r.walk[1].facts[0], { accountId: 'business', key: 'standing', unit: null, value: 'eligible' });
   assert.deepEqual([r.outcome.kind, r.outcome.accountId, r.outcome.rung], ['placed', 'business', { depth: 1, prefixTokens: 31200, rung: 'static' }]);
-  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 10, hashesStamped: true, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
+  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 11, hashesStamped: true, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
   assert.deepEqual(r.outcome.pinEvents, [{ kind: 'pin_created', reason: null }]);
   assert.equal(r.outcome.completion.hit, true);
   assert.deepEqual(r.outcome.completion.cacheMapWritten, [{ accountId: 'business', depth: 1, prefixTokens: 31200, tier: 'message', ttlMs: 300_000 }]);

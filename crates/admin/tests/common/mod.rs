@@ -190,13 +190,15 @@ pub async fn admin_parts_full_on(store: Arc<Store>, clock_cell: Arc<AtomicI64>) 
 /// the default's 5 s, so a wait for the mirror's copy of a registry write costs a tick of that length. The same
 /// interval paces the writer's revision poll, which lands pending budget rows, and the retry of a failed spend read on
 /// the ledger's clock, so a budget row a seed provokes lands on that cadence as well. Its router prices a pin's rewrite
-/// through the shipped cost model, as `admin_parts_full_on_equivalent` wires it.
+/// through the shipped cost model, as `admin_parts_full_on_equivalent` wires it, and its pricer answers `factor` for
+/// the Fable week through `SharePricer::with_week_factor`, where the default pricer answers none.
 pub async fn admin_parts_full_on_polled(
     store: Arc<Store>,
     clock_cell: Arc<AtomicI64>,
     event_poll: Duration,
+    factor: f64,
 ) -> Full {
-    admin_parts_full_on_equivalent(
+    full_on_equivalent(
         store,
         clock_cell,
         PlanTables::shipped(),
@@ -204,6 +206,7 @@ pub async fn admin_parts_full_on_polled(
             event_poll,
             ..LedgerConfig::default()
         },
+        Some(factor),
     )
     .await
 }
@@ -219,7 +222,29 @@ pub async fn admin_parts_full_on_equivalent(
     costs: PlanTables,
     ledger_config: LedgerConfig,
 ) -> Full {
+    full_on_equivalent(store, clock_cell, costs, ledger_config, None).await
+}
+
+/// The one build of `admin_parts_full_on_equivalent` and `admin_parts_full_on_polled`, its pricer answering `factor`
+/// for the Fable week where one is given, so the capture's factor leaves the equivalent's harness as it is.
+async fn full_on_equivalent(
+    store: Arc<Store>,
+    clock_cell: Arc<AtomicI64>,
+    costs: PlanTables,
+    ledger_config: LedgerConfig,
+    factor: Option<f64>,
+) -> Full {
     let tables = costs.clone();
+    let share =
+        SharePricer::default().with_equivalent(move |window, entrypoint, model, usage, at| {
+            tables.equivalent_at(window, entrypoint, model, usage, at, at, at)
+        });
+    let share = match factor {
+        Some(factor) => share.with_week_factor(move |window, _| {
+            (window == phoebis_routing::SEVEN_DAY_FABLE).then_some(factor)
+        }),
+        None => share,
+    };
     full_from(
         build_app_bounded(
             None,
@@ -231,11 +256,7 @@ pub async fn admin_parts_full_on_equivalent(
             None,
             Some(costs),
             RouterConfig {
-                share: SharePricer::default().with_equivalent(
-                    move |window, entrypoint, model, usage, at| {
-                        tables.equivalent_at(window, entrypoint, model, usage, at, at, at)
-                    },
-                ),
+                share,
                 ..RouterConfig::default()
             },
             ledger_config,
@@ -1212,6 +1233,58 @@ async fn build_app_routed(
     .await
 }
 
+/// The harness's two accounts on `store`: `business`, an OAuth slot paired as `identity` where one is given and unpaired
+/// otherwise, and `direct`, an API-key slot. A routing row lands only for an account the store holds, and the router
+/// reads those rows once, at its start, so a caller that writes one ahead of the harness seeds the accounts here first,
+/// and the builder then seeds none.
+pub fn seed_accounts(store: &Store, identity: Option<Identity>) {
+    let paired = identity.is_some();
+    store
+        .insert_account(&AccountRow {
+            label: "Business".into(),
+            identity,
+            state: if paired {
+                AccountState::Ready
+            } else {
+                AccountState::Unpaired
+            },
+            ..AccountRow::for_tests("business", AccountKind::Oauth)
+        })
+        .unwrap();
+    if paired {
+        // Far from expiry, so reading usage never triggers a refresh of its own against the fake.
+        store
+            .commit_credentials(
+                "business",
+                1,
+                1,
+                None,
+                None,
+                &NewBundle {
+                    access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                    refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                    issued_at: NOW,
+                    expires_at: NOW + 3_600_000,
+                    refresh_expires_at: None,
+                    scopes: "user:profile user:inference".into(),
+                },
+            )
+            .unwrap();
+    }
+
+    // Every app carries an API-key slot as well, since verification is the one route that only an
+    // API-key account reaches.
+    store
+        .insert_account(&AccountRow {
+            label: "Direct".into(),
+            ..AccountRow::for_tests("direct", AccountKind::ApiKey)
+        })
+        .unwrap();
+    store
+        .set_api_key_secret("direct", &Secret::new(API_KEY))
+        .unwrap();
+}
+
 /// `build_app_routed` with the sessions route bounded by `session_expiry` and `non_companion_idle`, which the settings
 /// view mirrors, and the ledger on the file at `ledger_path` where one is given, on a file under a temporary directory
 /// otherwise. `features` gives the settings answer a feature listener, which a router without the `features` block
@@ -1242,53 +1315,9 @@ async fn build_app_bounded(
         (Arc::new(store), clock_cell)
     });
     let clock = clock_of(&clock_cell);
-    let paired = identity.is_some();
     // A store handed in by the caller already carries its own accounts; seeding it again would collide.
     if store.accounts().unwrap().is_empty() {
-        store
-            .insert_account(&AccountRow {
-                label: "Business".into(),
-                identity,
-                state: if paired {
-                    AccountState::Ready
-                } else {
-                    AccountState::Unpaired
-                },
-                ..AccountRow::for_tests("business", AccountKind::Oauth)
-            })
-            .unwrap();
-        if paired {
-            // Far from expiry, so reading usage never triggers a refresh of its own against the fake.
-            store
-                .commit_credentials(
-                    "business",
-                    1,
-                    1,
-                    None,
-                    None,
-                    &NewBundle {
-                        access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
-                        refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
-                        issued_at: NOW,
-                        expires_at: NOW + 3_600_000,
-                        refresh_expires_at: None,
-                        scopes: "user:profile user:inference".into(),
-                    },
-                )
-                .unwrap();
-        }
-
-        // Every app carries an API-key slot as well, since verification is the one route that only an
-        // API-key account reaches.
-        store
-            .insert_account(&AccountRow {
-                label: "Direct".into(),
-                ..AccountRow::for_tests("direct", AccountKind::ApiKey)
-            })
-            .unwrap();
-        store
-            .set_api_key_secret("direct", &Secret::new(API_KEY))
-            .unwrap();
+        seed_accounts(&store, identity);
     }
 
     let addr = up.addr();
