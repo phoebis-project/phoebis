@@ -62,6 +62,9 @@ pub(crate) const HIT_SUFFIX: &str = "/hit";
 pub(crate) const TRANSFORMATIONS_MOVED: &str = "moved";
 /// The reserved key of `input_transformations` that counts a request whose serving attempt's answer listed no block.
 pub(crate) const TRANSFORMATIONS_NONE: &str = "none";
+/// The reserved key of `input_transformations` that counts a request whose serving attempt's answer carried the
+/// member, whatever it listed.
+pub(crate) const TRANSFORMATIONS_REPORTED: &str = "reported";
 
 /// The value a request files under when its answer named no `usage.speed` and it did not ask for `fast`; `fast`
 /// is the other value.
@@ -318,8 +321,8 @@ pub struct RollupRow {
     pub refusals: BTreeMap<String, u64>,
     pub cache_miss_reasons: BTreeMap<String, u64>,
     /// The requests counted once under each `<type>.<reason>` key of the blocks their serving attempt's answer dropped,
-    /// whatever the key's block count, with two reserved keys beside them: `TRANSFORMATIONS_MOVED` and
-    /// `TRANSFORMATIONS_NONE`.
+    /// whatever the key's block count, with three reserved keys beside them: `TRANSFORMATIONS_MOVED`,
+    /// `TRANSFORMATIONS_NONE` and `TRANSFORMATIONS_REPORTED`.
     pub input_transformations: BTreeMap<String, u64>,
 }
 
@@ -629,6 +632,9 @@ pub struct FoldRules {
     pub slow_down_hold: bool,
     /// A tokens-per-second sample needs a span of at least `THROUGHPUT_FLOOR_MS`.
     pub throughput_floor: bool,
+    /// A request whose serving attempt's answer carried the dropped-blocks member counts under
+    /// `TRANSFORMATIONS_REPORTED`.
+    pub transformations_reported: bool,
     /// A sample past 100,000 files in its own bucket of the 84 rather than in bucket 63.
     pub wide_edges: bool,
 }
@@ -639,6 +645,7 @@ impl FoldRules {
         hit_split: true,
         slow_down_hold: true,
         throughput_floor: true,
+        transformations_reported: true,
         wide_edges: true,
     };
 }
@@ -793,6 +800,11 @@ pub(crate) fn deltas_under(
     }
     // A request counts once under each key whatever the key's `blocks`, since the readers count requests.
     if let Some((a, dropped)) = last.and_then(|a| Some((a, a.input_transformations.as_ref()?))) {
+        if rules.transformations_reported {
+            *d.input_transformations
+                .entry(TRANSFORMATIONS_REPORTED.into())
+                .or_default() += 1;
+        }
         for key in dropped.keys() {
             *d.input_transformations.entry(key.clone()).or_default() += 1;
         }
@@ -3578,7 +3590,10 @@ mod tests {
     fn an_empty_member_counts_under_none_and_a_missing_member_counts_nowhere() {
         assert_eq!(
             transformations_of(Some(BTreeMap::new()), None),
-            BTreeMap::from([(TRANSFORMATIONS_NONE.to_string(), 1)]),
+            BTreeMap::from([
+                (TRANSFORMATIONS_NONE.to_string(), 1),
+                (TRANSFORMATIONS_REPORTED.to_string(), 1)
+            ]),
             "an answer that listed nothing"
         );
         assert_eq!(

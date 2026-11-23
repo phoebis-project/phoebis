@@ -85,9 +85,9 @@ halves, where the selection landed on that request's account in a turn the route
 the price revision in force when the request arrived, in the hourly sums too while the request's row is kept. An hour
 whose request rows the purge took prices whole at the revision in force at the end of the hour.
 
-The hourly rollup counts a request once under each kind its serving attempt lists, with two counts of their own: the
-moved requests whose answer listed a block under an account reason, and the answers whose member was empty. It keeps no
-count of blocks and no token estimate.
+The hourly rollup counts a request once under each kind its serving attempt lists, with three counts of their own: the
+moved requests whose answer listed a block under an account reason, the answers whose member was empty, and the requests
+whose answer carried the member at all. It keeps no count of blocks and no token estimate.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens. A `content`
 placement, by the conversation's own messages, is a hit when the response read the prefix the entry promised. A
@@ -592,7 +592,7 @@ an equal rollup retention the purge drops the hour that cutoff splits: that hour
 a budgeted member moves. The re-fold moves the request rows alone. A wasted probe's counts and a probe the keepalive
 still holds keep the band they settled or were recorded in, so the waste of a probe whose prompt falls between the old
 and the new threshold inside the retained window stays priced at that band. The first start after an upgrade that
-changes how the Latency samples are counted folds the retained requests again before the router serves.
+changes what a request adds to its hour folds the retained requests again before the router serves.
 
 ## Metrics
 

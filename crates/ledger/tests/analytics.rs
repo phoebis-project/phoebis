@@ -9540,6 +9540,79 @@ fn the_breakdown_answers_the_dropped_blocks_keys_apart_from_the_moved_count() {
     );
 }
 
+/// An answer that lists two keys counts once in the reported count and once under each of its keys.
+#[tokio::test]
+async fn an_answer_that_lists_two_keys_adds_one_to_the_reported_count() {
+    let (db, _dir) = common::temp_ledger();
+    let db = std::sync::Arc::new(db);
+    let request = RequestRecord {
+        id: "r1".into(),
+        received_at: WEEKDAY_OFF_PEAK,
+        key_id: Some("desktop".into()),
+        pool_id: Some("p".into()),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(200),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: "r1".into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: AccountKind::Oauth,
+        upstream_status: Some(200),
+        outcome: "succeeded".into(),
+        input_tokens: Some(100),
+        output_tokens: Some(10),
+        input_transformations: Some(BTreeMap::from([
+            (
+                "thinking.organization_binding_mismatch".to_string(),
+                InputTransformation {
+                    blocks: 2,
+                    first_message: 1,
+                },
+            ),
+            (
+                "thinking.prefix_binding_mismatch".to_string(),
+                InputTransformation {
+                    blocks: 3,
+                    first_message: 0,
+                },
+            ),
+        ])),
+        ..Default::default()
+    };
+    db.insert_request(&request, &[attempt], None).unwrap();
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let groups = account_groups(
+        &db,
+        &RollupFilter::default(),
+        from,
+        to,
+        &phoebis_ledger::test_tables::subscription_costs(),
+    )
+    .await;
+    let a = group(&groups, "a");
+    assert_eq!(
+        (
+            a.input_transformations_reported,
+            a.input_transformations.clone()
+        ),
+        (
+            1,
+            BTreeMap::from([
+                ("thinking.organization_binding_mismatch".to_string(), 1),
+                ("thinking.prefix_binding_mismatch".to_string(), 1),
+            ])
+        ),
+        "one request for the member, one under each key"
+    );
+}
+
 /// A request of `kind` on `model`, its one attempt answered with `input` uncached tokens and `read` read back under the
 /// miss reason `reason`, and the marker fact `cache_marker`.
 fn cached(

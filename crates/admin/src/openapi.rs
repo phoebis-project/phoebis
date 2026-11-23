@@ -755,6 +755,9 @@ pub(crate) struct BreakdownRow {
     pub input_transformations_moved: u64,
     /// The requests whose serving attempt's answer listed no dropped block.
     pub input_transformations_none: u64,
+    /// The requests whose serving attempt's answer carried the member that lists its dropped blocks, whatever it
+    /// listed. 0 for an hour whose requests the ledger no longer held when the router first kept the count.
+    pub input_transformations_reported: u64,
     pub histograms: HistogramsView,
     pub percentiles: PercentilesView,
     pub kept_warm: KeptWarmView,

@@ -37,7 +37,8 @@ use crate::rollup::{
     trailing_day_hours, visit_rollups, CostSplit, KeySelector, RollupRow, RollupSelect,
     RoutingKind, COLUMNS as ROLLUP_COLUMNS, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS,
     EXPIRED_BETWEEN_TURNS_UNRELEASED, HIT_SUFFIX, NO_CLASS, NO_EFFORT, NO_PLAN_PROBES,
-    OTHER_DIMENSION, TRANSFORMATIONS_MOVED, TRANSFORMATIONS_NONE, UNATTRIBUTED,
+    OTHER_DIMENSION, TRANSFORMATIONS_MOVED, TRANSFORMATIONS_NONE, TRANSFORMATIONS_REPORTED,
+    UNATTRIBUTED,
 };
 use crate::session_totals::{
     Serving, SessionRequest, FACTS_COLUMNS as SESSION_FACTS_COLUMNS,
@@ -2240,12 +2241,14 @@ pub struct GroupRow {
     /// prompt from the cache. A reason with none is left out.
     pub cache_miss_reason_hits: BTreeMap<String, u64>,
     /// The requests per `<type>.<reason>` key of the blocks their serving attempt's answer dropped, each counted once
-    /// under each key it listed, without the store's two reserved keys.
+    /// under each key it listed, without the store's three reserved keys.
     pub input_transformations: BTreeMap<String, u64>,
     /// The moved requests whose serving attempt's answer dropped a block under an account reason.
     pub input_transformations_moved: u64,
     /// The requests whose serving attempt's answer listed no dropped block.
     pub input_transformations_none: u64,
+    /// The requests whose serving attempt's answer carried the dropped-blocks member, whatever it listed.
+    pub input_transformations_reported: u64,
     pub histograms: Histograms,
     pub percentiles: Percentiles,
     pub kept_warm: KeptWarm,
@@ -2605,6 +2608,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
     let mut dropped = sum.input_transformations;
     let dropped_moved = dropped.remove(TRANSFORMATIONS_MOVED).unwrap_or(0);
     let dropped_none = dropped.remove(TRANSFORMATIONS_NONE).unwrap_or(0);
+    let dropped_reported = dropped.remove(TRANSFORMATIONS_REPORTED).unwrap_or(0);
     GroupRow {
         key: key.into(),
         label,
@@ -2645,6 +2649,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         input_transformations: dropped,
         input_transformations_moved: dropped_moved,
         input_transformations_none: dropped_none,
+        input_transformations_reported: dropped_reported,
         histograms: Histograms {
             duration_ms: sum.duration_hist.buckets(),
             output_tps: sum.output_tps_hist.buckets(),

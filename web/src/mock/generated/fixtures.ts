@@ -1298,6 +1298,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
+          "input_transformations_reported": 1,
           "histograms": {
             "duration_ms": [
               0,
@@ -1756,6 +1757,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "input_transformations": {},
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
+          "input_transformations_reported": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -2239,6 +2241,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
+          "input_transformations_reported": 1,
           "histograms": {
             "duration_ms": [
               0,
@@ -2698,6 +2701,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "input_transformations": {},
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
+          "input_transformations_reported": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -3163,6 +3167,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "input_transformations": {},
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
+          "input_transformations_reported": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -3627,6 +3632,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "input_transformations": {},
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
+          "input_transformations_reported": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -4101,6 +4107,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "input_transformations": {},
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
+          "input_transformations_reported": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -4577,6 +4584,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
+          "input_transformations_reported": 1,
           "histograms": {
             "duration_ms": [
               0,
@@ -7673,6 +7681,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
+              "input_transformations_reported": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -8155,6 +8164,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
+              "input_transformations_reported": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -8621,6 +8631,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
+              "input_transformations_reported": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -9097,6 +9108,7 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
+              "input_transformations_reported": 1,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -9653,6 +9665,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
+              "input_transformations_reported": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -10135,6 +10148,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
+              "input_transformations_reported": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -10602,6 +10616,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
+              "input_transformations_reported": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -11067,6 +11082,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
+              "input_transformations_reported": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -11531,6 +11547,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
+              "input_transformations_reported": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -12005,6 +12022,7 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
+              "input_transformations_reported": 1,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -12461,6 +12479,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
+              "input_transformations_reported": 0,
               "histograms": {
                 "duration_ms": [
                   0,

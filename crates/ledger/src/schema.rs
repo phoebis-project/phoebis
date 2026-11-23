@@ -241,8 +241,8 @@ CREATE TABLE IF NOT EXISTS "extra_usage_samples" (
 -- under each TTL, the slow-down columns the waits of the row's requests, client_canceled the requests whose client left
 -- (a column of the migration to version 4), in requests and apart from failed and errors_json,
 -- input_transformations_json (a column of the same migration) the requests per key of the blocks their answer dropped,
--- once per key whatever the blocks, beside the reserved keys moved and none, uncacheable (a column of the same
--- migration) the uncached requests that are no token count and whose body marked no cache, a part of
+-- once per key whatever the blocks, beside the reserved keys moved, none and reported, uncacheable (a column of the
+-- same migration) the uncached requests that are no token count and whose body marked no cache, a part of
 -- uncached_requests the read adds a token count's row to, and refusals_json the refusals by error code apart from every
 -- other figure, so a reader that sums the row sees none of them. Every open runs this baseline, so it keeps
 -- probe_migrated, which no build wrote above zero, and the migration to version 6 drops it from a fresh file as from a

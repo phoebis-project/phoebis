@@ -18,10 +18,11 @@
 //!
 //! A fold rule (the expiry between turns read against the body's cache marker, the entry's lifetime and the agent's
 //! release, the hits split off under each miss reason, the slow-down's hold left out of the millisecond samples, the
-//! tokens-per-second floor, the wide edge set) changes what a request adds to its hour, so the first start of a build
-//! that holds a rule folds again each retained request that landed before the rule's mark: its deltas under the rules
-//! it was folded under come out and its deltas under every rule go in, at the thresholds its rows stand under. That
-//! pass runs before the band re-fold and resumes from a cursor of its own.
+//! tokens-per-second floor, the count of the requests whose answer reported its dropped blocks, the wide edge set)
+//! changes what a request adds to its hour, so the first start of a build that holds a rule folds again each retained
+//! request that landed before the rule's mark: its deltas under the rules it was folded under come out and its deltas
+//! under every rule go in, at the thresholds its rows stand under. That pass runs before the band re-fold and resumes
+//! from a cursor of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
@@ -55,15 +56,17 @@ enum FoldRule {
     HitSplit,
     SlowDownHold,
     ThroughputFloor,
+    TransformationsReported,
     WideEdges,
 }
 
 impl FoldRule {
-    const EVERY: [FoldRule; 5] = [
+    const EVERY: [FoldRule; 6] = [
         FoldRule::ExpiryRelease,
         FoldRule::HitSplit,
         FoldRule::SlowDownHold,
         FoldRule::ThroughputFloor,
+        FoldRule::TransformationsReported,
         FoldRule::WideEdges,
     ];
 
@@ -73,6 +76,7 @@ impl FoldRule {
             FoldRule::HitSplit => "hit_split",
             FoldRule::SlowDownHold => "slow_down_hold",
             FoldRule::ThroughputFloor => "throughput_floor",
+            FoldRule::TransformationsReported => "transformations_reported",
             FoldRule::WideEdges => "wide_edges",
         }
     }
@@ -101,6 +105,10 @@ impl FoldRule {
             },
             FoldRule::ThroughputFloor => FoldRules {
                 throughput_floor: false,
+                ..rules
+            },
+            FoldRule::TransformationsReported => FoldRules {
+                transformations_reported: false,
                 ..rules
             },
             FoldRule::WideEdges => FoldRules {
@@ -848,9 +856,10 @@ mod tests {
     use crate::histogram::Histogram;
     use crate::pricing::{Band, PriceTable, Speed};
     use crate::query::{member_spends, BudgetedMember};
-    use crate::record::{AttemptRecord, RequestRecord};
+    use crate::record::{AttemptRecord, InputTransformation, RequestRecord};
     use crate::rollup::{
         read_rollups, RollupRow, RollupSelect, EXPIRED_BETWEEN_TURNS, LONG_BAND, STANDARD_BAND,
+        TRANSFORMATIONS_REPORTED,
     };
     use phoebis_store::AccountKind;
 
@@ -1546,6 +1555,7 @@ mod tests {
         hit_split: false,
         slow_down_hold: false,
         throughput_floor: false,
+        transformations_reported: false,
         wide_edges: false,
     };
 
@@ -1854,6 +1864,40 @@ mod tests {
             BTreeMap::from([
                 ("messages_changed".to_string(), 2),
                 ("messages_changed/hit".to_string(), 1)
+            ])
+        );
+    }
+
+    /// `haiku`'s request carries no timing, miss reason, hold or cache marker, so no other open rule moves it.
+    #[test]
+    fn the_rules_pass_gives_a_retained_request_its_reported_count() {
+        let (db, _dir) = crate::db::open_temp();
+        let at = NEW_YEAR + DAY;
+        let (request, mut attempts) = haiku("r1", at, 100);
+        attempts[0].input_transformations = Some(BTreeMap::from([(
+            "thinking.prefix_binding_mismatch".to_string(),
+            InputTransformation {
+                blocks: 1,
+                first_message: 0,
+            },
+        )]));
+        store(
+            &db,
+            &(request, attempts),
+            &list(Some(1_000)),
+            FoldRules {
+                transformations_reported: false,
+                ..FoldRules::ALL
+            },
+            0,
+        );
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
+        assert_eq!(
+            row(&db, at, STANDARD_BAND).input_transformations,
+            BTreeMap::from([
+                (TRANSFORMATIONS_REPORTED.to_string(), 1),
+                ("thinking.prefix_binding_mismatch".to_string(), 1)
             ])
         );
     }
