@@ -1202,6 +1202,14 @@ fn a_replace_that_moves_the_serving_attempt_empties_the_old_accounts_reading() {
         None,
         "nothing is left in the hour to read the vacated account's utilization from"
     );
+    assert_eq!(
+        db.read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
+            .unwrap()
+            .into_iter()
+            .find(|r| r.account_id == "a"),
+        None,
+        "an account hour that the replace left holding nothing is not stored"
+    );
     assert_eq!(peak(&db, "b"), Some(0.4));
 }
 

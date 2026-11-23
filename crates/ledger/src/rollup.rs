@@ -1018,8 +1018,9 @@ pub struct AccountRollupRow {
     /// Seconds of overage that ended in this hour: the whole span lands where it ended, so a range total is
     /// right and one hour's value can exceed 3,600.
     pub overage_seconds: u64,
-    /// Seconds of cooldown booked to the hour each part elapses in; more than one scope cooling down at once
-    /// can still push one hour's value past 3,600.
+    /// Seconds the account stood under at least one cooldown, booked to the hour each part elapses in, so two
+    /// scopes open over the same minutes count them once. An hour that was stored while each scope booked its own
+    /// time keeps its sum, which can pass 3,600.
     pub cooldown_seconds: u64,
     pub pins_created: u64,
     pub pins_migrated_in: u64,
@@ -1223,9 +1224,9 @@ fn serving_rewrite(attempts: &[AttemptRecord]) -> Option<(&AttemptRecord, u64)> 
     (tokens > 0).then_some((a, tokens))
 }
 
-/// One hour and account's utilization maxima, taken again from the raw attempts and written back over the
-/// three columns alone: the counters beside them come from cooldown, overage and pin events, which no
-/// replaced request has anything to say about.
+/// One hour and account's utilization maxima, taken again from the raw attempts and set on the row beside its counts,
+/// which come from cooldown, overage and pin events that no replaced request has anything to say about. The row goes
+/// through `write_account`, so an hour that the reread leaves holding nothing is not stored.
 fn reread_utilization(
     tx: &Transaction<'_>,
     hour: i64,
@@ -1243,12 +1244,15 @@ fn reread_utilization(
                 r.get::<_, Option<f64>>(2)?,
             ))
         })?;
-    tx.prepare_cached(
-        "UPDATE account_rollups_hourly SET utilization_5h_max = ?1, utilization_7d_max = ?2, utilization_7d_oi_max = ?3 \
-         WHERE hour = ?4 AND account_id = ?5",
-    )?
-    .execute(params![five, seven, oi, hour, account_id])?;
-    Ok(())
+    write_account(
+        tx,
+        &AccountRollupRow {
+            utilization_5h_max: five,
+            utilization_7d_max: seven,
+            utilization_7d_oi_max: oi,
+            ..account_row(tx, hour, account_id)?
+        },
+    )
 }
 
 /// The keepalive engine's own delta: one row of its key, holding a kept-warm request's credit, a skip, and the counts a
@@ -1394,16 +1398,19 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
         (COOLDOWN_SET, Some(account)) => {
             let detail = detail();
             let scope = detail["scope"].as_str().unwrap_or("account");
-            let accounted = read_span(tx, account, scope)?;
+            let own = read_span(tx, account, scope)?;
+            let latest = latest_span(tx, account)?.map(|(_, until)| until);
             let Some(until) = detail["until"].as_i64() else {
                 return Ok(());
             };
-            // Only what this announcement adds past the end already counted, and past now, is new time in
-            // cooldown; it is booked hour by hour so a clear can take back exactly the part each hour never
-            // saw. The span keeps the booked end rather than the deadline, so a later announcement books on
-            // from there and a clear takes back only what was booked.
+            // An hour's seconds are the time the account stood under at least one cooldown, so only what this
+            // announcement adds past the latest end that any of the account's scopes is accounted to, and past now,
+            // is new time. It is booked hour by hour, so a clear can take back exactly the part each hour never saw.
+            // The span keeps the scope's own booked end rather than the deadline or another scope's end, so the
+            // scope's next announcement books on from there and a clear measures what stays against the time each
+            // scope holds.
             let booked = until.min(event.at.saturating_add(COOLDOWN_BOOKING_HORIZON_MS));
-            let from = accounted.unwrap_or(event.at).max(event.at);
+            let from = latest.unwrap_or(event.at).max(event.at);
             let mut cursor = from;
             while cursor < booked {
                 let bucket = hour_of(cursor);
@@ -1422,7 +1429,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
                 }
                 cursor = end;
             }
-            write_span(tx, account, scope, accounted.unwrap_or(booked).max(booked))
+            write_span(tx, account, scope, own.unwrap_or(booked).max(booked))
         }
         (COOLDOWN_CLEARED, Some(account)) => {
             let detail = detail();
@@ -1430,11 +1437,22 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             let Some(until) = take_span(tx, account, scope)? else {
                 return Ok(());
             };
+            // Read behind the take of the cleared scope's span, so the cleared scope is never its own heir.
+            let stays = latest_span(tx, account)?;
+            // The account stays under cooldown up to the latest end of its other scopes, so only the part of each
+            // hour's segment past both the clear and that end never elapsed.
+            let from = stays
+                .as_ref()
+                .map_or(event.at, |(_, end)| event.at.max(*end));
             for (bucket, counted) in take_segments(tx, account, scope)? {
-                // The part of this hour's segment that lies after the clear never elapsed.
-                let seconds = unelapsed_segment_seconds(event.at, bucket, until, counted);
+                let seconds = unelapsed_segment_seconds(from, bucket, until, counted);
                 if seconds > 0 {
                     unfold_cooldown(tx, bucket, account, seconds)?;
+                }
+                // The seconds that stay booked pass to the scope that holds the latest end, so its own clear can
+                // take them back.
+                if let Some((heir, _)) = stays.as_ref().filter(|_| counted > seconds) {
+                    add_segment(tx, account, heir, bucket, counted - seconds)?;
                 }
             }
             Ok(())
@@ -2085,7 +2103,15 @@ fn account_row(
         }))
 }
 
+/// An account hour that holds nothing is not stored: the write deletes the row, so each writer keeps the table's rule.
 fn write_account(tx: &Transaction<'_>, row: &AccountRollupRow) -> Result<(), LedgerError> {
+    if row.holds_nothing() {
+        tx.prepare_cached(
+            "DELETE FROM account_rollups_hourly WHERE hour = ?1 AND account_id = ?2",
+        )?
+        .execute(params![row.hour, row.account_id])?;
+        return Ok(());
+    }
     static STATEMENT: LazyLock<String> = LazyLock::new(|| {
         upsert_statement(
             "account_rollups_hourly",
@@ -2111,8 +2137,7 @@ fn write_account(tx: &Transaction<'_>, row: &AccountRollupRow) -> Result<(), Led
     Ok(())
 }
 
-/// Takes back cooldown seconds an announcement counted that the account never spent. A row the take-back leaves
-/// holding nothing is deleted, so a cooldown cleared early lists no hour of zeros.
+/// Takes back cooldown seconds an announcement counted that the account never spent.
 fn unfold_cooldown(
     tx: &Transaction<'_>,
     hour: i64,
@@ -2121,13 +2146,6 @@ fn unfold_cooldown(
 ) -> Result<(), LedgerError> {
     let mut row = account_row(tx, hour, account_id)?;
     row.cooldown_seconds = row.cooldown_seconds.saturating_sub(seconds);
-    if row.holds_nothing() {
-        tx.prepare_cached(
-            "DELETE FROM account_rollups_hourly WHERE hour = ?1 AND account_id = ?2",
-        )?
-        .execute(params![hour, account_id])?;
-        return Ok(());
-    }
     write_account(tx, &row)
 }
 
@@ -2153,6 +2171,20 @@ fn read_span(
     Ok(tx
         .prepare_cached("SELECT until FROM cooldown_spans WHERE account_id = ?1 AND scope = ?2")?
         .query_row(params![account_id, scope], |r| r.get(0))
+        .optional()?)
+}
+
+/// The scope and the end of the account's open cooldown span that is accounted to the latest end. Two scopes that
+/// share the end tie by the scope's word, so each fold of the same events names the same scope.
+fn latest_span(
+    tx: &Transaction<'_>,
+    account_id: &str,
+) -> Result<Option<(String, i64)>, LedgerError> {
+    Ok(tx
+        .prepare_cached(
+            "SELECT scope, until FROM cooldown_spans WHERE account_id = ?1 ORDER BY until DESC, scope LIMIT 1",
+        )?
+        .query_row(params![account_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?)
 }
 
@@ -2234,18 +2266,22 @@ pub(crate) fn unelapsed_segment_seconds(
     (unelapsed as u64).min(segment_seconds)
 }
 
-/// Per account, the seconds of the current hour that its open cooldowns booked and that have not passed at `now`, an
-/// instant in Unix milliseconds. Reads `cooldown_spans` and `cooldown_segments` and writes nothing.
+/// Per account, the seconds of the current hour that its open cooldowns booked past `now`, up to the latest end of its
+/// scopes. `now` is an instant in Unix milliseconds. Reads `cooldown_spans` and `cooldown_segments` and writes nothing.
 pub fn open_cooldown_remainders(
     conn: &Connection,
     now: i64,
 ) -> Result<BTreeMap<String, i64>, LedgerError> {
     let hour = hour_of(now);
+    // Each side is aggregated on its own, since a join of the account's spans with its segments would sum each
+    // segment once for each span.
     let mut stmt = conn.prepare_cached(
-        "SELECT s.account_id, s.until, g.seconds FROM cooldown_spans s JOIN cooldown_segments g \
-         ON g.account_id = s.account_id AND g.scope = s.scope AND g.hour = ?1",
+        "SELECT s.account_id, s.latest, g.seconds \
+         FROM (SELECT account_id, MAX(until) AS latest FROM cooldown_spans GROUP BY account_id) s \
+         JOIN (SELECT account_id, SUM(seconds) AS seconds FROM cooldown_segments WHERE hour = ?1 GROUP BY account_id) g \
+         ON g.account_id = s.account_id",
     )?;
-    let segments = stmt.query_map(params![hour], |r| {
+    let accounts = stmt.query_map(params![hour], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, i64>(1)?,
@@ -2253,10 +2289,12 @@ pub fn open_cooldown_remainders(
         ))
     })?;
     let mut remainders = BTreeMap::new();
-    for segment in segments {
-        let (account_id, until, seconds) = segment?;
-        *remainders.entry(account_id).or_insert(0) +=
-            unelapsed_segment_seconds(now, hour, until, seconds) as i64;
+    for account in accounts {
+        let (account_id, latest, seconds) = account?;
+        remainders.insert(
+            account_id,
+            unelapsed_segment_seconds(now, hour, latest, seconds) as i64,
+        );
     }
     Ok(remainders)
 }
@@ -3603,32 +3641,38 @@ mod tests {
         );
     }
 
-    fn cooldown_set_event(at: i64, until: i64) -> EventRecord {
+    fn scoped_cooldown_set_event(scope: &str, at: i64, until: i64) -> EventRecord {
         EventRecord {
             at,
             kind: "cooldown_set".into(),
             account_id: Some("a".into()),
             detail: Some(
-                serde_json::json!({ "scope": "account", "until": until, "reason": "rate_limit" })
+                serde_json::json!({ "scope": scope, "until": until, "reason": "rate_limit" })
                     .to_string(),
             ),
             ..Default::default()
         }
     }
 
-    fn cooldown_cleared_event(at: i64) -> EventRecord {
+    fn cooldown_set_event(at: i64, until: i64) -> EventRecord {
+        scoped_cooldown_set_event("account", at, until)
+    }
+
+    fn scoped_cooldown_cleared_event(scope: &str, at: i64) -> EventRecord {
         EventRecord {
             at,
             kind: "cooldown_cleared".into(),
             account_id: Some("a".into()),
-            detail: Some(
-                serde_json::json!({ "cause": "recovered", "scope": "account" }).to_string(),
-            ),
+            detail: Some(serde_json::json!({ "cause": "recovered", "scope": scope }).to_string()),
             ..Default::default()
         }
     }
 
-    /// Both event builders name account `a`, so each hour holds one row.
+    fn cooldown_cleared_event(at: i64) -> EventRecord {
+        scoped_cooldown_cleared_event("account", at)
+    }
+
+    /// Each event builder names account `a`, so each hour holds one row.
     fn folded(events: &[EventRecord]) -> u64 {
         folded_by_hour(events).values().sum()
     }
@@ -3654,6 +3698,98 @@ mod tests {
             ]),
             20,
             "the forty seconds that never elapsed leave the hour that counted them"
+        );
+    }
+
+    #[test]
+    fn an_overage_end_with_no_start_in_an_empty_hour_stores_no_account_hour() {
+        assert_eq!(
+            folded_by_hour(&[EventRecord {
+                at: 600_000,
+                kind: OVERAGE_ENDED.into(),
+                account_id: Some("a".into()),
+                detail: Some(serde_json::json!({ "since": null }).to_string()),
+                ..Default::default()
+            }]),
+            BTreeMap::new(),
+            "an overage that names no start books no time, and an hour that holds nothing is not stored"
+        );
+    }
+
+    #[test]
+    fn two_scopes_open_over_the_same_half_hour_book_it_once() {
+        assert_eq!(
+            folded(&[
+                scoped_cooldown_set_event("account", 0, 1_800_000),
+                scoped_cooldown_set_event("model:m", 0, 1_800_000),
+            ]),
+            1_800,
+            "the half hour under both scopes counts once"
+        );
+    }
+
+    #[test]
+    fn a_clear_takes_back_only_the_time_that_no_other_scope_covers() {
+        assert_eq!(
+            folded(&[
+                scoped_cooldown_set_event("account", 0, 1_800_000),
+                scoped_cooldown_set_event("model:m", 0, 1_800_000),
+                scoped_cooldown_cleared_event("account", 600_000),
+            ]),
+            1_800,
+            "the model scope still covers the time past the account scope's clear"
+        );
+        assert_eq!(
+            folded(&[
+                scoped_cooldown_set_event("account", 0, 1_800_000),
+                scoped_cooldown_set_event("model:m", 0, 1_800_000),
+                scoped_cooldown_cleared_event("account", 600_000),
+                scoped_cooldown_cleared_event("model:m", 900_000),
+            ]),
+            900,
+            "the model scope's own clear takes back the seconds that the first clear left booked"
+        );
+    }
+
+    #[test]
+    fn the_reads_cut_takes_the_accounts_latest_end() {
+        let (db, _dir) = crate::db::open_temp();
+        let events = [
+            scoped_cooldown_set_event("account", 0, 600_000),
+            scoped_cooldown_set_event("model:m", 300_000, 3_000_000),
+            scoped_cooldown_set_event("account", 1_200_000, 1_800_000),
+        ];
+        db.write(|c| {
+            let tx = c.transaction()?;
+            for event in &events {
+                fold_event(&tx, event)?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let rows = db
+            .read_blocking(|c| read_account_rollups_at(c, 0, i64::MAX, 1_500_000))
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.hour, r.cooldown_seconds))
+                .collect::<Vec<_>>(),
+            vec![(0, 1_500)],
+            "the hour keeps the time under a cooldown up to the read, whichever scope booked it"
+        );
+    }
+
+    #[test]
+    fn a_scope_announced_inside_anothers_span_keeps_its_own_end() {
+        assert_eq!(
+            folded(&[
+                scoped_cooldown_set_event("model:m", 0, 3_000_000),
+                scoped_cooldown_set_event("account", 0, 1_200_000),
+                scoped_cooldown_cleared_event("model:m", 2_000_000),
+            ]),
+            2_000,
+            "the account scope stands only to its own end, so the model scope's clear takes back the time past it"
         );
     }
 

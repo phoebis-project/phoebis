@@ -1426,7 +1426,8 @@ windows the router reads, 5-hour, 7-day and 7-day Fable. Pace reads "The lead ov
 below behind, from the quota samples, before the router's burn projection", each account's hover adding its Pace score,
 the remaining share over the hours from the sample's instant to the earlier of the window's reset and the account's end.
 The table Accounts in range lists Peak 5h, Peak 7d, Peak Fable, Time in overage, Time in cooldown, Pins created,
-Migrated in and Migrated out. Time in cooldown counts a cleared cooldown up to its clear, and the clear leaves no time
+Migrated in and Migrated out. Time in cooldown counts the time an account stood under at least one cooldown, a minute
+once however many of its scopes were open, and a cleared cooldown up to its clear, and the clear leaves no time
 behind. It counts an open cooldown up to the moment of the read. The section reads the account rollups, which carry the
 account alone: it follows the range and the Account filter, and its cards name the Key, Pool, Model, Client, User agent,
 Agent and Session filters and Include probes as ignored while one of them is set. The card "Unused allowance by account"
