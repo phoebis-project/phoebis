@@ -855,7 +855,8 @@ async fn refresh_now_serves_the_stored_token_when_the_generation_already_moved()
                 scopes: "user:profile user:inference".into(),
             },
         )
-        .unwrap();
+        .unwrap()
+        .generation;
     store
         .commit_credentials(
             "a",
@@ -1424,7 +1425,8 @@ async fn a_late_invalid_grant_leaves_a_re_paired_bundle_alone() {
                 scopes: "user:profile user:inference".into(),
             },
         )
-        .unwrap();
+        .unwrap()
+        .generation;
     let mgr = Arc::new(mgr);
     let refreshing = tokio::spawn({
         let mgr = mgr.clone();
@@ -1499,7 +1501,8 @@ async fn an_attempt_another_holder_of_the_id_left_is_closed_at_start_rather_than
                 scopes: "user:profile user:inference".into(),
             },
         )
-        .unwrap();
+        .unwrap()
+        .generation;
     // The generations match the stored bundle; only the incarnation says the attempt is not this holder's.
     store.open_refresh_attempt("a", 2, 1, generation).unwrap();
     assert!(mgr.recover_on_start().unwrap().is_empty());
@@ -1541,7 +1544,8 @@ async fn an_attempt_row_without_its_commit_quarantines_the_account_at_start() {
     let (mgr, store, up) = manager_with(vec![], now).await;
     let generation = store
         .commit_credentials("a", 1, 1, None, None, &old_bundle(1_200_000))
-        .unwrap();
+        .unwrap()
+        .generation;
     store.open_refresh_attempt("a", 1, 1, generation).unwrap();
 
     assert_eq!(mgr.recover_on_start().unwrap(), vec!["a".to_string()]);
@@ -1574,10 +1578,12 @@ async fn an_unreadable_credential_row_quarantines_its_account_instead_of_failing
     };
     let unreadable = store
         .commit_credentials("a", 1, 1, None, None, &bundle())
-        .unwrap();
+        .unwrap()
+        .generation;
     let readable = store
         .commit_credentials("b", 1, 1, None, None, &bundle())
-        .unwrap();
+        .unwrap()
+        .generation;
     store.open_refresh_attempt("a", 1, 1, unreadable).unwrap();
     store.open_refresh_attempt("b", 1, 1, readable).unwrap();
     // What a damaged row, a truncated write, or a storage key that no longer opens this row looks like from
@@ -1631,7 +1637,8 @@ async fn a_lost_response_after_a_re_pair_quarantines_rather_than_serving_the_rep
                 scopes: "user:profile user:inference".into(),
             },
         )
-        .unwrap();
+        .unwrap()
+        .generation;
     let mgr = Arc::new(mgr);
     let refreshing = tokio::spawn({
         let mgr = mgr.clone();
@@ -1796,7 +1803,8 @@ async fn a_replay_refused_after_a_re_pairing_leaves_the_replacement_serving() {
     };
     let replayed = store
         .commit_credentials("a", 1, 1, None, None, &bundle("replayed"))
-        .unwrap();
+        .unwrap()
+        .generation;
     let row = store.account("a").unwrap().unwrap();
     let token = mgr.acquire_for(&row, Some(replayed)).await.unwrap();
     assert_eq!(token.secret.expose(), "replayed", "the replay's token");

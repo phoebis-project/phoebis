@@ -1072,24 +1072,9 @@ impl Inner {
             Some(attempt),
             &fresh,
         ) {
-            Ok(generation) => {
-                // The one write that moves the generation without a reload, so the entry moves with it. A response
-                // without a refresh token keeps the stored one, and one without the token's end keeps the stored
-                // end, as the commit does.
-                let committed = Arc::new(CredentialBundle {
-                    access_token: Secret::new(fresh.access_token.expose()),
-                    refresh_token: fresh
-                        .refresh_token
-                        .as_ref()
-                        .or(bundle.refresh_token.as_ref())
-                        .map(|token| Secret::new(token.expose())),
-                    issued_at: fresh.issued_at,
-                    expires_at: fresh.expires_at,
-                    refresh_expires_at: fresh.refresh_expires_at.or(bundle.refresh_expires_at),
-                    scopes: fresh.scopes.clone(),
-                    generation,
-                    lifecycle_generation: account.lifecycle_generation,
-                });
+            Ok(committed) => {
+                // The one write that moves the generation without a reload, so the entry moves with it.
+                let committed = Arc::new(committed);
                 let token = access_token(&account, &committed);
                 if !self.remember(&account, committed, epoch) {
                     return self.stored_now(&account);
@@ -1500,7 +1485,8 @@ mod tests {
         let (manager, store, up) = manager_at(now).await;
         let observed = store
             .commit_credentials("a", 1, 1, None, None, &bundle_at("observed", 0, 1))
-            .unwrap();
+            .unwrap()
+            .generation;
         // What another caller's refresh does between the generation this one read and the slot it wins.
         store
             .commit_credentials(
@@ -1598,7 +1584,8 @@ mod tests {
                 None,
                 &bundle_at("refused", now, now + 3_600_000),
             )
-            .unwrap();
+            .unwrap()
+            .generation;
         let account = store.account("a").unwrap().unwrap();
         let refused = Refused {
             incarnation: account.incarnation,

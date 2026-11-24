@@ -611,7 +611,8 @@ impl Store {
     /// a race with another write to the same bundle), a missing refresh token is folded forward from the
     /// previous plaintext, a missing end of the refresh token from the stored row, also where the bundle names a
     /// new refresh token, and `attempt_id`, if given, is resolved as `Committed` here too, so a crash between
-    /// the two writes cannot leave a committed bundle behind a pending attempt.
+    /// the two writes cannot leave a committed bundle behind a pending attempt. Answers the bundle as the row
+    /// holds it, the carried members among them.
     ///
     /// The incarnation is what the lifecycle generation cannot answer for: deleting a slot and recreating it
     /// under the same id restarts every generation at 1, so only the incarnation tells a refresh that began
@@ -624,11 +625,11 @@ impl Store {
         expected_generation: Option<u64>,
         attempt_id: Option<u64>,
         bundle: &NewBundle,
-    ) -> Result<u64, StoreError> {
+    ) -> Result<CredentialBundle, StoreError> {
         self.fail_injected_commit()?;
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let generation = self.commit_credentials_in(
+        let committed = self.commit_credentials_in(
             &tx,
             account_id,
             incarnation,
@@ -639,7 +640,7 @@ impl Store {
             self.now_ms(),
         )?;
         tx.commit()?;
-        Ok(generation)
+        Ok(committed)
     }
 
     /// `commit_credentials` for a pairing: the credential write, the supersession of the pending and uncertain
@@ -662,16 +663,18 @@ impl Store {
         // One instant for the supersession and the pairing's own row, so the pairing reads as the newest settled
         // attempt whatever the clock does between the two writes.
         let now = self.now_ms();
-        let generation = self.commit_credentials_in(
-            &tx,
-            account_id,
-            incarnation,
-            lifecycle_generation,
-            expected_generation,
-            bundle,
-            CommitKind::Pairing,
-            now,
-        )?;
+        let generation = self
+            .commit_credentials_in(
+                &tx,
+                account_id,
+                incarnation,
+                lifecycle_generation,
+                expected_generation,
+                bundle,
+                CommitKind::Pairing,
+                now,
+            )?
+            .generation;
         // The block was read under the pairing before this one, and the pairing's first reading reads it again. A
         // pairing leaves the holder as it is, so the epoch moves to refuse a read that was out across it.
         tx.execute(
@@ -703,7 +706,8 @@ impl Store {
 
     /// The body of the three credential commits, `commit_credentials`, `commit_pairing` and `create_paired_account`,
     /// inside the caller's transaction, which the caller commits. `kind` names the commit, and `now` stamps the
-    /// credential row and every attempt it settles.
+    /// credential row and every attempt it settles. Answers the bundle as the row holds it, the carried members
+    /// among them.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn commit_credentials_in(
         &self,
@@ -715,7 +719,7 @@ impl Store {
         bundle: &NewBundle,
         kind: CommitKind,
         now: i64,
-    ) -> Result<u64, StoreError> {
+    ) -> Result<CredentialBundle, StoreError> {
         let account: Option<(i64, i64)> = tx
             .query_row(
                 "SELECT incarnation, lifecycle_generation FROM accounts WHERE id = ?1",
@@ -852,7 +856,16 @@ impl Store {
                 return Err(StoreError::AttemptNotFound(id));
             }
         }
-        Ok(new_generation)
+        Ok(CredentialBundle {
+            access_token: Secret::new(&payload.access_token),
+            refresh_token: payload.refresh_token.as_deref().map(Secret::new),
+            issued_at: bundle.issued_at,
+            expires_at: bundle.expires_at,
+            refresh_expires_at,
+            scopes: bundle.scopes.clone(),
+            generation: new_generation,
+            lifecycle_generation,
+        })
     }
 
     pub fn api_key_secret(&self, account_id: &str) -> Result<Option<Secret>, StoreError> {

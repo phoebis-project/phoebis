@@ -47,9 +47,7 @@ pub(crate) struct AttentionItem {
     /// instant the registry recorded for the change to that state, for `feature_account_unavailable` that instant
     /// where the account is not ready and the earliest of its subscription's ends where it is past one, so the item
     /// never dates ahead of the read, or for a degraded writer, `keepalive_bus_gaps`, `keepalive_cap` and
-    /// `expired_between_turns` the first read of this process that saw the state. Null for one of the two account
-    /// states and for `feature_account_unavailable` of an account not ready on the one read where its account left
-    /// between the reader's read of the accounts and its read of their extras.
+    /// `expired_between_turns` the first read of this process that saw the state.
     pub since: Option<i64>,
     /// `account` and `label`, or `account`, `failures`, `last_error` and `outcome`, or `account`, `backoff_since`,
     /// `next_attempt_at` and `rate_limited_in_a_row`, or `pool` and `key`, or `client_version`, `trigger` and `key`, or

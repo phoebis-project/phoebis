@@ -663,12 +663,17 @@ impl Store {
     /// Every account's extras by account id, in one statement, so a list of accounts reads them once where
     /// `account_extras_of` and `subscription_term` read one row each.
     pub fn account_extras(&self) -> Result<BTreeMap<String, AccountExtras>, StoreError> {
+        all_extras(&self.conn.lock().expect(LOCK_POISONED))
+    }
+
+    /// Every account and every account's extras by account id, read under one take of the connection lock, so a
+    /// state and the instant it began come from one state of the registry. The map holds an entry for each row of
+    /// the list.
+    pub fn accounts_with_extras(
+        &self,
+    ) -> Result<(Vec<AccountRow>, BTreeMap<String, AccountExtras>), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare(&format!("SELECT {TERM_COLUMNS} FROM accounts"))?;
-        let extras = stmt
-            .query_map([], row_to_extras)?
-            .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
-        Ok(extras)
+        Ok((all_accounts(&conn)?, all_extras(&conn)?))
     }
 
     /// One account's `account_extras` entry, `None` for an unknown id, for a view of that account alone.
@@ -769,6 +774,14 @@ pub(crate) const TERM_COLUMNS: &str =
 
 static TERM_BY_ID: LazyLock<String> =
     LazyLock::new(|| format!("SELECT {TERM_COLUMNS} FROM accounts WHERE id = ?1"));
+
+fn all_extras(conn: &rusqlite::Connection) -> Result<BTreeMap<String, AccountExtras>, StoreError> {
+    let mut stmt = conn.prepare(&format!("SELECT {TERM_COLUMNS} FROM accounts"))?;
+    let extras = stmt
+        .query_map([], row_to_extras)?
+        .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
+    Ok(extras)
+}
 
 pub(crate) fn row_to_term(row: &Row<'_>) -> rusqlite::Result<SubscriptionTerm> {
     let profile = profile_of(row)?;

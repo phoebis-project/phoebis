@@ -1803,16 +1803,18 @@ impl Store {
             })
         })?;
         crate::accounts::write_profile_in(&tx, &row.id, profile_json, subscription, at)?;
-        let generation = self.commit_credentials_in(
-            &tx,
-            &row.id,
-            incarnation,
-            row.lifecycle_generation,
-            None,
-            bundle,
-            crate::credentials::CommitKind::Pairing,
-            at,
-        )?;
+        let generation = self
+            .commit_credentials_in(
+                &tx,
+                &row.id,
+                incarnation,
+                row.lifecycle_generation,
+                None,
+                bundle,
+                crate::credentials::CommitKind::Pairing,
+                at,
+            )?
+            .generation;
         crate::credentials::record_pairing_attempt(
             &tx,
             &row.id,

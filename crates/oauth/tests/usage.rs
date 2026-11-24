@@ -1510,6 +1510,7 @@ mod service {
                 },
             )
             .unwrap()
+            .generation
     }
 
     #[tokio::test]

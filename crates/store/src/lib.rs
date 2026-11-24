@@ -1945,6 +1945,30 @@ mod tests {
     }
 
     #[test]
+    fn the_accounts_and_their_extras_come_from_one_take_of_the_store() {
+        let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
+        for id in ["a", "b"] {
+            store
+                .insert_account(&account(id, AccountKind::Oauth))
+                .unwrap();
+        }
+        let before = store.debug_lock_count();
+        let (accounts, extras) = store.accounts_with_extras().unwrap();
+        assert_eq!(store.debug_lock_count() - before, 1);
+        assert_eq!(
+            accounts
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(
+            extras.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+    }
+
+    #[test]
     fn a_file_the_database_cannot_read_or_write_is_database_wide_and_a_refused_row_is_not() {
         let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
         let refused = store

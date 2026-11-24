@@ -263,9 +263,7 @@ pub struct Condition {
     pub kind: Kind,
     pub subject: Subject,
     pub holds: bool,
-    /// When the condition started, in Unix milliseconds. `None` while it does not hold, and for an account state or a
-    /// `feature_account_unavailable` of an account that is not ready that holds on the one read where its account left
-    /// between the reader's read of the accounts and its read of their extras.
+    /// When the condition started, in Unix milliseconds. `None` while it does not hold.
     pub since: Option<i64>,
     /// The pools the condition belongs to, so a pool card filters the same list the dashboard reads.
     pub pools: Vec<String>,
@@ -576,7 +574,7 @@ pub(crate) fn refresh_facts(
 }
 
 /// What the two account states, `feature_account_unavailable`, the reset condition and the wall's join read beside the
-/// accounts: each account's stored extras and the warning's days.
+/// accounts: each account's stored extras, with an entry for each account of the read, and the warning's days.
 pub(crate) struct ResetFacts<'a> {
     pub extras: &'a BTreeMap<String, AccountExtras>,
     pub warning_days: u32,
@@ -768,7 +766,6 @@ pub(crate) fn conditions(
             .get(&account.id)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        // The extras are read apart from the accounts, so one deleted in between has no entry and no date.
         let state_changed_at = resets
             .extras
             .get(&account.id)

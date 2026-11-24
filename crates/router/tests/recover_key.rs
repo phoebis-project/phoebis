@@ -180,7 +180,8 @@ fn seed(registry: &Path, key: &StorageKey) -> Vec<AccountRow> {
     for id in ["claude-a", "claude-b"] {
         let generation = store
             .commit_credentials(id, 1, 1, None, None, &bundle())
-            .unwrap();
+            .unwrap()
+            .generation;
         let attempt = store.open_refresh_attempt(id, 1, 1, generation).unwrap();
         if id == "claude-b" {
             assert!(store

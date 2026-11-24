@@ -37,10 +37,12 @@ fn credentials_round_trip_encrypted_and_generation_increments() {
     store.insert_account(&account("a")).unwrap();
     let g1 = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
-        .unwrap();
+        .unwrap()
+        .generation;
     let g2 = store
         .commit_credentials("a", 1, 1, Some(g1), None, &bundle("at-2"))
-        .unwrap();
+        .unwrap()
+        .generation;
     assert!(g2 > g1);
     let got = store.credentials("a").unwrap().unwrap();
     assert_eq!(got.access_token.expose(), "at-2");
@@ -92,7 +94,8 @@ fn disconnect_revokes_both_credential_kinds() {
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
-        .unwrap();
+        .unwrap()
+        .generation;
     store
         .set_api_key_secret("a", &Secret::new("sk-ant-api03-x"))
         .unwrap();
@@ -245,7 +248,8 @@ fn deleting_an_account_ends_its_pending_refresh_attempt() {
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
-        .unwrap();
+        .unwrap()
+        .generation;
     store.open_refresh_attempt("a", 1, 1, g).unwrap();
     store.delete_account("a", "test").unwrap();
     assert!(
@@ -255,7 +259,8 @@ fn deleting_an_account_ends_its_pending_refresh_attempt() {
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 2, 1, None, None, &bundle("at-2"))
-        .unwrap();
+        .unwrap()
+        .generation;
     assert!(
         store.open_refresh_attempt("a", 2, 1, g).is_ok(),
         "so the next holder's first refresh is not blocked by it"
@@ -268,7 +273,8 @@ fn an_attempt_carries_the_incarnation_it_began_under() {
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
-        .unwrap();
+        .unwrap()
+        .generation;
     let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     store
         .resolve_refresh_attempt(
@@ -298,7 +304,8 @@ fn an_attempt_carries_the_incarnation_it_began_under() {
     );
     let g = store
         .commit_credentials("a", 2, 1, None, None, &bundle("at-2"))
-        .unwrap();
+        .unwrap()
+        .generation;
     store.open_refresh_attempt("a", 2, 1, g).unwrap();
     assert_eq!(
         store
@@ -317,7 +324,8 @@ fn an_in_flight_attempt_blocks_a_new_one_and_an_uncertain_one_does_not() {
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
-        .unwrap();
+        .unwrap()
+        .generation;
     let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     store
         .resolve_refresh_attempt(
@@ -348,7 +356,8 @@ fn a_commit_resolves_its_attempt_in_the_same_transaction() {
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
-        .unwrap();
+        .unwrap()
+        .generation;
     let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     store
         .commit_credentials("a", 1, 1, Some(g), Some(id), &bundle("at-2"))
@@ -370,7 +379,8 @@ fn a_commit_supersedes_an_attempt_left_open_by_the_bundle_it_replaces() {
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
-        .unwrap();
+        .unwrap()
+        .generation;
     let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     store
         .resolve_refresh_attempt(
@@ -405,7 +415,8 @@ fn stale_generation_is_rejected() {
     store.insert_account(&account("a")).unwrap();
     let g1 = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
-        .unwrap();
+        .unwrap()
+        .generation;
     let _g2 = store
         .commit_credentials("a", 1, 1, Some(g1), None, &bundle("at-2"))
         .unwrap();
@@ -434,12 +445,17 @@ fn a_missing_refresh_token_keeps_the_previous_one() {
     store.insert_account(&account("a")).unwrap();
     let g1 = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
-        .unwrap();
+        .unwrap()
+        .generation;
     let mut b = bundle("at-2");
     b.refresh_token = None;
-    store
+    let committed = store
         .commit_credentials("a", 1, 1, Some(g1), None, &b)
         .unwrap();
+    assert_eq!(
+        committed.refresh_token.as_ref().map(Secret::expose),
+        Some("rt-1")
+    );
     assert_eq!(
         store
             .credentials("a")
@@ -472,13 +488,22 @@ fn a_refresh_keeps_the_stored_refresh_end_it_leaves_out_and_a_pairing_stores_its
     refreshed.insert_account(&account("a")).unwrap();
     let g1 = refreshed
         .commit_credentials("a", 1, 1, None, None, &ending("at-1", first_end))
-        .unwrap();
+        .unwrap()
+        .generation;
     let g2 = refreshed
         .commit_credentials("a", 1, 1, Some(g1), None, &ending("at-2", None))
         .unwrap();
+    assert_eq!(g2.refresh_expires_at, Some(1_802_588_400_000));
     let kept = stored_end(&refreshed);
     refreshed
-        .commit_credentials("a", 1, 1, Some(g2), None, &ending("at-3", second_end))
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            Some(g2.generation),
+            None,
+            &ending("at-3", second_end),
+        )
         .unwrap();
     let replaced = stored_end(&refreshed);
 
@@ -501,7 +526,8 @@ fn only_one_refresh_attempt_can_be_pending() {
     store.insert_account(&account("a")).unwrap();
     let g = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
-        .unwrap();
+        .unwrap()
+        .generation;
     let id = store.open_refresh_attempt("a", 1, 1, g).unwrap();
     assert!(matches!(
         store.open_refresh_attempt("a", 1, 1, g),
@@ -530,7 +556,8 @@ fn a_bogus_attempt_id_is_rejected_and_leaves_credentials_unchanged() {
     store.insert_account(&account("a")).unwrap();
     let g1 = store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
-        .unwrap();
+        .unwrap()
+        .generation;
     assert!(matches!(
         store.commit_credentials("a", 1, 1, Some(g1), Some(999), &bundle("at-2")),
         Err(StoreError::AttemptNotFound(999))
