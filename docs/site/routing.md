@@ -928,20 +928,25 @@ larger by the other.
 
 The router learns the binding per model and unordered pair of accounts. Each pin keeps, per account, the thinking tokens
 that account's answers reported for the session (`output_tokens_details.thinking_tokens`), and a client's request that
-carries `x-claude-code-context-compacted` sets each sum to zero, since its compacted prompt holds no earlier block. The
-sums travel with the session: a move keeps them, and so does each placement that replaces the session's pin, whether a
-failover took the pin, or it was released off its account, idle past its TTL or left behind by its pool. The router
-keeps the sums of a pin that expired for idleness for 7 days after the pin's last use, so an agent that returns inside
-them takes its sums up again, and one that returns later starts with none. When a selection lands a session on another
-account than its pin stood on, and the pin holds thinking of the account it leaves, the first answer with usage on the
-new account settles the pair. Its `input_transformations` member reads the pair bound where it lists a block dropped as
-`end_user_binding_mismatch` or `organization_binding_mismatch`, and kept where it lists neither, since the client's
-standing `prefix_binding_mismatch` entry is no drop the move caused. An answer without the member reads the pair bound
-where its prompt is smaller than the last prompt before the move, and settles nothing otherwise. The newest answer
-replaces what the pair held, and the registry keeps each pair's fact across a restart, while a move whose answer has not
-come yet is forgotten. When a model's spelling resolves to a dated id, the facts learned under the spelling move to the
-dated id, where the newer of two facts for one pair stands, and a move whose answer has not come yet follows its pin. A
-pair with no fact of its own reads bound once the model holds a bound pair, and unobserved otherwise.
+carries `x-claude-code-context-compacted` sets each sum to zero, since its compacted prompt holds no earlier block. A
+compaction call that answers whole, the main agent's or a subagent's, marks its pin, and the agent's next turn reads the
+mark: where the relay's estimate of the turn's body tokens reads under half of the call's prompt, each sum goes to zero,
+and the mark leaves at that turn either way. A move at that turn rewrites the turn's own body in place of the call's
+prompt. The sums travel with the session: a move keeps them, and so does each placement that replaces the session's pin,
+whether a failover took the pin, or it was released off its account, idle past its TTL or left behind by its pool. The
+router keeps the sums of a pin that expired for idleness for 7 days after the pin's last use, so an agent that returns
+inside them takes its sums up again, and one that returns later starts with none. The mark stands with them: where a pin
+expires for idleness between its compaction call and the agent's next turn, that turn still reads the mark when the
+agent returns inside those 7 days. When a selection lands a session on another account than its pin stood on, and the
+pin holds thinking of the account it leaves, the first answer with usage on the new account settles the pair. Its
+`input_transformations` member reads the pair bound where it lists a block dropped as `end_user_binding_mismatch` or
+`organization_binding_mismatch`, and kept where it lists neither, since the client's standing `prefix_binding_mismatch`
+entry is no drop the move caused. An answer without the member reads the pair bound where its prompt is smaller than the
+last prompt before the move, and settles nothing otherwise. The newest answer replaces what the pair held, and the
+registry keeps each pair's fact across a restart, while a move whose answer has not come yet is forgotten. When a
+model's spelling resolves to a dated id, the facts learned under the spelling move to the dated id, where the newer of
+two facts for one pair stands, and a move whose answer has not come yet follows its pin. A pair with no fact of its own
+reads bound once the model holds a bound pair, and unobserved otherwise.
 
 A move over a pair that reads bound prices its rewrite as the last prompt, less the pin's sum for the account it
 leaves, plus its sum for the destination, never under zero. A pair that reads kept or unobserved, a session with no pin

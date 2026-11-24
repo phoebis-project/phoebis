@@ -100,7 +100,8 @@ fn tenth_step_taken_back(conn: &rusqlite::Connection) {
         "ALTER TABLE pins DROP COLUMN account_bound;
          ALTER TABLE pins DROP COLUMN marked_source;
          ALTER TABLE cooldowns DROP COLUMN spend_share;
-         DROP TABLE lapsed_agents;",
+         DROP TABLE lapsed_agents;
+         ALTER TABLE pins DROP COLUMN compacted;",
     )
     .unwrap();
 }
@@ -219,6 +220,7 @@ fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_t
                 ended: false,
                 thinking_sums: Default::default(),
                 account_bound: false,
+                compacted: false,
             })
             .unwrap();
         let incarnation = store.account("a").unwrap().unwrap().incarnation;
@@ -375,6 +377,7 @@ fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_c
         ended: false,
         thinking_sums: Default::default(),
         account_bound: false,
+        compacted: false,
     };
     // A classifier call renewed this pin last under the fifth step, so its count is that call's prompt, which the
     // seed below flags.
@@ -687,6 +690,7 @@ fn a_pin_with_a_distinct_value_in_every_integer_field_and_every_optional_group_s
         ended: false,
         thinking_sums: Default::default(),
         account_bound: false,
+        compacted: false,
     };
     store.upsert_pin(&before).unwrap();
     assert_eq!(

@@ -49,6 +49,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         ended: false,
         thinking_sums: Default::default(),
         account_bound: false,
+        compacted: false,
     }
 }
 
@@ -251,6 +252,7 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
         }),
         static_hash: Some("static-hash".into()),
         tail_hash: Some("tail-hash".into()),
+        compacted: true,
         ..pin("k", "s", "claude-sonnet-5", "a")
     };
     store.upsert_pin(&seeded).unwrap();
@@ -299,6 +301,7 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
         row.burn_banded.input, 18.125,
         "the banded copy reads back beside the plain one"
     );
+    assert!(row.compacted, "the compaction mark reads back");
     store.delete_account("b", "test").unwrap();
     assert!(
         store.load_routing().unwrap().pins.is_empty(),
@@ -343,7 +346,8 @@ fn a_lapsed_agents_record_is_stored_with_its_pins_delete_and_leaves_at_its_place
                 tokens: 9_000,
             },
         )]),
-        account_bound: true,
+        account_bound: false,
+        compacted: true,
     };
     store
         .write_routing(|tx| {
@@ -897,6 +901,7 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
          ALTER TABLE pins DROP COLUMN marked_source;
          ALTER TABLE cooldowns DROP COLUMN spend_share;
          DROP TABLE lapsed_agents;
+         ALTER TABLE pins DROP COLUMN compacted;
          ALTER TABLE pools DROP COLUMN feature_accounts_json;
          ALTER TABLE api_keys DROP COLUMN feature_accounts_json;
          ALTER TABLE accounts DROP COLUMN state_changed_at;
@@ -1282,7 +1287,8 @@ fn a_rekeys_facts_and_lapsed_record_read_back_under_the_dated_id_alone() {
         burn_unmetered_model: None,
         speed: 1.0,
         thinking_sums: Default::default(),
-        account_bound: false,
+        account_bound: true,
+        compacted: false,
     };
     store
         .write_routing(|tx| {

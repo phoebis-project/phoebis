@@ -1884,6 +1884,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 turn_end: phoebis_routing::RenewalEnd::Turn,
                 thinking_tokens: None,
                 input_transformations: None,
+                compacted: false,
             })
             .await;
         parts
@@ -1973,6 +1974,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             turn_end: phoebis_routing::RenewalEnd::Turn,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     // A session no companion reports, placed on `direct` a day and an hour back and failed over to `business` a second
@@ -2076,6 +2078,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             turn_end: phoebis_routing::RenewalEnd::Turn,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     parts.router.pins().await.unwrap();
@@ -2865,6 +2868,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             turn_end: phoebis_routing::RenewalEnd::Turn,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     for (name, route) in [

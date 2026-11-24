@@ -1541,6 +1541,7 @@ pub(crate) fn lapsed_of(pin: &PinRow, speed: f64) -> LapsedAgentRow {
         speed,
         thinking_sums: pin.thinking_sums.clone(),
         account_bound: pin.account_bound,
+        compacted: pin.compacted,
     }
 }
 
@@ -4847,6 +4848,7 @@ mod tests {
             ended: false,
             thinking_sums: Default::default(),
             account_bound: false,
+            compacted: false,
         };
         (pin, Some(burn))
     }

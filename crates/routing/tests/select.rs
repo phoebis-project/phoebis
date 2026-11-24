@@ -9941,6 +9941,7 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         ended: false,
         thinking_sums: BTreeMap::new(),
         account_bound: false,
+        compacted: false,
     };
     // A decision writes into its state and the state is no `Clone`, so each read decides on a state built again.
     let past_reset = || {
@@ -13191,6 +13192,7 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         ended: false,
         thinking_sums: BTreeMap::new(),
         account_bound: false,
+        compacted: false,
     }
 }
 
@@ -13411,6 +13413,242 @@ fn a_compacted_turn_hands_on_no_size_on_a_live_pin_or_after_an_idle_expiry() {
         (compacted("s-live"), compacted("s-back")),
         (("a".to_string(), None), ("a".to_string(), None))
     );
+}
+
+/// `s1`'s pin on `a` as `seeded_pin` holds it, marked by a compaction call whose prompt read 100,000 tokens, with a sum
+/// of 4,000 thinking tokens for `a`.
+fn compacted_pin() -> PinRow {
+    PinRow {
+        last_input_tokens: 100_000,
+        thinking_sums: BTreeMap::from([(
+            "a".to_string(),
+            ThinkingSum {
+                incarnation: 1,
+                tokens: 4_000,
+            },
+        )]),
+        compacted: true,
+        ..seeded_pin("s1", "a", T)
+    }
+}
+
+/// A turn of `s1` of the class `main` with no compaction header, whose body the relay estimates at `body_tokens`.
+fn turn_of_body(s: &RegistrySnapshot, body_tokens: u64, now: i64) -> SelectRequest {
+    SelectRequest {
+        body_tokens,
+        ..main_turn(s, "s1", now)
+    }
+}
+
+/// `s1`'s sum for `a` and its compaction mark as the state holds them.
+fn sum_and_mark(st: &RoutingState) -> (Option<u64>, bool) {
+    let row = pinned(st, "s1");
+    (
+        row.thinking_sums.get("a").map(|sum| sum.tokens),
+        row.compacted,
+    )
+}
+
+#[test]
+fn a_marked_pins_next_turn_zeroes_its_sums_under_half_of_the_last_prompt_and_keeps_them_at_half() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // Each turn renews the pin in place, on a state of its own.
+    let turn = |body: u64| {
+        let mut st = loaded(vec![compacted_pin()]);
+        select(&mut st, &s, &turn_of_body(&s, body, T), &mut rng());
+        sum_and_mark(&st)
+    };
+    assert_eq!(
+        (turn(49_999), turn(50_000)),
+        ((Some(0), false), (Some(4_000), false)),
+        "twice the body under the last prompt zeroes the sum, and the mark leaves at either turn"
+    );
+}
+
+#[test]
+fn a_marked_pins_next_turn_moved_by_a_spent_window_books_the_rewrite_of_its_body() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // a's 5-hour window reads spent with its reset hours out and b has room, so the spent rule moves the turn to b. The
+    // pin's five-minute TTL prices its rewrite as five-minute writes, a ten-millionth of the 5-hour window a token
+    // under `ratio_pricer`. The model holds no thinking fact, so no move drops a sum.
+    let moved = |body: u64| {
+        let mut st = loaded(vec![compacted_pin()]);
+        st.set_share(ratio_pricer());
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+        st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
+        let d = decide(&mut st, &s, &turn_of_body(&s, body, T), &mut rng());
+        let booked = d
+            .record
+            .outcome
+            .reservation
+            .as_ref()
+            .expect("the move books its rewrite")
+            .rewrite[FIVE_HOUR];
+        (landed(d.result), booked, pinned(&st, "s1").compacted)
+    };
+    let (landing, booked, marked) = moved(20_000);
+    assert_eq!(
+        (landing, marked),
+        (("b".to_string(), Some(MigrateReason::Spent)), false),
+        "the turn moves to b, and its row there carries no mark"
+    );
+    assert!(
+        close(booked, 0.002),
+        "the move books the write of the body's 20,000 tokens: {booked}"
+    );
+    let (_, booked, _) = moved(60_000);
+    assert!(
+        close(booked, 0.006),
+        "a body over half the last prompt keeps the sums and still books the write of its own 60,000: {booked}"
+    );
+}
+
+#[test]
+fn a_round_reads_another_marked_pin_of_its_requests_agent_as_stored() {
+    // s1's main agent holds a marked Sonnet pin burning 0.03 of the 5-hour window an hour over a last prompt of 100,000
+    // tokens, and an unmarked Opus pin burning 0.001 an hour over 10,000. a at 0.99 projects 1.021 at its reset, so the
+    // agent's turn on the Opus pin fires a round on a, which reads the Sonnet pin. The model holds no thinking fact, so
+    // the Sonnet pin's move drops nothing.
+    let opus = PinRow {
+        model: "claude-opus-5".into(),
+        lane: lane_key("claude-opus-5", "standard", "none", "-"),
+        last_input_tokens: 10_000,
+        ..burning("s1", "a", 0.1, true, T)
+    };
+    let sonnet = PinRow {
+        compacted: true,
+        ..thinking_pin("s1", 3.0, true, 100_000, 4_000)
+    };
+    let (s, mut st) = thinking_state(vec![sonnet, opus], &[], 4, 0.99);
+    let turn = SelectRequest {
+        body_tokens: 20_000,
+        ..with_facts(
+            request(&s, Some("s1"), "claude-opus-5", true, &[], T),
+            Some("main"),
+            false,
+            None,
+            &[],
+        )
+    };
+    let round = decide(&mut st, &s, &turn, &mut rng())
+        .shed_round
+        .expect("the round ran")
+        .facts;
+    let read = round
+        .pins
+        .iter()
+        .find(|p| p.model == "claude-sonnet-5")
+        .unwrap_or_else(|| panic!("no row for the Sonnet pin in {:?}", round.pins));
+    assert!(
+        near(read.per_rewrite, 0.03 / 100_000.0),
+        "the Sonnet pin's burn over the last prompt it stored: {:?}",
+        read.per_rewrite
+    );
+}
+
+#[test]
+fn a_probe_leaves_the_mark_and_the_sums() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![compacted_pin()]);
+    // The keepalive replays the agent's main turn, its class among the rest.
+    let probe = SelectRequest {
+        probe: true,
+        ..turn_of_body(&s, 20_000, T)
+    };
+    select(&mut st, &s, &probe, &mut rng());
+    assert_eq!(sum_and_mark(&st), (Some(4_000), true));
+}
+
+#[test]
+fn a_move_by_an_auxiliary_call_carries_the_mark_so_the_turn_on_the_new_account_zeroes() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![compacted_pin()]);
+    // a's 5-hour window reads spent with its reset hours out, so the spent rule moves the auxiliary call to b.
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+    st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
+    let (result, _) = select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(result),
+        ("b".to_string(), Some(MigrateReason::Spent))
+    );
+    let moved = pinned(&st, "s1");
+    assert_eq!(
+        (moved.compacted, moved.last_input_tokens),
+        (true, 100_000),
+        "the new row carries the mark and the compaction call's prompt"
+    );
+    select(&mut st, &s, &turn_of_body(&s, 20_000, T), &mut rng());
+    assert_eq!(sum_and_mark(&st), (Some(0), false));
+}
+
+#[test]
+fn a_lapsed_agents_return_by_an_auxiliary_call_carries_the_mark_so_the_turn_behind_it_zeroes() {
+    let s = lapse_pool();
+    let (pin, sums) = lapsing_with_sums();
+    let marked = PinRow {
+        last_input_tokens: 100_000,
+        compacted: true,
+        ..pin
+    };
+    let mut st = beside_warm(vec![marked], T);
+    st.purge(&s, T);
+    select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let returned = pinned(&st, "s1");
+    assert_eq!(
+        (
+            returned.compacted,
+            returned.last_input_tokens,
+            &returned.thinking_sums
+        ),
+        (true, 100_000, &sums),
+        "the returned pin carries the record's mark, its last prompt and its sums"
+    );
+    select(&mut st, &s, &turn_of_body(&s, 20_000, T), &mut rng());
+    assert_eq!(sum_and_mark(&st), (Some(0), false));
+}
+
+#[test]
+fn an_auxiliary_call_that_replaces_a_row_its_pool_left_carries_the_mark_so_the_turn_behind_it_zeroes(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![compacted_pin()]);
+    // a left the call's candidates, so step 1 reads s1's row as one its pool left, and the placement on b replaces it
+    // with no move.
+    let mut call = auxiliary(&s, "s1", T);
+    call.candidates.retain(|c| c.account_id != "a");
+    let d = decide(&mut st, &s, &call, &mut rng());
+    assert_eq!(
+        d.record.pin.as_ref().map(|pin| pin.found),
+        Some("left_pool")
+    );
+    let placed = pinned(&st, "s1");
+    assert_eq!(
+        (
+            placed.account_id.as_str(),
+            placed.compacted,
+            placed.last_input_tokens,
+            placed.thinking_sums.get("a").map(|sum| sum.tokens)
+        ),
+        ("b", true, 100_000, Some(4_000)),
+        "the new row carries the replaced row's mark, its last prompt and its sum"
+    );
+    select(&mut st, &s, &turn_of_body(&s, 20_000, T), &mut rng());
+    assert_eq!(sum_and_mark(&st), (Some(0), false));
 }
 
 /// Both pins were used a second before `T` under a five-minute TTL: `s-past` was last refreshed six minutes back and

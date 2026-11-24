@@ -1233,6 +1233,65 @@ async fn a_stream_closed_cleanly_before_its_stop_is_warned_of_nothing_and_carrie
     );
 }
 
+/// The stop reason an answer's `message_delta` names.
+fn stop_event() -> SseEvent {
+    SseEvent {
+        event: "message_delta".into(),
+        data: r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#
+            .into(),
+    }
+}
+
+/// Whether the pin of one streamed request under `headers` reads its compaction mark once the stream of `events`
+/// closed clean. Read behind the completion, which the relay publishes after the renewal reached the router.
+async fn marked_behind(headers: &[(&str, &str)], events: Vec<SseEvent>) -> bool {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events,
+            delay_between: Duration::from_millis(2),
+        },
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let mut request = common::stream_request(common::KEY);
+    for (name, value) in headers {
+        common::set_header(&mut request, name, value);
+    }
+    let resp = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    completion(&mut sub).await;
+    let pins = h.router.pins().await.unwrap();
+    up.shutdown().await;
+    match pins.as_slice() {
+        [pin] => pin.compacted,
+        other => panic!("one pin is due, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_whole_compaction_call_marks_its_pin_and_one_closed_before_its_stop_or_a_whole_main_turn_marks_none(
+) {
+    let compaction = [
+        ("x-claude-code-request-class", "compaction"),
+        ("x-claude-code-compaction", "auto"),
+    ];
+    let whole = || vec![message_start_event(), stop_event(), message_stop_event()];
+    // The stream names its stop reason and closes clean ahead of `message_stop`.
+    let short = vec![message_start_event(), stop_event()];
+    assert_eq!(
+        (
+            marked_behind(&compaction, whole()).await,
+            marked_behind(&compaction, short).await,
+            marked_behind(&[("x-claude-code-request-class", "main")], whole()).await,
+        ),
+        (true, false, false)
+    );
+}
+
 /// One streamed request answered by `respond`: the status the client got, whether its body ended in an error, and
 /// the completion the bus carried.
 async fn one_stream(

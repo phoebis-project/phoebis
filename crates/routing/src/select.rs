@@ -1024,26 +1024,32 @@ fn budget_unknown(
 }
 
 /// The prompt size a pin's burn is divided by and its move rewrites: the pin's own prompt, else the request's own body
-/// where no call has renewed it with usage. A move to `destination` over a pair whose thinking blocks are bound drops
-/// the blocks the pin's account produced and keeps the destination's own, so its size is the last prompt less the
-/// pin's sum for its account plus its sum for the destination, never under zero.
+/// where no call has renewed it with usage or where the request, as the pin's own (`current`), reads its compaction
+/// mark, since the compaction call's prompt no longer holds the conversation. A move to `destination` over a pair whose
+/// thinking blocks are bound drops the blocks the pin's account produced and keeps the destination's own, so its size
+/// is that size less the pin's sum for its account plus its sum for the destination, never under zero.
 fn prompt_size(
     state: &RoutingState,
     pin: &PinRow,
+    current: bool,
     request: &SelectRequest,
     destination: Option<&str>,
 ) -> u64 {
     if pin.last_input_tokens == 0 {
         return request.body_tokens;
     }
+    let size = if confirms_compaction(pin, request, current) {
+        request.body_tokens
+    } else {
+        pin.last_input_tokens
+    };
     match bound_destination(state, pin, destination) {
         Some(destination) => {
             let sum = |account: &str| pin.thinking_sums.get(account).map_or(0, |sum| sum.tokens);
-            pin.last_input_tokens
-                .saturating_add(sum(destination))
+            size.saturating_add(sum(destination))
                 .saturating_sub(sum(&pin.account_id))
         }
-        None => pin.last_input_tokens,
+        None => size,
     }
 }
 
@@ -1059,10 +1065,50 @@ fn bound_destination<'a>(
         .filter(|destination| state.bound(&pin.model, &pin.account_id, destination))
 }
 
-/// Whether the selection sets the session's thinking sums to zero: a compacted request's prompt holds no earlier
-/// block. A probe replays the header of the request it keeps warm, whose answer has added its thinking since.
-pub(crate) fn zeroes_sums(request: &SelectRequest) -> bool {
-    request.context_compacted && !request.probe
+/// Whether `request` can read a compaction mark: a request of the class `main` or `subagent` that is no probe and no
+/// token count. The one test of the request that `confirms_compaction` makes for a row and `zeroes_lapsed_sums` for a
+/// record.
+fn reads_mark(request: &SelectRequest) -> bool {
+    matches!(request.request_class.as_deref(), Some("main" | "subagent"))
+        && !request.probe
+        && !request.count
+}
+
+/// Whether `request` is the conversation request that reads the mark of `row`: the request's own pin (`current`),
+/// the row's own agent, of the class `main` or `subagent`, no probe and no token count. A round reads another pin
+/// through a request shaped from the one that fired it, which keeps that request's class, session and agent, so the
+/// round says which pin is its request's own, as it tells `pin_request`, and takes each other marked pin as stored.
+fn confirms_compaction(row: &PinRow, request: &SelectRequest, current: bool) -> bool {
+    current
+        && row.compacted
+        && reads_mark(request)
+        && row.session_id == request.session_id
+        && row.agent_id == request.agent_id
+}
+
+/// Whether the selection sets the session's thinking sums to zero, on the row the session stood on where one stands: a
+/// compacted request's prompt holds no earlier block, and neither does the prompt of the turn that confirms a compaction
+/// with a body under half of the row's last prompt, the compaction call's. A probe replays the header of the request it
+/// keeps warm, whose answer has added its thinking since. Each reader holds the row of the request's own session, so
+/// the mark's test reads the row as the request's own pin.
+pub(crate) fn zeroes_sums(row: Option<&PinRow>, request: &SelectRequest) -> bool {
+    // A compacted prompt read a median of 0.168 of the call's, and no turn without a compaction read under one half
+    // (0.682 at the 0.1st percentile), so one half parts the two.
+    (request.context_compacted && !request.probe)
+        || row.is_some_and(|row| {
+            confirms_compaction(row, request, true)
+                && request.body_tokens.saturating_mul(2) < row.last_input_tokens
+        })
+}
+
+/// The answer of `zeroes_sums` for a session that returns from a lapsed agent's record, which stands in the row's
+/// place: the header's rule, or the record's mark under a request that `reads_mark` holds for and whose body reads
+/// under half of the record's last prompt.
+pub(crate) fn zeroes_lapsed_sums(kept: &LapsedAgentRow, request: &SelectRequest) -> bool {
+    (request.context_compacted && !request.probe)
+        || (kept.compacted
+            && reads_mark(request)
+            && request.body_tokens.saturating_mul(2) < kept.last_input_tokens)
 }
 
 /// The lapsed agent's record under the request's key, where the record names the key's generation the request carries:
@@ -1094,14 +1140,15 @@ pub(crate) fn handed_sums(
         .collect()
 }
 
-/// The rewrite a selection prices for the pin's next write: its last context, or the body's estimate for a fresh
-/// session or a pin never renewed with usage, as one cache write at the lane's TTL (five minutes until a pin reports
-/// one), sized for `destination` where the caller knows it. The gate's booking and the pick's figure price the same
-/// tokens through it.
+/// The rewrite a selection prices for the pin's next write: its size as `prompt_size` reads it for the request, which
+/// holds the pin as its own where `current`, or the body's estimate for a fresh session, as one cache write at the
+/// lane's TTL (five minutes until a pin reports one), sized for `destination` where the caller knows it. The gate's
+/// booking and the pick's figure price the same tokens through it.
 pub(crate) fn rewrite_write(
     state: &RoutingState,
     request: &SelectRequest,
     pin: Option<&PinRow>,
+    current: bool,
     destination: Option<&str>,
 ) -> PinUsage {
     // The plan windows see nothing of the client's classifier call, so its body is no rewrite to fit or to book. A
@@ -1115,7 +1162,7 @@ pub(crate) fn rewrite_write(
     // session's TTL is unknown before a pin exists, so its write prices at five minutes.
     let (tokens, ttl_ms) = match pin {
         Some(pin) => (
-            prompt_size(state, pin, request, destination),
+            prompt_size(state, pin, current, request, destination),
             pin.cache_ttl_ms,
         ),
         None => (body, FIVE_MINUTES_MS),
@@ -1161,14 +1208,21 @@ pub(crate) fn pin_figures<'a>(
     let share = state.share();
     let model = request.canonical_model.as_str();
     let average_ms = burn_average_ms(pool);
-    let write = rewrite_write(state, request, figures.pin(), Some(account_id));
+    let (pin, current) = figures.pin().unzip();
+    let write = rewrite_write(
+        state,
+        request,
+        pin,
+        current.unwrap_or(false),
+        Some(account_id),
+    );
     let priced = |window: &str, entrypoint: Option<&str>, p: &PinRow| {
         share
             .rate(window, entrypoint, tier, &p.model, &p.burn, now)
             .map(|rate| burn_decayed(rate, p.burn_at, now, average_ms))
     };
     let regime = match figures {
-        Figures::Pin(pin) => pin.entrypoint.as_deref(),
+        Figures::Pin(pin, _) => pin.entrypoint.as_deref(),
         Figures::Fresh(_) => match &request.failed_over {
             Some(failed_over) => failed_over.row.entrypoint.as_deref(),
             None => request.entrypoint.as_deref(),
@@ -1195,7 +1249,7 @@ pub(crate) fn pin_figures<'a>(
         // A slowed pin's burn is what its source's holds let through, so a destination reads the demand: the burn over
         // the source's speed, which the pin runs at there until the destination's own factor says otherwise.
         let rate = match figures {
-            Figures::Pin(pin) => priced(window, regime, pin)
+            Figures::Pin(pin, _) => priced(window, regime, pin)
                 .map(|rate| rate / state.slow_down_speed(pool, &pin.account_id, now)),
             // A failover's landing knows the session's own burn, while the destination's cache is cold, so the
             // rewrite above stays the body's.
@@ -1237,8 +1291,9 @@ pub(crate) fn pin_figures<'a>(
 /// Whose rewrite and burn `pin_figures` prices.
 #[derive(Clone, Copy)]
 pub(crate) enum Figures<'a> {
-    /// A live pin's own: its last context and its decayed burn.
-    Pin(&'a PinRow),
+    /// A live pin's own: its size as `prompt_size` reads it, with the second member saying whether the pin is the
+    /// request's own, and its decayed burn.
+    Pin(&'a PinRow, bool),
     /// A fresh session's: the body and the median burn of the pool's warm pins, which `fresh_prior` collects once per
     /// walk since every candidate of the walk reads the same set. A failed-over request's landing reads the burn of the
     /// row its source lost here instead of the median.
@@ -1250,9 +1305,9 @@ pub(crate) enum Figures<'a> {
 }
 
 impl<'a> Figures<'a> {
-    fn pin(self) -> Option<&'a PinRow> {
+    fn pin(self) -> Option<(&'a PinRow, bool)> {
         match self {
-            Figures::Pin(pin) => Some(pin),
+            Figures::Pin(pin, current) => Some((pin, current)),
             Figures::Fresh(_) | Figures::Lapsed(..) => None,
         }
     }
@@ -2399,7 +2454,7 @@ fn run(
     // pin's account alone.
     let mut migrated = None;
     let mut shed_from = None;
-    // The row a move takes off its source, whose burn and last prompt the new row carries.
+    // The row a move takes off its source, whose burn, last prompt and compaction mark the new row carries.
     let mut moving: Option<PinRow> = None;
     let mut selection_set: Vec<&Candidate> = eligible.clone();
     // The fit reads whose runway breaks the strategy's tie: a move's from its rule's gate, a placement's from the
@@ -2410,7 +2465,7 @@ fn run(
         // The move rules, the booking and the row a move takes off read the session's thinking sums as this selection
         // writes them, so a compacted request prices no drop of blocks its prompt no longer holds.
         let as_written = |mut row: PinRow| {
-            if zeroes_sums(request) {
+            if zeroes_sums(Some(&row), request) {
                 for sum in row.thinking_sums.values_mut() {
                     sum.tokens = 0;
                 }
@@ -2723,7 +2778,7 @@ fn run(
     // The request's own figures, which the fit, rung 4's gate and the booking read alike. A failover's landing keeps
     // the row its source lost, whatever record the agent left.
     let figures = match (&moving, &lapsed) {
-        (Some(row), _) => Figures::Pin(row),
+        (Some(row), _) => Figures::Pin(row, true),
         (None, Some(kept)) if request.failed_over.is_none() => Figures::Lapsed(kept, &prior),
         (None, _) => Figures::Fresh(&prior),
     };
@@ -3046,7 +3101,7 @@ fn run(
         let failed_over = request.failed_over.as_ref();
         let moving = moving.as_ref().or(failed_over.map(|f| &f.row));
         // A live row released off its account, or one idle past the TTL or left behind by its pool, is the session's
-        // too, so the thinking it carries follows the session onto the new row.
+        // too, so the thinking and the compaction mark it carries follow the session onto the new row.
         let replaced = moving
             .or(pin.as_ref().map(|(row, _)| row))
             .or(expired.as_ref().and_then(|key| state.pin(key)));
@@ -3210,9 +3265,11 @@ fn replace_expired(
 /// averages, the classifier copy's model and the last prompt the new row carries, so the destination's projection
 /// counts the pin from the moment it lands, the copy keeps its price and a later move prices its rewrite from a figure.
 /// `replaced` is any row of the pin the placement replaces, `moving` among them, whose thinking sums of the holders
-/// `snapshot` carries the new row takes on. `lapsed` is a returning agent's record, or the one a row idle past the TTL
-/// stands in for: with no `moving` row the new row takes its burn copies, decayed from the placement on, and where it
-/// replaces no row its sums.
+/// `snapshot` carries and whose compaction mark the new row takes on. `lapsed` is a returning agent's record, or the one
+/// a row idle past the TTL stands in for: with no `moving` row the new row takes its burn copies, decayed from the
+/// placement on, and where it replaces no row its sums and its mark. The request that reads the mark writes the new row
+/// without it. Each other request carries a marked source's mark with the source's last prompt, which the turn behind
+/// it compares its body with.
 #[allow(clippy::too_many_arguments)]
 fn fresh_pin(
     request: &SelectRequest,
@@ -3247,6 +3304,24 @@ fn fresh_pin(
             ),
             (None, None) => Default::default(),
         };
+    // The mark comes off the source the sums come off, and the request that reads it writes none. A source with no
+    // `moving` row hands on its last prompt beside the mark alone, since the turn behind the request compares its body
+    // with that prompt.
+    let (compacted, last_input_tokens) = match (moving, replaced, lapsed) {
+        (Some(m), ..) => (
+            m.compacted && !confirms_compaction(m, request, true),
+            m.last_input_tokens,
+        ),
+        (None, Some(row), _) => {
+            let carried = row.compacted && !confirms_compaction(row, request, true);
+            (carried, if carried { row.last_input_tokens } else { 0 })
+        }
+        (None, None, Some(kept)) => {
+            let carried = kept.compacted && !reads_mark(request);
+            (carried, if carried { kept.last_input_tokens } else { 0 })
+        }
+        (None, None, None) => (false, 0),
+    };
     let mut row = PinRow {
         key_id: request.key_id.clone(),
         session_id: session.to_string(),
@@ -3267,7 +3342,7 @@ fn fresh_pin(
         burn_fast,
         burn_unmetered,
         burn_unmetered_model,
-        last_input_tokens: moving.map_or(0, |m| m.last_input_tokens),
+        last_input_tokens,
         // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
         last_refresh_at: request.now,
         cache_ttl_ms: FIVE_MINUTES_MS,
@@ -3287,15 +3362,24 @@ fn fresh_pin(
         auxiliary_only: placed_auxiliary_only(request),
         effort: request.effort.clone(),
         ended: false,
-        thinking_sums: replaced
-            .map(|r| &r.thinking_sums)
-            .or(lapsed.map(|kept| &kept.thinking_sums))
-            .map(|sums| handed_sums(sums, zeroes_sums(request), snapshot))
-            .unwrap_or_default(),
+        thinking_sums: match (replaced, lapsed) {
+            (Some(row), _) => handed_sums(
+                &row.thinking_sums,
+                zeroes_sums(Some(row), request),
+                snapshot,
+            ),
+            (None, Some(kept)) => handed_sums(
+                &kept.thinking_sums,
+                zeroes_lapsed_sums(kept, request),
+                snapshot,
+            ),
+            (None, None) => BTreeMap::new(),
+        },
         // No row's or record's flag carries over: a request that carries no conversation replaces a flagged row or
         // takes a flagged record only once the account that holds the state is gone, and a request that carries the
         // conversation states the class of its own body.
         account_bound: carries_conversation(request) && !request.portability.is_portable(),
+        compacted,
     };
     stamp_hashes(&mut row, request);
     row
@@ -4646,7 +4730,7 @@ fn gate<'a>(
                     snapshot,
                     pool,
                     request,
-                    Figures::Pin(current),
+                    Figures::Pin(current, true),
                     &c.account_id,
                     &[],
                     now,
@@ -6264,6 +6348,7 @@ pub(crate) fn move_read(
     state: &RoutingState,
     req: &SelectRequest,
     pin: &PinRow,
+    current: bool,
     now: i64,
     destination: Option<&str>,
 ) -> MoveRead {
@@ -6298,8 +6383,8 @@ pub(crate) fn move_read(
         });
     let drop_size = weighed.map(|(size, _)| size);
     let drop_cost = weighed.map(|(_, cost)| cost);
-    let sized = prompt_size(state, pin, req, destination);
-    let size = (prompt_size(state, pin, req, None) > 0)
+    let sized = prompt_size(state, pin, current, req, destination);
+    let size = (prompt_size(state, pin, current, req, None) > 0)
         .then(|| (sized as f64 + drop_size.unwrap_or(0.0)).max(1.0));
     let write = share(cache_write(sized, pin.cache_ttl_ms)).filter(|share| *share > 0.0);
     let cost = match (write, drop_cost) {
@@ -6329,6 +6414,7 @@ fn destination_of(
     request: &SelectRequest,
     eligible: &[&Candidate],
     pin: &PinRow,
+    current: bool,
     planned: &[Reservation],
     now: i64,
     fallback_ms: i64,
@@ -6354,7 +6440,7 @@ fn destination_of(
                     snapshot,
                     pool,
                     request,
-                    Figures::Pin(pin),
+                    Figures::Pin(pin, current),
                     &c.account_id,
                     planned,
                     now,
@@ -6393,6 +6479,7 @@ fn move_at(
     req: &SelectRequest,
     eligible: &[&Candidate],
     pin: &PinRow,
+    current: bool,
     planned: &[Reservation],
     now: i64,
     fallback_ms: i64,
@@ -6404,6 +6491,7 @@ fn move_at(
         req,
         eligible,
         pin,
+        current,
         planned,
         now,
         fallback_ms,
@@ -6412,6 +6500,7 @@ fn move_at(
         state,
         req,
         pin,
+        current,
         now,
         found.as_ref().map(|(id, _)| id.as_str()),
     );
@@ -6473,13 +6562,14 @@ pub(crate) fn standing_move_read(
                 &request,
                 &eligible,
                 pin,
+                false,
                 &[],
                 now,
                 fallback_ms,
             )
         }
         // A pin whose pool left the registry has no siblings to plan a move among.
-        None => (None, move_read(state, &request, pin, now, None)),
+        None => (None, move_read(state, &request, pin, false, now, None)),
     };
     let movable = destination.is_some() && !pin.account_bound;
     MoveRead {
@@ -6737,6 +6827,7 @@ fn shed_round(
                 &req,
                 eligible,
                 &row,
+                current_row,
                 &[],
                 now,
                 fallback_ms,
@@ -6848,7 +6939,8 @@ fn shed_round(
     // shows of it, and the booking a mark plans there: `no_runway` where nothing fits.
     let plan_of = |walked: &RoundPin, planned: &[Reservation]| {
         let p = &walked.row;
-        let req = pin_request(request, p, is_current(p));
+        let current = is_current(p);
+        let req = pin_request(request, p, current);
         // The round reads the state without writing it, so with nothing planned the order's read is the one a read
         // here would answer.
         let (found, moved) = if planned.is_empty() {
@@ -6861,6 +6953,7 @@ fn shed_round(
                 &req,
                 eligible,
                 p,
+                current,
                 planned,
                 now,
                 fallback_ms,
@@ -6884,14 +6977,14 @@ fn shed_round(
             pool,
             &destination,
             &req,
-            Figures::Pin(p),
+            Figures::Pin(p, current),
             destination_tier,
             now,
         );
         read.runway_ms = runway_ms;
         let model = req.canonical_model.as_str();
         // The record shows the Pro-week figure of the write alone, one unit for every pin.
-        let write = rewrite_write(state, &req, Some(p), Some(&destination));
+        let write = rewrite_write(state, &req, Some(p), current, Some(&destination));
         read.rewrite = state
             .share()
             .equivalent(SEVEN_DAY, req.entrypoint.as_deref(), model, write, now)
@@ -7341,10 +7434,14 @@ fn renew(
     if !request.probe {
         renewed.entrypoint.clone_from(&request.entrypoint);
     }
-    if zeroes_sums(request) {
+    if zeroes_sums(Some(&*renewed), request) {
         for sum in renewed.thinking_sums.values_mut() {
             sum.tokens = 0;
         }
+    }
+    // Cleared behind the zeroing above, which reads the mark.
+    if confirms_compaction(renewed, request, true) {
+        renewed.compacted = false;
     }
     let renewed = renewed.clone();
     let handed = pin_ref(&renewed);

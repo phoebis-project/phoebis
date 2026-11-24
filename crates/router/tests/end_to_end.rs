@@ -3463,6 +3463,7 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
                 ended: false,
                 thinking_sums: Default::default(),
                 account_bound: false,
+                compacted: false,
             })
             .unwrap();
     }

@@ -8273,6 +8273,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
             turn_end: RenewalEnd::NoTurn,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     let pin = handle.pins().await.unwrap().remove(0);
@@ -8319,6 +8320,7 @@ fn renewal(pin: PinRef, now: i64, usage: PinUsage, keepalive: bool, cache_ttl_ms
         },
         thinking_tokens: None,
         input_transformations: None,
+        compacted: false,
     }
 }
 
@@ -8532,6 +8534,7 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
             turn_end: RenewalEnd::Turn,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     let pins = handle.pins().await.unwrap();
@@ -8639,6 +8642,7 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
             turn_end: RenewalEnd::Turn,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     handle
@@ -9171,6 +9175,7 @@ fn speed_renewal(pin: PinRef, now: i64, fast: bool, input: u64) -> Report {
         turn_end: RenewalEnd::Turn,
         thinking_tokens: None,
         input_transformations: None,
+        compacted: false,
     }
 }
 
@@ -10285,6 +10290,7 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
             turn_end: RenewalEnd::AgentEnded,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     handle
@@ -10457,6 +10463,7 @@ async fn a_projection_leaves_out_the_burn_of_a_pin_whose_agent_ended_until_the_a
             turn_end: RenewalEnd::AgentEnded,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     handle
@@ -10654,6 +10661,7 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         ended: false,
         thinking_sums: Default::default(),
         account_bound: false,
+        compacted: false,
     }
 }
 
@@ -10983,6 +10991,7 @@ async fn every_set_of_an_ended_agents_mark_and_its_clear_by_an_exhausted_request
             turn_end: RenewalEnd::AgentEnded,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     handle.shutdown().await.unwrap();
@@ -11016,6 +11025,7 @@ async fn every_set_of_an_ended_agents_mark_and_its_clear_by_an_exhausted_request
             turn_end: RenewalEnd::AgentEnded,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     handle.shutdown().await.unwrap();
@@ -17370,6 +17380,7 @@ async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probe
         },
         thinking_tokens: None,
         input_transformations: None,
+        compacted: false,
     };
     let stored = || async { handle.pins().await.unwrap().remove(0).effort };
     assert_eq!(
@@ -17423,6 +17434,7 @@ async fn a_token_count_behind_a_turn_keeps_the_effort_the_turn_stamped() {
             turn_end: RenewalEnd::Turn,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     now.store(3_000, Ordering::SeqCst);
@@ -18175,6 +18187,7 @@ async fn an_auxiliary_calls_end_on_another_agents_turn_pin_does_not_redirect_the
             turn_end: RenewalEnd::NoTurn,
             thinking_tokens: None,
             input_transformations: None,
+            compacted: false,
         })
         .await;
     let call = SelectRequest {
@@ -18294,6 +18307,7 @@ fn answered(pin: PinRef, prompt: u64, thinking: Option<u64>, dropped: Option<&st
                 },
             )])
         }),
+        compacted: false,
     }
 }
 
@@ -18397,6 +18411,202 @@ async fn a_compacted_move_opens_no_observation_so_its_answer_leaves_its_pair_unl
     // The pair holds no fact, and a and c bound make it the model's first drop: 100,000 less 40,000.
     assert_eq!(account, "b");
     assert!(close(booked, 0.006), "{booked:?}");
+}
+
+/// The renewal of `pin` at `now` by a call that ends no turn, whose answer read a prompt of `prompt` input tokens: a
+/// compaction call's that answered whole where `compacted`, else an auxiliary call's.
+fn off_turn_answer(pin: PinRef, prompt: u64, compacted: bool, now: i64) -> Report {
+    Report::PinRenewed {
+        pin,
+        now,
+        usage: Some(PinUsage {
+            input: prompt,
+            ..PinUsage::default()
+        }),
+        keepalive: false,
+        cache_ttl_ms: 300_000,
+        fast: false,
+        turn_end: RenewalEnd::NoTurn,
+        thinking_tokens: None,
+        input_transformations: None,
+        compacted,
+    }
+}
+
+/// `session`'s turn of the class `main` with no compaction header at `now`, whose body the relay estimates at
+/// `body_tokens`.
+fn main_turn_of(handle: &RouterHandle, session: &str, body_tokens: u64, now: i64) -> SelectRequest {
+    SelectRequest {
+        request_class: Some("main".into()),
+        body_tokens,
+        ..turn_of(handle, session, "main", SONNET, now)
+    }
+}
+
+/// `session`'s pin on `a` as `stored_pin` holds it, over a last prompt of 100,000 tokens that holds `own` tokens of the
+/// thinking `a` produced.
+fn holding(store: &Store, session: &str, epoch: u64, own: u64) -> PinRow {
+    PinRow {
+        last_input_tokens: 100_000,
+        thinking_sums: std::collections::BTreeMap::from([(
+            "a".to_string(),
+            ThinkingSum {
+                incarnation: 1,
+                tokens: own,
+            },
+        )]),
+        ..stored_pin(store, session, "a", epoch, 10.0)
+    }
+}
+
+/// `session`'s sum for `a` and its compaction mark as the router holds them.
+async fn sum_and_mark(handle: &RouterHandle, session: &str) -> (Option<u64>, bool) {
+    let row = handle
+        .pins()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.session_id == session)
+        .expect("the session's pin");
+    (
+        row.thinking_sums.get("a").map(|sum| sum.tokens),
+        row.compacted,
+    )
+}
+
+#[tokio::test]
+async fn a_confirming_turn_that_lands_on_another_account_opens_no_observation() {
+    // No fact for the model, so a pair that no answer settled reads unobserved.
+    let store = thinking_store(&["a", "b"], &[]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let pins = [
+        stored_pin(&store, "s1", "a", 1, 10.0),
+        stored_pin(&store, "s2", "a", 2, 10.0),
+    ];
+    let handle = thinking_router(&store, &pins, &now).await;
+    handle
+        .report(off_turn_answer(
+            session_pin(&handle, "s1").await,
+            100_000,
+            true,
+            AT,
+        ))
+        .await;
+    a_spent(&handle, &["a", "b"], AT).await;
+    // Under half of the compaction call's 100,000, so the turn confirms the compaction on its move to b.
+    assert_eq!(
+        spent_move(&handle, main_turn_of(&handle, "s1", 20_000, AT))
+            .await
+            .0,
+        "b"
+    );
+    // A smaller prompt with no member, which an open observation would read as the pair bound.
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            30_000,
+            None,
+            None,
+        ))
+        .await;
+    let (account, booked) = spent_move(&handle, turn_of(&handle, "s2", "main", SONNET, AT)).await;
+    assert_eq!(account, "b");
+    assert!(
+        close(booked, 0.01),
+        "the pair reads unobserved, so the whole 100,000: {booked:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_auxiliary_call_leaves_the_mark_so_the_turn_behind_it_zeroes() {
+    let store = thinking_store(&["a"], &[]);
+    store.upsert_pin(&holding(&store, "s1", 1, 4_000)).unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    handle
+        .report(off_turn_answer(
+            session_pin(&handle, "s1").await,
+            100_000,
+            true,
+            AT,
+        ))
+        .await;
+    let call = SelectRequest {
+        request_class: Some("auxiliary".into()),
+        body_tokens: 10_000,
+        ..turn_of(&handle, "s1", "main", SONNET, AT)
+    };
+    assert_eq!(
+        landed_on(handle.select(call).await.unwrap()),
+        ("a".into(), None)
+    );
+    handle
+        .report(off_turn_answer(
+            session_pin(&handle, "s1").await,
+            10_000,
+            false,
+            AT,
+        ))
+        .await;
+    let between = sum_and_mark(&handle, "s1").await;
+    // Under half of the compaction call's 100,000, and over half of the auxiliary answer's 10,000.
+    handle
+        .select(main_turn_of(&handle, "s1", 20_000, AT))
+        .await
+        .unwrap();
+    assert_eq!(
+        (between, sum_and_mark(&handle, "s1").await),
+        ((Some(4_000), true), (Some(0), false)),
+        "the auxiliary call leaves the mark and the sum, and the turn behind it zeroes the sum"
+    );
+}
+
+#[tokio::test]
+async fn a_lapsed_agents_return_from_a_marked_record_zeroes_its_sums_and_opens_no_observation() {
+    // No fact for the model, so a pair that no answer settled reads unobserved.
+    let store = thinking_store(&["a", "b"], &[]);
+    store.upsert_pin(&holding(&store, "s1", 1, 4_000)).unwrap();
+    store.upsert_pin(&holding(&store, "s2", 2, 40_000)).unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    // The compaction call answered a millisecond more than the pool's hour-long affinity TTL before AT, so the reload's
+    // purge takes s1's pin as idle and keeps its record.
+    handle
+        .report(off_turn_answer(
+            session_pin(&handle, "s1").await,
+            100_000,
+            true,
+            AT - HOUR - 1,
+        ))
+        .await;
+    handle.reload().await.unwrap();
+    // a already tried, as the return of the lapsed agent's observation case is, so the return lands on b.
+    let returned = SelectRequest {
+        attempted: vec!["a".into()],
+        ..main_turn_of(&handle, "s1", 20_000, AT)
+    };
+    assert_eq!(landed_on(handle.select(returned).await.unwrap()).0, "b");
+    let landed = sum_and_mark(&handle, "s1").await;
+    // A prompt under the record's last with no member, which an open observation would read as the pair bound.
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            70_000,
+            None,
+            None,
+        ))
+        .await;
+    a_spent(&handle, &["a", "b"], AT).await;
+    let (account, booked) = spent_move(&handle, turn_of(&handle, "s2", "main", SONNET, AT)).await;
+    assert_eq!(
+        (landed, account.as_str()),
+        ((Some(0), false), "b"),
+        "the return zeroes its sum and carries no mark"
+    );
+    assert!(
+        close(booked, 0.01),
+        "the pair reads unobserved, so the whole 100,000: {booked:?}"
+    );
 }
 
 #[tokio::test]
@@ -19247,6 +19457,7 @@ async fn a_move_behind_a_return(attempted: &[&str]) -> (String, Option<f64>) {
             },
         )]),
         account_bound: false,
+        compacted: false,
     };
     store
         .write_routing(|tx| tx.upsert_lapsed_agent(&record))
@@ -19315,6 +19526,7 @@ async fn a_lapsed_agents_record_reaches_the_store_at_the_purge_and_leaves_it_at_
         speed: 1.0,
         thinking_sums: Default::default(),
         account_bound: false,
+        compacted: false,
     };
     // Ahead of the start: a record last used a minute more than 7 days back, one last used an hour back, and a pin
     // under a key the registry does not hold. The start's purge deletes that pin as unserved, which writes no record,
@@ -19429,6 +19641,7 @@ async fn a_rounds_record_states_the_rewrite_of_a_pin_whose_pair_reads_bound_at_t
             turn_end: RenewalEnd::Turn,
             thinking_tokens: Some(1_000),
             input_transformations: None,
+            compacted: false,
         })
         .await;
     handle

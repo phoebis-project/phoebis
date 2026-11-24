@@ -28,9 +28,9 @@ use crate::record::{
 use crate::select::{
     account_end, budget_facts, burn_unit, decide, fresh_fit, fresh_prior, lane_is_fast,
     lapsed_record, mark_cleared_of, obstacle_on, pace_of, projection_of, projections_of, runway,
-    slow_down_ramp, spend_spent, standing_eligible, standing_move_read, zeroes_sums, BurnRead,
-    Decided, FailedOver, FitRead, FitWord, Judged, JudgedCharge, MoveRead, Obstacle, Refusal,
-    SelectRequest, SelectResult, RATE_LIMIT_REASON,
+    slow_down_ramp, spend_spent, standing_eligible, standing_move_read, zeroes_lapsed_sums,
+    zeroes_sums, BurnRead, Decided, FailedOver, FitRead, FitWord, Judged, JudgedCharge, MoveRead,
+    Obstacle, Refusal, SelectRequest, SelectResult, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -918,6 +918,8 @@ pub enum Report {
         thinking_tokens: Option<u64>,
         /// The blocks the answer dropped per `<type>.<reason>` key, `None` where the answer held no such member.
         input_transformations: Option<BTreeMap<String, DroppedBlocks>>,
+        /// The request was a compaction call whose stream ended whole with a stop reason.
+        compacted: bool,
     },
     Sample {
         account_id: String,
@@ -4447,6 +4449,7 @@ impl Task {
                 turn_end,
                 thinking_tokens,
                 input_transformations,
+                compacted,
             } => {
                 let key = self.canonical_pin(&mut pin);
                 if let Some(current) = self.state.pin(&key) {
@@ -4481,6 +4484,7 @@ impl Task {
                         .flatten();
                     if let Some(renewed) = renewed {
                         let mut answered_prompt = None;
+                        let was_compacted = renewed.compacted;
                         renewed.last_used_at = now;
                         renewed.cache_ttl_ms = cache_ttl_ms;
                         // A turn's stream end with its usage is the turn's end a classifier call that follows judges:
@@ -4500,6 +4504,9 @@ impl Task {
                             // and its effort as it keeps its lane.
                             renewed.entrypoint.clone_from(&pin.entrypoint);
                             renewed.effort.clone_from(&pin.effort);
+                            if compacted {
+                                renewed.compacted = true;
+                            }
                             if let Some(usage) = usage {
                                 // Every copy folds whatever the account's kind and nothing is priced here: the
                                 // reader prices the copies its funding selects on the account the pin sits on when
@@ -4528,7 +4535,12 @@ impl Task {
                                     now,
                                     window_ms,
                                 );
-                                renewed.last_input_tokens = usage.prompt_tokens();
+                                // A marked row keeps its compaction call's prompt until the agent's next turn reads
+                                // the mark. An auxiliary answer in between would move the size that the turn's body is
+                                // compared with.
+                                if !(was_compacted && !turn_ended && !compacted) {
+                                    renewed.last_input_tokens = usage.prompt_tokens();
+                                }
                                 if let Some(tokens) = thinking_tokens.filter(|tokens| *tokens > 0) {
                                     // A sum of the id's previous holder holds none of this holder's blocks, so
                                     // the holder's own entry starts again.
@@ -5157,7 +5169,12 @@ impl Task {
         // A compacted prompt holds no earlier block, so its answer drops none: it would close an earlier landing's
         // observation with a false `kept`, or with a false bound where it carries no member, and teach a landing's
         // pair a false `kept`. The selection hands such a landing its sums at zero, so it opens no observation.
-        if zeroes_sums(request) {
+        let zeroed = match &stood_on {
+            Some(Stood::Row(row)) => zeroes_sums(Some(row), request),
+            Some(Stood::Lapsed(record)) => zeroes_lapsed_sums(record, request),
+            None => zeroes_sums(None, request),
+        };
+        if zeroed {
             self.state.take_observation(key);
             return;
         }
@@ -6392,6 +6409,7 @@ mod tests {
             ended: false,
             thinking_sums: Default::default(),
             account_bound: false,
+            compacted: false,
         };
         assert_eq!(
             rates.price_pin(BurnUnit::Usd, &pin, FIVE_HOUR),
@@ -6448,6 +6466,7 @@ mod tests {
             ended: false,
             thinking_sums: Default::default(),
             account_bound: false,
+            compacted: false,
         };
         assert_eq!(
             rates.price_pin(BurnUnit::Usd, &pin, FIVE_HOUR),
@@ -6816,6 +6835,7 @@ mod tests {
                 ended: false,
                 thinking_sums: Default::default(),
                 account_bound: false,
+                compacted: false,
             }],
             ..RoutingLoad::default()
         });

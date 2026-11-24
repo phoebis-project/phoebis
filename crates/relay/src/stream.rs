@@ -204,6 +204,8 @@ pub(crate) struct Renewal {
     pub turn: bool,
     /// The request's class is `subagent`, so an answer that stops with `end_turn` ends the agent.
     pub subagent: bool,
+    /// The request's class is `compaction`, so an answer that ends whole marks the pin for the agent's next turn.
+    pub compaction: bool,
     /// False for a token count: it writes no cache, so its answer renews nothing, though a client error on a
     /// pin it created still releases that pin.
     pub renews: bool,
@@ -221,12 +223,14 @@ impl Renewal {
         self.fresh && RELEASING_STATUSES.contains(&status)
     }
 
+    /// `complete` says the answer arrived whole: a stream that ended clean after its stop, or a body decoded whole.
     pub(crate) fn send(
         self,
         now: i64,
         status: u16,
         usage: Option<&Usage>,
         response: &ResponseFacts,
+        complete: bool,
         waiting: &mut Waiting,
     ) {
         if self.releases(status) {
@@ -268,6 +272,11 @@ impl Renewal {
                 turn_end,
                 thinking_tokens: usage.and_then(|u| u.thinking_tokens),
                 input_transformations: response.input_transformations.as_ref().map(dropped_blocks),
+                // A probe replays a compaction call's class too, and marks nothing, as it ends no turn.
+                compacted: self.compaction
+                    && !self.keepalive
+                    && complete
+                    && response.stop_reason.is_some(),
             },
         );
     }
@@ -714,6 +723,7 @@ impl Publish {
                 self.status,
                 usage.as_ref(),
                 &self.response,
+                outcome.is_none(),
                 waiting,
             );
         }

@@ -133,6 +133,8 @@ pub struct PinRow {
     /// The pin's session holds account state: its newest request that carried the conversation read non-portable. A
     /// request that carries no conversation follows such a pin, and no round plans its move.
     pub account_bound: bool,
+    /// The pin's compaction call answered whole, and no conversation request of the agent has read the mark yet.
+    pub compacted: bool,
 }
 
 /// One account's entry in a pin's thinking sums. An id is reusable, and a holder created under it later produced none
@@ -180,6 +182,8 @@ pub struct LapsedAgentRow {
     pub thinking_sums: BTreeMap<String, ThinkingSum>,
     /// The pin's session held account state when the pin was taken, as the pin's own flag read.
     pub account_bound: bool,
+    /// The pin carried its compaction mark when the purge took it.
+    pub compacted: bool,
 }
 
 impl LapsedAgentRow {
@@ -526,6 +530,7 @@ impl Store {
                     speed: r.get("speed")?,
                     thinking_sums: json_column(r, r.as_ref().column_index("thinking_sums")?)?,
                     account_bound: r.get("account_bound")?,
+                    compacted: r.get("compacted")?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // As with the windows, a previous holder's hours are never loaded.
@@ -557,6 +562,7 @@ impl Store {
                     ended: r.get("ended")?,
                     thinking_sums: json_column(r, r.as_ref().column_index("thinking_sums")?)?,
                     account_bound: r.get("account_bound")?,
+                    compacted: r.get("compacted")?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: all_resolutions(&tx)?,
@@ -952,7 +958,7 @@ const PIN_COLUMNS: &str = "key_id, session_id, agent_id, model, account_id, epoc
      burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
      burn_unmetered_write_5m, burn_unmetered_model, \
      marked_at, marked_on, marked_window, entrypoint, shed_reason, auxiliary_only, effort, ended, thinking_sums, \
-     account_bound, marked_source";
+     account_bound, marked_source, compacted";
 
 // The upsert binds a lapsed agent's columns in this one order, so `upsert_lapsed_agent_on` lists its values in it. The
 // burn columns carry the pins' names, so the load reads both tables through the lists below.
@@ -962,7 +968,7 @@ const LAPSED_AGENT_COLUMNS: &str = "key_id, session_id, agent_id, model, key_gen
      burn_banded_cache_read, burn_banded_input, burn_banded_output, burn_banded_write_1h, burn_banded_write_5m, \
      burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m, \
      burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
-     burn_unmetered_write_5m, burn_unmetered_model, speed, thinking_sums, account_bound";
+     burn_unmetered_write_5m, burn_unmetered_model, speed, thinking_sums, account_bound, compacted";
 
 // Each burn copy's columns, in `PinBurn`'s field order: `burn_from` takes them by position.
 const BURN_COLUMNS: [&str; 5] = [
@@ -1119,7 +1125,8 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
         pin.ended,
         serde_json::to_string(&pin.thinking_sums)?,
         pin.account_bound,
-        pin.mark.as_ref().and_then(|mark| mark.source.as_ref())
+        pin.mark.as_ref().and_then(|mark| mark.source.as_ref()),
+        pin.compacted
     ])?;
     Ok(())
 }
@@ -1179,7 +1186,8 @@ fn upsert_lapsed_agent_on(conn: &Connection, row: &LapsedAgentRow) -> Result<(),
         row.burn_unmetered_model,
         row.speed,
         serde_json::to_string(&row.thinking_sums)?,
-        row.account_bound
+        row.account_bound,
+        row.compacted
     ])?;
     Ok(())
 }

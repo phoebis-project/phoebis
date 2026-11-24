@@ -1784,6 +1784,7 @@ impl Relay {
         );
         let turn = matches!(hints.request_class.as_deref(), Some("main" | "subagent"));
         let subagent = hints.request_class.as_deref() == Some("subagent");
+        let compaction = hints.request_class.as_deref() == Some("compaction");
         crate::facts::note_entrypoint_disagreement(
             &trace.request_id,
             identity.entrypoint.as_deref(),
@@ -2106,6 +2107,7 @@ impl Relay {
             client_gzip,
             client_hash,
             client_version,
+            compaction,
             deadline,
             diagnostics,
             fallback_ms,
@@ -3707,6 +3709,7 @@ impl Relay {
                 head.status,
                 None,
                 &ResponseFacts::default(),
+                false,
                 &mut waiting,
             );
         }
@@ -3751,6 +3754,7 @@ impl Relay {
             fresh: ctx.fresh_pin,
             turn: ctx.admitted.turn,
             subagent: ctx.admitted.subagent,
+            compaction: ctx.admitted.compaction,
             renews: ctx.admitted.trace.kind != Kind::CountTokens,
             generations: (
                 ctx.account.incarnation,
@@ -4593,6 +4597,7 @@ impl Relay {
                 head.status,
                 usage.as_ref(),
                 &facts,
+                true,
                 &mut waiting,
             );
         }
@@ -5112,6 +5117,9 @@ struct Admitted<'a> {
     /// The client stamped a hash the drift check verified, which every leg re-signs (`NativeEdit::client_hash`).
     client_hash: bool,
     client_version: Option<String>,
+    /// The request's class is `compaction`, read once at admission beside `turn` and carried to every leg's renewal: a
+    /// whole answer under it marks the pin.
+    compaction: bool,
     /// The relay's clock past which the attempt loop answers the exhaustion rather than selecting again, and at
     /// which a wait on an account's backoff ends: admission plus `head_timeout` less `ATTEMPT_DEADLINE_MARGIN`.
     /// `None` when `head_timeout` is no longer than the margin.

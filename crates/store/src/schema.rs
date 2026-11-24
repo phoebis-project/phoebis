@@ -378,12 +378,13 @@ ALTER TABLE api_keys ADD COLUMN feature_accounts_json TEXT NOT NULL DEFAULT '{}'
 "#;
 
 /// A pin whose session holds account state, which stays on its account until a portable turn of the conversation, or
-/// until a request bound by web search results alone leaves it because its account cannot serve in time. A
-/// shedding mark names the test that fired its round, null on a mark made before the column, which reads as a
-/// projection round's. An account cooldown of a usage-based seat keeps the spend share at its refusal, null on each
-/// other row and on a seat's row set before the column, which lifts as a share of 1.0. A lapsed agent's record keeps
-/// the burn and the thinking sums of a pin the purge took as expired, with whether its session held account state, and
-/// the table starts empty.
+/// until a request bound by web search results alone leaves it because its account cannot serve in time. A shedding
+/// mark names the test that fired its round, null on a mark made before the column, which reads as a projection
+/// round's. An account cooldown of a usage-based seat keeps the spend share at its refusal, null on each other row and
+/// on a seat's row set before the column, which lifts as a share of 1.0. A lapsed agent's record keeps the burn and the
+/// thinking sums of a pin the purge took as expired, with whether its session held account state, and the table starts
+/// empty. A pin whose compaction call answered whole carries a mark until the agent's next conversation request, and a
+/// lapsed agent's record keeps that mark.
 const V10: &str = r#"
 ALTER TABLE pins ADD COLUMN account_bound INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN marked_source TEXT;
@@ -403,6 +404,8 @@ CREATE TABLE lapsed_agents (
   speed REAL NOT NULL, thinking_sums TEXT NOT NULL, account_bound INTEGER NOT NULL,
   PRIMARY KEY (key_id, session_id, agent_id, model)
 );
+ALTER TABLE pins ADD COLUMN compacted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lapsed_agents ADD COLUMN compacted INTEGER NOT NULL DEFAULT 0;
 "#;
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
