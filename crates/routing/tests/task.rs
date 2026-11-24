@@ -12714,6 +12714,89 @@ async fn a_later_reset_ahead_of_the_stored_one_s_turn_signals_a_restart_where_th
 }
 
 #[tokio::test]
+async fn a_poll_that_names_no_five_hour_reset_signals_a_restart_where_the_figure_fell() {
+    let stored_reset = 2_000 + 2 * HOUR;
+    let week = 2_000 + 7 * 24 * HOUR;
+    let weekly = |observed_at: i64, utilization: f64| WindowReading {
+        utilization,
+        reset: Some(week),
+        observed_at,
+        source: WindowSource::Poll,
+        plan: None,
+        tier: None,
+    };
+    let one = || vec![("a".to_string(), 1)];
+    // The stored poll, the reading behind it and the restarts: a poll's fall of one point that names no reset, the same
+    // poll over an equal stored figure, a head's fall that names no reset, and a poll's 5-hour figure that holds beside
+    // a weekly fall of one point, which `window_drop` reads as no drop.
+    for (row, stored, second, restarts_expected) in [
+        (
+            "a poll's fall",
+            as_poll(sample_with(1_000, FIVE_HOUR, 0.40, Some(stored_reset))),
+            as_poll(sample_with(2_000, FIVE_HOUR, 0.39, None)),
+            one(),
+        ),
+        (
+            "a poll with no fall",
+            as_poll(sample_with(1_000, FIVE_HOUR, 0.39, Some(stored_reset))),
+            as_poll(sample_with(2_000, FIVE_HOUR, 0.39, None)),
+            vec![],
+        ),
+        (
+            "a head's fall",
+            as_poll(sample_with(1_000, FIVE_HOUR, 0.40, Some(stored_reset))),
+            sample_with(2_000, FIVE_HOUR, 0.20, None),
+            vec![],
+        ),
+        (
+            "a weekly fall",
+            as_poll(
+                sample_with(1_000, FIVE_HOUR, 0.40, Some(stored_reset))
+                    .with(SEVEN_DAY, weekly(1_000, 0.60)),
+            ),
+            as_poll(sample_with(2_000, FIVE_HOUR, 0.40, None).with(SEVEN_DAY, weekly(2_000, 0.59))),
+            vec![],
+        ),
+    ] {
+        let store = seeded_oauth(&["a"]);
+        let now = Arc::new(AtomicI64::new(4_000));
+        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+        let mut restarts = handle.subscribe_restarts();
+        handle.report(observed("a", stored)).await;
+        handle.samples().await.unwrap();
+        handle.report(observed("a", second)).await;
+        handle.samples().await.unwrap();
+        assert_eq!(restarts_of(&mut restarts), restarts_expected, "{row}");
+    }
+}
+
+#[tokio::test]
+async fn a_poll_that_names_no_five_hour_reset_once_the_stored_reset_is_reached_signals_no_restart()
+{
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut restarts = handle.subscribe_restarts();
+    // The farthest reset that the reading at 2,000 still reads as reached.
+    let stored_reset = 2_000 + RESET_SLACK_MS;
+    handle
+        .report(observed(
+            "a",
+            as_poll(sample_with(1_000, FIVE_HOUR, 0.40, Some(stored_reset))),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    handle
+        .report(observed(
+            "a",
+            as_poll(sample_with(2_000, FIVE_HOUR, 0.0, None)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert_eq!(restarts_of(&mut restarts), Vec::<(String, u64)>::new());
+}
+
+#[tokio::test]
 async fn a_weekly_fall_under_its_standing_reset_signals_a_restart_at_its_first_reading_alone() {
     let store = seeded_oauth(&["a", "b", "c"]);
     let now = Arc::new(AtomicI64::new(4_000));

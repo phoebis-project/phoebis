@@ -1610,8 +1610,9 @@ pub struct ProbeHolds {
 }
 
 /// A plan window of the account started again out of turn: a later reset ahead of the stored one's turn with a fallen
-/// figure, or a weekly window's fall under its standing reset. The task sends it once per sample report that is the
-/// first to show a window's restart.
+/// figure, a poll's reading of the 5-hour window that names no reset ahead of that turn with a fallen figure, or a
+/// weekly window's fall under its standing reset. The task sends it once per sample report that is the first to show a
+/// window's restart.
 #[derive(Clone, Debug)]
 pub struct WindowRestart {
     pub account_id: String,
@@ -4657,6 +4658,12 @@ impl Task {
                         Some((window.clone(), reading.utilization))
                     })
                     .collect();
+                // Read ahead of `held_at_the_wall`, which gives a reading with no reset the stored one's.
+                let unnamed = sample.poll
+                    && sample
+                        .windows
+                        .get(FIVE_HOUR)
+                        .is_some_and(|reading| reading.reset.is_none());
                 let sample = self.held_at_the_wall(&account_id, sample, &stored, now);
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
@@ -4677,9 +4684,13 @@ impl Task {
                         let Some(reading) = sample.windows.get(window) else {
                             continue;
                         };
-                        restarted |= stored
-                            .get(window)
-                            .is_some_and(|stored| Self::restarted_ahead_of_turn(stored, reading));
+                        restarted |= stored.get(window).is_some_and(|stored| {
+                            Self::restarted_ahead_of_turn(
+                                stored,
+                                reading,
+                                unnamed && window.as_str() == FIVE_HOUR,
+                            )
+                        });
                         self.window_edges(
                             &account_id,
                             window,
@@ -5354,15 +5365,24 @@ impl Task {
     }
 
     /// Whether a plan window's new reading shows the window started again ahead of the stored reset's turn: the stored
-    /// reset lies more than `RESET_SLACK_MS` past the reading's own instant, the reading names a reset more than
-    /// `RESET_SLACK_MS` after it, and the figure fell by a whole point or more. `window_edges` reads such a reading as
-    /// a slide with no reset event, and the fall tells a plan change or a used limit reset from an idle 5-hour window's
-    /// slide at 0.
-    fn restarted_ahead_of_turn(stored: &WindowReading, reading: &WindowReading) -> bool {
-        let (Some(reset_at), Some(next)) = (stored.reset, reading.reset) else {
+    /// reset lies more than `RESET_SLACK_MS` past the reading's own instant, the figure fell by a whole point or more,
+    /// and the reading names a reset more than `RESET_SLACK_MS` after the stored one or, as a poll's reading of the
+    /// 5-hour window, named none (`unnamed`). A poll taken ahead of the account's first request on a restarted window
+    /// names no reset. `unnamed` carries what the poll delivered, since `held_at_the_wall` gives a reading with no
+    /// reset the stored one's before this test reads it. `window_edges` reads a later reset as a slide with no reset
+    /// event, and the fall tells a plan change or a used limit reset from an idle 5-hour window's slide at 0.
+    fn restarted_ahead_of_turn(
+        stored: &WindowReading,
+        reading: &WindowReading,
+        unnamed: bool,
+    ) -> bool {
+        let Some(reset_at) = stored.reset else {
             return false;
         };
-        later_reset(reset_at, next)
+        (unnamed
+            || reading
+                .reset
+                .is_some_and(|next| later_reset(reset_at, next)))
             && !reached(reset_at, reading.observed_at)
             && whole_points(stored.utilization) - whole_points(reading.utilization) >= 1
     }
