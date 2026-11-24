@@ -349,7 +349,11 @@ the pick name the reason `classifier` ([Clients](#clients)). The call holds no p
 the reason `classifier` and the facts `judged_agent` and `judged_model` (the turn it judges), `judged` (the account that
 turn's stream ended on, or the one its pin stands on where no end is recorded, `none` with no turn to judge) and
 `direction` (`turn_account`, `pin_account` or `strategy`, where the call went). A call a fallback credit directs keeps
-`none`, reads the fact `credit` and no `direction`.
+`none`, reads the fact `credit` and no `direction`. The third such read binds a non-portable request that holds another
+reference than a web search result, once its session's pin expired for idleness: for 7 days after the pin's last use the
+request goes to the account that the pin stood on, where that account is eligible, the cap not read since no other
+account holds what the request references, and the rungs and the pick name the reason `account_bound`. The paragraph on
+a non-portable request, below, says what the request gets while that account cannot serve.
 
 A fresh request with no live pin lands where its prefix is already warm. The deepest message boundary any account still
 holds wins first, for a main conversation and a subagent alike. Both rungs read entries of the request's own cache lane
@@ -446,18 +450,27 @@ is refunded and reads as untouched, with no share of the router's own. Ties are 
 read no sample at all. A usage-based seat is a paid source beside the API-key accounts: it sorts in their group with the
 flag on, and `pace` scores it as an API-key account, untouched since it reads no bucket.
 
-A non-portable request, one whose body references account state, is answered by its live pin's account or not at all. A
-body references account state where it carries a top-level `container`, or where a block of `messages` holds a `file_id`
-itself or in its `source` or is a server tool's result (its `type` ends in `_tool_result`). A web fetch result
+A non-portable request, one whose body references account state, is bound to the account that its session's pin stands
+on. A body references account state where it carries a top-level `container`, or where a block of `messages` holds a
+`file_id` itself or in its `source` or is a server tool's result (its `type` ends in `_tool_result`). A web fetch result
 (`web_fetch_tool_result`) is the one such result that binds nothing by its type. The router reads blocks alone, in a
 message's `content`, in a block's own `content` and in a document's content source, so the input of a tool call, a tool
 definition and a string bind nothing. It sorts a non-portable request into one of two classes: a request whose
 references are all web search results (`web_search_tool_result`), and a request that holds any other reference, beside a
 web search result or not. The pin of such a session stays on its account while the session's newest turn holds a
-reference: no request of the session moves it, no shedding round plans its move, and a portable side request that the
-account cannot serve is placed for that one request and leaves the pin. A portable turn of the conversation ends that,
-and the pin moves again by the rules below. With affinity off or no live pin, a non-portable request runs the normal
-selection instead, and the account-scoped reference it carries may then not resolve.
+reference: no portable request of the session moves it, no shedding round plans its move, and a portable side request
+that the account cannot serve is placed for that one request and leaves the pin. A portable turn of the conversation
+ends that, and the pin moves again by the rules below. While the pin's account cannot serve, a request of the first
+class waits for it only where the wait ends in time: the pool still lists the account for the request's model, the
+account's obstacle names an end, and that end lies before the pin's idle expiry, the pin's last use plus the pool's
+affinity TTL. Otherwise it is placed as a portable request is and the pin follows it, at the price of its search
+results, which the new account refuses once and the client then drops before it sends the request again. A request of
+the second class waits for its account whatever the obstacle, and it stays bound past the pin's idle expiry: for 7 days
+after the pin's last use it goes to that account alone, and while the account cannot serve, it is answered with that
+account's own exhaustion. A side request of the session that holds no reference is placed for itself meanwhile and
+leaves that binding. A non-portable request that nothing binds runs the normal selection instead, and the account-scoped
+reference it carries may then not resolve: with affinity off, for the first class with no live pin, and for the second
+class behind those 7 days or once its account has left the registry.
 
 Every decision is recorded in full, with what the engine read in the order it read it, and read in the console's
 [routing log](console.md#routing-log). The log's words for the rules, the rungs, the partitions and the strategies are
@@ -600,14 +613,14 @@ the wait ends at once when the first request ends without a head.
 
 ### Moves
 
-A live pin moves only when its session sends a portable request while the session holds no account state, and only by
-one of five rules, checked in this order: spent, overage, return to plan, drain and shed. The first rule that finds a
-destination moves the pin and names the move after itself. A keepalive probe reaches none of the five rules, as a token
-count reaches none, and the move waits for the session's next real request. A pin on an account past its subscription
-end reaches none of them: the `subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin.
-A request sent fast takes neither the spent nor the overage rule, since it draws usage credits and no plan window. What
-a move drops of a session's thinking, and how a move and a shedding round weigh it, is under [What a move
-drops](#what-a-move-drops).
+A live pin moves only when its session sends a portable request while the session holds no account state, or a request
+bound by web search results alone that its account cannot serve in time, and only by one of five rules, checked in this
+order: spent, overage, return to plan, drain and shed. The first rule that finds a destination moves the pin and names
+the move after itself. A keepalive probe reaches none of the five rules, as a token count reaches none, and the move
+waits for the session's next real request. A pin on an account past its subscription end reaches none of them: the
+`subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin. A request sent fast takes
+neither the spent nor the overage rule, since it draws usage credits and no plan window. What a move drops of a
+session's thinking, and how a move and a shedding round weigh it, is under [What a move drops](#what-a-move-drops).
 
 Every rule takes its destination through one gate, the destination gate. It leaves out the source, the siblings the
 rule's own test refuses and every sibling inside `wind_down_minutes` of its subscription end (see **Subscription end**,
@@ -801,16 +814,17 @@ when every pin walked was a pending move. Either way the round is recorded, so t
 
 A marked session moves at its next real request, the request that ran the round included, since the mark check follows
 the round. A mark on a pin whose session holds account state moves nothing until a portable turn of the conversation
-ends that state. A marked session moves only to a sibling it fits, the one the strategy ranks first with the longest
-runway among its ties, never within `shed_dwell_seconds` back to an account that shed it, and with none it renews in
-place and keeps its mark. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the
-marked session stays where it is. A pin on an account cooling for the session's model, marked or not, is replaced rather
-than renewed, with `cooldown` among its reasons: the selection's renew step does not renew it, and the placement that
-takes its place on another account moves the session, its mark clearing as `moved`. The round on the account still runs,
-since a cooldown can hold one model alone. An unmarked pin never moves for utilization. A mark holds until the pin
-moves, is released or expires, or its account heals: when the account's projection on the marked window reads under the
-line its horizon sets (the wall at the account's end or the window's own reset, the window's own ceiling at the
-five-hour bound) at the pin's next request, or, for a mark the stretch made, when the stretch reads at or under
+ends that state, or until a request bound by web search results alone leaves the pin because its account cannot serve in
+time. A marked session moves only to a sibling it fits, the one the strategy ranks first with the longest runway among
+its ties, never within `shed_dwell_seconds` back to an account that shed it, and with none it renews in place and keeps
+its mark. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the marked session
+stays where it is. A pin on an account cooling for the session's model, marked or not, is replaced rather than renewed,
+with `cooldown` among its reasons: the selection's renew step does not renew it, and the placement that takes its place
+on another account moves the session, its mark clearing as `moved`. The round on the account still runs, since a
+cooldown can hold one model alone. An unmarked pin never moves for utilization. A mark holds until the pin moves, is
+released or expires, or its account heals: when the account's projection on the marked window reads under the line its
+horizon sets (the wall at the account's end or the window's own reset, the window's own ceiling at the five-hour bound)
+at the pin's next request, or, for a mark the stretch made, when the stretch reads at or under
 `slow_down_stretch_seconds`, the mark clears and the pin stays. On a pool that sheds on the Fable reservation, a
 `seven_day` mark on a pin whose model draws no model week heals only once the account's 7-day room also reads at or
 above its reservation, so a mark of the reservation's round stands while either test reads over and does not clear on

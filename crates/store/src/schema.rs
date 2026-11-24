@@ -377,7 +377,8 @@ ALTER TABLE pools ADD COLUMN feature_accounts_json TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE api_keys ADD COLUMN feature_accounts_json TEXT NOT NULL DEFAULT '{}';
 "#;
 
-/// A pin whose session holds account state, which stays on its account until a portable turn of the conversation. A
+/// A pin whose session holds account state, which stays on its account until a portable turn of the conversation, or
+/// until a request bound by web search results alone leaves it because its account cannot serve in time. A
 /// shedding mark names the test that fired its round, null on a mark made before the column, which reads as a
 /// projection round's. An account cooldown of a usage-based seat keeps the spend share at its refusal, null on each
 /// other row and on a seat's row set before the column, which lifts as a share of 1.0. A lapsed agent's record keeps

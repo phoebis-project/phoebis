@@ -126,7 +126,8 @@ pub(crate) struct Session {
     /// The display pin's lane is the fast lane, as a shedding round tests it. Null on a row with no pin.
     pub fast: Option<bool>,
     /// The display pin's session holds account state, so the pin stays on its account until a portable turn of the
-    /// conversation. Null on a row with no pin.
+    /// conversation, or until a request bound by web search results alone leaves it because its account cannot serve
+    /// in time. Null on a row with no pin.
     pub account_bound: Option<bool>,
     /// The figure a shedding round's pick compares for the display pin: the Pro share its rewrite spends on the week
     /// its model draws, the Fable week for a model that draws it and the 7-day window otherwise, plus the share of the

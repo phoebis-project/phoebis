@@ -933,6 +933,24 @@ impl Obstacle {
             Obstacle::Spent { .. } => "spent",
         }
     }
+
+    /// When a wait clears the obstacle: the end of a budget's period, of a cooldown, of an overage and of a spent
+    /// window. None for each obstacle that no wait clears.
+    fn until(&self) -> Option<i64> {
+        match self {
+            Obstacle::Budget { until, .. }
+            | Obstacle::Cooldown { until, .. }
+            | Obstacle::Overage { until }
+            | Obstacle::Spent { until, .. } => Some(*until),
+            Obstacle::Attempted
+            | Obstacle::BudgetUnknown
+            | Obstacle::Credits { .. }
+            | Obstacle::Deleted
+            | Obstacle::Ended
+            | Obstacle::Paused
+            | Obstacle::Unready => None,
+        }
+    }
 }
 
 /// The member's spend at or above either of its budgets, still inside the bounds the ledger reported it for:
@@ -1737,8 +1755,8 @@ struct Recorder {
     /// Where the client's classifier call went (`judged_candidate`'s word, else `PLACED_DIRECTION`), for its Pin step.
     /// `None` for a call a fallback credit directed, whose `credit` fact says where it went.
     direction: Option<&'static str>,
-    /// The words of the placement the fallback credit or the judged turn directed ahead of the strategy, for the
-    /// summary's pick.
+    /// The words of the placement the bind of a lapsed pin, the fallback credit or the judged turn directed ahead of
+    /// the strategy, for the summary's pick.
     directed: Option<DirectedWords>,
 }
 
@@ -1864,8 +1882,9 @@ fn run(
     }
 
     // Step 1: the pin, expired when idle past the TTL or when its account can no longer serve the model here. A
-    // non-portable request keeps a pin whose account left the pool: the fence below answers for that account,
-    // because no other account holds the state the request refers to.
+    // non-portable request keeps a pin whose account left the pool, because no other account holds the state the
+    // request refers to: step 3 answers with that account's own obstacle for the hold class, and hands the row on for
+    // a request bound by web search results alone.
     let mut pin = None;
     let mut previous_account: Option<String> = None;
     let mut expired: Option<PinKey> = None;
@@ -1875,16 +1894,24 @@ fn run(
     // lands back on the account reads its cache against that size.
     let mut row_size: Option<(String, (u64, bool, bool))> = None;
     let mut row_warmth: Option<(Warmth, WarmthCause)> = None;
-    // The row's session holds account state and this request carries no conversation, so the request follows the pin
-    // as a token count does: it reads no credit, no move rule runs for it, and where the pin's account cannot serve it,
-    // it is placed for itself and writes no pin. Read off the row whatever `found` names it, so a row whose account
-    // left the pool binds as a live one does, and a row that idled out binds nothing.
+    // The session of the row, or of the lapsed agent's record where no row stands, holds account state and this request
+    // carries no conversation, so the request follows the pin as a token count does: it reads no credit, no move rule
+    // runs for it, and where the pin's account cannot serve it, it is placed for itself and writes no pin. Read off the
+    // row whatever `found` names it, so a row whose account left the pool binds as a live one does, and off a row that
+    // idled out or a record while the snapshot carries the account that holds the state, since with that holder gone
+    // nothing is left to keep the row or the record for.
     let mut follows_bound = false;
+    // The row's account stands among the request's candidates, which step 3 reads for a request bound by web search
+    // results alone.
+    let mut serves = false;
+    // The account and the incarnation that hold the session's state once its pin expired for idleness: the row's that
+    // idled out, else the lapsed agent's record's, to which the bind ahead of step 4 holds a request of the hold class.
+    let mut lapsed_holder: Option<(String, u64)> = None;
     // What a placement of a returning agent reads in place of a fresh session's figures: the record the purge left
     // under the request's key, or the one a row idle past the TTL stands in for, since the same selection writes the
     // pin that carries the figures. An owned copy, since the booking and the pin's write borrow the state mutably. A
-    // token count and a probe place no pin, so they read neither. `lapsed_stored` says the state holds it as a record,
-    // which the pin's write takes.
+    // token count, a probe and a request that follows a bound row or record place no pin, so they read neither.
+    // `lapsed_stored` says the state holds it as a record, which the pin's write takes.
     let mut lapsed: Option<LapsedAgentRow> = None;
     let mut lapsed_stored = false;
     let reads_lapsed = !(request.count || request.probe);
@@ -1928,12 +1955,17 @@ fn run(
             // Whatever `found` names the row, it says where the session's previous request landed, which the
             // placement compares against, unless a turn on another of the session's models landed since.
             previous_account.get_or_insert_with(|| current.account_id.clone());
-            let serves = request
+            serves = request
                 .candidates
                 .iter()
                 .any(|c| c.account_id == current.account_id);
             let idle = request.now - current.last_used_at > ttl_ms;
-            follows_bound = !idle && current.account_bound && !carries_conversation(request);
+            follows_bound = current.account_bound
+                && !carries_conversation(request)
+                && (!idle
+                    || snapshot
+                        .holder(&current.account_id, current.incarnation)
+                        .is_some());
             let found = if idle {
                 "expired_idle"
             } else if !serves && request.portability.is_portable() {
@@ -2004,9 +2036,12 @@ fn run(
                 request.now,
                 state.pin_pace(&current_key),
             ));
-            if found == "expired_idle" && reads_lapsed {
-                let speed = state.slow_down_speed(pool, &current.account_id, request.now);
-                lapsed = Some(lapsed_of(&current, speed));
+            if found == "expired_idle" {
+                lapsed_holder = Some((current.account_id.clone(), current.incarnation));
+                if reads_lapsed && !follows_bound {
+                    let speed = state.slow_down_speed(pool, &current.account_id, request.now);
+                    lapsed = Some(lapsed_of(&current, speed));
+                }
             }
             if found == "live" {
                 pin = Some((current, current_key));
@@ -2023,8 +2058,17 @@ fn run(
                 request.now,
                 state.pin_pace(&key),
             ));
-            if reads_lapsed {
-                lapsed = lapsed_record(state, request).cloned();
+            let record = lapsed_record(state, request);
+            if let Some(kept) = record {
+                follows_bound = kept.account_bound
+                    && !carries_conversation(request)
+                    && snapshot
+                        .holder(&kept.account_id, kept.incarnation)
+                        .is_some();
+                lapsed_holder = Some((kept.account_id.clone(), kept.incarnation));
+            }
+            if reads_lapsed && !follows_bound {
+                lapsed = record.cloned();
                 lapsed_stored = lapsed.is_some();
             }
         }
@@ -2114,10 +2158,21 @@ fn run(
         if eligible.is_empty() { "none" } else { "match" },
         standing,
     );
+    // A request of the hold class whose session's pin expired for idleness stays bound to the account that holds the
+    // state it references, for as long as the idle row or the lapsed agent's record stands and the snapshot carries
+    // that holder: no measure shows a second account resolving a file or a container, so no other is tried.
+    // `bound_to` is that account's candidate in the eligible set, and an account outside it fences the request below.
+    let bound = lapsed_holder
+        .as_ref()
+        .filter(|_| request.portability == Portability::Hold)
+        .filter(|(account_id, incarnation)| snapshot.holder(account_id, *incarnation).is_some())
+        .map(|(account_id, _)| account_id.as_str());
+    let bound_to = bound.and_then(|account_id| candidate_in(&eligible, account_id));
     // A fallback credit token is good on the organization that issued it alone, so the body carrying one goes to that
     // account ahead of the moves and the strategy, which would place it where the upstream refuses the token. The
     // client's classifier call goes ahead of the strategy the same way, to the account its judged turn ended on, where
-    // the upstream keeps it free, else to the account that turn's pin stands on now.
+    // the upstream keeps it free, else to the account that turn's pin stands on now. A request of the hold class reads
+    // no credit and a classifier call holds no session, so neither meets the bind above.
     let credit = credit_candidate(
         request,
         follows_bound,
@@ -2127,8 +2182,9 @@ fn run(
         pool,
     );
     let judged = judged_candidate(state, snapshot, request, turn, &eligible, window);
-    let directed = credit
-        .map(|c| (c, CREDIT_WORDS))
+    let directed = bound_to
+        .map(|c| (c, BOUND_WORDS))
+        .or(credit.map(|c| (c, CREDIT_WORDS)))
         .or(judged.map(|(c, _)| (c, JUDGED_WORDS)));
     rec.directed = directed.map(|(_, words)| words);
     if let Some(c) = credit {
@@ -2221,8 +2277,12 @@ fn run(
         rec.step("probe", "passed", facts);
     }
 
-    // Step 3: a non-portable request is bound to the pin it holds. The client's classifier call holds none, so it goes
-    // where the direction read above or the placement sends it.
+    // Step 3: a non-portable request is bound to the live pin it holds and renews it where its account can serve. Where
+    // that account cannot, a request of the hold class gets the account's own answer, and a request bound by web
+    // search results alone waits for it only where the wait ends while the pin still stands, else it goes on as a
+    // portable request with that pin does. The client's classifier call holds no pin, so it goes where the direction
+    // read above or the placement sends it.
+    let mut handed_on = false;
     if let (false, Some(((current, current_key), warmth))) =
         (request.portability.is_portable(), pin.as_ref().zip(warmth))
     {
@@ -2265,20 +2325,76 @@ fn run(
                 writes,
             );
         }
-        rec.step(
-            "bound",
-            "exhausted",
-            vec![account_fact(&current.account_id)],
+        let own = obstacle_on(
+            state,
+            snapshot,
+            pool,
+            &current.account_id,
+            &request.canonical_model,
+            &[],
+            request.now,
+            request.fallback_ms,
+            request.fast,
         );
-        let exhaustion = fenced(state, snapshot, pool, request, &current.account_id, rec);
+        // An account that the request's candidates no longer hold serves no request of this key when its cooldown
+        // ends, so its absence is an obstacle with no end, whatever `obstacle_on` reads for the account itself.
+        let end = if serves {
+            own.as_ref().and_then(Obstacle::until)
+        } else {
+            None
+        };
+        let expires_at = current.last_used_at.saturating_add(ttl_ms);
+        // A fenced request renews no pin, so a wait that reaches the pin's idle expiry ends in a free placement
+        // anyway.
+        let waits =
+            request.portability == Portability::Hold || end.is_some_and(|end| end < expires_at);
+        if waits {
+            rec.step(
+                "bound",
+                "exhausted",
+                vec![account_fact(&current.account_id)],
+            );
+            let exhaustion = fenced(request, &current.account_id, own, rec);
+            return (SelectResult::Exhausted(exhaustion), writes);
+        }
+        let mut facts = vec![account_fact(&current.account_id)];
+        facts.extend(end.map(|end| Fact::int("deadline", end).unit("time")));
+        facts.push(Fact::int("expires_at", expires_at).unit("time"));
+        rec.step("bound", "passed", facts);
+        handed_on = !serves;
+    }
+    // A released pin whose account left the request's pool is handed on as step 1 hands on a portable request's row
+    // that its pool left behind: no move rule runs for an account outside the pool, and the placement replaces the
+    // row. The record keeps `live` on its pin step, since the pin was live when step 1 read it.
+    if handed_on {
+        pin = None;
+        expired = own_key.clone();
+    }
+    // Past the idle expiry the account that holds the state answers for a bound request outside the eligible set as a
+    // live pin's account does above. The row or the record stays, so the bind keeps its start at the pin's last use.
+    if let Some(account_id) = bound.filter(|_| bound_to.is_none()) {
+        rec.step("bound", "exhausted", vec![account_fact(account_id)]);
+        let own = obstacle_on(
+            state,
+            snapshot,
+            pool,
+            account_id,
+            &request.canonical_model,
+            &[],
+            request.now,
+            request.fallback_ms,
+            request.fast,
+        );
+        let exhaustion = fenced(request, account_id, own, rec);
         return (SelectResult::Exhausted(exhaustion), writes);
     }
-    // Step 4: the moves, for a portable request with a live pin. A pin on an account past its saved end never
-    // reaches them: step 5 releases it as it releases a cooled account's. A token count follows its pin: it
-    // creates no pin (step 7), so a move it made would leave the session with none. A probe follows its pin too,
-    // so a rule that would move it, a standing mark's among them, waits for the session's next real request. So does
-    // a request that carries no conversation on the pin of a session that holds account state, since the session's
-    // next non-portable turn finds its references on the pin's account alone.
+    // Step 4: the moves, for a portable request with a live pin and for a request bound by web search results alone
+    // that step 3 sent on with its pin. A pin on an account past its saved end never reaches them: step 5 releases it
+    // as it releases a cooled account's. A token count follows its pin: it creates no pin (step 7), so a move it made
+    // would leave the session with none. A probe follows its pin too, so a rule that would move it, a standing mark's
+    // among them, waits for the session's next real request. So does a request that carries no conversation on the pin
+    // of a session that holds account state, since the session's next non-portable turn finds its references on the
+    // pin's account alone.
     let mut migrated = None;
     let mut shed_from = None;
     // The row a move takes off its source, whose burn and last prompt the new row carries.
@@ -2742,8 +2858,8 @@ fn run(
         ),
     };
     let (chosen, tier, placement) = if let Some((candidate, words)) = directed {
-        // Every station the console draws is recorded, the rungs and the pick naming the credit or the judged turn as
-        // their reason.
+        // Every station the console draws is recorded, the rungs and the pick naming the bind, the credit or the judged
+        // turn as their reason.
         for rung in ["rung:content", "rung:with_main", "rung:static"] {
             rec.step(rung, "none", vec![Fact::text("reason", words.reason)]);
         }
@@ -2918,7 +3034,8 @@ fn run(
         .filter(|account| account != &chosen.account_id);
     // Step 7: a fresh pin with a fresh epoch. A token count touches no cache, so it creates none: a pin it left
     // on an account at its cap would carry the agent's next message past the cap, since a renewal never reads it. A
-    // request that follows a bound pin creates none either, so the row stays for the session's next non-portable turn.
+    // request that follows a bound row, live or idle past the TTL, or a bound record creates none either, so the row or
+    // the record stays for the session's next turn that references the state.
     let creates = !request.count && !follows_bound;
     let handed = session.filter(|_| creates).map(|session| {
         let epoch = state.fresh_epoch();
@@ -3173,35 +3290,23 @@ fn fresh_pin(
             .or(lapsed.map(|kept| &kept.thinking_sums))
             .map(|sums| handed_sums(sums, zeroes_sums(request), snapshot))
             .unwrap_or_default(),
-        // No row's flag carries over: a request that carries no conversation never moves or replaces a flagged live
-        // row, and each other row it replaces names an account whose state the new account does not hold.
+        // No row's or record's flag carries over: a request that carries no conversation replaces a flagged row or
+        // takes a flagged record only once the account that holds the state is gone, and a request that carries the
+        // conversation states the class of its own body.
         account_bound: carries_conversation(request) && !request.portability.is_portable(),
     };
     stamp_hashes(&mut row, request);
     row
 }
 
-/// What a non-portable request bound to `account_id` answers when that account cannot serve it: the account's
-/// own obstacle, since no other account holds the state the request refers to.
+/// What a request bound to `account_id` answers while that account cannot serve it and the request waits for it: `own`,
+/// the account's own obstacle as the caller read it, since no other account holds the state the request refers to.
 fn fenced(
-    state: &RoutingState,
-    snapshot: &RegistrySnapshot,
-    pool: &PoolRow,
     request: &SelectRequest,
     account_id: &str,
+    own: Option<Obstacle>,
     rec: &mut Recorder,
 ) -> Exhaustion {
-    let own = obstacle_on(
-        state,
-        snapshot,
-        pool,
-        account_id,
-        &request.canonical_model,
-        &[],
-        request.now,
-        request.fallback_ms,
-        request.fast,
-    );
     let names = own.iter().map(|o| weighed_name(account_id, o)).collect();
     let exhaustion = exhaustion_of(own.into_iter().collect());
     rec.step(
@@ -6430,9 +6535,11 @@ fn left_out_as(
     if pin.ended {
         return Some("ended");
     }
-    // A pin whose session holds account state stays on its account until a portable turn of the conversation, so no
-    // round plans its move. The request's own pin is free behind this selection: a request that follows a bound pin
-    // runs no round, so its own row carries no flag, or the request is the portable turn that clears it.
+    // A pin whose session holds account state stays on its account until a portable turn of the conversation, or until
+    // a request bound by web search results alone leaves it because its account cannot serve in time, so no round
+    // plans its move. The request's own pin is free behind this selection: a request that follows a bound pin runs no
+    // round, so its own row carries no flag, or the request is the portable turn that clears it or a request that
+    // leaves the pin itself.
     (!is_current && pin.account_bound).then_some("account_bound")
 }
 
@@ -6446,7 +6553,8 @@ fn left_out_as(
 /// Fable reservation fired (`fable_model`), since its use is what the reservation keeps room for, a pin whose agent
 /// ended out of any round too, since its agent sends no new turn and marking its decayed burn relieves nothing, and a
 /// pin whose session holds account state out of any round (`account_bound`), since it stays on its account until a
-/// portable turn of the conversation), then walked while the removed burn is under the target,
+/// portable turn of the conversation, or until a request bound by web search results alone leaves it because its
+/// account cannot serve in time), then walked while the removed burn is under the target,
 /// `min(excess, shed_cap x burn_sum)` on the trigger's window, and `shed_cap x burn_sum` under the reservation, whose
 /// test names no excess. Once one pin's burn covers what the target still asks, the walk marks the covering pin whose
 /// move costs the least, `cheapest` on the record, rather than the next in the order: a warm pin's rewrite plus the
@@ -7468,8 +7576,9 @@ fn subscription_ended(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -
 /// The candidate a fallback credit token places the request on: the issuer `credit_account` names, among the eligible
 /// set under the incarnation that answered the refusal, and under its in-flight cap unless the live pin is already
 /// there, since a renewal reads no cap. A count creates no pin and follows its pin, a probe warms the pin it was sent
-/// for, a request that `follows_bound` follows the pin of a session that holds account state as a count does, and a
-/// non-portable request keeps its binding, so none of them reads a credit.
+/// for, a request that `follows_bound` follows the pin of a session that holds account state as a count does, and the
+/// binding of a non-portable request is decided behind this read, at step 3 or at the bind past the pin's idle expiry,
+/// whether it holds or a request bound by web search results alone leaves it, so none of them reads a credit.
 fn credit_candidate<'a>(
     request: &SelectRequest,
     follows_bound: bool,
@@ -7496,6 +7605,13 @@ struct DirectedWords {
     reason: &'static str,
     fact: &'static str,
 }
+
+/// The placement of a request that its session's lapsed pin binds, on the account that the pin stood on. Its `pin` step
+/// takes no fact for it, so `fact` repeats the key under which the pick names the account.
+const BOUND_WORDS: DirectedWords = DirectedWords {
+    reason: "account_bound",
+    fact: "account_id",
+};
 
 /// The fallback credit token's placement, on the account that issued the token.
 const CREDIT_WORDS: DirectedWords = DirectedWords {
@@ -9377,7 +9493,7 @@ impl Readings<'_> {
     fn pick_fact(&self) -> Vec<SummaryFact> {
         let text =
             |key: &'static str, value: String| summary_fact(key, FactValue::Text(value), "text");
-        // The credit or the judged turn placed the request ahead of the strategy, which ranked no candidate.
+        // The bind, the credit or the judged turn placed the request ahead of the strategy, which ranked no candidate.
         if let Some(words) = self.directed {
             return vec![text("pick", words.reason.into())];
         }

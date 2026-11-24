@@ -3251,6 +3251,150 @@ fn a_non_portable_request_with_a_blocked_pin_gets_that_accounts_exhaustion_and_s
     );
 }
 
+/// The request of `session` on `s`'s key from the main agent at `now`, of the portability `class`, with no request
+/// class, so a request that is not portable carries the conversation.
+fn of_class(s: &RegistrySnapshot, session: &str, class: Portability, now: i64) -> SelectRequest {
+    SelectRequest {
+        portability: class,
+        ..request(
+            s,
+            Some(session),
+            "claude-sonnet-5",
+            class.is_portable(),
+            &[],
+            now,
+        )
+    }
+}
+
+/// A state of the default pool whose session `s1` holds the pin that a request of the release class placed at 1,000,
+/// its idle expiry `1_000 + HOUR`, with that pin's account cooling until `until`, and that account.
+fn release_pin_cooling_until(s: &RegistrySnapshot, until: i64) -> (RoutingState, String) {
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let placing = of_class(s, "s1", Portability::Release, 1_000);
+    let first = picked(&select(&mut st, s, &placing, &mut rng()).0).to_string();
+    st.record_cooldown(cooled(&first, "account", until, "seven_day", "rate_limit"));
+    (st, first)
+}
+
+#[test]
+fn a_release_class_request_waits_on_its_pins_account_only_while_the_obstacle_ends_ahead_of_the_idle_expiry(
+) {
+    let s = snapshot(Pool::default());
+    let (mut st, _) = release_pin_cooling_until(&s, 1_000 + HOUR - 1);
+    let d = decide(
+        &mut st,
+        &s,
+        &of_class(&s, "s1", Portability::Release, 2_000),
+        &mut rng(),
+    );
+    assert!(
+        matches!(d.result, SelectResult::Exhausted(Exhaustion::Timed { deadline, ref window }) if deadline == 1_000 + HOUR - 1 && window == "seven_day"),
+        "the cooldown ends a millisecond ahead of the pin's idle expiry, so the request waits: {:?}",
+        d.result
+    );
+    assert!(d.writes.is_empty(), "{:?}", d.writes);
+
+    let (mut st, first) = release_pin_cooling_until(&s, 1_000 + HOUR);
+    let d = decide(
+        &mut st,
+        &s,
+        &of_class(&s, "s1", Portability::Release, 2_000),
+        &mut rng(),
+    );
+    let landed = picked(&d.result).to_string();
+    assert_ne!(
+        landed, first,
+        "the cooldown ends at the pin's idle expiry, so the request leaves the pin"
+    );
+    assert_eq!(pinned(&st, "s1").account_id, landed);
+    let bound = line(&d.record, "bound");
+    assert_eq!(
+        (
+            bound.verdict,
+            fact(bound, "account_id"),
+            fact(bound, "deadline"),
+            fact(bound, "expires_at"),
+        ),
+        (
+            "passed",
+            &FactValue::Text(first),
+            &FactValue::Int(1_000 + HOUR),
+            &FactValue::Int(1_000 + HOUR),
+        )
+    );
+}
+
+/// The pool of the release's cases on a ranked pool: `a` ahead of `b` and `c`, so the first request pins `a`.
+fn a_first() -> Pool {
+    Pool {
+        members: vec![("a", 0), ("b", 1), ("c", 1)],
+        ..Pool::default()
+    }
+}
+
+#[test]
+fn a_release_class_request_leaves_a_pin_whose_account_is_paused() {
+    let s = snapshot(a_first());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let placing = of_class(&s, "s1", Portability::Release, 1_000);
+    assert_eq!(picked(&select(&mut st, &s, &placing, &mut rng()).0), "a");
+    let paused = snapshot_with(a_first(), &[("a", false, AccountState::Ready)]);
+    let d = decide(
+        &mut st,
+        &paused,
+        &of_class(&paused, "s1", Portability::Release, 2_000),
+        &mut rng(),
+    );
+    let landed = picked(&d.result).to_string();
+    assert_ne!(landed, "a", "a pause names no end to wait for");
+    assert_eq!(pinned(&st, "s1").account_id, landed);
+    let bound = line(&d.record, "bound");
+    assert_eq!(
+        (bound.verdict, fact(bound, "expires_at")),
+        ("passed", &FactValue::Int(1_000 + HOUR))
+    );
+    assert!(no_fact(bound, "deadline"), "{:?}", bound.facts);
+}
+
+#[test]
+fn a_release_class_request_leaves_a_pin_whose_account_left_the_pool_whatever_that_accounts_cooldown(
+) {
+    let s = snapshot(a_first());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let placing = of_class(&s, "s1", Portability::Release, 1_000);
+    assert_eq!(picked(&select(&mut st, &s, &placing, &mut rng()).0), "a");
+    st.record_cooldown(cooled(
+        "a",
+        "account",
+        1_000 + HOUR - 1,
+        "seven_day",
+        "rate_limit",
+    ));
+    let mut req = of_class(&s, "s1", Portability::Release, 2_000);
+    req.candidates.retain(|c| c.account_id != "a");
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let landed = picked(&d.result).to_string();
+    assert_ne!(
+        landed, "a",
+        "the pool no longer lists a, so its cooldown's end saves nothing"
+    );
+    assert_eq!(pinned(&st, "s1").account_id, landed);
+    let bound = line(&d.record, "bound");
+    assert_eq!(bound.verdict, "passed");
+    assert!(no_fact(bound, "deadline"), "{:?}", bound.facts);
+    assert_eq!(
+        fact(line(&d.record, "pin"), "found"),
+        &FactValue::Text("live".into()),
+        "the pin was live when step 1 read it"
+    );
+    assert!(
+        d.record.walk.iter().all(|w| !w.step.starts_with("move:")),
+        "the row is handed on, so no move rule runs for an account outside the pool: {:?}",
+        steps(&d.record)
+    );
+}
+
 #[test]
 fn exhaustion_is_timed_from_the_earliest_cooldown_and_untimed_when_only_an_operator_can_clear_it() {
     let s = snapshot(Pool::default());
@@ -31944,6 +32088,215 @@ fn a_return_ahead_of_the_purge_books_the_idle_rows_burn_over_the_speed_at_the_se
     assert!(
         close(booked, 0.072),
         "the return books the idle row's burn over the speed at the selection: {booked}"
+    );
+}
+
+/// A pool that keeps a session on its account for five minutes past its last use and ranks `a` ahead of `b`, so a
+/// session with nothing under its key lands on `a`.
+fn bind_pool() -> RegistrySnapshot {
+    snapshot(Pool {
+        affinity: 300,
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    })
+}
+
+/// `s1`'s pin on `b`, last used six minutes before `T`, past the TTL of `bind_pool`.
+fn idle_on_b() -> PinRow {
+    PinRow {
+        last_used_at: T - 6 * MINUTE,
+        last_refresh_at: T - 6 * MINUTE,
+        ..seeded_pin("s1", "b", T)
+    }
+}
+
+#[test]
+fn a_hold_class_request_lands_on_the_account_that_its_lapsed_agents_record_names() {
+    let s = bind_pool();
+    let mut st = loaded(vec![idle_on_b()]);
+    st.purge(&s, T);
+    let d = decide(
+        &mut st,
+        &s,
+        &of_class(&s, "s1", Portability::Hold, T),
+        &mut rng(),
+    );
+    assert_eq!(
+        picked(&d.result),
+        "b",
+        "no other account holds what the request references"
+    );
+    let pick = line(&d.record, "pick");
+    assert_eq!(
+        (pick.verdict, fact(pick, "reason")),
+        ("chosen", &FactValue::Text("account_bound".into()))
+    );
+    let fresh = decide(
+        &mut st,
+        &s,
+        &of_class(&s, "s2", Portability::Hold, T),
+        &mut rng(),
+    );
+    assert_eq!(
+        picked(&fresh.result),
+        "a",
+        "a session that left nothing lands by the pool's rank"
+    );
+}
+
+#[test]
+fn a_hold_class_request_gets_its_records_accounts_exhaustion_and_lands_there_behind_the_cooldown() {
+    let s = bind_pool();
+    let mut st = loaded(vec![idle_on_b()]);
+    st.purge(&s, T);
+    st.record_cooldown(cooled("b", "account", T + HOUR, "five_hour", "rate_limit"));
+    let (result, writes) = select(
+        &mut st,
+        &s,
+        &of_class(&s, "s1", Portability::Hold, T),
+        &mut rng(),
+    );
+    assert!(
+        matches!(result, SelectResult::Exhausted(Exhaustion::Timed { deadline, ref window }) if deadline == T + HOUR && window == "five_hour"),
+        "the request gets b's own answer: {result:?}"
+    );
+    assert!(writes.is_empty(), "{writes:?}");
+    let behind = of_class(&s, "s1", Portability::Hold, T + HOUR + MINUTE);
+    assert_eq!(
+        picked(&select(&mut st, &s, &behind, &mut rng()).0),
+        "b",
+        "the fence left the record for the request behind the cooldown"
+    );
+}
+
+#[test]
+fn a_hold_class_token_count_lands_on_its_records_account_and_leaves_the_record() {
+    let s = bind_pool();
+    let mut st = loaded(vec![idle_on_b()]);
+    st.purge(&s, T);
+    let count = SelectRequest {
+        count: true,
+        ..of_class(&s, "s1", Portability::Hold, T)
+    };
+    let d = decide(&mut st, &s, &count, &mut rng());
+    assert_eq!(
+        picked(&d.result),
+        "b",
+        "no other account holds what the count references"
+    );
+    assert!(!touches_a_pin(&d.writes), "{:?}", d.writes);
+    let turn = of_class(&s, "s1", Portability::Hold, T + 1_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &turn, &mut rng()).0),
+        "b",
+        "the count left the record for the turn behind it"
+    );
+}
+
+#[test]
+fn a_hold_class_request_on_a_row_idle_past_the_ttl_lands_on_the_rows_account() {
+    let s = bind_pool();
+    let mut st = loaded(vec![idle_on_b()]);
+    let d = decide(
+        &mut st,
+        &s,
+        &of_class(&s, "s1", Portability::Hold, T),
+        &mut rng(),
+    );
+    assert_eq!(
+        d.record.pin.as_ref().map(|pin| pin.found),
+        Some("expired_idle"),
+        "no purge took the row"
+    );
+    assert_eq!(
+        picked(&d.result),
+        "b",
+        "the row's account holds what the request references, whatever flag the row carries"
+    );
+}
+
+#[test]
+fn a_hold_class_request_is_placed_freely_once_its_records_account_left_the_registry() {
+    let s = bind_pool();
+    let mut st = loaded(vec![idle_on_b()]);
+    // The purge reads b in the registry, so it takes the pin as expired and keeps its record.
+    st.purge(&s, T);
+    let gone = without_account(&s, "b");
+    let d = decide(
+        &mut st,
+        &gone,
+        &of_class(&gone, "s1", Portability::Hold, T),
+        &mut rng(),
+    );
+    assert_eq!(
+        picked(&d.result),
+        "a",
+        "no account holds the state any more, so the request is placed freely"
+    );
+}
+
+#[test]
+fn a_portable_auxiliary_request_leaves_a_flagged_record_for_the_next_hold_class_turn() {
+    let s = bind_pool();
+    let mut st = loaded(vec![PinRow {
+        account_bound: true,
+        ..idle_on_b()
+    }]);
+    st.purge(&s, T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        picked(&d.result),
+        "a",
+        "the side request is placed for itself"
+    );
+    assert!(!touches_a_pin(&d.writes), "{:?}", d.writes);
+    let turn = of_class(&s, "s1", Portability::Hold, T + 1_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &turn, &mut rng()).0),
+        "b",
+        "the record still names the account that holds the references"
+    );
+}
+
+#[test]
+fn a_portable_auxiliary_request_leaves_a_flagged_idle_row_for_the_next_hold_class_turn() {
+    let s = bind_pool();
+    let row = PinRow {
+        account_bound: true,
+        ..idle_on_b()
+    };
+    let mut st = loaded(vec![row.clone()]);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        picked(&d.result),
+        "a",
+        "the side request is placed for itself"
+    );
+    assert!(!touches_a_pin(&d.writes), "{:?}", d.writes);
+    assert_eq!(st.pin(&pin_key("s1")), Some(&row));
+    let turn = of_class(&s, "s1", Portability::Hold, T + 1_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &turn, &mut rng()).0),
+        "b",
+        "the idle row still names the account that holds the references"
+    );
+}
+
+#[test]
+fn a_release_class_request_under_a_lapsed_agents_record_is_placed_freely() {
+    let s = bind_pool();
+    let mut st = loaded(vec![idle_on_b()]);
+    st.purge(&s, T);
+    let d = decide(
+        &mut st,
+        &s,
+        &of_class(&s, "s1", Portability::Release, T),
+        &mut rng(),
+    );
+    assert_eq!(
+        picked(&d.result),
+        "a",
+        "a move costs a web search result no more than its content, so nothing binds it past the idle expiry"
     );
 }
 
