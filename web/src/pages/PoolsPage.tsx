@@ -1281,9 +1281,9 @@ export function PoolDialog({
   // so an opening's first overview read is the 7-day one.
   const [returnRange, setReturnRange] = useState<OverviewRange>('7d');
   if (!open && returnRange !== '7d') setReturnRange('7d');
-  // Each opening of a saved pool reads the sessions and the keepalive overview once, the overview again on a range
-  // pick, and both again after a key write, never at the interval.
-  const sessionsRead = useAsync(() => (open && pool ? api.listSessions() : Promise.resolve(null)), [open, pool?.id]);
+  // Each opening of a saved pool reads its pins and the keepalive overview once, the overview again on a range pick,
+  // and both again after a key write, never at the interval.
+  const pinsRead = useAsync(() => (open && pool ? api.listPoolPins(pool.id) : Promise.resolve(null)), [open, pool?.id]);
   // Each answer carries the range it was read for.
   const overview = useAsync(
     () => (open && pool ? api.getKeepaliveOverview({ range: returnRange }).then((read) => ({ overview: read, range: returnRange })) : Promise.resolve(null)),
@@ -1300,12 +1300,6 @@ export function PoolDialog({
     onRange: setReturnRange,
     range: returnRange,
   };
-  // The sessions under the pool's keys: a shedding round weighs the pool's own pins on a member alone. A session
-  // reaches a pool through its key, which is the only link the sessions route carries.
-  const sessions = useMemo(() => {
-    const poolKeyIds = new Set(keys.filter((k) => k.poolId === pool?.id).map((k) => k.id));
-    return (sessionsRead.data ?? []).filter((s) => poolKeyIds.has(s.keyId));
-  }, [keys, pool?.id, sessionsRead.data]);
   // The flag `GroupedDialog` hands its expert wrappers, whose registry the bodies built here cannot reach: a half cell
   // whose row-mate is expert spans the row while the mate is hidden.
   const { expertView } = useAppSettings();
@@ -1458,7 +1452,7 @@ export function PoolDialog({
 
   const keysChanged = () => {
     onKeysChanged();
-    sessionsRead.reload();
+    pinsRead.reload();
     overview.reload();
   };
 
@@ -1559,7 +1553,7 @@ export function PoolDialog({
         }),
       },
       accounts,
-      sessions,
+      pinsRead.current ?? [],
       now,
     );
     const slowPreview = slowDownPreview({ ...previewed, members: previewed.members.map((m) => ({ ...m, factor: stored.get(m.accountId)?.factor ?? null })) }, accounts);
@@ -2108,9 +2102,19 @@ export function PoolDialog({
             </Expert>
             <Expert>
               <Field label="Preview" plain>
-                <p className="shed-preview num" role="status">
-                  {shedPreviewLine(preview, now)}
-                </p>
+                {/* The last answer outlives a failed read and a change of pool, so a saved pool's preview counts the
+                    current one alone and draws no count without it. */}
+                {pool !== null && pinsRead.current === null ? (
+                  pinsRead.error !== null && !pinsRead.loading ? (
+                    <p className="muted">Could not load the pool's pins: {pinsRead.error}</p>
+                  ) : (
+                    <Skeleton height={28} />
+                  )
+                ) : (
+                  <p className="shed-preview num" role="status">
+                    {shedPreviewLine(preview, now)}
+                  </p>
+                )}
               </Field>
             </Expert>
           </div>

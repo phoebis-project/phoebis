@@ -2644,7 +2644,8 @@ async function poolRoutingCards(theme) {
     await expertView(false).catch(() => {});
     return;
   }
-  await settle();
+  // The shedding Preview draws no line until the pool's pins, which the dialog reads as it opens, have landed.
+  await advance(LOAD_MS);
   const measure = () =>
     dialog.evaluate((el) => {
       // Only the group on show is read; a hidden group's boxes measure nothing.

@@ -143,6 +143,9 @@ export interface AccountSlowDown {
   speed: number;
   /** How long before the reset the sessions' unpaced demand would pass the window's ceiling, 0 when it never does. */
   stretchMs: number;
+  /** The 5-hour projection at the window's horizon less the threshold, the figure of the router's stretch test.
+   *  Null where that instant lies at or before the read. */
+  stretchProjection: number | null;
   /** The pool's `slow_down_stretch_seconds` at the read, in milliseconds. */
   thresholdMs: number;
 }
@@ -2164,6 +2167,22 @@ export interface AgentContext extends BurnFigures, MoveFigures {
   /** The route's reading of the selector's rule: whether the pin's last refresh is inside its cache TTL. */
   warm: boolean;
   /** The first instant `warm` answers false for the pin, null only where an answer carries none. */
+  warmUntil: string | null;
+}
+
+/** A pin under a pool's keys as a shedding round reads it, a pin the Sessions list hides among them. */
+export interface PoolPin extends MoveFigures, Pick<BurnFigures, 'burn' | 'burnAt' | 'burnUnit' | 'burnWindow'> {
+  accountBound: boolean;
+  accountId: string;
+  agentId: string;
+  ended: boolean;
+  fast: boolean;
+  keyId: string;
+  /** The standing mark on this pin, as a session row's `mark`. */
+  mark: Session['mark'];
+  model: string;
+  sessionId: string;
+  warm: boolean;
   warmUntil: string | null;
 }
 

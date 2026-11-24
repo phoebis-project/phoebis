@@ -38,6 +38,7 @@ import type {
   Pool,
   PoolCacheTtl,
   PoolKeepalive,
+  PoolPin,
   PoolStrategy,
   QuotaHistory,
   ReconciliationsAnswer,
@@ -286,6 +287,8 @@ export interface Api {
   listGuardrails(): Promise<Guardrail[]>;
   listKeepaliveRecipes(): Promise<KeepaliveRecipe[]>;
   listKeys(): Promise<ApiKey[]>;
+  /** `GET /admin/pools/{id}/pins`: each pin under the pool's keys, the ones the Sessions list hides among them. */
+  listPoolPins(poolId: string): Promise<PoolPin[]>;
   listPools(): Promise<Pool[]>;
   listRequests(query?: RequestQuery): Promise<RequestPage>;
   listRoutingLog(query?: RoutingLogQuery): Promise<RoutingLogPage>;

@@ -682,41 +682,47 @@ round also runs on a member whose 7-day room is smaller than its Fable reservati
 up to the shed cap.", and closes on a "Preview" line, the round's dry run as the fields stand. `Burn average (s)` sits
 under Windows and `Migrate when spent` under Failover, which opens on "How long a request waits out a throttle on its
 member, how many requests one member serves at once, and whether a spent window moves the session at once." The Preview
-replays the trigger from the projections the accounts route serves for each member and window and from the sessions'
-served burn, an estimate of what the router reads. It walks each conversation pin of a session, as the router's round
-does, leaves out a pin on the fast lane and a pin whose row or line reads ended, and orders the rest and picks among the
-pins that cover what the round's target still asks by the figures the router's own round reads for each pin's move, its
-size and its cost, while the Sessions view keeps drawing an ended agent's line. The figures are those of a round that
-the pin's own next request fires, so a round that another pin's request fires can order the pins another way. The
-Preview reads each pin's destination with no planned booking, as a round's order and its first mark do, and a round's
-second or later mark reads the destination again with the bookings its walk planned, so the Preview is exact for a
-round's first mark and an estimate behind it.
+replays the trigger from the projections the accounts route serves for each member and window and from the burn of the
+pool's pins, which the dialog reads from the router when it opens, an estimate of what the router reads. It walks each
+pin under the pool's keys, as the router's round does, a pin that the Sessions view no longer lists among them, leaves
+out a pin on the fast lane, a pin that reads ended and a pin that holds state on its account, and orders the rest and
+picks among the pins that cover what the round's target still asks by the figures the router's own round reads for each
+pin's move, its size and its cost, while the Sessions view keeps drawing an ended agent's line. The figures are those of
+a round that the pin's own next request fires, so a round that another pin's request fires can order the pins another
+way. The Preview reads each pin's destination with no planned booking, as a round's order and its first mark do, and a
+round's second or later mark reads the destination again with the bookings its walk planned, so the Preview is exact for
+a round's first mark and an estimate behind it. On a pool with the slow-down on, the Preview tests a member's 5-hour
+window against the 5-hour ceiling by the figure of the router's stretch test, the projection at the window's horizon
+less the stretch threshold, and reads no 5-hour round for a member whose account carries no such figure.
 
 With the switch off the Preview opens on `Load shedding is off: no round runs.` and names the projection alone. It reads
 `No member projects over the ceiling on any window: the closest is {label}, {window} {p} {horizon}.` while no member's
 projection passes its window's ceiling, the closest being the member window with the least room under its own ceiling,
-and otherwise `1 member projects over the ceiling: {label}.` or
-`{n} members project over the ceiling: {list}.`, followed by
-`A round there would mark {k} sessions ({warm} warm), {excess} of the excess, to move to a sibling with runway.`
-(`1 session (1 warm)` for one), by `No sibling has runway for them, so nothing would be marked.` where no sibling has
-runway for the sessions a round would mark, or by `A round there would mark no session:` with the reason it marks none,
-`none is priced.` where the members over the ceiling hold no priced session, or where one burns there and no round's
-walk names a cause, as while the Shed cap (%) field holds 0, `each is too small to move.` where a session the walk
-reached is a sliver under the round's mark share, `each would leave its member too little burn.` where none is a sliver
-and the round's guard keeps one, `the sessions already marked cover it.` where neither holds and a session stands under
-a mark already, `each is warm.` where Warm sessions is never and every priced session that burns is warm, or `none
-burns.` where the priced sessions burn nothing, so the round's target is zero. With `Fable reservation shedding` on,
-under the Pace strategy and with load shedding on, the line adds, for the members no window fired on whose 7-day room is
-smaller than their Fable reservation, `1 member holds less 7-day room than its Fable reservation: {label}.` or `{n}
-members hold less 7-day room than their Fable reservation: {list}.`, followed by `A round there would mark {k} non-Fable
-sessions ({warm} warm), to move to a sibling with runway.` (`1 non-Fable session (1 warm)` for one) or by `A round there
-would mark no non-Fable session.` Otherwise the line says nothing of the reservation. A member whose 5-hour window is
-under the hold is read on its next window in the order, and where its 5-hour projection reads over the ceiling, the line
-names the round the hold took away: `{label}'s 5-hour window is {age} old, under the hold of {hold}, so its round reads
-the next window.` `{p}` is a whole percent with a space before the sign (`99 %`), `{horizon}` `at` a clock time on the
-5-hour window and `in` a span on a weekly one (`in 5h`), `{window}` the window's label (`5h`, `7d` or `7-day Fable`),
-`{excess}` a percent an hour with one decimal (`9.5 %/h`), `{list}` the members in the Members group's order, and
-`{age}` and `{hold}` spans to the minute (`45 min`, `1 h`).
+and otherwise `1 member projects over the ceiling: {label}.` or `{n} members project over the ceiling: {list}.`,
+followed by `A round there would mark {k} sessions ({warm} warm), {excess} of the excess, to move to a sibling with
+runway.` (`1 session (1 warm)` for one), by `No sibling has runway for them, so nothing would be marked.` where a
+session the round's walk reached has no sibling with runway for it, or by `A round there would mark no session:` with
+the first reason that holds, `each is too small to move.` where a session the walk reached is a sliver under the round's
+mark share, `none is priced.` where one it reached has no priced burn, `each would leave its member too little burn.`
+where the round's guard keeps one, `the sessions already marked cover it.` where a session stands under a mark already,
+or `each is warm.` where Warm sessions is never and every session the walk holds that burns is warm. Where a round walks
+no session, the reason says why each was left out: `none draws that window.`, `each is a Fable session, which the
+reservation keeps.`, `each agent has ended.` or `each holds state on its account, which a move would lose.`, then `none
+burns.` where the sessions burn nothing on the window. Otherwise the reason is `none is priced.`, as where the members
+over the ceiling hold no session or while the Shed cap (%) field holds 0. With `Fable reservation shedding` on, under
+the Pace strategy and with load shedding on, the line adds, for the members no window fired on whose 7-day room is
+smaller than their Fable reservation and that hold a session of another model that a round can move, `1 member holds
+less 7-day room than its Fable reservation: {label}.` or `{n} members hold less 7-day room than their Fable reservation:
+{list}.`, followed by `A round there would mark {k} non-Fable sessions ({warm} warm), to move to a sibling with runway.`
+(`1 non-Fable session (1 warm)` for one) or by `A round there would mark no non-Fable session.` A member under its
+reservation with no such session runs no round, and the line reads `{label} is under its Fable reservation, and no
+session of another model is there to move.` Otherwise the line says nothing of the reservation. A member whose 5-hour
+window is under the hold is read on its next window in the order, and where its 5-hour projection reads over the
+ceiling, the line names the round the hold took away: `{label}'s 5-hour window is {age} old, under the hold of {hold},
+so its round reads the next window.` `{p}` is a whole percent with a space before the sign (`99 %`), `{horizon}` `at` a
+clock time on the 5-hour window and `in` a span on a weekly one (`in 5h`), `{window}` the window's label (`5h`, `7d` or
+`7-day Fable`), `{excess}` a percent an hour with one decimal (`9.5 %/h`), `{list}` the members in the Members group's
+order, and `{age}` and `{hold}` spans to the minute (`45 min`, `1 h`).
 
 Slow-down, in the expert view, opens on "The slow-down holds each request of a session before it is forwarded, so an
 account whose sessions would pass the ceiling before the reset reaches it under the ceiling instead. A session waits its

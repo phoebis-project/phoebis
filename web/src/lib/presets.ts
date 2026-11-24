@@ -1,8 +1,8 @@
-import type { Account, AgentContext, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
+import type { Account, MemberEligibility, Pool, PoolPin, RateLimitWindow } from '@/api/types';
 import { groupInto } from './counts';
 import { byteOrder, fmtDuration, instant, noun, percentText, plural } from './format';
 import { openMark, pinTtlMs } from './keepalive';
-import { endOf, minuteSpan, shareLeft, windowOf } from './quota';
+import { endOf, minuteSpan, remainingOf, shareLeft, windowOf } from './quota';
 import { speedWord, windingDown } from './selection';
 import { compareFigures } from './sort';
 import { HOUR } from './time';
@@ -50,81 +50,90 @@ export const SHED_MARK_SHARE = 0.1;
 /** The burn averages after which a decayed burn reads zero, as the router's. */
 const BURN_DECAY_CUTOFF_AVERAGES = 30;
 
-/** The causes a walk that marks nothing answers, in the router's order. */
-const SHED_CAUSES = ['sliver', 'last_pin', 'standing'] as const;
+/**
+ * The words a round that marks nothing answers, in the router's order: a walked pin's `no_runway` and `sliver`, a
+ * left-out pin's `off_window`, `fable_model`, `ended`, `account_bound` and `no_burn`, then a walked pin's `unpriced`,
+ * `last_pin` and `standing`.
+ */
+const SHED_CAUSES = ['no_runway', 'sliver', 'off_window', 'fable_model', 'ended', 'account_bound', 'no_burn', 'unpriced', 'last_pin', 'standing'] as const;
 type ShedCause = (typeof SHED_CAUSES)[number];
-const firstCause = (read: ReadonlySet<ShedCause>): ShedCause | null => SHED_CAUSES.find((c) => read.has(c)) ?? null;
+const firstCause = (read: readonly (ShedCause | null)[]): ShedCause | null => SHED_CAUSES.find((c) => read.includes(c)) ?? null;
 
 /**
  * The round's marking rule, the mirror of the router's walk: pins in the round's order with their burns on the round's
- * window, marked until the removed burn reaches `target`, none for a zero target. A pin under a standing mark is a move
- * pending, so its burn counts as removed and the walk skips it. Once one pin from the walk's position on covers what
- * the target still asks, the walk marks the covering pin whose move costs the least, the first in the order among
- * equals, and stops. Otherwise a pin under `SHED_MARK_SHARE` of that rest stays as a sliver, and the pin at the
- * position is marked. A mark that would leave the account's other priced pins, those neither marked nor under a
- * standing mark, under `SHED_MARK_SHARE` of the round's burn sum is refused, and the walk goes on. A pin flagged `skip`
- * stays unmarked and so counts among those pins, as the router counts a pin it passes over. An unpriced pin's burn is
- * unknown and not none, so while one stands unmarked and under no standing mark the round refuses no mark. An
- * unpriced pin and one flagged `skip` count nothing toward the target.
+ * window, walked until the removed burn reaches `target`, none for a zero target. Each position reads the router's
+ * tests in its order. A pin under a standing mark is a move pending, so its burn counts as removed and it reads
+ * `standing`. Past a met target, and at a pin flagged `pastCold`, a warm pin under `never` behind the cold ones, the
+ * walk reads nothing. An unpriced pin reads `unpriced` and is never marked. At a priced pin the pick reads each pin from
+ * the position on that covers the rest: the guard first, so a pin the guard keeps reads `last_pin` and never
+ * `no_runway`, then its runway, so a pin with none reads `no_runway`, and the covering pin with runway whose move costs
+ * the least is marked, the first in the order among equals, and the walk stops. With no pick the pin at the position
+ * reads `sliver` under `SHED_MARK_SHARE` of the rest, `last_pin` where the guard refuses it, `no_runway` with no
+ * runway, and is marked otherwise.
  *
- * A walk that marks nothing answers its cause in `quiet`, the first word a pin of the walk read in the order `sliver`,
- * `last_pin`, `standing`. That is the router's order of its round's causes, `no_runway`, `sliver`, `off_window`,
- * `fable_model`, `ended`, `no_burn`, `unpriced`, `last_pin`, `standing`, in the part a walk here answers: the preview
- * reads `no_runway` where no sibling has runway for any pin a round could mark, and `unpriced` where no pin is priced
- * or no walk names a cause. A pin under a standing mark reads `standing` ahead of each other test, wherever the walk
- * stops, as the router reads it. Otherwise a pin at the walk's position under `SHED_MARK_SHARE` of the rest reads
- * `sliver`, a pin the guard refuses there reads `last_pin`, and a pin flagged `skip` and an unpriced pin read no word.
- * A covering pin the guard keeps from the pick reads `last_pin` at its own position, since a walk that marks nothing
- * reaches it with the same rest. The cause is null where a mark lands and where the target reads zero or less.
+ * The guard refuses a mark that would leave the walk's other priced pins, neither marked nor under a standing mark,
+ * plus `stays.burn`, what stays on the account outside the walk, under `SHED_MARK_SHARE` of the walk's priced burn sum.
+ * A burn with no price is unknown and not none, so an unpriced pin of the walk that stands unmarked and under no mark,
+ * and `stays.unpriced`, turn the guard off. A walk that marks nothing answers the first word of `SHED_CAUSES` that one
+ * of its pins read, and null where none read one. It answers null where a mark lands and where the target reads zero
+ * or less.
  */
 function shedMarks(
-  ordered: { burn: number | null; cost?: number; id: string; skip?: boolean; standing?: boolean }[],
+  ordered: { burn: number | null; cost?: number; id: string; pastCold: boolean; runway: boolean; standing?: boolean }[],
   target: number,
+  stays: { burn: number; unpriced: boolean },
 ): { marks: string[]; quiet: ShedCause | null } {
   type Pin = (typeof ordered)[number];
   const marks: string[] = [];
   if (Number.isNaN(target) || target <= 0) return { marks, quiet: null };
   const sum = ordered.reduce((n, pin) => n + (pin.burn ?? 0), 0);
-  const unpricedStays = ordered.some((pin) => pin.burn === null && pin.standing !== true);
+  const unpricedStays = stays.unpriced || ordered.some((pin) => pin.burn === null && pin.standing !== true);
   // A standing mark is a move pending, so its burn counts as removed before the walk marks anything else.
   let removed = ordered.reduce((n, pin) => n + (pin.standing === true ? (pin.burn ?? 0) : 0), 0);
   // The guard sums the pins that stay, as the router does, since the round's sum less what leaves can round under a
   // floor those pins reach exactly.
-  const refused = (candidate: Pin) => !unpricedStays && ordered.filter((q) => q !== candidate && q.standing !== true && !marks.includes(q.id)).reduce((n, q) => n + (q.burn ?? 0), 0) < SHED_MARK_SHARE * sum;
-  // An unpriced burn moves the removed sum nowhere, so marking the pin would shed a session on a guess. A pin with no
-  // sibling to move to stays where it is, and its burn stays on the account.
-  const open = (pin: Pin): pin is Pin & { burn: number } => pin.burn !== null && pin.skip !== true && pin.standing !== true;
-  const read = new Set<ShedCause>();
-  if (ordered.some((pin) => pin.standing === true)) read.add('standing');
+  const refused = (candidate: Pin) => !unpricedStays && ordered.filter((q) => q !== candidate && q.standing !== true && !marks.includes(q.id)).reduce((n, q) => n + (q.burn ?? 0), 0) + stays.burn < SHED_MARK_SHARE * sum;
+  // By position, as the router keeps them: a later position's pick reads a covering pin again.
+  const words: (ShedCause | null)[] = ordered.map(() => null);
+  let met = false;
   for (const [index, pin] of ordered.entries()) {
+    if (pin.standing === true) {
+      words[index] = 'standing';
+      continue;
+    }
     // An indivisible pin may carry the removed burn past the target, and the round stops there.
-    if (removed >= target) break;
-    if (!open(pin)) continue;
+    if (met || removed >= target || pin.pastCold) continue;
+    // An unpriced burn moves the removed sum nowhere, so marking the pin would shed a session on a guess.
+    if (pin.burn === null) {
+      words[index] = 'unpriced';
+      continue;
+    }
     const rest = target - removed;
     // A pin is indivisible, so once one from here on covers the rest, the cheapest such move meets the target.
-    const pick = ordered
-      .slice(index)
-      .filter(open)
-      .filter((q) => q.burn >= rest && !refused(q))
-      .reduce<Pin | null>((best, q) => (best !== null && (best.cost ?? 0) <= (q.cost ?? 0) ? best : q), null);
+    let pick: { burn: number; cost: number; id: string } | null = null;
+    for (const [k, q] of ordered.entries()) {
+      if (k < index || q.burn === null || q.burn < rest || q.standing === true || q.pastCold) continue;
+      words[k] = refused(q) ? 'last_pin' : q.runway ? null : 'no_runway';
+      if (words[k] === null && (pick === null || (q.cost ?? 0) < pick.cost)) pick = { burn: q.burn, cost: q.cost ?? 0, id: q.id };
+    }
     if (pick !== null) {
       marks.push(pick.id);
-      break;
+      removed += pick.burn;
+      met = true;
+    } else if (pin.burn < SHED_MARK_SHARE * rest) {
+      // A pin under the floor relieves too little of the rest to be worth its move, so it stays.
+      words[index] = 'sliver';
+    } else if (pin.burn < rest) {
+      // The guard refuses this pin alone: a later pin's smaller mark may still leave a tenth on the account.
+      if (refused(pin)) words[index] = 'last_pin';
+      else if (!pin.runway) words[index] = 'no_runway';
+      else {
+        marks.push(pin.id);
+        removed += pin.burn;
+      }
     }
-    // A pin under the floor relieves too little of the rest to be worth its move, so it stays.
-    if (pin.burn < SHED_MARK_SHARE * rest) {
-      read.add('sliver');
-      continue;
-    }
-    // The guard refuses this pin alone: a later pin's smaller mark may still leave a tenth on the account.
-    if (refused(pin)) {
-      read.add('last_pin');
-      continue;
-    }
-    marks.push(pin.id);
-    removed += pin.burn;
   }
-  return { marks, quiet: marks.length > 0 ? null : firstCause(read) };
+  return { marks, quiet: marks.length > 0 ? null : firstCause(words) };
 }
 
 /**
@@ -218,107 +227,96 @@ export interface ShedPreview {
   held: ShedHeld[];
   /** The members over the round's line, in the order the Members group lists them. */
   hot: ShedHot[];
-  /** The rounds mark nothing because no sibling has runway for any pin they could mark. */
-  noRunway: boolean;
   /** The pool's switch is off: no round runs, whatever the projection reads. */
   off: boolean;
-  /** The members a Fable reservation round fires on, in the members' order, with what their rounds would mark.
-   *  No label where the option is off, the strategy is not Pace, load shedding is off or no member stands there. */
-  reservation: { labels: string[]; sessions: number; warm: number };
   /**
-   * Why the rounds mark nothing though a pin there is priced, read over every member over the ceiling: the priced pins
-   * burn nothing, so the target is zero (`burnless`), or each priced pin that burns is warm under `never` (`warm`).
-   * Past those, the first cause in the router's order that one member's walk answered by `shedMarks`: `sliver`, then
-   * `last_pin`, then `standing`. Null where the switch is off, where no member is over the ceiling, where a round
-   * marks a session, where no pin is priced, where no sibling has runway and where no walk names a cause.
+   * Why the rounds the members' windows fire mark nothing, read as one round: the first word of `SHED_CAUSES` that a
+   * walked pin of a round read. With none, `warm` where a walked pin burns and each walked pin that burns is warm under
+   * `never`. Then the first word, in the same order, that a left-out pin carries on a round that walked no pin, a pin on
+   * the fast lane naming none. Then `unpriced`, the router's own fallback. Null where the switch is off, where no member
+   * is over its line and where a round marks a session.
    */
-  quiet: 'burnless' | 'warm' | ShedCause | null;
+  quiet: ShedCause | 'warm' | null;
+  /**
+   * The Fable reservation's part, with the option on, under Pace and with load shedding on: in the members' order, the
+   * members whose reservation round runs (`labels`) with what those rounds would mark, and the members under their
+   * reservation that hold no pin a round could move (`idle`), which run no round.
+   */
+  reservation: { idle: string[]; labels: string[]; sessions: number; warm: number };
   sessions: number;
-  /**
-   * The rounds mark nothing and read the router's own fallback word: no pin on the members over the ceiling is priced,
-   * or none is pinned there, or a pin burns there and no walk names a cause, as under a shed cap of zero.
-   */
-  unpriced: boolean;
   warm: number;
 }
 
-/** Whether the line holds the row's own display pin. */
-const isDisplayLine = (s: Pick<Session, 'agentId' | 'model'>, c: Pick<AgentContext, 'agentId' | 'model'>) => c.agentId === s.agentId && c.model === s.model;
-
+/** A pool pin as a round walks it, its own mark standing where the mark names the pin's account. */
+type RoundPin = PoolPin & { standing: boolean };
+/** A window as the trigger tests it: its projection against the line at the horizon, and the burn a round scales by. */
+type WindowRead = { burn: number | null; horizon: number; id: ShedWindow; line: number; projection: number };
+/** The words the router's predicates leave a pin out of a round under, in the order it tests them. */
+type LeftOut = 'account_bound' | 'ended' | 'fable_model' | 'fast_lane' | 'off_window';
 /**
- * A conversation pin as the round walks it, its figures read off its source: the row for a display pin no line holds,
- * else the line. A line is warm before its first cold instant, and by its served `warm` where it carries none. The
- * row's mark serves its display pin alone, whichever source it walks as, since the route answers no mark per line.
+ * The word the router's predicates leave `p` out of a round on `fired` under, the first that holds, null for a pin the
+ * round walks: a pin on the fast lane, a pin whose model does not draw the fired window, a Fable pin of a reservation
+ * round, an ended pin and a pin that holds state on its account.
  */
-const walkedPin = (s: Session, line: AgentContext | null, now: number) => {
-  const source = line ?? s;
-  return {
-    accountId: source.accountId,
-    agentId: source.agentId,
-    burn: source.burn,
-    burnAt: source.burnAt,
-    burnUnit: source.burnUnit,
-    burnWindow: source.burnWindow,
-    ended: source.ended,
-    fast: source.fast,
-    keyId: s.keyId,
-    model: source.model,
-    moveCost: source.moveCost,
-    moveDropCost: source.moveDropCost,
-    moveDropSize: source.moveDropSize,
-    moveSize: source.moveSize,
-    sessionId: s.sessionId,
-    standing: (line === null || isDisplayLine(s, line)) && openMark(s) !== null,
-    warm: line === null ? s.lastRefreshAt !== null && s.cacheTtlMs !== null && now - Date.parse(s.lastRefreshAt) < s.cacheTtlMs : line.warmUntil === null ? line.warm : pinTtlMs(line, now) !== null,
-  };
+const leftOutAs = (p: Pick<PoolPin, 'accountBound' | 'ended' | 'fast' | 'model'>, fired: { id: ShedWindow; reservation: boolean }): LeftOut | null => {
+  if (p.fast) return 'fast_lane';
+  if (!windowsOf(p.model).includes(fired.id)) return 'off_window';
+  if (fired.reservation && drawsFable(p.model)) return 'fable_model';
+  if (p.ended) return 'ended';
+  return p.accountBound ? 'account_bound' : null;
 };
 
 /**
  * The shedding round's dry run, replayed from the data the routes serve. Each member's served projection is read at its
  * served horizon on the windows its pins draw, in the trigger's order, and the first window over the round's line fires
  * its round: the wall, 1, where the window's served reset ahead of `now` or the account's end set the horizon, else the
- * window's own ceiling, 5-hour or weekly. The excess runs from that line. A 5-hour window younger than twice the pool's
- * burn average does not fire, and the member reads its next window, as the router holds the round. With no member over
- * its line, the closest window is the one with the least room to its own ceiling. The router's round on a pool that
- * slows its pins tests the 5-hour window by the stretch, which the preview reads as it reads the other windows.
+ * window's own ceiling, 5-hour or weekly. On a pool with the slow-down on, the 5-hour window reads the router's stretch
+ * test in its place: the `stretchProjection` of the account's slow-down entry against the 5-hour ceiling, at the
+ * window's served horizon less the entry's threshold, and no 5-hour window for an account with no entry or no figure,
+ * as the router fires nothing there. The excess runs from the line to the horizon. A 5-hour window younger than twice
+ * the pool's burn average fires under neither test, and the member reads its next window, as the router holds the
+ * round. With no member over its line, the closest window is the one with the least room to its own ceiling.
  *
- * The round walks the pool's own conversation pins on the member, the sessions under its keys, which the caller
- * filters, since the router's round marks the triggering pool's pins alone. They are the pins the sessions route lists:
- * each line on the member, and a row's display pin where the row is pinned there and no line holds its agent and model.
- * The router's round also walks a pin only auxiliary requests used and a pin whose line the route no longer lists,
- * which no served row holds. Each pin reads its burn, its lane, its ended mark and the round's figures of its move (its
- * size, its weighted drop and their costs) off its own row or line, and two pins of one session are marked and counted
- * apart. A pin on the fast lane or whose agent ended is out of the round, its order, its sum and its counts, as the
- * router's round leaves it out, though a fast pin's model week still counts among the windows the trigger reads. The
- * round orders the pins by their served burn, decayed from the instant it was served to `now`: cold pins first, those
- * whose move drops nothing by burn and then those that drop thinking by burn over the weighted drop, then warm ones by
- * burn over the move's size, all by burn over the size under `always` and bounded by the warm-sessions mode. It marks
- * until the removed burn covers the excess under `shedCap`, passing over a pin with no sibling that has runway for it,
- * by `shedMarks`. The display pin under its row's standing mark is a move pending, and a subagent's pending move, which
- * the route answers no mark for, still counts as burn to remove. A move costs the pin's served move cost where the pin
- * is warm or the mode reads `always`, and a cold pin the share of the thinking its move drops. A member without
- * `eligible` counts as eligible, as a member of a pool not saved yet does.
+ * The round walks the pins the pool's pins route answers on the member, a pin the Sessions list hides among them, since
+ * the router's round walks each pin under the pool's keys. A pin stands under a mark where its own mark names its
+ * account, and it is warm before its first cold instant at `now`, by its served `warm` where it carries none. The
+ * router's predicates leave a pin out by `leftOutAs`, and a priced pin that burns nothing on the window leaves under
+ * `no_burn`, while a fast pin's model week still counts among the windows the trigger reads. The round orders the rest
+ * by their served burn, decayed from the instant it was served to `now`: cold pins first, those whose move drops
+ * nothing by burn and then those that drop thinking by burn over the weighted drop, then warm ones by burn over the
+ * move's size, all by burn over the size under `always`, and walks them by `shedMarks` toward the excess under
+ * `shedCap`. A move costs the pin's served move cost where the pin is warm or the mode reads `always`, and a cold pin
+ * the share of the thinking its move drops. A member without `eligible` counts as eligible, as a member of a pool not
+ * saved yet does.
  *
- * With the pool's Fable reservation option on, under Pace and with load shedding on, a member no window fired on runs
- * a round of its own where its 7-day room, 1 less its served 7-day utilization floored at 0, stands under its
- * `fableReservation`. That round walks the member's pins whose model draws no Fable week on the 7-day window, in the
- * order and at the costs above, toward `shedCap` of their burn with no excess to bound it, and its marks count apart
- * from the rounds the windows fire. A null reservation, a missing 7-day window and one with no projection fire nothing.
- * The router waits before such a round as it waits before a window's, and the preview reads no wait for either.
+ * With the pool's Fable reservation option on, under Pace and with load shedding on, a member no window fired on runs a
+ * round of its own where its 7-day room, 1 less its served 7-day utilization floored at 0, stands under its
+ * `fableReservation`. A member whose pins that have not ended are each left out by the predicates, or that holds none,
+ * runs no round and stands in `idle`, as the router cancels such a round. The round walks the member's pins on the
+ * 7-day window toward `shedCap` of their burn with no excess to bound it, its marks counted apart from the rounds the
+ * windows fire, and the Fable pins it leaves out whose agent has not ended stay on the account for its guard, at their
+ * burns on the 7-day window. A null reservation, a missing 7-day window and one with no projection fire nothing. The
+ * router waits before each round, and the preview reads no wait.
+ *
+ * The preview parts from the router's record in four places. A round whose walked pins that burn are each warm under
+ * `never` reads `warm`, where the record reads `unpriced`. A target of zero or less reads no word, where the record
+ * reads `standing` for a pin under a standing mark. A slowed member's target and marks read the served burn, where the
+ * router divides each pin's burn by the speed its demand was read at. A pin whose move cost reads null prices at 0 in
+ * the pick.
  */
 export function shedPreview(
-  pool: Pick<Pool, 'burnAverageSeconds' | 'fableReservationShedding' | 'fiveHourCeiling' | 'loadShedding' | 'shedCap' | 'strategy' | 'warmSessions' | 'weeklyCeiling' | 'windDownMinutes'> & {
+  pool: Pick<Pool, 'burnAverageSeconds' | 'fableReservationShedding' | 'fiveHourCeiling' | 'loadShedding' | 'shedCap' | 'slowDown' | 'strategy' | 'warmSessions' | 'weeklyCeiling' | 'windDownMinutes'> & {
     members: { accountId: string; eligible?: MemberEligibility; fableReservation: number | null; priority: number }[];
   },
   accounts: Account[],
-  sessions: Session[],
+  pins: PoolPin[],
   now: number,
 ): ShedPreview {
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const listed = pool.members
     .flatMap((m) => {
       const account = byId.get(m.accountId);
-      return account === undefined ? [] : [{ account, eligible: (m.eligible ?? 'eligible') === 'eligible', priority: m.priority, reservation: m.fableReservation ?? null }];
+      return account === undefined ? [] : [{ account, eligible: (m.eligible ?? 'eligible') === 'eligible', priority: m.priority, reservation: m.fableReservation }];
     })
     .sort((a, b) => a.priority - b.priority || a.account.label.localeCompare(b.account.label));
   // The preview's reading of the gate: a sibling has runway for a pin while its served projection sits under the
@@ -327,12 +325,20 @@ export function shedPreview(
   // read. A sibling whose end falls inside the pool's wind-down is no destination whatever it reads, an end exactly the
   // wind-down away included. A sibling whose windows hold the 7-day window and no 5-hour one, as an approved Ultra
   // account's set does, is read on the 7-day window alone, since the router's fit books the windows of the
-  // destination's set and nothing on a window that set lacks.
-  const hasRunway = (source: string, model: string | null) =>
+  // destination's set and nothing on a window that set lacks. A reservation round moves no pin onto a sibling whose own
+  // 7-day room reads under its `fableReservation`, as the router's leaves such a sibling out, and a sibling whose 7-day
+  // window serves no share, or that serves no such window, reads a room of 1, as the router reads a window it holds no
+  // reading of.
+  const shortOfReservation = (account: Account, reservation: number | null) => {
+    const week = windowOf(account, '7d');
+    return reservation !== null && (week === null ? 1 : (remainingOf(week) ?? 1)) < reservation;
+  };
+  const hasRunway = (source: string, model: string | null, reservationRound: boolean) =>
     listed.some(
-      ({ account, eligible }) =>
+      ({ account, eligible, reservation }) =>
         account.id !== source &&
         eligible &&
+        !(reservationRound && shortOfReservation(account, reservation)) &&
         !windingDown(pool, endOf(account, now), now) &&
         (account.kind === 'api_key'
           ? bucketRoom(account, now)
@@ -344,13 +350,13 @@ export function shedPreview(
               })),
     );
   // `hasRunway` reads the model only through whether it draws the Fable week, so a member's pins share at most two
-  // answers.
+  // answers in each kind of round.
   const runwayMemo = new Map<string, boolean>();
-  const runwayOf = (source: string, model: string | null): boolean => {
-    const key = `${source}/${drawsFable(model)}`;
+  const runwayOf = (source: string, model: string | null, reservationRound: boolean): boolean => {
+    const key = `${source}/${drawsFable(model)}/${reservationRound}`;
     const known = runwayMemo.get(key);
     if (known !== undefined) return known;
-    const runway = hasRunway(source, model);
+    const runway = hasRunway(source, model, reservationRound);
     runwayMemo.set(key, runway);
     return runway;
   };
@@ -361,50 +367,67 @@ export function shedPreview(
   let covered = 0;
   let marked = 0;
   let warmMarked = 0;
-  let walkable = 0;
-  let stranded = 0;
-  let priced = 0;
+  // The rounds the windows fire, read as one: the word each round's walk answered, the walked pins that burn and those
+  // of them warm under `never`, and the words of the pins left out of a round that walked none.
+  const walkedWords: (ShedCause | null)[] = [];
+  const leftOutWords: ShedCause[] = [];
   let burning = 0;
-  const causes = new Set<ShedCause>();
+  let burningWarm = 0;
   // Only Pace holds a reservation back, and the option adds a test to the round the switch runs.
   const reserving = pool.fableReservationShedding && pool.strategy === 'pace' && pool.loadShedding;
-  const reserved: ShedPreview['reservation'] = { labels: [], sessions: 0, warm: 0 };
-  const conversation = sessions.flatMap((s) => {
-    const display = s.pinned && !s.agentContexts.some((c) => isDisplayLine(s, c)) ? [walkedPin(s, null, now)] : [];
-    return [...display, ...s.agentContexts.map((c) => walkedPin(s, c, now))];
-  });
-  const byAccount = groupInto(conversation.filter((p) => p.ended !== true), (p) => p.accountId);
+  const reserved: ShedPreview['reservation'] = { idle: [], labels: [], sessions: 0, warm: 0 };
+  const byAccount = groupInto(
+    pins.map((p): RoundPin => ({ ...p, standing: openMark(p) !== null, warm: p.warmUntil === null ? p.warm : pinTtlMs(p, now) !== null })),
+    (p) => p.accountId,
+  );
   /**
-   * One round's walk on `account` over `pins` on the window `fired` names, toward the target `targetOf` reads off the
+   * One round's walk on `account` over its pins on the window `fired` names, toward the target `targetOf` reads off the
    * walked burn. The served burn is a pin's share of the window its `burnWindow` names: the 5-hour window, or the 7-day
    * one on an account without it. A round on another window reads each pin's burn scaled by the account's burn on the
    * fired window over its burn on the pin's own, the preview's approximation of the router's pricing of each pin on the
-   * fired window. A pin whose model does not draw the fired window is out of the round before the order, as the
-   * router's partition takes it, so it is in neither the order, the counts nor the quiet reading, and a pin served in
-   * dollars has no share to scale, so it reads unpriced.
+   * fired window, and a pin served in dollars has no share to scale, so it reads unpriced.
    */
-  const walkOn = (account: Account, pins: ReturnType<typeof walkedPin>[], fired: { burn: number | null; id: ShedWindow }, targetOf: (total: number) => number) => {
-    const walked = pins
-      .filter((p) => windowsOf(p.model).includes(fired.id))
-      .map((p) => {
-        const window = burnWindowOf(p.burnWindow);
-        const own = window === null ? null : (windowOf(account, window)?.burn ?? null);
-        const scale = fired.id === window ? 1 : own !== null && own > 0 && fired.burn !== null ? fired.burn / own : null;
-        const served = p.burn === null || p.burnUnit !== 'window_share' ? null : burnDecayed(p.burn, p.burnAt, now, windowMs);
-        return {
-          burn: served === null || scale === null ? null : served * scale,
+  const walkOn = (account: Account, onAccount: RoundPin[], fired: { burn: number | null; id: ShedWindow; reservation: boolean }, targetOf: (total: number) => number) => {
+    const burnOf = (p: RoundPin) => {
+      const window = burnWindowOf(p.burnWindow);
+      const own = window === null ? null : (windowOf(account, window)?.burn ?? null);
+      const scale = fired.id === window ? 1 : own !== null && own > 0 && fired.burn !== null ? fired.burn / own : null;
+      const served = p.burn === null || p.burnUnit !== 'window_share' ? null : burnDecayed(p.burn, p.burnAt, now, windowMs);
+      return { burn: served === null || scale === null ? null : served * scale, served };
+    };
+    const left: (LeftOut | 'no_burn')[] = [];
+    const walked = onAccount.flatMap((p) => {
+      const word = leftOutAs(p, fired);
+      if (word !== null) {
+        left.push(word);
+        return [];
+      }
+      const { burn, served } = burnOf(p);
+      // A pin that burns nothing on the fired window has nothing to shed, so it leaves before the order and the guard's
+      // sum, as the router's partition takes it.
+      if (burn === 0) {
+        left.push('no_burn');
+        return [];
+      }
+      return [
+        {
+          burn,
           dropCost: p.moveDropCost,
           dropSize: p.moveDropSize,
-          id: `${p.keyId}/${p.sessionId}/${p.agentId ?? ''}/${p.model ?? ''}`,
+          id: `${p.keyId}/${p.sessionId}/${p.agentId}/${p.model}`,
           moveCost: p.moveCost,
           order: served,
-          runway: runwayOf(account.id, p.model),
+          runway: runwayOf(account.id, p.model, fired.reservation),
           // A pin with no prompt size reported yet ranks as the cheapest rewrite, at one token, as the round reads it.
           size: p.moveSize ?? 1,
           standing: p.standing,
           warm: p.warm,
-        };
-      });
+        },
+      ];
+    });
+    // The Fable pins a reservation round leaves out stay on the account, a pin under a standing mark among them, and
+    // an ended agent's Fable pin counts nothing there, though it leaves under `fable_model` ahead of `ended`.
+    const stays = onAccount.filter((p) => !p.ended && leftOutAs(p, fired) === 'fable_model').map((p) => burnOf(p).burn);
     type Pin = (typeof walked)[number];
     // A pin whose burn cannot be priced ranks after every priced pin of its group, as the router's round ranks it.
     const pricedFirst = (a: number | null, b: number | null) => compareFigures(a, b, 'desc');
@@ -415,33 +438,30 @@ export function shedPreview(
     // with no priced burn ranks after every priced cold pin, those that drop thinking among them.
     const perDrop = (p: Pin) => (p.order === null ? null : p.dropSize === null ? p.order : p.order / p.dropSize);
     const coldOrder = (a: Pin, b: Pin) => (a.order === null || b.order === null ? 0 : Number(a.dropSize !== null) - Number(b.dropSize !== null)) || pricedFirst(perDrop(a), perDrop(b));
-    // A pin that burns nothing on the fired window has nothing to shed, so it leaves before the order as the router's
-    // partition takes it, ahead of any standing mark: it stands in neither the guard's sum nor the counts of the pins a
-    // round could mark, and it still counts as priced.
-    const ranked = walked.filter((p) => p.burn !== 0);
-    const cold = ranked.filter((p) => !p.warm).sort(coldOrder);
-    const warm = ranked.filter((p) => p.warm).sort(byRewrite);
+    const cold = walked.filter((p) => !p.warm).sort(coldOrder);
+    const warm = walked.filter((p) => p.warm).sort(byRewrite);
     const ordered = pool.warmSessions === 'always' ? [...cold, ...warm].sort(byRewrite) : [...cold, ...warm];
-    // Under `never` the walk stops after the cold pins, so a warm pin stays in the order, where the burn guard still
-    // counts its burn among the member's unmarked pins, and is never marked.
-    const open = (p: Pin) => p.burn !== null && !(pool.warmSessions === 'never' && p.warm);
     const total = walked.reduce((sum, p) => sum + (p.burn ?? 0), 0);
     // A cold pin's cache is rewritten wherever it runs next, so its move pays the dropped thinking's share alone. A
-    // move the cost model sizes none of reads 0, as the router's pick reads it.
+    // move the cost model sizes none of reads 0, as the router's pick reads it. Under `never` the walk stops after the
+    // cold pins, so a warm pin stays in the order, where the guard still counts its burn, and is never marked.
     const walk = shedMarks(
-      ordered.map((p) => ({ burn: p.burn, cost: pool.warmSessions === 'always' || p.warm ? (p.moveCost ?? 0) : (p.dropCost ?? 0), id: p.id, skip: !open(p) || !p.runway, standing: p.standing })),
+      ordered.map((p) => ({ burn: p.burn, cost: pool.warmSessions === 'always' || p.warm ? (p.moveCost ?? 0) : (p.dropCost ?? 0), id: p.id, pastCold: pool.warmSessions === 'never' && p.warm, runway: p.runway, standing: p.standing })),
       targetOf(total),
+      { burn: stays.reduce((sum: number, burn) => sum + (burn ?? 0), 0), unpriced: stays.some((burn) => burn === null) },
     );
     const marks = new Set(walk.marks);
-    return { open, quiet: walk.quiet, ranked, taken: walked.filter((p) => marks.has(p.id)), total, walked };
+    return { left, quiet: walk.quiet, taken: walked.filter((p) => marks.has(p.id)), walked };
   };
   for (const { account, reservation } of listed) {
     if (account.kind === 'api_key') continue;
-    const kept = [...(byAccount.get(account.id) ?? [])]
+    const onAccount = [...(byAccount.get(account.id) ?? [])]
       // The router walks an account's pins in key, session, agent and model order as bytes, which settles ties in the
       // sorts below.
-      .sort((a, b) => byteOrder(a.keyId, b.keyId) || byteOrder(a.sessionId, b.sessionId) || byteOrder(a.agentId ?? '', b.agentId ?? '') || byteOrder(a.model ?? '', b.model ?? ''));
-    const pins = kept.filter((p) => p.fast !== true);
+      .sort((a, b) => byteOrder(a.keyId, b.keyId) || byteOrder(a.sessionId, b.sessionId) || byteOrder(a.agentId, b.agentId) || byteOrder(a.model, b.model));
+    // The router's trigger reads the pins the pool keeps on the account, a pin on the fast lane among them, and the
+    // keep leaves an ended agent's pin out.
+    const kept = onAccount.filter((p) => !p.ended);
     const five = windowOf(account, '5h');
     const start = five === null ? null : windowStart(five, now);
     // A start at or after `now`, from a reset more than five hours ahead, is no reading of a fresh window, so it holds
@@ -449,19 +469,31 @@ export function shedPreview(
     const heldNow = start !== null && start < now && now - start < 2 * windowMs;
     const end = endOf(account, now);
     const lineAt = (id: ShedWindow, w: RateLimitWindow, horizon: number) => lineOf(pool, id, w.resetsAt === null ? null : Date.parse(w.resetsAt), end, horizon, now);
+    const entry = account.slowDown ?? null;
+    // One 5-hour read feeds the trigger and the hold's test, so a slowed member under the hold is named by its stretch
+    // figure as well.
+    const fiveRead: WindowRead | null =
+      five === null || five.horizon === null
+        ? null
+        : pool.slowDown
+          ? entry === null || entry.stretchProjection === null
+            ? null
+            : { burn: five.burn, horizon: Date.parse(five.horizon) - entry.thresholdMs, id: '5h', line: pool.fiveHourCeiling, projection: entry.stretchProjection }
+          : five.projection === null
+            ? null
+            : { burn: five.burn, horizon: Date.parse(five.horizon), id: '5h', line: lineAt('5h', five, Date.parse(five.horizon)), projection: five.projection };
     // A model week is read only where one of the pins draws it, a pin on the fast lane among them, as the router's
     // trigger reads every pin the pool keeps on the account.
-    const read = TRIGGER_ORDER.filter((id) => id !== '7d_fable' || kept.some((p) => drawsFable(p.model)))
-      .filter((id) => !(id === '5h' && heldNow))
-      .flatMap((id) => {
-        const w = windowOf(account, id);
-        if (w === null || w.projection === null || w.horizon === null) return [];
-        const horizon = Date.parse(w.horizon);
-        return [{ burn: w.burn, horizon, id, line: lineAt(id, w, horizon), projection: w.projection }];
-      });
+    const read = TRIGGER_ORDER.filter((id) => id !== '7d_fable' || kept.some((p) => drawsFable(p.model))).flatMap((id): WindowRead[] => {
+      if (id === '5h') return fiveRead === null || heldNow ? [] : [fiveRead];
+      const w = windowOf(account, id);
+      if (w === null || w.projection === null || w.horizon === null) return [];
+      const horizon = Date.parse(w.horizon);
+      return [{ burn: w.burn, horizon, id, line: lineAt(id, w, horizon), projection: w.projection }];
+    });
     // A young 5-hour window under its line changes nothing in the round, so only one over it names its member: that
     // is the round the hold took away.
-    if (heldNow && five !== null && five.projection !== null && five.horizon !== null && five.projection > lineAt('5h', five, Date.parse(five.horizon))) held.push({ ageMs: now - start, holdMs: 2 * windowMs, id: account.id, label: account.label });
+    if (heldNow && fiveRead !== null && fiveRead.projection > fiveRead.line) held.push({ ageMs: now - start, holdMs: 2 * windowMs, id: account.id, label: account.label });
     const fired = read.find((w) => w.projection > w.line);
     if (fired === undefined) {
       // The room to each window's own ceiling ranks them, since the two kinds of window read different ceilings.
@@ -470,13 +502,14 @@ export function shedPreview(
       // alone, since the router's needs the projection of a window it holds a reading of.
       const week = windowOf(account, '7d');
       if (!reserving || reservation === null || week === null || week.utilization === null || week.projection === null || shareLeft(week.utilization) >= reservation) continue;
-      // Only the Fable week's use is reserved, so the round moves the pins whose model draws none.
-      const round = walkOn(
-        account,
-        pins.filter((p) => !drawsFable(p.model)),
-        { burn: week.burn, id: '7d' },
-        (total) => pool.shedCap * total,
-      );
+      // Only the Fable week's use is reserved, so the round would leave out each Fable pin. Where its predicates leave
+      // out each pin the pool keeps on the account, the router cancels the round, whatever those pins burn.
+      const round7d = { burn: week.burn, id: '7d' as const, reservation: true };
+      if (kept.every((p) => leftOutAs(p, round7d) !== null)) {
+        reserved.idle.push(account.label);
+        continue;
+      }
+      const round = walkOn(account, onAccount, round7d, (total) => pool.shedCap * total);
       reserved.labels.push(account.label);
       reserved.sessions += round.taken.length;
       reserved.warm += round.taken.filter((p) => p.warm).length;
@@ -486,65 +519,68 @@ export function shedPreview(
     const excess = (fired.projection - fired.line) / Math.max((fired.horizon - now) / HOUR, 1 / 60);
     hot.push({ excess, horizon: fired.horizon, id: account.id, label: account.label, projection: fired.projection, window: fired.id });
     if (!pool.loadShedding) continue;
-    const round = walkOn(account, pins, fired, (total) => Math.min(excess, pool.shedCap * total));
-    if (round.quiet !== null) causes.add(round.quiet);
+    const round = walkOn(account, onAccount, { burn: fired.burn, id: fired.id, reservation: false }, (total) => Math.min(excess, pool.shedCap * total));
     covered += Math.min(round.taken.reduce((sum, p) => sum + (p.burn ?? 0), 0), excess);
     marked += round.taken.length;
     warmMarked += round.taken.filter((p) => p.warm).length;
-    walkable += round.ranked.filter(round.open).length;
-    priced += round.walked.filter((p) => p.burn !== null).length;
-    burning += round.total;
-    stranded += round.ranked.filter((p) => round.open(p) && !p.runway).length;
+    walkedWords.push(round.quiet);
+    const burns = round.walked.filter((p) => p.burn !== null);
+    burning += burns.length;
+    burningWarm += burns.filter((p) => pool.warmSessions === 'never' && p.warm).length;
+    // The router reads a left-out pin's word only where its round walked no pin, and the fast lane names none.
+    if (round.walked.length === 0) leftOutWords.push(...round.left.flatMap((word) => (word === 'fast_lane' ? [] : [word])));
   }
-  const noRunway = marked === 0 && walkable > 0 && stranded === walkable;
-  const walkedQuiet = pool.loadShedding && hot.length > 0 && marked === 0 && priced > 0 && !noRunway;
-  // The router runs a round per member, each with its own cause, and the preview draws one line for them all, so the
-  // line names the first cause in the router's order that any walk answered.
-  const quiet = !walkedQuiet ? null : burning === 0 ? 'burnless' : walkable === 0 ? 'warm' : firstCause(causes);
+  // The router runs a round per member, each with its own word, and the preview draws one line for them all.
+  const quiet = !pool.loadShedding || hot.length === 0 || marked > 0 ? null : (firstCause(walkedWords) ?? (burning > 0 && burningWarm === burning ? 'warm' : (firstCause(leftOutWords) ?? 'unpriced')));
   return {
     closest: hot.length === 0 ? closest : null,
     covered,
     held,
     hot,
-    noRunway,
     off: !pool.loadShedding,
     quiet,
     reservation: reserved,
     sessions: marked,
-    // A walk reads the pins' prices, so with the switch off or no member over the ceiling there is no price to lack. A
-    // round whose walks name no cause though a pin burns reads the router's own fallback word too.
-    unpriced: (pool.loadShedding && hot.length > 0 && marked === 0 && priced === 0) || (walkedQuiet && quiet === null),
     warm: warmMarked,
   };
 }
 
-const QUIET_REASON: Record<NonNullable<ShedPreview['quiet']>, string> = {
-  burnless: 'none burns.',
+/** The reason a round that marks no session reads for each word of `quiet`, `no_runway` keeping a sentence of its own. */
+const QUIET_REASON: Record<Exclude<NonNullable<ShedPreview['quiet']>, 'no_runway'>, string> = {
+  account_bound: 'each holds state on its account, which a move would lose.',
+  ended: 'each agent has ended.',
+  fable_model: 'each is a Fable session, which the reservation keeps.',
   last_pin: 'each would leave its member too little burn.',
+  no_burn: 'none burns.',
+  off_window: 'none draws that window.',
   sliver: 'each is too small to move.',
   standing: 'the sessions already marked cover it.',
+  unpriced: 'none is priced.',
   warm: 'each is warm.',
 };
 
 /**
- * The shedding group's dry run in up to five sentences, plus one per held member: the switch when it is off, the
- * members whose projection crosses the ceiling or the one closest to it, and the round they would run, or that no
- * sibling has runway for their sessions, or why a round would mark none of them, then the members whose 7-day room
- * stands under their Fable reservation and what their rounds would mark, then each member whose 5-hour round the hold
- * keeps back. A 5-hour horizon reads its clock time, a weekly one the span to it.
+ * The shedding group's dry run in up to five sentences, plus one per idle and one per held member: the switch when it
+ * is off, the members whose projection crosses the ceiling or the one closest to it, and the round they would run, or
+ * that no sibling has runway for their sessions, or why a round would mark none of them, then the members whose 7-day
+ * room stands under their Fable reservation and what their rounds would mark, then each member under its reservation
+ * with no session of another model to move, then each member whose 5-hour round the hold keeps back. A 5-hour horizon
+ * reads its clock time, a weekly one the span to it.
  */
 export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()): string {
   const off = preview.off ? ['Load shedding is off: no round runs.'] : [];
   const { closest, hot } = preview;
   const held = preview.held.map((h) => `${h.label}'s 5-hour window is ${minuteSpan(h.ageMs)} old, under the hold of ${minuteSpan(h.holdMs)}, so its round reads the next window.`);
-  const { labels, sessions, warm } = preview.reservation;
-  const reserved =
-    labels.length === 0
+  const { idle, labels, sessions, warm } = preview.reservation;
+  const reserved = [
+    ...(labels.length === 0
       ? []
       : [
           `${plural(labels.length, 'member')} ${noun(labels.length, 'holds', 'hold')} less 7-day room than ${noun(labels.length, 'its', 'their')} Fable reservation: ${labels.join(', ')}.`,
           sessions === 0 ? 'A round there would mark no non-Fable session.' : `A round there would mark ${plural(sessions, 'non-Fable session')} (${warm} warm), to move to a sibling with runway.`,
-        ];
+        ]),
+    ...idle.map((label) => `${label} is under its Fable reservation, and no session of another model is there to move.`),
+  ];
   if (hot.length === 0) {
     const at = closest === null ? '' : closest.window === '5h' ? `at ${instant(closest.horizon, now)}` : `in ${fmtDuration(closest.horizon - now)}`;
     const nearest = closest === null ? '' : `: the closest is ${closest.label}, ${WINDOW_SHORT[closest.window]} ${percentText(closest.projection)} ${at}`;
@@ -553,10 +589,9 @@ export function shedPreviewLine(preview: ShedPreview, now: number = Date.now()):
   const over = `${plural(hot.length, 'member')} ${noun(hot.length, 'projects', 'project')} over the ceiling: ${hot.map((h) => h.label).join(', ')}.`;
   if (preview.off) return [...off, over, ...held].join(' ');
   const count = plural(preview.sessions, 'session');
-  const round = preview.noRunway
-    ? 'No sibling has runway for them, so nothing would be marked.'
-    : preview.unpriced
-      ? 'A round there would mark no session: none is priced.'
+  const round =
+    preview.quiet === 'no_runway'
+      ? 'No sibling has runway for them, so nothing would be marked.'
       : preview.quiet !== null
         ? `A round there would mark no session: ${QUIET_REASON[preview.quiet]}`
         : `A round there would mark ${count} (${preview.warm} warm), ${(preview.covered * 100).toFixed(1)} %/h of the excess, to move to a sibling with runway.`;

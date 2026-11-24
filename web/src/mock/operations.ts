@@ -1,4 +1,4 @@
-import type { AgentContext, AgentRequests, BurnFigures, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, Lifecycle, MoveFigures, RecipeCause, RecipeState, RequestLog, RoutingEvent, Session, SessionAgentFacts, SessionDay, SessionFacts, SessionSpendPart } from '@/api/types';
+import type { AgentContext, AgentRequests, BurnFigures, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, Lifecycle, MoveFigures, PoolPin, RecipeCause, RecipeState, RequestLog, RoutingEvent, Session, SessionAgentFacts, SessionDay, SessionFacts, SessionSpendPart } from '@/api/types';
 import { anchorTier, fundingOf, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { expiredBetweenTurns, servingAttempt } from '@/lib/dimensions';
@@ -9,7 +9,7 @@ import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { eligibilityOf, keyById, poolById, servedFigures } from './pools';
-import { ACCOUNT_BOUND_SESSION_ID, BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, accountBoundAt, fastTurn, pinCacheTtlOf, requestById } from './requests';
+import { ACCOUNT_BOUND_SESSION_ID, BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, accountBoundAt, fastTurn, pinCacheTtlOf, pinReadAt, requestById } from './requests';
 import { dropSizeOf, droppedThinkingOf, moveSizeOf, proWeekRewriteOf } from './rewrite';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, regimeFor, tablesFor } from './samples';
@@ -968,34 +968,51 @@ SESSIONS.forEach((pin) => {
  * keep their rolls.
  */
 const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) * 1_000;
+/** A recipe that names its account, whose agent holds a pin there. */
+const onAccount = (r: KeepaliveRecipe): r is KeepaliveRecipe & { accountId: string } => r.accountId !== null;
+/**
+ * The pin of the agent that recipe `r` at place `j` of drawn row `i` names, as the sessions route draws its line and the
+ * pins route answers it, so the two routes read one `ended` and one set of move figures. Main's pin reads the row's own
+ * figures. A subagent's pin takes the companion's five-minute TTL, its place's effort word and its last request as its
+ * last use and its last refresh, and a moved pin's row is the one its move wrote.
+ */
+const agentPinOf = (row: Session, i: number, r: KeepaliveRecipe & { accountId: string }, j: number): UndatedLine => {
+  const fold = lastFold.get(row);
+  const display = { burn: fold?.burn ?? null, dollars: fold?.dollars ?? null, lastInputTokens: row.lastInputTokens };
+  const moved = movedPinOf(r);
+  const own = { accountId: moved?.accountId ?? r.accountId, agentId: r.agentId, model: r.model };
+  if (r.agentId === 'main') {
+    const line = { ...own, burnAt: fold?.at ?? null, cacheTtlMs: row.cacheTtlMs, effort: row.effort, ended: false, lastInputTokens: row.lastInputTokens, lastUsedAt: row.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: row.pinnedAt };
+    return pinLine(line, row.keyId, row.sessionId, display, row.lastRefreshAt);
+  }
+  const ended = i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT;
+  const line = { ...own, cacheTtlMs: pinCacheTtlOf(row.sessionId), effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState, ...(moved === null ? {} : { pinnedAt: moved.at }) };
+  return pinLine(line, row.keyId, row.sessionId, servedBeside(display, line, firstSighting.get(row) ?? null), line.lastUsedAt);
+};
+/**
+ * The pins of each row that the router holds and the row lists no line for, which the pins route answers beside the
+ * lines: a released agent's on a row a companion reports, and main's auxiliary pin.
+ */
+const UNLISTED_PINS = new Map<Session, UndatedLine[]>();
 // The route lists one line per pin: on a row a companion reports, one of an agent the engine holds and has not
 // released, main's reading the row's own pin, so a session the mod released whole lists none, and on any other row
 // every pin the listing keeps inside the non-companion timeout, released or not, so the session the mod ended lists its
 // released agents. Every recipe the story writes stands on a pin, and a session no companion ever reported holds main's
-// alone. The subagents' pins take the companion's five-minute TTL, their place's effort word and their last request as
-// their last use and their last refresh. The row and main's line read warm off the row's last refresh, as the route
-// reads both off one pin, before the row's last use moves to the newest across its pins.
+// alone. The row and main's line read warm off the row's last refresh, as the route reads both off one pin, before the
+// row's last use moves to the newest across its pins.
 SESSIONS.forEach((pin, i) => {
   const recipes = RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId);
-  const fold = lastFold.get(pin);
-  const display = { burn: fold?.burn ?? null, dollars: fold?.dollars ?? null, lastInputTokens: pin.lastInputTokens };
   const firstSeen = firstSighting.get(pin) ?? null;
+  const pins = recipes.flatMap((r, j) => (onAccount(r) ? [{ line: agentPinOf(pin, i, r, j), listed: r.agentState !== 'released' || pin.companion === 'none' }] : []));
   pin.agentContexts = datedLines(
     firstSeen,
     activityOf(pin.keyId, pin.keyGeneration, pin.sessionId),
-    recipes.flatMap((r, j) => {
-      if ((r.agentState === 'released' && pin.companion !== 'none') || r.accountId === null) return [];
-      const moved = movedPinOf(r);
-      const own = { accountId: moved?.accountId ?? r.accountId, agentId: r.agentId, model: r.model };
-      if (r.agentId === 'main') {
-        const line = { ...own, burnAt: fold?.at ?? null, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: pin.pinnedAt };
-        return [pinLine(line, pin.keyId, pin.sessionId, display, pin.lastRefreshAt)];
-      }
-      const ended = i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT;
-      // A moved pin's row is the one its move wrote.
-      const line = { ...own, cacheTtlMs: pinCacheTtlOf(pin.sessionId), effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState, ...(moved === null ? {} : { pinnedAt: moved.at }) };
-      return [pinLine(line, pin.keyId, pin.sessionId, servedBeside(display, line, firstSeen), line.lastUsedAt)];
-    }),
+    pins.flatMap((p) => (p.listed ? [p.line] : [])),
+  );
+  // The router holds a released agent's pin as ended.
+  UNLISTED_PINS.set(
+    pin,
+    pins.flatMap((p) => (p.listed ? [] : [{ ...p.line, ended: true }])),
   );
   // The spec names a subagent's facts by its place, so they take the id the recipes drew for that place, and the route
   // answers them in agent id order.
@@ -1334,20 +1351,25 @@ const NO_MOD_CREATED_AT = ago(47 * MINUTE);
 const NO_MOD_BURN = 0.22;
 const noModMain = { accountId: 'contract', agentId: 'main', cacheTtlMs: pinCacheTtlOf(NO_MOD_SESSION_ID), effort: 'max', ended: false, lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), lifecycle: null, model: 'claude-sonnet-5-5' };
 const noModSubagent = { accountId: 'contract', agentId: '5c8e', cacheTtlMs: pinCacheTtlOf(NO_MOD_SESSION_ID), effort: 'low', ended: false, lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), lifecycle: null, model: HAIKU };
+const auxiliaryOnlyRow = writtenRow(
+  {
+    accountId: 'overflow',
+    agentId: auxiliaryOnlyLine.agentId,
+    burn: AUXILIARY_ONLY_BURN,
+    companion: 'reporting',
+    firstSeen: AUXILIARY_ONLY_CREATED_AT,
+    keyId: 'laptop',
+    presenceAgeSeconds: 9,
+    sessionId: AUXILIARY_ONLY_SESSION_ID,
+  },
+  [auxiliaryOnlyLine],
+);
+// Main's auxiliary calls ride beside its subagent's turns, so its pin was last used at the subagent's last request. An
+// auxiliary call reports no prompt size, so the pin's burn and its move's size read none.
+const auxiliaryMain = { accountId: 'overflow', agentId: 'main', cacheTtlMs: pinCacheTtlOf(AUXILIARY_ONLY_SESSION_ID), effort: null, ended: false, lastInputTokens: null, lastUsedAt: auxiliaryOnlyRecipe.lastRequestAt, lifecycle: null, model: HAIKU };
+UNLISTED_PINS.set(auxiliaryOnlyRow, [pinLine(auxiliaryMain, 'laptop', AUXILIARY_ONLY_SESSION_ID, { burn: null, dollars: null }, auxiliaryMain.lastUsedAt)]);
 const WRITTEN_SESSIONS = [
-  writtenRow(
-    {
-      accountId: 'overflow',
-      agentId: auxiliaryOnlyLine.agentId,
-      burn: AUXILIARY_ONLY_BURN,
-      companion: 'reporting',
-      firstSeen: AUXILIARY_ONLY_CREATED_AT,
-      keyId: 'laptop',
-      presenceAgeSeconds: 9,
-      sessionId: AUXILIARY_ONLY_SESSION_ID,
-    },
-    [auxiliaryOnlyLine],
-  ),
+  auxiliaryOnlyRow,
   writtenRow({ accountId: 'contract', agentId: 'main', burn: NO_MOD_BURN, firstSeen: NO_MOD_CREATED_AT, keyId: 'fleet', sessionId: NO_MOD_SESSION_ID }, [noModMain, noModSubagent]),
 ];
 SESSIONS.push(...WRITTEN_SESSIONS);
@@ -1520,9 +1542,54 @@ export const sessionsListedAt = (now: number, sessions: readonly Session[], seco
 // inside its pool's affinity window, whether or not the ledger holds the request that wrote it. The pool view reads
 // every pin under the pool's keys as its figure and each member's own on the member, so a pin on an account that left
 // the pool counts in the figure and the dashboard's sum alone.
-const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => {
-  const lastUse = Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((at) => (at === null ? [] : [Date.parse(at)])));
-  return NOW - lastUse <= (poolById.get(poolId)?.affinityTtlSeconds ?? 0) * 1_000;
+const recipeLastUse = (r: Pick<KeepaliveRecipe, 'lastProbeAt' | 'lastRequestAt'>): number => Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((at) => (at === null ? [] : [Date.parse(at)])));
+const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => NOW - recipeLastUse(r) <= (poolById.get(poolId)?.affinityTtlSeconds ?? 0) * 1_000;
+
+/**
+ * The pins under a pool's keys as `GET /admin/pools/{id}/pins` answers them at `now`, in the order of their keys,
+ * sessions, agents and models as bytes: each line of the rows and each pin the rows list no line for, with none of the
+ * sessions route's filters. A pin's mark is its row's where it is the row's display pin, since the story marks no other.
+ * The router's sweep takes a pin past the pool's affinity TTL, so a pin that `pinReadAt` reads as swept at `now` is out:
+ * its last use is the later of its recipe's last request and last probe, which each renew it, and a line's own last use
+ * where no recipe names the pin.
+ */
+export const poolPinsAt = (now: number, sessions: readonly Session[], keyIds: ReadonlySet<string>, ttlMs: number): PoolPin[] => {
+  const keyOf = (keyId: string, sessionId: string, agentId: string, model: string) => `${keyId}|${sessionId}|${agentId}|${model}`;
+  const recipes = new Map(RECIPES.map((r) => [keyOf(r.keyId, r.sessionId, r.agentId, r.model), r]));
+  return sessions
+    .filter((s) => keyIds.has(s.keyId))
+    .flatMap((s) =>
+      [...s.agentContexts, ...(UNLISTED_PINS.get(s) ?? [])].flatMap((line): PoolPin[] => {
+        const recipe = recipes.get(keyOf(s.keyId, s.sessionId, line.agentId, line.model));
+        const lastUse = recipe !== undefined ? recipeLastUse(recipe) : line.lastUsedAt === null ? null : Date.parse(line.lastUsedAt);
+        if (lastUse === null || pinReadAt(lastUse, ttlMs, now) === 'none') return [];
+        const mark = line.agentId === s.agentId && line.model === s.model ? s.mark : null;
+        return [
+          {
+            accountBound: line.accountBound === true,
+            accountId: line.accountId,
+            agentId: line.agentId,
+            burn: line.burn,
+            burnAt: line.burnAt,
+            burnUnit: line.burnUnit,
+            burnWindow: line.burnWindow,
+            ended: line.ended,
+            fast: line.fast,
+            keyId: s.keyId,
+            mark,
+            model: line.model,
+            moveCost: line.moveCost,
+            moveDropCost: line.moveDropCost,
+            moveDropSize: line.moveDropSize,
+            moveSize: line.moveSize,
+            sessionId: s.sessionId,
+            warm: line.warm,
+            warmUntil: line.warmUntil,
+          },
+        ];
+      }),
+    )
+    .sort((a, b) => byteOrder(a.keyId, b.keyId) || byteOrder(a.sessionId, b.sessionId) || byteOrder(a.agentId, b.agentId) || byteOrder(a.model, b.model));
 };
 type Pin = { agentId: string; keyId: string; sessionId: string };
 /** The pins by their account, keyed `key|session|agent|model` so a pin a recipe and a line name counts once. */

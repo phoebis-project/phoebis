@@ -86,6 +86,7 @@ const SYNC = {
   key_models: { decode: (b) => d.decodeKeyModels(b), mock: (api) => api.getKeyModels('laptop') },
   keys: { decode: (b) => b.keys.map(d.decodeKey), mock: (api) => api.listKeys() },
   pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing({ accountId: 'legacy' }) },
+  pool_pins: { decode: (b) => b.pins.map(d.decodePoolPin), mock: (api) => api.listPoolPins('work') },
   pools: { decode: (b) => b.pools.map(d.decodePool), mock: (api) => api.listPools() },
   replay: { decode: (b) => d.decodeReplay(b), mock: (api) => api.replayParked() },
   // The fixture's request carries events and a stream cut, and the route lifts the cut off the request's own
@@ -104,7 +105,7 @@ const SYNC = {
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures no decoder and no `Api` method reads: captured for their route's shape, or read by a test of their own. */
-const UNCONSUMED = ['bound_refusals', 'decision_pick', 'oauth_session', 'pool_pins', 'pool_traffic', 'pricing', 'replay_held', 'sessions_costs', 'system', 'test_tables'];
+const UNCONSUMED = ['bound_refusals', 'decision_pick', 'oauth_session', 'pool_traffic', 'pricing', 'replay_held', 'sessions_costs', 'system', 'test_tables'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');

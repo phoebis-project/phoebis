@@ -171,6 +171,16 @@ export const blankAccountRow = (input: Pick<Account, 'id' | 'kind' | 'label'>, s
 
 const CONTRACT_SUBSCRIPTION: Omit<Subscription, 'plan'> = { billingType: 'stripe_subscription_contracted', organizationType: 'claude_enterprise', planDisplayName: null, rateLimitTier: 'default_claude_zero', since: ago(45 * DAY), trialEndsAt: null, endsAt: null };
 
+/**
+ * The stretch test's figure as the router stores it on the slow-down entry that a read writes, at that read's instant
+ * `at`: the 5-hour utilization the read held plus its demand's increase until the window's horizon less the threshold,
+ * null where that instant lies at or before the read.
+ */
+const stretchProjectionOf = (read: { at: number; demand: number; horizon: number; utilization: number }, thresholdMs: number): number | null => {
+  const until = read.horizon - thresholdMs;
+  return until <= read.at ? null : read.utilization + (read.demand * (until - read.at)) / HOUR;
+};
+
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
 // `requests.ts`; a lifetime reaches past both, so it is the story's own, raised there to what the rollups hold. The
@@ -326,7 +336,17 @@ const SEEDS = [
     subscription: { billingType: 'monthly', organizationType: 'claude_max', planDisplayName: null, rateLimitTier: 'default_claude_max_5x', since: ago(16 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 48 },
     cooldowns: [],
-    slowDown: { factor: 0.5, holdMs: 120_000, ramp: 1, since: iso(clock(13, 48)), speed: 0.5, stretchMs: 2_520_000, thresholdMs: 1_800_000 },
+    slowDown: {
+      factor: 0.5,
+      holdMs: 120_000,
+      ramp: 1,
+      since: iso(clock(13, 48)),
+      speed: 0.5,
+      stretchMs: 2_520_000,
+      // The read of 14:05 above: 0.86 plus 54 minutes of the demand to 14:59, the reset less the threshold.
+      stretchProjection: stretchProjectionOf({ at: clock(14, 5), demand: 0.1286, horizon: clock(15, 29), utilization: 0.86 }, 1_800_000),
+      thresholdMs: 1_800_000,
+    },
   },
   // The work pool's API-key member, which takes the sessions a round moves off studio.
   {

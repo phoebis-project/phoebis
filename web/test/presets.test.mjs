@@ -75,34 +75,37 @@ const win = (id, projection, horizonIn = 2 * HOUR, burn = 0.01) => ({
 /** A subscription account with its 5-hour and 7-day projections, and its 7-day Fable window's where one is named. */
 const oauth = (id, five, seven, fable = null) => ({ fableWindow: fable === null ? null : win('7d_fable', fable, 5 * HOUR), id, kind: 'oauth', label: id, windows: [win('5h', five), win('7d', seven, 5 * HOUR)] });
 /**
- * A pin as the Sessions route serves it: its burn on `burnWindow` decayed to `burnAt`, the instant of the read, main's,
- * with no line and no mark.
+ * `oauth` with its 5-hour window resetting `resetIn` from now, its horizon there. The window starts five hours before
+ * the reset, or at the reset once it has passed. A reset ahead sets the round's line at the wall.
+ */
+const fresh = (id, five, seven, resetIn) => ({ ...oauth(id, five, seven), windows: [{ ...win('5h', five, resetIn), resetsAt: at(NOW + resetIn) }, win('7d', seven, 5 * HOUR)] });
+/**
+ * A pin as the pool's pins route serves it: main's, its burn on `burnWindow` decayed to `burnAt`, the instant of the
+ * read, warm until four minutes after it or cold since five minutes before it, and no mark.
  */
 const pin = (accountId, sessionId, burn, warm, over = {}) => ({
+  accountBound: false,
   accountId,
-  agentContexts: [],
   agentId: 'main',
   burn,
   burnAt: at(NOW),
   burnUnit: 'window_share',
   burnWindow: 'five_hour',
-  cacheTtlMs: 5 * MINUTE,
   ended: false,
   fast: false,
   keyId: 'desktop',
-  lastInputTokens: 1_000,
-  lastRefreshAt: at(warm ? NOW - MINUTE : NOW - 10 * MINUTE),
   mark: null,
   model: 'claude-sonnet-5',
   moveCost: null,
   moveDropCost: null,
   moveDropSize: null,
   moveSize: null,
-  pinned: true,
   sessionId,
+  warm,
+  warmUntil: at(warm ? NOW + 4 * MINUTE : NOW - 5 * MINUTE),
   ...over,
 });
-const member = (accountId, eligible = 'eligible', priority = 0) => ({ accountId, eligible, priority });
+const member = (accountId, eligible = 'eligible', priority = 0) => ({ accountId, eligible, fableReservation: null, priority });
 const pool = (accounts, over = {}) => ({
   burnAverageSeconds: 1_800,
   fiveHourCeiling: 0.9,
@@ -114,18 +117,18 @@ const pool = (accounts, over = {}) => ({
   windDownMinutes: 30,
   ...over,
 });
-const line = (accounts, sessions, over = {}) => d.shedPreviewLine(d.shedPreview(pool(accounts, over), accounts, sessions, NOW), NOW);
-// hot projects 99 % at its 5-hour horizon two hours out, with no reset ahead, nine points past the ceiling: an excess
-// of 4.5 points an hour.
-const hot = oauth('hot', 0.99, 0.4);
+const line = (accounts, pins, over = {}) => d.shedPreviewLine(d.shedPreview(pool(accounts, over), accounts, pins, NOW), NOW);
+// hot projects 109 % at its 5-hour reset two hours out, nine points past the wall: an excess of 4.5 points an hour. Its
+// window opened three hours ago, past the hold.
+const hot = fresh('hot', 1.09, 0.4, 2 * HOUR);
 const cool = oauth('cool', 0.3, 0.2);
 const three = [pin('hot', 'cold-a', 0.03, false), pin('hot', 'warm-b', 0.025, true), pin('hot', 'warm-c', 0.01, true)];
 
 /**
- * hot projecting 99 % a minute out on its 5-hour window, nine points past the ceiling: an excess of 540 points an hour,
- * so the cap's share of the pins' burn sets a round's target.
+ * hot projecting 109 % at its 5-hour reset a minute out, nine points past the wall: an excess of 540 points an hour, so
+ * the cap's share of the pins' burn sets a round's target.
  */
-const steep = { ...hot, windows: [win('5h', 0.99, MINUTE), win('7d', 0.4, 5 * HOUR)] };
+const steep = fresh('hot', 1.09, 0.4, MINUTE);
 /** What `steep`'s round beside `cool` marks over `pins`: its sessions, the warm ones and the burn they carry. */
 const marksOf = (pins, over = {}) => {
   const preview = d.shedPreview(pool([steep, cool], over), [steep, cool], pins, NOW);
@@ -161,8 +164,8 @@ test('a standing mark lifts no guard, and an unpriced pin under one is not the p
 test('the preview reads one member over the ceiling and the round that marks two of its sessions, word for word', () => {
   // The cap bounds the target at half of the 6.5 points an hour the pins burn, which no pin covers alone: cold-a's 3
   // goes first, then warm-b's 2.5, the first of the two warm pins that cover the rest at one cost, reaches it. The 5.5
-  // they carry fall under the 9.5 points an hour that a projection of 109 % two hours out asks for.
-  const over = oauth('hot', 1.09, 0.4);
+  // they carry fall under the 9.5 points an hour that a projection of 119 % at the reset two hours out asks for.
+  const over = fresh('hot', 1.19, 0.4, 2 * HOUR);
   assert.equal(line([over, cool], three), '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 5.5 %/h of the excess, to move to a sibling with runway.');
   const preview = d.shedPreview(pool([over, cool]), [over, cool], three, NOW);
   assert.deepEqual([preview.hot.map((h) => [h.label, h.window]), preview.sessions, preview.warm, preview.covered.toFixed(3)], [[['hot', '5h']], 2, 1, '0.055']);
@@ -238,12 +241,12 @@ test('the preview reads each window against its own ceiling', () => {
 });
 
 test("a sibling's runway reads the weekly ceiling on its 7-day window", () => {
-  // hot projects 97 % with no 5-hour reset ahead, over the 5-hour ceiling of 95: an excess of one point an hour, which
-  // cold-a's cold move covers. Its one sibling's 7-day window reads 97 %, under the weekly ceiling of 100.
-  const over = { fableWindow: null, id: 'hot', kind: 'oauth', label: 'hot', windows: [{ ...win('5h', 0.97), resetsAt: null }, { ...win('7d', 0.4, 5 * HOUR), resetsAt: WEEKS_RESET }] };
+  // hot projects 102 % at its 5-hour reset two hours out, past the wall: an excess of one point an hour, which cold-a's
+  // cold move covers. Its one sibling's 7-day window reads 97 %, under the weekly ceiling of 100.
+  const over = fresh('hot', 1.02, 0.4, 2 * HOUR);
   const sibling = { fableWindow: null, id: 'sibling', kind: 'oauth', label: 'sibling', windows: [{ ...win('5h', 0.3), resetsAt: null }, { ...win('7d', 0.97, 5 * HOUR), resetsAt: WEEKS_RESET }] };
   const preview = d.shedPreview(pool([over, sibling], { fiveHourCeiling: 0.95, weeklyCeiling: 1 }), [over, sibling], three, NOW);
-  assert.deepEqual([preview.sessions, preview.noRunway], [1, false]);
+  assert.deepEqual([preview.sessions, preview.quiet], [1, null]);
 });
 
 test("closest ranks by the room to a window's own ceiling", () => {
@@ -315,10 +318,10 @@ test('a member over the ceiling with no priced pin reads that a round would mark
 });
 
 test('the preview reads no priced pin only where a round walks: the switch on and a member over the ceiling', () => {
-  assert.equal(d.shedPreview(pool([hot, cool], { loadShedding: false }), [hot, cool], [], NOW).unpriced, false, 'the switch off walks no member');
+  assert.equal(d.shedPreview(pool([hot, cool], { loadShedding: false }), [hot, cool], [], NOW).quiet, null, 'the switch off walks no member');
   const near = oauth('near', 0.85, 0.3);
-  assert.equal(d.shedPreview(pool([near, cool]), [near, cool], [], NOW).unpriced, false, 'no member over the ceiling walks none');
-  assert.equal(d.shedPreview(pool([hot, cool]), [hot, cool], [], NOW).unpriced, true, 'a member over the ceiling with no pin to price');
+  assert.equal(d.shedPreview(pool([near, cool]), [near, cool], [], NOW).quiet, null, 'no member over the ceiling walks none');
+  assert.equal(d.shedPreview(pool([hot, cool]), [hot, cool], [], NOW).quiet, 'unpriced', 'a member over the ceiling with no pin to price');
 });
 
 /** The round's sentence over `hot` when it would mark no priced pin for `reason`. */
@@ -352,8 +355,8 @@ test('a round whose pins are each too small to move says so, ahead of the guard'
   // alder's and ivy's one pin of 3 points an hour each covers its target of 1.5, and its mark would leave its member
   // no burn, so both walks read the guard. The preview walks alder, hot and ivy by their labels at one priority, and
   // the line names hot's sliver, the first cause in the router's order, from the middle walk.
-  const alder = oauth('alder', 0.99, 0.4);
-  const ivy = oauth('ivy', 0.99, 0.4);
+  const alder = fresh('alder', 1.09, 0.4, 2 * HOUR);
+  const ivy = fresh('ivy', 1.09, 0.4, 2 * HOUR);
   assert.equal(
     line([alder, hot, ivy, cool], [pin('alder', 'only', 0.03, false), ...pins, pin('ivy', 'only', 0.03, false)]),
     '3 members project over the ceiling: alder, hot, ivy. A round there would mark no session: each is too small to move.',
@@ -371,7 +374,7 @@ test('a round with a pin no sibling has runway for, which burns nothing, reads t
 test('a pin that burns nothing leaves the round before its order', () => {
   // hot's two pins burn nothing, so its target is zero, and under never other's two pins are warm, so its walk stops
   // after its cold pins, of which it holds none. No pin is left that a round could mark.
-  const other = oauth('other', 0.99, 0.4);
+  const other = fresh('other', 1.09, 0.4, 2 * HOUR);
   const beside = [pin('hot', 'z1', 0, false), pin('hot', 'z2', 0, false), pin('other', 'a', 0.03, true), pin('other', 'b', 0.02, true)];
   // b's 3 points an hour cover the target of 1.5, the cap's half of b's 3, and its mark would leave hot no burn, since
   // z burns nothing and stands in neither the order nor the guard's sum.
@@ -414,7 +417,7 @@ test('a round fired by the 7-day Fable window counts the pins whose model draws 
   const pins = [pin('fable-hot', 'sonnet-a', 0.05, false), fable('fable-b', 0.01), fable('fable-c', 0.005)];
   const preview = d.shedPreview(pool([fableHot, sibling]), [fableHot, sibling], pins, NOW);
   assert.deepEqual(preview.hot.map((h) => [h.label, h.window, h.excess.toFixed(3)]), [['fable-hot', '7d_fable', '0.018']]);
-  assert.deepEqual([preview.sessions, preview.covered.toFixed(3), preview.unpriced], [1, '0.010', false], "fable-b's point alone, never the Sonnet pin's five");
+  assert.deepEqual([preview.sessions, preview.covered.toFixed(3), preview.quiet], [1, '0.010', null], "fable-b's point alone, never the Sonnet pin's five");
   assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: fable-hot. A round there would mark 1 session (0 warm), 1.0 %/h of the excess, to move to a sibling with runway.');
 });
 
@@ -440,11 +443,6 @@ test('the preview counts an unpriced pin on the window for the last-pin rule sti
   assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: hot. A round there would mark 1 session (0 warm), 3.0 %/h of the excess, to move to a sibling with runway.');
 });
 
-/**
- * `oauth` with its 5-hour window resetting `resetIn` from now, its horizon there. The window starts five hours before
- * the reset, or at the reset once it has passed. A reset ahead sets the round's line at the wall.
- */
-const fresh = (id, five, seven, resetIn) => ({ ...oauth(id, five, seven), windows: [{ ...win('5h', five, resetIn), resetsAt: at(NOW + resetIn) }, win('7d', seven, 5 * HOUR)] });
 /** The sentence that names a member whose 5-hour round the hold, twice the test pool's 30-minute average, took away. */
 const heldSentence = (label, age) => `${label}'s 5-hour window is ${age} old, under the hold of 1 h, so its round reads the next window.`;
 
@@ -471,7 +469,7 @@ test('a held member with no other window over the ceiling is named beside the cl
 });
 
 test('a passed reset with no new one starts the window at the reset', () => {
-  const passed = fresh('hot', 0.99, 0.4, -5 * MINUTE);
+  const passed = fresh('hot', 1.09, 0.4, -5 * MINUTE);
   const preview = d.shedPreview(pool([passed, cool]), [passed, cool], three, NOW);
   assert.deepEqual([preview.hot.length, preview.held], [0, [{ ageMs: 300_000, holdMs: 3_600_000, id: 'hot', label: 'hot' }]]);
 });
@@ -590,37 +588,12 @@ test("a pin's burn decays to nothing once its instant lies more than thirty burn
   );
 });
 
-/**
- * A line as the Sessions route serves it, its own pin's figures: its burn on `burnWindow` decayed to `burnAt`, the
- * instant of the read, warm until four minutes after it or cold since five minutes before it.
- */
-const agentLine = (accountId, agentId, burn, warm, over = {}) => ({
-  accountId,
-  agentId,
-  burn,
-  burnAt: at(NOW),
-  burnUnit: 'window_share',
-  burnWindow: 'five_hour',
-  ended: false,
-  fast: false,
-  lastInputTokens: 1_000,
-  model: 'claude-sonnet-5',
-  moveCost: null,
-  moveDropCost: null,
-  moveDropSize: null,
-  moveSize: null,
-  warm,
-  warmUntil: at(warm ? NOW + 4 * MINUTE : NOW - 5 * MINUTE),
-  ...over,
-});
-
-test("the preview's round leaves out a pin whose line reads its agent ended, from its order, its sum and its count", () => {
+test("the preview's round leaves out a pin that reads its agent ended, from its order, its sum and its count", () => {
   // With both pins walked the cap's half of their 5 points an hour is 2.5, which a's 3 covers, leaving b's 2 on hot.
-  // With b's agent ended the round walks a alone, and its mark would leave none of the burn on hot. b walks as its
-  // line, which holds its agent and model, so the line's own mark is the one read.
-  const b = (ended) => pin('hot', 'b', 0.02, false, { agentContexts: [agentLine('hot', 'main', 0.02, false, { ended })] });
-  const read = (sessions) => {
-    const preview = d.shedPreview(pool([hot, cool]), [hot, cool], sessions, NOW);
+  // With b's agent ended the round walks a alone, and its mark would leave none of the burn on hot.
+  const b = (ended) => pin('hot', 'b', 0.02, false, { ended });
+  const read = (pins) => {
+    const preview = d.shedPreview(pool([hot, cool]), [hot, cool], pins, NOW);
     return [preview.sessions, preview.covered, preview.quiet];
   };
   assert.deepEqual(read([pin('hot', 'a', 0.03, false), b(false)]), [1, 0.03, null]);
@@ -636,24 +609,18 @@ const markedOne = '1 member projects over the ceiling: hot. A round there would 
 const second = pin('hot', 't', 0.02, false);
 
 test("the preview walks a subagent's pin on its own member", () => {
-  // The row's display pin and its line stand on cool, and its subagent's line burns 3 points an hour on hot.
-  const split = pin('cool', 's', 0.01, false, { agentContexts: [agentLine('cool', 'main', 0.01, false), agentLine('hot', 'sub', 0.03, false)] });
-  assert.equal(line([hot, cool], [split, second]), markedOne);
-  // The row's display pin on hot is the pin its own line holds, so the round walks one pin of 3 points an hour there.
-  const own = pin('hot', 'r', 0.03, false, { agentContexts: [agentLine('hot', 'main', 0.03, false)] });
-  assert.equal(line([hot, cool], [own, second]), markedOne, 'a display pin and its own line count as one pin');
+  // The session's main pin stands on cool, and its subagent's pin burns 3 points an hour on hot.
+  assert.equal(line([hot, cool], [pin('cool', 's', 0.01, false), pin('hot', 's', 0.03, false, { agentId: 'sub' }), second]), markedOne);
 });
 
-test('two pins of one session and one model are walked and marked apart, and a line reads its warmth off its cold instant', () => {
-  // r's display pin, which no line holds, burns 3 points an hour on hot and its subagent's line 1 on the same model.
-  // The cap's half of their 4 is 2, which the display pin's 3 covers alone, and its mark leaves sub's 1 on hot, over
-  // the guard's tenth of 0.4.
-  const pair = pin('hot', 'r', 0.03, false, { agentContexts: [agentLine('hot', 'sub', 0.01, false)] });
-  assert.equal(line([hot, cool], [pair]), markedOne);
-  // The subagent's line is served warm and went cold a minute before the dialog's clock, so it walks cold beside t,
+test('two pins of one session and one model are walked and marked apart, and a pin reads its warmth off its cold instant', () => {
+  // r's main pin burns 3 points an hour on hot and its subagent's pin 1 on the same model. The cap's half of their 4
+  // is 2, which main's 3 covers alone, and its mark leaves sub's 1 on hot, over the guard's tenth of 0.4.
+  assert.equal(line([hot, cool], [pin('hot', 'r', 0.03, false), pin('hot', 'r', 0.01, false, { agentId: 'sub' })]), markedOne);
+  // The subagent's pin is served warm and went cold a minute before the dialog's clock, so it walks cold beside t,
   // the sums of case 1: its 3 covers the target of 2.5 and leaves t's 2 on hot.
-  const cooled = pin('cool', 's', 0.01, false, { agentContexts: [agentLine('cool', 'main', 0.01, false), agentLine('hot', 'sub', 0.03, true, { warmUntil: at(NOW - MINUTE) })] });
-  assert.equal(line([hot, cool], [cooled, second]), markedOne, 'a line past its cold instant reads cold whatever it was served');
+  const cooled = pin('hot', 's', 0.03, true, { agentId: 'sub', warmUntil: at(NOW - MINUTE) });
+  assert.equal(line([hot, cool], [pin('cool', 's', 0.01, false), cooled, second]), markedOne, 'a pin past its cold instant reads cold whatever it was served');
 });
 
 test('a fast-lane pin is out of the round', () => {
@@ -669,12 +636,6 @@ test('a member whose one Fable pin rides the fast lane still reads its Fable wee
   const fableHot = oauth('fable-hot', 0.5, 0.4, 0.99);
   const preview = d.shedPreview(pool([fableHot, cool]), [fableHot, cool], [pin('fable-hot', 'f', 0.01, false, { fast: true, model: 'claude-fable-5-1' })], NOW);
   assert.deepEqual(preview.hot.map((h) => [h.label, h.window]), [['fable-hot', '7d_fable']]);
-});
-
-test('an ended row with no line is out of the round', () => {
-  const read = (ended) => line([hot, cool], [pin('hot', 'e', 0.03, false, { ended }), second]);
-  assert.equal(read(true), quiet('each would leave its member too little burn.'), "with its agent ended e is out, and t's mark would leave hot no burn");
-  assert.equal(read(false), markedOne);
 });
 
 test('the pick compares the served cost of a move', () => {
@@ -714,8 +675,14 @@ test('the cold group walks the pins that drop nothing first', () => {
   assert.equal(read([pin('hot', 'none', 0.01, false), pin('hot', 'dense', 0.02, false, { moveDropCost: 0.000001, moveDropSize: 1 })]), 0.01);
 });
 
-/** `res`, an account whose 7-day window reads `utilization` under a projection of `projection` five hours out. */
-const reserving = (utilization, five = 0.3, projection = 0.85) => ({ ...oauth('res', five, projection, 0.3), windows: [win('5h', five), { ...win('7d', projection, 5 * HOUR), utilization }] });
+/**
+ * `res`, an account whose 7-day window reads `utilization` under a projection of `projection` five hours out, and
+ * whose 5-hour window projects `five` at its reset two hours out.
+ */
+const reserving = (utilization, five = 0.3, projection = 0.85) => {
+  const res = fresh('res', five, projection, 2 * HOUR);
+  return { ...res, fableWindow: win('7d_fable', 0.3, 5 * HOUR), windows: [res.windows[0], { ...res.windows[1], utilization }] };
+};
 /** A sibling with runway on every window a pin of `res` draws, its Fable week too. */
 const runway = oauth('cool', 0.3, 0.2, 0.1);
 /** res's three cold pins: a Fable one, which draws the Fable week, and two Sonnet ones, which do not. */
@@ -729,7 +696,7 @@ test('the preview mirrors a Fable reservation round on the non-Fable pins of a m
   // ceiling of 0.9, the closest its 7-day projection of 85 %. The round walks s1 and s2 alone, whose 5 points an hour
   // the cap halves to 2.5, which s1's 3 covers, leaving s2's 2 over a tenth of the 5. A walk of f's 3 beside them would
   // halve 8 to 4, which no pin covers, and mark f and then s1.
-  const none = { labels: [], sessions: 0, warm: 0 };
+  const none = { idle: [], labels: [], sessions: 0, warm: 0 };
   // hot's 5-hour round beside res's reservation round, each marking its own pins: two of hot's three, one of them warm,
   // and s1 on res.
   const res = reserving(0.8);
@@ -749,7 +716,7 @@ test('the preview mirrors a Fable reservation round on the non-Fable pins of a m
       optionOff: reservationPreview(reserving(0.8), 0.25, { fableReservationShedding: false }).reservation,
       priority: reservationPreview(reserving(0.8), 0.25, { strategy: 'priority' }).reservation,
       sheddingOff: reservationPreview(reserving(0.8), 0.25, { loadShedding: false }).reservation,
-      windowFires: reservationPreview(reserving(0.8, 0.95), 0.25).reservation,
+      windowFires: reservationPreview(reserving(0.8, 1.05), 0.25).reservation,
     },
     {
       beside:
@@ -764,8 +731,114 @@ test('the preview mirrors a Fable reservation round on the non-Fable pins of a m
       optionOff: none,
       priority: none,
       sheddingOff: none,
-      // res's 5-hour projection of 95 % fires its own round, which the reservation's test never follows.
+      // res's 5-hour projection of 105 % at its reset fires its own round, which the reservation's test never follows.
       windowFires: none,
     },
   );
+});
+
+test('a heavy pin with no runway beside slivers answers no_runway', () => {
+  // heavy's Fable model draws the 7-day Fable window, of which cool holds no reading, so no sibling has runway for it.
+  // The target is the cap's half of the 5.6 points an hour the pins burn, 2.8, which heavy covers, and its mark would
+  // leave the slivers' 0.6 on hot, over the guard's tenth of 0.56, so the gate reads it. Each sliver is under a tenth of
+  // the rest.
+  const pins = [pin('hot', 'heavy', 0.05, false, { model: 'claude-fable-5-1' }), pin('hot', 's1', 0.002, false), pin('hot', 's2', 0.002, false), pin('hot', 's3', 0.002, false)];
+  assert.equal(d.shedPreview(pool([hot, cool]), [hot, cool], pins, NOW).quiet, 'no_runway');
+});
+
+test('slivers with no runway answer sliver', () => {
+  // hot projects 120 % at its reset an hour out, so the excess of 20 points an hour exceeds the 11 points the pins burn,
+  // which a cap of 1 sets as the target. Each pin's 1 point is under a tenth of it, and hot has no sibling.
+  const soon = fresh('hot', 1.2, 0.4, HOUR);
+  const slivers = Array.from({ length: 11 }, (_, i) => pin('hot', `s${i}`, 0.01, false));
+  assert.equal(d.shedPreview(pool([soon], { shedCap: 1 }), [soon], slivers, NOW).quiet, 'sliver');
+});
+
+test('a lone pin with no runway answers last_pin', () => {
+  // a covers the target of 1.5, the cap's half of its 3, and its mark would leave hot no burn, so the guard keeps it
+  // before the gate reads that hot has no sibling.
+  assert.equal(d.shedPreview(pool([hot]), [hot], [pin('hot', 'a', 0.03, false)], NOW).quiet, 'last_pin');
+});
+
+test('a warm pin under a standing mark with never answers standing', () => {
+  const s = pin('hot', 's', 0.03, true, { mark: { at: at(NOW - 5 * MINUTE), on: 'hot', window: 'five_hour' } });
+  assert.equal(d.shedPreview(pool([hot, cool], { warmSessions: 'never' }), [hot, cool], [s], NOW).quiet, 'standing');
+});
+
+/**
+ * An account whose 5-hour window resets `resetIn` from now, projecting `five` there, with the slow-down entry's stretch
+ * figure `stretch` against a threshold of 30 minutes.
+ */
+const stretched = (id, five, stretch, resetIn = 3 * HOUR) => ({ ...fresh(id, five, 0.4, resetIn), slowDown: { stretchProjection: stretch, thresholdMs: 30 * MINUTE } });
+
+test("a slowed pool's 5-hour window reads the stretch figure against the 5-hour ceiling, under the hold too", () => {
+  // stretch's figure of 93 % is over the 5-hour ceiling of 90, though its projection of 97 % at its reset is under the
+  // wall. unread carries no figure, so its projection of 102 % fires nothing. young and young-unread hold the same
+  // figures on a window that opened ten minutes ago, under the hold of an hour.
+  const accounts = [stretched('stretch', 0.97, 0.93), stretched('unread', 1.02, null), stretched('young', 0.97, 0.93, 4 * HOUR + 50 * MINUTE), stretched('young-unread', 1.02, null, 4 * HOUR + 50 * MINUTE)];
+  const preview = d.shedPreview(pool(accounts, { slowDown: true }), accounts, [], NOW);
+  assert.deepEqual({ held: preview.held.map((h) => h.label), hot: preview.hot.map((h) => h.label) }, { held: ['young'], hot: ['stretch'] });
+});
+
+test("a slowed member's stretch round reads its horizon off the served horizon less the threshold", () => {
+  // The account ends two hours out, ahead of its 5-hour reset three hours out, so the route serves the end as the
+  // window's horizon. The round's horizon is 30 minutes before it, an hour and a half out, and the figure of 96 %, six
+  // points over the 5-hour ceiling of 90, asks 4 points an hour.
+  const ends = at(NOW + 2 * HOUR);
+  const base = stretched('ending', 0.97, 0.96);
+  const ending = { ...base, canceled: true, subscription: { endsAt: ends, trialEndsAt: null }, windows: [{ ...base.windows[0], horizon: ends }, base.windows[1]] };
+  const preview = d.shedPreview(pool([ending], { slowDown: true }), [ending], [], NOW);
+  assert.deepEqual(preview.hot.map((h) => [h.label, h.horizon, h.excess.toFixed(4)]), [['ending', NOW + 90 * MINUTE, '0.0400']]);
+});
+
+test('a walk whose pins each hold state on their account marks none and answers account_bound', () => {
+  // Without the flag, a's 3 points an hour would cover the target of 2.5, the cap's half of the 5, and leave b's 2.
+  const pins = [pin('hot', 'a', 0.03, false, { accountBound: true }), pin('hot', 'b', 0.02, false, { accountBound: true })];
+  const preview = d.shedPreview(pool([hot, cool]), [hot, cool], pins, NOW);
+  assert.deepEqual([preview.sessions, preview.quiet], [0, 'account_bound']);
+});
+
+/**
+ * res's reservation round over `pins`, res's 7-day room of 0.2 under its reservation of 0.25, beside `sibling` holding
+ * `siblingReservation`.
+ */
+const reservationRound = (pins, sibling = runway, siblingReservation = null) => {
+  const res = reserving(0.8);
+  const members = [
+    { accountId: 'res', fableReservation: 0.25, priority: 0 },
+    { accountId: sibling.id, eligible: 'eligible', fableReservation: siblingReservation, priority: 0 },
+  ];
+  return d.shedPreview(pool([res, sibling], { fableReservationShedding: true, members, strategy: 'pace' }), [res, sibling], pins, NOW).reservation;
+};
+const fable = (sessionId, burn, over = {}) => pin('res', sessionId, burn, false, { model: 'claude-fable-5-1', ...over });
+
+test("a reservation round's guard counts the Fable pins that stay on the account", () => {
+  // s alone covers the target of 1.5, the cap's half of its 3. Its mark leaves the Fable pins' 4 points an hour on
+  // res, over the guard's tenth of 0.3.
+  assert.equal(reservationRound([pin('res', 's', 0.03, false), fable('f1', 0.02), fable('f2', 0.02)]).sessions, 1);
+});
+
+test("a reservation round's guard reads a Fable pin with no priced burn as a burn it cannot weigh", () => {
+  assert.equal(reservationRound([pin('res', 's', 0.03, false), fable('f', null)]).sessions, 1);
+});
+
+test("a reservation round's guard counts nothing for a Fable pin whose agent ended", () => {
+  // With f's agent ended nothing stays beside s, so the guard keeps s, the round's last_pin.
+  assert.equal(reservationRound([pin('res', 's', 0.03, false), fable('f', null, { ended: true })]).sessions, 0);
+});
+
+test('a reservation round moves no pin onto a sibling under its own Fable reservation', () => {
+  // Each pin's 3 points an hour cover the target of 3, the cap's half of their 6, and each mark leaves the other's 3.
+  // The sibling's 7-day room of 0.2 is under its reservation of 0.25, so no pin has a destination, the round's
+  // no_runway, and with no reservation the sibling takes one.
+  const sibling = { ...oauth('cool', 0.3, 0.85, 0.1), windows: [win('5h', 0.3), { ...win('7d', 0.85, 5 * HOUR), utilization: 0.8 }] };
+  const pins = [pin('res', 's1', 0.03, false), pin('res', 's2', 0.03, false)];
+  assert.deepEqual([reservationRound(pins, sibling, 0.25).sessions, reservationRound(pins, sibling, null).sessions], [0, 1]);
+});
+
+test('a member under its reservation with no pin of another model to move runs no round', () => {
+  const fablePins = [fable('f1', 0.03), fable('f2', 0.02)];
+  assert.deepEqual(reservationRound(fablePins), { idle: ['res'], labels: [], sessions: 0, warm: 0 });
+  // A pin of another model that burns nothing is a pin the round's test can move, so the round runs and marks none.
+  assert.deepEqual(reservationRound([...fablePins, pin('res', 'z', 0, false)]), { idle: [], labels: ['res'], sessions: 0, warm: 0 }, 'a pin of another model that burns nothing');
 });

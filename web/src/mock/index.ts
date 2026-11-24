@@ -27,7 +27,7 @@ import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, 
 import { ATTENTION, byKindThenSince, featureAccountUnavailableOf, pairingExpiringOf } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
-import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, rowsOfDeletedKey, sessionsListedAt } from './operations';
+import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, poolPinsAt, rowsOfDeletedKey, sessionsListedAt } from './operations';
 import { KEYS, POOLS, UNTIL_DRAWN, budgetUntilOf, composedFor, eligibilityOf, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, FEATURE_CALLS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
@@ -1387,6 +1387,15 @@ export class MockApi implements Api {
 
   listKeys() {
     return latency(this.registry().keys.map((k) => this.keyView(k)));
+  }
+
+  /** The pins under the pool's keys at the read, the clock the sessions route reads, swept at the pool's affinity TTL. */
+  listPoolPins(poolId: string) {
+    const { keys, pools, sessions } = this.registry();
+    const pool = pools.find((p) => p.id === poolId);
+    if (pool === undefined) return Promise.reject(new ApiError(404, 'pool not found', null));
+    const keyIds = new Set(keys.filter((k) => k.poolId === poolId).map((k) => k.id));
+    return latency(poolPinsAt(NOW, sessions, keyIds, pool.affinityTtlSeconds * 1_000));
   }
 
   listPools() {

@@ -290,6 +290,7 @@ export class HttpApi implements Api {
   listGuardrails = async () => (await call<{ guardrails: unknown[] }>('GET', '/admin/guardrails')).guardrails.map(d.decodeGuardrail);
   listKeepaliveRecipes = async () => (await call<{ recipes: unknown[] }>('GET', '/admin/keepalive/recipes')).recipes.map(d.decodeRecipe);
   listKeys = async () => (await call<{ keys: unknown[] }>('GET', '/admin/keys')).keys.map(d.decodeKey);
+  listPoolPins = async (poolId: string) => (await call<{ pins: unknown[] }>('GET', `/admin/pools/${enc(poolId)}/pins`)).pins.map(d.decodePoolPin);
   listPools = async () => (await call<{ pools: unknown[] }>('GET', '/admin/pools')).pools.map(d.decodePool);
   listRequests = async (q: RequestQuery = {}) =>
     d.decodeRequestPage(

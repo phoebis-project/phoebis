@@ -32,20 +32,20 @@ const { MockApi } = await import('./dist/api.js');
 const LIMIT = 72;
 
 const roots = [];
-const reads = { getKeepaliveOverview: api.getKeepaliveOverview, getKeyModels: api.getKeyModels, listAccounts: api.listAccounts, listCatalogOf: api.listCatalogOf, listSessions: api.listSessions, updateKey: api.updateKey, updatePool: api.updatePool };
+const reads = { getKeepaliveOverview: api.getKeepaliveOverview, getKeyModels: api.getKeyModels, listAccounts: api.listAccounts, listCatalogOf: api.listCatalogOf, listPoolPins: api.listPoolPins, updateKey: api.updateKey, updatePool: api.updatePool };
 beforeEach(() => {
   // A frozen clock, so the dialog's ticking instant arms no window timer.
   const clock = fakeClock();
   clock.freeze(Date.UTC(2026, 9, 14, 12));
   installClock(clock);
   // The test build's api is the HTTP client, so the dialogs' other reads answer here: the account list the key dialog
-  // reads at each opening and a saved pool's sessions and return rate as the mock does, the members' catalogs after the
-  // suggestions' pause and an open edit's model list empty.
+  // reads at each opening and a saved pool's return rate as the mock does, and a saved pool's pins, the members'
+  // catalogs after the suggestions' pause and an open edit's model list empty.
   api.listAccounts = async () => accounts;
   api.listCatalogOf = async () => [];
   api.getKeyModels = async (keyId) => ({ keyId, longContextTwins: true, modelRulesMode: 'extend', poolId: '', rules: [] });
   api.getKeepaliveOverview = async ({ range }) => overviews[range];
-  api.listSessions = async () => sessions;
+  api.listPoolPins = async () => [];
 });
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
@@ -99,8 +99,7 @@ const mock = new MockApi();
 const pools = await mock.listPools();
 const accounts = await mock.listAccounts();
 
-// A saved pool's dialog reads the sessions and its return rate itself, answered here as the mock answers them.
-const sessions = await mock.listSessions();
+// A saved pool's dialog reads its return rate itself, answered here as the mock answers it.
 const overviews = { '30d': await mock.getKeepaliveOverview({ range: '30d' }), '7d': await mock.getKeepaliveOverview({ range: '7d' }) };
 /** The accounts read as the page hands it down, its list null until it answers. */
 const accountsRead = (data) => ({ data, error: null, reload() {} });
@@ -472,6 +471,58 @@ test("a key move sends the stored key's settings with the new pool, the name tri
     notes: null,
     poolId: target.id,
   });
+});
+
+/**
+ * The Load shedding group's Preview field, its expert view turned on through the group's line. The expert fields read
+ * on their own once drawn, so the wait lets those reads land before the case reads the field.
+ */
+const shedPreviewField = async (container) => {
+  const group = () => container.querySelector('dialog[open] section.dialog-group[aria-label="Load shedding"]');
+  act(() => group()?.querySelector('button[aria-label="Turn on the expert view"]')?.click());
+  await settled();
+  return [...(group()?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Preview');
+};
+
+test("a saved pool's Preview walks the pins the pool's own read answers", async () => {
+  // hot projects 109 % at its 5-hour reset an hour out, nine points past the wall, and cool sits under both of the pool
+  // all's ceilings of 75 and 78 %. The cap's half of the two pins' 6 points an hour is 3, which either covers, and the
+  // mark leaves the other's 3 on hot.
+  const at = (ms) => new Date(Date.UTC(2026, 9, 14, 12) + ms).toISOString();
+  const studio = accounts.find((a) => a.id === 'studio');
+  const [five, seven] = studio.windows;
+  const account = (id, fiveProjection, sevenProjection) => ({
+    ...studio,
+    fableWindow: null,
+    id,
+    label: id,
+    slowDown: null,
+    windows: [
+      { ...five, horizon: at(3_600_000), projection: fiveProjection, resetsAt: at(3_600_000), utilization: 0.5 },
+      { ...seven, horizon: at(5 * 3_600_000), projection: sevenProjection, utilization: 0.1 },
+    ],
+  });
+  const both = [account('hot', 1.09, 0.4), account('cool', 0.3, 0.2)];
+  const all = pools.find((p) => p.id === 'all');
+  const pool = { ...all, members: both.map((a) => ({ ...all.members[0], accountId: a.id, eligible: 'eligible', fableReservation: null, priority: 0 })) };
+  const pinOn = (sessionId) => ({ accountBound: false, accountId: 'hot', agentId: 'main', burn: 0.03, burnAt: at(0), burnUnit: 'window_share', burnWindow: 'five_hour', ended: false, fast: false, keyId: 'desktop', mark: null, model: 'claude-sonnet-5', moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null, sessionId, warm: false, warmUntil: at(-300_000) });
+  api.listPoolPins = async () => [pinOn('a'), pinOn('b')];
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts: accountsRead(both), initialGroup: 'shedding', pool }));
+  assert.equal(
+    (await shedPreviewField(container))?.querySelector('.shed-preview')?.textContent,
+    '1 member projects over the ceiling: hot. A round there would mark 1 session (0 warm), 3.0 %/h of the excess, to move to a sibling with runway.',
+  );
+});
+
+test("a saved pool's Preview draws the failure of its pins' read in place of a count", async () => {
+  api.listPoolPins = async () => {
+    throw new ApiError(503, 'store busy', null);
+  };
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts: accountsRead(accounts), initialGroup: 'shedding', pool: pools.find((p) => p.id === 'all') }));
+  const field = await shedPreviewField(container);
+  assert.deepEqual([field?.querySelector('.shed-preview')?.textContent ?? null, field?.querySelector('p.muted')?.textContent ?? null], [null, "Could not load the pool's pins: store busy"]);
 });
 
 test('a pool dialog reopened after a 30-day pick reads its return rate once, over 7 days', async () => {

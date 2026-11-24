@@ -9445,12 +9445,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // session's subagent, so its preview reads them alone, whatever desktop, still all's key, holds there. Sonnet 4.5
   // has no weight in the cost model, so neither Sonnet burn is priced, and the subagent's burn scales its row's
   // unpriced one, so the round marks none. Studio, whose sessions project it past any ceiling under 95 %, leaves work
-  // for the check, and the annex is the sibling with runway.
+  // for the check, and the annex is the sibling with runway. The check's work turns its slow-down off: primary holds no
+  // slow-down entry, so on a slowed pool it reads no 5-hour round.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
   const written = (p, members) => ({ ...poolInput(p), members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
   await api.updatePool('all', written(story('all'), story('all').members.filter((x) => x.accountId !== 'primary')));
-  await api.updatePool('work', written(story('work'), [...story('work').members.filter((x) => x.accountId !== 'studio'), { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }]));
+  await api.updatePool('work', { ...written(story('work'), [...story('work').members.filter((x) => x.accountId !== 'studio'), { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }]), slowDown: false });
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
   const moveLaptop = (poolId) =>
     api.updateKey('laptop', {
@@ -26948,14 +26949,14 @@ await forView('/pools', async () => {
   });
 });
 await forView('/pools', async () => {
-  // The dialog alone draws the sessions and the keepalive overview, so neither is read while it is closed: each opening
-  // of a saved pool reads both once, and a key write from it reads both again. A stub answers the revoke and leaves the
-  // story alone, so the keys the later checks read stay as they are.
-  const name = '/pools two periods pass with the dialog closed and no sessions or overview read goes out, the opening reads each once, and a key write while it is open reads both again';
+  // The dialog alone draws the pool's pins and the keepalive overview, so neither is read while it is closed: each
+  // opening of a saved pool reads both once, and a key write from it reads both again. A stub answers the revoke and
+  // leaves the story alone, so the keys the later checks read stay as they are.
+  const name = '/pools two periods pass with the dialog closed and no pins or overview read goes out, the opening reads each once, and a key write while it is open reads both again';
   const page = await mount('/pools', { now: CLOCK_ORIGIN });
-  const sessions = countCalls('listSessions');
+  const pins = countCalls('listPoolPins');
   const overview = countCalls('getKeepaliveOverview');
-  const reads = () => ({ overview: overview.calls.length, sessions: sessions.calls.length });
+  const reads = () => ({ overview: overview.calls.length, pins: pins.calls.length });
   tick(5_000);
   await page.settle();
   tick(5_000);
@@ -26986,12 +26987,12 @@ await forView('/pools', async () => {
   }
   api.revokeKey = revokeKey;
   const written = reads();
-  sessions.restore();
+  pins.restore();
   overview.restore();
   page.unmount();
   results.push({
     name,
-    ok: revoked && JSON.stringify(closed) === JSON.stringify({ overview: 0, sessions: 0 }) && JSON.stringify(opened) === JSON.stringify({ overview: 1, sessions: 1 }) && JSON.stringify(written) === JSON.stringify({ overview: 2, sessions: 2 }),
+    ok: revoked && JSON.stringify(closed) === JSON.stringify({ overview: 0, pins: 0 }) && JSON.stringify(opened) === JSON.stringify({ overview: 1, pins: 1 }) && JSON.stringify(written) === JSON.stringify({ overview: 2, pins: 2 }),
     missing: [revoked ? 'a key revoked' : 'no key to revoke', JSON.stringify(closed), JSON.stringify(opened), JSON.stringify(written)],
   });
 });

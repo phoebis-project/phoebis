@@ -76,11 +76,11 @@ test("an account decodes its slow-down and each window's demand, and an api_key 
   const five = body.windows.find((w) => w.id === 'five_hour');
   const wire = {
     ...body,
-    slow_down: { factor: 0.5, hold_ms: 120_000, since, speed: 0.6, stretch_ms: 2_520_000, threshold_ms: 1_800_000 },
+    slow_down: { factor: 0.5, hold_ms: 120_000, since, speed: 0.6, stretch_ms: 2_520_000, stretch_projection: 0.93, threshold_ms: 1_800_000 },
     windows: body.windows.map((w) => (w === five ? { ...five, burn: 0.085, demand: 0.17, horizon: five.resets_at, projection: 0.81 } : w)),
   };
   const slowed = d.decodeAccount(wire);
-  assert.deepEqual(slowed.slowDown, { factor: 0.5, holdMs: 120_000, ramp: null, since: new Date(since).toISOString(), speed: 0.6, stretchMs: 2_520_000, thresholdMs: 1_800_000 });
+  assert.deepEqual(slowed.slowDown, { factor: 0.5, holdMs: 120_000, ramp: null, since: new Date(since).toISOString(), speed: 0.6, stretchMs: 2_520_000, stretchProjection: 0.93, thresholdMs: 1_800_000 });
   assert.deepEqual(slowed.windows.map((w) => [w.id, w.demand]), [['5h', 0.17], ['7d', null], ['seven_day_opus', null]], 'the demand where the route projects one');
   assert.equal(slowed.fableWindow.demand, 0);
   assert.equal(d.decodeAccount({ ...wire, slow_down: { ...wire.slow_down, since: null } }).slowDown.since, null, 'an entry outside a span names no start');
@@ -2489,6 +2489,16 @@ test('an agent line reads null for each nullable member the route sends as null,
   }
   const { warm: _w, ...withoutWarm } = full;
   assert.deepEqual([one(full).warm, one(withoutWarm).warm], [true, false], 'an entry without warm reads cold');
+});
+
+test("a pool's pin decodes each nullable member as the capture holds it", () => {
+  // A member read under another wire name decodes null, which the sync table's shape check passes, so each member is
+  // held to the first captured row that holds a value for it.
+  const pins = fixture('pool_pins').pins.map(d.decodePoolPin);
+  assert.deepEqual(
+    { burn: pins[0].burn, burnAt: pins[5].burnAt, burnUnit: pins[0].burnUnit, burnWindow: pins[0].burnWindow, moveCost: pins[5].moveCost, moveSize: pins[5].moveSize, warmUntil: pins[0].warmUntil },
+    { burn: 0, burnAt: '2026-10-11T12:16:40.000Z', burnUnit: 'window_share', burnWindow: 'five_hour', moveCost: 0.0010833333333333333, moveSize: 52_000, warmUntil: '2026-10-11T12:21:40.000Z' },
+  );
 });
 
 test('a session row reads an empty list where it draws no line or sends none, and no effort where it sends none', () => {
