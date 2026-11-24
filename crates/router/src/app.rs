@@ -1859,14 +1859,9 @@ mod tests {
     #[test]
     fn the_router_config_reads_the_regimes_under_the_revision_in_force_at_each_call() {
         use phoebis_ledger::test_tables::{FEBRUARY_2026, JANUARY_2026, SUBSCRIPTION_COSTS};
-        let named = "    regimes:\n";
         let mut costs = SUBSCRIPTION_COSTS.to_string();
-        let second = costs
-            .rfind(named)
-            .expect("the second entry names its regimes")
-            + named.len();
-        costs.insert_str(
-            second,
+        // The second entry's `desk` block ends the file, so `booth` lands behind it and out of the sorted order.
+        costs.push_str(
             "      booth: {entrypoints: [kiosk, booth], capacity: {default_claude_ai: {five_hour: 10, seven_day: 62.5}}, \
              peak: {capacity_factor: {five_hour: 1, seven_day: 1}}}\n",
         );
