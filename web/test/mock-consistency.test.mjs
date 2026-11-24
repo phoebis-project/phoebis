@@ -4203,8 +4203,9 @@ test("a turn reads its pin's entry past its lifetime by the pin's own TTL and co
 // Catches a mock that feeds the Cache tab and the keepalive's two counts one count. The day holds six expiries,
 // laptop's two of them: its main turn of 15:33:36 the day before (req_b9b779ef-af6) and the night's turn of its
 // subagent e90b at 04:37:26 (req_f05195b5-f2f), which read the report of the agent's turn of 04:27:56 with no request
-// of its pin between, the return of an agent the mod released. The Cache tab's laptop row counts both, and the overview
-// and the attention item count the five expiries of the agents that the keepalive held.
+// of its pin between. That turn's answer stopped with `end_turn`, which ends a subagent under the router's rule, so the
+// turn of 04:37:26 is the agent's return. The Cache tab's laptop row counts both, and the overview and the attention
+// item count the five expiries of the agents that the keepalive held.
 test("a released agent's return counts in its key's Cache row and in neither the keepalive overview's count nor the attention item's", async () => {
   const s = await pinned;
   const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'key', to: iso(s.now) });

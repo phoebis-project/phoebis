@@ -876,9 +876,9 @@ await forView('/', async () => {
     // The engine's retained prompts at 92 percent of their cap, the mock overview's retained bytes.
     ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
     // The expiries between turns rank last: the day's five, the drawn turns the mock seats inside their pin's window
-    // but the return of an agent the mod released (`RELEASED_AT_REQUEST` in mock/requests.ts), each sit on a pool that
-    // warms caches under a key the keepalive may probe for (`ATTENTION` in mock/attention.ts over the request seed's
-    // rows).
+    // but a subagent's return behind its answer that stopped with `end_turn` (`RELEASED_AT_REQUEST` in
+    // mock/requests.ts), each sit on a pool that warms caches under a key the keepalive may probe for (`ATTENTION` in
+    // mock/attention.ts over the request seed's rows).
     [
       'Expired between turns: 5 in 24h',
       'badge--warning',
@@ -1307,7 +1307,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // sessions the engine holds and its 33 agent records, one per recipe the story writes, against the bootstrap file's
   // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (225
   // ok of 277), the 5 expiries between turns the ledger rows of the day hold, the drawn turns the mock seats inside
-  // their pin's window but the return of an agent the mod released, and the three bus gaps, the last two hours back.
+  // their pin's window but a subagent's return behind its answer that stopped with `end_turn`, and the three bus gaps,
+  // the last two hours back.
   // The expired part takes the warning ink while the attention item `expired_between_turns` holds, which the mock holds
   // over its expiries on the pools that warm caches under keys that may be probed for (`ATTENTION` in
   // mock/attention.ts), and with an attention answer that lacks the item it takes none, the overview's count of 5

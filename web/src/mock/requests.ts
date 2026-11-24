@@ -1251,14 +1251,15 @@ const HOUR_ENTRY_SESSION_IDS: ReadonlySet<string> = new Set([MARKED_SESSION_IDS[
 /** The TTL of the cache entries of a session's pins, as each pin's line carries it in `cacheTtlMs`. The walk's
  *  expiry and the lines both read it, so the fact on an attempt and the line cannot part. */
 export const pinCacheTtlOf = (sessionId: string | null): number => (sessionId !== null && HOUR_ENTRY_SESSION_IDS.has(sessionId) ? HOUR : 5 * MINUTE);
+const releasedAtRequest = new Set<string>();
 /**
- * The ids of the requests whose pin's row carried the keepalive's release at the request. The router states the fact
- * on the attempt and no view reads it, so the mock keeps it beside its rows for its two counts. The story holds one, a
- * laptop subagent's turn of the night: the mod released the agent behind the turn before, and the request is the
- * agent's return. A drawn row's id follows the clock the mock loads at, so it names that turn at the instant the smoke
- * and the browser pass pin.
+ * The ids of the requests whose pin's row carried the router's mark of an ended agent at the request, as their serving
+ * attempt reads it (`walkSessionTurns`, which fills the set): the agent's last answer on the pin, a subagent's, stopped
+ * with `end_turn`, and the request is the agent's return. The router states the fact on the attempt and no view reads
+ * it, so the mock keeps it beside its rows for its two counts. The mock's rows hold no release by the mod with an
+ * instant, so the walk states the first of the router's two causes alone.
  */
-export const RELEASED_AT_REQUEST: ReadonlySet<string> = new Set(['req_f05195b5-f2f']);
+export const RELEASED_AT_REQUEST: ReadonlySet<string> = releasedAtRequest;
 const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
 
 function storyRow(seed: StorySeed): RequestLog {
@@ -2829,6 +2830,11 @@ function phaseRequests() {
  * stamps it at its selection and clears the mark, a compacted turn's renewal zeroes it, a probe's renewal stamps it at
  * the report, and a token count and an auxiliary call leave both.
  *
+ * The row also keeps the router's mark of an ended agent. The reported end of a subagent-class request whose answer
+ * stopped with `end_turn` sets it, a request of the pin's key reads it at its selection, a request that is no probe and
+ * no classifier call clears it behind that read, and a row that a placement writes holds none. The read rides beside
+ * the size as the entry's fact does, and `RELEASED_AT_REQUEST` takes each request whose serving attempt read the mark.
+ *
  * The account a first attempt leaves is its agent's newest landing under the key and session, whatever the model, while
  * the sweeps have not taken it: a placement, a renewal and a probe's renewal stamp the pin they land on. An auxiliary
  * call reads its own pin's account, and its pins answer no other request. A token count creates no pin: one that finds
@@ -2848,7 +2854,7 @@ function phaseRequests() {
  * keeps its null.
  */
 function walkSessionTurns() {
-  const rows = new Map<string, { accountId: string; at: number; auxiliaryOnly: boolean; refreshedAt: number; size: number | null }>();
+  const rows = new Map<string, { accountId: string; at: number; auxiliaryOnly: boolean; ended: boolean; refreshedAt: number; size: number | null }>();
   const newest = new Map<string, { accountId: string; at: number }>();
   const answered = new Map<string, string>();
   for (const r of byArrival()) {
@@ -2872,12 +2878,18 @@ function walkSessionTurns() {
     // A pin only auxiliary requests used is kept warm by them, so its last use is the measure, as the router's `warm`
     // reads its row.
     const warmUntil = row === undefined ? null : (row.auxiliaryOnly ? row.at : row.refreshedAt) + pinCacheTtlOf(r.sessionId);
+    // The routing task reads the mark ahead of the clear that the agent's own request makes, and a probe and a
+    // classifier call are no return.
+    const ended = row?.ended === true;
+    if (row !== undefined && r.kind !== 'probe' && r.classifier === null) row.ended = false;
+    const agentReleased: (boolean | null)[] = r.attempts.map(() => null);
     let left: string | undefined;
     r.attempts.forEach((a, i) => {
       if (resentInPlace(r, i)) {
         if (r.sessionId !== null) {
           a.previousInputTokens = r.attempts[i - 1].previousInputTokens;
           a.entryExpired = r.attempts[i - 1].entryExpired;
+          agentReleased[i] = agentReleased[i - 1];
         }
       } else if (i > 0) {
         if (r.sessionId !== null) left = r.attempts[i - 1].accountId;
@@ -2887,6 +2899,7 @@ function walkSessionTurns() {
         left = auxiliary ? row?.accountId : prior !== undefined && pinReadAt(prior.at, ttl, selectedAt) !== 'none' ? prior.accountId : undefined;
         a.previousInputTokens = row !== undefined && r.contextCompacted === null && (row.size ?? 0) > 0 && a.accountId === row.accountId ? row.size : null;
         a.entryExpired = a.previousInputTokens === null || warmUntil === null ? null : selectedAt >= warmUntil;
+        agentReleased[i] = a.previousInputTokens === null ? null : ended;
       }
       if (a.upstreamStatus !== 200 || r.kind === 'count_tokens' || UNFILED_IDS.has(r.id)) return;
       const named = !firstTurn && r.kind !== 'probe' && (left === undefined || left === a.accountId);
@@ -2901,6 +2914,7 @@ function walkSessionTurns() {
         if (i === 0 && read === 'none' && lastAnswer !== undefined && lastAnswer !== a.accountId) a.cacheMissReason = 'previous_message_not_found';
       }
     });
+    if (agentReleased[agentReleased.length - 1] === true) releasedAtRequest.add(r.id);
     const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
     if (r.sessionId !== null && last !== undefined) {
       const renews = row !== undefined && read === 'live' && row.accountId === last.accountId;
@@ -2921,8 +2935,12 @@ function walkSessionTurns() {
         // The selection that placed the pin is the one the last attempt went out under.
         let decided = r.attempts.length - 1;
         while (resentInPlace(r, decided)) decided -= 1;
-        rows.set(pin, { accountId: last.accountId, at: stamp, auxiliaryOnly: !refreshing, refreshedAt: Date.parse(r.attempts[decided].startedAt), size: null });
+        rows.set(pin, { accountId: last.accountId, at: stamp, auxiliaryOnly: !refreshing, ended: false, refreshedAt: Date.parse(r.attempts[decided].startedAt), size: null });
       }
+      // The router marks whatever row stands under the key at the report, and a probe replays the class and ends
+      // nothing.
+      const marked = rows.get(pin);
+      if (marked !== undefined && r.kind !== 'probe' && r.requestClass === 'subagent' && reportsRenewal(r, renews) && servingAttempt(r)?.response.stopReason === 'end_turn') marked.ended = true;
       if (!auxiliary && (renews || places)) newest.set(landing, { accountId: last.accountId, at: renews ? row.at : stamp });
     }
     const serving = servingAttempt(r);
