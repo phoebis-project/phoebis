@@ -61,7 +61,8 @@ pub enum Portability {
     /// The body references no account state.
     Portable,
     /// Each block that binds the body is a `web_search_tool_result`, which a second account refuses once and the
-    /// client then drops, so a move costs the search content and no more.
+    /// client then drops. A move costs the search content and the pin that the moved request wrote, which that refusal
+    /// releases.
     Release,
     /// The body holds a top-level `container`, a block with a `file_id` itself or in its `source`, or a block
     /// whose type ends in `_tool_result` and is neither a web search nor a web fetch result.

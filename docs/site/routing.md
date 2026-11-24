@@ -463,14 +463,17 @@ that the account cannot serve is placed for that one request and leaves the pin.
 ends that, and the pin moves again by the rules below. While the pin's account cannot serve, a request of the first
 class waits for it only where the wait ends in time: the pool still lists the account for the request's model, the
 account's obstacle names an end, and that end lies before the pin's idle expiry, the pin's last use plus the pool's
-affinity TTL. Otherwise it is placed as a portable request is and the pin follows it, at the price of its search
-results, which the new account refuses once and the client then drops before it sends the request again. A request of
-the second class waits for its account whatever the obstacle, and it stays bound past the pin's idle expiry: for 7 days
-after the pin's last use it goes to that account alone, and while the account cannot serve, it is answered with that
-account's own exhaustion. A side request of the session that holds no reference is placed for itself meanwhile and
-leaves that binding. A non-portable request that nothing binds runs the normal selection instead, and the account-scoped
-reference it carries may then not resolve: with affinity off, for the first class with no live pin, and for the second
-class behind those 7 days or once its account has left the registry.
+affinity TTL. Otherwise it is placed as a portable request is, and the placement writes the session's pin on the new
+account. That account refuses the search results once, and the refusal releases the pin that the placement wrote, under
+the reason `client_error`. The client then drops the search results and sends the request again. The session holds no
+pin by then, so the router places that request afresh, with the pool's median burn in place of the session's own. A
+request of the second class waits for its account whatever the obstacle, and it stays bound past the pin's idle expiry:
+for 7 days after the pin's last use it goes to that account alone, and while the account cannot serve, it is answered
+with that account's own exhaustion. A side request of the session that holds no reference is placed for itself meanwhile
+and leaves that binding. A non-portable request that nothing binds runs the normal selection instead, and the
+account-scoped reference it carries may then not resolve: with affinity off, for the first class with no live pin, and
+for the second class behind those 7 days, once its account has left the registry, or once the request that returned to
+the account ended in a client error that released the pin it wrote (the reason `client_error`).
 
 Every decision is recorded in full, with what the engine read in the order it read it, and read in the console's
 [routing log](console.md#routing-log). The log's words for the rules, the rungs, the partitions and the strategies are
