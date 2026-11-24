@@ -2319,14 +2319,16 @@ pub struct SeriesPoint {
     pub groups: Vec<GroupRow>,
 }
 
-/// Which rows a read keeps by who paid for them, off the funding each row was recorded under: `Billed` the billed,
-/// overage, fast and usage-based rows, `Plan` the plan rows. The two partition the rows, so their sums add up to the
-/// unfiltered sum, and the registry's later state moves no row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FundingFilter {
-    Billed,
-    Plan,
+phoebis_store::text_enum! {
+    plain
+    /// Which rows a read keeps by who paid for them, off the funding each row was recorded under: `Billed` the billed,
+    /// overage, fast and usage-based rows, `Plan` the plan rows. The two partition the rows, so their sums add up to
+    /// the unfiltered sum, and the registry's later state moves no row.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum FundingFilter {
+        Billed => "billed",
+        Plan => "plan",
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2395,6 +2397,21 @@ phoebis_store::text_enum! {
         UserAgent => "user_agent",
     }
 }
+
+/// `Deserialize` for a query's word parameter through the parse `text_enum!` generates, so a refusal of the query
+/// extractor names the words.
+macro_rules! word_parameter {
+    ($($name:ident),*) => {$(
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let word = String::deserialize(deserializer)?;
+                $name::parse(&word)
+                    .ok_or_else(|| serde::de::Error::unknown_variant(&word, $name::WORDS))
+            }
+        }
+    )*};
+}
+word_parameter!(Direction, FundingFilter, GroupBy, RequestOrder);
 
 /// The group a pattern list files an agent under when no pattern matches.
 pub const OTHER_AGENTS: &str = "other";
@@ -4178,11 +4195,10 @@ fn summed_usage(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<PinUsage> 
 }
 
 /// One group of a priced SQL sum read from `offset`: its hour, and its requests, its five counts and its dollars,
-/// priced through `price_row` at the last millisecond of the group's own hour as an inference row, so the revision is
-/// the span's and the peak factor the hour's, the Pro-week figure against the anchor row at `now`. The group's hour is
-/// one no entry splits, since each reader binds the boundary hours out of its sum. The sums' `NO_PLAN_PROBES` clause
-/// admits the probe rows the plan did not fund, and a group of them answers its dollars alone, with no request and no
-/// token.
+/// priced through `price_row` at the last millisecond of the group's own hour as an inference row, so the revision and
+/// the peak factor are the hour's, the Pro-week figure against the anchor row at `now`. The group's hour is one no
+/// entry splits, since each reader binds the boundary hours out of its sum. The sums' `NO_PLAN_PROBES` clause admits
+/// the probe rows the plan did not fund, and a group of them answers its dollars alone, with no request and no token.
 fn price_group(
     r: &rusqlite::Row<'_>,
     offset: usize,
@@ -4310,11 +4326,10 @@ pub fn key_request_totals(
 }
 
 /// Request, token, and cost totals per key and generation over `[since_hour, to_hour)`, a billed probe's dollars in
-/// and every other figure of a probe row left out: the pair is grouped in SQL beside the price columns and the hour,
-/// one query per span of `revision_spans`. Every generation is answered, so a caller that keeps the answer across a
-/// key's creation or deletion filters the live generations through [`LiveKeys::live_totals`], and a key created again
-/// under an id reads none of its earlier holder's rows. `now` is the read's instant, whose anchor row divides the
-/// Pro-week figure.
+/// and every other figure of a probe row left out: the pair is grouped in SQL beside the price columns and the hour.
+/// Every generation is answered, so a caller that keeps the answer across a key's creation or deletion filters the
+/// live generations through [`LiveKeys::live_totals`], and a key created again under an id reads none of its earlier
+/// holder's rows. `now` is the read's instant, whose anchor row divides the Pro-week figure.
 pub fn key_request_totals_by_generation(
     conn: &Connection,
     since_hour: i64,
@@ -4340,11 +4355,11 @@ pub fn key_request_totals_by_generation(
 }
 
 /// The priced SQL sum of both totals reads over the hour range: grouped by `group_columns`, the price columns, the hour
-/// and the probe rows apart, one query per span of `revision_spans`, each group's price columns read after the group
-/// columns and its key by `key_of`, a group whose key is `None` left out unpriced. The statement orders the groups as
-/// it groups them, so a key adds its groups' figures in one order whichever plan SQLite picks. A boundary hour of the
-/// range is bound out of the statement: its stored rows are read under the statement's own filter, each priced by its
-/// parts as `row_totals` prices it and added to its key's totals.
+/// and the probe rows apart, each group's price columns read after the group columns and its key by `key_of`, a group
+/// whose key is `None` left out unpriced. The statement orders the groups as it groups them, so a key adds its groups'
+/// figures in one order whichever plan SQLite picks. A boundary hour of the range is bound out of the statement: its
+/// stored rows are read under the statement's own filter, each priced by its parts as `row_totals` prices it and added
+/// to its key's totals.
 fn grouped_totals<K: Ord>(
     conn: &Connection,
     group_columns: &[&str],
@@ -4360,8 +4375,14 @@ fn grouped_totals<K: Ord>(
     let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE {NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2 GROUP BY {group_columns}, {PRICE_GROUP_COLUMNS} ORDER BY {group_columns}, {PRICE_GROUP_COLUMNS}"))?;
     let mut rows_stmt: Option<rusqlite::Statement<'_>> = None;
     let out: RefCell<BTreeMap<K, Totals>> = RefCell::default();
+    // One span over the range, its `at` unread: `price_group` prices each group at its own hour.
+    let range = Span {
+        from_hour: since_hour,
+        to_hour,
+        at: 0,
+    };
     sides.split_sum(
-        revision_spans(prices, Some(&costs.revisions), since_hour, to_hour),
+        [range],
         |piece| {
             let rows = stmt.query_map(params![piece.from_hour, piece.to_hour], |r| {
                 let Some(key) = key_of(r)? else {

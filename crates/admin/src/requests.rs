@@ -18,7 +18,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
-use crate::openapi::{ErrorBody, LedgerFailure};
+use crate::openapi::{DirectionWords, ErrorBody, LedgerFailure, RequestOrderWords};
 use crate::routes::{failure, reported_samples, windows_lacked, AdminQuery};
 use crate::AdminState;
 
@@ -873,35 +873,6 @@ pub(crate) fn text_param(value: Option<&str>) -> Option<String> {
     value.filter(|v| !v.is_empty()).map(String::from)
 }
 
-/// The words a parameter takes as its refusal lists them, `a, b or c`.
-fn one_of(words: &[&str]) -> String {
-    match words {
-        [] => panic!("a parameter takes at least one word"),
-        [word] => word.to_string(),
-        [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
-    }
-}
-
-/// The word parameter `name`: the default where it is absent, the word `parse` reads, or the 400 that lists `words`.
-// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a pointer chase
-// and nothing else.
-#[allow(clippy::result_large_err)]
-pub(crate) fn word_param<T: Default>(
-    value: Option<&str>,
-    name: &str,
-    parse: impl Fn(&str) -> Option<T>,
-    words: &[&str],
-) -> Result<T, Response> {
-    match value.map(parse) {
-        None => Ok(T::default()),
-        Some(Some(value)) => Ok(value),
-        Some(None) => Err(failure(
-            StatusCode::BAD_REQUEST,
-            &format!("{name} is {}", one_of(words)),
-        )),
-    }
-}
-
 /// `GET /admin/requests`'s query.
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -982,9 +953,11 @@ pub(crate) struct RequestsQuery {
     /// The order key: `received_at` (the default), `attempts`, `duration_ms`, `ttfb_ms`, `input_tokens` or
     /// `output_tokens`. Under `duration_ms`, `ttfb_ms` and the two token keys a request without the figure sorts after
     /// every request with it, in either direction. The id breaks a tie in the key's direction.
-    pub order: Option<String>,
+    #[param(value_type = Option<RequestOrderWords>, inline)]
+    pub order: Option<RequestOrder>,
     /// `desc` (the default) or `asc`, the direction of `order`.
-    pub dir: Option<String>,
+    #[param(value_type = Option<DirectionWords>, inline)]
+    pub dir: Option<Direction>,
     /// Default 50, clamped to 1 through 500.
     pub limit: Option<u32>,
     /// The `next_cursor` of the page before under the same `order` and `dir`, `<value>:<id>`: the order key's value on
@@ -1002,7 +975,7 @@ pub(crate) struct RequestsQuery {
     params(RequestsQuery),
     responses(
         (status = 200, description = "The page.", body = RequestList),
-        (status = 400, description = "- `statuses are numbers`\n- `order is received_at, attempts, duration_ms, ttfb_ms, input_tokens or output_tokens`\n- `dir is desc or asc`\n- `cursor is <value>:<id>`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "limit: invalid digit found in string"})),
+        (status = 400, description = "- `statuses are numbers`\n- `cursor is <value>:<id>`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "limit: invalid digit found in string"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -1060,19 +1033,8 @@ pub(crate) async fn list(
         fixed_end: q.fixed_end.unwrap_or(false),
     };
     let limit = page_size(q.limit);
-    let order = match word_param(
-        q.order.as_deref(),
-        "order",
-        RequestOrder::parse,
-        RequestOrder::WORDS,
-    ) {
-        Ok(order) => order,
-        Err(response) => return response,
-    };
-    let dir = match word_param(q.dir.as_deref(), "dir", Direction::parse, Direction::WORDS) {
-        Ok(dir) => dir,
-        Err(response) => return response,
-    };
+    let order = q.order.unwrap_or_default();
+    let dir = q.dir.unwrap_or_default();
     let cursor = match q.cursor.as_deref().map(|c| RequestCursor::parse(c, order)) {
         None => None,
         Some(Some(cursor)) => Some(cursor),

@@ -196,6 +196,32 @@ impl Modify for QueryRefusals {
     }
 }
 
+/// The schema of a query parameter that takes one word of a ledger type: a string whose `enum` is the type's `WORDS`.
+// A member names its marker as `value_type = Option<...>` with `inline`, since `schema_with` drops the member's doc
+// comment from the parameter, and the `Option` keeps the parameter optional.
+macro_rules! word_schemas {
+    ($($marker:ident => $words:ty),* $(,)?) => {$(
+        pub(crate) struct $marker;
+
+        impl utoipa::PartialSchema for $marker {
+            fn schema() -> RefOr<utoipa::openapi::schema::Schema> {
+                utoipa::openapi::schema::ObjectBuilder::new()
+                    .schema_type(utoipa::openapi::schema::Type::String)
+                    .enum_values(Some(<$words>::WORDS.iter().copied()))
+                    .into()
+            }
+        }
+
+        impl ToSchema for $marker {}
+    )*};
+}
+word_schemas!(
+    DirectionWords => phoebis_ledger::Direction,
+    FundingFilterWords => phoebis_ledger::FundingFilter,
+    GroupByWords => phoebis_ledger::GroupBy,
+    RequestOrderWords => phoebis_ledger::RequestOrder,
+);
+
 // Macros, since a `400`'s description joins them through `concat!`, which takes literals and no `const`.
 
 /// The lead of each `400` of an operation that reads a `range`: `phoebis_ledger::parse_range`'s refusals.

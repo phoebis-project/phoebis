@@ -685,6 +685,7 @@ fn a_pin_migrated_event_counts_under_its_reason_on_the_destination() {
                     r#"{"reason":"overage","from_account":"a","cause":{"scope":"account","reason":"rate_limit","window":"five_hour"}}"#
                         .into(),
                 ),
+                from_account_id: Some("a".into()),
                 ..Default::default()
             },
         )?;
@@ -733,6 +734,7 @@ fn moved(at: i64, to: &str, reason: &str, fit: Option<&str>) -> EventRecord {
             serde_json::json!({ "reason": reason, "from_account": "a", "fit": fit, "cause": null })
                 .to_string(),
         ),
+        from_account_id: Some("a".into()),
         ..Default::default()
     }
 }

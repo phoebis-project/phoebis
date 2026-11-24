@@ -4581,7 +4581,13 @@ async fn an_unknown_funding_value_is_refused() {
         )
         .await;
         assert_eq!(refused.status(), 400, "{route}");
-        assert_eq!(json(refused).await["error"], "funding is billed or plan");
+        let error = json(refused).await["error"].clone();
+        assert!(
+            error
+                .as_str()
+                .is_some_and(|text| text.starts_with("funding: ")),
+            "{route}: the route's error body names the parameter: {error}"
+        );
     }
 }
 

@@ -1368,7 +1368,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
                     ..row(to)
                 },
             )?;
-            match detail["from_account"].as_str() {
+            match event.from_account_id.as_deref() {
                 Some(from) => fold_account(
                     tx,
                     &AccountRollupRow {

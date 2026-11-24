@@ -438,7 +438,10 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // session whichever pass surfaced it. Only the sessions the retain below can keep are named: every engine
     // session, and one with a pin use or a request at or after `idle_bound`.
     let live_keys = phoebis_ledger::LiveKeys(live.clone());
-    let (prices, tables) = (state.pricing.revisions(), state.tables.clone());
+    // One read of the revisions prices the spend in the read below and the burn after it, so a reload that lands
+    // during the read cannot price one answer under two revisions.
+    let revisions = state.pricing.revisions();
+    let (prices, tables) = (revisions.clone(), state.tables.clone());
     let read = state.ledger.db().read(move |c| {
         // One WAL snapshot for every statement: `read` lends a connection and starts no transaction, and a request
         // landing between two reads would show in the activity and not in the totals.
@@ -492,7 +495,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // 5-hour window where the set has it and the 7-day window otherwise, through the model's anchor rates on that
     // window over its tier's capacity ratio there, both under the pin's regime. The 7-day anchor rates alone are the
     // Pro-week figure. Each account's window set is read once per request.
-    let revisions = state.pricing.revisions();
     let prices = revisions.in_force(now);
     let rates = BurnRates {
         dollars: prices.rate_table(),

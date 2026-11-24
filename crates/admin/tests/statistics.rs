@@ -1292,9 +1292,12 @@ async fn the_analytics_group_by_client_and_narrow_to_client_patterns() {
     )
     .await;
     assert_eq!(bad_group.status(), 400);
-    assert_eq!(
-        json(bad_group).await["error"],
-        "group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent"
+    let error = json(bad_group).await["error"].clone();
+    assert!(
+        error
+            .as_str()
+            .is_some_and(|text| text.starts_with("group_by: ")),
+        "the route's error body names the parameter: {error}"
     );
     let by_speed = get(
         &parts.app,

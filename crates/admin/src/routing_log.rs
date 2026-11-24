@@ -16,8 +16,8 @@ use serde_json::{json, Map, Value};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
-use crate::openapi::{ErrorBody, LedgerFailure};
-use crate::requests::{list_param, text_param, word_param};
+use crate::openapi::{DirectionWords, ErrorBody, LedgerFailure};
+use crate::requests::{list_param, text_param};
 use crate::routes::{failure, AdminQuery};
 use crate::AdminState;
 
@@ -484,7 +484,8 @@ pub(crate) struct RoutingLogQuery {
     /// The `next_cursor` of the page before under the same `dir`, `<at>:<rank>:<id>`.
     pub cursor: Option<String>,
     /// `desc` (the default), newest first, or `asc`, oldest first.
-    pub dir: Option<String>,
+    #[param(value_type = Option<DirectionWords>, inline)]
+    pub dir: Option<Direction>,
     /// An RFC 3339 instant such as `2026-09-16T14:15:00.000Z` or Unix milliseconds, a value that reads as an
     /// integer taken as milliseconds. Defaults to an hour before now. Inclusive.
     pub from: Option<String>,
@@ -524,7 +525,6 @@ pub(crate) struct RoutingLogQuery {
             "- `unknown kind {name}`\n",
             "- `{name} is not a time`, for `from` or `to`\n",
             "- `limit is 1 to 200`\n",
-            "- `dir is desc or asc`\n",
             "- `cursor is <at>:<rank>:<id>`",
         ), body = ErrorBody, example = json!({"error": "limit is 1 to 200"})),
         (status = 500, response = LedgerFailure),
@@ -555,10 +555,7 @@ pub(crate) async fn list(
         Some(n) if (1..=MAX_LIMIT).contains(&n) => n,
         Some(_) => return failure(StatusCode::BAD_REQUEST, "limit is 1 to 200"),
     };
-    let dir = match word_param(q.dir.as_deref(), "dir", Direction::parse, Direction::WORDS) {
-        Ok(dir) => dir,
-        Err(response) => return response,
-    };
+    let dir = q.dir.unwrap_or_default();
     let cursor = match q.cursor.as_deref().map(RoutingLogCursor::parse) {
         None => None,
         Some(Some(cursor)) => Some(cursor),

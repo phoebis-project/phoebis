@@ -24,7 +24,8 @@ use phoebis_store::{AccountKind, SubscriptionTerm};
 use utoipa::ToSchema;
 
 use crate::openapi::{
-    chart_refusal, patterns_refusal, range_refusal, ErrorBody, LedgerFailure, RouterUnavailable,
+    chart_refusal, patterns_refusal, range_refusal, ErrorBody, FundingFilterWords, GroupByWords,
+    LedgerFailure, RouterUnavailable,
 };
 use crate::requests::list_param as list;
 use crate::routes::{failure, reported_samples, router_unavailable, windows_lacked, AdminQuery};
@@ -120,27 +121,9 @@ type Selection = ((i64, i64), GroupBy, RollupFilter, LiveKeys, i64);
 fn selection(state: &AdminState, q: &RollupQuery) -> Result<Selection, Response> {
     let now = (state.clock)();
     let (from, to) = range_of(q.range.as_deref(), now)?;
-    let group_by = GroupBy::parse(q.group_by.as_deref().unwrap_or("all")).ok_or_else(|| {
-        let (last, rest) = GroupBy::WORDS
-            .split_last()
-            .expect("GroupBy has a dimension");
-        failure(
-            StatusCode::BAD_REQUEST,
-            &format!("group_by is {}, or {last}", rest.join(", ")),
-        )
-    })?;
+    let group_by = q.group_by.unwrap_or(GroupBy::All);
     let mut filter = filter_of(filter_params!(q))?;
-    filter.funding = match q.funding.as_deref() {
-        None => None,
-        Some("billed") => Some(FundingFilter::Billed),
-        Some("plan") => Some(FundingFilter::Plan),
-        Some(_) => {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "funding is billed or plan",
-            ))
-        }
-    };
+    filter.funding = q.funding;
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
     Ok(((from, to), group_by, filter, live, now))
 }
@@ -161,7 +144,8 @@ pub(crate) struct RollupQuery {
     pub range: Option<String>,
     /// `account`, `all`, `classifier`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `speed`, or
     /// `user_agent`. Default `all`.
-    pub group_by: Option<String>,
+    #[param(value_type = Option<GroupByWords>, inline)]
+    pub group_by: Option<GroupBy>,
     /// A comma-separated list. A value names the key's id, or `<id>@<generation>` for an earlier holder's rows,
     /// and a bare id selects the current key's rows alone.
     pub keys: Option<String>,
@@ -182,7 +166,8 @@ pub(crate) struct RollupQuery {
     /// `true` or `false`.
     pub include_probes: Option<bool>,
     /// `billed` or `plan`, the two subsets the Analytics tag describes.
-    pub funding: Option<String>,
+    #[param(value_type = Option<FundingFilterWords>, inline)]
+    pub funding: Option<FundingFilter>,
 }
 
 /// `GET /admin/analytics/placements`'s query.
@@ -329,7 +314,7 @@ pub(crate) struct Series {
     params(RollupQuery),
     responses(
         (status = 200, description = "The points over the range.", body = Series),
-        (status = 400, description = concat!(range_refusal!(), "\n\n", chart_refusal!(), "\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- ", patterns_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = concat!(range_refusal!(), "\n\n", chart_refusal!(), "\n\nFor the other parameters:\n- ", patterns_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -406,7 +391,7 @@ pub(crate) struct Breakdown {
     params(RollupQuery),
     responses(
         (status = 200, description = "The rows over the range.", body = Breakdown),
-        (status = 400, description = concat!(range_refusal!(), "\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- ", patterns_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = concat!(range_refusal!(), "\n\nFor the other parameters:\n- ", patterns_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]

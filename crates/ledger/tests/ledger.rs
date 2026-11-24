@@ -6430,6 +6430,7 @@ fn a_rate_limit_fail_over_whose_destination_writes_cache_books_its_rewrite_token
                 kind: "pin_migrated".into(),
                 account_id: Some("b".into()),
                 detail: Some(r#"{"reason":"cooldown","from_account":"a"}"#.into()),
+                from_account_id: Some("a".into()),
                 ..Default::default()
             },
         )?;
