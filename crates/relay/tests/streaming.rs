@@ -1365,6 +1365,31 @@ async fn an_error_event_whose_data_is_cut_short_files_the_type_its_text_names() 
     );
 }
 
+#[tokio::test]
+async fn an_error_event_whose_type_runs_past_the_filed_bound_files_error() {
+    let past_bound = "a".repeat(65);
+    let (_, _, complete) = one_stream(
+        Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events: vec![
+                message_start_event(),
+                SseEvent {
+                    event: "error".into(),
+                    data: format!(r#"{{"type":"error","error":{{"type":"{past_bound}"}}}}"#),
+                },
+            ],
+            delay_between: Duration::from_millis(2),
+        },
+        common::default_limits(),
+    )
+    .await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, Some("error"))
+    );
+}
+
 const CUT_WARNING: &str = "the upstream body ended short after the head";
 
 /// The `request-id` head the cut cases answer with, so the warning has an upstream request id to name.

@@ -48,8 +48,9 @@ status and outcome (`canceled`, which counts apart from the failures where the c
 `stream_stalled` or `stream_undecodable` under `failed` for a forwarded answer of another status whose body was cut,
 went silent or did not decode). Any other forwarded answer of 400 or more files the upstream's `error.type` as its code
 where that type is an identifier of at most 64 bytes, else `upstream_<status>`, and such an answer an earlier version
-stored has no code. It carries the time to first byte and to first token, the duration, the bytes sent and received,
-whether the response was served kept warm, and whether its body was captured. It names the client's user agent and class
+stored has no code. An `error` event inside a stream files its `error.type` under the same bound, else `error`. The row
+carries the time to first byte and to first token, the duration, the bytes sent and received, whether the response was
+served kept warm, and whether its body was captured. It names the client's user agent and class
 (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the agent type, the compaction and context-compacted
 markers, and the summed tool durations of the turn before), the turn origin off its attribution line, and its auto-mode
 standing as admission read it: a server-side check asked for under an on setting, the `safeguards` member carried under

@@ -11,6 +11,7 @@ use phoebis_store::{AccountKind, AccountState, StateCause};
 use phoebis_transport::response::ResponseHead;
 use serde_json::Value;
 
+use crate::identity::is_filed_word;
 use crate::memory::Injected;
 use crate::ratelimit::{retry_after, HeadReading, UnifiedHeaders, UnifiedWindow, WindowStatus};
 
@@ -483,6 +484,13 @@ impl ErrorBody {
 /// The error body's `error.type`.
 pub(crate) fn error_type(body: &[u8]) -> Option<String> {
     error_member(body, "/error/type", "type")
+}
+
+/// The error body's `error.type` where it is a word the relay files as sent (`is_filed_word`), `None` for a body
+/// that names no type and for a type outside that bound. The word becomes a map key and a filter value, so each
+/// site that files it reads it here.
+pub(crate) fn filed_error_type(body: &[u8]) -> Option<String> {
+    error_type(body).filter(|word| is_filed_word(word))
 }
 
 /// Whether an error event's data names a `rate_limit_error`, read off its parsed `error.type`, so a type spelled with

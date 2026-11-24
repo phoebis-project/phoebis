@@ -329,8 +329,8 @@ pub fn is_valid_id(value: &str) -> bool {
 }
 
 /// Whether `value` is a word the relay files as the upstream sent it: one to `MAX_FILED_WORD_LEN` bytes, each an
-/// `identifier_byte`. A word that fails reads `other` in a key and files `upstream_<status>` as a forwarded
-/// failure's code.
+/// `identifier_byte`. A word that fails reads `other` in a key, and it files `upstream_<status>` as a forwarded
+/// failure's code and `error` as the code of a stream's `error` event.
 pub fn is_filed_word(value: &str) -> bool {
     value.len() <= MAX_FILED_WORD_LEN && is_valid_id(value)
 }

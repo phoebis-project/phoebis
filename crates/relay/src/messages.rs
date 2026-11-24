@@ -59,7 +59,7 @@ use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
 use crate::chains::Chains;
 use crate::classify::{
-    classify, error_message, error_type, is_rate_limit_event, refused_injected, Cooldown,
+    classify, error_message, filed_error_type, is_rate_limit_event, refused_injected, Cooldown,
     HeadContext, Scope, Verdict,
 };
 use crate::credit::{hex_of, CreditDigest, CreditStore};
@@ -78,8 +78,8 @@ use crate::facts::{
 use crate::headers::{outbound_headers, starts_with_ignoring_case, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{
-    client_of, climb, contract_gap, identify, is_filed_word, restores_prev_req, PendingReports,
-    RequestIdentity, PENDING_REPORT_WAIT,
+    client_of, climb, contract_gap, identify, restores_prev_req, PendingReports, RequestIdentity,
+    PENDING_REPORT_WAIT,
 };
 use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
@@ -1235,12 +1235,11 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
 }
 
 /// The upstream's word for an answer forwarded with its `status`, `None` below 400: the `error.type` that `body`
-/// names where it passes `is_filed_word`, else `upstream_<status>`. The word becomes a map key and a filter value,
+/// names where it passes `filed_error_type`, else `upstream_<status>`. The word becomes a map key and a filter value,
 /// so a type outside that bound files the fallback.
 pub(crate) fn upstream_code(status: u16, body: Option<&[u8]>) -> Option<String> {
     (status >= 400).then(|| {
-        body.and_then(error_type)
-            .filter(|word| is_filed_word(word))
+        body.and_then(filed_error_type)
             .unwrap_or_else(|| format!("upstream_{status}"))
     })
 }

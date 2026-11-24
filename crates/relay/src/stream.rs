@@ -574,7 +574,7 @@ impl Publish {
             // client sees it; the bytes the client sees are untouched.
             Some(b"error") => {
                 self.stream_error.get_or_insert_with(|| {
-                    crate::classify::error_type(&event.data).unwrap_or_else(|| "error".into())
+                    crate::classify::filed_error_type(&event.data).unwrap_or_else(|| "error".into())
                 });
                 if let Some(on_error) = self.on_error.take() {
                     on_error(event.data.clone(), waiting);
