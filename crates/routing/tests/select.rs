@@ -3,11 +3,11 @@ mod common;
 use common::select;
 use phoebis_routing::{
     all_plan_windows, burn_average_ms, cohort_hold, decide, feature_ready, lane_key, resolve,
-    shed_dwell_ms, warm, warmth_of, AccountTicket, AffinityChain, AffinityMap, AffinityRow,
-    BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts, ClientClass,
-    CohortHold, CreditAccount, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion,
-    FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldReason, HoldWait,
-    Holder, LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, Obstacle,
+    shed_dwell_ms, warm, warmth_of, AccountTicket, AffinityChain, AffinityMap, AffinityReport,
+    AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts,
+    ClientClass, CohortHold, CreditAccount, CreditsState, Decided, DecisionRecord, EvidenceSource,
+    Exhaustion, FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldReason,
+    HoldWait, Holder, LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, Obstacle,
     OverageEvidence, PinKeyFacts, PinRef, PinShed, PinUsage, PinnedObstacle, Placement,
     Portability, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot,
     RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult, SharePricer,
@@ -20932,6 +20932,320 @@ fn a_spent_move_books_the_pins_last_prompt_as_its_rewrite_and_its_own_decayed_bu
     assert!(
         close(booked.rewrite[FIVE_HOUR], 2.0 * 200_000.0 / 10_000_000.0),
         "the body's estimate as one one-hour write: {booked:?}"
+    );
+}
+
+/// An answer of `account` to another session that read the static prefix from the cache on `lane` at `at`: the chain
+/// of `boundaries`, each with the estimated size of the blocks up to it, under a one-hour marker.
+fn static_report(account: &str, boundaries: &[(&str, u64)], lane: &str, at: i64) -> AffinityReport {
+    AffinityReport {
+        account_id: account.into(),
+        incarnation: 1,
+        key_id: "k".into(),
+        key_generation: 0,
+        canonical_model: "claude-sonnet-5".into(),
+        lane: lane.into(),
+        root: "s-other".into(),
+        static_boundaries: boundaries
+            .iter()
+            .map(|(hash, _)| hash.to_string())
+            .collect(),
+        message_boundaries: Arc::from([]),
+        static_sizes: boundaries.iter().map(|(_, size)| *size).collect(),
+        static_ttl_ms: Some(HOUR),
+        message_ttl_ms: None,
+        cache_touched: true,
+        prefix_tokens: boundaries.last().map_or(0, |(_, size)| *size),
+        now: at,
+        cache_write_5m_tokens: None,
+        cache_write_1h_tokens: None,
+        uniform_ttl_ms: None,
+        request_id: "r-other".into(),
+        seq: 1,
+        attempt: 1,
+        message_id: None,
+    }
+}
+
+/// The lane of the suite's requests and pins.
+fn standard_lane() -> String {
+    lane_key("claude-sonnet-5", "standard", "none", "-")
+}
+
+/// A pool over `a` and `b` on `TIER` that moves a pin off a spent window.
+fn spent_pool() -> RegistrySnapshot {
+    tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        shedding: Shedding {
+            migrate_when_spent: true,
+            ..Shedding::default()
+        },
+        ..Pool::default()
+    })
+}
+
+/// `s1`'s warm pin on `a` with a last prompt of `last_input_tokens`, burning one input token a second, under the ratio
+/// pricer, with `a`'s 5-hour window spent and `b` at 0.2 on it, so the pin's next turn moves to `b`.
+fn spent_on_a(last_input_tokens: u64) -> RoutingState {
+    let mut st = priced(vec![PinRow {
+        last_input_tokens,
+        ..burning("s1", "a", 1.0, true, T)
+    }]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+    st
+}
+
+/// The rewrite per window that `s1`'s spent move to `b` books at `T` for a main turn whose static chain is `chain`.
+fn spent_move_rewrite(
+    st: &mut RoutingState,
+    s: &RegistrySnapshot,
+    chain: &[&str],
+) -> BTreeMap<String, f64> {
+    let req = SelectRequest {
+        static_boundaries: chain.iter().map(|hash| hash.to_string()).collect(),
+        ..main_turn(s, "s1", T)
+    };
+    let d = decide(st, s, &req, &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    d.record
+        .outcome
+        .reservation
+        .expect("the move books on its destination")
+        .rewrite
+}
+
+#[test]
+fn a_move_to_a_destination_that_holds_the_static_boundary_live_books_the_prompt_less_its_size() {
+    let s = spent_pool();
+    // The hold lives for its one-hour lifetime and not a millisecond past it.
+    let booked = |reported_at: i64| {
+        let mut st = spent_on_a(100_000);
+        st.affinity().write().unwrap().record(&static_report(
+            "b",
+            &[("x", 30_000)],
+            &standard_lane(),
+            reported_at,
+        ));
+        spent_move_rewrite(&mut st, &s, &["x"])
+    };
+    let (live, lapsed) = (booked(T - HOUR), booked(T - HOUR - 1));
+    assert!(
+        close(live[FIVE_HOUR], 0.007),
+        "the write of the 70,000 tokens that b does not hold: {live:?}"
+    );
+    assert!(
+        close(lapsed[FIVE_HOUR], 0.01),
+        "the whole prompt once the hold lapsed: {lapsed:?}"
+    );
+}
+
+#[test]
+fn a_later_report_from_another_account_leaves_the_first_accounts_hold() {
+    let s = spent_pool();
+    let mut st = spent_on_a(100_000);
+    st.affinity().write().unwrap().record(&static_report(
+        "b",
+        &[("x", 30_000)],
+        &standard_lane(),
+        T - 20 * MINUTE,
+    ));
+    st.affinity().write().unwrap().record(&static_report(
+        "c",
+        &[("x", 30_000)],
+        &standard_lane(),
+        T - 10 * MINUTE,
+    ));
+    let rewrite = spent_move_rewrite(&mut st, &s, &["x"]);
+    assert!(close(rewrite[FIVE_HOUR], 0.007), "{rewrite:?}");
+}
+
+#[test]
+fn the_deepest_boundary_that_the_destination_holds_sets_the_size() {
+    let s = spent_pool();
+    // The relay's sizes are cumulative: `s2`'s 5,000 tokens cover `s1`'s 1,000.
+    let booked = |held: &[(&str, u64)]| {
+        let mut st = spent_on_a(100_000);
+        st.affinity().write().unwrap().record(&static_report(
+            "b",
+            held,
+            &standard_lane(),
+            T - 10 * MINUTE,
+        ));
+        spent_move_rewrite(&mut st, &s, &["s1", "s2"])
+    };
+    let both = booked(&[("s1", 1_000), ("s2", 5_000)]);
+    let first = booked(&[("s1", 1_000)]);
+    assert!(
+        close(both[FIVE_HOUR], 0.0095),
+        "less the deeper boundary's 5,000: {both:?}"
+    );
+    assert!(
+        close(first[FIVE_HOUR], 0.0099),
+        "less the first boundary's 1,000: {first:?}"
+    );
+}
+
+#[test]
+fn a_hold_written_on_another_lane_subtracts_nothing() {
+    let s = spent_pool();
+    let mut st = spent_on_a(100_000);
+    st.affinity().write().unwrap().record(&static_report(
+        "b",
+        &[("x", 30_000)],
+        &lane_key("claude-sonnet-5", "standard", "none", "high"),
+        T - 10 * MINUTE,
+    ));
+    let rewrite = spent_move_rewrite(&mut st, &s, &["x"]);
+    assert!(close(rewrite[FIVE_HOUR], 0.01), "{rewrite:?}");
+}
+
+#[test]
+fn a_report_on_a_second_lane_leaves_the_first_lanes_hold() {
+    let s = spent_pool();
+    let mut st = spent_on_a(100_000);
+    st.affinity().write().unwrap().record(&static_report(
+        "b",
+        &[("x", 30_000)],
+        &standard_lane(),
+        T - 20 * MINUTE,
+    ));
+    st.affinity().write().unwrap().record(&static_report(
+        "b",
+        &[("x", 30_000)],
+        &lane_key("claude-sonnet-5", "standard", "none", "high"),
+        T - 10 * MINUTE,
+    ));
+    let rewrite = spent_move_rewrite(&mut st, &s, &["x"]);
+    assert!(close(rewrite[FIVE_HOUR], 0.007), "{rewrite:?}");
+}
+
+#[test]
+fn a_hold_of_an_account_created_again_under_its_id_subtracts_nothing() {
+    let s = spent_pool();
+    let mut st = spent_on_a(100_000);
+    // The snapshot's `b` is incarnation 1, so the report under 2 names another holder of the id.
+    st.affinity().write().unwrap().record(&AffinityReport {
+        incarnation: 2,
+        ..static_report("b", &[("x", 30_000)], &standard_lane(), T - 10 * MINUTE)
+    });
+    let rewrite = spent_move_rewrite(&mut st, &s, &["x"]);
+    assert!(close(rewrite[FIVE_HOUR], 0.01), "{rewrite:?}");
+}
+
+#[test]
+fn a_static_boundary_larger_than_the_last_prompt_gives_a_size_of_zero() {
+    let s = spent_pool();
+    let mut st = spent_on_a(10_000);
+    st.affinity().write().unwrap().record(&static_report(
+        "b",
+        &[("x", 30_000)],
+        &standard_lane(),
+        T - 10 * MINUTE,
+    ));
+    // The pin's burn keeps the booking, so it stands with no rewrite in it.
+    let rewrite = spent_move_rewrite(&mut st, &s, &["x"]);
+    assert!(rewrite.is_empty(), "{rewrite:?}");
+}
+
+#[test]
+fn in_a_round_another_pin_subtracts_by_its_own_static_hash() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    // As in the round of `heavy_light_small`: the pins' 0.035 an hour take a at 0.967 to 1.002 at its reset an hour
+    // out, a target of 0.002 that `heavy` and `held` each cover, and `held`'s rewrite costs less than `heavy`'s
+    // 600,000 tokens whatever the destination holds, so the round plans `held`'s move.
+    let mut st = rounding(vec![
+        PinRow {
+            last_input_tokens: 600_000,
+            ..burning("heavy", "a", 3.0, true, T)
+        },
+        PinRow {
+            last_input_tokens: 100_000,
+            static_hash: Some("y".into()),
+            ..burning("held", "a", 0.4, true, T)
+        },
+        PinRow {
+            last_input_tokens: 10_000,
+            ..burning("small", "a", 0.1, true, T)
+        },
+    ]);
+    st.record_sample("a", refreshing(0.967, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    st.affinity().write().unwrap().record(&static_report(
+        "b",
+        &[("y", 30_000)],
+        &standard_lane(),
+        T - 10 * MINUTE,
+    ));
+    let req = SelectRequest {
+        static_boundaries: Arc::from(["x".to_string()]),
+        ..auxiliary(&s, "small", T)
+    };
+    let round = decide(&mut st, &s, &req, &mut rng())
+        .shed_round
+        .expect("the round ran")
+        .facts;
+    let held = round_pin(&round, "held");
+    assert_eq!(held.planned.as_deref(), Some("b"), "{round:?}");
+    assert!(
+        near(held.rewrite, 70_000.0 / 60_000_000.0),
+        "the Pro-week figure of the 70,000 tokens past `y`: {:?}",
+        held.rewrite
+    );
+}
+
+#[test]
+fn a_failovers_landing_books_its_body_less_the_static_prefix_that_the_destination_holds() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // The failover took `s1`'s row off `a`, which the request names as attempted, so each request lands on `b`.
+    let landing = SelectRequest {
+        body_tokens: 100_000,
+        static_boundaries: Arc::from(["x".to_string()]),
+        ..failing_over(
+            &s,
+            "a",
+            "cooldown",
+            burning("s1", "a", 100.0, true, T),
+            None,
+            T,
+        )
+    };
+    let booked = |req: &SelectRequest| {
+        let mut st = priced(Vec::new());
+        st.record_sample("b", refreshing(0.3, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        st.affinity().write().unwrap().record(&static_report(
+            "b",
+            &[("x", 30_000)],
+            &standard_lane(),
+            T - 10 * MINUTE,
+        ));
+        let d = decide(&mut st, &s, req, &mut rng());
+        assert_eq!(landed(d.result.clone()).0, "b");
+        d.record
+            .outcome
+            .reservation
+            .expect("the selection books on b")
+            .rewrite
+    };
+    let landed_over = booked(&landing);
+    let fresh = booked(&SelectRequest {
+        failed_over: None,
+        ..landing.clone()
+    });
+    assert!(
+        close(landed_over[FIVE_HOUR], 0.007),
+        "the landing is a move: {landed_over:?}"
+    );
+    assert!(
+        close(fresh[FIVE_HOUR], 0.01),
+        "a fresh session's placement prices its whole body: {fresh:?}"
     );
 }
 

@@ -14725,6 +14725,84 @@ async fn the_window_inside_its_reset_binds_the_standing_runway_where_a_shorter_o
 }
 
 #[tokio::test]
+async fn a_standing_pin_subtracts_by_its_own_static_hash() {
+    let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    with_tier(&store, "b");
+    store
+        .upsert_pin(&PinRow {
+            last_input_tokens: 100_000,
+            static_hash: Some("y".into()),
+            ..stored_pin(&store, "s1", "a", 1, 1.0)
+        })
+        .unwrap();
+    // The move cost reads the Pro-week equivalent: a ten-millionth per cache-write token.
+    let config = RouterConfig {
+        share: priced_config().share.with_equivalent(|_, _, _, usage, _| {
+            Some((usage.write_5m + usage.write_1h) as f64 / 10_000_000.0)
+        }),
+        ..priced_config()
+    };
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), config).unwrap();
+    // b, the one sibling, at 0.1 on both windows, where the pin fits.
+    handle
+        .report(observed(
+            "b",
+            sample_with(AT, FIVE_HOUR, 0.1, Some(AT + HOUR)).with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.1,
+                    reset: Some(AT + 72 * HOUR),
+                    observed_at: AT,
+                    source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+        ))
+        .await;
+    // b's answer to another session read the 30,000 tokens of the static prefix that ends at `y` ten minutes ago.
+    let s = handle.snapshot();
+    handle
+        .report(Report::Affinity(AffinityReport {
+            account_id: "b".into(),
+            incarnation: s.account("b").unwrap().incarnation,
+            key_id: "k".into(),
+            key_generation: s.key("k").unwrap().created_at,
+            canonical_model: "claude-sonnet-5".into(),
+            lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+            root: "s2".into(),
+            static_boundaries: Arc::from(["y".to_string()]),
+            message_boundaries: Arc::from([]),
+            static_sizes: vec![30_000],
+            static_ttl_ms: Some(HOUR),
+            message_ttl_ms: None,
+            cache_touched: true,
+            prefix_tokens: 30_000,
+            now: AT - 10 * 60_000,
+            cache_write_5m_tokens: None,
+            cache_write_1h_tokens: None,
+            uniform_ttl_ms: None,
+            request_id: "r-2".into(),
+            seq: 1,
+            attempt: 1,
+            message_id: None,
+        }))
+        .await;
+    let standing = handle.pins_standing().await.unwrap();
+    let s1 = standing
+        .iter()
+        .find(|p| p.pin.session_id == "s1")
+        .unwrap_or_else(|| panic!("no pin of s1: {standing:?}"));
+    assert!(
+        close(s1.move_read.cost, 0.007),
+        "the write of the 70,000 tokens that b does not hold: {:?}",
+        s1.move_read
+    );
+}
+
+#[tokio::test]
 async fn a_predicted_wall_with_no_reset_holds_back_a_sample_whose_reset_lands_within_a_minute_past_its_length(
 ) {
     use phoebis_routing::RouterEvent;

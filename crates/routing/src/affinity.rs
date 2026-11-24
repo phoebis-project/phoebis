@@ -182,11 +182,37 @@ fn row_of(model: &str, hash: String, entry: &AffinityEntry) -> AffinityRow {
     }
 }
 
+/// What one account holds of a static boundary on one lane, as its newest report on that lane with cache evidence
+/// wrote it. Memory only: a restart starts with none, and a move prices the whole prompt until the reports fill the
+/// index again.
+#[derive(Debug)]
+pub(crate) struct StaticHold {
+    pub incarnation: u64,
+    pub written_at: i64,
+    pub ttl_ms: i64,
+    pub size: u64,
+}
+
+impl StaticHold {
+    /// Live while its lifetime has not passed since its report and the account carries the incarnation that wrote it,
+    /// which `incarnation` reads now.
+    fn live(&self, now: i64, incarnation: Option<u64>) -> bool {
+        now - self.written_at <= self.ttl_ms && incarnation == Some(self.incarnation)
+    }
+}
+
+/// The holds by the model, the boundary, the account, then the canonical lane. No inner map is left empty.
+type StaticHolds = HashMap<String, HashMap<String, HashMap<String, HashMap<String, StaticHold>>>>;
+
 #[derive(Debug, Default)]
 pub struct AffinityMap {
     /// The model, then the boundary: a lookup borrows both keys, so a selection walking a long conversation's
     /// boundaries allocates nothing per boundary. No inner map is left empty.
     entries: HashMap<String, HashMap<String, AffinityEntry>>,
+    /// Each account's hold of each static boundary on each lane, which the price of a move reads and no rung does.
+    /// `entries` keeps one holder per boundary, so it cannot say which accounts still hold a prefix that another
+    /// account reported after them.
+    static_holds: StaticHolds,
     /// The boundaries refreshed in place since the last drain, not yet persisted, keyed as `entries` is, so a refresh
     /// of a boundary already dirty allocates nothing.
     dirty: HashMap<String, HashSet<String>>,
@@ -245,6 +271,31 @@ impl AffinityMap {
         self.entries.get(self.canonical(canonical_model))?.get(hash)
     }
 
+    /// The size of the deepest boundary of `chain` that `account_id` holds live on `lane` at `now`, 0 where it holds
+    /// none. `incarnation_of` reads an id's current incarnation, as `AffinityEntry::held` takes it.
+    pub(crate) fn static_held(
+        &self,
+        model: &str,
+        chain: &[String],
+        lane: &str,
+        account_id: &str,
+        now: i64,
+        incarnation_of: impl Fn(&str) -> Option<u64>,
+    ) -> u64 {
+        let Some(boundaries) = self.static_holds.get(self.canonical(model)) else {
+            return 0;
+        };
+        chain
+            .iter()
+            .rev()
+            .find_map(|boundary| {
+                let hold = boundaries.get(boundary)?.get(account_id)?.get(lane)?;
+                hold.live(now, incarnation_of(account_id))
+                    .then_some(hold.size)
+            })
+            .unwrap_or(0)
+    }
+
     /// The deepest boundary whose entry `accept` admits, any owner: (depth, entry). Walks from the last
     /// boundary to the first and steps over an entry `accept` refuses (expired, another incarnation, an
     /// account the caller cannot use) rather than stopping at it.
@@ -296,7 +347,8 @@ impl AffinityMap {
         walk
     }
 
-    /// Upserts the report's boundaries and answers the rows to persist (new or moved).
+    /// Upserts the report's boundaries and answers the rows to persist (new or moved). A response that touched the
+    /// cache also writes the account's hold of each static boundary on the report's lane, which no row carries.
     pub fn record(&mut self, report: &AffinityReport) -> Vec<AffinityRow> {
         let canonical_model = self.canonical(&report.canonical_model).to_string();
         let lane = self.canonical_lane(&report.lane);
@@ -362,6 +414,24 @@ impl AffinityMap {
                 ) {
                     rows.push(row);
                 }
+                if let Some(ttl_ms) = static_ttl_ms {
+                    self.static_holds
+                        .entry(canonical_model.clone())
+                        .or_default()
+                        .entry(boundary.clone())
+                        .or_default()
+                        .entry(report.account_id.clone())
+                        .or_default()
+                        .insert(
+                            lane.clone(),
+                            StaticHold {
+                                incarnation: report.incarnation,
+                                written_at: report.now,
+                                ttl_ms,
+                                size,
+                            },
+                        );
+                }
             }
         }
         rows
@@ -369,7 +439,8 @@ impl AffinityMap {
 
     /// Entries past `ttl_of(key_id)` (an idle TTL in ms, or `None` for an unserved key), or whose account is gone
     /// or under another incarnation, leave. Answers each with its cause, the account's before the TTL's, since a
-    /// replaced holder's entry would have left whatever its age.
+    /// replaced holder's entry would have left whatever its age. A static hold leaves past its own lifetime or under
+    /// another incarnation, and the answer names none.
     pub fn purge(
         &mut self,
         now: i64,
@@ -406,6 +477,17 @@ impl AffinityMap {
                 hashes.remove(&purged.hash);
             }
         }
+        self.static_holds.retain(|_, boundaries| {
+            boundaries.retain(|_, accounts| {
+                accounts.retain(|account_id, lanes| {
+                    let incarnation = incarnation_of(account_id);
+                    lanes.retain(|_, hold| hold.live(now, incarnation));
+                    !lanes.is_empty()
+                });
+                !accounts.is_empty()
+            });
+            !boundaries.is_empty()
+        });
         gone
     }
 

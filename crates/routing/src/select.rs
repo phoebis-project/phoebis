@@ -1027,30 +1027,58 @@ fn budget_unknown(
 /// where no call has renewed it with usage or where the request, as the pin's own (`current`), reads its compaction
 /// mark, since the compaction call's prompt no longer holds the conversation. A move to `destination` over a pair whose
 /// thinking blocks are bound drops the blocks the pin's account produced and keeps the destination's own, so its size
-/// is that size less the pin's sum for its account plus its sum for the destination, never under zero.
+/// is that size less the pin's sum for its account plus its sum for the destination, never under zero. Last, a move
+/// leaves out the static prefix that `destination` holds warm (`held_prefix`), never under zero.
+#[allow(clippy::too_many_arguments)]
 fn prompt_size(
     state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     pin: &PinRow,
     current: bool,
     request: &SelectRequest,
     destination: Option<&str>,
+    now: i64,
 ) -> u64 {
+    let held = held_prefix(snapshot, affinity, request, destination, now);
     if pin.last_input_tokens == 0 {
-        return request.body_tokens;
+        return request.body_tokens.saturating_sub(held);
     }
     let size = if confirms_compaction(pin, request, current) {
         request.body_tokens
     } else {
         pin.last_input_tokens
     };
-    match bound_destination(state, pin, destination) {
+    let size = match bound_destination(state, pin, destination) {
         Some(destination) => {
             let sum = |account: &str| pin.thinking_sums.get(account).map_or(0, |sum| sum.tokens);
             size.saturating_add(sum(destination))
                 .saturating_sub(sum(&pin.account_id))
         }
         None => size,
-    }
+    };
+    size.saturating_sub(held)
+}
+
+/// The size of the static prefix that `destination` holds warm for `request`: the deepest boundary of the request's
+/// static chain that the destination's holder in `snapshot` holds live on the request's lane, 0 with no destination.
+fn held_prefix(
+    snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
+    request: &SelectRequest,
+    destination: Option<&str>,
+    now: i64,
+) -> u64 {
+    destination.map_or(0, |destination| {
+        affinity.static_held(
+            &request.canonical_model,
+            &request.static_boundaries,
+            &request.lane,
+            destination,
+            now,
+            |id| snapshot.incarnation(id),
+        )
+    })
 }
 
 /// `destination` where the pin's move there drops the blocks its account produced: another account whose pair with
@@ -1141,15 +1169,20 @@ pub(crate) fn handed_sums(
 }
 
 /// The rewrite a selection prices for the pin's next write: its size as `prompt_size` reads it for the request, which
-/// holds the pin as its own where `current`, or the body's estimate for a fresh session, as one cache write at the
-/// lane's TTL (five minutes until a pin reports one), sized for `destination` where the caller knows it. The gate's
-/// booking and the pick's figure price the same tokens through it.
+/// holds the pin as its own where `current`, or the body's estimate for a fresh session, and that estimate less the
+/// static prefix that `destination` holds warm for a failover's landing, as one cache write at the lane's TTL (five
+/// minutes until a pin reports one), sized for `destination` where the caller knows it. The gate's booking and the
+/// pick's figure price the same tokens through it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn rewrite_write(
     state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     request: &SelectRequest,
     pin: Option<&PinRow>,
     current: bool,
     destination: Option<&str>,
+    now: i64,
 ) -> PinUsage {
     // The plan windows see nothing of the client's classifier call, so its body is no rewrite to fit or to book. A
     // renewed pin's own context stays the session's, since a move still rewrites it.
@@ -1162,8 +1195,23 @@ pub(crate) fn rewrite_write(
     // session's TTL is unknown before a pin exists, so its write prices at five minutes.
     let (tokens, ttl_ms) = match pin {
         Some(pin) => (
-            prompt_size(state, pin, current, request, destination),
+            prompt_size(
+                state,
+                snapshot,
+                affinity,
+                pin,
+                current,
+                request,
+                destination,
+                now,
+            ),
             pin.cache_ttl_ms,
+        ),
+        // A failover's landing is a move, so it rewrites only what its destination does not hold. A fresh session's
+        // placement keeps its whole body, since a discount there would move where new sessions land.
+        None if request.failed_over.is_some() => (
+            body.saturating_sub(held_prefix(snapshot, affinity, request, destination, now)),
+            FIVE_MINUTES_MS,
         ),
         None => (body, FIVE_MINUTES_MS),
     };
@@ -1192,8 +1240,11 @@ fn cache_write(tokens: u64, ttl_ms: i64) -> PinUsage {
 /// both. The destination gate's fit and the shedding round read it. The third member is the entrypoint the burn is
 /// priced under (the pin's, the failed-over row's, or the request's for a lapsed agent and the median), whose band a
 /// reader that weighs the burn over a span reads it under.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn pin_figures<'a>(
     state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     pool: &PoolRow,
     account_id: &str,
     request: &'a SelectRequest,
@@ -1211,10 +1262,13 @@ pub(crate) fn pin_figures<'a>(
     let (pin, current) = figures.pin().unzip();
     let write = rewrite_write(
         state,
+        snapshot,
+        affinity,
         request,
         pin,
         current.unwrap_or(false),
         Some(account_id),
+        now,
     );
     let priced = |window: &str, entrypoint: Option<&str>, p: &PinRow| {
         share
@@ -1251,8 +1305,8 @@ pub(crate) fn pin_figures<'a>(
         let rate = match figures {
             Figures::Pin(pin, _) => priced(window, regime, pin)
                 .map(|rate| rate / state.slow_down_speed(pool, &pin.account_id, now)),
-            // A failover's landing knows the session's own burn, while the destination's cache is cold, so the
-            // rewrite above stays the body's.
+            // A failover's landing knows the session's own burn, and its rewrite above is the body less the static
+            // prefix that the destination holds live.
             Figures::Fresh(_) if request.failed_over.is_some() => {
                 request.failed_over.as_ref().and_then(|failed_over| {
                     priced(window, regime, &failed_over.row).map(|rate| {
@@ -1295,8 +1349,9 @@ pub(crate) enum Figures<'a> {
     /// request's own, and its decayed burn.
     Pin(&'a PinRow, bool),
     /// A fresh session's: the body and the median burn of the pool's warm pins, which `fresh_prior` collects once per
-    /// walk since every candidate of the walk reads the same set. A failed-over request's landing reads the burn of the
-    /// row its source lost here instead of the median.
+    /// walk since every candidate of the walk reads the same set. A failed-over request's landing reads the body less
+    /// the static prefix that the destination holds warm, and the burn of the row its source lost here instead of the
+    /// median.
     Fresh(&'a [PinRow]),
     /// A lapsed agent's return: the body as its rewrite, and the burn its record kept, with no decay, over the record's
     /// speed. A record whose burn members are all zero kept none, and the median of the pool's warm pins, the second
@@ -1936,6 +1991,11 @@ fn run(
     } else if session.is_none() {
         rec.pin_reason = Some("pinning_off");
     }
+    // One read of the map for the whole selection, which each price reads through its argument, since a second read
+    // of the lock on this thread can wait forever behind a waiting writer. No path of a selection writes the map: a
+    // write under this guard would wait on it forever.
+    let affinity_handle = state.affinity();
+    let affinity = affinity_handle.read().expect("affinity lock poisoned");
 
     // Step 1: the pin, expired when idle past the TTL or when its account can no longer serve the model here. A
     // non-portable request keeps a pin whose account left the pool, because no other account holds the state the
@@ -2054,11 +2114,7 @@ fn run(
             }
             // Judged for every row, though only a live pin's verdict reaches the record and the rules below: a row that
             // idled out or left its pool never gets one.
-            let judged = warmth_of(
-                &current,
-                request,
-                &state.affinity().read().expect("affinity lock poisoned"),
-            );
+            let judged = warmth_of(&current, request, &affinity);
             row_warmth = Some(judged);
             row_size = handed_row(&current, request.pin_ended, judged.1, request.now)
                 .map(|handed| (current.account_id.clone(), handed));
@@ -2526,6 +2582,7 @@ fn run(
             let moved = move_of(
                 state,
                 snapshot,
+                &affinity,
                 pool,
                 request,
                 &current,
@@ -2793,6 +2850,7 @@ fn run(
             let read = fit_of(
                 state,
                 snapshot,
+                &affinity,
                 pool,
                 request,
                 figures,
@@ -2895,8 +2953,6 @@ fn run(
         },
         partitions,
     );
-    let affinity_handle = state.affinity();
-    let affinity_guard = affinity_handle.read().expect("affinity lock poisoned");
     let placed = match directed {
         Some(_) => None,
         None => placement_of(
@@ -2905,7 +2961,7 @@ fn run(
             pool,
             request,
             figures,
-            &affinity_guard,
+            &affinity,
             &allowed,
             window,
             own_key.as_ref(),
@@ -2994,14 +3050,7 @@ fn run(
                 )
             } else {
                 let cohort = subagent_cohort(
-                    state,
-                    snapshot,
-                    pool,
-                    request,
-                    &affinity_guard,
-                    &allowed,
-                    window,
-                    rec,
+                    state, snapshot, pool, request, &affinity, &allowed, window, rec,
                 );
                 let hold = HoldFacts {
                     cohort: cohort.map(|c| c.account_id.clone()),
@@ -3054,6 +3103,8 @@ fn run(
         if let Some(tier) = snapshot.priced_tier(&chosen.account_id) {
             let (rewrite, burn, regime) = pin_figures(
                 state,
+                snapshot,
+                &affinity,
                 pool,
                 &chosen.account_id,
                 request,
@@ -4124,6 +4175,7 @@ pub(crate) enum Judge {
 pub(crate) fn fit_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     pool: &PoolRow,
     request: &SelectRequest,
     figures: Figures<'_>,
@@ -4134,7 +4186,8 @@ pub(crate) fn fit_of(
     own: Option<&PinKey>,
 ) -> FitRead {
     fit_read(
-        state, snapshot, pool, request, figures, candidate, planned, now, judge, own, false,
+        state, snapshot, affinity, pool, request, figures, candidate, planned, now, judge, own,
+        false,
     )
 }
 
@@ -4143,6 +4196,7 @@ pub(crate) fn fit_of(
 fn fit_read(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     pool: &PoolRow,
     request: &SelectRequest,
     figures: Figures<'_>,
@@ -4230,7 +4284,11 @@ fn fit_read(
         return read;
     }
     let (rewrite, pin_burn, pin_regime) = tier
-        .map(|tier| pin_figures(state, pool, candidate, request, figures, tier, now))
+        .map(|tier| {
+            pin_figures(
+                state, snapshot, affinity, pool, candidate, request, figures, tier, now,
+            )
+        })
         .unwrap_or_default();
     let share = state.share();
     let projections = projections_of(
@@ -4440,9 +4498,12 @@ pub(crate) fn fresh_fit(
         body_tokens: 0,
         effort: None,
     };
+    let affinity_handle = state.affinity();
+    let affinity = affinity_handle.read().expect("affinity lock poisoned");
     fit_read(
         state,
         snapshot,
+        &affinity,
         pool,
         &request,
         Figures::Fresh(prior),
@@ -4700,6 +4761,7 @@ fn longest<'a, 'r>(
 fn gate<'a>(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     pool: &PoolRow,
     request: &SelectRequest,
     current: &PinRow,
@@ -4728,6 +4790,7 @@ fn gate<'a>(
                 fit_of(
                     state,
                     snapshot,
+                    affinity,
                     pool,
                     request,
                     Figures::Pin(current, true),
@@ -4804,6 +4867,7 @@ fn gate<'a>(
 fn move_of<'a>(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     pool: &PoolRow,
     request: &SelectRequest,
     current: &PinRow,
@@ -4912,6 +4976,7 @@ fn move_of<'a>(
         let gate = gate(
             state,
             snapshot,
+            affinity,
             pool,
             request,
             current,
@@ -4982,6 +5047,7 @@ fn move_of<'a>(
                 let gate = gate(
                     state,
                     snapshot,
+                    affinity,
                     pool,
                     request,
                     current,
@@ -5050,6 +5116,7 @@ fn move_of<'a>(
             let gate = gate(
                 state,
                 snapshot,
+                affinity,
                 pool,
                 request,
                 current,
@@ -5093,6 +5160,7 @@ fn move_of<'a>(
         let gate = gate(
             state,
             snapshot,
+            affinity,
             pool,
             request,
             current,
@@ -5280,6 +5348,7 @@ fn move_of<'a>(
             let round = shed_round(
                 state,
                 snapshot,
+                affinity,
                 pool,
                 request,
                 eligible,
@@ -5365,6 +5434,7 @@ fn move_of<'a>(
     let gate = gate(
         state,
         snapshot,
+        affinity,
         pool,
         request,
         current,
@@ -6246,10 +6316,11 @@ pub(crate) fn mark_cleared_of(
 
 /// The request `fit_of` and `pin_figures` read a pin of the round by. The request's own pin reads the request as it
 /// is. Another pin reads the request's shape with its own model and lane, which name the windows it draws and its
-/// speed, and no body estimate, since a pin never renewed with usage has no prompt to rewrite. It keeps the request's
-/// candidates, resolved for the request's model: a pin of another model is planned among them because the plan is
-/// advisory, the pin's own next request runs the gate over its own candidates, and the cost of the shortcut is a
-/// wrong `no_runway` skip or a wrong planned destination, never a wrong move.
+/// speed, and no body estimate, since a pin never renewed with usage has no prompt to rewrite. Its static chain is the
+/// one boundary its row names, so the read matches a destination that holds the pin's whole static prefix and no
+/// shorter one. It keeps the request's candidates, resolved for the request's model: a pin of another model is planned
+/// among them because the plan is advisory, the pin's own next request runs the gate over its own candidates, and the
+/// cost of the shortcut is a wrong `no_runway` skip or a wrong planned destination, never a wrong move.
 fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRequest {
     if current {
         return request.clone();
@@ -6260,16 +6331,18 @@ fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRe
         lane: pin.lane.clone(),
         fast: lane_is_fast(&pin.lane),
         entrypoint: pin.entrypoint.clone(),
+        static_boundaries: pin.static_hash.iter().cloned().collect(),
         body_tokens: 0,
         ..request.clone()
     }
 }
 
 /// The request a standing pin is read by outside a round, shaped from the pin's own facts: its key and generation, its
-/// agent and session, its model, its lane with the lane's speed and its entrypoint. `pin_request` takes the same model,
-/// lane and entrypoint for another pin of a round and keeps the round request's key, generation, agent and session. No
-/// request stands behind a standing, so it holds no body estimate and no candidates, and every other member reads
-/// empty.
+/// agent and session, its model, its lane with the lane's speed, its entrypoint and the one static boundary its row
+/// names, so the read matches a destination that holds the pin's whole static prefix and no shorter one. `pin_request`
+/// takes the same model, lane, entrypoint and boundary for another pin of a round and keeps the round request's key,
+/// generation, agent and session. No request stands behind a standing, so it holds no body estimate and no candidates,
+/// and every other member reads empty.
 fn standing_request(pin: &PinRow) -> SelectRequest {
     // Every member is written out, so a member the type gains states its value for a standing too.
     SelectRequest {
@@ -6298,7 +6371,7 @@ fn standing_request(pin: &PinRow) -> SelectRequest {
         boundaries: Arc::from([]),
         client: ClientClass::Other,
         entrypoint: pin.entrypoint.clone(),
-        static_boundaries: Arc::from([]),
+        static_boundaries: pin.static_hash.iter().cloned().collect(),
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
@@ -6344,8 +6417,11 @@ pub struct MoveRead {
 /// which is the gate's to make. The dropped thinking reads the pair of the pin's account and the destination, and its
 /// weight is the share of a token as output over its share as a cache write at the pin's TTL, so the cost model sets
 /// it. `req` is the request `pin_request` shapes for the pin in a round, or `standing_request`'s for a standing pin.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn move_read(
     state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     req: &SelectRequest,
     pin: &PinRow,
     current: bool,
@@ -6383,8 +6459,17 @@ pub(crate) fn move_read(
         });
     let drop_size = weighed.map(|(size, _)| size);
     let drop_cost = weighed.map(|(_, cost)| cost);
-    let sized = prompt_size(state, pin, current, req, destination);
-    let size = (prompt_size(state, pin, current, req, None) > 0)
+    let sized = prompt_size(
+        state,
+        snapshot,
+        affinity,
+        pin,
+        current,
+        req,
+        destination,
+        now,
+    );
+    let size = (prompt_size(state, snapshot, affinity, pin, current, req, None, now) > 0)
         .then(|| (sized as f64 + drop_size.unwrap_or(0.0)).max(1.0));
     let write = share(cache_write(sized, pin.cache_ttl_ms)).filter(|share| *share > 0.0);
     let cost = match (write, drop_cost) {
@@ -6410,6 +6495,7 @@ pub(crate) fn move_read(
 fn destination_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     pool: &PoolRow,
     request: &SelectRequest,
     eligible: &[&Candidate],
@@ -6438,6 +6524,7 @@ fn destination_of(
                 fit_of(
                     state,
                     snapshot,
+                    affinity,
                     pool,
                     request,
                     Figures::Pin(pin, current),
@@ -6475,6 +6562,7 @@ fn destination_of(
 fn move_at(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     pool: &PoolRow,
     req: &SelectRequest,
     eligible: &[&Candidate],
@@ -6487,6 +6575,7 @@ fn move_at(
     let found = destination_of(
         state,
         snapshot,
+        affinity,
         pool,
         req,
         eligible,
@@ -6498,6 +6587,8 @@ fn move_at(
     );
     let read = move_read(
         state,
+        snapshot,
+        affinity,
         req,
         pin,
         current,
@@ -6552,12 +6643,15 @@ pub(crate) fn standing_move_read(
     fallback_ms: i64,
 ) -> MoveRead {
     let request = standing_request(pin);
+    let affinity_handle = state.affinity();
+    let affinity = affinity_handle.read().expect("affinity lock poisoned");
     let (destination, read) = match pool {
         Some(pool) => {
             let eligible: Vec<&Candidate> = eligible.iter().collect();
             move_at(
                 state,
                 snapshot,
+                &affinity,
                 pool,
                 &request,
                 &eligible,
@@ -6569,7 +6663,10 @@ pub(crate) fn standing_move_read(
             )
         }
         // A pin whose pool left the registry has no siblings to plan a move among.
-        None => (None, move_read(state, &request, pin, false, now, None)),
+        None => (
+            None,
+            move_read(state, snapshot, &affinity, &request, pin, false, now, None),
+        ),
     };
     let movable = destination.is_some() && !pin.account_bound;
     MoveRead {
@@ -6663,6 +6760,7 @@ fn left_out_as(
 fn shed_round(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     pool: &PoolRow,
     request: &SelectRequest,
     eligible: &[&Candidate],
@@ -6823,6 +6921,7 @@ fn shed_round(
             let (found, read) = move_at(
                 state,
                 snapshot,
+                affinity,
                 pool,
                 &req,
                 eligible,
@@ -6949,6 +7048,7 @@ fn shed_round(
             let (found, moved) = move_at(
                 state,
                 snapshot,
+                affinity,
                 pool,
                 &req,
                 eligible,
@@ -6974,6 +7074,8 @@ fn shed_round(
         let destination_tier = snapshot.priced_tier(&destination).unwrap_or_default();
         let (rewrite, pin_burn, regime) = pin_figures(
             state,
+            snapshot,
+            affinity,
             pool,
             &destination,
             &req,
@@ -6984,7 +7086,16 @@ fn shed_round(
         read.runway_ms = runway_ms;
         let model = req.canonical_model.as_str();
         // The record shows the Pro-week figure of the write alone, one unit for every pin.
-        let write = rewrite_write(state, &req, Some(p), current, Some(&destination));
+        let write = rewrite_write(
+            state,
+            snapshot,
+            affinity,
+            &req,
+            Some(p),
+            current,
+            Some(&destination),
+            now,
+        );
         read.rewrite = state
             .share()
             .equivalent(SEVEN_DAY, req.entrypoint.as_deref(), model, write, now)
@@ -7613,6 +7724,7 @@ fn entry_refusal(
 fn blocked(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
+    affinity: &AffinityMap,
     pool: &PoolRow,
     request: &SelectRequest,
     figures: Figures<'_>,
@@ -7627,6 +7739,7 @@ fn blocked(
         fit_of(
             state,
             snapshot,
+            affinity,
             pool,
             request,
             figures,
@@ -7947,6 +8060,7 @@ fn placement_of<'a>(
                     blocked(
                         state,
                         snapshot,
+                        affinity,
                         pool,
                         request,
                         figures,
@@ -9845,6 +9959,7 @@ mod banded_tests {
     use super::{
         fit_of, lane_key, runway, slow_down_of, Banded, Figures, Judge, Portability, SelectRequest,
     };
+    use crate::affinity::AffinityMap;
     use crate::state::{
         BandSegment, Reservation, RoutingState, SharePricer, UtilizationSample, WindowReading,
         WindowSource, FIVE_HOUR,
@@ -10106,6 +10221,7 @@ mod banded_tests {
         let read = fit_of(
             &state,
             &snapshot,
+            &AffinityMap::default(),
             snapshot.pool("p").expect("the case's pool"),
             &request,
             Figures::Fresh(&[]),
