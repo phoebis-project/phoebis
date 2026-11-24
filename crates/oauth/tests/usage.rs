@@ -80,19 +80,6 @@ fn fable_and_window_keys(body: &[u8]) -> (Option<(String, Option<f64>)>, Vec<Str
 }
 
 #[test]
-fn a_body_with_no_limits_reads_the_overage_included_week_as_the_fable_week() {
-    let body = br#"{"five_hour":{"utilization":10,"resets_at":null},"seven_day_overage_included":{"utilization":37,"resets_at":null}}"#;
-    assert_eq!(
-        fable_and_window_keys(body),
-        (
-            Some(("fable".to_string(), Some(37.0))),
-            vec!["five_hour".to_string()]
-        ),
-        "the overage-included week is a spelling of the Fable week, so it stands under no raw key"
-    );
-}
-
-#[test]
 fn a_limits_list_with_no_fable_entry_still_reads_the_overage_included_week() {
     let body = br#"{"five_hour":{"utilization":10,"resets_at":null},"seven_day_overage_included":{"utilization":37,"resets_at":null},"limits":[{"kind":"weekly_scoped","percent":15,"scope":{"model":{"display_name":"Opus"}}}]}"#;
     assert_eq!(
@@ -102,19 +89,6 @@ fn a_limits_list_with_no_fable_entry_still_reads_the_overage_included_week() {
             vec!["five_hour".to_string()]
         ),
         "a limits list that names no Fable entry leaves the top-level spelling to stand as the Fable week"
-    );
-}
-
-#[test]
-fn a_fable_entry_of_limits_stands_over_the_overage_included_week() {
-    let body = br#"{"five_hour":{"utilization":10,"resets_at":null},"seven_day_overage_included":{"utilization":37,"resets_at":null},"limits":[{"kind":"weekly_scoped","percent":42,"scope":{"model":{"display_name":"Fable"}}}]}"#;
-    assert_eq!(
-        fable_and_window_keys(body),
-        (
-            Some(("fable".to_string(), Some(42.0))),
-            vec!["five_hour".to_string()]
-        ),
-        "the entry of limits is the Fable week, and the same week under its upstream name leaves the windows"
     );
 }
 

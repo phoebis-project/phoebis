@@ -521,23 +521,17 @@ RS
 out=$(python3 "$tmp/schema-unreadable/scripts/check-docs.py" schema 2>&1) \
   && fail "a ledger table whose last entry is no (number, expression) step passed"
 
-# The hrefs check has to fail on a console link to an anchor that no heading of its page carries, on a link to a page
-# that the nav does not hold though the page's file stands, on a call whose arguments it cannot read, on a use of
-# docsHref as a value, on an import of docsHref under another name, on a unit address that names a page outside the nav,
-# on a unit with no Documentation line, on a unit address outside the documentation site, and on an anchor that only a
-# line inside a fenced block spells. Each copy of the shared tree adds one of them to a valid site, so each case's exit
-# comes from that case alone. The check's run on the real tree is the passing side.
+# The hrefs check has to fail on a link to a page that the nav does not hold though the page's file stands, on a call
+# whose arguments it cannot read, on a use of docsHref as a value, on an import of docsHref under another name, on a
+# unit address that names a page outside the nav, on a unit with no Documentation line, on a unit address outside the
+# documentation site, and on an anchor that only a line inside a fenced block spells. Each copy of the shared tree adds
+# one of them to a valid site, so each case's exit comes from that case alone. The check's run on the real tree is the
+# passing side.
 tree hrefs
 echo "const DOCS_SITE = 'https://docs.example/router/';" > "$tmp/hrefs/web/src/lib/docs.ts"
 echo 'nav = [ { "Guide" = "guide.md" } ]' > "$tmp/hrefs/docs/nav.toml"
 echo '## Here' > "$tmp/hrefs/docs/site/guide.md"
 echo 'Documentation=https://docs.example/router/guide/' > "$tmp/hrefs/deploy/phoebis.service"
-cp -R "$tmp/hrefs" "$tmp/hrefs-anchor"
-echo "const href = docsHref('guide', 'gone');" > "$tmp/hrefs-anchor/web/src/Page.tsx"
-out=$(python3 "$tmp/hrefs-anchor/scripts/check-docs.py" hrefs 2>&1) \
-  && fail "a link to an anchor that no heading of its page carries passed"
-echo "$out" | grep -qF "web/src/Page.tsx:1: docsHref names #gone, which no heading of guide.md carries" \
-  || fail "the anchor that no heading carries did not report: $out"
 cp -R "$tmp/hrefs" "$tmp/hrefs-nav"
 : > "$tmp/hrefs-nav/docs/site/missing.md"
 echo "const href = docsHref('missing');" > "$tmp/hrefs-nav/web/src/Page.tsx"

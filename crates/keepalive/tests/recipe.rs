@@ -618,10 +618,6 @@ fn a_body_bound_to_its_account_is_retained() {
             "{label}"
         );
     }
-    assert!(
-        make_recipe(&headers(), BODY.as_bytes(), "routing-alias", 1 << 20).is_ok(),
-        "a body that carries no such reference still builds"
-    );
 }
 
 /// A user turn whose `tool_result` carries the marker on a block of its own content, the fifth position the

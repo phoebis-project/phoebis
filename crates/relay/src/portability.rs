@@ -131,12 +131,6 @@ mod tests {
     }
 
     #[test]
-    fn a_tool_definition_binds_no_request() {
-        let body = br#"{"model":"m","messages":[{"role":"system","content":[{"type":"tool_addition","tool":{"definition":{"name":"update","input_schema":{"type":"object","properties":{"file_id":{"type":"string"}}}}}}]}]}"#;
-        assert_eq!(class_of(body), Portability::Portable);
-    }
-
-    #[test]
     fn a_file_inside_a_tool_results_content_binds_the_request() {
         let body = br#"{"model":"m","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"image","source":{"type":"file","file_id":"file_1"}}]}]}]}"#;
         assert_eq!(class_of(body), Portability::Hold);

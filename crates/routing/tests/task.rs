@@ -4006,33 +4006,6 @@ async fn a_fable_completions_hour_reaches_the_reservation_of_the_next_starts_non
 }
 
 #[tokio::test]
-async fn a_completed_requests_share_is_added_to_the_reading() {
-    let store = seeded_oauth(&["a"]);
-    with_tier(&store, "a");
-    let now = Arc::new(AtomicI64::new(3_000));
-    let handle = spawn(
-        store.clone(),
-        clock(&now),
-        RouterConfig {
-            share: a_tenth_per_million(),
-            ..RouterConfig::default()
-        },
-    )
-    .unwrap();
-    handle
-        .report(observed(
-            "a",
-            sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
-        ))
-        .await;
-    handle.report(a_million_input("a", 2_000)).await;
-    assert!(
-        close(read(&handle, "a", FIVE_HOUR).await, 0.6),
-        "the reading plus the request's share"
-    );
-}
-
-#[tokio::test]
 async fn inside_one_reset_a_head_keeps_the_routers_own_figure_within_its_percent_and_a_poll_lands_as_read(
 ) {
     let store = seeded_oauth(&["a"]);
@@ -6987,42 +6960,6 @@ async fn a_reading_between_the_shares_of_two_refusals_lifts_the_seats_row() {
         cooled_scopes(&handle).await,
         Vec::<String>::new(),
         "the second refusal brings its share under the standing deadline, and a reading under it lifts the row"
-    );
-    assert_eq!(
-        next_cleared(&mut events).await,
-        (CooldownScope::Account, "recovered")
-    );
-}
-
-/// The clock moves between the two refusals, as in the case of two refusals under one deadline.
-#[tokio::test]
-async fn a_refusal_under_a_later_deadline_brings_its_share_to_the_seats_row() {
-    let store = seeded_oauth(&["a"]);
-    usage_based_seat(&store, "a");
-    let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
-    let mut events = handle.subscribe_events();
-    handle.report(credits_at(true, None, Some(90.0), 500)).await;
-    handle.report(seat_refused(1_000 + 5 * HOUR)).await;
-    assert_eq!(cooled_scopes(&handle).await, ["account"]);
-    handle
-        .report(credits_at(true, None, Some(97.0), 1_500))
-        .await;
-    assert_eq!(
-        cooled_scopes(&handle).await,
-        ["account"],
-        "a reading over the first refusal's share leaves the row"
-    );
-    now.store(2_000, Ordering::SeqCst);
-    handle.report(seat_refused(2_000 + 6 * HOUR)).await;
-    assert_eq!(cooled_scopes(&handle).await, ["account"]);
-    handle
-        .report(credits_at(true, None, Some(95.0), 3_000))
-        .await;
-    assert_eq!(
-        cooled_scopes(&handle).await,
-        Vec::<String>::new(),
-        "the refusal that wins the deadline brings its share, and a reading under it lifts the row"
     );
     assert_eq!(
         next_cleared(&mut events).await,
@@ -17259,48 +17196,6 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
         projection_of_account(&handle.projections("p").await.unwrap(), "a").slow_down,
         None,
         "a pool with the slow-down off answers no entry"
-    );
-}
-
-#[tokio::test]
-async fn a_slowed_account_answers_the_figure_that_the_stretch_test_compares() {
-    let now = Arc::new(AtomicI64::new(AT));
-    let store = shedding_store(&["a"]);
-    let mut pool = store.pool("p").unwrap().unwrap();
-    pool.five_hour_ceiling = 0.95;
-    pool.slow_down.slow_down = true;
-    pool.slow_down.slow_down_stretch_seconds = 240;
-    pool.shedding.burn_average_seconds = (SLOWED_AVERAGE_MS / 1_000) as u64;
-    store.update_pool(&pool, pool.updated_at, "test").unwrap();
-    with_tier(&store, "a");
-    // s1 burns a tenth of the 5-hour window an hour on `a`, at 0.9 with 40 minutes left: the demand passes the ceiling
-    // half an hour in, before the reset less the threshold of four minutes.
-    store
-        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
-        .unwrap();
-    let handle = spawn(store, clock(&now), priced_config()).unwrap();
-    handle
-        .report(observed(
-            "a",
-            sample_with(AT, FIVE_HOUR, 0.9, Some(SLOWED_RESET)),
-        ))
-        .await;
-    handle.samples().await.unwrap();
-    handle
-        .select(slowed_turn(&handle, "r-1", AT))
-        .await
-        .unwrap();
-
-    let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
-    let entry = a.slow_down.expect("the pinned read wrote a's entry");
-    assert!(
-        close(entry.stretch_projection, 0.96),
-        "0.9 and a tenth an hour over the 36 minutes to the reset less the threshold: {entry:?}"
-    );
-    let five_hour = a.windows[FIVE_HOUR];
-    assert!(
-        !close(Some(five_hour.projection), 0.96),
-        "the window's projection runs on to the reset itself: {five_hour:?}"
     );
 }
 

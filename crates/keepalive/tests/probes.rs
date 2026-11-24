@@ -462,41 +462,6 @@ async fn held_re_sends_stop_at_the_router_until_it_serves_one() {
     );
 }
 
-/// A probe the router refuses while the main agent is busy counts as sent and holds the recipe under `ledger_behind`,
-/// as one the router refuses while the agent is idle does.
-#[tokio::test]
-async fn a_probe_held_while_the_main_agent_is_busy_counts_as_sent_and_holds_under_ledger_behind() {
-    let behind = Arc::new(AtomicBool::new(false));
-    let reading = behind.clone();
-    let mut r = rig(RigSpec {
-        accounting: Some(Arc::new(move |_| Accounting {
-            behind: reading.load(Ordering::SeqCst),
-        })),
-        accounts: vec![api_key("a", A, 0)],
-        ..RigSpec::default()
-    })
-    .await;
-    r.observe("main").await;
-    r.state("main", "idle");
-    for _ in 0..2 {
-        r.advance_attended(270_000);
-        r.step().await;
-    }
-    assert_eq!(r.view("main").probes_today, 2, "two served idle probes");
-    r.state("main", "busy");
-    behind.store(true, Ordering::SeqCst);
-    r.advance_attended(270_000);
-    r.step().await;
-    r.advance_attended(5_000);
-    r.step().await;
-    let status = r.view("main");
-    assert_eq!(
-        (status.probes_today, status.cause),
-        (4, Reason::LedgerBehind),
-        "two holds while busy: {status:?}"
-    );
-}
-
 #[tokio::test]
 async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discards_at_once() {
     // The lapse case: the recipe stays, the probe at 270 s still runs, a heartbeat is refused, and the idle

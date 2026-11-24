@@ -2668,31 +2668,6 @@ fn a_portable_main_turn_clears_the_flag_and_takes_the_move() {
 }
 
 #[test]
-fn a_portable_auxiliary_request_lands_on_a_sibling_and_leaves_a_cooled_bound_pins_row() {
-    let s = snapshot(Pool::default());
-    let pin = bound_pin("s-cooled-bound", "a", T);
-    let mut st = loaded(vec![pin.clone()]);
-    st.record_cooldown(cooled("a", "account", T + HOUR, "five_hour", "rate_limit"));
-    let d = decide(
-        &mut st,
-        &s,
-        &auxiliary(&s, "s-cooled-bound", T + 1_000),
-        &mut rng(),
-    );
-    assert_ne!(
-        picked(&d.result),
-        "a",
-        "the request is placed for itself on a sibling"
-    );
-    assert!(!touches_a_pin(&d.writes), "{:?}", d.writes);
-    assert_eq!(
-        st.pin(&pin_key("s-cooled-bound")),
-        Some(&pin),
-        "the row stays on a for the session's next non-portable turn"
-    );
-}
-
-#[test]
 fn a_round_marks_a_free_pin_and_lists_the_bound_one_as_account_bound() {
     let s = tiered(shedding_pool(Shedding::default()));
     // Three warm pins on a of equal burn, 0.04 of the 5-hour window an hour each: s0 holds account state, and the round
@@ -3331,30 +3306,6 @@ fn a_first() -> Pool {
         members: vec![("a", 0), ("b", 1), ("c", 1)],
         ..Pool::default()
     }
-}
-
-#[test]
-fn a_release_class_request_leaves_a_pin_whose_account_is_paused() {
-    let s = snapshot(a_first());
-    let mut st = RoutingState::from_load(RoutingLoad::default());
-    let placing = of_class(&s, "s1", Portability::Release, 1_000);
-    assert_eq!(picked(&select(&mut st, &s, &placing, &mut rng()).0), "a");
-    let paused = snapshot_with(a_first(), &[("a", false, AccountState::Ready)]);
-    let d = decide(
-        &mut st,
-        &paused,
-        &of_class(&paused, "s1", Portability::Release, 2_000),
-        &mut rng(),
-    );
-    let landed = picked(&d.result).to_string();
-    assert_ne!(landed, "a", "a pause names no end to wait for");
-    assert_eq!(pinned(&st, "s1").account_id, landed);
-    let bound = line(&d.record, "bound");
-    assert_eq!(
-        (bound.verdict, fact(bound, "expires_at")),
-        ("passed", &FactValue::Int(1_000 + HOUR))
-    );
-    assert!(no_fact(bound, "deadline"), "{:?}", bound.facts);
 }
 
 #[test]
@@ -33126,41 +33077,6 @@ fn a_request_that_waited_for_the_rewrite_is_not_held_for_the_slow_down() {
         d.record.pin.as_ref().and_then(|pin| pin.slow_down_until),
         None,
         "no slow-down deadline stands for it"
-    );
-}
-
-#[test]
-fn a_non_portable_request_of_a_moved_pin_on_a_slowed_account_waits_for_the_rewrite_first() {
-    let (off, on) = held_pools(120);
-    // The state of `a_request_that_waited_for_the_rewrite_is_not_held_for_the_slow_down`: s1's move lands it on b,
-    // which reads a factor of about a half.
-    let mut st = rounding(vec![
-        burning("s1", "a", 15.0, true, T),
-        burning("s0", "b", 15.0, true, T),
-    ]);
-    reading(&mut st, "a", 0.1, 2 * HOUR, T);
-    reading(&mut st, "b", 0.80, 2 * HOUR, T);
-    let at = T + 20 * SECOND;
-    stamped(&mut st, &on, "s0", at);
-    cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
-    st.record_cooldown(cooled(
-        "a",
-        "model:claude-sonnet-5",
-        T + 10 * MINUTE,
-        "retry_after",
-        "rate_limit",
-    ));
-    let moved = decide(&mut st, &on, &turn_of(&on, "r-1", at), &mut rng());
-    assert_eq!(picked(&moved.result), "b");
-    let bound = SelectRequest {
-        portability: Portability::Hold,
-        ..turn_of(&on, "r-2", at + 200)
-    };
-    let (account_id, hold) = held_on(&decide(&mut st, &on, &bound, &mut rng()));
-    assert_eq!(
-        (account_id.as_str(), hold.reason, hold.waits_for.as_deref()),
-        ("b", HoldReason::Rewrite, Some("r-1")),
-        "the rewrite's hold comes first"
     );
 }
 

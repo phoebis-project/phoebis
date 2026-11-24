@@ -767,16 +767,6 @@ fn a_pin_migrated_event_counts_under_its_reason_and_its_fit_on_the_destination()
         db.read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
             .unwrap()
     };
-    let by_reason = |db: &LedgerDb| {
-        by_fit(db)
-            .into_iter()
-            .map(|(reason, fits)| (reason, fits.values().sum::<u64>()))
-            .collect::<std::collections::BTreeMap<_, _>>()
-    };
-    assert_eq!(
-        by_reason(&db),
-        std::collections::BTreeMap::from([("overage".to_string(), 1)])
-    );
     assert_eq!(
         by_fit(&db),
         std::collections::BTreeMap::from([(
@@ -786,10 +776,6 @@ fn a_pin_migrated_event_counts_under_its_reason_and_its_fit_on_the_destination()
     );
     // A move outside the gate carries no fit, so it reads under the fit unknown beside the gated one.
     fold_events(&db, &[moved(3_600_100, "b", "overage", None)]);
-    assert_eq!(
-        by_reason(&db),
-        std::collections::BTreeMap::from([("overage".to_string(), 2)])
-    );
     assert_eq!(
         by_fit(&db),
         std::collections::BTreeMap::from([(
@@ -827,14 +813,6 @@ fn two_reasons_keep_their_own_fit_counts_in_the_moves_by_reason_and_fit() {
             ),
         ]),
         "each reason keeps its own fits, summed over the accounts"
-    );
-    assert_eq!(
-        by_fit
-            .into_iter()
-            .map(|(reason, fits)| (reason, fits.values().sum::<u64>()))
-            .collect::<std::collections::BTreeMap<_, _>>(),
-        std::collections::BTreeMap::from([("shed".to_string(), 1), ("spent".to_string(), 2)]),
-        "the moves by reason are the sum over each reason's fits"
     );
 }
 

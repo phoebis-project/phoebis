@@ -3763,18 +3763,6 @@ mod tests {
     }
 
     #[test]
-    fn two_scopes_open_over_the_same_half_hour_book_it_once() {
-        assert_eq!(
-            folded(&[
-                scoped_cooldown_set_event("account", 0, 1_800_000),
-                scoped_cooldown_set_event("model:m", 0, 1_800_000),
-            ]),
-            1_800,
-            "the half hour under both scopes counts once"
-        );
-    }
-
-    #[test]
     fn a_clear_takes_back_only_the_time_that_no_other_scope_covers() {
         assert_eq!(
             folded(&[

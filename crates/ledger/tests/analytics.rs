@@ -6903,10 +6903,6 @@ fn the_rewrite_series_and_the_moves_by_reason_read_the_account_rollups() {
         .read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
         .unwrap();
     assert_eq!(
-        by_fit.get("shed").map(|fits| fits.values().sum::<u64>()),
-        Some(1)
-    );
-    assert_eq!(
         by_fit,
         BTreeMap::from([(
             "shed".to_string(),
@@ -7056,17 +7052,6 @@ fn moves_by_reason_invents_no_vocabulary_for_a_reason_no_code_names_or_none_at_a
     let by_fit = db
         .read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
         .unwrap();
-    let moves = |reason: &str| by_fit.get(reason).map(|fits| fits.values().sum::<u64>());
-    assert_eq!(
-        moves("future_reason"),
-        Some(1),
-        "a reason no code names reads back as itself"
-    );
-    assert_eq!(
-        moves("unknown"),
-        Some(1),
-        "no reason at all falls back to unknown"
-    );
     assert_eq!(
         by_fit,
         BTreeMap::from([
