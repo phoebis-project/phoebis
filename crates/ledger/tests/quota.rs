@@ -342,10 +342,16 @@ fn rate_limited_for(retry_after_seconds: &str) -> Respond {
 /// stamps one, since a block read in the account's first slots would add a request and a connection to the counts
 /// that pin the poll's cadence.
 fn pair(store: &Store, id: &str, secret: &str) {
+    pair_as(store, id, secret, "00000000-0000-4000-8000-000000000199");
+}
+
+/// `pair` under the upstream account `account_uuid`, for a second account paired beside the first, since the registry
+/// holds one account per upstream account.
+fn pair_as(store: &Store, id: &str, secret: &str, account_uuid: &str) {
     store
         .insert_account(&AccountRow {
             identity: Some(Identity {
-                account_uuid: "00000000-0000-4000-8000-000000000199".into(),
+                account_uuid: account_uuid.into(),
                 email: format!("{id}@example.invalid"),
                 organization_uuid: None,
             }),
@@ -878,6 +884,53 @@ async fn a_pairing_re_spreads_the_slots_without_reading_an_account_again_within_
     );
     step_to(&h, &up, &paused, secs(652)).await;
     assert_eq!(usage_asked(&up, OAUTH_C), 1);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_slot_drawn_behind_a_fresh_reading_polls_an_interval_later_with_no_profile() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(
+        &up,
+        &[oauth("a", A, 0), oauth("c", OAUTH_C, 1)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    let usage = h
+        .usage
+        .clone()
+        .expect("the harness was built with the poll");
+    let paused = start_polling(&h, &up).await;
+    // `b` is read at once as a confirm reads a new account, and `d` is not read. `c`'s slot at 450 s makes the pass
+    // that spreads the four, which draws `b` at 525 s and `d` at 675 s.
+    step_to(&h, &up, &paused, secs(310)).await;
+    pair(&h.store, "b", B);
+    pair_as(
+        &h.store,
+        "d",
+        OAUTH_D,
+        "00000000-0000-4000-8000-000000000198",
+    );
+    resumed(usage.poll("b")).await.unwrap();
+    step_to(&h, &up, &paused, secs(608)).await;
+    assert_eq!(
+        (usage_asked(&up, B), profile_asked(&up, B)),
+        (1, 0),
+        "the seed's request alone: b's slot waits for the interval after its reading at 310 s"
+    );
+    step_to(&h, &up, &paused, secs(612)).await;
+    assert_eq!(
+        (usage_asked(&up, B), profile_asked(&up, B)),
+        (2, 0),
+        "the seed's request and b's first poll, which counts the reading as its first and reads no profile"
+    );
+    step_to(&h, &up, &paused, secs(677)).await;
+    assert_eq!(
+        (usage_asked(&up, OAUTH_D), profile_asked(&up, OAUTH_D)),
+        (1, 1),
+        "d, with no reading, polls at its drawn slot and reads the profile"
+    );
     up.shutdown().await;
 }
 

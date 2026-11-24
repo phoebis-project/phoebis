@@ -4502,6 +4502,47 @@ async fn a_confirmed_pairing_polls_the_quota_at_once_and_a_refresh_records_its_r
 }
 
 #[tokio::test]
+async fn a_confirmed_pairing_reads_the_limit_resets_behind_its_first_usage_reading() {
+    use common::{get, json, login, LIMIT_RESETS_PATH};
+    let h = common::admin_parts_full().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    // The fake's default answer carries no block, which the route answers as none whether or not the read left.
+    h.up.set_rule_after(
+        0,
+        LIMIT_RESETS_PATH,
+        limit_resets_answer(
+            serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+        ),
+    );
+    assert_eq!(pair_business(&h.app, &cookie).await.status(), 200);
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        (sent(&h.up, "GET /api/oauth/usage?cedar_ember=1") == 1).then_some(())
+    })
+    .await;
+    let requests = h.up.requests();
+    let position = |line: &str| {
+        requests
+            .iter()
+            .position(|r| r.line.starts_with(line))
+            .unwrap_or_else(|| panic!("no request starts with {line:?}"))
+    };
+    assert!(
+        position("GET /api/oauth/usage ") < position("GET /api/oauth/usage?cedar_ember=1"),
+        "the usage reading leaves ahead of the limit resets read"
+    );
+    let account = fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
+        let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+        (!account["limit_resets"].is_null()).then_some(account)
+    })
+    .await;
+    assert_eq!(
+        account["limit_resets"]["grants"][0]["id"].as_str(),
+        Some("rg-b-1"),
+        "{account}"
+    );
+}
+
+#[tokio::test]
 async fn a_confirm_says_its_first_poll_is_in_flight_and_the_list_row_lists_the_windows_it_lands() {
     use common::{get, json, login, NOW};
     let h = common::admin_parts_full().await;

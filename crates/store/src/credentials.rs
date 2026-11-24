@@ -672,7 +672,7 @@ impl Store {
             CommitKind::Pairing,
             now,
         )?;
-        // The block was read under the pairing before this one, and the poll's next slots read it again. A
+        // The block was read under the pairing before this one, and the pairing's first reading reads it again. A
         // pairing leaves the holder as it is, so the epoch moves to refuse a read that was out across it.
         tx.execute(
             "UPDATE accounts SET limit_resets_json = NULL, limit_resets_read_at = NULL, \

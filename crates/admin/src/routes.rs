@@ -1911,8 +1911,8 @@ async fn pairing_confirm(
         Ok(()) => {
             // The first reading is taken now rather than left to the scheduler's next pass, so the account's
             // windows show as soon as the endpoint answers. The answer does not wait on it: the endpoint can be
-            // slow and the pairing is committed either way, so a failed read records nothing and the next pass
-            // reads the account. Tracked so a shutdown aborts a read still in flight rather than letting it
+            // slow and the pairing is committed either way, so a failed read records nothing and the account's slot
+            // reads it again. Tracked so a shutdown aborts a read still in flight rather than letting it
             // record into the closing channel. A flag the confirm kept pauses the account's usage reads as it pauses
             // the poll's schedule: a reading would land after the flag and take the term-ended row's pair with it.
             let first_poll = !QuotaPoll::plan_paused(&state.store, &row.id);
@@ -1922,7 +1922,10 @@ async fn pairing_confirm(
                 let handle = tokio::spawn(async move {
                     match polled.store.account(&account_id) {
                         Ok(Some(committed)) => {
-                            let _ = polled.quota_poll().poll_account(&committed).await;
+                            polled
+                                .quota_poll()
+                                .read_in_slot_order(&committed, false)
+                                .await;
                         }
                         Ok(None) => {
                             tracing::debug!(account = %account_id, "the account was deleted before its first poll")

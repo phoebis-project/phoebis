@@ -250,13 +250,15 @@ struct Slot {
     in_flight: Option<tokio::task::Id>,
     /// The next poll's instant, or the slot the poll in flight was drawn at.
     at: Instant,
-    /// Reads counted on this slot's incarnation, the startup step's among them for a slot the first pass
-    /// drew. A poll made while the count is a multiple of `PROFILE_EVERY_POLLS` reads the profile, so a
-    /// new account's first poll reads it and a first-pass slot's first poll does not. A restart read that
-    /// answered sets the count to 1, as the startup step's read counts as the first.
+    /// Reads counted on this slot's incarnation, among them the startup step's for a slot the first pass
+    /// drew and the usage service's last reading for one a later pass drew. A poll made while the count is
+    /// a multiple of `PROFILE_EVERY_POLLS` reads the profile, so the first poll of a slot drawn with no
+    /// reading reads it and any other first poll does not. A restart read that answered sets the count to
+    /// 1, as the startup step's read counts as the first.
     polls: u32,
-    /// When the account was last read: the last poll's dispatch, or the scheduler's start for a slot the
-    /// first pass drew, standing in for the startup step's read. `None` until a new account's first poll.
+    /// When the account was last read: the last poll's dispatch, the scheduler's start for a slot the first
+    /// pass drew, standing in for the startup step's read, or the instant of the reading a later pass
+    /// counted. `None` until the first poll of a slot whose draw placed no read.
     last_read: Option<Instant>,
     /// A plan window's restart asked for the profile, and no read has served it yet.
     restart_due: bool,
@@ -316,7 +318,8 @@ fn next_slot(at: Instant, dispatched: Instant) -> Instant {
 /// re-pairing or a delete re-spreads the phases, an attempt in flight keeps its slot, an account is not read
 /// again sooner than an interval after its last read, and a held account's slot is the hold's end.
 /// The first pass follows the startup step, which has just read every account it lists, so those slots start
-/// an interval on with that read counted as their first poll.
+/// an interval on with that read counted as their first poll. A later pass counts the usage service's last
+/// reading of a new slot's holder the same way, a pairing's first reading among them.
 fn spread(
     slots: &mut BTreeMap<String, Slot>,
     rows: Vec<AccountRow>,
@@ -341,14 +344,31 @@ fn spread(
     }
     slots.retain(|id, slot| known.contains(&(id.clone(), slot.account.incarnation)));
     for (index, account) in accounts.iter().enumerate() {
-        let slot = slots.entry(account.id.clone()).or_insert_with(|| Slot {
-            account: account.clone(),
-            in_flight: None,
-            at: now,
-            polls: u32::from(first_pass),
-            last_read: first_pass.then_some(now),
-            restart_due: false,
-            restart_read: None,
+        let slot = slots.entry(account.id.clone()).or_insert_with(|| {
+            let (polls, last_read) = if first_pass {
+                (1, Some(now))
+            } else {
+                match usage.latest_for(account) {
+                    // The age is read off the wall clock, which can step: a negative age counts as zero, and one that
+                    // the slot's clock cannot reach back to leaves no last read.
+                    Some(snapshot) => {
+                        let age = Duration::from_millis(
+                            u64::try_from(usage.now() - snapshot.fetched_at).unwrap_or(0),
+                        );
+                        (1, now.checked_sub(age))
+                    }
+                    None => (0, None),
+                }
+            };
+            Slot {
+                account: account.clone(),
+                in_flight: None,
+                at: now,
+                polls,
+                last_read,
+                restart_due: false,
+                restart_read: None,
+            }
         });
         slot.account = account.clone();
         if slot.in_flight.is_none() {
@@ -488,36 +508,8 @@ impl QuotaPoll {
                     let account = slot.account.clone();
                     let poll = self.clone();
                     let handle = attempts.spawn(async move {
-                        // A slot of an account whose plan ended keeps its cadence for the third poll's profile read.
-                        let paused = Self::plan_paused(&poll.store, &account.id);
-                        let (reading, profile_read) = if paused {
-                            (None, false)
-                        } else {
-                            let (answer, read) = poll.poll_reading(&account).await;
-                            (answer.ok(), read)
-                        };
-                        // The profile endpoint shares the usage endpoint's limit, so a read the poll made serves the
-                        // slot's.
-                        if profile_due && !profile_read {
-                            poll.refresh_profile(&account).await;
-                        }
-                        // The limit resets share that limit too, so a slot that reads the profile leaves them to the
-                        // next one, and the usage reading goes first, since it is what returns an account to the
-                        // routing.
-                        if !paused
-                            && !profile_due
-                            && !profile_read
-                            && poll.limit_resets_due(&account, reading.as_ref())
-                        {
-                            let _ = poll.read_limit_resets(&account).await;
-                        }
-                        Completion::of(
-                            &poll,
-                            account,
-                            Attempt::Poll {
-                                profile_tried: profile_due || profile_read,
-                            },
-                        )
+                        let profile_tried = poll.read_in_slot_order(&account, profile_due).await;
+                        Completion::of(&poll, account, Attempt::Poll { profile_tried })
                     });
                     slot.in_flight = Some(handle.id());
                 }
@@ -596,6 +588,34 @@ impl QuotaPoll {
                 }
             }
         })
+    }
+
+    /// A slot's reads in their order, for the scheduler's slot and for a pairing's first reading: the usage, the
+    /// profile where `profile_due` and the usage read none, then the limit resets where they are due and no profile was
+    /// read. An account under a plan-ended pause reads the due profile alone. Answers whether a profile read was tried.
+    pub async fn read_in_slot_order(&self, account: &AccountRow, profile_due: bool) -> bool {
+        // A slot of an account whose plan ended keeps its cadence for the third poll's profile read.
+        let paused = Self::plan_paused(&self.store, &account.id);
+        let (reading, profile_read) = if paused {
+            (None, false)
+        } else {
+            let (answer, read) = self.poll_reading(account).await;
+            (answer.ok(), read)
+        };
+        // The profile endpoint shares the usage endpoint's limit, so a read the poll made serves the slot's.
+        if profile_due && !profile_read {
+            self.refresh_profile(account).await;
+        }
+        // The limit resets share that limit too, so a slot that reads the profile leaves them to the next one, and
+        // the usage reading goes first, since it is what returns an account to the routing.
+        if !paused
+            && !profile_due
+            && !profile_read
+            && self.limit_resets_due(account, reading.as_ref())
+        {
+            let _ = self.read_limit_resets(account).await;
+        }
+        profile_due || profile_read
     }
 
     /// One account's reading through the service's hold, concurrency cap and coalescing: a clean snapshot is recorded
