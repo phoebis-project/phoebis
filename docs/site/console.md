@@ -694,7 +694,8 @@ way. The Preview reads each pin's destination with no planned booking, as a roun
 round's second or later mark reads the destination again with the bookings its walk planned, so the Preview is exact for
 a round's first mark and an estimate behind it. On a pool with the slow-down on, the Preview tests a member's 5-hour
 window against the 5-hour ceiling by the figure of the router's stretch test, the projection at the window's horizon
-less the stretch threshold, and reads no 5-hour round for a member whose account carries no such figure.
+less the stretch threshold. It reads no 5-hour round for a member whose account carries no such figure, and none once
+the window has the stretch threshold or less left to its horizon, where the router's test fires nothing.
 
 With the switch off the Preview opens on `Load shedding is off: no round runs.` and names the projection alone. It reads
 `No member projects over the ceiling on any window: the closest is {label}, {window} {p} {horizon}.` while no member's
@@ -707,23 +708,23 @@ the first reason that holds, `each is too small to move.` where a session the wa
 mark share, `none is priced.` where one it reached has no priced burn, `each would leave its member too little burn.`
 where the round's guard keeps one, `the sessions already marked cover it.` where a session stands under a mark already,
 or `each is warm.` where Warm sessions is never and every session the walk holds that burns is warm. Where a round walks
-no session, the reason says why each was left out: `none draws that window.`, `each is a Fable session, which the
-reservation keeps.`, `each agent has ended.` or `each holds state on its account, which a move would lose.`, then `none
-burns.` where the sessions burn nothing on the window. Otherwise the reason is `none is priced.`, as where the members
-over the ceiling hold no session or while the Shed cap (%) field holds 0. With `Fable reservation shedding` on, under
-the Pace strategy and with load shedding on, the line adds, for the members no window fired on whose 7-day room is
-smaller than their Fable reservation and that hold a session of another model that a round can move, `1 member holds
-less 7-day room than its Fable reservation: {label}.` or `{n} members hold less 7-day room than their Fable reservation:
-{list}.`, followed by `A round there would mark {k} non-Fable sessions ({warm} warm), to move to a sibling with runway.`
-(`1 non-Fable session (1 warm)` for one) or by `A round there would mark no non-Fable session.` A member under its
-reservation with no such session runs no round, and the line reads `{label} is under its Fable reservation, and no
-session of another model is there to move.` Otherwise the line says nothing of the reservation. A member whose 5-hour
-window is under the hold is read on its next window in the order, and where its 5-hour projection reads over the
-ceiling, the line names the round the hold took away: `{label}'s 5-hour window is {age} old, under the hold of {hold},
-so its round reads the next window.` `{p}` is a whole percent with a space before the sign (`99 %`), `{horizon}` `at` a
-clock time on the 5-hour window and `in` a span on a weekly one (`in 5h`), `{window}` the window's label (`5h`, `7d` or
-`7-day Fable`), `{excess}` a percent an hour with one decimal (`9.5 %/h`), `{list}` the members in the Members group's
-order, and `{age}` and `{hold}` spans to the minute (`45 min`, `1 h`).
+no session, the reason says why each was left out: `none draws that window.`, `each agent has ended.` or `each holds
+state on its account, which a move would lose.`, then `none burns.` where the sessions burn nothing on the window.
+Otherwise the reason is `none is priced.`, as where the members over the ceiling hold no session or while the Shed cap
+(%) field holds 0. With `Fable reservation shedding` on, under the Pace strategy and with load shedding on, the line
+adds, for the members no window fired on whose 7-day room is smaller than their Fable reservation and that hold a
+session of another model that a round can move, `1 member holds less 7-day room than its Fable reservation: {label}.` or
+`{n} members hold less 7-day room than their Fable reservation: {list}.`, followed by `A round there would mark {k}
+non-Fable sessions ({warm} warm), to move to a sibling with runway.` (`1 non-Fable session (1 warm)` for one) or by `A
+round there would mark no non-Fable session.` A member under its reservation with no such session runs no round, and the
+line reads `{label} is under its Fable reservation, and no session of another model is there to move.` Otherwise the
+line says nothing of the reservation. A member whose 5-hour window is under the hold is read on its next window in the
+order, and where its 5-hour projection reads over the ceiling, the line names the round the hold took away: `{label}'s
+5-hour window is {age} old, under the hold of {hold}, so its round reads the next window.` `{p}` is a whole percent with
+a space before the sign (`99 %`), `{horizon}` `at` a clock time on the 5-hour window and `in` a span on a weekly one
+(`in 5h`), `{window}` the window's label (`5h`, `7d` or `7-day Fable`), `{excess}` a percent an hour with one decimal
+(`9.5 %/h`), `{list}` the members in the Members group's order, and `{age}` and `{hold}` spans to the minute (`45 min`,
+`1 h`).
 
 Slow-down, in the expert view, opens on "The slow-down holds each request of a session before it is forwarded, so an
 account whose sessions would pass the ceiling before the reset reaches it under the ceiling instead. A session waits its

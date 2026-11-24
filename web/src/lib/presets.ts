@@ -64,12 +64,12 @@ const firstCause = (read: readonly (ShedCause | null)[]): ShedCause | null => SH
  * window, walked until the removed burn reaches `target`, none for a zero target. Each position reads the router's
  * tests in its order. A pin under a standing mark is a move pending, so its burn counts as removed and it reads
  * `standing`. Past a met target, and at a pin flagged `pastCold`, a warm pin under `never` behind the cold ones, the
- * walk reads nothing. An unpriced pin reads `unpriced` and is never marked. At a priced pin the pick reads each pin from
- * the position on that covers the rest: the guard first, so a pin the guard keeps reads `last_pin` and never
- * `no_runway`, then its runway, so a pin with none reads `no_runway`, and the covering pin with runway whose move costs
- * the least is marked, the first in the order among equals, and the walk stops. With no pick the pin at the position
- * reads `sliver` under `SHED_MARK_SHARE` of the rest, `last_pin` where the guard refuses it, `no_runway` with no
- * runway, and is marked otherwise.
+ * walk reads nothing. An unpriced pin reads `unpriced` and is never marked. At a priced pin the pick reads each pin
+ * from the position on that covers the rest: the guard first, so a pin the guard keeps reads `last_pin` and never
+ * `no_runway`, then its runway, so a pin with none reads `no_runway`, and the covering pin with runway whose move
+ * costs the least is marked, the first in the order among equals, and the walk stops. With no pick the pin at the
+ * position reads `sliver` under `SHED_MARK_SHARE` of the rest, `last_pin` where the guard refuses it, `no_runway` with
+ * no runway, and is marked otherwise.
  *
  * The guard refuses a mark that would leave the walk's other priced pins, neither marked nor under a standing mark,
  * plus `stays.burn`, what stays on the account outside the walk, under `SHED_MARK_SHARE` of the walk's priced burn sum.
@@ -231,10 +231,10 @@ export interface ShedPreview {
   off: boolean;
   /**
    * Why the rounds the members' windows fire mark nothing, read as one round: the first word of `SHED_CAUSES` that a
-   * walked pin of a round read. With none, `warm` where a walked pin burns and each walked pin that burns is warm under
-   * `never`. Then the first word, in the same order, that a left-out pin carries on a round that walked no pin, a pin on
-   * the fast lane naming none. Then `unpriced`, the router's own fallback. Null where the switch is off, where no member
-   * is over its line and where a round marks a session.
+   * walked pin of a round read. With none, `warm` where a walked pin burns and each walked pin that burns is warm
+   * under `never`. Then the first word, in the same order, that a left-out pin carries on a round that walked no pin,
+   * a pin on the fast lane naming none. Then `unpriced`, the router's own fallback. Null where the switch is off, where
+   * no member is over its line and where a round marks a session.
    */
   quiet: ShedCause | 'warm' | null;
   /**
@@ -273,9 +273,10 @@ const leftOutAs = (p: Pick<PoolPin, 'accountBound' | 'ended' | 'fast' | 'model'>
  * window's own ceiling, 5-hour or weekly. On a pool with the slow-down on, the 5-hour window reads the router's stretch
  * test in its place: the `stretchProjection` of the account's slow-down entry against the 5-hour ceiling, at the
  * window's served horizon less the entry's threshold, and no 5-hour window for an account with no entry or no figure,
- * as the router fires nothing there. The excess runs from the line to the horizon. A 5-hour window younger than twice
- * the pool's burn average fires under neither test, and the member reads its next window, as the router holds the
- * round. With no member over its line, the closest window is the one with the least room to its own ceiling.
+ * or where that instant lies at or before `now`, as the router fires nothing there. The excess runs from the line to
+ * the horizon. A 5-hour window younger than twice the pool's burn average fires under neither test, and the member
+ * reads its next window, as the router holds the round. With no member over its line, the closest window is the one
+ * with the least room to its own ceiling.
  *
  * The round walks the pins the pool's pins route answers on the member, a pin the Sessions list hides among them, since
  * the router's round walks each pin under the pool's keys. A pin stands under a mark where its own mark names its
@@ -471,12 +472,13 @@ export function shedPreview(
     const lineAt = (id: ShedWindow, w: RateLimitWindow, horizon: number) => lineOf(pool, id, w.resetsAt === null ? null : Date.parse(w.resetsAt), end, horizon, now);
     const entry = account.slowDown ?? null;
     // One 5-hour read feeds the trigger and the hold's test, so a slowed member under the hold is named by its stretch
-    // figure as well.
+    // figure as well. The route serves the figure the last selection stored, and the router's test reads none once
+    // the horizon less the threshold has come.
     const fiveRead: WindowRead | null =
       five === null || five.horizon === null
         ? null
         : pool.slowDown
-          ? entry === null || entry.stretchProjection === null
+          ? entry === null || entry.stretchProjection === null || Date.parse(five.horizon) - entry.thresholdMs <= now
             ? null
             : { burn: five.burn, horizon: Date.parse(five.horizon) - entry.thresholdMs, id: '5h', line: pool.fiveHourCeiling, projection: entry.stretchProjection }
           : five.projection === null
@@ -545,10 +547,12 @@ export function shedPreview(
   };
 }
 
-/** The reason a round that marks no session reads for each word of `quiet`, `no_runway` keeping a sentence of its own. */
+/** The reason a round that marks no session reads for each word of `quiet`, `no_runway` keeping its own sentence. */
 const QUIET_REASON: Record<Exclude<NonNullable<ShedPreview['quiet']>, 'no_runway'>, string> = {
   account_bound: 'each holds state on its account, which a move would lose.',
   ended: 'each agent has ended.',
+  // No round of the preview reads this word: a window's round leaves no pin out under it, and the reservation's rounds
+  // feed their own sentences.
   fable_model: 'each is a Fable session, which the reservation keeps.',
   last_pin: 'each would leave its member too little burn.',
   no_burn: 'none burns.',

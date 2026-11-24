@@ -206,6 +206,13 @@ test('createAccount sends the id, kind, label, and secret in snake_case', async 
   assert.deepEqual([calls[0].init.method, calls[0].url, JSON.parse(calls[0].init.body)], ['POST', '/admin/accounts', { id: 'console', kind: 'api_key', label: 'Console', secret: 'sk-ant-api03-FAKE' }]);
 });
 
+test("a pool's pins are one GET under the pool's encoded id, and answer the body's pins decoded", async () => {
+  const body = JSON.parse(readFileSync(new URL('./fixtures/pool_pins.json', import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body));
+  const pins = await new HttpApi().listPoolPins('team/a');
+  assert.deepEqual([calls.map((c) => [c.init.method ?? 'GET', c.url]), pins.length, pins[0].keyId], [[['GET', '/admin/pools/team%2Fa/pins']], 8, 'desktop']);
+});
+
 test('the accounts list is one GET, and no usage route is read', async () => {
   const body = JSON.parse(readFileSync(new URL('./fixtures/accounts.json', import.meta.url), 'utf8')).body;
   const calls = stub(() => answer(200, body));

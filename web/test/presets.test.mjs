@@ -740,15 +740,15 @@ test('the preview mirrors a Fable reservation round on the non-Fable pins of a m
 test('a heavy pin with no runway beside slivers answers no_runway', () => {
   // heavy's Fable model draws the 7-day Fable window, of which cool holds no reading, so no sibling has runway for it.
   // The target is the cap's half of the 5.6 points an hour the pins burn, 2.8, which heavy covers, and its mark would
-  // leave the slivers' 0.6 on hot, over the guard's tenth of 0.56, so the gate reads it. Each sliver is under a tenth of
-  // the rest.
+  // leave the slivers' 0.6 on hot, over the guard's tenth of 0.56, so the gate reads it. Each sliver is under a tenth
+  // of the rest.
   const pins = [pin('hot', 'heavy', 0.05, false, { model: 'claude-fable-5-1' }), pin('hot', 's1', 0.002, false), pin('hot', 's2', 0.002, false), pin('hot', 's3', 0.002, false)];
   assert.equal(d.shedPreview(pool([hot, cool]), [hot, cool], pins, NOW).quiet, 'no_runway');
 });
 
 test('slivers with no runway answer sliver', () => {
-  // hot projects 120 % at its reset an hour out, so the excess of 20 points an hour exceeds the 11 points the pins burn,
-  // which a cap of 1 sets as the target. Each pin's 1 point is under a tenth of it, and hot has no sibling.
+  // hot projects 120 % at its reset an hour out, so the excess of 20 points an hour exceeds the 11 points the pins
+  // burn, which a cap of 1 sets as the target. Each pin's 1 point is under a tenth of it, and hot has no sibling.
   const soon = fresh('hot', 1.2, 0.4, HOUR);
   const slivers = Array.from({ length: 11 }, (_, i) => pin('hot', `s${i}`, 0.01, false));
   assert.equal(d.shedPreview(pool([soon], { shedCap: 1 }), [soon], slivers, NOW).quiet, 'sliver');
@@ -789,6 +789,16 @@ test("a slowed member's stretch round reads its horizon off the served horizon l
   const ending = { ...base, canceled: true, subscription: { endsAt: ends, trialEndsAt: null }, windows: [{ ...base.windows[0], horizon: ends }, base.windows[1]] };
   const preview = d.shedPreview(pool([ending], { slowDown: true }), [ending], [], NOW);
   assert.deepEqual(preview.hot.map((h) => [h.label, h.horizon, h.excess.toFixed(4)]), [['ending', NOW + 90 * MINUTE, '0.0400']]);
+});
+
+test("a slowed member's stretch figure fires no round once the horizon less the threshold has come", () => {
+  // The route serves the figure the last selection stored, and the router's test reads none at or behind that instant.
+  // A reset 31 minutes out puts the instant a minute ahead, and one 30 minutes out puts it at now.
+  const hotWith = (resetIn) => {
+    const member = stretched('stretch', 0.97, 0.93, resetIn);
+    return d.shedPreview(pool([member], { slowDown: true }), [member], [], NOW).hot.map((h) => h.label);
+  };
+  assert.deepEqual({ ahead: hotWith(31 * MINUTE), at: hotWith(30 * MINUTE) }, { ahead: ['stretch'], at: [] });
 });
 
 test('a walk whose pins each hold state on their account marks none and answers account_bound', () => {
@@ -834,6 +844,13 @@ test('a reservation round moves no pin onto a sibling under its own Fable reserv
   const sibling = { ...oauth('cool', 0.3, 0.85, 0.1), windows: [win('5h', 0.3), { ...win('7d', 0.85, 5 * HOUR), utilization: 0.8 }] };
   const pins = [pin('res', 's1', 0.03, false), pin('res', 's2', 0.03, false)];
   assert.deepEqual([reservationRound(pins, sibling, 0.25).sessions, reservationRound(pins, sibling, null).sessions], [0, 1]);
+});
+
+test("a reservation round reads a sibling's 7-day window that serves no share as untouched room", () => {
+  // The router reads a window it holds no reading of as a room of 1, over the sibling's reservation of 0.25. Each pin's
+  // 3 points an hour cover the target of 3, the cap's half of their 6, so the sibling takes one.
+  const sibling = { ...oauth('cool', 0.3, 0.3, 0.1), windows: [win('5h', 0.3), { ...win('7d', 0.3, 5 * HOUR), utilization: null }] };
+  assert.equal(reservationRound([pin('res', 's1', 0.03, false), pin('res', 's2', 0.03, false)], sibling, 0.25).sessions, 1);
 });
 
 test('a member under its reservation with no pin of another model to move runs no round', () => {

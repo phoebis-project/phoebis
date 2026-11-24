@@ -3581,7 +3581,9 @@ async function poolDialogWalk(theme, mode) {
   for (const group of frame.groups) {
     try {
       await railEntry(dialog, group).click();
-      await settle();
+      // The shedding Preview draws no line until the pool's pins, which the dialog reads as it opens, have landed.
+      if (group === 'Load shedding') await advance(LOAD_MS);
+      else await settle();
       const { found, line } = await check(group);
       found.push(...(await dependents(group)));
       measurements.push(`${theme} /pools ${mode} dialog ${group} ${JSON.stringify(line)}`);

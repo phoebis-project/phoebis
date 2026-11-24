@@ -485,9 +485,9 @@ const shedPreviewField = async (container) => {
 };
 
 test("a saved pool's Preview walks the pins the pool's own read answers", async () => {
-  // hot projects 109 % at its 5-hour reset an hour out, nine points past the wall, and cool sits under both of the pool
-  // all's ceilings of 75 and 78 %. The cap's half of the two pins' 6 points an hour is 3, which either covers, and the
-  // mark leaves the other's 3 on hot.
+  // hot projects 109 % at its 5-hour reset an hour out, nine points past the wall, and cool sits under both of the
+  // pool's ceilings of 75 and 78 %. The cap's half of the two pins' 6 points an hour is 3, which either covers, and the
+  // mark leaves the other's 3 on hot. The slow-down is off, so the 5-hour window reads its own projection.
   const at = (ms) => new Date(Date.UTC(2026, 9, 14, 12) + ms).toISOString();
   const studio = accounts.find((a) => a.id === 'studio');
   const [five, seven] = studio.windows;
@@ -504,7 +504,8 @@ test("a saved pool's Preview walks the pins the pool's own read answers", async 
   });
   const both = [account('hot', 1.09, 0.4), account('cool', 0.3, 0.2)];
   const all = pools.find((p) => p.id === 'all');
-  const pool = { ...all, members: both.map((a) => ({ ...all.members[0], accountId: a.id, eligible: 'eligible', fableReservation: null, priority: 0 })) };
+  const members = both.map((a) => ({ ...all.members[0], accountId: a.id, eligible: 'eligible', fableReservation: null, priority: 0 }));
+  const pool = { ...all, fiveHourCeiling: 0.75, members, shedCap: 0.5, slowDown: false, weeklyCeiling: 0.78 };
   const pinOn = (sessionId) => ({ accountBound: false, accountId: 'hot', agentId: 'main', burn: 0.03, burnAt: at(0), burnUnit: 'window_share', burnWindow: 'five_hour', ended: false, fast: false, keyId: 'desktop', mark: null, model: 'claude-sonnet-5', moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null, sessionId, warm: false, warmUntil: at(-300_000) });
   api.listPoolPins = async () => [pinOn('a'), pinOn('b')];
   const { container, draw } = mount();
@@ -523,6 +524,15 @@ test("a saved pool's Preview draws the failure of its pins' read in place of a c
   await draw(poolDialog({ accounts: accountsRead(accounts), initialGroup: 'shedding', pool: pools.find((p) => p.id === 'all') }));
   const field = await shedPreviewField(container);
   assert.deepEqual([field?.querySelector('.shed-preview')?.textContent ?? null, field?.querySelector('p.muted')?.textContent ?? null], [null, "Could not load the pool's pins: store busy"]);
+});
+
+test("a saved pool's Preview draws a placeholder and no count while its pins' read is in flight", async () => {
+  // A read that never settles holds the dialog where an empty list would read as no pin under the pool's keys.
+  api.listPoolPins = () => new Promise(() => {});
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts: accountsRead(accounts), initialGroup: 'shedding', pool: pools.find((p) => p.id === 'all') }));
+  const field = await shedPreviewField(container);
+  assert.deepEqual([field?.querySelector('.shed-preview')?.textContent ?? null, (field?.querySelector('.skeleton') ?? null) !== null], [null, true]);
 });
 
 test('a pool dialog reopened after a 30-day pick reads its return rate once, over 7 days', async () => {
