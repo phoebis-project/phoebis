@@ -3396,6 +3396,30 @@ fn a_release_class_request_leaves_a_pin_whose_account_left_the_pool_whatever_tha
 }
 
 #[test]
+fn a_release_class_probe_whose_pins_account_left_the_pool_is_answered_and_placed_nowhere() {
+    let s = snapshot(a_first());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let placing = of_class(&s, "s1", Portability::Release, 1_000);
+    assert_eq!(picked(&select(&mut st, &s, &placing, &mut rng()).0), "a");
+    let pin = pinned(&st, "s1");
+    let mut probe = SelectRequest {
+        probe: true,
+        holder: Some(Holder {
+            account_id: pin.account_id,
+            incarnation: pin.incarnation,
+        }),
+        ..of_class(&s, "s1", Portability::Release, 2_000)
+    };
+    probe.candidates.retain(|c| c.account_id != "a");
+    let (result, writes) = select(&mut st, &s, &probe, &mut rng());
+    assert!(
+        matches!(result, SelectResult::Exhausted(_)),
+        "a probe warms the pin it was sent for, so b and c take none: {result:?}"
+    );
+    assert!(writes.is_empty(), "{writes:?}");
+}
+
+#[test]
 fn exhaustion_is_timed_from_the_earliest_cooldown_and_untimed_when_only_an_operator_can_clear_it() {
     let s = snapshot(Pool::default());
     let mut st = RoutingState::from_load(RoutingLoad::default());

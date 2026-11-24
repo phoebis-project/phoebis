@@ -2345,9 +2345,10 @@ fn run(
         };
         let expires_at = current.last_used_at.saturating_add(ttl_ms);
         // A fenced request renews no pin, so a wait that reaches the pin's idle expiry ends in a free placement
-        // anyway.
-        let waits =
-            request.portability == Portability::Hold || end.is_some_and(|end| end < expires_at);
+        // anyway. A probe warms the pin that it was sent for, so it never leaves that pin's account.
+        let waits = request.portability == Portability::Hold
+            || request.probe
+            || end.is_some_and(|end| end < expires_at);
         if waits {
             rec.step(
                 "bound",
