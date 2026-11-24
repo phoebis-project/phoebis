@@ -174,6 +174,15 @@ test("a routing log candidate's pace decodes its Fable reservation, and null whe
   assert.equal(pace(null), null);
 });
 
+test("a Pace pick's captured candidate decodes the Fable reservation the route answered", () => {
+  // A candidate built under the decoder's own wire name passes a route that renames, retypes or moves the member, so
+  // this case reads the captured answer. A static placement's record holds null on each candidate, so it reads a Pace
+  // pick's.
+  const body = fixture('decision_pick');
+  assert.equal(typeof body.candidates[0].pace.fable_reservation, 'number', "the capture answers a number on the pick's first candidate");
+  assert.equal(d.decodeDecisionRecord(body).candidates[0].pace.fableReservation, body.candidates[0].pace.fable_reservation);
+});
+
 test("an account's windows read the router's lead over pace, null while the utilization is unknown", () => {
   const body = fixture('account');
   const a = d.decodeAccount(body);
@@ -650,6 +659,7 @@ test("a pool decodes its warnings and a member's pace score, burn, Fable reserva
   assert.deepEqual(p.members.map((m) => [m.accountId, m.paceScore, m.burn]), row.members.map((m) => [m.account_id, m.pace_score, m.burn]));
   const keyed = p.members.find((m) => m.kind === 'api_key');
   assert.deepEqual([typeof keyed.paceScore, keyed.burn], ['number', null], "an API-key member's score is its remaining allowance, with no burn");
+  assert.deepEqual([typeof row.members[0].fable_reservation, p.members[0].fableReservation], ['number', row.members[0].fable_reservation], "the captured first member's reservation reads as the number the route answered");
   const spending = d.decodePool({ ...row, members: [{ ...row.members[0], burn: 0.085, fable_reservation: 0.31, fit: 'least_bad', pace_score: -0.02, runway_ms: 3_724_138 }] }).members[0];
   assert.deepEqual(
     [spending.paceScore, spending.burn, spending.fableReservation, spending.fit, spending.runwayMs],

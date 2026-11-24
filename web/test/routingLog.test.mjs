@@ -1266,6 +1266,16 @@ test("a round the Fable reservation fired reads its 7-day room under the reserva
   assert.deepEqual([pairs.Trigger, pairs['Walked burn'], pairs.Excess], [['7d room 30% under the Fable reservation 32%'], ['0.4 %/h'], undefined]);
 });
 
+test("a captured round the Fable reservation fired draws the reservation its detail holds", () => {
+  // A detail built under the console's own wire name passes a route that renames or moves the member, so this case
+  // reads the captured round, whose reservation of 0.12 draws as 12%.
+  const page = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
+  const round = page.rows.find((r) => r.type === 'event' && r.detail.trigger === 'fable_reservation');
+  assert.equal(typeof round.detail.fable_reservation, 'number', "the capture answers a number in the round's detail");
+  const pairs = Object.fromEntries(d.detailPairs(round, NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
+  assert.deepEqual(pairs['Fable reservation'], ['12%']);
+});
+
 test('a mark healed under the threshold says so', () => {
   const page = d.decodeRoutingLogPage({
     counts: null,
