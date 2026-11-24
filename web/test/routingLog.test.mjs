@@ -796,10 +796,11 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(verdict({ verdict: 'source', windows: { five_hour: window5h(1, ms(15, 42)), seven_day: window5h(0.5, null) } }), ['source', '5h spent', null]);
 });
 
-test("the candidate's Runway reads unbounded where the gate read a fit and no runway, none at 0 and a dash where it read no fit", () => {
-  // The record leaves the runway out both where no burn bounds it and where it passes the binding window's reset.
+test("the candidate's Runway reads unbounded where the gate read a fit and no runway, none at 0 and a dash where it read no fit or the fit spent", () => {
+  // The record leaves the runway out where no burn bounds it, where it passes the binding window's reset and on a
+  // member that has no allowance left.
   const runway = (o) => d.candidateCells(candidate(o), record(), NOW).runway;
-  assert.deepEqual([runway({ fit: 'fits', runwayMs: null }), runway({ fit: 'least_bad', runwayMs: 0 }), runway({ fit: null, runwayMs: null })], ['unbounded', 'none', '-']);
+  assert.deepEqual([runway({ fit: 'fits', runwayMs: null }), runway({ fit: 'least_bad', runwayMs: 0 }), runway({ fit: null, runwayMs: null }), runway({ fit: 'spent', runwayMs: null })], ['unbounded', 'none', '-', '-']);
 });
 
 test('the outcome rows read the cache tier off the deepest map entry and pending before it', () => {
@@ -1437,6 +1438,7 @@ test('the pin moved, shedding round, cleared mark and expired reservation detail
   assert.deepEqual([moved({ binding: 'five_hour', fit: 'fits', runway_ms: 7_800_000 })['Destination fit'], moved({ binding: 'five_hour', fit: 'fits', runway_ms: 7_800_000 }).Runway], [['fits'], ['2 h 10 min']]);
   assert.deepEqual([moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 })['Destination fit'], moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 }).Runway], [['least bad'], ['none']]);
   assert.deepEqual([moved({ binding: null, fit: 'rewrite_only', runway_ms: null })['Destination fit'], moved({ binding: null, fit: 'rewrite_only', runway_ms: null }).Runway], [['rewrite only'], ['unbounded']]);
+  assert.equal(moved({ binding: null, fit: 'spent', runway_ms: null }).Runway, undefined, 'a landing on a member with no allowance left states no runway');
   assert.deepEqual(Object.keys(moved({})), ['When', 'Account', 'From', 'To', 'Reason', 'Moved by', 'Session', 'Agent'], 'a move the ledger wrote before the gate reads neither pair');
   // A failover's cause reads as the cooldown's own words, and a rule's move or a cause-less failover draws no Cause row.
   const cooled = moved({ cause: { reason: 'rate_limit', scope: 'account', window: 'five_hour' }, reason: 'cooldown' });

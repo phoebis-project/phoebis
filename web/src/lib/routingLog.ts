@@ -10,7 +10,7 @@ import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, ins
 import { accountBound, transformationLabel, transformationOrder } from './inputTransformations';
 import { ALL_KINDS, DECISION_KIND_LABEL, EVENT_KIND_LABEL } from './kinds';
 import { isFastScope, MODEL_SCOPE_PREFIX, PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL, scopeLabel, scopeModel, shareLeft } from './quota';
-import { INELIGIBLE_LABEL, speedWord } from './selection';
+import { INELIGIBLE_LABEL, LAST_RESORT_LABEL, speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
 import { knownWindowsFirst, storedFableKey, WINDOW_KEYS, WINDOW_LABEL, windowEntry, windowLabelOf, windowTag, windowTagOf } from './windows';
 
@@ -102,7 +102,7 @@ const DIRECTION_WORDS: Record<string, string> = {
   turn_account: "the judged turn's account",
 };
 
-export type VerdictTone = 'critical' | 'good' | 'neutral' | 'warning';
+export type VerdictTone = 'critical' | 'good' | 'neutral' | 'serious' | 'warning';
 
 export const DECISION_KIND_TONE: Record<DecisionKind, VerdictTone> = {
   exhausted: 'critical',
@@ -1520,8 +1520,11 @@ function rowObstacleChip(c: RecordCandidate, obstacle: NonNullable<RecordCandida
   }
 }
 
-/** The chip of a destination the gate read and found short: rewrite only and least bad warn, an ending account is neutral. */
-const FIT_CHIP: Record<string, { tone: VerdictTone; word: string }> = { ending: { tone: 'neutral', word: 'ending' }, least_bad: { tone: 'warning', word: 'least bad' }, rewrite_only: { tone: 'warning', word: 'rewrite only' } };
+/**
+ * The chip of a destination the gate read and found short, where rewrite only and least bad warn and an ending account
+ * is neutral, and of a placement's member with no allowance left, in the tone the Pools card gives the word.
+ */
+const FIT_CHIP: Record<string, { tone: VerdictTone; word: string }> = { ending: { tone: 'neutral', word: 'ending' }, least_bad: { tone: 'warning', word: 'least bad' }, rewrite_only: { tone: 'warning', word: 'rewrite only' }, spent: { tone: 'serious', word: LAST_RESORT_LABEL.spent } };
 
 /** The verdict cell's one chip, and the tone it carries where it names the destination's fit. */
 function verdictChipOf(c: RecordCandidate, now: number): { chip: Chip | null; tone: VerdictTone | null } {
@@ -1639,8 +1642,11 @@ function projectionTitle(c: RecordCandidate, now: number): string | null {
   return `demand ${formatFact(demand, 'percent_per_hour', now)} over burn ${formatFact(burn, 'percent_per_hour', now)}${c.factor === null ? '' : ` at ${speedWord(c.factor)}`}`;
 }
 
-/** The time a pin could stay before its window that binds reaches the ceiling, unbounded where nothing binds. */
-const runwayWord = (c: RecordCandidate) => (c.fit === null ? '-' : c.runwayMs === null ? 'unbounded' : c.runwayMs === 0 ? 'none' : span(c.runwayMs));
+/**
+ * The time a pin could stay before its window that binds reaches the ceiling, unbounded where nothing binds. A spent
+ * member states no runway, so its null reads as a dash.
+ */
+const runwayWord = (c: RecordCandidate) => (c.fit === null || c.fit === 'spent' ? '-' : c.runwayMs === null ? 'unbounded' : c.runwayMs === 0 ? 'none' : span(c.runwayMs));
 
 /** A spend window's lines: the share over the reset, and the estimate's word where no head has named the reset yet. */
 const spendLines = (w: RecordCandidate['windows'][string], now: number): string[] => [`spend ${fmtPct(w.utilization)}`, w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), ...(w.source === 'estimated' ? ['estimated'] : [])];
@@ -1955,7 +1961,7 @@ const hourlyShare = (perHour: number) => `${(perHour * 100).toFixed(1)} %/h`;
 // The router records the wall as a line of 1, the window's whole share.
 const lineWords = (limit: number): string => (limit >= 1 ? 'the wall' : `the ceiling ${fmtPct(limit)}`);
 /** A move's destination fit as the gate worded it. */
-const FIT_WORD: Record<string, string> = { fits: 'fits', least_bad: 'least bad', rewrite_only: 'rewrite only' };
+const FIT_WORD: Record<string, string> = { fits: 'fits', least_bad: 'least bad', rewrite_only: 'rewrite only', spent: LAST_RESORT_LABEL.spent };
 /**
  * A pin's Rewrite cell. A round that names its `rewrite_unit` stored the Pro-week figure, which reads in the chosen
  * week titled with the window the pick compared on, untitled where the pick compared on none, and a dash while the
@@ -2145,12 +2151,13 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
         add('Cause', plain(causeWords({ cause: str(cause.cause), reason: str(cause.reason), scope: str(cause.scope), state: str(cause.state), window: str(cause.window) })));
       }
       add('Moved by', plain(caused ? "the account's state" : RULE_MOVES.has(reason) ? `${words(reason)} rule` : FAILOVER_MOVES.has(reason) ? 'failover' : words(reason || 'move')));
-      // A move the gate read carries its verdict, and the detail carries a null runway where no window bounds it.
+      // A move the gate read carries its verdict, and the detail carries a null runway where no window bounds it. A
+      // landing on a spent member states no runway, so its null draws no line.
       const fit = str(d.fit);
       if (fit !== null) {
         const runway = num(d.runway_ms);
         add('Destination fit', plain(wordOf(FIT_WORD, fit)));
-        add('Runway', plain(runway === null ? 'unbounded' : runway === 0 ? 'none' : span(runway)));
+        if (fit !== 'spent') add('Runway', plain(runway === null ? 'unbounded' : runway === 0 ? 'none' : span(runway)));
       }
       pin();
       break;

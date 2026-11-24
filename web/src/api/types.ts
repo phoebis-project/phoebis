@@ -1530,7 +1530,10 @@ export interface RecordCandidate {
   enabled: boolean;
   /** The account's slow-down factor from its entry in force, null with none or on a record from before the member. */
   factor: number | null;
-  /** `fits`, `rewrite_only`, `least_bad` or `ending` where the gate or the no-fit partition read the candidate. */
+  /**
+   * `fits`, `rewrite_only`, `least_bad`, `ending` or `spent` where the gate or the no-fit partition read the candidate.
+   * `spent` stands on a placement's member that has no allowance left.
+   */
   fit: string | null;
   inFlight: number;
   inFlightCap: number;
