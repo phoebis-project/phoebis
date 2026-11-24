@@ -322,8 +322,8 @@ const POOL_ROWS: PoolSeed[] = [
     // the account takes its member row by the cascade and moves no stamp.
     updatedAt: iso(RETIRED.createdAt),
     // The sample's failover settings are the store's defaults, so this pool reads balanced on both groups. The last
-    // hour's moves are the routing log's story: three failovers, a fast lane's and two by the spent rule.
-    movesPerHour: { cooldown: 3, fast_lane: 1, spent: 2 },
+    // hour's moves are the routing log's story: four failovers, a fast lane's and two by the spent rule.
+    movesPerHour: { cooldown: 4, fast_lane: 1, spent: 2 },
   },
   {
     ...POOL_SAMPLE,

@@ -46,6 +46,11 @@ const lastUseOf = (r) => Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((x
  */
 const pinnedRecipesOf = (s, recipes) => recipes.filter((r) => r.agentState !== 'released' || s.now - lastUseOf(r) <= affinityOf(s, r));
 /**
+ * The account a recipe's pin stands on, its line's, as the router's pin row holds it: a recipe held under `pin_moved`
+ * keeps the account its pin left, and a released agent's pin, which draws no line, stands on its recipe's.
+ */
+const pinAccountOf = (s, r) => s.sessions.find((x) => !x.historical && x.keyId === r.keyId && x.sessionId === r.sessionId)?.agentContexts.find((c) => c.agentId === r.agentId && c.model === r.model)?.accountId ?? r.accountId;
+/**
  * Whether no recipe warms a pinned session's main, whose agents then hold one pin each beside the recipes' own. The
  * session's summary reads a subagent's recipe where main holds none, so the recipes themselves are read.
  */
@@ -1059,14 +1064,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const live = pinnedRecipesOf(s, recipes);
     // A pinned session whose main no recipe warms holds a pin per line all the same.
     const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && poolOf.get(x.keyId) === poolId && (accountId === undefined || x.accountId === accountId)), (x) => x.agentContexts.length);
-    const pins = (poolId, accountId) => new Set(live.filter((r) => poolOf.get(r.keyId) === poolId && (accountId === undefined || r.accountId === accountId)).map(pinOf)).size + unwarmed(poolId, accountId);
+    const pins = (poolId, accountId) => new Set(live.filter((r) => poolOf.get(r.keyId) === poolId && (accountId === undefined || pinAccountOf(s, r) === accountId)).map(pinOf)).size + unwarmed(poolId, accountId);
     const above = {};
     for (const p of s.pools) {
       assert.equal(p.activePins, pins(p.id), `${p.id}'s active pins`);
       for (const m of p.members) assert.equal(m.activePins, pins(p.id, m.accountId), `${p.id}'s ${m.accountId}`);
       // A pin under the pool's keys on an account the pool no longer lists counts in its figure and in no member's.
       const listed = new Set(p.members.map((m) => m.accountId));
-      const pinnedOn = new Set([...live.filter((r) => poolOf.get(r.keyId) === p.id).map((r) => r.accountId), ...s.sessions.filter((x) => x.pinned && poolOf.get(x.keyId) === p.id).map((x) => x.accountId)]);
+      const pinnedOn = new Set([...live.filter((r) => poolOf.get(r.keyId) === p.id).map((r) => pinAccountOf(s, r)), ...s.sessions.filter((x) => x.pinned && poolOf.get(x.keyId) === p.id).map((x) => x.accountId)]);
       const outside = sum([...pinnedOn].filter((a) => !listed.has(a)), (a) => pins(p.id, a));
       assert.equal(sum(p.members, (m) => m.activePins) + outside, p.activePins, `${p.id}'s members' sum and the ${outside} pins on accounts outside them make its figure`);
       above[p.id] = p.activePins - sum(p.members, (m) => m.activePins);
@@ -1079,7 +1084,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`two sessions on one account and one model hold two pins, at ${at}`, async () => {
     const s = await story;
     const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
-    const live = pinnedRecipesOf(s, await s.api.listKeepaliveRecipes()).filter((r) => poolOf.get(r.keyId) === 'all' && r.accountId === 'primary');
+    const live = pinnedRecipesOf(s, await s.api.listKeepaliveRecipes()).filter((r) => poolOf.get(r.keyId) === 'all' && pinAccountOf(s, r) === 'primary');
     // The desktop sessions on primary whose main runs Fable share the account, the agent id and the model.
     const pair = new Set(live.filter((r) => r.keyId === 'desktop' && r.agentId === 'main' && r.model === 'claude-fable-5-1').map((r) => r.sessionId));
     assert.ok(pair.size >= 2, `${pair.size} such sessions`);
@@ -1125,8 +1130,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const overview = await s.api.getKeepaliveOverview();
     // The engine's cap counts every record it holds, the idle recipe of the row two hours back among them, which the
     // route's list leaves out. The session specs the mod registered or a recipe warms hold 32 agents, the
-    // registration-only row none, and the auxiliary-only row its one subagent.
-    assert.equal(overview.limits.agents.count, 33, 'the cap counts every record');
+    // registration-only row none, the auxiliary-only row its one subagent, and the failover session the subagent whose
+    // pin its auxiliary call moved.
+    assert.equal(overview.limits.agents.count, 34, 'the cap counts every record');
   });
 
   test(`a probed line of a session row on an account inside an account-wide cooldown reads held on the retry ladder, never scheduled, at ${at}`, async () => {
@@ -1136,8 +1142,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // its retry ladder. Secondary cools from 20 minutes and 29 seconds back to 25 minutes ahead, and of its lines
     // 229bf72c's two are probed, while e5a17c3d's main ended on its idle limit.
     const cooling = new Set(s.accounts.filter((a) => a.cooldowns.some((c) => c.scope === 'account' && Date.parse(c.setAt) <= s.now && s.now < Date.parse(c.until))).map((a) => a.id));
-    const probed = recipes.filter((r) => cooling.has(r.accountId) && r.state !== 'ended' && r.state !== 'not_retained');
-    assert.deepEqual(probed.map((r) => [r.accountId, r.sessionId.slice(0, 8), r.agentId, r.cause, r.state]), [
+    const probed = recipes.filter((r) => cooling.has(pinAccountOf(s, r)) && r.state !== 'ended' && r.state !== 'not_retained');
+    assert.deepEqual(probed.map((r) => [pinAccountOf(s, r), r.sessionId.slice(0, 8), r.agentId, r.cause, r.state]), [
       ['secondary', '229bf72c', 'main', 'probe_quota_exhausted', 'held'],
       ['secondary', '229bf72c', 'a7f3', 'probe_quota_exhausted', 'held'],
     ]);
@@ -1167,7 +1173,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.now - Date.parse(own[2].at) > affinityOf(s, main), "main's request is past the window");
     assert.ok(s.now - Date.parse(main.lastProbeAt) <= affinityOf(s, main), "main's last probe renewed its pin inside the window");
     const poolId = s.keys.find((k) => k.id === row.keyId).poolId;
-    const counted = new Set(pinnedRecipesOf(s, recipes).filter((r) => s.keys.find((k) => k.id === r.keyId)?.poolId === poolId && r.accountId === main.accountId).map(pinOf));
+    const counted = new Set(pinnedRecipesOf(s, recipes).filter((r) => s.keys.find((k) => k.id === r.keyId)?.poolId === poolId && pinAccountOf(s, r) === main.accountId).map(pinOf));
     const member = s.pools.find((p) => p.id === poolId).members.find((m) => m.accountId === main.accountId);
     assert.ok(counted.has(pinOf(main)), 'the release left the pin in place');
     assert.equal(member.activePins, counted.size, `${main.accountId}'s figure counts it`);
@@ -1301,8 +1307,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         ],
       ],
     );
-    // The session no mod reports: its cold line passes the timeout forty minutes on, while its warm one keeps the row.
-    const noMod = plain.find((x) => x.agentContexts.length === 2 && x.agentContexts.some((c) => c.warm) && x.agentContexts.some((c) => !c.warm));
+    // The session no mod reports on fleet: its cold line passes the timeout forty minutes on, while its warm one keeps
+    // the row. The desktop failover session holds a warm line and a cold one too, both inside the timeout then.
+    const noMod = plain.find((x) => x.keyId === 'fleet' && x.agentContexts.length === 2 && x.agentContexts.some((c) => c.warm) && x.agentContexts.some((c) => !c.warm));
     assert.ok(noMod !== undefined, 'the session no mod reports is listed');
     const later = s.lib.sessionsListedAt(s.now + 40 * 60_000, s.lib.SESSIONS, s.settings.sessions.nonCompanionIdleSeconds, s.lib.REQUESTS, s.lib.ROUTING_EVENTS).find((x) => x.keyId === noMod.keyId && x.sessionId === noMod.sessionId);
     assert.deepEqual(later?.agentContexts.map((c) => c.warm), [true], 'the warm line stays and the cold one leaves');
@@ -1350,7 +1357,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && poolOf.get(x.keyId) === poolId && x.accountId === accountId), (x) => x.agentContexts.length);
     for (const p of s.pools) {
       for (const m of p.members) {
-        const own = recipes.filter((r) => poolOf.get(r.keyId) === p.id && r.accountId === m.accountId);
+        const own = recipes.filter((r) => poolOf.get(r.keyId) === p.id && pinAccountOf(s, r) === m.accountId);
         const released = own.filter((r) => r.agentState === 'released');
         const kept = released.filter(inside).map((r) => r.agentId);
         const gone = released.filter((r) => !inside(r)).map((r) => r.agentId);
@@ -1369,7 +1376,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(affinityOf(s, line) > 0, 'on a pool whose pins outlive their last use');
     assert.ok(line.lastProbeAt !== null && Date.parse(line.lastProbeAt) <= Date.parse(line.lastRequestAt), `probed at ${line.lastProbeAt}, before its last request at ${line.lastRequestAt}`);
     const poolId = s.keys.find((k) => k.id === line.keyId).poolId;
-    const own = recipes.filter((r) => s.keys.find((k) => k.id === r.keyId)?.poolId === poolId && r.accountId === line.accountId);
+    const own = recipes.filter((r) => s.keys.find((k) => k.id === r.keyId)?.poolId === poolId && pinAccountOf(s, r) === line.accountId);
     const unwarmed = sum(s.sessions.filter((x) => x.pinned && mainUnwarmed(recipes, x) && s.keys.find((k) => k.id === x.keyId)?.poolId === poolId && x.accountId === line.accountId), (x) => x.agentContexts.length);
     const member = s.pools.find((p) => p.id === poolId).members.find((m) => m.accountId === line.accountId);
     assert.equal(member.activePins, new Set(pinnedRecipesOf(s, own).map(pinOf)).size + unwarmed, `${line.accountId}'s figure`);
@@ -2221,7 +2228,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   // Catches a draw that sends a probe whose session holds no live pin and places a pin for it: the selector answers
   // such a probe the pinned obstacle `no_pin` with no attempt, so no record of a probe places or moves a pin.
-  test(`no probe places a pin, and a probe that sent nothing reads the no_pin answer, at ${at}`, async () => {
+  test(`no probe places a pin, and a probe that sent nothing reads the no_pin answer, or pin_moved where its pin stood off its recipe's account, at ${at}`, async () => {
     const s = await story;
     const records = (await decisionsOf(s)).filter((r) => r.request.flags.probe);
     const placed = records.filter((r) => r.outcome.kind === 'placed' || r.outcome.kind === 'moved').map((r) => `${r.requestId}/${r.seq}`);
@@ -2232,7 +2239,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         return [r.id, r.status, r.errorCode, r.outcome, own.map((x) => [x.outcome.kind, x.outcome.exhaustion?.kind, x.outcome.exhaustion?.obstacle])];
       });
     assert.deepEqual(placed, [], 'a probe record that places or moves a pin');
-    for (const [id, ...answer] of answers) assert.deepEqual(answer, [503, 'accounts_unavailable', 'rejected', [['exhausted', 'pinned', 'no_pin']]], id);
+    // The failover session's subagent `6c2b` probes after its auxiliary call moved its pin to nightly while its recipe
+    // stayed on primary (`MOVED_PIN_PROBE_ID` in mock/requests.ts). Every other probe that sent nothing found no pin.
+    const moved = 'req_3c7f2e98-d16';
+    assert.deepEqual(answers.find(([id]) => id === moved)?.slice(1), [503, 'accounts_unavailable', 'rejected', [['exhausted', 'pinned', 'pin_moved']]], moved);
+    for (const [id, ...answer] of answers.filter(([id]) => id !== moved)) assert.deepEqual(answer, [503, 'accounts_unavailable', 'rejected', [['exhausted', 'pinned', 'no_pin']]], id);
   });
 
   test(`a scripted pick comes from the highest tier that holds an eligible member, and every record's instant follows its request's, at ${at}`, async () => {
@@ -2779,7 +2790,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const weekOf = (model) => (model.includes('fable') ? 'seven_day_fable' : 'seven_day');
     // The 08:30 and 11:00 rounds, which an earlier build wrote before the unit.
     const older = new Set([...rounds].sort((x, y) => Date.parse(x.at) - Date.parse(y.at)).slice(0, 2));
-    assert.deepEqual(rounds.map((e) => [older.has(e), e.detail.rewrite_unit]).sort(), [[false, 'pro_week'], [false, 'pro_week'], [false, 'pro_week'], [true, undefined], [true, undefined]], 'the newer rounds name the unit and the older ones none');
+    assert.deepEqual(rounds.map((e) => [older.has(e), e.detail.rewrite_unit]).sort(), [[false, 'pro_week'], [false, 'pro_week'], [false, 'pro_week'], [false, 'pro_week'], [true, undefined], [true, undefined]], 'the newer rounds name the unit and the older ones none');
     // An earlier build stored a marked Sonnet pin's rewrite as its tokens times 1.4e-8, the share of the 7-day window
     // one token takes, times the Sonnet weight of 0.25, to five places: 0.00008 and 0.00031 for the 11:00 round's
     // 22,000 and 88,000 tokens. A newer round prices the prompt written to the cache again at the destination as the
@@ -2872,7 +2883,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The 08:30 round's 7-day Fable reset lies days past the five-hour bound, so it tests all's weekly ceiling of 0.78
     // (`weeklyCeiling` in mock/pools.ts), and so does the 11:13:40 round's 7-day projection, which the Fable
     // reservation's round reads as a projection round does. The stretch tests work's 5-hour ceiling of 0.95 at every
-    // horizon.
+    // horizon. Primary's two afternoon rounds read their 5-hour reset at 16:44 as the wall.
     assert.deepEqual(
       rounds.map((e) => [e.requestId, e.detail.window, e.detail.trigger, e.detail.ceiling]),
       [
@@ -2881,6 +2892,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         ['req_5d1f8c3a-b27', 'seven_day', 'fable_reservation', 0.78],
         ['req_9f2e7c5a-c49', 'five_hour', 'slow_down', 0.95],
         ['req_6e1f3b98-a24', 'five_hour', 'projection', 1],
+        ['req_9e1b4c63-a52', 'five_hour', 'projection', 1],
       ],
     );
   });
@@ -2892,10 +2904,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // Each round's burn sum, the priced burn its marks leave and whether an unpriced pin stands unmarked, off the seeds
     // in mock/routingLog.ts, each left figure at least a tenth of its sum: the Fable session's 0.03 of
     // `FABLE_WEEK_BURN`, the 0.0052 and 0.0071 `ROUND_PINS` leave of their 0.0299, the 0.002, 0.026, 0.0206 and 0.025
-    // `STRETCH_PINS` leave of their 0.1286, and the 0.212 and 0.012 of the two priced pins of `NO_RUNWAY_PINS`, which
-    // unpriced pins stand beside. The afternoon round lists the pin of the session the mod released whole under `ended`
-    // with no burn, so its sum is its priced pins' alone. The one priced pin of `RESERVATION_PINS` takes its whole
-    // 0.0016 and leaves nothing, which its unpriced current pin allows.
+    // `STRETCH_PINS` leave of their 0.1286, the 0.212 and 0.012 of the two priced pins of `NO_RUNWAY_PINS`, and the
+    // 0.1165, 0.0301 and 0.0774 of the three priced pins of `MOVED_PIN_ROUND_PINS`, which unpriced pins stand beside in
+    // both. The afternoon round lists the pin of the session the mod released whole under `ended` with no burn, and the
+    // last round the pins of three subagents whose last turn ended, so each sum is its priced pins' alone. The one
+    // priced pin of `RESERVATION_PINS` takes its whole 0.0016 and leaves nothing, which its unpriced current pin
+    // allows.
     assert.deepEqual(
       {
         ended: rounds.flatMap((e) => e.detail.pins.filter((p) => p.skip === 'ended').map((p) => [e.requestId, p.burn])),
@@ -2907,13 +2921,19 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         ]),
       },
       {
-        ended: [['req_6e1f3b98-a24', null]],
+        ended: [
+          ['req_6e1f3b98-a24', null],
+          ['req_9e1b4c63-a52', null],
+          ['req_9e1b4c63-a52', null],
+          ['req_9e1b4c63-a52', null],
+        ],
         left: [
           ['req_3e7a5c19-f84', 0.03, 0.03, false],
           ['req_1eaa9bc1-a18', 0.0299, 0.0123, false],
           ['req_5d1f8c3a-b27', 0.0016, 0, true],
           ['req_9f2e7c5a-c49', 0.1286, 0.0736, false],
           ['req_6e1f3b98-a24', 0.224, 0.224, true],
+          ['req_9e1b4c63-a52', 0.224, 0.224, true],
         ],
       },
     );

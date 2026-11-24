@@ -858,12 +858,13 @@ await forView('/', async () => {
       '/routing-log',
       ['fits: {"least_bad":1,"unknown":1}', 'moves: 2', 'setting: ["five_hour_ceiling"]', 'setting_values: {"five_hour_ceiling":0.75}', 'windows: ["five_hour"]'],
     ],
-    // A round reads a sibling's runway over windows of both kinds, so its item names both of all's ceilings.
+    // A round reads a sibling's runway over windows of both kinds, so its item names both of all's ceilings. Primary's
+    // rounds of 14:12:30 and 14:29 each found none with runway.
     [
-      'all: 1 round marked nothing, no destination had runway, five_hour_ceiling 75 % and weekly_ceiling 78 %, since 14:12',
+      'all: 2 rounds marked nothing, no destination had runway, five_hour_ceiling 75 % and weekly_ceiling 78 %, since 14:12',
       'badge--warning',
       '/routing-log',
-      ['accounts: ["primary"]', 'rounds: 1', 'setting: ["five_hour_ceiling","weekly_ceiling"]', 'setting_values: {"five_hour_ceiling":0.75,"weekly_ceiling":0.78}'],
+      ['accounts: ["primary"]', 'rounds: 2', 'setting: ["five_hour_ceiling","weekly_ceiling"]', 'setting_values: {"five_hour_ceiling":0.75,"weekly_ceiling":0.78}'],
     ],
     // Studio's two slow-down spans in work: the closed one from 09:12 until its factor read 1 at 10:38:20, and the open
     // one from 13:48, with the day's held time and held requests of `HELD_TODAY` (`mock/attention.ts`).
@@ -1198,7 +1199,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 32, 0, 6, 3 and 1 pins, one per key, session, agent and model under their keys, on primary,
+  // The story's pools hold 33, 0, 6, 3 and 1 pins, one per key, session, agent and model under their keys, on primary,
   // nightly, secondary, overflow, studio, contract and workshop, over 24 listed pinned rows on seven accounts.
   // Secondary's row idle for two hours left the route's list under the non-companion timeout, and its listed one is
   // 229bf72c, whose keepalive probe renewed the pin on secondary and moved none. The two written sessions bring four of
@@ -1207,7 +1208,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // counting the pinned rows or a note counting every row's account reads otherwise.
   // A hero counting every session row reads otherwise only while the story's row count differs from its pins, so the
   // count is read first and a story where the two meet fails here.
-  const PINS = 42;
+  const PINS = 43;
   const sessionRows = (await api.listSessions()).length;
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({
@@ -1284,8 +1285,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 }
 {
   // The Sessions card's grid counts the live sessions' lines as the Sessions view's summary line counts the rows its
-  // bare address keeps, both read at the clock origin: 35 agents, the lines less the released ones with main counted
-  // where no line names it, and 11 busy, 7 idle and 4 parked by lifecycle word. The three finished sessions stay out of
+  // bare address keeps, both read at the clock origin: 36 agents, the lines less the released ones with main counted
+  // where no line names it, and 12 busy, 7 idle and 4 parked by lifecycle word. The three finished sessions stay out of
   // both, and nightly's notebook row (`sessionSpec[19]`), whose mod went silent beside main's idle recipe, counts idle.
   const cardOf = (page) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Sessions');
   const dash = await mount('/', { now: CLOCK_ORIGIN });
@@ -1298,15 +1299,15 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const summary = line === null ? null : { Agents: line[1], Busy: line[2], Idle: line[3], Parked: line[4] };
   results.push({
     name: "/ the Sessions card's Agents, Busy, Idle and Parked count the live sessions' lines as the Sessions view's summary line counts them",
-    ok: JSON.stringify(grid) === JSON.stringify({ Agents: '35', Busy: '11', Idle: '7', Parked: '4' }) && JSON.stringify(summary) === JSON.stringify(grid),
+    ok: JSON.stringify(grid) === JSON.stringify({ Agents: '36', Busy: '12', Idle: '7', Parked: '4' }) && JSON.stringify(summary) === JSON.stringify(grid),
     missing: [JSON.stringify(grid), subtitle || 'no summary line'],
   });
 }
 {
   // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 19
-  // sessions the engine holds and its 33 agent records, one per recipe the story writes, against the bootstrap file's
+  // sessions the engine holds and its 34 agent records, one per recipe the story writes, against the bootstrap file's
   // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (225
-  // ok of 277), the 5 expiries between turns the ledger rows of the day hold, the drawn turns the mock seats inside
+  // ok of 279), the 5 expiries between turns the ledger rows of the day hold, the drawn turns the mock seats inside
   // their pin's window but a subagent's return behind its answer that stopped with `end_turn`, and the three bus gaps,
   // the last two hours back.
   // The expired part takes the warning ink while the attention item `expired_between_turns` holds, which the mock holds
@@ -1348,10 +1349,10 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const { getAttention } = api;
   const cold = await readCard(async () => (await getAttention.call(api)).filter((i) => i.kind !== 'expired_between_turns'));
   const want = {
-    bar: 'Probes in the last 24h: 225 ok, 4 held, 45 skipped, 3 failed',
+    bar: 'Probes in the last 24h: 225 ok, 4 held, 46 skipped, 4 failed',
     caps: [
       ['Sessions', '19 of 128'],
-      ['Agent records', '33 of 1,024'],
+      ['Agent records', '34 of 1,024'],
       ['Retained', '235.5 MiB of 256 MiB'],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
@@ -1360,7 +1361,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       { text: 'expired between turns 5', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
-    probes: '225 ok (81%) of 277',
+    probes: '225 ok (81%) of 279',
   };
   results.push({
     name: "/ the Sessions card's Keepalive engine block reads the caps, the day's probes over their bar, and the line whose expired part takes the warning ink while the attention item on expiries between turns holds and whose bus gaps part takes it while the last gap is inside the day, its instant on hover",
@@ -1400,8 +1401,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       (failed.notice ?? '').startsWith('Could not load the keepalive overview: ledger locked') &&
       role === 'status' &&
       drawn.grid === 4 &&
-      // The hero's `42` is the mock overview's active pins, which the failed keepalive read leaves drawn.
-      drawn.hero === '42' &&
+      // The hero's `43` is the mock overview's active pins, which the failed keepalive read leaves drawn.
+      drawn.hero === '43' &&
       retry !== undefined &&
       calls === 1 &&
       // `19 of 128` is the Sessions cap after Try again: `ENGINE_SESSIONS.length` of
@@ -1440,8 +1441,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       JSON.stringify(failed.grid) === JSON.stringify(['-', '-', '-', '-']) &&
       (failed.notice ?? '').startsWith('Could not load the recipes: recipes locked') &&
       notice?.getAttribute('role') === 'status' &&
-      // `42` is the mock overview's active pins, which the failed recipes read leaves drawn.
-      JSON.stringify(drawn) === JSON.stringify({ caps: 3, hero: '42' }) &&
+      // `43` is the mock overview's active pins, which the failed recipes read leaves drawn.
+      JSON.stringify(drawn) === JSON.stringify({ caps: 3, hero: '43' }) &&
       calls === 1 &&
       again.notice === null &&
       again.grid.every((figure) => /^\d+$/.test(figure ?? '')),
@@ -6857,12 +6858,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [...spend('jobs', 'Research workspace'), ...research.badges.map((b) => b.join(' | ')), research.why],
   });
   const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
-  // The story's pool all moved two sessions by the spent rule, three by a failover and one by its fast lane cooling.
+  // The story's pool all moved two sessions by the spent rule, four by a failover and one by its fast lane cooling.
   const allTitle = [
     'Rule moves in the last hour',
     'window spent 2',
     'Failovers left out of the count',
-    'failed over 3',
+    'failed over 4',
     'fast lane cooling 1',
     'Opens the Routing log on pool all and the moved kind for the last hour',
   ].join('\n');
@@ -18942,6 +18943,24 @@ await forView('/routing-log', async () => {
     });
   }
   {
+    // The failover session's subagent probes after its auxiliary call moved its pin to nightly while its recipe stayed
+    // on primary (`MOVED_PIN_PROBE_ID` in mock/requests.ts). The router answers the moved pin at the Probe line, which
+    // names no member the probe tried, and the relay answers 503 with no wait.
+    const { card, page } = await story('req_3c7f2e98-d16', 1, 'probe');
+    scan('moved pin', card);
+    const by = rowOf(page, 'req_3c7f2e98-d16/1')?.querySelector('td.routing-log__by .chip')?.textContent ?? null;
+    const decisive = stationsOf(card).find((s) => s.button.classList.contains('is-decisive'));
+    const probe = await popoverOf(page, decisive?.button);
+    const facts = { obstacle: popoverRowOf(probe, 'obstacle'), tried: popoverRowOf(probe, 'tried') };
+    const answer = outcomeOf(card).Answer ?? [];
+    page.unmount();
+    results.push({
+      name: "/routing-log a probe whose pin moved reads pin moved under By, ends its walk at the Probe line with the obstacle and no tried fact, and answers 503 with no retry",
+      ok: by === 'pin moved' && decisive?.step === 'Probe' && decisive.verdict === 'answered' && JSON.stringify(facts) === JSON.stringify({ obstacle: ['obstacle pin moved'], tried: null }) && JSON.stringify(answer) === JSON.stringify(['status 503', 'retry none']),
+      missing: [JSON.stringify([by, decisive ? [decisive.step, decisive.verdict] : null, facts, answer]), rowsRead(probe)],
+    });
+  }
+  {
     const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
     scan('failover attempt', card);
     stripDrawn('failover attempt', card, modelPairs(record), record);
@@ -21417,7 +21436,9 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // `req_c1e40a95-b28`.
   // Laptop's Failed and the line's errors count the bare 502 of the range's first hour, `req_8f5a2d16-c47`, and the
   // line's errors the rejection beside it, `req_4c1e8b27-d93`, which counts under Rejected. The line's requests count
-  // the hour's request the relay sent once more on primary after a failed connect, `req_0e5a7c3b-f92`, which answered.
+  // the hour's request the relay sent once more on primary after a failed connect, `req_0e5a7c3b-f92`, which answered,
+  // and the failover session's subagent turn and auxiliary call (`MOVED_PIN_TURN_ID` and `MOVED_PIN_CALL_ID`), each
+  // answered.
   // Ci's Failed and the line's errors leave out the stream its client closed, the drawn `req_52f62e67-839`, which counts
   // under Client canceled.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
@@ -21432,7 +21453,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '16', '3'], ['ci', '0', '3'], ['laptop', '7', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '268 requests, 14.6% errors',
+      line === '270 requests, 14.4% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -22825,8 +22846,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // alone, as the breakdown answers it, and the day holds no billed probe, so Probes by outcome draws its bars only
       // while its own reads count probes. Its legend reads the warming breakdown's probe counts, which a read with
       // probes off still holds here. The figures are the probe rows of the story's rollups (`ALL_ROLLUPS`,
-      // mock/requests.ts) over the day to 14:30: 5 ok, 1 held, 40 skipped and 31 failed, the 30 drawn probes that
-      // found no live pin among them, in 18 hourly buckets that stack 36 nonzero bars. jsdom lays nothing out, so the
+      // mock/requests.ts) over the day to 14:30: 5 ok, 1 held, 40 skipped and 32 failed, the 30 drawn probes that
+      // found no live pin and the probe whose pin moved (`MOVED_PIN_PROBE_ID`) among them, in 18 hourly buckets that
+      // stack 36 nonzero bars. jsdom lays nothing out, so the
       // chart's container reads a browser's size here.
       const measure = window.HTMLElement.prototype.getBoundingClientRect;
       window.HTMLElement.prototype.getBoundingClientRect = function () {
@@ -22842,7 +22864,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       kinds.unmount();
       results.push({
         name: '/analytics Probes by outcome counts probes with the toggle off',
-        ok: JSON.stringify(legend) === JSON.stringify([['OK', '5'], ['Held', '1'], ['Skipped', '40'], ['Failed', '31']]) && bars === 36,
+        ok: JSON.stringify(legend) === JSON.stringify([['OK', '5'], ['Held', '1'], ['Skipped', '40'], ['Failed', '32']]) && bars === 36,
         missing: [JSON.stringify(legend), `${bars} bars`],
       });
     }
@@ -22865,7 +22887,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       localStorage.removeItem('phoebis.unit');
       results.push({
         name: '/analytics under Billed dollars Probes by outcome counts the probes of both sides with the toggle off',
-        ok: unit === 'usd' && JSON.stringify(legend) === JSON.stringify([['OK', '5'], ['Held', '1'], ['Skipped', '40'], ['Failed', '31']]) && bars === 36,
+        ok: unit === 'usd' && JSON.stringify(legend) === JSON.stringify([['OK', '5'], ['Held', '1'], ['Skipped', '40'], ['Failed', '32']]) && bars === 36,
         missing: [`unit ${unit}`, JSON.stringify(legend), `${bars} bars`],
       });
     }
@@ -27084,20 +27106,20 @@ await forView('/sessions', async () => {
   // the fleet row 4, the workshop session on bench 6, the pinless fork 16, overflow's desktop row 28 and studio's four
   // notebook rows 25 to 42. The non-companion timeout leaves out the five past the hour: the refusal-only row 98
   // by its newest refusal, the ci rows 118 and 240, the row idle for two hours 120 and the earlier holder 20 hours
-  // back. The defaults keep 24 and hide the three finished. The 24 rows draw 35 agents, the lines less the released
-  // ones: three on the story's first session, four of the written session's seven, two on each of three sessions with a
+  // back. The defaults keep 24 and hide the three finished. The 24 rows draw 36 agents, the lines less the released
+  // ones: three on the story's first session, four of the written session's seven, two on each of four sessions with a
   // subagent line, the auxiliary-only session's main and its subagent, the two pins of studio's slowed session and of
-  // the fleet session no mod reports, and main's line on each of the other sixteen.
+  // the fleet session no mod reports, and main's line on each of the other fifteen.
   const bare = await read('');
   const drawnOf = (got) => got.drawn.map((id) => listed.find((s) => idOfRow(s) === id)).filter(Boolean);
   results.push({
     name: '/sessions the bare address keeps the rows the default filters keep, with no chip, the finished session hidden and the count of the sessions and their agents, the hidden rows on its hover',
-    ok: finished !== undefined && bare.chips.length === 0 && !bare.finished && bare.drawn.length === 24 && bare.count === '24 sessions · 35 agents' && bare.countTitle === '3 sessions hidden by the filters',
+    ok: finished !== undefined && bare.chips.length === 0 && !bare.finished && bare.drawn.length === 24 && bare.count === '24 sessions · 36 agents' && bare.countTitle === '3 sessions hidden by the filters',
     missing: [`finished ${finished?.sessionId ?? 'absent'}`, JSON.stringify(bare.chips), `${bare.drawn.length} rows`, String(bare.count), String(bare.countTitle)],
   });
   {
     // The Companion filter on reporting and silent keeps the fourteen rows a companion reports or went silent on, which
-    // draw 23 agents: the bare page's 35 less the twelve of the ten rows no companion reports.
+    // draw 23 agents: the bare page's 36 less the thirteen of the ten rows no companion reports.
     const only = await read('?companion=reporting,silent');
     const kept = drawnOf(only);
     results.push({
@@ -27138,7 +27160,7 @@ await forView('/sessions', async () => {
   {
     // A finished session keeps its lines once shown: the finished sentence opens its detail above the facts, and each
     // line of the Cache warming details reads its ended state with the probes and credits the engine last read. The
-    // filter lists all 27 rows, the three finished ones adding no agent to the bare page's 35, since the end released
+    // filter lists all 27 rows, the three finished ones adding no agent to the bare page's 36, since the end released
     // the ended session's main with its subagents and the Agents count leaves the released lines out. No companion
     // reports the session after its end, and its main keeps the released word: its Agents cell counts none with no word
     // under it, and main's line in its Agents table reads released.
@@ -27170,7 +27192,7 @@ await forView('/sessions', async () => {
       name: '/sessions ?finished=1 lists the finished session under the chip finished sessions, its expanded row the finished sentence above its facts and its three lines each ended with its probes and credits, its main released and counted in no Agents word, and the count names every listed row',
       ok:
         JSON.stringify(chips) === JSON.stringify(['finished sessions']) &&
-        count.text === '27 sessions · 35 agents' &&
+        count.text === '27 sessions · 36 agents' &&
         count.title === null &&
         row !== null &&
         got.text === RELEASED_SENTENCE &&
@@ -27217,7 +27239,7 @@ await forView('/sessions', async () => {
       name: "/sessions ?released=1 draws a live session's released lines under the chip released agents, each with its released badge, and the count names the same agents",
       ok:
         JSON.stringify(on.chips) === JSON.stringify(['released agents']) &&
-        on.count === '24 sessions · 35 agents' &&
+        on.count === '24 sessions · 36 agents' &&
         releasedHere.length > 0 &&
         off.lines.every((l) => !releasedHere.includes(l.id)) &&
         JSON.stringify(on.lines.map((l) => l.id).sort()) === JSON.stringify(lineIds(recipes)) &&
@@ -27281,14 +27303,15 @@ await forView('/sessions', async () => {
         // The last turn decides, whatever the pin's use: story 3 (d7167642) is in by its last turn 3 minutes back, its
         // pin used 2 back, and the story's first session (fa23a6da) and laptop's c64358b5 are in by their subagents'
         // last turns 7 minutes and 3 minutes 30 seconds back (the seed rows `req_c62e9b05-a41` and
-        // `req_e07b3c82-d95` in `web/src/mock/requests.ts`). Story 5 (0d588de5) is out by its last turn 25 minutes
+        // `req_e07b3c82-d95` in `web/src/mock/requests.ts`), and the failover session (bcc805b6) by its subagent's
+        // auxiliary call a minute back (`MOVED_PIN_CALL_ID`). Story 5 (0d588de5) is out by its last turn 25 minutes
         // back, its pin used 20 seconds back, and the pinless fork (5eeed6ce), quiet for 16 minutes, is out. The rows
         // the ledger holds no turn of read their pin's use, the auxiliary-only session (3e9b7c21) 3 minutes back and
         // the fleet session no mod reports (b7e2d5a9) 2.
-        count: '10 sessions · 16 agents',
+        count: '11 sessions · 18 agents',
         name: '/sessions ?active=15m keeps the rows whose last turn is inside 15 minutes',
         query: '?active=15m',
-        rows: ['4ef130f1', 'd7167642', 'fa23a6da', '89cd1c92', 'c64358b5', '7d3e1c20', '8b1f4c2e', '4a7c2e9b', '3e9b7c21', 'b7e2d5a9'],
+        rows: ['4ef130f1', 'd7167642', 'fa23a6da', '89cd1c92', 'c64358b5', '7d3e1c20', 'bcc805b6', '8b1f4c2e', '4a7c2e9b', '3e9b7c21', 'b7e2d5a9'],
       },
       {
         // The folded version of the newest client request: laptop's three story rows (`sessionSpec[6]` to `[8]`), the
@@ -27331,11 +27354,12 @@ await forView('/sessions', async () => {
         // A line's account is its pin's, else its recipe's: the story's first session on primary is in by c21e and e4b7
         // on nightly, laptop's c64358b5 on primary by its Haiku 4.5 subagents' line on nightly, laptop's unledgered row
         // on nightly is out, since it draws main from the row with no pin, and studio's four rows are in by pins no
-        // recipe stands on.
-        count: '10 sessions · 13 matching agents',
+        // recipe stands on. The failover session (bcc805b6) on primary is in by its subagent 6c2b's pin on nightly,
+        // where its recipe stays on primary.
+        count: '11 sessions · 14 matching agents',
         name: "/sessions ?account=nightly,studio keeps the rows with a line on either account, read off the line's recipe or its pin",
         query: '?account=nightly,studio',
-        rows: ['fa23a6da', '89cd1c92', '1c0f9727', '76ddb35b', 'c64358b5', '6d2f8b40', '5f8a3c1e', '9c2d7e4a', 'e7a4b2d9', 'c8f4a2e7'],
+        rows: ['fa23a6da', '89cd1c92', '1c0f9727', '76ddb35b', 'c64358b5', 'bcc805b6', '6d2f8b40', '5f8a3c1e', '9c2d7e4a', 'e7a4b2d9', 'c8f4a2e7'],
       },
       {
         // a7f3 on story 2 is a Plan agent (`STORY_AGENTS`), and the fork c21e on the story's first session is not.
@@ -27363,12 +27387,12 @@ await forView('/sessions', async () => {
       },
       {
         // A line's model: the story's first session by c21e and e4b7 and story 4 by e90b, both rows on
-        // claude-fable-5-1. Story 5's main runs claude-sonnet-4-5, its turns' model, and the two released sessions on
-        // claude-sonnet-5 are finished.
-        count: '2 sessions · 3 matching agents',
+        // claude-fable-5-1, and the failover session on claude-sonnet-4-5 by its subagent 6c2b. Story 5's main runs
+        // claude-sonnet-4-5, its turns' model, and the two released sessions on claude-sonnet-5 are finished.
+        count: '3 sessions · 4 matching agents',
         name: '/sessions ?model=claude-sonnet-5 keeps the rows with a line on the model, whatever model the row reads',
         query: '?model=claude-sonnet-5',
-        rows: ['fa23a6da', '89cd1c92'],
+        rows: ['fa23a6da', '89cd1c92', 'bcc805b6'],
       },
       {
         // Main parked on story 3 and story 8, story 4's e90b and the written session's 4f0c2a9e7b61d3c58.
@@ -28298,12 +28322,13 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
-    // The summary line under the card's title, over the rows the filters keep: the 35 agents the Agents cells count, 11
+    // The summary line under the card's title, over the rows the filters keep: the 36 agents the Agents cells count, 12
     // busy, 7 idle and 4 parked among them, nightly's notebook row (`sessionSpec[19]`) idle, since its mod went silent
-    // beside main's idle recipe, the 93 client requests of the last 24 hours the rows' `day` folds and a dash for
+    // beside main's idle recipe, the 95 client requests of the last 24 hours the rows' `day` folds and a dash for
     // their spend, since thirteen of the rows' days hold a plan request the cost model priced nothing for and a partial
-    // sum would read as the whole, then the $1.53 the day billed in dollars, $1.5342 over these rows of the request
-    // seed (mock/requests.ts): e4b7's row the seed draws onto
+    // sum would read as the whole, then the $1.59 the day billed in dollars, $1.5855 over these rows of the request
+    // seed (mock/requests.ts): the failover session's auxiliary call that fails over into nightly's overage on
+    // claude-sonnet-5 (`MOVED_PIN_CALL_ID`, $0.0513), e4b7's row the seed draws onto
     // the story's first session (`SESSION_IDS[0]`) on desktop, on overflow's API key on claude-fable-5-1 ($0.7747), the
     // written session's row on overflow's API key that the Cost case names ($0.4812), the fleet session's three written
     // rows on the fleet key, on contract's usage-based seat on claude-opus-5-5 and claude-sonnet-5-5 ($0.0554, $0.0174
@@ -28317,7 +28342,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const parts = /^(.*) · (.*) requests and (.*) \+ (\$[\d.]+) in 24 h$/.exec(subtitle);
     results.push({
       name: "/sessions the card's summary line reads the agents by word, the day's requests and spend, and the dollars billed beside it, and the title its sentence on hover",
-      ok: card?.querySelector('.card__title [title]')?.getAttribute('title') === 'One row per session. Open a row for its agents, its routing and its cache warming.' && parts !== null && parts[1] === '35 agents: 11 busy, 7 idle, 4 parked' && parts[2] === '93' && parts[3] === '-' && parts[4] === '$1.53',
+      ok: card?.querySelector('.card__title [title]')?.getAttribute('title') === 'One row per session. Open a row for its agents, its routing and its cache warming.' && parts !== null && parts[1] === '36 agents: 12 busy, 7 idle, 4 parked' && parts[2] === '95' && parts[3] === '-' && parts[4] === '$1.59',
       missing: [subtitle, card?.querySelector('.card__title')?.outerHTML ?? 'no title'],
     });
   }
@@ -29378,13 +29403,13 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const plus = [...m.container.querySelectorAll('tbody tr.srow .badge')].filter((b) => /^\+\d+$/.test(b.textContent?.trim() ?? ''));
     [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all')?.click();
     await m.settle(250);
-    // The default filters' 24 rows draw 31 lines on an account. Nine are pins no recipe stands on: the written fleet
+    // The default filters' 24 rows draw 32 lines on an account. Nine are pins no recipe stands on: the written fleet
     // session no mod reports draws two, studio's four slowed notebook rows five, the fleet row one and the workshop
     // session one. The written auxiliary-only session draws its subagent's recipe line. Main's line drawn from a row
     // stands on no pin and no recipe, so it names no account.
     results.push({
       name: "/sessions each line's Account cell links to the account with its kind on the title and in its description and its speed chip while slowed, and the row's +N badges stand with their figure, inside its cell",
-      ok: links.length === 31 && off.length === 0 && kinds.includes('oauth') && kinds.includes('api_key') && links.some((l) => l.chip) && plus.length > 0 && plus.every((b) => b.closest('.srow__pin') !== null),
+      ok: links.length === 32 && off.length === 0 && kinds.includes('oauth') && kinds.includes('api_key') && links.some((l) => l.chip) && plus.length > 0 && plus.every((b) => b.closest('.srow__pin') !== null),
       missing: [`${links.length} lines`, ...new Set(kinds), ...off.slice(0, 6).map((l) => l.link?.outerHTML ?? 'no link'), `${plus.length} +N badges`],
     });
   }
@@ -30075,7 +30100,12 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
     const background = read(lineOf(/^parked · background · deadline in \d+h \d+m$/));
     const scheduled = read(lineOf(/^parked · scheduled · wakes in \d+d( \d+h)?$/));
+    // The failover session's subagent `6c2b`, whose auxiliary call moved its pin to nightly while its recipe stayed on
+    // primary (`MOVED_PIN_CALL_ID` in mock/requests.ts). The router holds its probe under that cause, so the line reads
+    // held, where a recipe left to the default state would read retained.
+    const moved = read(parks.find((l) => l.querySelector('.agents__state > .badge:nth-child(2)')?.textContent?.trim() === 'pin moved'));
     pinned.unmount();
+    results.push({ name: '/sessions the line whose pin moved off its recipe reads held beside pin moved', ok: moved.state === 'held' && moved.cause === 'pin moved', missing: [JSON.stringify(moved)] });
     const PARKED = 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.';
     results.push({
       name: '/sessions the agent line shows the state word with its cause and the park detail',

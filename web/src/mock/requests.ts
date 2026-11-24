@@ -1101,7 +1101,7 @@ interface StorySeed {
    * A story row that takes no draw from the streams the drawn rows read, so it keeps its written class and instants
    * and every drawn figure stays where it was. The routing log derives its records as it does a drawn row's, or writes
    * them by hand where `STORY_IDS` names it, as it does for the rows that stamp a round's window and keep its account
-   * pinned to the round. The derived ones: the
+   * pinned to the round and for the three rows of the pin an auxiliary call moves. The derived ones: the
    * contract seat's rows on fleet, the approved Ultra's rows on bench, the last turns of the desktop session the mod
    * ended, the one turn of story 4's Explore subagent, the classifier call its judged account could not take, the turn
    * whose placement replaced an expired row, the three turns of the conversation whose pin the purge takes twice, the
@@ -1122,15 +1122,15 @@ interface StorySeed {
  */
 export const STORY_IDS = new Set([
   'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2b9e4c7f-d36', 'req_2c7d9f15-b63', 'req_2d8e5b13-f40', 'req_2d8f6b14-a79', 'req_2e7c90a1-6d4',
-  'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_3d7b9e2f-a41', 'req_3e2b9d47-c18', 'req_3e7a5c19-f84', 'req_3f8c1d94-b57',
+  'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_3c7f2e98-d16', 'req_3d7b9e2f-a41', 'req_3e2b9d47-c18', 'req_3e7a5c19-f84', 'req_3f8c1d94-b57',
   'req_4a9c3e7b-a27', 'req_4b0e9d17-c31', 'req_4b9e2c71-a35',
   'req_4d9a1e6b-c20',
   'req_4e8b1d36-f72', 'req_4f2a8d6e-b7a', 'req_51d0e2b8-7a0', 'req_5b2e8d47-c19', 'req_5c7e2a9d-b14', 'req_5d1f8c3a-b27',
   'req_5d6f1b3a-e27', 'req_5e2f7a19-b03',
   'req_5e3c8a41-d27', 'req_5f2c8b19-d73',
   'req_63a8d2f5-b17',
-  'req_69e30548-32e', 'req_6a1c9e47-b90', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6d0b3f85-a14', 'req_6e1f3b98-a24', 'req_71b5f2c8-e40', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
-  'req_7e2b9f40-c81', 'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8c41f2d7-a93', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_8e1d5a36-c92', 'req_9a07c4e1-d55', 'req_9b4f1c62-a07', 'req_9c4a7e12-f08', 'req_9d4c1a73-e58',
+  'req_69e30548-32e', 'req_6a1c9e47-b90', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6d0b3f85-a14', 'req_6d2a9f41-c37', 'req_6e1f3b98-a24', 'req_71b5f2c8-e40', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
+  'req_7e2b9f40-c81', 'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8c41f2d7-a93', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_8e1d5a36-c92', 'req_9a07c4e1-d55', 'req_9b4f1c62-a07', 'req_9c4a7e12-f08', 'req_9d4c1a73-e58', 'req_9e1b4c63-a52',
   'req_9f2e7c5a-c49', 'req_a1f04c2e-7b3', 'req_a2c94e7b-f15', 'req_a3d8f1b6-c25', 'req_a6c19e73-5d2', 'req_a96e3d52-b18', 'req_b1e7c4a9-a69', 'req_b2bed817-a58',
   'req_b72e9d05-c14', 'req_b7d43a90-e26', 'req_b8c3e9d4-e61', 'req_c3a71e58-b46', 'req_c41d0311-200', 'req_c5d8e2b7-e95', 'req_c8f2a61d-b74', 'req_c90d3f61-a28', 'req_d06a4e73-c29', 'req_d27f5a83-e14', 'req_d2a8f6c1-d50',
   'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e1b6d4f8-b38', 'req_e2c7a4f9-d13', 'req_e4a92c17-b60', 'req_e5a1c093-4d7', 'req_e83b2d65-c57',
@@ -1213,6 +1213,20 @@ const BARE_502_TURN_ID = 'req_8f5a2d16-c47';
 const RESENT_REQUEST_ID = 'req_0e5a7c3b-f92';
 /** The laptop session of the relay's 502 and the client's retry of that turn. */
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
+/**
+ * The subagent of the failover session (`bcc805b6`) whose auxiliary call moved its pin off primary while its recipe
+ * stayed there, and its three rows: the turn that armed the recipe, the call, and the probe the move overtook.
+ */
+const MOVED_PIN_AGENT_ID = '6c2b';
+export const MOVED_PIN_TURN_ID = 'req_6d2a9f41-c37';
+export const MOVED_PIN_CALL_ID = 'req_9e1b4c63-a52';
+export const MOVED_PIN_PROBE_ID = 'req_3c7f2e98-d16';
+const MOVED_PIN_ROWS: ReadonlySet<string> = new Set([MOVED_PIN_TURN_ID, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_ID]);
+/**
+ * The probe's due time: the turn's entry ends five minutes after its answer, less the 60 s lead and 3.1 s of jitter.
+ * The keepalive's tick read the pin on primary then, ahead of the call's 429.
+ */
+export const MOVED_PIN_PROBE_DUE = clock(14, 29, 0.9);
 // The conversations that keep a round's account pinned from its stamp to the round run on the four sessions below,
 // written ids outside `SESSION_IDS`. A drawn row takes its session from that list alone, so no drawn row writes one of
 // these conversations' pin keys, and each one holds its account at whichever clock the mock loads at.
@@ -1411,6 +1425,29 @@ function storySeeds(): StorySeed[] {
   // the code, the user agent and the label, no model and no session, as the relay lands one.
   const BATCH_AGENT = 'phoebis-batch/0.9 (external, ci)';
   return [
+    // The failover session's subagent arms a five-minute recipe on primary, and its auxiliary call, which marks its
+    // body and so reads the pin, fails over to nightly and writes its prefix cold there: the pin moves and the recipe
+    // stays on primary. The probe due at `MOVED_PIN_PROBE_DUE` passed the gate on primary, and its selection meets the
+    // moved pin and sends nothing.
+    { agentId: MOVED_PIN_AGENT_ID, at: t(14, 25), attempts: [{ accountId: 'primary', at: t(14, 25), ms: 4_000, status: 200 }], id: MOVED_PIN_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: 'bcc805b6', unseeded: true, usage: { cacheWrite5m: 18_400, input: 1_200, output: 640 } },
+    {
+      agentId: MOVED_PIN_AGENT_ID,
+      at: t(14, 29),
+      attempts: [
+        // The mock fails over behind this 429 as behind each 429 of the story, where the relay waits a `Retry-After`
+        // under the pool's bound out on the same account.
+        { accountId: 'primary', at: t(14, 29), cooldown: retryAfter(t(14, 29, 1)), ms: 1_000, status: 429 },
+        { accountId: 'nightly', at: t(14, 29, 1), ms: 2_000, status: 200 },
+      ],
+      id: MOVED_PIN_CALL_ID,
+      keyId: 'desktop',
+      model: 'claude-sonnet-5',
+      requestClass: 'auxiliary',
+      session: 'bcc805b6',
+      unseeded: true,
+      usage: { cacheWrite5m: 18_900, input: 1_400, output: 120 },
+    },
+    { agentId: MOVED_PIN_AGENT_ID, at: MOVED_PIN_PROBE_DUE + 400, attempts: [], errorCode: 'accounts_unavailable', id: MOVED_PIN_PROBE_ID, keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-5', outcome: 'rejected', requestClass: 'subagent', session: 'bcc805b6', status: 503, unseeded: true },
     // An answer the upstream ran on its priority tier.
     { agentId: 'main', at: t(14, 27, 28), attempts: [{ accountId: 'primary', at: t(14, 27, 28), ms: 6_400, status: 200 }], id: 'req_f8085653-422', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', tier: 'priority', usage: { cacheRead: 48_100, cacheWrite1h: 2_100, input: 3_900, output: 1_250 } },
     {
@@ -2411,6 +2448,7 @@ function storyEvents(): Map<string, RequestEvent[]> {
   };
   moved('req_4b0e9d17-c31', clock(14, 27, 1), 'primary', 'nightly', 'fast_lane');
   moved('req_2e7c90a1-6d4', clock(14, 24, 10), 'primary', 'nightly', 'cooldown');
+  moved(MOVED_PIN_CALL_ID, clock(14, 29, 1), 'primary', 'nightly', 'cooldown');
   moved('req_da52d141-a5a', clock(14, 5, 12), 'secondary', 'primary', 'spent');
   moved('req_b8c3e9d4-e61', clock(14, 7, 51), 'secondary', 'primary', 'cooldown');
   moved('req_1d9c3e55-0b2', clock(14, 2, 11), 'secondary', 'primary', 'cooldown');
@@ -3175,7 +3213,11 @@ const tally = <T>(items: readonly T[], keyOf: (item: T) => string | null, into: 
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
-  for (const r of rows) {
+  // The moved pin's rows join the story behind every drawn figure, so their lane hours take this stream's draws after
+  // every other lane hour's, and their probe takes no part in the pick of the held probe below.
+  const behind = (r: RequestLog) => MOVED_PIN_ROWS.has(r.id);
+  const behindRollups = new Set<HourlyRollup>();
+  for (const r of [...rows.filter((x) => !behind(x)), ...rows.filter(behind)]) {
     const hour = iso(startOfHour(Date.parse(r.at)));
     // A request answered at the cap before any account served it files under `-`, as the ledger files what it could
     // not attribute. The funding is part of the key, so a lane-hour on both sides of nightly's overage raise splits.
@@ -3318,11 +3360,12 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         probeCostUsd,
         ...waste,
       });
+      if (list.every(behind)) behindRollups.add(out[out.length - 1]);
     }
   }
   // The day holds one probe the router held while its ledger caught up, from the default range's first hour on, so the
   // default range draws the slice.
-  const probeRows = out.filter((r) => r.kind === 'probe' && Date.parse(r.hour) >= DAY_FROM);
+  const probeRows = out.filter((r) => r.kind === 'probe' && Date.parse(r.hour) >= DAY_FROM && !behindRollups.has(r));
   if (probeRows.length > 0) heldRng.pick(probeRows).probes.held = 1;
   return out.sort((a, b) => Date.parse(a.hour) - Date.parse(b.hour));
 }

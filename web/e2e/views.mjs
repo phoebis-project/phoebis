@@ -9636,17 +9636,14 @@ async function requestDrawerCompact(theme) {
   };
   // The cost row's chips (the figure and the hint's lines under native, the default) take the status badge's type,
   // sit on one line each inside the cell, and the muted equivalent follows them on one line inside it. A cost row with
-  // no chip (a request billed in dollars) is recorded in the router pass, whose seeded requests an API key account
-  // serves, and fails the mock pass, whose story's newest request a subscription window paid for.
+  // no chip (a request billed in dollars) is recorded, and the mock pass reads a plan-paid cost row at both sizes
+  // through the Fable read.
   const costRow = (where, got) => {
     if (got.cost === null) {
       say(`${where} has no Estimated cost row to read`);
       return;
     }
-    if (got.cost.chips.length === 0) {
-      if (mock) say(`${where}: the cost row draws no equivalent chip`);
-      return;
-    }
+    if (got.cost.chips.length === 0) return;
     const insideOf = (cell) => (e) => e.left >= cell.left && e.right <= cell.right;
     const inside = insideOf(got.cost.cell);
     const chipsIn = (chips, cell, row) => {

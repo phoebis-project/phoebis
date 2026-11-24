@@ -18,7 +18,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
 import { DELETED_ACCOUNTS, KEY_REVOKED_AT, RETIRED, WORST_BUCKET, keyById, poolById, storyAccountOf, type PoolSeed } from './pools';
-import { ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, CLIMB_SESSION_ID, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, NO_PIN_DRAWS, OPENING_SESSION_IDS, OPUS_MORNING_SESSION_ID, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, RESERVATION_FABLE_SESSION_ID, RESERVATION_MARKED_SESSION_ID, REWRITE_HELD_ID, ROUTER_RESTARTED_AT, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, pinReadAt, pinStampOf, requestById, resentInPlace, sweepAfter, type CooldownRow } from './requests';
+import { ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, CLIMB_SESSION_ID, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, NO_PIN_DRAWS, OPENING_SESSION_IDS, OPUS_MORNING_SESSION_ID, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, RESERVATION_FABLE_SESSION_ID, RESERVATION_MARKED_SESSION_ID, REWRITE_HELD_ID, ROUTER_RESTARTED_AT, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, pinReadAt, pinStampOf, requestById, resentInPlace, sweepAfter, type CooldownRow } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { drawnWindows, droppedThinkingOf, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
@@ -679,8 +679,13 @@ const NO_RUNWAY_ROUND = { accountId: 'primary', at: clock(14, 12, 30) };
 const FABLE_WEEK_ROUND = { accountId: 'nightly', at: clock(8, 30) };
 /** Primary's morning round on its Fable reservation, fired while every window reads under its line. */
 const RESERVATION_ROUND = { accountId: 'primary', at: clock(11, 13, 40) };
-/** The story's five rounds, which a later decision on the account reads as within the dwell. */
-const ROUNDS = [SHED_ROUND, NO_RUNWAY_ROUND, STRETCH_ROUND, FABLE_WEEK_ROUND, RESERVATION_ROUND];
+/**
+ * Primary's last round, fired by the auxiliary call's renewal behind the afternoon round's dwell, which finds no
+ * sibling with runway for a pin of its own.
+ */
+const MOVED_PIN_ROUND = { accountId: 'primary', at: Date.parse(requestById.get(MOVED_PIN_CALL_ID)!.at) };
+/** The story's six rounds, which a later decision on the account reads as within the dwell. */
+const ROUNDS = [SHED_ROUND, NO_RUNWAY_ROUND, STRETCH_ROUND, FABLE_WEEK_ROUND, RESERVATION_ROUND, MOVED_PIN_ROUND];
 
 /**
  * What the gate read of one candidate for a pin: the verdict, the runway to the ceiling and its window, the runway to
@@ -1794,12 +1799,13 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   }
   const member = (id: string | null | undefined) => candidates.find((c) => c.accountId === id);
   // A probe warms the pin it was sent for: the line names that member's obstacle, if any, and whether this probe
-  // already tried it, or `no_pin` where the session holds no live pin. A pinned answer ends the walk there, the reserve
-  // station aside.
+  // already tried it, `no_pin` where the session holds no live pin, or `pin_moved` alone where the pin stands on
+  // another account than the recipe's, which the selector answers before it reads the member. A pinned answer ends the
+  // walk there, the reserve station aside.
   if (r.kind === 'probe') {
     const pinned = pin?.found === 'live' ? member(pin.accountId) : undefined;
-    const noPin = spec.exhaustion?.obstacle === 'no_pin' ? [fact('obstacle', 'no_pin')] : [];
-    const facts = pinned ? [...(pinned.obstacle ? [fact('obstacle', pinned.obstacle.name)] : []), fact('tried', spec.attempted.includes(pinned.accountId))] : noPin;
+    const ownWord = spec.exhaustion?.obstacle === 'no_pin' || spec.exhaustion?.obstacle === 'pin_moved' ? spec.exhaustion.obstacle : null;
+    const facts = ownWord !== null ? [fact('obstacle', ownWord)] : pinned ? [...(pinned.obstacle ? [fact('obstacle', pinned.obstacle.name)] : []), fact('tried', spec.attempted.includes(pinned.accountId))] : [];
     walk.push(step('probe', pinnedAnswerOf(spec) ? 'answered' : 'passed', facts));
   }
   const { gateFits, movedAmong, steps: moveSteps } = moveWalkOf(spec, candidates, pool, pin, portable);
@@ -2282,6 +2288,27 @@ const RESERVATION_PINS: RoundPin[] = [
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 52_000, marked: false, model: 'claude-fable-5-1', note: null, sessionId: RESERVATION_FABLE_SESSION_ID, skip: 'fable_model' },
 ];
 
+/**
+ * The last round's pins on primary, each pin of all that a request row holds there at 14:29:00, in the router's order:
+ * the cold pins by burn, then the warm ones by burn over their prompt, a pin with no priced burn last in its group. The
+ * priced pins share primary's 5-hour burn of 0.224 an hour by the 5-hour shares their turns took in the half hour of
+ * all's burn average. The two Sonnet 4.5 pins, the failover session's main and the laptop session's main whose 502 and
+ * retry ran at 14:22, hold a model with no weight of its own, so the round skips each as unpriced. No sibling has
+ * runway for a priced pin, since nightly projects past the ceiling, secondary is spent and cooling, and the Overflow
+ * workspace is paused. Three pins leave the round before the order, each of a subagent whose last turn ended: `e90b`'s
+ * of 14:21:12 and the two of the session the mod released whole.
+ */
+const MOVED_PIN_ROUND_PINS: RoundPin[] = [
+  { agentId: 'main', burn: 0.1165, cold: true, keyId: 'desktop', lastInputTokens: 57_800, marked: false, model: 'claude-fable-5-1', note: null, sessionId: sessionId('4ef130f1'), skip: 'no_runway' },
+  { agentId: 'main', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 63_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('bcc805b6'), skip: 'unpriced' },
+  { agentId: 'main', burn: null, cold: true, keyId: 'laptop', lastInputTokens: 3_200, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('7d3e1c20'), skip: 'unpriced' },
+  { agentId: '6c2b', burn: 0.0301, cold: false, keyId: 'desktop', lastInputTokens: 19_600, marked: false, model: 'claude-sonnet-5', note: 'current', sessionId: sessionId('bcc805b6'), skip: 'no_runway' },
+  { agentId: 'main', burn: 0.0774, cold: false, keyId: 'desktop', lastInputTokens: 54_100, marked: false, model: 'claude-sonnet-5-5', note: null, sessionId: sessionId('d7167642'), skip: 'no_runway' },
+  { agentId: 'e90b', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 19_600, marked: false, model: 'claude-sonnet-5-5', note: null, sessionId: sessionId('89cd1c92'), skip: 'ended' },
+  { agentId: '8c1a', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 14_100, marked: false, model: 'claude-sonnet-5', note: null, sessionId: RELEASED_SESSION_ID, skip: 'ended' },
+  { agentId: '2f9d', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 12_600, marked: false, model: 'claude-sonnet-5', note: null, sessionId: RELEASED_SESSION_ID, skip: 'ended' },
+];
+
 const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId })), pins });
 
 /**
@@ -2504,6 +2531,17 @@ function storySpecs(): Spec[] {
     at('req_4b0e9d17-c31', 1, 1, t(14, 26, 58), 'placed', 'primary'),
     at('req_4b0e9d17-c31', 2, 2, t(14, 27, 1), 'placed', 'nightly', { attempted: ['primary'], failover: 'fast_lane', from: 'primary', pin: live() }),
     at('req_f8085653-422', 1, 1, t(14, 27, 28), 'renewed', 'primary', { pin: live('continues_pin', 506_000) }),
+    // The failover session's subagent lands beside its main on primary. Its auxiliary call renews the pin there and
+    // leaves its warmth, and the call's 429 fails it over to nightly, which moves the pin off the recipe's holder. The
+    // probe the move overtook meets the pin on nightly and answers that standing with no attempt.
+    at(MOVED_PIN_TURN_ID, 1, 1, t(14, 25), 'placed', 'primary'),
+    at(MOVED_PIN_CALL_ID, 1, 1, MOVED_PIN_ROUND.at, 'renewed', 'primary', { pin: live('continues_pin', 236_000, 'untouched'), round: roundOfPins(MOVED_PIN_ROUND_PINS) }),
+    at(MOVED_PIN_CALL_ID, 2, 2, t(14, 29, 1), 'placed', 'nightly', { attempted: ['primary'], failover: 'cooldown', from: 'primary', pin: live() }),
+    at(MOVED_PIN_PROBE_ID, 1, 1, MOVED_PIN_PROBE_DUE + 400, 'exhausted', null, {
+      exhaustion: { deadline: null, kind: 'pinned', obstacle: 'pin_moved', reason: null, window: null },
+      from: 'nightly',
+      pin: live('probe', 300, 'untouched'),
+    }),
     // The client's two classifier calls follow their judged turns to primary. A classifier call books nothing and holds
     // no pin.
     at('req_4d9a1e6b-c20', 1, 1, t(12, 41, 8), 'placed', 'primary', { pin: 'classifier' }),
@@ -3422,6 +3460,7 @@ function buildEvents(): RoutingEvent[] {
       roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS),
       roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS, true),
       roundEvent('req_5d1f8c3a-b27/1', RESERVATION_PINS),
+      roundEvent(`${MOVED_PIN_CALL_ID}/1`, MOVED_PIN_ROUND_PINS),
     ].flatMap((e) => (e === null ? [] : [e])),
     ...markCleared(),
     ...expiredReservations(),

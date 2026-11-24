@@ -9,7 +9,7 @@ import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById, servedFigures } from './pools';
-import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, fastTurn, pinCacheTtlOf, requestById } from './requests';
+import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, fastTurn, pinCacheTtlOf, requestById } from './requests';
 import { dropSizeOf, droppedThinkingOf, moveSizeOf, proWeekRewriteOf } from './rewrite';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, tablesFor } from './samples';
@@ -718,23 +718,27 @@ SESSIONS.push({
 /** How long ago a probe still in flight went out. */
 const PROBE_IN_FLIGHT_MS = 20_000;
 
-// The state the engine reads each cause the story uses in, as `recipe_state` maps it with no pause.
+// The state the engine reads a cause in, as `recipe_state` maps it with no pause.
 const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
   affinity_too_short: 'held',
   awaiting_cache_evidence: 'retained',
   compacted: 'ended',
+  credits: 'held',
   expired: 'ended',
   horizon: 'held',
   idle_limit: 'ended',
   overage: 'held',
   parked_limit: 'ended',
+  pin_moved: 'held',
   probe_pool_exhausted: 'held',
   probe_quota_exhausted: 'held',
   probing: 'retained',
   repeated_cold_probe: 'paused',
   scheduled: 'retained',
+  spent: 'held',
   unsupported_shape: 'not_retained',
 };
+const stateOf = (cause: RecipeCause): RecipeState => STATE_OF[cause] ?? 'retained';
 
 // The causes the story holds on the engine's retry ladder, each line `held`. A line held for its probe's 429 waits at
 // least the answer's retry-after, and each cooldown of the story runs past the 300 s cap. A line held for its pool's
@@ -791,7 +795,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const held = j === 0 ? (spec.cause ?? null) : j === 1 ? (spec.subagentHold ?? null) : null;
     // A busy main has its probe in flight, and every other agent nothing holds waits for its scheduled one.
     const cause: RecipeCause = held ?? (mainState === 'busy' && j === 0 ? 'probing' : 'scheduled');
-    const state = STATE_OF[cause] ?? 'retained';
+    const state = stateOf(cause);
     const model = j === 0 ? sessionSpec[i].model : sub?.model ?? sessionSpec[i].model;
     // The engine lists an agent once it has sent a request. The roll is drawn whatever it gives, so the rows after this
     // one keep theirs, and a subagent it leaves without one sent its request three and a half minutes ago, off the
@@ -858,6 +862,55 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
 });
 
 /**
+ * The failover session's subagent whose auxiliary call moved its pin to nightly. Its recipe keeps primary, the account
+ * its last turn answered on, and the gate holds it with its schedule armed, so its next probe reads the due time that
+ * the probe the move overtook went out at. Written behind the rolls, so every drawn row and recipe keeps its own.
+ */
+{
+  const of = (id: string) => {
+    const r = requestById.get(id);
+    if (r === undefined) throw new Error(`the story holds no request ${id}`);
+    return r;
+  };
+  const turn = of(MOVED_PIN_TURN_ID);
+  const call = of(MOVED_PIN_CALL_ID);
+  RECIPES.push({
+    ...RECIPE_SAMPLE,
+    accountId: servingAttempt(turn)!.accountId,
+    agentId: call.agentId!,
+    agentState: 'busy',
+    cause: 'pin_moved',
+    creditedToday: 0,
+    deadline: null,
+    keyId: call.keyId!,
+    lastGuard: 'auxiliary',
+    lastProbeAt: of(MOVED_PIN_PROBE_ID).at,
+    lastRequestAt: call.at,
+    model: call.canonicalModel,
+    nextProbeAt: iso(MOVED_PIN_PROBE_DUE),
+    parkKind: null,
+    poolId: keyById.get(call.keyId!)?.poolId ?? 'all',
+    probesToday: 1,
+    sessionId: call.sessionId!,
+    state: stateOf('pin_moved'),
+    ttlSeconds: 300,
+    wakeAt: null,
+  });
+}
+
+/**
+ * The account and the instant of the story's newest move of a recipe's pin key, for a recipe the gate holds under
+ * `pin_moved`, whose pin stands off the account it holds. Every other recipe's pin stands on that account.
+ */
+function movedPinOf(r: Pick<KeepaliveRecipe, 'agentId' | 'cause' | 'keyId' | 'model' | 'sessionId'>): { accountId: string; at: string } | null {
+  if (r.cause !== 'pin_moved') return null;
+  const moves = [...REQUEST_EVENTS.values()].flat().filter((e) => e.kind === 'pin_migrated' && e.keyId === r.keyId && e.sessionId === r.sessionId && e.model === r.model && e.detail?.agent_id === r.agentId);
+  const newest = moves.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+  if (newest === undefined || newest.accountId === null) throw new Error(`the story moves no pin of ${r.sessionId} ${r.agentId} off its recipe`);
+  return { accountId: newest.accountId, at: newest.at };
+}
+
+/**
  * A session's summary as the admin route reads it off the session's recipes. Its next probe is the soonest its agents
  * have scheduled: an agent awaiting cache evidence contributes no time even though it is armed, so a session left with
  * only those reads as pending rather than unscheduled.
@@ -907,13 +960,15 @@ SESSIONS.forEach((pin, i) => {
     activityOf(pin.keyId, pin.keyGeneration, pin.sessionId),
     recipes.flatMap((r, j) => {
       if ((r.agentState === 'released' && pin.companion !== 'none') || r.accountId === null) return [];
-      const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
+      const moved = movedPinOf(r);
+      const own = { accountId: moved?.accountId ?? r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
         const line = { ...own, burnAt: fold?.at ?? null, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: pin.pinnedAt };
         return [pinLine(line, pin.keyId, pin.sessionId, display, pin.lastRefreshAt)];
       }
       const ended = i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT;
-      const line = { ...own, cacheTtlMs: pinCacheTtlOf(pin.sessionId), effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState };
+      // A moved pin's row is the one its move wrote.
+      const line = { ...own, cacheTtlMs: pinCacheTtlOf(pin.sessionId), effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState, ...(moved === null ? {} : { pinnedAt: moved.at }) };
       return [pinLine(line, pin.keyId, pin.sessionId, servedBeside(display, line, firstSeen), line.lastUsedAt)];
     }),
   );
@@ -1449,7 +1504,7 @@ const pinOn = (accountId: string | null, keyId: string, sessionId: string, agent
 for (const r of RECIPES) {
   const poolId = keyById.get(r.keyId)?.poolId;
   if (poolId === undefined || (r.agentState === 'released' && !pinKept(r, poolId))) continue;
-  pinOn(r.accountId, r.keyId, r.sessionId, r.agentId, r.model);
+  pinOn(movedPinOf(r)?.accountId ?? r.accountId, r.keyId, r.sessionId, r.agentId, r.model);
 }
 // Every listed line is a pin. The recipe loop above stays for the released agents the router still holds, which draw
 // no line.
@@ -1493,8 +1548,9 @@ const ENGINE_SESSIONS = SESSIONS.filter((s, i) => s.companion !== 'none' || (i <
 
 // Router-wide, so every probe counted here belongs to a pool that keeps caches
 // warm, and `jobs` has warming off and contributes none. Hand-set at a busier
-// scale than the logged rows.
-const PROBES_24H = { ok: 225, held: 4, skipped: 45, failed: 3 };
+// scale than the logged rows. The probe whose pin moved files under failed, and the gate's hold behind it withholds
+// the same due probe once, under skipped.
+const PROBES_24H = { ok: 225, held: 4, skipped: 46, failed: 4 };
 
 // Each bucket reaches fewer windows than the one before it left unreturned.
 const IDLE_REACHED = [96, 70, 50, 36, 22, 13, 8, 5, 2, 1];

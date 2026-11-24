@@ -270,9 +270,12 @@ const OBSTACLE_WORD: Record<string, string> = {
   no_pin: 'no pin',
   operator: INELIGIBLE_LABEL.unavailable,
   overage: INELIGIBLE_LABEL.overage,
+  pin_moved: 'pin moved',
   spent: INELIGIBLE_LABEL.spent,
   subscription_ended: INELIGIBLE_LABEL.subscription_ended,
 };
+/** The hover of a pinned obstacle on the By chip, for an obstacle whose word does not say why the probe stayed. */
+const PINNED_OBSTACLE_HINT: Record<string, string> = { pin_moved: "The pin stands on another account than the recipe's, so the probe was not sent." };
 /** The pinned obstacles a wait clears, which the relay answers with a 429 as it answers a dated exhaustion. */
 const PINNED_WAITS = new Set(['cooldown', 'credits', 'overage', 'spent']);
 /**
@@ -330,8 +333,11 @@ function decisionBy(row: DecisionSummary): Chip {
   // more than the renewal does.
   if (row.kind === 'renewed' && !(kind === 'hold' && (value === 'slow_down' || value === 'rewrite'))) return { value: row.probe ? 'keepalive' : 'no rule fired' };
   switch (kind) {
-    case 'exhaustion':
-      return { value: exhaustionWord(row) };
+    case 'exhaustion': {
+      const x = row.exhaustion;
+      const title = x?.kind === 'pinned' && x.obstacle !== null ? lookup(PINNED_OBSTACLE_HINT, x.obstacle) : undefined;
+      return title === undefined ? { value: exhaustionWord(row) } : { title, value: exhaustionWord(row) };
+    }
     case 'hold':
       return value === 'strategy_pick' ? strategyChip(row.strategy, row.tier) : { value: value === 'slow_down' ? LABELS.slow_down : value === 'rewrite' ? LABELS.rewrite : words(value) };
     case 'none':
