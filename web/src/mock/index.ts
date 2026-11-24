@@ -353,7 +353,7 @@ const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   // The caps are the bootstrap file's defaults, which the story's overview carries.
   limits: { agents: { ...KEEPALIVE_OVERVIEW.limits.agents, count: 0 }, retainedBytes: { ...KEEPALIVE_OVERVIEW.limits.retainedBytes, count: 0 }, sessions: { ...KEEPALIVE_OVERVIEW.limits.sessions, count: 0 } },
   pools: [],
-  probes24h: { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 },
+  probes24h: { failed: 0, held: 0, ok: 0, skipped: 0 },
 };
 
 function fromCallbackUrl(url: string): { code: string; state: string } | null {

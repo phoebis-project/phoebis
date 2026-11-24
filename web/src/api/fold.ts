@@ -51,7 +51,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   planRequests: null,
   probeCostUsd: 0,
   probeEquivalent: { cost: 0, wasted: 0 },
-  probes: { failed: 0, held: 0, migrated: 0, ok: 0, planOk: 0, skipped: 0 },
+  probes: { failed: 0, held: 0, ok: 0, planOk: 0, skipped: 0 },
   rateLimited: 0,
   refusals: emptyCounts(),
   refused: 0,
@@ -461,7 +461,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     for (const k of ['cacheMissReasonHits', 'cacheMissReasons', 'errors', 'inputTransformations', 'refusals'] as const) addCounts(out[k], g[k]);
     if (g.fromRequests) out.fromRequests = true;
     out.keptWarm = plusBoth(out.keptWarm, g.keptWarm);
-    for (const k of ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'] as const) out.probes[k] += g.probes[k];
+    for (const k of ['failed', 'held', 'ok', 'planOk', 'skipped'] as const) out.probes[k] += g.probes[k];
     for (const reason of WASTED_PROBE_REASONS) out.wastedProbeReasons[reason] += g.wastedProbeReasons[reason];
   }
   for (const m of METRICS) {

@@ -1304,9 +1304,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 {
   // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 19
   // sessions the engine holds and its 33 agent records, one per recipe the story writes, against the bootstrap file's
-  // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (207
-  // ok of 277, since its `ok` of 225 holds the 18 migrated), the 6 expiries between turns the ledger rows of the day
-  // hold, the drawn turns the mock seats inside their pin's window, and the three bus gaps, the last two hours back.
+  // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (225
+  // ok of 277), the 6 expiries between turns the ledger rows of the day hold, the drawn turns the mock seats inside
+  // their pin's window, and the three bus gaps, the last two hours back.
   // The expired part takes the warning ink while the attention item `expired_between_turns` holds, which the mock holds
   // over its expiries on the pools that warm caches under keys that may be probed for (`ATTENTION` in
   // mock/attention.ts), and with an attention answer that lacks the item it takes none, the overview's count of 6
@@ -1346,7 +1346,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const { getAttention } = api;
   const cold = await readCard(async () => (await getAttention.call(api)).filter((i) => i.kind !== 'expired_between_turns'));
   const want = {
-    bar: 'Probes in the last 24h: 207 ok, 18 migrated, 4 held, 45 skipped, 3 failed',
+    bar: 'Probes in the last 24h: 225 ok, 4 held, 45 skipped, 3 failed',
     caps: [
       ['Sessions', '19 of 128'],
       ['Agent records', '33 of 1,024'],
@@ -1358,7 +1358,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       { text: 'expired between turns 6', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
-    probes: '207 ok (75%) of 277',
+    probes: '225 ok (81%) of 277',
   };
   results.push({
     name: "/ the Sessions card's Keepalive engine block reads the caps, the day's probes over their bar, and the line whose expired part takes the warning ink while the attention item on expiries between turns holds and whose bus gaps part takes it while the last gap is inside the day, its instant on hover",
@@ -21414,7 +21414,7 @@ expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share',
 await tab(m, 'Cost');
 expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
 await tab(m, 'Cache warming');
-expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Probe cost', 'Saved by probes', 'Net saving', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
+expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Probe cost', 'Saved by probes', 'Net saving', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
 {
   const titles = [...m.container.querySelectorAll('.card__title')].map((t) => t.textContent?.trim());
   const left = ['Gross saved', 'Net saved'].filter((w) => m.text().includes(w));
@@ -22581,15 +22581,6 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           JSON.stringify(probeTile.lines) === JSON.stringify(pairOf(probe.cost, billed.probeCostUsd)) && probeTile.note === `${fmtInt(upstreamCount(whole))} probes sent, ${NATIVE_SUBSET}` && probeTile.title === null,
         missing: [JSON.stringify(probeTile), JSON.stringify({ billed: billed.probeCostUsd, probe, probes: [probeCount(whole), probeCount(billed)] })],
       });
-      // The route counts a migrated probe in `ok` and in `migrated`, so Probes by outcome's OK is the totals' `ok` less
-      // `migrated`, the totals of the tab's breakdown that counts probes.
-      const outcomes = sumGroups((await answerOf((q) => q.groupBy === 'key' && q.funding === undefined && q.includeProbes === true)) ?? []);
-      const okValue = legendOf('Probes by outcome').find((i) => i.label === 'OK')?.value ?? null;
-      results.push({
-        name: "/analytics Probes by outcome's legend counts a migrated probe once, its OK the range's ok less the migrated probes the route counts in both",
-        ok: outcomes.probes.migrated > 0 && okValue === fmtInt(outcomes.probes.ok - outcomes.probes.migrated),
-        missing: [okValue ?? 'no OK value', JSON.stringify(outcomes.probes)],
-      });
       // The saving's sides are told apart by their kept-warm credits, the plan side the whole read's less the billed
       // read's: the gross a side with a credit, the net a side with a credit or a probe, each side's saving less its
       // probe cost. A side with nothing behind it counts zero, and one the route priced nothing on reads a dash.
@@ -22700,7 +22691,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // side $0.10 saved less $0.50 of probes.
       const now = Date.now();
       const template = (await api.getAnalyticsBreakdown({ from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() })).find((g) => g.key === 'primary');
-      const probesOf = (ok) => ({ failed: 0, held: 0, migrated: 0, ok, skipped: 0 });
+      const probesOf = (ok) => ({ failed: 0, held: 0, ok, skipped: 0 });
       const whole = template === undefined ? null : { ...template, keptWarm: { requests: 5, tokens1h: 0, tokens5m: 5_000 }, probeCostUsd: 0.7, probeEquivalent: { cost: 0.005, wasted: 0 }, probes: probesOf(10), savingEquivalent: 0.02, savingUsd: 0.6 };
       const paid = template === undefined ? null : { ...template, cacheEquivalent: null, costEquivalent: null, keptWarm: { requests: 1, tokens1h: 0, tokens5m: 1_000 }, planOutputTokens: 0, planRequests: 0, probeCostUsd: 0.5, probeEquivalent: null, probes: probesOf(4), savingEquivalent: null, savingUsd: 0.1 };
       api.getAnalyticsBreakdown = async (q) => (whole === null ? [] : [q.funding === 'billed' ? paid : whole]);
@@ -22728,7 +22719,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // credits saved 2% of a Pro week, and no probe priced anything.
       const now = Date.now();
       const template = (await api.getAnalyticsBreakdown({ from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() })).find((g) => g.key === 'primary');
-      const none = { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 };
+      const none = { failed: 0, held: 0, ok: 0, skipped: 0 };
       const whole = template === undefined ? null : { ...template, keptWarm: { requests: 4, tokens1h: 0, tokens5m: 4_000 }, probeCostUsd: 0, probeEquivalent: null, probes: { ...none, held: 3, skipped: 2 }, savingEquivalent: 0.02, savingUsd: 0.5, wastedProbeUsd: 0, wastedProbes: 0 };
       const paid = template === undefined ? null : { ...template, cacheEquivalent: null, costEquivalent: null, keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 }, planOutputTokens: 0, planRequests: 0, probeCostUsd: 0, probeEquivalent: null, probes: none, savingEquivalent: null, savingUsd: 0, wastedProbeUsd: 0, wastedProbes: 0 };
       const at = new Date(Math.floor((CLOCK_ORIGIN - 2 * 3_600_000) / 3_600_000) * 3_600_000).toISOString();
@@ -22793,9 +22784,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // alone, as the breakdown answers it, and the day holds no billed probe, so Probes by outcome draws its bars only
       // while its own reads count probes. Its legend reads the warming breakdown's probe counts, which a read with
       // probes off still holds here. The figures are the probe rows of the story's rollups (`ALL_ROLLUPS`,
-      // mock/requests.ts) over the day to 14:30: 5 ok of which 3 migrated, 1 held, 40 skipped and 31 failed, the 30
-      // drawn probes that found no live pin among them, in 18 hourly buckets that stack 36 nonzero bars. jsdom lays
-      // nothing out, so the chart's container reads a browser's size here.
+      // mock/requests.ts) over the day to 14:30: 5 ok, 1 held, 40 skipped and 31 failed, the 30 drawn probes that
+      // found no live pin among them, in 18 hourly buckets that stack 36 nonzero bars. jsdom lays nothing out, so the
+      // chart's container reads a browser's size here.
       const measure = window.HTMLElement.prototype.getBoundingClientRect;
       window.HTMLElement.prototype.getBoundingClientRect = function () {
         return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
@@ -22810,7 +22801,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       kinds.unmount();
       results.push({
         name: '/analytics Probes by outcome counts probes with the toggle off',
-        ok: JSON.stringify(legend) === JSON.stringify([['OK', '2'], ['Migrated', '3'], ['Held', '1'], ['Skipped', '40'], ['Failed', '31']]) && bars === 36,
+        ok: JSON.stringify(legend) === JSON.stringify([['OK', '5'], ['Held', '1'], ['Skipped', '40'], ['Failed', '31']]) && bars === 36,
         missing: [JSON.stringify(legend), `${bars} bars`],
       });
     }
@@ -22833,7 +22824,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       localStorage.removeItem('phoebis.unit');
       results.push({
         name: '/analytics under Billed dollars Probes by outcome counts the probes of both sides with the toggle off',
-        ok: unit === 'usd' && JSON.stringify(legend) === JSON.stringify([['OK', '2'], ['Migrated', '3'], ['Held', '1'], ['Skipped', '40'], ['Failed', '31']]) && bars === 36,
+        ok: unit === 'usd' && JSON.stringify(legend) === JSON.stringify([['OK', '5'], ['Held', '1'], ['Skipped', '40'], ['Failed', '31']]) && bars === 36,
         missing: [`unit ${unit}`, JSON.stringify(legend), `${bars} bars`],
       });
     }
@@ -23023,7 +23014,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const now = Date.now();
       const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
       const template = (await api.getAnalyticsBreakdown(query)).find((g) => g.key === 'primary');
-      const probesOf = (ok) => ({ failed: 0, held: 0, migrated: 0, ok, skipped: 0 });
+      const probesOf = (ok) => ({ failed: 0, held: 0, ok, skipped: 0 });
       // The plan paid for the requests the probes kept warm, so their saving lives on the plan side alone.
       const zero = { requests: 0, tokens1h: 0, tokens5m: 0 };
       api.getAnalyticsBreakdown = async (q) => {
@@ -23081,7 +23072,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
       const template = (await api.getAnalyticsBreakdown(query)).find((g) => g.key === 'primary');
       const hours = [3, 2].map((h) => new Date(Math.floor((now - h * 3_600_000) / 3_600_000) * 3_600_000).toISOString());
-      const probesOf = (ok) => ({ failed: 0, held: 0, migrated: 0, ok, skipped: 0 });
+      const probesOf = (ok) => ({ failed: 0, held: 0, ok, skipped: 0 });
       const zero = { requests: 0, tokens1h: 0, tokens5m: 0 };
       const asked = [];
       api.getAnalyticsSeries = async (q) => {
@@ -24300,21 +24291,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
   await tab(m, 'Cache warming');
   {
-    const legend = [...m.container.querySelectorAll('.legend li')].map((li) => li.textContent?.trim() ?? '');
-    const migrated = [...m.container.querySelectorAll('.legend li')].find((li) => (li.textContent ?? '').startsWith('Migrated'));
-    results.push({
-      name: '/analytics probes by outcome carries a migrated slice with its hint',
-      ok: migrated !== undefined && (migrated.getAttribute('title') ?? '').includes("The probe was served by another account than the recipe's. It paid the write the next request would have paid there, so it never adds to the cold streak and keeps that request warm. Like any probe, it counts as wasted when no request follows it or when the request after it reads no cache."),
-      missing: [migrated?.getAttribute('title') ?? legend.join('|').slice(0, 160)],
-    });
-    const probeLegend = [...(migrated?.parentElement?.querySelectorAll('li') ?? [])];
+    const chart = [...m.container.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Probes by outcome');
+    const probeLegend = [...(chart?.querySelectorAll('.legend li') ?? [])];
     const held = probeLegend.find((li) => (li.textContent ?? '').startsWith('Held'));
     const warming = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Cache warming by pool'));
     const columns = [...(warming?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
     results.push({
-      name: '/analytics probes by outcome carries a held slice above zero after migrated, and the warming table a Held column before Skipped',
+      name: '/analytics probes by outcome carries a held slice above zero, and the warming table a Held column before Skipped',
       ok:
-        probeLegend.map((li) => li.textContent?.match(/^[A-Za-z]+/)?.[0]).join(',') === 'OK,Migrated,Held,Skipped,Failed' &&
+        probeLegend.map((li) => li.textContent?.match(/^[A-Za-z]+/)?.[0]).join(',') === 'OK,Held,Skipped,Failed' &&
         (held?.getAttribute('title') ?? '') === 'The router refused the probe while its ledger caught up. It was sent again and never adds to the cold streak.' &&
         columns.indexOf('Held') === columns.indexOf('Skipped') - 1 &&
         /^Held\s*[1-9]/.test(held?.textContent ?? ''),
@@ -25428,7 +25413,7 @@ await forView('/analytics', async () => {
     planRequests: 0,
     probeCostUsd: 0,
     probeEquivalent: { cost: 0, wasted: 0 },
-    probes: { failed: 0, held: 0, migrated: 0, ok: 0, planOk: 0, skipped: 0 },
+    probes: { failed: 0, held: 0, ok: 0, planOk: 0, skipped: 0 },
     rateLimited: 0,
     refusals: {},
     refused: 0,
@@ -25447,7 +25432,7 @@ await forView('/analytics', async () => {
   // The second group is one upstream error with no usage, which the mock counts as a request that priced nothing. The
   // third is one billed probe's cache read, $0.25, which a read with Include probes off counts as no request.
   const PROBE_DOLLARS = { ...NO_SPLIT, cacheRead: 0.25 };
-  const billedProbe = (template) => ({ ...nothing(template, 'billed-probe'), billed: PROBE_DOLLARS, billedUsd: 0.25, cost: PROBE_DOLLARS, costUsd: 0.25, probeCostUsd: 0.25, probes: { failed: 0, held: 0, migrated: 0, ok: 1, planOk: 0, skipped: 0 } });
+  const billedProbe = (template) => ({ ...nothing(template, 'billed-probe'), billed: PROBE_DOLLARS, billedUsd: 0.25, cost: PROBE_DOLLARS, costUsd: 0.25, probeCostUsd: 0.25, probes: { failed: 0, held: 0, ok: 1, planOk: 0, skipped: 0 } });
   const cut = (by, groups) =>
     STORY[by] === undefined || groups.length === 0
       ? groups

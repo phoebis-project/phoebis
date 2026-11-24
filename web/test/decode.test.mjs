@@ -215,7 +215,7 @@ test('a group decodes the plan-funded answered probes, and a sum adds them', () 
   assert.deepEqual(Object.keys(row.probes).sort(), ['failed', 'held', 'ok', 'plan_ok', 'skipped'], 'the capture answers the plan-funded part beside the four outcomes');
   const captured = d.decodeAnalyticsGroup(row);
   assert.equal(captured.probes.planOk, 0);
-  assert.deepEqual(Object.keys(captured.probes).sort(), ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'], 'the probes decode to the five outcomes and the plan-funded part');
+  assert.deepEqual(Object.keys(captured.probes).sort(), ['failed', 'held', 'ok', 'planOk', 'skipped'], 'the probes decode to the four outcomes and the plan-funded part');
   // The capture reads zero, as a missing field decodes, so nonzero copies prove the wire names.
   const group = d.decodeAnalyticsGroup({ ...row, probes: { ...row.probes, ok: 3, plan_ok: 2 } });
   assert.deepEqual([group.probes.planOk, group.probes.ok], [2, 3]);
@@ -2708,7 +2708,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const wire = { ...fixture('keepalive_overview'), pools: [{ ...fixture('keepalive_overview').pools[0], credited_24h: 2, wasted_reasons_24h: { horizon: 1 } }] };
   const [read] = d.decodeKeepaliveOverview(wire).pools;
   assert.deepEqual([read.credited24h, read.wastedReasons24h.horizon, read.wastedReasons24h.idle_limit], [2, 1, 0], 'a reason the answer leaves out reads zero');
-  assert.deepEqual(Object.keys(ov.probes24h).sort(), ['failed', 'held', 'migrated', 'ok', 'skipped'], 'the five probe outcomes the tile draws');
+  assert.deepEqual(Object.keys(ov.probes24h).sort(), ['failed', 'held', 'ok', 'skipped'], 'the four probe outcomes the tile draws');
   const captured = fixture('keepalive_overview');
   assert.equal(d.decodeKeepaliveOverview({ ...captured, probes_24h: { ...captured.probes_24h, held: 2 } }).probes24h.held, 2, 'the held count reads off the route');
   // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.

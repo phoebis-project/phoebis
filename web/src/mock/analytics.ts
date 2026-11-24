@@ -89,8 +89,6 @@ export interface HourlyRollup {
   model: string;
   poolId: string;
   probeCostUsd: number;
-  /** Probes served by another account than the recipe's; they do not count toward the cold streak. */
-  probeMigrated: number;
   /** `held` counts the probes the router refused with `503 ledger_behind` while its ledger caught up, outside `failed`. */
   probes: { failed: number; held: number; ok: number; skipped: number };
   /** The refused requests of the row by error code, counted here and under none of `requests`. */
@@ -393,7 +391,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     planOutputTokens: sumOf(countedPlan, (r) => r.tokens.output),
     planRequests: sumOf(countedPlan, requestsIn),
     probeCostUsd: sumOf(probeRows, (r) => r.probeCostUsd),
-    probes: { failed: probes.failed, held: probes.held, migrated: sumOf(probeRows, (r) => r.probeMigrated), ok: probes.ok, planOk: sumOf(probePlan, (r) => r.probes.ok), skipped: probes.skipped },
+    probes: { failed: probes.failed, held: probes.held, ok: probes.ok, planOk: sumOf(probePlan, (r) => r.probes.ok), skipped: probes.skipped },
     rateLimited: outcomes.rate_limited,
     refusals,
     refused: Object.values(refusals).reduce((n, c) => n + c, 0),

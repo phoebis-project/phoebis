@@ -1831,7 +1831,7 @@ export interface AnalyticsGroup {
    *  priced nothing and on a fold, which measures no probe. */
   probeEquivalent: { cost: number; wasted: number } | null;
   /** `planOk` is the part of `ok` a plan account served. */
-  probes: { failed: number; held: number; migrated: number; ok: number; planOk: number; skipped: number };
+  probes: { failed: number; held: number; ok: number; planOk: number; skipped: number };
   rateLimited: number;
   /** The refused requests of the group by error code, each counted here and in `refused`, never in `requests`. */
   refusals: Record<string, number>;
@@ -2383,7 +2383,7 @@ export interface KeepaliveOverview {
    * open-ended. An account outside every pool lists under its own id.
    */
   pools: { credited24h: number; idleReturns: { fromSeconds: number; toSeconds: number | null; reached: number; returned: number }[]; poolId: string; probes24h: number; wasted24h: number; wastedReasons24h: Record<WastedProbeReason, number> }[];
-  probes24h: { failed: number; held: number; migrated: number; ok: number; skipped: number };
+  probes24h: { failed: number; held: number; ok: number; skipped: number };
 }
 
 /** Five cells, USD per million tokens: a model's standard, fast-mode or long-context prices. */

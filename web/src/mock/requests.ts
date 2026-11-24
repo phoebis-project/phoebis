@@ -3133,7 +3133,9 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
     const migrations = retried && h.chance(0.5) && moved.length > 0 ? 1 : 0;
     const probeCostUsd = isProbe ? sumOf(list, (r) => r.costUsd) : 0;
     const probes = isProbe ? { ok: okRows.length, failed: list.length - okRows.length, held: 0, skipped: h.int(0, 2) } : null;
-    const probeMigrated = isProbe && h.chance(0.35) ? Math.min(okRows.length, h.int(1, 2)) : 0;
+    // The stream was seeded while a probe lane hour drew probes served by another account, so the hour still draws the
+    // chance and the count, and drops both, which keeps every later draw in its place.
+    if (isProbe && h.chance(0.35)) h.int(1, 2);
     const waste = isProbe ? wastedProbes(h, okRows.length, probeCostUsd) : ZERO_WASTE;
     // A lane's rows share its key, model and kind, which is what decides fast mode in this story; a row refused
     // before any attempt files under the speed it asked for, as the ledger files the speed key alone.
@@ -3243,7 +3245,6 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         // The ledger prices a freed call's kept tokens under the row's own key, which reads zero, as its cost does.
         savingUsd: freed ? 0 : sumOf(keptHere, (r) => savingUsdOf(r.model, keptOf(r), promptOf(r.usage), servingResponse(r)?.speed === 'fast', r.at)),
         probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
-        probeMigrated,
         probeCostUsd,
         ...waste,
       });
@@ -3453,7 +3454,6 @@ function historicalRollups(): HourlyRollup[] {
         // A synthesized hour's kept requests carry its mean prompt, which selects the cells their saving prices at.
         savingUsd: savingUsdOf(model, keptSplit, ok === 0 ? 0 : promptOf(usage) / ok, fast, t),
         probes: { ok: 0, failed: 0, held: 0, skipped: 0 },
-        probeMigrated: 0,
         probeCostUsd: 0,
         ...ZERO_WASTE,
       };
@@ -3471,6 +3471,12 @@ function historicalRollups(): HourlyRollup[] {
         const probeUsage: Usage = { input: 0, cacheRead: probes * h.int(30_000, 80_000), cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS };
         const probeCost = costOf(model, probeUsage, false, t);
         const probeOutcomes: HourlyRollup['requests'] = { ...ZERO_OUTCOMES, ok: probes, upstream_error: failed };
+        const histograms = { durationMs: histogramOf(sampled(h, probes, 600, 0.3)), outputTps: emptyHistogram(), ttfbMs: histogramOf(sampled(h, probes, 320, 0.3)), ttftMs: emptyHistogram() };
+        const skipped = h.int(0, 2);
+        // The stream was seeded while a probe hour drew a probe served by another account between `skipped` and the
+        // wasted probes, so the hour still draws that chance there, and drops it, which keeps every later draw in its
+        // place.
+        h.chance(0.3);
         out.push({
           hour: iso(t),
           client: CLIENTS[lane.keyId] ?? '-',
@@ -3505,11 +3511,10 @@ function historicalRollups(): HourlyRollup[] {
           cost: costSplitOf(model, probeUsage, false, t),
           ...hourShares(accountId, model, CLIENTS[lane.keyId] ?? null, [{ at: t, usage: probeUsage }]),
           tier: accountTier(accountId),
-          histograms: { durationMs: histogramOf(sampled(h, probes, 600, 0.3)), outputTps: emptyHistogram(), ttfbMs: histogramOf(sampled(h, probes, 320, 0.3)), ttftMs: emptyHistogram() },
+          histograms,
           keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 },
           savingUsd: 0,
-          probes: { ok: probes, failed, held: heldRng.chance(0.04) ? 1 : 0, skipped: h.int(0, 2) },
-          probeMigrated: h.chance(0.3) ? 1 : 0,
+          probes: { ok: probes, failed, held: heldRng.chance(0.04) ? 1 : 0, skipped },
           probeCostUsd: probeCost,
           ...wastedProbes(h, probes, probeCost),
         });
@@ -3582,7 +3587,6 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 },
       savingUsd: 0,
       probes: { failed: 0, held: 0, ok: 1, skipped: 0 },
-      probeMigrated: 0,
       probeCostUsd: costUsd,
       wastedProbeReasons,
       wastedProbeUsd: costUsd,

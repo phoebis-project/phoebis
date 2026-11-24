@@ -24,7 +24,7 @@ import { SectionBar, sectionPanel } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { NO_RESET_IN_RANGE, allowanceRows, fleetFigures, rangeAllowanceSpan, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure, type AllowanceRow, type FleetFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, coveredWindow, dollarsOf, equivalentOrDash, errorRateOf, failureHead, firstBucketPartial, foldBurn, heldBars, heldHover, heldSpan, hitRatioOf, hitRatioText, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, probeParts, readBurn, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, coveredWindow, dollarsOf, equivalentOrDash, errorRateOf, failureHead, firstBucketPartial, foldBurn, heldBars, heldHover, heldSpan, hitRatioOf, hitRatioText, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { ignoredNote, type AnalyticsControl } from '@/lib/analyticsControls';
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
@@ -212,7 +212,7 @@ const totalsOf = (groups: AnalyticsGroup[]) => {
   return { ...summed, tokens: withPlainOutput(summed.tokens) };
 };
 const bucketsOf = (points: AnalyticsPoint[]): Bucket[] => points.map((p) => ({ at: Date.parse(p.at), ...totalsOf(p.groups) }));
-const PROBE_COUNTERS = ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'] as const;
+const PROBE_COUNTERS = ['failed', 'held', 'ok', 'planOk', 'skipped'] as const;
 /** Whether a group counts a request. A group of refused requests alone counts none, and only the Traffic table's
  *  Refused column has a figure for it. */
 const countsRequest = (g: { requests: number }): boolean => g.requests > 0;
@@ -692,11 +692,10 @@ export function AnalyticsPage() {
   const probeAnswer = (funded ? fundedProbes : warmingSeries).current;
   const { probeBuckets, probeTotals } = useMemo(() => {
     const raw = sessionId !== null ? buckets : funded ? bucketsOf(probeAnswer ?? NO_POINTS) : warmingBuckets;
-    // The counters are whole numbers, so the buckets sum to the answer's whole. `probeParts` floors the whole rather
-    // than each bucket, since its floor at zero does not add.
-    const summed = { failed: 0, held: 0, migrated: 0, ok: 0, planOk: 0, skipped: 0 };
+    // The counters are whole numbers, so the buckets sum to the answer's whole.
+    const summed = { failed: 0, held: 0, ok: 0, planOk: 0, skipped: 0 };
     if (funded) for (const b of raw) for (const k of PROBE_COUNTERS) summed[k] += b.probes[k];
-    return { probeBuckets: raw.map((b) => ({ ...b, probes: probeParts(b.probes) })), probeTotals: probeParts(sessionId !== null ? totals.probes : funded ? summed : costTotals.probes) };
+    return { probeBuckets: raw, probeTotals: sessionId !== null ? totals.probes : funded ? summed : costTotals.probes };
   }, [sessionId, funded, probeAnswer, warmingBuckets, buckets, totals.probes, costTotals.probes]);
   const probeLoading = sessionId === null ? probeAnswer === null || (!funded && costBreakdown.current === null) : loading;
   const probeFailure = sessionId === null ? failed(funded ? fundedProbes.error : (warmingSeries.error ?? costBreakdown.error)) : null;

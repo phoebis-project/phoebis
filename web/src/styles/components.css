@@ -3501,11 +3501,6 @@ textarea.input {
   background: var(--good);
 }
 
-/* Matches the migrated slice of the analytics probe chart, --series-3. */
-.probe-bar__seg--migrated {
-  background: var(--series-3);
-}
-
 /* Matches the held slice of the analytics probe chart, --series-muted. */
 .probe-bar__seg--held {
   background: var(--series-muted);

@@ -781,7 +781,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     planRequests: numOrNull(g.plan_requests),
     probeCostUsd: num(g.probe_cost_usd),
     probeEquivalent: orNull(g.probe_equivalent, (e) => ({ cost: num(e.cost), wasted: num(e.wasted) })),
-    probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), planOk: num(rec(g.probes).plan_ok), skipped: num(rec(g.probes).skipped) },
+    probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), ok: num(rec(g.probes).ok), planOk: num(rec(g.probes).plan_ok), skipped: num(rec(g.probes).skipped) },
     rateLimited: num(g.rate_limited), refusals: counts(g.refusals), refused: num(g.refused), rejected: num(g.rejected), requests: num(g.requests),
     savingEquivalent: numOrNull(g.saving_equivalent),
     savingUsd: num(g.saving_usd),
@@ -991,7 +991,7 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
       wasted24h: num(q.wasted_24h),
       wastedReasons24h: wastedReasons(q.wasted_reasons_24h),
     })),
-    probes24h: { failed: num(p.failed), held: num(p.held), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) },
+    probes24h: { failed: num(p.failed), held: num(p.held), ok: num(p.ok), skipped: num(p.skipped) },
   };
 }
 

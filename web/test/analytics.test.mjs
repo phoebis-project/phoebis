@@ -790,10 +790,6 @@ test('the probe cost counts the probes that reached the upstream, so a group who
   assert.equal(d.upstreamProbes(accountGroup({ probes: { ...base.probes, failed: 2, held: 3, ok: 5, skipped: 4 } })), 7, 'the answered and the failed probes');
 });
 
-test('probeParts floors the OK part at zero', () => {
-  assert.equal(d.probeParts({ failed: 0, held: 0, migrated: 1, ok: 0, skipped: 0 }).ok, 0, 'a bucket whose mark landed apart from its request row');
-});
-
 test('a burn line by model names the group without a model "no model"', () => {
   const { lines } = d.foldBurn([point(0, 'claude-haiku-4-5', { uncachedTokens: 60 }), point(0, '')], 'model', 60, NONE);
   assert.deepEqual(lines.map((l) => l.label), ['claude-haiku-4-5', 'no model'], 'the burn line under the model grouping');
