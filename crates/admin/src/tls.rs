@@ -36,16 +36,15 @@ pub trait TlsReload: Send + Sync {
 }
 
 /// One object per public listener, `proxy` then `admin`.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TlsReloaded {
     pub listeners: Vec<ListenerOutcome>,
 }
 
 /// A listener's outcome: a pair that loaded, a pair that was refused, or a plain listener.
-// Every outcome is a closed object and the most specific comes first, so the untagged walk lands a payload on the one
-// shape whose field set it has instead of the first whose fields it covers.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+// Every outcome is a closed object, so a payload fits the one schema whose field set it has.
+#[derive(serde::Serialize, ToSchema)]
 #[serde(untagged)]
 pub(crate) enum ListenerOutcome {
     Pair(PairOutcome),
@@ -55,7 +54,7 @@ pub(crate) enum ListenerOutcome {
 
 /// `serving` `tls` and `reloaded` true: the pair loaded and serves the next connection. `days_left` is the whole days
 /// until the new leaf's `not_after`.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PairOutcome {
     #[schema(example = "proxy")]
@@ -72,7 +71,7 @@ pub(crate) struct PairOutcome {
 
 /// `serving` `tls` and `reloaded` false: the pair did not load, `error` is the line the start would print for it,
 /// and the listener keeps serving the pair it had.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RefusedOutcome {
     #[schema(example = "proxy")]
@@ -84,7 +83,7 @@ pub(crate) struct RefusedOutcome {
 }
 
 /// `serving` `plain`: the listener has no pair to reload.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PlainOutcome {
     #[schema(example = "proxy")]

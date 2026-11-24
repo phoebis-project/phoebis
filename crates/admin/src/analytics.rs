@@ -466,13 +466,15 @@ fn bound_shares(
 }
 
 /// One row per budgeted period of a pool member.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Budgets {
     pub members: Vec<BudgetMember>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BudgetMember {
     pub pool_id: String,
@@ -534,7 +536,8 @@ pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
 }
 
 /// One row per rung reached.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Placements {
     pub from: i64,
@@ -542,7 +545,8 @@ pub(crate) struct Placements {
     pub rows: Vec<PlacementRow>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PlacementRow {
     /// `content`, `static`, or `with_main`.
@@ -651,7 +655,8 @@ fn raise_peak(row: &mut AccountRollupRow, window: &str, utilization: f64) {
 }
 
 /// The account rollups over the range.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AnalyticsAccounts {
     pub from: i64,
@@ -659,7 +664,8 @@ pub(crate) struct AnalyticsAccounts {
     pub accounts: Vec<AccountRollup>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountRollup {
     pub account_id: String,
@@ -672,7 +678,8 @@ pub(crate) struct AccountRollup {
 
 /// The account's peaks over the range, each the highest of the same peak among its listed hours, so an hour's
 /// highest quota sample counts as its attempts' heads do (`RollupHour`).
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RollupPeak {
     pub five_hour: Option<f64>,
@@ -680,7 +687,8 @@ pub(crate) struct RollupPeak {
     pub seven_day_overage_included: Option<f64>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RollupPins {
     pub created: u64,
@@ -691,7 +699,8 @@ pub(crate) struct RollupPins {
 /// One hour. The answer lists no hour after the current one, and an hour with samples and no attempt is listed with
 /// zero counts. A peak is the larger of the highest utilization the attempts' heads carried in the hour and the hour's
 /// highest quota sample of the peak's window, null where the hour holds neither.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RollupHour {
     pub hour: i64,
@@ -739,7 +748,8 @@ fn windows_schema() -> utoipa::openapi::schema::Object {
 /// The hour's last sample of one window. `lead` is the utilization less the share of the window elapsed at the
 /// sample's instant toward the window's reset, or toward the account's subscription end when that comes first, null
 /// with the utilization for a sample that reported the reset alone.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WindowSample {
     pub utilization: Option<f64>,
@@ -880,7 +890,8 @@ pub(crate) async fn accounts(
 /// once per plan tier in `equivalent_by_tier`, `five_hour_equivalent_by_tier` and `fable_equivalent_by_tier`, and so
 /// do a plan-funded row's list dollars in `plan_usd` beside the billed dollars in `usd`. A group none of whose rows in
 /// the range holds a token answers no point.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Burn {
     pub from: i64,
@@ -893,7 +904,8 @@ pub(crate) struct Burn {
     pub points: Vec<BurnPoint>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BurnPoint {
     pub at: i64,
@@ -1117,7 +1129,8 @@ pub(crate) async fn burn(
 }
 
 /// The reconciled windows of the trailing 30 days, newest first.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Reconciliations {
     pub reconciliations: Vec<Reconciliation>,
@@ -1128,7 +1141,8 @@ pub(crate) struct Reconciliations {
 
 /// One completed window of an account: the rise its readings showed against the share the router priced for its own
 /// plan-funded attempts completed between those readings, each under its own regime.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Reconciliation {
     pub account_id: String,
@@ -1206,7 +1220,8 @@ pub(crate) async fn reconciliations(
 /// The requests in range whose serving attempt the upstream answered with the stop reason `refusal`, counted per
 /// model and category, the largest count first and then the model and the category, beside the requests in range
 /// that presented a fallback credit.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RefusalCategories {
     pub from: i64,
@@ -1220,7 +1235,8 @@ pub(crate) struct RefusalCategories {
 }
 
 /// One model and category's refused requests over the range.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RefusalCategoryRow {
     /// The request's canonical model, the name the `models` filter reads.
@@ -1305,7 +1321,8 @@ pub(crate) async fn refusal_categories(
 /// The weekly allowance each subscription account left unused at its resets in range, read off the stored
 /// `window_reset` events, and before each used limit reset or plan change that cleared a window, read off the stored
 /// `window_dropped` events, both of which the request retention bounds.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UnusedAllowance {
     pub from: i64,
@@ -1316,7 +1333,8 @@ pub(crate) struct UnusedAllowance {
 }
 
 /// One subscription account's weekly windows over the range.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UnusedAllowanceAccount {
     pub account_id: String,
@@ -1330,7 +1348,8 @@ pub(crate) struct UnusedAllowanceAccount {
 }
 
 /// One weekly window's resets over the range.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UnusedAllowanceWindow {
     /// `seven_day` or `seven_day_<model>`.
@@ -1346,7 +1365,8 @@ pub(crate) struct UnusedAllowanceWindow {
 
 /// One reset of the window, a used limit reset or a plan change that cleared it, or the account's term end read as a
 /// reset.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UnusedAllowanceReset {
     /// The window's reset instant, epoch milliseconds: the unchanged reset of the week the drop fell in for a `claim`
@@ -1482,7 +1502,8 @@ pub(crate) async fn unused_allowance(
 }
 
 /// The rewrite tokens per bucket, the moves over the range and the slow-down's held time per bucket.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Rewrites {
     pub from: i64,
@@ -1498,7 +1519,8 @@ pub(crate) struct Rewrites {
     pub held: Vec<HeldPoint>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HeldPoint {
     pub at: i64,
@@ -1508,7 +1530,8 @@ pub(crate) struct HeldPoint {
     pub requests: u64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RewritePoint {
     pub at: i64,
@@ -1594,7 +1617,8 @@ pub(crate) async fn rewrites(
 }
 
 /// The guardrail matches of the range.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailCounts {
     pub from: i64,
@@ -1604,7 +1628,8 @@ pub(crate) struct GuardrailCounts {
 }
 
 /// One guardrail's matches over the range.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailCount {
     pub id: String,

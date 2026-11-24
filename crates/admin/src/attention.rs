@@ -15,13 +15,13 @@ use crate::routes::failure;
 use crate::AdminState;
 
 /// `{"items": []}` when nothing holds.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Attention {
     pub items: Vec<AttentionItem>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttentionItem {
     #[schema(example = "pool_exhausted")]
@@ -99,7 +99,7 @@ pub(crate) struct AttentionItem {
     pub detail: Value,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttentionSubject {
     /// `account`, `pool`, `client`, `router` or `model`.
@@ -114,7 +114,7 @@ pub(crate) struct AttentionSubject {
     pub label: String,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttentionLink {
     /// `accounts`, `keys` or `pools`.

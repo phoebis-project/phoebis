@@ -1027,7 +1027,8 @@ pub(crate) struct Pool {
 }
 
 /// One static check that holds on the pool's settings. A warning blocks nothing.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PoolWarning {
     /// `affinity_under_cache_ttl`, `cap_under_cohort`, `cap_under_quarter`, `five_hour_ceiling_low`,
@@ -1184,7 +1185,8 @@ fn warnings_of(row: &PoolRow, cache_ttl: &CacheTtlPolicy, cohort: usize) -> Vec<
 }
 
 /// One member of a pool.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PoolMemberView {
     pub account_id: String,
@@ -1233,7 +1235,8 @@ pub(crate) struct PoolMemberView {
 }
 
 /// A member's fit under one regime of the cost model in force.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RegimeFitView {
     /// The regime's name as the cost model in force spells it, null for the base regime, which prices a session whose
@@ -1255,7 +1258,8 @@ pub(crate) struct RegimeFitView {
     pub runway_ms: Option<i64>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SpendReport {
     /// `day` or `month`.
@@ -1265,7 +1269,8 @@ pub(crate) struct SpendReport {
     pub period_end: i64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PoolKey {
     pub id: String,

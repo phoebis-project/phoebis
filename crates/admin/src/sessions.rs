@@ -22,7 +22,8 @@ pub(crate) struct SessionList {
 }
 
 /// One session row. On a row with no pin `pinned_at` and the keys from `burn` to `move_drop_cost` read null.
-#[derive(Default, serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(Default, serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Session {
     pub key_id: String,
@@ -189,7 +190,8 @@ pub(crate) struct Session {
 }
 
 /// A pin's shed stamp, written by a shedding round's move or a failover's landing.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionShed {
     /// The account a shedding round's move or a failover's landing took the pin from, which keeps the pin off that
@@ -205,7 +207,8 @@ pub(crate) struct SessionShed {
 }
 
 /// A shedding round's mark on a pin.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionMark {
     /// The account a shedding round's mark on the pin was made on, the account the session is to leave. The mark
@@ -229,7 +232,8 @@ impl From<&phoebis_store::PinMark> for SessionMark {
 }
 
 /// One conversation pin the row lists as a line, read from this pin alone.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentContext {
     pub agent_id: String,
@@ -294,7 +298,8 @@ pub(crate) struct AgentContext {
 
 /// Main's recipe as the session row reads it, or the newest other agent's where main holds none, every member null
 /// while no agent holds one.
-#[derive(Default, serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(Default, serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionKeepalive {
     #[schema(value_type = Option<String>)]
@@ -317,7 +322,8 @@ impl From<&phoebis_keepalive::KeepaliveSummary> for SessionKeepalive {
 }
 
 /// The session's reported facts, each cleaned by the router before it is kept.
-#[derive(Default, serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(Default, serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionFacts {
     pub branch: Option<String>,
@@ -344,7 +350,8 @@ impl From<&phoebis_keepalive::SessionFacts> for SessionFacts {
 }
 
 /// One agent's reported facts.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionAgentFacts {
     pub agent_id: String,
@@ -354,7 +361,8 @@ pub(crate) struct SessionAgentFacts {
 }
 
 /// The per-model cost card the console shows beside the sessions.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionCosts {
     /// The `effective` of the price revision in force as its file wrote it, a date `YYYY-MM-DD` or an instant
@@ -363,7 +371,8 @@ pub(crate) struct SessionCosts {
     pub models: Vec<CostRow>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CostRow {
     pub model: String,

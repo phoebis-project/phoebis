@@ -19,7 +19,7 @@ pub const REPLAY_BOUND: Duration = Duration::from_secs(30);
 
 /// The replay's count: `remaining` is the table's count afterwards. The system page's `ledger.parked_priced` and
 /// the `ledger_record_parked` condition read the result.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Replay {
     pub landed: u64,

@@ -127,7 +127,8 @@ impl Modify for Bearer {
 }
 
 /// Every refusal's body.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ErrorBody {
     /// The message, as the refusal spells it.
@@ -282,7 +283,8 @@ pub(crate) struct RouterUnavailable(ErrorBody);
 )]
 pub(crate) struct RegistryUnavailable(ErrorBody);
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentCountsView {
     pub busy: u64,
@@ -291,7 +293,8 @@ pub(crate) struct AgentCountsView {
 }
 
 /// The probe counts by outcome.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProbeCountsView {
     pub failed: u64,
@@ -305,7 +308,8 @@ pub(crate) struct ProbeCountsView {
 
 /// An agent's recipe. `probes_today` and `credited_today` count from midnight UTC and read 0 on a day that has
 /// neither yet.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RecipeViewSchema {
     /// The pinned account.
@@ -341,7 +345,8 @@ pub(crate) struct RecipeViewSchema {
 
 /// One entry of a model rule list: the pattern, checked as the routing page's model rules say, and whether it
 /// denies the models it matches.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ModelRuleView {
     pub pattern: String,
@@ -349,7 +354,8 @@ pub(crate) struct ModelRuleView {
 }
 
 /// Per claude.ai feature, the id of the account its calls act under, or null for none.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FeatureAccountIdsView {
     pub artifacts: Option<String>,
@@ -386,7 +392,8 @@ impl From<&FeatureOverride> for KeyFeatureAccountView {
 }
 
 /// A key's value for each claude.ai feature.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyFeatureAccountsView {
     pub artifacts: KeyFeatureAccountView,
@@ -459,7 +466,8 @@ impl From<&Condition> for ConditionView {
     }
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeepalivePolicyView {
     pub enabled: bool,
@@ -473,7 +481,8 @@ pub(crate) struct KeepalivePolicyView {
     pub scheduled_horizon_seconds: Option<u64>,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ResolvedCeilingsView {
     pub break_even_seconds: RangeView,
@@ -483,14 +492,16 @@ pub(crate) struct ResolvedCeilingsView {
     pub parked_seconds: RangeView,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RangeView {
     pub min: f64,
     pub max: f64,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CacheTtlPolicyView {
     pub enabled: bool,
@@ -502,7 +513,8 @@ pub(crate) struct CacheTtlPolicyView {
 }
 
 /// One rule set: the TTL by branch, with per-model overrides.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TtlRulesView {
     /// `5m` or `1h`.
@@ -515,7 +527,8 @@ pub(crate) struct TtlRulesView {
     pub subagent: String,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ModelTtlView {
     /// `5m` or `1h`.
@@ -528,7 +541,8 @@ pub(crate) struct ModelTtlView {
 }
 
 /// One bucket of a pool's traffic.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TrafficBucketView {
     pub at: i64,
@@ -546,7 +560,8 @@ pub(crate) struct TrafficBucketView {
 }
 
 /// One model's list prices, each cell per million tokens.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ModelRowView {
     pub input: f64,
@@ -564,7 +579,8 @@ pub(crate) struct ModelRowView {
     pub long_context: Option<LongContextView>,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ModelPriceView {
     pub input: f64,
@@ -574,7 +590,8 @@ pub(crate) struct ModelPriceView {
     pub output: f64,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LongContextView {
     /// The prompt length in tokens past which the five cells apply.
@@ -587,7 +604,8 @@ pub(crate) struct LongContextView {
 }
 
 /// Every key of the subscription cost model but `unit`, which the envelope carries once.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SubscriptionCostsView {
     /// The revision's `effective` as its file wrote it, a date `YYYY-MM-DD` or an instant `YYYY-MM-DDTHH:MM:SSZ`.
@@ -610,21 +628,24 @@ pub(crate) struct SubscriptionCostsView {
     pub regimes: BTreeMap<String, RegimeView>,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UnitView {
     pub tier: String,
     pub window: String,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CapacityView {
     pub five_hour: Option<f64>,
     pub seven_day: Option<f64>,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PeakView {
     pub capacity_factor: PerWindowView,
@@ -635,14 +656,16 @@ pub(crate) struct PeakView {
 }
 
 /// The peak's factor on each shared window, both always set.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PerWindowView {
     pub five_hour: f64,
     pub seven_day: f64,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TypeMultiplierView {
     pub cache_read: f64,
@@ -652,7 +675,8 @@ pub(crate) struct TypeMultiplierView {
     pub output: f64,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ModelWindowView {
     pub capacity_factor: f64,
@@ -661,7 +685,8 @@ pub(crate) struct ModelWindowView {
 
 /// A regime: the entrypoints it prices, and the capacity rows and band factor it sets in place of the base ones. A
 /// tier it leaves out prices at the base row.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RegimeView {
     pub entrypoints: Vec<String>,
@@ -671,13 +696,15 @@ pub(crate) struct RegimeView {
 }
 
 /// The band factor a regime sets on each shared window, read inside the base band's hours.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RegimePeakView {
     pub capacity_factor: PerWindowView,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OverrideView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -688,7 +715,8 @@ pub(crate) struct OverrideView {
     pub weight_by_window: Option<BTreeMap<String, f64>>,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TypeOverrideView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -709,7 +737,8 @@ pub(crate) struct TypeOverrideView {
 }
 
 /// One group of the breakdown.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BreakdownRow {
     /// Under `group_by=key` the key's id for the key that holds it now and `<id>@<generation>` for rows an earlier
@@ -832,7 +861,8 @@ pub(crate) struct BreakdownRow {
     pub equivalent_split: Option<BTreeMap<String, f64>>,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct TokenSplitView {
     pub cache_read: u64,
@@ -848,7 +878,8 @@ pub(crate) struct TokenSplitView {
     pub web_search: u64,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CostSplitView {
     pub cache_read: f64,
@@ -857,7 +888,8 @@ pub(crate) struct CostSplitView {
     pub output: f64,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HistogramsView {
     pub duration_ms: Vec<u64>,
@@ -866,7 +898,8 @@ pub(crate) struct HistogramsView {
     pub ttft_ms: Vec<u64>,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct QuartetView {
     pub p50: Option<f64>,
@@ -875,7 +908,8 @@ pub(crate) struct QuartetView {
     pub p99: Option<f64>,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PercentilesView {
     pub duration_ms: QuartetView,
@@ -884,7 +918,8 @@ pub(crate) struct PercentilesView {
     pub ttft_ms: QuartetView,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeptWarmView {
     pub requests: u64,
@@ -902,7 +937,8 @@ pub(crate) struct KeptWarmView {
 }
 
 /// The read and write halves of a group's cache in the Pro-week figure.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CacheEquivalentView {
     pub read: f64,
@@ -910,7 +946,8 @@ pub(crate) struct CacheEquivalentView {
 }
 
 /// The probe rows in the Pro-week figure and the wasted probes' own counts priced in it, 0 where none was wasted.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProbeEquivalentView {
     pub cost: f64,
@@ -918,7 +955,8 @@ pub(crate) struct ProbeEquivalentView {
 }
 
 /// One bucket of the series: the groups of the bucket, each a breakdown row.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SeriesPointView {
     pub at: i64,
@@ -926,7 +964,7 @@ pub(crate) struct SeriesPointView {
 }
 
 /// One hour of the dashboard's last day.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HourPointView {
     pub at: i64,
@@ -944,7 +982,8 @@ pub(crate) struct HourPointView {
     pub tokens: u64,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FastCells {
     pub input_per_m: f64,
@@ -954,7 +993,8 @@ pub(crate) struct FastCells {
     pub output_per_m: f64,
 }
 
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LongContextCells {
     /// The prompt length in tokens past which the five cells apply.

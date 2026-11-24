@@ -102,7 +102,7 @@ pub(crate) struct GuardrailInput {
 }
 
 /// A pool or key a guardrail is attached to.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttachmentView {
     pub id: String,
@@ -114,7 +114,8 @@ pub(crate) struct AttachmentView {
 }
 
 /// A guardrail on a pool's or a key's list.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailRef {
     pub id: String,
@@ -129,7 +130,7 @@ pub(crate) struct GuardrailRef {
 }
 
 /// A guardrail with its conditions and the pools and keys it is attached to.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Guardrail {
     pub id: String,
@@ -157,14 +158,14 @@ pub(crate) struct Guardrail {
 }
 
 /// The guardrails, ordered by id.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailList {
     pub guardrails: Vec<Guardrail>,
 }
 
 /// Where a guardrail came from and whether it still reads as the preset shipped it.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailPresetState {
     /// The preset's id.
@@ -180,7 +181,7 @@ pub(crate) struct GuardrailPresetState {
 }
 
 /// A preset at its current version: the definition a guardrail created from it starts with.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailPresetView {
     #[schema(example = "subagent-status-summary")]
@@ -199,7 +200,7 @@ pub(crate) struct GuardrailPresetView {
 }
 
 /// The presets this build ships, each at its current version, ordered by id.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PresetList {
     pub presets: Vec<GuardrailPresetView>,
@@ -233,7 +234,7 @@ pub(crate) struct GuardrailTestInput {
 }
 
 /// The requests a test read: the one subject it named, its limit, and how far back it reached.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailTestSample {
     /// The pool sampled, where the test named one.
@@ -250,7 +251,7 @@ pub(crate) struct GuardrailTestSample {
 }
 
 /// The sample's verdicts counted.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailTestTotals {
     pub sampled: u32,
@@ -260,7 +261,7 @@ pub(crate) struct GuardrailTestTotals {
 }
 
 /// One sampled request and what the definition answered on it.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailTestRequest {
     pub id: String,
@@ -275,7 +276,7 @@ pub(crate) struct GuardrailTestRequest {
 
 /// The verdicts on the newest captured requests of a pool or a key. The answer carries ids and instants, never a
 /// body's text.
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailTestResult {
     pub sample: GuardrailTestSample,

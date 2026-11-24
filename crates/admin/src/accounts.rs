@@ -427,7 +427,7 @@ pub(crate) struct CatalogQuery {
 /// The account's model listing as last read, held until the next scheduled read (every
 /// `routing.catalog_refresh_seconds`) or an eviction replaces it, and read on demand when the account has none. A
 /// failed read is held for sixty seconds.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Catalog {
     /// Sorted by id. Empty when the fetch failed.
@@ -437,7 +437,7 @@ pub(crate) struct Catalog {
     pub error: Option<String>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CatalogModel {
     pub id: String,
@@ -585,7 +585,7 @@ pub(crate) struct QuotaQuery {
 }
 
 /// The account's quota samples and extra usage samples over the range.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Quota {
     pub account_id: String,
@@ -596,14 +596,14 @@ pub(crate) struct Quota {
     pub extra_usage: Vec<ExtraUsageSample>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct QuotaWindow {
     pub id: String,
     pub samples: Vec<QuotaSample>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct QuotaSample {
     pub at: i64,
@@ -612,7 +612,7 @@ pub(crate) struct QuotaSample {
     pub source: String,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExtraUsageSample {
     pub at: i64,

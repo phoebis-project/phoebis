@@ -14,7 +14,7 @@ use crate::routes::{api_key, found, router_unavailable, store_failure};
 use crate::AdminState;
 
 /// The processed rule list a key is judged by, in the order it applies.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyModels {
     pub key_id: String,
@@ -26,7 +26,7 @@ pub(crate) struct KeyModels {
     pub rules: Vec<RuleEntry>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RuleEntry {
     /// `key` or `pool`.
@@ -40,7 +40,7 @@ pub(crate) struct RuleEntry {
 }
 
 /// A live model-scoped cooldown.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ModelCooldown {
     pub account_id: String,

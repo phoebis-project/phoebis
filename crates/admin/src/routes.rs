@@ -492,7 +492,7 @@ pub(crate) struct LoginInput {
 
 /// Whether the cookie the console holds still names a session, by the id pairing ownership uses, never by the
 /// cookie value.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionView {
     /// True for a login that asked to stay, false for a plain login and for a bearer caller.
@@ -1330,7 +1330,7 @@ pub(crate) struct PairingCallbackInput {
 }
 
 /// The pairing session the browser is sent to.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PairingStarted {
     pub id: String,
@@ -1340,7 +1340,7 @@ pub(crate) struct PairingStarted {
 }
 
 /// A pairing session as its owner reads it.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PairingSessionView {
     /// The reserved id for a session started with `new`.
@@ -1354,7 +1354,7 @@ pub(crate) struct PairingSessionView {
 }
 
 /// The exchange's result, once the token exchange and profile lookup succeed.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Exchanged {
     /// `exchanged`.
@@ -1364,7 +1364,7 @@ pub(crate) struct Exchanged {
 }
 
 /// The identity the exchange answered, which the confirm commits.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PendingIdentityView {
     pub account_uuid: String,
@@ -1374,7 +1374,7 @@ pub(crate) struct PendingIdentityView {
 }
 
 /// The committed pairing.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Confirmed {
     pub account_id: String,
@@ -1958,7 +1958,7 @@ async fn pairing_confirm(
 
 /// The process's standing: the version, the readiness, the ledger's and the router's counters, the bus, the
 /// pricing sources, the recent gaps and the keepalive engine.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct System {
     pub version: String,
@@ -1983,7 +1983,7 @@ pub(crate) struct System {
     pub keepalive: KeepaliveStats,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LedgerStats {
     pub schema_version: Option<u32>,
@@ -2016,7 +2016,7 @@ pub(crate) struct LedgerStats {
     pub parked_priced: u64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RouterStats {
     /// The queue's size.
@@ -2033,7 +2033,7 @@ pub(crate) struct RouterStats {
     pub writer: WriterStats,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WriterStats {
     /// The batches waiting in its channel.
@@ -2046,7 +2046,7 @@ pub(crate) struct WriterStats {
     pub failed_batches: u64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BusSubscriber {
     pub subscriber: String,
@@ -2054,14 +2054,14 @@ pub(crate) struct BusSubscriber {
     pub panics: u64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PricingSources {
     pub api_prices: PricingSource,
     pub subscription_costs: PricingSource,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PricingSource {
     /// The configured path or null when the key is unset.
@@ -2079,7 +2079,7 @@ pub(crate) struct PricingSource {
     pub next: Option<String>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeepaliveStats {
     pub agents: usize,
@@ -2582,7 +2582,8 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
 }
 
 /// The accounts, one row each.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountList {
     /// Each row carries the account's fields, the same shape `GET /admin/accounts/{id}` answers at the top level.
@@ -2590,7 +2591,8 @@ pub(crate) struct AccountList {
 }
 
 /// An account as the registry, the router and the ledger see it.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Account {
     pub id: String,
@@ -2661,7 +2663,8 @@ pub(crate) struct Account {
     pub spend: Option<Spend>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountIdentity {
     pub email: String,
@@ -2670,7 +2673,8 @@ pub(crate) struct AccountIdentity {
 }
 
 /// The credential's standing.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountCredential {
     pub access_expires_at: i64,
@@ -2683,7 +2687,8 @@ pub(crate) struct AccountCredential {
     pub quarantined: bool,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Cooldown {
     pub scope: String,
@@ -2693,7 +2698,8 @@ pub(crate) struct Cooldown {
     pub set_at: i64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Overage {
     pub in_use: bool,
@@ -2703,7 +2709,8 @@ pub(crate) struct Overage {
 }
 
 /// Seven values read off the stored profile document as they are.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountProfile {
     /// Usually a string, null when the document lacks it.
@@ -2724,7 +2731,8 @@ pub(crate) struct AccountProfile {
     pub rate_limit_tier: Value,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountSubscription {
     /// The plan the stored profile resolves to: `free`, `pro`, `max_5x`, `max_20x`, `max` (a Max organization whose
@@ -2742,7 +2750,8 @@ pub(crate) struct AccountSubscription {
     pub ends_at: Option<i64>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountWindow {
     pub id: String,
@@ -2768,7 +2777,8 @@ pub(crate) struct AccountWindow {
 }
 
 /// The slow-down entry the account's last pinned selection wrote, the figures its holds apply.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountSlowDownView {
     /// The burn the 5-hour window can still carry to its reset over the demand, from 0 to 1: under 1 the account is
@@ -2795,14 +2805,16 @@ pub(crate) struct AccountSlowDownView {
 }
 
 /// The fast lane's input and output buckets as the router last read them off an answer's head.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FastLane {
     pub input: Option<LaneReading>,
     pub output: Option<LaneReading>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LaneReading {
     pub utilization: f64,
@@ -2811,7 +2823,8 @@ pub(crate) struct LaneReading {
 }
 
 /// An account's one-time limit resets, as the block's last read and the claims since left them.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountLimitResets {
     /// Epoch milliseconds: the block's cooldown while it lies after the route's clock, else null.
@@ -2835,7 +2848,8 @@ pub(crate) struct AccountLimitResets {
     pub revision: u64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountLimitResetGrant {
     /// The window names that block the grant, in the router's names, empty where none.
@@ -2901,7 +2915,8 @@ pub(crate) struct LimitResetUse {
     pub weekly_resets_at: Option<i64>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExtraUsage {
     pub currency: Option<String>,
@@ -2915,7 +2930,8 @@ pub(crate) struct ExtraUsage {
 }
 
 /// A usage-based seat's spend window: the poll's amounts, the newest share and the window's reset.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Spend {
     /// Null while no polled row of the last day carries the amounts.
@@ -2935,7 +2951,8 @@ pub(crate) struct Spend {
 }
 
 /// The polled row's `spend` figures, or its `extra_usage` amounts where the body carried no `spend` object.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SpendAmounts {
     pub currency: String,
@@ -2948,14 +2965,16 @@ pub(crate) struct SpendAmounts {
     pub polled_at: i64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PoolMembership {
     pub pool_id: String,
     pub priority: u32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RequestCounts {
     pub last_24h: u64,
@@ -2964,7 +2983,8 @@ pub(crate) struct RequestCounts {
 }
 
 /// The poll's standing on an `oauth` account, as `GET /admin/accounts/{id}/usage` answers it.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UsageStanding {
     pub error: Option<String>,
@@ -2976,7 +2996,8 @@ pub(crate) struct UsageStanding {
 
 /// The poll's standing. The instants are Unix milliseconds, `backoff_since` null outside a run of 429s and
 /// `next_attempt_at` null once the account's next slot may ask it.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PollStatusView {
     pub backoff_since: Option<i64>,
@@ -2993,7 +3014,7 @@ pub(crate) struct PollStatusView {
 
 /// The poll's latest snapshot and standing, or the error that stands in for a snapshot when there is none, with
 /// every other member null or empty.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Usage {
     pub account_id: String,
@@ -3012,7 +3033,7 @@ pub(crate) struct Usage {
     pub windows: Vec<UsageWindowView>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UsageWindowView {
     pub key: String,
@@ -3020,7 +3041,7 @@ pub(crate) struct UsageWindowView {
     pub utilization: Option<f64>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UsageExtra {
     pub currency: Option<String>,
@@ -3033,7 +3054,7 @@ pub(crate) struct UsageExtra {
 
 /// Whether an API key still works, for an `api_key` account only, asked over the cheapest authenticated endpoint
 /// there is: the catalog discovery, against the account's own host.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Verify {
     pub ok: bool,

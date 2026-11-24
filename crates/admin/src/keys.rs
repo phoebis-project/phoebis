@@ -117,14 +117,15 @@ pub(crate) struct KeyFeatureAccountsInput {
 }
 
 /// The keys, one row each.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyList {
     pub keys: Vec<Key>,
 }
 
 /// A key as the registry and the ledger see it.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Key {
     pub id: String,
@@ -177,7 +178,8 @@ pub(crate) struct Key {
     pub lifetime: KeyLifetime,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyUsage {
     /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
@@ -192,7 +194,8 @@ pub(crate) struct KeyUsage {
     pub tokens: u64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyLifetime {
     /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
@@ -207,7 +210,8 @@ pub(crate) struct KeyLifetime {
 }
 
 /// The key's fields and `secret`, the one answer that carries the secret.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyCreated {
     pub id: String,

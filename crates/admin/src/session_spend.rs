@@ -8,7 +8,8 @@ use phoebis_ledger::{AgentFigures, DayFigures, SpendFigures, SpendMoney, NO_CLAS
 use utoipa::ToSchema;
 
 /// The session's spend over its client requests, and the same figures over its probes, apart.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionSpend {
     /// The client requests priced, probes and refused requests out.
@@ -34,7 +35,8 @@ pub(crate) struct SessionSpend {
 }
 
 /// `SessionSpend` without its probes.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionSpendPart {
     pub requests: u64,
@@ -46,7 +48,8 @@ pub(crate) struct SessionSpendPart {
 }
 
 /// The session's client requests of the last 24 hours by class, and their spend.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionDay {
     /// By `request_class` as the ledger holds it, `other` for a request with none.
@@ -65,7 +68,8 @@ impl Default for SessionDay {
 }
 
 /// One agent's requests of the session over every model it ran, from the ledger.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentRequests {
     pub agent_id: String,

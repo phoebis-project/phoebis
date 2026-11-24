@@ -14,7 +14,7 @@ use crate::AdminState;
 
 /// The ledger's dashboard rollup and the live pin count. The rollup reads 25 hourly points, the 24 whole hours before
 /// the current hour and the current hour so far, and of the probe rows it reads a billed probe's dollars alone.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Dashboard {
     /// The requests of the window, not counting the ones the router refused before any account was asked, which
@@ -50,7 +50,7 @@ pub(crate) struct Dashboard {
     pub sessions: DashboardSessions,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DashboardSessions {
     pub active_pins: usize,

@@ -18,7 +18,7 @@ use crate::routes::{failure, AdminQuery};
 use crate::AdminState;
 
 /// One page of the feature calls.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FeatureCallList {
     pub feature_calls: Vec<FeatureCallEntry>,
@@ -27,7 +27,7 @@ pub(crate) struct FeatureCallList {
 }
 
 /// One call the router sent to a feature host under an account.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FeatureCallEntry {
     pub account_id: String,

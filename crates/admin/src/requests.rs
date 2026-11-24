@@ -59,7 +59,7 @@ impl ShareContext {
 }
 
 /// One page of the request log.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RequestList {
     pub requests: Vec<RequestSummary>,
@@ -75,7 +75,7 @@ pub(crate) struct RequestList {
 /// One client request with its attempt trail. `response_truncated` says whether the captured response is shorter than
 /// what the relay saw. `agent_type`, `compaction` and `context_compacted` are the gateway hint headers as the client
 /// sent them, null when it sent none.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RequestSummary {
     pub id: String,
@@ -209,7 +209,7 @@ pub(crate) struct RequestSummary {
 }
 
 /// A guardrail that matched a request: its id, its place in the evaluation order and whether it blocked.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailMatchView {
     pub id: String,
@@ -218,7 +218,7 @@ pub(crate) struct GuardrailMatchView {
 }
 
 /// Each key as the request sent it.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RequestShape {
     pub context_edits: Vec<String>,
@@ -235,7 +235,7 @@ pub(crate) struct RequestShape {
 }
 
 /// The serving attempt's usage. Where no count is stored, `input` and `output` read null and the other six read zero.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RequestUsage {
     pub cache_read: u64,
@@ -251,7 +251,7 @@ pub(crate) struct RequestUsage {
 }
 
 /// Each Unix milliseconds, null for an instant the ledger holds none of.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RequestPhases {
     pub received_at: i64,
@@ -267,7 +267,7 @@ pub(crate) struct RequestPhases {
 }
 
 /// One attempt of the trail.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Attempt {
     pub index: u32,
@@ -339,14 +339,14 @@ pub(crate) struct Attempt {
     pub issued_digest: Option<String>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CooldownSet {
     pub reason: String,
     pub until: Option<i64>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttemptWindow {
     /// `five_hour`, `seven_day` or `seven_day_overage_included`.
@@ -357,7 +357,7 @@ pub(crate) struct AttemptWindow {
 }
 
 /// Each key as the answer said it. `served_model` only when it differs from the resolved model.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttemptResponse {
     pub cleared_input_tokens: Option<u64>,
@@ -388,7 +388,7 @@ pub(crate) struct InputTransformationView {
 }
 
 /// The newest `stream_interrupted` event of the request, lifted so a reader takes one member rather than the list.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StreamCut {
     pub at: i64,
@@ -401,7 +401,7 @@ pub(crate) struct StreamCut {
     pub attempt: u32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RequestDetail {
     /// The same shape as one row of `GET /admin/requests`.
@@ -413,7 +413,7 @@ pub(crate) struct RequestDetail {
 
 /// One event the request names, the last three keys the pool the event is about, the agent the pin is held for,
 /// and the request the event names, each null where the kind has none. Rows from before read null.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Event {
     pub at: i64,
@@ -571,7 +571,7 @@ pub(crate) struct Event {
 /// among them, as a string. The four byte counts are the bytes each side stored and the bytes it ran to, and the
 /// difference is what was dropped. `response_truncated` is the request's own flag, as `GET /admin/requests` answers it,
 /// so a capture whose last chunks never reached the ledger reads truncated even where the two byte counts agree.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Bodies {
     pub request_id: String,

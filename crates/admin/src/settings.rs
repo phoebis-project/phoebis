@@ -28,7 +28,8 @@ pub(crate) struct Settings {
     pub usage: UsageSettings,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct About {
     /// The full commit the router was built from, or `unknown` for a build that had none, as every answer carries it
@@ -38,7 +39,8 @@ pub(crate) struct About {
     pub version: String,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Access {
     pub admin_configured: bool,
@@ -58,7 +60,8 @@ pub(crate) struct FeaturesSettings {
     pub listen: String,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Listeners {
     pub metrics: String,
@@ -69,7 +72,8 @@ pub(crate) struct Listeners {
 
 /// The retention bounds the router runs under: file settings of the `stats` section the console shows and never
 /// edits. The two day counts read 0 for forever.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Retention {
     pub body_capture_max_hours: u32,
@@ -80,7 +84,8 @@ pub(crate) struct Retention {
     pub rollup_retention_days: u32,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionsSettings {
     pub expire_after_seconds: u64,
@@ -91,7 +96,8 @@ pub(crate) struct SessionsSettings {
 }
 
 /// The two table paths null when their key is unset.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Storage {
     pub api_prices_path: Option<String>,

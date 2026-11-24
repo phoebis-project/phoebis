@@ -43,7 +43,8 @@ pub(crate) struct KeepaliveOverview {
     pub probes_24h: phoebis_ledger::ProbeCounts,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OverviewLimits {
     pub agents: Limit,
@@ -51,7 +52,8 @@ pub(crate) struct OverviewLimits {
     pub sessions: Limit,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Limit {
     pub count: usize,
@@ -59,7 +61,8 @@ pub(crate) struct Limit {
 }
 
 /// One pool's keepalive day.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PoolKeepalive {
     /// The requests a probe kept warm.
@@ -75,7 +78,8 @@ pub(crate) struct PoolKeepalive {
     pub wasted_reasons_24h: BTreeMap<String, u64>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct IdleReturn {
     pub from_seconds: u64,
