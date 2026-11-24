@@ -1123,15 +1123,17 @@ The metrics listener counts the calls in two families ([Metrics](statistics.md#m
 | `phoebis_feature_calls_total` | `feature`, `key`, `outcome` | each call the router sent upstream, the domain check among them under the feature `domain_check` |
 | `phoebis_feature_refusals_total` | `code`, `feature`, `key` | each call the router refused with a `401`, a `403`, the `429` `domain_checks_at_cap` of a domain check, the `429` `key_sockets` or `sockets_at_cap` of a socket request or the `503` `ledger_behind`, under the feature `none` for a call that matched no row, for each `401` and for a refused domain check, and the `401` of a socket request that no token admits under the code `socket_token_unknown` |
 
-Neither family carries a path, a status or an account. A refused call and a domain check each write one line at `debug`
-too, with the code or the outcome, the method, the path without its query and the key's label. A socket's tunnel writes
-one at its end, with the cause (`check_failed`, `client_ended`, `client_failed`, `idle`, `stopped`, `upstream_ended` or
-`upstream_failed`), under `check` the failed check (`account`, `key`, `selection` or `sign_in`) where the cause is
-`check_failed`, the method, the path, the key's label and the socket's life in milliseconds. The router writes one where
-a page read under one key returns a token that another key read, with the path and the two keys' labels, and one where
-it cannot scan a page read's answer, with the cause and the path. None of these lines holds a token or a byte of a body.
-Under `RUST_LOG=info,phoebis_relay::features=debug` the router writes the feature module's `debug` lines, these among
-them, and keeps each other module at `info` ([Environment variables](installation.md#environment-variables)).
+Neither family carries a path, a status or an account. A refused call writes one line with its code, the method, the
+path without its query and the key's label: at `info` where its key resolved, so the default log names the path, and at
+`debug` for a call with no key. A domain check writes one at `debug` with its outcome in place of the code. A socket's
+tunnel writes one at its end, with the cause (`check_failed`, `client_ended`, `client_failed`, `idle`, `stopped`,
+`upstream_ended` or `upstream_failed`), under `check` the failed check (`account`, `key`, `selection` or `sign_in`)
+where the cause is `check_failed`, the method, the path, the key's label and the socket's life in milliseconds. The
+router writes one where a page read under one key returns a token that another key read, with the path and the two keys'
+labels, and one where it cannot scan a page read's answer, with the cause and the path. None of these lines holds a
+token or a byte of a body. Under `RUST_LOG=info,phoebis_relay::features=debug` the router writes the feature module's
+`debug` lines, these among them, and keeps each other module at `info` ([Environment
+variables](installation.md#environment-variables)).
 
 ## The CA over time
 

@@ -282,11 +282,11 @@ async fn lapsed(listener: &Listener, call: Call, entry: &Entry, unheld: Unheld) 
 }
 
 /// A refusal of the key, the table, the selection, the account's state, the ledger's standing, the domain check's cap
-/// or a count of the open sockets: its DEBUG line, its end, which the ledger counts and writes no row for, and its
-/// answer. `key` is the key's label, `-` where none resolved. The end is a fact published ahead of the answer, so it
-/// reaches the ledger ahead of any later call of the same caller. While the ledger stands behind, the end goes out
-/// best-effort and the bus counts it where it drops it: a writer that stopped draining fills the bus queue, and a
-/// refusal that waited there would hold its connection, a caller's without a key among them.
+/// or a count of the open sockets: its line, its end, which the ledger counts and writes no row for, and its answer.
+/// `key` is the key's label, `-` where none resolved. The end is a fact published ahead of the answer, so it reaches
+/// the ledger ahead of any later call of the same caller. While the ledger stands behind, the end goes out best-effort
+/// and the bus counts it where it drops it: a writer that stopped draining fills the bus queue, and a refusal that
+/// waited there would hold its connection, a caller's without a key among them.
 async fn refusal(relay: &Relay, call: Call, failure: &Failure, key: &str) -> Response {
     refusal_under(relay, call, failure, failure.code, key).await
 }
@@ -336,15 +336,27 @@ async fn token_unknown(relay: &Relay, mut call: Call) -> Response {
     .await
 }
 
-/// The DEBUG line of a refused feature endpoint request, with the path alone.
+/// The line of a refused feature endpoint request, with the path alone: at INFO where the call's key resolved, so the
+/// default log names the path a key's holder asked for, and at DEBUG for a call with no key, whose caller could
+/// otherwise write the default log at will.
 fn refused_line(code: &str, call: &Call, key: &str) {
-    tracing::debug!(
-        code,
-        method = %call.method,
-        path = call.path.as_str(),
-        key = %key,
-        "a feature call was refused"
-    );
+    if call.key_id.is_some() {
+        tracing::info!(
+            code,
+            method = %call.method,
+            path = call.path.as_str(),
+            key = %key,
+            "a feature call was refused"
+        );
+    } else {
+        tracing::debug!(
+            code,
+            method = %call.method,
+            path = call.path.as_str(),
+            key = %key,
+            "a feature call was refused"
+        );
+    }
 }
 
 /// A domain check under the cap and its one deadline from `arrived`, which bounds the wait for a place, the send and
