@@ -4,6 +4,7 @@ import type {
   PoolKeepalive, RecordPin, RecordRequest, RecordSettings, Refusal, RequestEvent, RequestLog, ResetOutcome, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, Subscription, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { DECISION_KIND_VALUES } from '@/api/types';
+import { modelWeeks } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { servingAttempt } from '@/lib/dimensions';
 import { placementHit } from '@/lib/format';
@@ -23,6 +24,7 @@ import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse 
 import { drawnWindows, dropSizeOf, droppedThinkingOf, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
 import { round } from './round';
+import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, OVERFLOW_PAUSED_AT, RESEARCH_BUDGET_AT, clock, endOfMonth, iso, startOfDay, startOfMonth } from './time';
 
 /** Why a move rule fired, as the trace's `moved` names it. A failover's reasons move the pin from the task instead. */
@@ -186,13 +188,22 @@ function stampAt(pool: PoolSeed, at: number): string {
 }
 
 /**
- * The pool's settings as the record decided at `at` names them, by the pool fields they are read from, under the stamp
- * the pool held then: a record decided before the pool's edit carries the values the edit moved.
+ * The decisions an earlier build of the router recorded, keyed `${requestId}/${seq}`. One build wrote a decision's
+ * record and its round, so both lack each member that build did not write: the round names no unit, no floor, no
+ * dropped thinking and no reservation, and the settings no Fable reservation option.
  */
-function settingsOf(pool: PoolSeed, at: number): RecordSettings {
+const EARLIER_BUILD: ReadonlySet<string> = new Set(['req_1eaa9bc1-a18/1', 'req_3e7a5c19-f84/1']);
+
+/**
+ * The pool's settings as the record decided at `at` names them, by the pool fields they are read from, under the stamp
+ * the pool held then: a record decided before the pool's edit carries the values the edit moved, and a record of the
+ * earlier build no Fable reservation option.
+ */
+function settingsOf(pool: PoolSeed, at: number, decision: string): RecordSettings {
   const edit = BEFORE_EDIT[pool.id];
   return {
     ...settingsNow(pool),
+    ...(EARLIER_BUILD.has(decision) ? { fableReservationShedding: null } : {}),
     poolUpdatedAt: stampAt(pool, at),
     ...(edit !== undefined && at < edit.at ? edit.settings : {}),
   };
@@ -203,6 +214,7 @@ function settingsNow(pool: PoolSeed): RecordSettings {
     affinityMode: pool.affinityMode,
     affinityTtlSeconds: pool.affinityTtlSeconds,
     burnAverageSeconds: pool.burnAverageSeconds,
+    fableReservationShedding: pool.fableReservationShedding,
     fiveHourCeiling: pool.fiveHourCeiling,
     inFlightCap: pool.inFlightCap,
     legacy: null,
@@ -977,7 +989,10 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const shortRead = trigger === null && short !== null && (source.windows.seven_day?.projection ?? null) !== null;
   const reservationWait = shortRead && (spec.round !== undefined || !fires) ? reservationWaitOf(source, at, pool) : null;
   const reservationWaits = reservationWait !== null && spec.round === undefined && at - reservationWait.overSince < reservationWait.waitMs;
-  const reserved = shortRead && !reservationWaits;
+  // A round on the reservation walks the source's pins of another model alone, so over Fable pins alone its test fires
+  // nothing, and the line says why behind the reservation's figure. The stamp still reads the room short.
+  const noOtherModel = shortRead && !reservationWaits && fablePinsAlone(source.accountId, pool, at);
+  const reserved = shortRead && !reservationWaits && !noOtherModel;
   if (reserved && spec.round !== undefined && reservationWait !== null && at - reservationWait.overSince < reservationWait.waitMs)
     throw new Error(roundInsideWait(source.accountId, 'Fable reservation', at, reservationWait.overSince, reservationWait.waitMs));
   if (reserved && !fires) throw new Error(`the story writes no round for ${source.accountId}'s Fable reservation at ${iso(at)}, outside any dwell`);
@@ -1017,6 +1032,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   // The router names the reservation wherever the room reads short, whether or not a window fired, and the stamp and
   // the wait beside it while the room reads short inside the wait.
   if (short !== null) facts.push(fact('fable_reservation', short, 'percent'));
+  if (noOtherModel) facts.push(fact('fable_reservation', 'no_other_model'));
   if (reservationWaits && reservationWait !== null) facts.push(fact('over_since_fable_reservation', reservationWait.overSince, 'time'), fact('wait_fable_reservation', reservationWait.waitMs, 'ms'));
   // The line tests windows of both kinds, so the router writes both of the pool's ceilings here, whatever line the
   // trigger reads.
@@ -1090,6 +1106,16 @@ function reservationShort(source: RecordCandidate, pool: PoolSeed, at: number): 
   if (pool.strategy !== 'pace' || !pool.loadShedding || !pool.fableReservationShedding) return null;
   const pace = paceOf(accountOf(source.accountId), at, null, { burns: source.burn, readings: source.windows, reserve: true });
   return pace.fableReservation !== null && pace.remaining < pace.fableReservation ? pace.fableReservation : null;
+}
+
+/**
+ * Whether each pin the routing state keeps on the account under the pool's keys at `at` draws a week of its own, the
+ * Fable use a round on the reservation leaves in place. The router also leaves a pin out of that round for its lane,
+ * its agent's end and its session's account state, which this state does not keep.
+ */
+function fablePinsAlone(accountId: string, pool: PoolSeed, at: number): boolean {
+  const held = [...pins.entries()].filter(([, p]) => p.accountId === accountId && p.poolId === pool.id && pinReadAt(p.stamp, pool.affinityTtlSeconds * 1_000, at) !== 'none');
+  return held.every(([key]) => modelWeeks(TABLES, key.slice(key.lastIndexOf('|') + 1)).length > 0);
 }
 
 /** The instant a window's projected burn takes it to its wall, in whole milliseconds as the engine stores it. */
@@ -1914,7 +1940,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     },
     requestId: r.id,
     seq: spec.seq,
-    settings: settingsOf(pool, spec.at),
+    settings: settingsOf(pool, spec.at, `${r.id}/${spec.seq}`),
     version: 3,
     walk,
   };
@@ -2885,10 +2911,11 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
  * figure under `rewrite_unit`, a figure of the pin alone, so an API-key destination reads it too, with the weekly
  * window the pick compared on named, and the share floor the round applied. Each pin names the thinking its move drops,
  * null on a kept pair and with no destination. A round the Fable reservation fired names the reservation, which any
- * other round holds null. An event of an earlier build (`earlier`) stored the rewrite as the story's 20x equivalent of
- * that window and names no unit, no floor, no dropped thinking and no reservation.
+ * other round holds null. An event of an earlier build (`EARLIER_BUILD`) stored the rewrite as the story's 20x
+ * equivalent of that window and names no unit, no floor, no dropped thinking and no reservation.
  */
-function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventSeed | null {
+function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
+  const earlier = EARLIER_BUILD.has(decision);
   const record = DECISIONS.get(decision);
   const line = record?.walk.find((w) => w.step === 'move:shed');
   const value = (key: string) => line?.facts.find((f) => f.key === key)?.value;
@@ -3474,10 +3501,10 @@ function buildEvents(): RoutingEvent[] {
     // stored, priced through that build's fallback weight: the 11:00 round's planned moves of Sonnet 4.5 pins read
     // their figures, which the request story's moves onto primary at 11:00 follow.
     ...[
-      roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS, true),
+      roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS),
       roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS),
       roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS),
-      roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS, true),
+      roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS),
       roundEvent('req_5d1f8c3a-b27/1', RESERVATION_PINS),
       roundEvent(`${MOVED_PIN_CALL_ID}/1`, MOVED_PIN_ROUND_PINS),
     ].flatMap((e) => (e === null ? [] : [e])),

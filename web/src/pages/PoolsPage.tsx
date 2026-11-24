@@ -82,6 +82,7 @@ const WARNING_FIELD_GROUP: Readonly<Record<string, PoolGroup>> = {
   affinity_ttl_seconds: 'pinning',
   burn_average_seconds: 'utilization',
   cache_ttl: 'cacheTtl',
+  fable_reservation_shedding: 'shedding',
   five_hour_ceiling: 'utilization',
   in_flight_cap: 'failover',
   load_shedding: 'shedding',

@@ -531,7 +531,7 @@ const candidate = (o) => ({
 });
 const completion = (o) => ({ cacheMapWritten: null, cacheReadTokens: null, cacheWriteTokens: null, completedAt: null, freed: false, heldMs: null, hit: null, inputTokens: null, inputTransformations: null, promisedTokens: null, status: null, ...o });
 const SETTINGS = {
-  affinityMode: 'when_cached', affinityTtlSeconds: 600, burnAverageSeconds: 1_800, fiveHourCeiling: 0.95, inFlightCap: 16, legacy: null, loadShedding: true, migrateWhenSpent: true, minSharedPrefixTokens: 20_000,
+  affinityMode: 'when_cached', affinityTtlSeconds: 600, burnAverageSeconds: 1_800, fableReservationShedding: true, fiveHourCeiling: 0.95, inFlightCap: 16, legacy: null, loadShedding: true, migrateWhenSpent: true, minSharedPrefixTokens: 20_000,
   overageMoveGraceMinutes: 30, overagePolicy: 'prefer_plan', poolUpdatedAt: iso(ms(9, 5, 12)), preferSubscription: true, retryInPlaceSeconds: 60, returnToPlan: 'when_cold', returnToPlanDwellSeconds: 900,
   sessionPlacement: 'by_warm_prefix', shedCap: 0.5, shedDwellSeconds: 900, slowDown: true, slowDownHoldSeconds: 120, slowDownStretchSeconds: 1_800, strategy: 'pace', subagentPlacement: 'by_cohort', warmSessions: 'when_needed',
   weeklyCeiling: 1, windDownMinutes: 30,
@@ -1574,15 +1574,15 @@ test('a placement that created its pin draws no chip where its answer lists an a
   assert.equal(note, undefined, 'the account key stands on each answer from the move to the next compaction');
 });
 
-test('the settings fold lists twenty-five rows, draws the five as not recorded on a record from before, and a return dwell of 0 as at once', () => {
+test('the settings fold lists twenty-six rows, draws the five as not recorded on a record from before, and a return dwell of 0 as at once', () => {
   assert.deepEqual(d.SETTINGS_ROWS.map((s) => s.label), [
     'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', '5-hour ceiling', 'Weekly ceiling', 'Load shedding',
-    'Move when spent', 'Overage grace', 'Return to plan', 'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Slow-down', 'Stretch', 'Hold', 'Warm sessions', 'In-flight cap',
-    'Retry in place',
+    'Move when spent', 'Overage grace', 'Return to plan', 'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Shed on the Fable reservation', 'Slow-down', 'Stretch', 'Hold',
+    'Warm sessions', 'In-flight cap', 'Retry in place',
   ]);
   assert.deepEqual(d.SETTINGS_ROWS.map((s) => d.settingValue(s.key, SETTINGS)), [
     'Pace', 'subscriptions first', 'prefer plan', '10 min', 'when cached', 'by warm prefix', '20K', 'by cohort', '95%', '100%', 'on', 'on', '30 min', 'when cold', '15 min', '30 min', '50%', '30 min', '15 min',
-    'on', '30 min', '2 min', 'when needed', '16', '1 min',
+    'on', 'on', '30 min', '2 min', 'when needed', '16', '1 min',
   ]);
   const rows = (settings) => d.settingsRows(record({ settings })).map((r) => [r.label, texts(r.chips)]);
   assert.deepEqual(rows({ ...SETTINGS, loadShedding: false }).find(([label]) => label === 'Load shedding'), ['Load shedding', ['off']]);
@@ -1596,7 +1596,9 @@ test('the settings fold lists twenty-five rows, draws the five as not recorded o
   const legacy = rows(LEGACY_SETTINGS);
   assert.deepEqual(legacy.slice(8, 11), [['5-hour ceiling', ['not recorded']], ['Weekly ceiling', ['not recorded']], ['Load shedding', ['not recorded']]]);
   assert.deepEqual(legacy.slice(-3), [['Shed above (then)', ['90%']], ['Select below (then)', ['off']], ['Pace floor (then)', ['5%']]]);
-  assert.equal(rows(SETTINGS).length, 25);
+  assert.equal(rows(SETTINGS).length, 26);
+  const unwritten = rows({ ...SETTINGS, fableReservationShedding: null });
+  assert.deepEqual([unwritten.length, unwritten.some(([label]) => label === 'Shed on the Fable reservation')], [25, false], 'a record stored before the option draws no row for it, since its pool may have held the option on');
   const refused = record({ outcome: { accountId: null, kind: 'refused', refusal: { code: 'contract', kind: 'client', reason: 'the request has no session header' }, strategy: '' } });
   assert.equal(d.settingsRows(refused), null, 'a refusal entered no setting, so it lists none');
 });

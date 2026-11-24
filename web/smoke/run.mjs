@@ -18417,9 +18417,9 @@ await forView('/routing-log', async () => {
       await page.settle(50);
       const labels = (f) => kvRows(f?.querySelector('.kv')).map((r) => r.label);
       const settings = kvRows(folds[2]?.querySelector('.kv.decision-card__settings'));
-      const twentyFive = [
+      const twentySix = [
         'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', '5-hour ceiling', 'Weekly ceiling', 'Load shedding', 'Move when spent', 'Overage grace',
-        'Return to plan', 'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Slow-down', 'Stretch', 'Hold', 'Warm sessions', 'In-flight cap', 'Retry in place',
+        'Return to plan', 'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Shed on the Fable reservation', 'Slow-down', 'Stretch', 'Hold', 'Warm sessions', 'In-flight cap', 'Retry in place',
       ];
       const values = Object.fromEntries(settings.map((r) => [r.label, r.dd?.textContent ?? '']));
       // The fold's head names when the pool's settings took force, the settings' own instant.
@@ -18427,7 +18427,7 @@ await forView('/routing-log', async () => {
       const edited = `since ${new Date(record.settings.poolUpdatedAt).toISOString().slice(11, 16)}`;
       const request = Object.fromEntries(kvRows(folds[0]?.querySelector('.kv')).map((r) => [r.label, r.dd]));
       results.push({
-        name: "/routing-log the three folds open to Request facts, Pin and warmth and the twenty-five settings in order, Load shedding on, under the instant the settings took force",
+        name: "/routing-log the three folds open to Request facts, Pin and warmth and the twenty-six settings in order, Load shedding on, under the instant the settings took force",
         ok:
           JSON.stringify(folds.map((f) => f.querySelector('summary')?.firstChild?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
           since === edited &&
@@ -18439,7 +18439,7 @@ await forView('/routing-log', async () => {
           request.Key?.querySelector('a')?.getAttribute('href') === `/keys#${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools#${record.request.poolId}` &&
           request.Session?.querySelector('a')?.getAttribute('href') === `/sessions?search=${record.request.sessionId}&finished=1` && request.Session?.querySelector('.chip')?.getAttribute('title') === record.request.sessionId && JSON.stringify(ddWords(request.Lane)) === JSON.stringify([`speed ${record.request.lane.speed}`, `thinking ${record.request.lane.thinking}`, `effort ${record.request.lane.effort}`]) &&
           JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
-          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twentyFive) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
+          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twentySix) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
         missing: [JSON.stringify(closed), String(since), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
       });
       scan('renewal, folds open', card);

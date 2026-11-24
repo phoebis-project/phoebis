@@ -533,14 +533,14 @@ test("a story card's candidate table leads with the member the decision placed, 
   assert.notEqual(record.candidates[0].accountId, record.outcome.accountId, "the fast failover's record leads with another member");
 });
 
-test('the settings fold lists the twenty-five settings with Load shedding on or off, and a version 1 record its three removed after them', async () => {
+test('the settings fold lists the twenty-six settings with Load shedding on or off, and a version 1 record its three removed after them', async () => {
   const { record, row } = await storyRecord('req_ef099b34-453', 1);
   const fold = async (settings) => {
     const container = await cardOf({ ...record, settings }, row);
     return rowsOf(container, '.decision-card__settings');
   };
   const on = await fold({ ...record.settings, fiveHourCeiling: 0.75, loadShedding: true, weeklyCeiling: 0.78 });
-  assert.equal(on.length, 25);
+  assert.equal(on.length, 26);
   assert.deepEqual([on[8], on[9], on[10]], [['5-hour ceiling', '75%'], ['Weekly ceiling', '78%'], ['Load shedding', 'on']]);
   assert.deepEqual((await fold({ ...record.settings, loadShedding: false }))[10], ['Load shedding', 'off']);
   // A version 1 record carried neither the switch and the ceilings nor the slow-down's and the return mode's five.

@@ -602,7 +602,7 @@ const SHEDDING_FIELDS = ['load_shedding', 'five_hour_ceiling', 'weekly_ceiling',
 const shedding = (p) => [p.loadShedding, p.fiveHourCeiling, p.weeklyCeiling, p.shedCap, p.burnAverageSeconds, p.shedDwellSeconds];
 
 test('a pool decodes its switch, its Fable reservation option, its two ceilings, its cap, its average and its dwell and encodes them back', () => {
-  // A record's settings carry no Fable reservation option, so the pool's read takes it beside the shared fields.
+  // The record's case reads the Fable reservation option alone, so the pool's read adds it to the shared fields.
   const fields = [...SHEDDING_FIELDS, 'fable_reservation_shedding'];
   const read = (p) => [...shedding(p), p.fableReservationShedding];
   const row = fixture('pools').pools[0];
@@ -797,7 +797,8 @@ test("every record version decodes its settings, a version 1 record's three remo
   const s = body.settings;
   assert.equal(v3.version, 3);
   assert.equal(Object.keys(s).length, 27, 'the route answers twenty-seven settings');
-  assert.deepEqual(Object.keys(v3.settings).filter((k) => k !== 'legacy').length, 26);
+  assert.deepEqual(Object.keys(v3.settings).filter((k) => k !== 'legacy').length, 27);
+  assert.equal(v3.settings.fableReservationShedding, false, 'the captured record reads the Fable reservation option the route answered');
   assert.deepEqual(shedding(v3.settings), SHEDDING_FIELDS.map((f) => s[f]), 'a version 3 record reads the new names');
   assert.equal(v3.settings.legacy, null);
   assert.equal(d.decodeDecisionRecord({ ...body, settings: { ...s, load_shedding: false } }).settings.loadShedding, false, 'the switch reads off');

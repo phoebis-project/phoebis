@@ -1434,7 +1434,7 @@ export interface RecordPin {
 }
 
 /**
- * The twenty-six values that entered the decision, each named as the pool row names the field it was read from. A
+ * The twenty-seven values that entered the decision, each named as the pool row names the field it was read from. A
  * version 1 record read the cap, the average and the dwell under their old names and carried neither the switch nor a
  * ceiling. The slow-down's three and the return-to-plan's two read null on a record from before them.
  */
@@ -1442,6 +1442,8 @@ export interface RecordSettings {
   affinityMode: string;
   affinityTtlSeconds: number;
   burnAverageSeconds: number;
+  /** Whether the pool sheds on its members' Fable reservation. Null on a record stored before the router wrote it. */
+  fableReservationShedding: boolean | null;
   /** Null on a version 1 record, which carried no ceiling. */
   fiveHourCeiling: number | null;
   inFlightCap: number;

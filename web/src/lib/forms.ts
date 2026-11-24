@@ -250,6 +250,7 @@ export type WarnedSettings = Pick<
   Pool,
   | 'affinityTtlSeconds'
   | 'cacheTtl'
+  | 'fableReservationShedding'
   | 'fiveHourCeiling'
   | 'inFlightCap'
   | 'loadShedding'
@@ -259,6 +260,7 @@ export type WarnedSettings = Pick<
   | 'shedCap'
   | 'slowDown'
   | 'slowDownHoldSeconds'
+  | 'strategy'
   | 'warmSessions'
   | 'weeklyCeiling'
 >;
@@ -266,7 +268,7 @@ export type WarnedSettings = Pick<
 const TTL_SECONDS = { '1h': 3_600, '5m': 300 } as const;
 
 /**
- * The pool routes' eleven static checks, the mirror of the route's own as `ENGINE_BOUNDS` mirrors its bounds: each with
+ * The pool routes' twelve static checks, the mirror of the route's own as `ENGINE_BOUNDS` mirrors its bounds: each with
  * the fields it reads and its sentence, sorted by code. `cohort` is the most agents of one session among the pins
  * under the pool's keys. A warning blocks nothing.
  */
@@ -299,6 +301,10 @@ export function poolWarnings(pool: WarnedSettings, cohort: number): PoolWarning[
   }
   if (pool.slowDownHoldSeconds > 150) {
     warn('hold_over_window', ['slow_down_hold_seconds'], "A hold over 150 seconds leaves under 30 seconds of the client's first-byte window for the upstream's head, so a slowed request can time out at the client and be sent again.");
+  }
+  // The round on the reservation runs under Pace with load shedding on, so the option is idle on any other pool.
+  if (pool.fableReservationShedding && (pool.strategy !== 'pace' || !pool.loadShedding)) {
+    warn('reservation_shedding_idle', ['fable_reservation_shedding', 'load_shedding', 'strategy'], 'The option to shed on the Fable reservation does nothing here, since its rounds run on a Pace pool with load shedding on.');
   }
   if (pool.returnToPlan === 'always' && pool.returnToPlanDwellSeconds === 0) {
     warn('return_at_once', ['return_to_plan_dwell_seconds'], "A return dwell of zero returns every warm session on its first request at the metered member, so the member serves one turn per session and the move's rewrite is paid each time.");

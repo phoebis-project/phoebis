@@ -483,7 +483,7 @@ test('the form admits and refuses the values the routes do', () => {
   }
 });
 
-test("the warnings mirror reads the pool routes' eleven checks on a pool's settings, sorted by code", () => {
+test("the warnings mirror reads the pool routes' twelve checks on a pool's settings, sorted by code", () => {
   const row = fixture('pools').pools[0];
   assert.deepEqual(d.poolWarnings(d.decodePool(row), 0), d.decodePool(row).warnings, 'the captured pool reads the warnings the route answered');
   const quiet = {
@@ -525,6 +525,9 @@ test("the warnings mirror reads the pool routes' eleven checks on a pool's setti
   ]);
   assert.deepEqual(codes({ returnToPlan: 'when_cold', returnToPlanDwellSeconds: 0 }), [], 'a mode that reads no dwell returns no warm session at once');
   assert.deepEqual(codes({ loadShedding: false, slowDown: true }), [], 'with the slow-down on a session over the ceiling is slowed rather than left to spend its window');
+  assert.deepEqual(codes({ fableReservationShedding: true, strategy: 'priority' }), [['reservation_shedding_idle', ['fable_reservation_shedding', 'load_shedding', 'strategy']]], 'the option on a pool that is no Pace pool');
+  assert.deepEqual(codes({ fableReservationShedding: true, loadShedding: false, slowDown: true, strategy: 'pace' }), [['reservation_shedding_idle', ['fable_reservation_shedding', 'load_shedding', 'strategy']]], 'the option on a Pace pool with load shedding off');
+  assert.deepEqual(codes({ fableReservationShedding: true, loadShedding: true, strategy: 'pace' }), [], 'the option on a Pace pool that sheds');
   const every = d.poolWarnings({ ...quiet, affinityTtlSeconds: 600, fiveHourCeiling: 0.75, loadShedding: false, migrateWhenSpent: false, returnToPlanDwellSeconds: 0, shedCap: 0.2, slowDownHoldSeconds: 300, warmSessions: 'never', weeklyCeiling: 0.75 }, 17);
   assert.deepEqual(
     every.map((w) => w.code),

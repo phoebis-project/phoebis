@@ -1073,6 +1073,8 @@ const SELF_NAMED = new Set(['score', 'standing']);
 /** `warmth_of`'s causes in words. */
 const WARMTH_CAUSE_WORD: Record<string, string> = { chainless: 'no chain', class_auxiliary: 'auxiliary class', class_refreshes: 'refreshing class', continues_pin: 'continues the pin', count: 'token count' };
 const WARMTH_WORD: Record<string, string> = { refresh: 'warm' };
+/** Why the reservation's test fired no round, in the console's words. */
+const RESERVATION_WORD: Record<string, string> = { no_other_model: 'no session of another model to move' };
 const SNAKE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
 const unitOf = (unit: string | null): FactUnit | null => FACT_UNIT_VALUES.find((u) => u === unit) ?? null;
 
@@ -1091,6 +1093,8 @@ function textWord(key: string, value: string): string {
       return windowTagWord(value);
     case 'fired_by':
       return wordOf(LABELS, value);
+    case 'fable_reservation':
+      return wordOf(RESERVATION_WORD, value);
     case 'obstacle':
       return wordOf(OBSTACLE_WORD, value);
     case 'reason':
@@ -1731,6 +1735,7 @@ export const SETTINGS_ROWS: { key: SettingKey; label: string }[] = [
   { key: 'shedCap', label: 'Shed cap' },
   { key: 'burnAverageSeconds', label: 'Burn average' },
   { key: 'shedDwellSeconds', label: 'Shed dwell' },
+  { key: 'fableReservationShedding', label: 'Shed on the Fable reservation' },
   { key: 'slowDown', label: 'Slow-down' },
   { key: 'slowDownStretchSeconds', label: 'Stretch' },
   { key: 'slowDownHoldSeconds', label: 'Hold' },
@@ -2560,12 +2565,13 @@ export function pinRows(record: DecisionRecord, now: number): CardRow[] {
 
 /**
  * The Settings in force grid. A refusal draws none, since no setting entered it. A version 1 record reads the
- * switch and the ceiling as not recorded and its three removed settings after the list.
+ * switch and the ceiling as not recorded and its three removed settings after the list. A record stored before the
+ * router wrote the Fable reservation option draws no row for it, where `settingValue` would read the null as off.
  */
 export function settingsRows(record: DecisionRecord): CardRow[] | null {
   const s = record.settings;
   if (s === null || record.outcome.kind === 'refused') return null;
-  const rows = SETTINGS_ROWS.map((r) => ({ chips: [plain(UNRECORDED.includes(r.key) && s[r.key] === null ? 'not recorded' : settingValue(r.key, s))], label: r.label }));
+  const rows = SETTINGS_ROWS.filter((r) => r.key !== 'fableReservationShedding' || s.fableReservationShedding !== null).map((r) => ({ chips: [plain(UNRECORDED.includes(r.key) && s[r.key] === null ? 'not recorded' : settingValue(r.key, s))], label: r.label }));
   const share = (v: number | null) => (v === null ? 'off' : fmtPct(v));
   const legacy = s.legacy === null ? [] : [
     { chips: [plain(share(s.legacy.shedAheadOfPace))], label: 'Shed above (then)' },

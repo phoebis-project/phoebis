@@ -672,7 +672,8 @@ function decodeRecordOutcome(v: unknown): RecordOutcome {
  */
 function decodeRecordSettings(x: Rec, version: number): RecordSettings {
   const shared = {
-    affinityMode: str(x.affinity_mode), affinityTtlSeconds: num(x.affinity_ttl_seconds), inFlightCap: num(x.in_flight_cap), migrateWhenSpent: bool(x.migrate_when_spent),
+    affinityMode: str(x.affinity_mode), affinityTtlSeconds: num(x.affinity_ttl_seconds), fableReservationShedding: boolOrNull(x.fable_reservation_shedding), inFlightCap: num(x.in_flight_cap),
+    migrateWhenSpent: bool(x.migrate_when_spent),
     minSharedPrefixTokens: num(x.min_shared_prefix_tokens), overageMoveGraceMinutes: num(x.overage_move_grace_minutes), overagePolicy: str(x.overage_policy), poolUpdatedAt: isoOr(x.pool_updated_at, epoch),
     preferSubscription: bool(x.prefer_subscription), retryInPlaceSeconds: num(x.retry_in_place_seconds), returnToPlan: strOrNull(x.return_to_plan), returnToPlanDwellSeconds: numOrNull(x.return_to_plan_dwell_seconds),
     sessionPlacement: str(x.session_placement), slowDown: boolOrNull(x.slow_down), slowDownHoldSeconds: numOrNull(x.slow_down_hold_seconds),

@@ -1935,13 +1935,13 @@ nothing reads why: classifier, not looked up or pinning off, and a pin that carr
 and `Settings in force since {time}` (which a guardrail's attach to or detach from the pool moves too, since the fence
 re-reads the pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account
 it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with the instant. The
-settings fold lists the pool's twenty-five settings in the card's order with Load shedding and Slow-down reading `on` or
+settings fold lists the pool's twenty-six settings in the card's order with Load shedding and Slow-down reading `on` or
 `off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at once` at 0, or "The key
 and its pool had left the registry". A refused record, which no pool setting entered, draws no settings fold, a
 guardrail block's among them, whose Admission line and Answer row carry `guardrail blocked` and the guardrail's name as
 a second chip. A record written before a setting existed reads `not recorded` for it, Load shedding, 5-hour ceiling and
 Weekly ceiling on a version 1 record and the five slow-down and return-to-plan settings on an older version 2 record,
-and a version 1 record lists after the twenty-five, each marked `(then)`, the three settings it carried that a later
+and a version 1 record lists after the twenty-six, each marked `(then)`, the three settings it carried that a later
 record does not. A record that carries the one ceiling a pool held before its 5-hour and weekly ceilings split reads
 that fraction on both the 5-hour ceiling and the Weekly ceiling rows. "Outcome" lists the pin written, the reservation
 (the account, the share per window and the expiry), the cache-map entries the answer wrote (`pending` until it ends),
