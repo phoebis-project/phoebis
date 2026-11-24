@@ -950,18 +950,20 @@ reads bound once the model holds a bound pair, and unobserved otherwise.
 
 A move over a pair that reads bound prices its rewrite as the last prompt, less the pin's sum for the account it
 leaves, plus its sum for the destination, never under zero. A pair that reads kept or unobserved, a session with no pin
-and a pin no answer has renewed with usage price their rewrite as above. Each move's rewrite also leaves out the static
-prefix that its destination holds warm: the router keeps, per model, account and cache lane, the static boundaries that
-the account's answers confirmed in the cache, and subtracts the estimated size of the deepest boundary of the request
-that the destination holds on the request's cache lane, never under zero. A failover's landing, which reads no pin,
-leaves that prefix out of its body's write too, and a fresh session's placement prices its whole body. A shedding round
-reads each pin other than its request's own, and the Sessions route each pin, by the one static boundary that the pin
-names, the end of its static prefix, so they subtract only at a destination that holds the pin's whole static prefix.
-The router keeps these boundaries in memory, so after a restart a move prices the whole prompt until new answers report
-them. The shedding round reads each pin's move at the destination its gate finds for the pin: it orders its pins by that
-rewrite plus the thinking the move drops, counted at the weight of output, and prices a warm pin's move at both shares
-and a cold pin's at the dropped thinking's share, while the `rewrite` of a planned move in the round's record reads the
-write alone.
+and a pin no answer has renewed with usage price their rewrite as above. The rewrite of a rule's move also leaves out
+the static prefix that its destination holds warm: the router keeps, per model, account and cache lane, the static
+boundaries that the account's answers confirmed in the cache, and subtracts the estimated size of the deepest boundary
+of the request that the destination holds on the request's cache lane, never under zero. The rewrite of a live pin that
+a fallback credit token hands to the account that issued the token leaves that prefix out in the same way, unless the
+pin's account is past its subscription end. A failover's landing, which reads no pin, leaves that prefix out of its
+body's write too, while a fresh session's placement and each other placement that replaces a live pin price their whole
+body. A shedding round reads each pin other than its request's own, and the Sessions route each pin, by the one static
+boundary that the pin names, the end of its static prefix, so they subtract only at a destination that holds the pin's
+whole static prefix. The router keeps these boundaries in memory, so after a restart a move prices the whole prompt
+until new answers report them. The shedding round reads each pin's move at the destination its gate finds for the pin:
+it orders its pins by that rewrite plus the thinking the move drops, counted at the weight of output, and prices a warm
+pin's move at both shares and a cold pin's at the dropped thinking's share, while the `rewrite` of a planned move in the
+round's record reads the write alone.
 
 ### Slow-down
 
