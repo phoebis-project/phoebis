@@ -9,7 +9,7 @@ import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById, servedFigures } from './pools';
-import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, fastTurn, requestById } from './requests';
+import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, fastTurn, pinCacheTtlOf, requestById } from './requests';
 import { dropSizeOf, droppedThinkingOf, moveSizeOf, proWeekRewriteOf } from './rewrite';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, tablesFor } from './samples';
@@ -639,7 +639,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     burnAt: pinned ? servedBurnAt(burnAtRoll) : null,
     ...burnReadingOf(spec.accountId, spec.keyId, burn, unit),
     burnUsd: burnUsdOf(burnUsdRoll * factor, unit, spec.model),
-    cacheTtlMs: pinned ? 5 * MINUTE : null,
+    cacheTtlMs: pinned ? pinCacheTtlOf(sessionId) : null,
     effort: pinned && !spec.noEffort ? effortAt(i) : null,
     lastInputTokens: pinned ? lastInputRoll : null,
     lastRefreshAt: pinned ? lastRefresh : null,
@@ -913,7 +913,7 @@ SESSIONS.forEach((pin, i) => {
         return [pinLine(line, pin.keyId, pin.sessionId, display, pin.lastRefreshAt)];
       }
       const ended = i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT;
-      const line = { ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState };
+      const line = { ...own, cacheTtlMs: pinCacheTtlOf(pin.sessionId), effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState };
       return [pinLine(line, pin.keyId, pin.sessionId, servedBeside(display, line, firstSeen), line.lastUsedAt)];
     }),
   );
@@ -1094,7 +1094,7 @@ SLOWED_PINS.forEach((pin, k) => {
     return {
       accountId: 'studio',
       agentId,
-      cacheTtlMs: HOUR,
+      cacheTtlMs: pinCacheTtlOf(pin.sessionId),
       effort: agentId === 'main' ? effort : effortAt(k + j),
       ended: false,
       lastInputTokens: promptOf(newest.usage),
@@ -1151,7 +1151,7 @@ if (FLEET_PINS.length > 0) {
   const lines = FLEET_PINS.map((pin, j) => {
     const attempt = servingAttempt(pin)!;
     const pinnedAt = runStart(fleetRows.filter((r) => r.canonicalModel === pin.canonicalModel)).at;
-    return { accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), ended: false, lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel, pinnedAt };
+    return { accountId: attempt.accountId, agentId: 'main', cacheTtlMs: pinCacheTtlOf(FLEET_SESSION_ID), effort: effortAt(j + 1), ended: false, lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel, pinnedAt };
   });
   SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', burn: FLEET_BURN, firstSeen: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
 }
@@ -1171,7 +1171,7 @@ const WORKSHOP_BURN_USD = 0.19;
   const firstSeen = workshopRows[workshopRows.length - 1].at;
   // A pin holds one model, so the line's pin was written at the session's oldest turn on that model.
   const pinnedAt = workshopRows.filter((r) => r.canonicalModel === WORKSHOP_PIN.canonicalModel).at(-1)!.at;
-  const line = { accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), ended: false, lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel, pinnedAt };
+  const line = { accountId: 'workshop', agentId: 'main', cacheTtlMs: pinCacheTtlOf(WORKSHOP_SESSION_ID), effort: effortAt(1), ended: false, lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel, pinnedAt };
   SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', burn: WORKSHOP_BURN, dollars: WORKSHOP_BURN_USD, firstSeen, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
 }
 
@@ -1239,7 +1239,7 @@ const AUXILIARY_ONLY_BURN = 0.05;
 const auxiliaryOnlyLine = {
   accountId: 'overflow',
   agentId: auxiliaryOnlyRecipe.agentId,
-  cacheTtlMs: 5 * MINUTE,
+  cacheTtlMs: pinCacheTtlOf(AUXILIARY_ONLY_SESSION_ID),
   effort: 'high',
   ended: false,
   lastInputTokens: 23_400,
@@ -1249,8 +1249,8 @@ const auxiliaryOnlyLine = {
 };
 const NO_MOD_CREATED_AT = ago(47 * MINUTE);
 const NO_MOD_BURN = 0.22;
-const noModMain = { accountId: 'contract', agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: 'max', ended: false, lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), lifecycle: null, model: 'claude-sonnet-5-5' };
-const noModSubagent = { accountId: 'contract', agentId: '5c8e', cacheTtlMs: 5 * MINUTE, effort: 'low', ended: false, lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), lifecycle: null, model: HAIKU };
+const noModMain = { accountId: 'contract', agentId: 'main', cacheTtlMs: pinCacheTtlOf(NO_MOD_SESSION_ID), effort: 'max', ended: false, lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), lifecycle: null, model: 'claude-sonnet-5-5' };
+const noModSubagent = { accountId: 'contract', agentId: '5c8e', cacheTtlMs: pinCacheTtlOf(NO_MOD_SESSION_ID), effort: 'low', ended: false, lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), lifecycle: null, model: HAIKU };
 const WRITTEN_SESSIONS = [
   writtenRow(
     {
@@ -1481,9 +1481,10 @@ export const largestCohort = (keyIds: ReadonlySet<string>): number => {
   return Math.max(0, ...[...agents.values()].map((a) => a.size));
 };
 
-// Read off the ledger rows, which cover the last 24 hours, so the tile and the
-// analytics Cache section agree on what "expired between turns" counts.
-export const EXPIRED_BETWEEN_TURNS = REQUESTS.filter((r) => r.status === 200 && expiredBetweenTurns(r));
+// The ledger rows' expiries between turns over the last 24 hours, which the tile and the attention item count. A
+// released agent's return stays out, since no probe could have kept its entry warm, while the Cache section's rollups
+// keep it.
+export const EXPIRED_BETWEEN_TURNS = REQUESTS.filter((r) => r.status === 200 && expiredBetweenTurns(r) && !RELEASED_AT_REQUEST.has(r.id));
 
 // The mock's engine holds a session from its registration: the mod's, on every row a mod reports or went silent on,
 // the registration-only row among them, and the first request it kept a recipe for on a spec row no mod registered.

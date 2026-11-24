@@ -578,6 +578,8 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       cacheMissReason: null,
       cooldownSet: rateLimitHit ? rateLimitCooldown(windows, cursor + durationMs, rng.int(20, 75)) : null,
       durationMs,
+      // Read off the day's rows with the previous size (`walkSessionTurns`).
+      entryExpired: null,
       index: i,
       issuedDigest: null,
       outcome,
@@ -1244,6 +1246,19 @@ export const FINISHED_AGENTS = [
 export const FLEET_SESSION_ID = '8b1f4c2e-6a93-4d07-b5e2-3c9a7f1d4e68';
 /** The approved Ultra's session on bench, on the 7-day window and the Fable week alone. */
 export const WORKSHOP_SESSION_ID = '4a7c2e9b-1d58-4f36-b0e3-7c5a9d2f1e84';
+/** The sessions whose pins' cache entries live for an hour: four of studio's notebook sessions and the workshop's. */
+const HOUR_ENTRY_SESSION_IDS: ReadonlySet<string> = new Set([MARKED_SESSION_IDS[0], MARKED_SESSION_IDS[1], OPENING_SESSION_IDS[1], SLOWED_SESSION_ID, WORKSHOP_SESSION_ID]);
+/** The TTL of the cache entries of a session's pins, as each pin's line carries it in `cacheTtlMs`. The walk's
+ *  expiry and the lines both read it, so the fact on an attempt and the line cannot part. */
+export const pinCacheTtlOf = (sessionId: string | null): number => (sessionId !== null && HOUR_ENTRY_SESSION_IDS.has(sessionId) ? HOUR : 5 * MINUTE);
+/**
+ * The ids of the requests whose pin's row carried the keepalive's release at the request. The router states the fact
+ * on the attempt and no view reads it, so the mock keeps it beside its rows for its two counts. The story holds one, a
+ * laptop subagent's turn of the night: the mod released the agent behind the turn before, and the request is the
+ * agent's return. A drawn row's id follows the clock the mock loads at, so it names that turn at the instant the smoke
+ * and the browser pass pin.
+ */
+export const RELEASED_AT_REQUEST: ReadonlySet<string> = new Set(['req_f05195b5-f2f']);
 const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
 
 function storyRow(seed: StorySeed): RequestLog {
@@ -1282,6 +1297,8 @@ function storyRow(seed: StorySeed): RequestLog {
       cacheMissReason: !answer || kind === 'count_tokens' || index > 0 || seed.landsAfresh || seed.unfiled ? null : !oauth ? null : seed.pending ? 'pending' : 'none',
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
+      // Read off the day's rows with the previous size (`walkSessionTurns`).
+      entryExpired: null,
       index,
       issuedDigest: null,
       // The ledger files an attempt with no head as a transport failure unless the request ended canceled.
@@ -1995,15 +2012,22 @@ export const pinReadAt = (lastUsedAt: number, ttlMs: number, at: number): PinRea
 /** The client errors that release a pin the request's own selection placed, as the relay answers them. */
 const RELEASING_STATUSES: readonly (number | null)[] = [400, 401, 403, 404];
 /**
+ * Whether the relay reports a renewal at the end of a request's last attempt, where `renews` says the pin stood before
+ * the request: where the request is no token count and that attempt answered 200, or answered a releasing client error
+ * on a pin it did not place. A count sends no report.
+ */
+const reportsRenewal = (r: Pick<RequestLog, 'attempts' | 'kind'>, renews: boolean): boolean => {
+  const last = r.attempts[r.attempts.length - 1];
+  return r.kind !== 'count_tokens' && (last.upstreamStatus === 200 || (renews && RELEASING_STATUSES.includes(last.upstreamStatus)));
+};
+/**
  * The instant a request leaves its pin's last use at, where `renews` says the pin stood before the request: the end of
- * its last attempt where the request is no token count and that attempt answered 200, or answered a releasing client
- * error on a pin it did not place, since the router stamps the pin again with the renewal the relay reports at the
- * stream's end, and the start of its last attempt otherwise, the selection's own stamp. A count sends no report.
+ * its last attempt where the relay reports a renewal there (`reportsRenewal`), since the router stamps the pin again
+ * with that report, and the start of its last attempt otherwise, the selection's own stamp.
  */
 export const pinStampOf = (r: Pick<RequestLog, 'attempts' | 'kind'>, renews: boolean): number => {
   const last = r.attempts[r.attempts.length - 1];
-  const reported = r.kind !== 'count_tokens' && (last.upstreamStatus === 200 || (renews && RELEASING_STATUSES.includes(last.upstreamStatus)));
-  return reported ? attemptEnd(last) : Date.parse(last.startedAt);
+  return reportsRenewal(r, renews) ? attemptEnd(last) : Date.parse(last.startedAt);
 };
 
 /**
@@ -2789,14 +2813,21 @@ function phaseRequests() {
 /**
  * The session's turns as the router and the relay see them, over the rows' last fields, since the passes above move
  * arrivals. Each pin key (key, session, agent and canonical model) holds the router's row: its account, its stamp
- * (`pinStampOf`) and the size of its last usage report. A request's first selection reads the row as `pinReadAt` does,
- * and a row a sweep has taken is gone, so a pool that pins nothing holds none. A first attempt takes its previous size
- * as the selection hands it on: the row's size, live or idle past the window, where the attempt lands on the row's
- * account, a token count's renewal among them, and none on a compacted turn, on a row whose last report was empty or
- * absent, off that account and on a request with no row. A probe's usage is the keepalive's cost and renews no size,
- * and a token count stores no report. A failover's leg finds no row of its own, since the failover took it, so it takes
- * no size, and a resend in place goes out under the decision of the attempt it repeats, its size and the account it
- * left included.
+ * (`pinStampOf`), its last refresh, whether only auxiliary requests used it and the size of its last usage report. A
+ * request's first selection reads the row as `pinReadAt` does, and a row a sweep has taken is gone, so a pool that pins
+ * nothing holds none. A first attempt takes its previous size as the selection hands it on: the row's size, live or
+ * idle past the window, where the attempt lands on the row's account, a token count's renewal among them, and none on a
+ * compacted turn, on a row whose last report was empty or absent, off that account and on a request with no row. A
+ * probe's usage is the keepalive's cost and renews no size, and a token count stores no report. A failover's leg finds
+ * no row of its own, since the failover took it, so it takes no size, and a resend in place goes out under the decision
+ * of the attempt it repeats, its size and the account it left included.
+ *
+ * An attempt that takes a size takes beside it whether the row's entry was past its lifetime at the selection: at or
+ * past the row's last refresh, or its last use for a row only auxiliary requests used, plus the session's cache TTL
+ * (`pinCacheTtlOf`). Each other attempt reads null, and a resend in place copies the fact with the size. A placement
+ * stamps the refresh at its selection and marks a row that a request of an auxiliary class placed, a turn's renewal
+ * stamps it at its selection and clears the mark, a compacted turn's renewal zeroes it, a probe's renewal stamps it at
+ * the report, and a token count and an auxiliary call leave both.
  *
  * The account a first attempt leaves is its agent's newest landing under the key and session, whatever the model, while
  * the sweeps have not taken it: a placement, a renewal and a probe's renewal stamp the pin they land on. An auxiliary
@@ -2817,7 +2848,7 @@ function phaseRequests() {
  * keeps its null.
  */
 function walkSessionTurns() {
-  const rows = new Map<string, { accountId: string; at: number; size: number | null }>();
+  const rows = new Map<string, { accountId: string; at: number; auxiliaryOnly: boolean; refreshedAt: number; size: number | null }>();
   const newest = new Map<string, { accountId: string; at: number }>();
   const answered = new Map<string, string>();
   for (const r of byArrival()) {
@@ -2838,16 +2869,24 @@ function walkSessionTurns() {
     const parent = r.agentType === 'fork' ? `${r.sessionId}|main` : r.forkedFrom === null ? undefined : `${r.forkedFrom}|main`;
     const lastAnswer = answered.get(agent) ?? (parent === undefined ? undefined : answered.get(parent));
     const prior = newest.get(landing);
+    // A pin only auxiliary requests used is kept warm by them, so its last use is the measure, as the router's `warm`
+    // reads its row.
+    const warmUntil = row === undefined ? null : (row.auxiliaryOnly ? row.at : row.refreshedAt) + pinCacheTtlOf(r.sessionId);
     let left: string | undefined;
     r.attempts.forEach((a, i) => {
       if (resentInPlace(r, i)) {
-        if (r.sessionId !== null) a.previousInputTokens = r.attempts[i - 1].previousInputTokens;
+        if (r.sessionId !== null) {
+          a.previousInputTokens = r.attempts[i - 1].previousInputTokens;
+          a.entryExpired = r.attempts[i - 1].entryExpired;
+        }
       } else if (i > 0) {
         if (r.sessionId !== null) left = r.attempts[i - 1].accountId;
         a.previousInputTokens = null;
+        a.entryExpired = null;
       } else if (r.sessionId !== null) {
         left = auxiliary ? row?.accountId : prior !== undefined && pinReadAt(prior.at, ttl, selectedAt) !== 'none' ? prior.accountId : undefined;
         a.previousInputTokens = row !== undefined && r.contextCompacted === null && (row.size ?? 0) > 0 && a.accountId === row.accountId ? row.size : null;
+        a.entryExpired = a.previousInputTokens === null || warmUntil === null ? null : selectedAt >= warmUntil;
       }
       if (a.upstreamStatus !== 200 || r.kind === 'count_tokens' || UNFILED_IDS.has(r.id)) return;
       const named = !firstTurn && r.kind !== 'probe' && (left === undefined || left === a.accountId);
@@ -2868,9 +2907,22 @@ function walkSessionTurns() {
       const stamp = pinStampOf(r, renews);
       const released = RELEASING_STATUSES.includes(last.upstreamStatus);
       const places = !renews && r.kind !== 'count_tokens' && !released;
+      const refreshing = r.requestClass === null || CONVERSATION_CLASSES.some((c) => c === r.requestClass);
       if (failsOver(last) || (!renews && r.kind !== 'count_tokens' && released)) rows.delete(pin);
-      else if (renews) row.at = Math.max(row.at, stamp);
-      else if (places) rows.set(pin, { accountId: last.accountId, at: stamp, size: null });
+      else if (renews) {
+        row.at = Math.max(row.at, stamp);
+        // A refresh keeps the later of its stamp and the one before it, as the last use does, since a turn and a probe
+        // that overlap land their stamps out of arrival order. A compacted turn's zero alone moves it back.
+        if (r.kind === 'probe') {
+          if (reportsRenewal(r, renews)) row.refreshedAt = Math.max(row.refreshedAt, stamp);
+        } else if (r.kind !== 'count_tokens' && r.contextCompacted !== null) row.refreshedAt = 0;
+        else if (r.kind !== 'count_tokens' && refreshing) Object.assign(row, { auxiliaryOnly: false, refreshedAt: Math.max(row.refreshedAt, selectedAt) });
+      } else if (places) {
+        // The selection that placed the pin is the one the last attempt went out under.
+        let decided = r.attempts.length - 1;
+        while (resentInPlace(r, decided)) decided -= 1;
+        rows.set(pin, { accountId: last.accountId, at: stamp, auxiliaryOnly: !refreshing, refreshedAt: Date.parse(r.attempts[decided].startedAt), size: null });
+      }
       if (!auxiliary && (renews || places)) newest.set(landing, { accountId: last.accountId, at: renews ? row.at : stamp });
     }
     const serving = servingAttempt(r);

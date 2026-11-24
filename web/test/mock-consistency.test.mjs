@@ -4183,6 +4183,36 @@ test('a guardrail block carries the marker the relay computed behind its read of
   assert.equal(detail?.request.cacheMarker, true);
 });
 
+// Catches a walk that reads the pool's tier for an entry's lifetime, by the first turn, and one that states the entry
+// past its lifetime whatever the instant, by the second. Laptop's main turn on secondary of 15:33:36 the day before
+// (req_b9b779ef-af6) comes 9 min 40 s behind its pin's last turn, past the five minutes its pin's line holds and inside
+// the hour that all's policy gives a plan account's main turn. Desktop's main turn on primary of 14:12:30
+// (req_6e1f3b98-a24) comes 46 s behind its pin's last turn.
+test("a turn reads its pin's entry past its lifetime by the pin's own TTL and counts, and a turn inside it counts nothing", async () => {
+  const s = await pinned;
+  const factOf = async (id) => {
+    const row = (await s.api.getRequest(id))?.request;
+    return row && [row.attempts[0].entryExpired, s.lib.expiredBetweenTurns(row)];
+  };
+  assert.deepEqual(await Promise.all([factOf('req_b9b779ef-af6'), factOf('req_6e1f3b98-a24')]), [
+    [true, true],
+    [false, false],
+  ]);
+});
+
+// Catches a mock that feeds the Cache tab and the keepalive's two counts one count. The day holds six expiries,
+// laptop's two of them: its main turn of 15:33:36 the day before (req_b9b779ef-af6) and the night's turn of its
+// subagent e90b at 04:37:26 (req_f05195b5-f2f), which read the report of the agent's turn of 04:27:56 with no request
+// of its pin between, the return of an agent the mod released. The Cache tab's laptop row counts both, and the overview
+// and the attention item count the five expiries of the agents that the keepalive held.
+test("a released agent's return counts in its key's Cache row and in neither the keepalive overview's count nor the attention item's", async () => {
+  const s = await pinned;
+  const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'key', to: iso(s.now) });
+  const overview = await s.api.getKeepaliveOverview();
+  const item = s.attention.find((i) => i.kind === 'expired_between_turns');
+  assert.deepEqual([groups.find((g) => g.key === 'laptop')?.expiredBetweenTurns, overview.expiredBetweenTurns24h, item?.detail.expired], [2, 5, 5]);
+});
+
 // An instant whose hour a full day back carries traffic.
 const firstHour = loading.then(() => storyAt('2026-09-16T09:30:00Z'));
 

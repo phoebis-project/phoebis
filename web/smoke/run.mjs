@@ -875,14 +875,15 @@ await forView('/', async () => {
     ],
     // The engine's retained prompts at 92 percent of their cap, the mock overview's retained bytes.
     ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
-    // The expiries between turns rank last: the day's six, the drawn turns the mock seats inside their pin's window,
-    // each sit on a pool that warms caches under a key the keepalive may probe for (`ATTENTION` in mock/attention.ts
-    // over the request seed's rows).
+    // The expiries between turns rank last: the day's five, the drawn turns the mock seats inside their pin's window
+    // but the return of an agent the mod released (`RELEASED_AT_REQUEST` in mock/requests.ts), each sit on a pool that
+    // warms caches under a key the keepalive may probe for (`ATTENTION` in mock/attention.ts over the request seed's
+    // rows).
     [
-      'Expired between turns: 6 in 24h',
+      'Expired between turns: 5 in 24h',
       'badge--warning',
       '/sessions',
-      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 6'],
+      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 5'],
     ],
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
@@ -1305,11 +1306,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 19
   // sessions the engine holds and its 33 agent records, one per recipe the story writes, against the bootstrap file's
   // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (225
-  // ok of 277), the 6 expiries between turns the ledger rows of the day hold, the drawn turns the mock seats inside
-  // their pin's window, and the three bus gaps, the last two hours back.
+  // ok of 277), the 5 expiries between turns the ledger rows of the day hold, the drawn turns the mock seats inside
+  // their pin's window but the return of an agent the mod released, and the three bus gaps, the last two hours back.
   // The expired part takes the warning ink while the attention item `expired_between_turns` holds, which the mock holds
   // over its expiries on the pools that warm caches under keys that may be probed for (`ATTENTION` in
-  // mock/attention.ts), and with an attention answer that lacks the item it takes none, the overview's count of 6
+  // mock/attention.ts), and with an attention answer that lacks the item it takes none, the overview's count of 5
   // standing. The last gap is inside the day, so the bus gaps part takes the warning ink with that gap's instant on its
   // hover. The card is read at the story's own instant, which the mock anchors as it loads, a moment past the clock's
   // origin, so the gap lies two hours back.
@@ -1353,9 +1354,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       ['Retained', '235.5 MiB of 256 MiB'],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
-    line: 'expired between turns 6 · bus gaps 3',
+    line: 'expired between turns 5 · bus gaps 3',
     parts: [
-      { text: 'expired between turns 6', title: null, warning: true },
+      { text: 'expired between turns 5', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
     probes: '225 ok (81%) of 277',

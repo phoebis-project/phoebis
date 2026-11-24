@@ -58,8 +58,8 @@ export interface HourlyRollup {
    */
   errors: Record<string, number>;
   /**
-   * Requests that `expiredBetweenTurns` reads as a turn whose cache expired: under half the size the pin's last report
-   * left. The reason counts cannot be split this way once summed, which is why the ledger carries it.
+   * Requests that `expiredBetweenTurns` reads as a turn whose cache expired. The reason counts cannot be split this way
+   * once summed, which is why the ledger carries it.
    */
   expiredBetweenTurns: number;
   /** Attempts that moved to another member before the request succeeded. */

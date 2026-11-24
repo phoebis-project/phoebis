@@ -862,6 +862,11 @@ export interface Attempt {
   cacheMissReason: CacheMissReason | null;
   cooldownSet: { reason: string; until: string } | null;
   durationMs: number | null;
+  /**
+   * Whether the pin's cache entry was past its lifetime when the selection read it, a probe's refresh counted. Null
+   * where the selection handed no size on and on an attempt stored before the router wrote the fact.
+   */
+  entryExpired: boolean | null;
   index: number;
   /** The digest of the credit token a refused attempt issued, null elsewhere. */
   issuedDigest: string | null;

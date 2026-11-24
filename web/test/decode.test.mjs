@@ -1316,6 +1316,8 @@ test("an attempt decodes its account's usage-based class, and an attempt from be
 test('a request page carries the trail with zero-based attempt indexes and the cursor', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   assert.equal(page.nextCursor, null);
+  // r-1's one attempt is the stem's one whose entry fact is a boolean, which a read under another name decodes null.
+  assert.equal(page.requests.find((r) => r.id === 'r-1').attempts[0].entryExpired, true);
   const failover = page.requests.find((r) => r.id === 'r-failover');
   assert.deepEqual(failover.attempts.map((a) => [a.index, a.accountId, a.upstreamStatus, a.outcome]), [[0, 'direct', 429, 'rate_limited'], [1, 'business', 200, 'succeeded']]);
   assert.equal(failover.attempts[0].cooldownSet.reason, 'account');
@@ -2057,9 +2059,12 @@ test('a request that read nine tenths of its prompt hits under its reason', () =
 test('a turn expired where it read under half the previous size', () => {
   const base = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
   const attempt = base.attempts[base.attempts.length - 1];
-  const turn = ({ cacheRead, kind = 'inference', previousInputTokens = 1_000, reason = 'not_requested', storedTokens = { input: 300, output: 100 } }) => ({
+  // The captured row's body carried no marker, so each row carries the marker and the expired entry that a count reads
+  // unless it names its own.
+  const turn = ({ cacheMarker = true, cacheRead, entryExpired = true, kind = 'inference', previousInputTokens = 1_000, reason = 'not_requested', storedTokens = { input: 300, output: 100 } }) => ({
     ...base,
-    attempts: [{ ...attempt, cacheMissReason: reason, previousInputTokens }],
+    attempts: [{ ...attempt, cacheMissReason: reason, entryExpired, previousInputTokens }],
+    cacheMarker,
     kind,
     storedTokens,
     usage: { ...base.usage, cacheRead, cacheWrite1h: 0, cacheWrite5m: 0, input: 0 },
@@ -2074,8 +2079,15 @@ test('a turn expired where it read under half the previous size', () => {
     turn({ cacheRead: 0, reason: null, storedTokens: { input: null, output: null } }),
     turn({ cacheRead: 100, kind: 'count_tokens' }),
     turn({ cacheRead: 100, kind: 'probe' }),
+    turn({ cacheMarker: false, cacheRead: 499 }),
+    turn({ cacheRead: 499, entryExpired: false }),
+    turn({ cacheRead: 499, entryExpired: null }),
   ];
-  assert.deepEqual(rows.map(expired), [1, 0, 0, 0, 0, 0, 0], 'under half of 1,000 counts, half does not, and no previous size, a divergence, no usage report, a token count and a probe count nothing');
+  assert.deepEqual(
+    rows.map(expired),
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    'under half of 1,000 counts, half does not, and no previous size, a divergence, no usage report, a token count, a probe, an unmarked body, an entry inside its lifetime and an attempt with no fact count nothing',
+  );
 });
 
 test('the fold counts the requests that could never read a cache', () => {

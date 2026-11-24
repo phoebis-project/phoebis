@@ -76,12 +76,16 @@ const EXPIRY_REASONS: readonly CacheMissReason[] = ['none', 'not_requested', 'no
 export const relayReason = (reason: CacheMissReason): boolean => EXPIRY_REASONS.includes(reason);
 
 /**
- * Whether a turn found its cache expired: its serving attempt stored a usage report and read under half the size the
- * pin's last report left on that account, under no reason or one of `EXPIRY_REASONS`. A null previous size counts
- * nothing, and a probe and a token count are no turns.
+ * Whether a turn found its cache expired: its body carried a cache marker, and its serving attempt stored a usage
+ * report, found the pin's entry past its lifetime and read under half the size the pin's last report left on that
+ * account, under no reason or one of `EXPIRY_REASONS`. So a short read inside a long entry and an unmarked call never
+ * count. A null previous size counts nothing, and so does an attempt stored before the router wrote whether the entry
+ * had outlived its lifetime. A probe and a token count are no turns.
  */
-export const expiredBetweenTurns = (r: Pick<RequestLog, 'attempts' | 'kind' | 'storedTokens' | 'usage'>): boolean => {
-  const previous = servingAttempt(r)?.previousInputTokens ?? null;
+export const expiredBetweenTurns = (r: Pick<RequestLog, 'attempts' | 'cacheMarker' | 'kind' | 'storedTokens' | 'usage'>): boolean => {
+  const serving = servingAttempt(r);
+  const previous = serving?.previousInputTokens ?? null;
+  if (!r.cacheMarker || serving?.entryExpired !== true) return false;
   if (previous === null || r.kind === 'probe' || r.kind === 'count_tokens' || r.storedTokens.input === null) return false;
   const reason = servedMissReason(r);
   return 2 * r.usage.cacheRead < previous && (reason === null || relayReason(reason));
