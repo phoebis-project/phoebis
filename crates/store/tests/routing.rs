@@ -1189,6 +1189,10 @@ fn rekey_of_a() -> RekeyWrite {
         }],
         delete_cooldowns: vec![("a".into(), CooldownScope::Model(SPELLING.into()))],
         upsert_cooldowns: vec![cooldown("a", &format!("model:{DATED}"), 10_000)],
+        delete_bindings: Vec::new(),
+        upsert_bindings: Vec::new(),
+        delete_lapsed_agents: Vec::new(),
+        upsert_lapsed_agents: Vec::new(),
     }
 }
 
@@ -1247,6 +1251,68 @@ fn a_rekey_read_back_after_a_reopen_carries_the_moved_rows_and_the_spelling_row_
     assert_eq!(load.pins, rekey.upsert_pins);
     assert_eq!(load.cooldowns, rekey.upsert_cooldowns);
     assert_eq!(load.resolutions, vec![rekey.resolution]);
+}
+
+#[test]
+fn a_rekeys_facts_and_lapsed_record_read_back_under_the_dated_id_alone() {
+    let store = store_with(&["a", "b"]);
+    let fact = |model: &str| ThinkingBindingRow {
+        model: model.into(),
+        account_a: "a".into(),
+        incarnation_a: 1,
+        account_b: "b".into(),
+        incarnation_b: 1,
+        bound: true,
+        observed_at: 1_000,
+    };
+    let record = |model: &str| LapsedAgentRow {
+        key_id: "k".into(),
+        session_id: "s".into(),
+        agent_id: "main".into(),
+        model: model.into(),
+        key_generation: 1,
+        account_id: "a".into(),
+        incarnation: 1,
+        last_used_at: 1_200,
+        last_input_tokens: 4_000,
+        burn: PinBurn::default(),
+        burn_banded: PinBurn::default(),
+        burn_fast: PinBurn::default(),
+        burn_unmetered: PinBurn::default(),
+        burn_unmetered_model: None,
+        speed: 1.0,
+        thinking_sums: Default::default(),
+        account_bound: false,
+    };
+    store
+        .write_routing(|tx| {
+            tx.replace_thinking_binding(&fact(SPELLING))?;
+            tx.upsert_lapsed_agent(&record(SPELLING))
+        })
+        .unwrap();
+    store
+        .rekey_resolution(&RekeyWrite {
+            resolution: ResolutionRow {
+                spelling: SPELLING.into(),
+                dated_id: DATED.into(),
+                resolved_at: 1_500,
+            },
+            delete_pins: Vec::new(),
+            upsert_pins: Vec::new(),
+            delete_cooldowns: Vec::new(),
+            upsert_cooldowns: Vec::new(),
+            delete_bindings: vec![(SPELLING.into(), "a".into(), "b".into())],
+            upsert_bindings: vec![fact(DATED)],
+            delete_lapsed_agents: vec![record(SPELLING).key()],
+            upsert_lapsed_agents: vec![record(DATED)],
+        })
+        .unwrap();
+    let load = store.load_routing().unwrap();
+    assert_eq!(
+        (load.thinking_bindings, load.lapsed_agents),
+        (vec![fact(DATED)], vec![record(DATED)]),
+        "a restart loads each moved row under the dated id and none under the spelling"
+    );
 }
 
 #[test]

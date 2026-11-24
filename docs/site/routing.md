@@ -939,8 +939,9 @@ new account settles the pair. Its `input_transformations` member reads the pair 
 standing `prefix_binding_mismatch` entry is no drop the move caused. An answer without the member reads the pair bound
 where its prompt is smaller than the last prompt before the move, and settles nothing otherwise. The newest answer
 replaces what the pair held, and the registry keeps each pair's fact across a restart, while a move whose answer has not
-come yet is forgotten. A pair with no fact of its own reads bound once the model holds a bound pair, and unobserved
-otherwise.
+come yet is forgotten. When a model's spelling resolves to a dated id, the facts learned under the spelling move to the
+dated id, where the newer of two facts for one pair stands, and a move whose answer has not come yet follows its pin. A
+pair with no fact of its own reads bound once the model holds a bound pair, and unobserved otherwise.
 
 A move over a pair that reads bound prices its rewrite as the last prompt, less the pin's sum for the account it
 leaves, plus its sum for the destination, never under zero. A pair that reads kept or unobserved, a session with no pin

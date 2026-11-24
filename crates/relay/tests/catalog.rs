@@ -534,6 +534,10 @@ async fn the_first_request_after_a_restart_carries_the_dated_id_from_the_persist
             upsert_pins: Vec::new(),
             delete_cooldowns: Vec::new(),
             upsert_cooldowns: Vec::new(),
+            delete_bindings: Vec::new(),
+            upsert_bindings: Vec::new(),
+            delete_lapsed_agents: Vec::new(),
+            upsert_lapsed_agents: Vec::new(),
         })
         .unwrap();
     let h = harness_with_store_and_catalog(
@@ -1056,6 +1060,10 @@ async fn a_persisted_newer_mapping_is_not_moved_back_by_an_older_startup_listing
             upsert_pins: Vec::new(),
             delete_cooldowns: Vec::new(),
             upsert_cooldowns: Vec::new(),
+            delete_bindings: Vec::new(),
+            upsert_bindings: Vec::new(),
+            delete_lapsed_agents: Vec::new(),
+            upsert_lapsed_agents: Vec::new(),
         })
         .unwrap();
     let h = harness_with_store_and_catalog(

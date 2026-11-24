@@ -14,7 +14,8 @@ use phoebis_routing::{
     RouterHandle, RoutingState, SelectAnswer, SelectRequest, SelectResult, SharePricer,
     SpendResetSource, SpendWindow, UtilizationSample, WindowReading, WindowRestart, WindowSource,
     WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
-    IN_FLIGHT_RECLAIM_MS, RESET_SLACK_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
+    IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, RESET_SLACK_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
+    WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, Cancellation,
@@ -1333,6 +1334,209 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             .map(|c| c.scope.to_string())
             .collect::<Vec<_>>(),
         ["model:claude-sonnet-4-5-20250929"]
+    );
+}
+
+#[tokio::test]
+async fn a_pin_under_the_folded_spelling_holds_its_member_for_a_non_portable_turn_after_the_resolution(
+) {
+    const DATED: &str = "claude-sonnet-4-5-20250929";
+    let store = seeded(&["a", "b"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.strategy = Strategy::RoundRobin;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let turn = |model: &str, portability: Portability, at: i64| SelectRequest {
+        portability,
+        ..turn_of(&handle, "s1", "main", model, at)
+    };
+    let SelectResult::Selected(opening) = handle
+        .select(turn("claude-sonnet-4-5", Portability::Portable, 1_000))
+        .await
+        .unwrap()
+        .result
+    else {
+        panic!()
+    };
+    assert_eq!(opening.account.id, "a");
+    let epoch = opening.pin.unwrap().epoch;
+    handle
+        .resolve("claude-sonnet-4-5", DATED, 2_000)
+        .await
+        .unwrap();
+    let spelled = PinKey {
+        key_id: "k".to_string(),
+        session_id: "s1".to_string(),
+        agent_id: "main".to_string(),
+        model: "claude-sonnet-4-5".to_string(),
+    };
+    let keys: Vec<PinKey> = handle
+        .pins()
+        .await
+        .unwrap()
+        .iter()
+        .map(PinRow::key)
+        .collect();
+    assert!(
+        !keys.contains(&spelled),
+        "the pin under the folded spelling is dropped"
+    );
+    assert!(
+        keys.iter().any(|key| key.model == DATED),
+        "and re-written under the dated id: {keys:?}"
+    );
+    assert_eq!(
+        handle
+            .canonicals(vec!["claude-sonnet-4-5".into()])
+            .await
+            .unwrap(),
+        [DATED],
+        "and the resolution itself travels with them"
+    );
+    now.store(3_000, Ordering::SeqCst);
+    let SelectResult::Selected(sel) = handle
+        .select(turn(DATED, Portability::Hold, 3_000))
+        .await
+        .unwrap()
+        .result
+    else {
+        panic!()
+    };
+    assert_eq!(
+        (
+            sel.account.id.as_str(),
+            sel.migrated,
+            sel.pin.unwrap().epoch
+        ),
+        ("a", None, epoch),
+        "the pin renews under the dated id rather than starting over"
+    );
+    now.store(4_000, Ordering::SeqCst);
+    assert_eq!(
+        landed_on(
+            handle
+                .select(turn("claude-sonnet-4-5", Portability::Hold, 4_000))
+                .await
+                .unwrap()
+        )
+        .0,
+        "a",
+        "the folded spelling still finds the same pin"
+    );
+}
+
+#[tokio::test]
+async fn a_rejection_cooldown_under_the_folded_spelling_still_excludes_the_member_under_the_dated_id(
+) {
+    const DATED: &str = "claude-sonnet-4-5-20250929";
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(500));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let rejection = |until: i64| Report::Cooldown {
+        account_id: "a".into(),
+        row: CooldownRow {
+            account_id: "a".into(),
+            scope: CooldownScope::Model("claude-sonnet-4-5".into()),
+            until,
+            set_at: 0,
+            reason: MODEL_REJECTED_REASON.into(),
+            window: "model_rejection".into(),
+            source_request_id: None,
+            incarnation: 1,
+            spend_share: None,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    };
+    handle.report(rejection(1_000 + HOUR)).await;
+    handle
+        .resolve("claude-sonnet-4-5", DATED, 500)
+        .await
+        .unwrap();
+    now.store(1_000, Ordering::SeqCst);
+    // Each call names a fresh session, so the second request finds no pin of the first.
+    let dated = || {
+        let s = handle.snapshot();
+        SelectRequest {
+            canonical_model: DATED.into(),
+            folded_model: DATED.into(),
+            candidates: resolve(&s, s.key("k").unwrap(), DATED, DATED).unwrap(),
+            lane: lane_key(DATED, "standard", "none", "-"),
+            ..request(&handle, None, 1_000)
+        }
+    };
+    assert_eq!(landed_on(handle.select(dated()).await.unwrap()).0, "b");
+    let mut solo = dated();
+    solo.candidates.retain(|c| c.account_id != "b");
+    assert_eq!(
+        handle.select(solo).await.unwrap().result,
+        SelectResult::Exhausted(Exhaustion::ModelRejected),
+        "no second attempt on the cooled member"
+    );
+    handle.report(rejection(2_000 + HOUR)).await;
+    assert_eq!(
+        handle
+            .cooldowns()
+            .await
+            .unwrap()
+            .iter()
+            .find(|c| c.account_id == "a" && c.scope == CooldownScope::Model(DATED.into()))
+            .map(|c| c.until),
+        Some(2_000 + HOUR),
+        "a cooldown recorded under the folded scope after the landing is stored under the dated scope"
+    );
+}
+
+#[tokio::test]
+async fn a_resolution_between_two_turns_keeps_the_pin_warm_on_the_dated_id() {
+    const DATED: &str = "claude-sonnet-4-5-20250929";
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let turn = |model: &str, at: i64, boundaries: &[&str]| SelectRequest {
+        request_class: Some("main".into()),
+        boundaries: boundaries.iter().map(|b| b.to_string()).collect(),
+        ..turn_of(&handle, "s1", "main", model, at)
+    };
+    handle
+        .select(turn("claude-sonnet-4-5", AT, &["m1"]))
+        .await
+        .unwrap();
+    handle
+        .resolve("claude-sonnet-4-5", DATED, AT + 500)
+        .await
+        .unwrap();
+    let dated_lane = lane_key(DATED, "standard", "none", "-");
+    assert_eq!(
+        handle
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .map(|p| p.lane.as_str())
+            .collect::<Vec<_>>(),
+        [dated_lane.as_str()],
+        "the moved pin's lane names the model the next request composes it from"
+    );
+    now.store(AT + 1_000, Ordering::SeqCst);
+    handle
+        .select(turn(DATED, AT + 1_000, &["m1", "m2"]))
+        .await
+        .unwrap();
+    let pin = handle
+        .pins()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.session_id == "s1" && p.model == DATED)
+        .expect("the pin moved to the dated id");
+    assert_eq!(
+        pin.last_refresh_at,
+        AT + 1_000,
+        "the continuation after the resolution refreshes its pin"
     );
 }
 
@@ -17240,37 +17444,6 @@ async fn a_token_count_behind_a_turn_keeps_the_effort_the_turn_stamped() {
 }
 
 #[tokio::test]
-async fn a_rekeyed_pin_keeps_its_pace_under_the_new_key() {
-    const DATED: &str = "claude-sonnet-5-20260929";
-    let store = seeded_oauth(&["a"]);
-    let now = Arc::new(AtomicI64::new(AT));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    let pin = stored_pin(&store, "s1", "a", 1, 0.0);
-    let mut state = RoutingState::from_load(RoutingLoad {
-        pins: vec![pin.clone()],
-        ..RoutingLoad::default()
-    });
-    main_turn_on(&mut state, &handle, "s1", AT);
-    main_turn_on(&mut state, &handle, "s1", AT + 10_000);
-    assert_eq!(
-        state.pin_pace(&pin.key()).and_then(|p| p.cycle_ms),
-        Some(10_000.0)
-    );
-    state.apply_resolution("claude-sonnet-5", DATED, AT + 20_000);
-    let dated = PinKey {
-        model: DATED.into(),
-        ..pin.key()
-    };
-    assert!(state.pin(&dated).is_some(), "the rekey moved the pin");
-    assert_eq!(
-        state.pin_pace(&dated).and_then(|p| p.cycle_ms),
-        Some(10_000.0),
-        "the pace moved with it"
-    );
-    assert!(state.pin_pace(&pin.key()).is_none());
-}
-
-#[tokio::test]
 async fn a_fail_over_whose_landing_was_held_names_the_account_left_on_the_next_request() {
     let store = shedding_store(&["a", "b"]);
     with_tier(&store, "a");
@@ -18438,6 +18611,38 @@ async fn a_later_observation_replaces_the_fact_its_pair_held() {
     // s1's answer taught a and b bound and s2's taught them kept, so the move prices the whole 100,000.
     assert_eq!(account, "b");
     assert!(close(booked, 0.01), "{booked:?}");
+}
+
+#[tokio::test]
+async fn an_observation_opened_under_the_spelling_settles_under_the_dated_id() {
+    const DATED: &str = "claude-sonnet-5-20260929";
+    let store = thinking_store(&["a", "b"], &[]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let pins = [
+        stored_pin(&store, "s1", "a", 1, 10.0),
+        stored_pin(&store, "s2", "a", 2, 10.0),
+    ];
+    let handle = thinking_router(&store, &pins, &now).await;
+    a_spent(&handle, &["a", "b"], AT).await;
+    assert_eq!(
+        spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, AT))
+            .await
+            .0,
+        "b"
+    );
+    handle.resolve(SONNET, DATED, AT).await.unwrap();
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            100_000,
+            None,
+            Some(DROPPED_FOR_ACCOUNT),
+        ))
+        .await;
+    let (account, booked) = spent_move(&handle, turn_of(&handle, "s2", "main", SONNET, AT)).await;
+    // s1's answer taught a and b bound under the dated id, so the move prices 100,000 less a's 40,000.
+    assert_eq!(account, "b");
+    assert!(close(booked, 0.006), "{booked:?}");
 }
 
 /// The 5-hour share `s2`'s move from `a` to `b` books once `s1`'s move over the same pair was answered with a prompt of

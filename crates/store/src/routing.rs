@@ -358,8 +358,8 @@ pub struct ResolutionRow {
     pub resolved_at: i64,
 }
 
-/// One landing of a resolution: the spelling row and every pin and model cooldown it moves from the spelling to
-/// the dated id.
+/// One landing of a resolution: the spelling row and every pin, model cooldown, pair's fact and lapsed agent's record
+/// that it moves from the spelling to the dated id.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RekeyWrite {
     pub resolution: ResolutionRow,
@@ -368,6 +368,12 @@ pub struct RekeyWrite {
     /// `(account_id, scope)` of each cooldown under the spelling.
     pub delete_cooldowns: Vec<(String, CooldownScope)>,
     pub upsert_cooldowns: Vec<CooldownRow>,
+    /// `(model, account_a, account_b)` of each pair's fact under the spelling.
+    pub delete_bindings: Vec<(String, String, String)>,
+    /// Each fact that stands under the dated id behind the merge, written under the holders that it names.
+    pub upsert_bindings: Vec<ThinkingBindingRow>,
+    pub delete_lapsed_agents: Vec<PinKey>,
+    pub upsert_lapsed_agents: Vec<LapsedAgentRow>,
 }
 
 text_enum! {
@@ -834,27 +840,7 @@ impl RoutingTx<'_> {
         &mut self,
         row: &ThinkingBindingRow,
     ) -> Result<bool, StoreError> {
-        // A pair whose account left between the observation and the write lands nowhere, rather than failing the
-        // batch on the reference the cascade would have cleared, and so does one whose id a new holder took: the
-        // table names no incarnation, so a row that landed would read as the new holder's.
-        let written = self
-            .tx
-            .prepare_cached(
-                "INSERT OR REPLACE INTO thinking_bindings (model, account_a, account_b, bound, observed_at) \
-                 SELECT ?1, ?2, ?3, ?4, ?5 \
-                 WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?2 AND incarnation = ?6) \
-                 AND EXISTS (SELECT 1 FROM accounts WHERE id = ?3 AND incarnation = ?7)",
-            )?
-            .execute(params![
-                row.model,
-                row.account_a,
-                row.account_b,
-                row.bound,
-                row.observed_at,
-                row.incarnation_a as i64,
-                row.incarnation_b as i64
-            ])?;
-        Ok(written > 0)
+        replace_thinking_binding_on(self.tx, row)
     }
 
     pub fn set_state_if_generations(
@@ -1206,6 +1192,34 @@ fn delete_lapsed_agent_on(conn: &Connection, key: &PinKey) -> Result<(), StoreEr
     Ok(())
 }
 
+/// Writes the pair's fact in place of the one it held, only while both ids' holders carry the incarnations the row
+/// names, and answers whether a row was written.
+fn replace_thinking_binding_on(
+    conn: &Connection,
+    row: &ThinkingBindingRow,
+) -> Result<bool, StoreError> {
+    // A pair whose account left between the observation and the write lands nowhere, rather than failing the
+    // batch on the reference the cascade would have cleared, and so does one whose id a new holder took: the
+    // table names no incarnation, so a row that landed would read as the new holder's.
+    let written = conn
+        .prepare_cached(
+            "INSERT OR REPLACE INTO thinking_bindings (model, account_a, account_b, bound, observed_at) \
+             SELECT ?1, ?2, ?3, ?4, ?5 \
+             WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?2 AND incarnation = ?6) \
+             AND EXISTS (SELECT 1 FROM accounts WHERE id = ?3 AND incarnation = ?7)",
+        )?
+        .execute(params![
+            row.model,
+            row.account_a,
+            row.account_b,
+            row.bound,
+            row.observed_at,
+            row.incarnation_a as i64,
+            row.incarnation_b as i64
+        ])?;
+    Ok(written > 0)
+}
+
 fn upsert_cooldown_on(conn: &Connection, row: &CooldownRow) -> Result<(), StoreError> {
     conn.prepare_cached("INSERT INTO cooldowns (account_id, scope, until, set_at, reason, window, source_request_id, incarnation, spend_share) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
          ON CONFLICT(account_id, scope) DO UPDATE SET \
@@ -1399,6 +1413,22 @@ fn rekey_resolution_on(conn: &Connection, rekey: &RekeyWrite) -> Result<(), Stor
     }
     for row in &rekey.upsert_cooldowns {
         upsert_cooldown_on(conn, row)?;
+    }
+    for (model, account_a, account_b) in &rekey.delete_bindings {
+        conn.prepare_cached(
+            "DELETE FROM thinking_bindings WHERE model = ?1 AND account_a = ?2 AND account_b = ?3",
+        )?
+        .execute(params![model, account_a, account_b])?;
+    }
+    // A moved fact lands only under the holders it names, as the router's own write of a fact does.
+    for row in &rekey.upsert_bindings {
+        replace_thinking_binding_on(conn, row)?;
+    }
+    for key in &rekey.delete_lapsed_agents {
+        delete_lapsed_agent_on(conn, key)?;
+    }
+    for row in &rekey.upsert_lapsed_agents {
+        upsert_lapsed_agent_on(conn, row)?;
     }
     Ok(())
 }

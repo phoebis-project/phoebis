@@ -24,7 +24,7 @@ use crate::select::{
     affinity_ttl_ms, lane_with_model, resolved, seconds_ms, Banded, SlowDownRead,
     RATE_LIMIT_REASON, RETRY_AFTER_WINDOW, SLOW_DOWN_WAIT_MS,
 };
-use crate::task::BurnRates;
+use crate::task::{under_account_reason, BurnRates};
 use crate::windows::{model_week, window_for, MODEL_WINDOWS};
 use crate::RegistrySnapshot;
 
@@ -1622,8 +1622,9 @@ pub struct RoutingState {
     /// are, and it leaves with the row in `take_pin`, so a restart holds none.
     head_marks: HashMap<PinKey, HeadMark>,
     in_flight: InFlight,
-    /// Each lapsed agent's record by the key of the pin the purge took as expired, which a placement of the agent reads
-    /// in place of a fresh session's figures. Written through and loaded at the start.
+    /// Each lapsed agent's record by the key of the pin the purge took as expired, that key's dated form once a
+    /// resolution moved it. A placement of the agent reads the record in place of a fresh session's figures. Written
+    /// through and loaded at the start.
     lapsed_agents: HashMap<PinKey, LapsedAgentRow>,
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
@@ -1632,6 +1633,10 @@ pub struct RoutingState {
     /// hour Pace's reservation reads survives a restart.
     model_week_hours: HashMap<(String, String), WeekHours>,
     next_epoch: u64,
+    /// The moves whose first answer has yet to say whether the account moved to dropped the thinking of the account
+    /// left, by the pin's key. Memory only, so a restart inside one teaches nothing. An observation belongs to its row
+    /// by the epoch, so it leaves with the row in `take_pin`.
+    observations: HashMap<PinKey, Observation>,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<PinKey, PinRow>,
     /// Each pin's pace by its key, which outlives `take_pin`: a move and a failover's landing write their fresh row
@@ -1713,6 +1718,8 @@ struct PairFact {
     bound: bool,
     incarnation_a: u64,
     incarnation_b: u64,
+    /// When the answer that taught the fact came, which a resolution's merge of two facts for one pair compares.
+    observed_at: i64,
 }
 
 /// Two accounts as the facts key their unordered pair: the smaller id first.
@@ -1721,6 +1728,35 @@ fn pair(account: &str, other: &str) -> (String, String) {
         (account.to_string(), other.to_string())
     } else {
         (other.to_string(), account.to_string())
+    }
+}
+
+/// A landing that took a session off an account whose thinking it held, open until the landed row's first report with
+/// usage says whether the account moved to dropped those blocks.
+pub(crate) struct Observation {
+    /// The landed row's epoch, which a report on that row carries.
+    pub(crate) epoch: u64,
+    pub(crate) left: String,
+    /// The incarnation the row ran on before the move, the left side's holder the learned pair names.
+    pub(crate) left_incarnation: u64,
+    /// The row's last prompt before the move, which an answer with no member is measured against.
+    pub(crate) last_prompt: u64,
+}
+
+impl Observation {
+    /// What the answer shows of the pair, `None` where it shows nothing: its member where it carries one, bound where
+    /// the member lists a block dropped for an account reason and kept where it lists none, and without one a `prompt`
+    /// smaller than the last one before the move reads bound. The client's standing prefix entry is no drop the move
+    /// caused.
+    pub(crate) fn binding(
+        &self,
+        prompt: u64,
+        dropped: Option<&BTreeMap<String, DroppedBlocks>>,
+    ) -> Option<bool> {
+        match dropped {
+            Some(dropped) => Some(dropped.keys().any(|key| under_account_reason(key))),
+            None => (prompt < self.last_prompt).then_some(true),
+        }
     }
 }
 
@@ -1782,6 +1818,7 @@ impl RoutingState {
                     bound: row.bound,
                     incarnation_a: row.incarnation_a,
                     incarnation_b: row.incarnation_b,
+                    observed_at: row.observed_at,
                 },
             );
         }
@@ -1822,6 +1859,7 @@ impl RoutingState {
             member_spend: HashMap::new(),
             model_week_hours,
             next_epoch,
+            observations: HashMap::new(),
             overage: load
                 .overage
                 .into_iter()
@@ -2035,12 +2073,24 @@ impl RoutingState {
     }
 
     /// The one way a pin leaves the map, by a move, a fail-over, an expiry, a release or the purge. The row leaves
-    /// with its mark, which the caller reads off the answer to say what cleared it.
+    /// with its mark, which the caller reads off the answer to say what cleared it, and with the key's open
+    /// observation, which only a report on the row's epoch settles.
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
         self.renewed.remove(key);
         self.head_marks.remove(key);
+        self.observations.remove(key);
         Some(pin)
+    }
+
+    /// Opens `observation` under `key` in place of the one the key held.
+    pub(crate) fn open_observation(&mut self, key: &PinKey, observation: Observation) {
+        self.observations.insert(key.clone(), observation);
+    }
+
+    /// Takes the open observation under `key` off the state, whatever its epoch.
+    pub(crate) fn take_observation(&mut self, key: &PinKey) -> Option<Observation> {
+        self.observations.remove(key)
     }
 
     /// The next index into `cohort` for a pool's tier under round robin. The key carries the cohort because
@@ -2470,6 +2520,7 @@ impl RoutingState {
                     bound,
                     incarnation_a,
                     incarnation_b,
+                    observed_at: at,
                 },
             );
         ThinkingBindingRow {
@@ -4007,20 +4058,19 @@ impl RoutingState {
 
     /// Records the resolution and moves every pin and every model cooldown keyed on `spelling` to `dated_id`
     /// in one step, so nothing selects between the two halves: two rows that meet merge as the store merges
-    /// them (the later cooldown deadline wins, the pin with the newer `last_used_at` wins). The rekey carries
-    /// the deletes under the old key, the upserts under the new one, and the resolution row itself.
+    /// them (the later cooldown deadline wins, the pin with the newer `last_used_at` wins). The pairs' facts, the
+    /// pins' open observations and the lapsed agents' records move with them, where the newer fact and the later
+    /// record stand, the dated id's own on a tie, and a record whose dated key holds a pin lands nowhere. The rekey
+    /// carries the deletes under the old key, the upserts under the new one, and the resolution row itself.
     ///
     /// The rows here are found and moved by their raw stored key rather than through `pin`/`cooldown`'s own
     /// canonicalizing lookups: those rows were written under the literal `spelling` before this resolution
     /// existed, so only a raw key finds them. A spelling re-pointed to a newer dated id moves only the rows
     /// still keyed on the literal spelling; rows already moved under the previous dated id stay there, since
     /// a new snapshot is a new model.
-    pub fn apply_resolution(&mut self, spelling: &str, dated_id: &str, at: i64) -> RekeyWrite {
-        self.rekey(spelling, dated_id, at).0
-    }
-
-    /// `apply_resolution` with the rows that lost a merge, each leaving with its mark, so the caller clears the
-    /// marks that stood on them as a release does.
+    ///
+    /// The answer holds the rows that lost a merge too, each leaving with its mark, so the caller clears the marks
+    /// that stood on them as a release does.
     pub(crate) fn rekey(
         &mut self,
         spelling: &str,
@@ -4037,6 +4087,10 @@ impl RoutingState {
             upsert_pins: Vec::new(),
             delete_cooldowns: Vec::new(),
             upsert_cooldowns: Vec::new(),
+            delete_bindings: Vec::new(),
+            upsert_bindings: Vec::new(),
+            delete_lapsed_agents: Vec::new(),
+            upsert_lapsed_agents: Vec::new(),
         };
         let mut merged_away = Vec::new();
         if let Some(current) = self.resolutions.get(spelling) {
@@ -4068,9 +4122,10 @@ impl RoutingState {
             // its flag and its fast and unmetered usage move with it. Its ended agent stays ended there too, since a
             // resolution is no new request from that agent.
             let renewed = self.renewed.contains(&spelled);
-            // Read ahead of `take_pin`, which drops it: the mark lives as long as its row, so a `Head` report still
-            // finds it under the dated id.
+            // Read ahead of `take_pin`, which drops them: the mark and the open observation live as long as their row,
+            // so a `Head` report and the row's first answer with usage still find them under the dated id.
             let mark = self.head_marks.remove(&spelled);
+            let observation = self.observations.remove(&spelled);
             self.take_pin(&spelled);
             // The pace follows the row the merge keeps, so the session's cycle reads on under the dated id.
             let pace = self.pin_paces.remove(&spelled);
@@ -4089,11 +4144,20 @@ impl RoutingState {
                 if let Some(pace) = pace {
                     self.pin_paces.insert(dated_key.clone(), pace);
                 }
-                // A dated row this one replaces leaves with its own mark.
+                // A dated row this one replaces leaves with its own mark and its own observation.
                 match mark {
                     Some(mark) => self.head_marks.insert(dated_key.clone(), mark),
                     None => self.head_marks.remove(&dated_key),
                 };
+                match observation {
+                    Some(observation) => self.observations.insert(dated_key.clone(), observation),
+                    None => self.observations.remove(&dated_key),
+                };
+                // A placement takes a lapsed agent's record with its pin's write, so a record left beside the moved pin
+                // would outlive the pin with an older burn and older sums.
+                if self.lapsed_agents.remove(&dated_key).is_some() {
+                    rekey.delete_lapsed_agents.push(dated_key.clone());
+                }
                 let moved = PinRow {
                     model: dated_id.to_string(),
                     lane: relaned(&pin.lane, spelling, dated_id),
@@ -4108,6 +4172,33 @@ impl RoutingState {
                     self.renewed.remove(&dated_key);
                 }
                 rekey.upsert_pins.push(moved);
+            }
+        }
+        // A lapsed agent's return selects under the dated key, so a record left under the spelling would hand on no
+        // burn, no sums and no bind. One whose dated key holds a pin lands nowhere, since the agent's pin stands.
+        let moved_records: Vec<LapsedAgentRow> = self
+            .lapsed_agents
+            .values()
+            .filter(|record| record.model == spelling)
+            .cloned()
+            .collect();
+        for record in moved_records {
+            let spelled = record.key();
+            self.lapsed_agents.remove(&spelled);
+            rekey.delete_lapsed_agents.push(spelled);
+            let moved = LapsedAgentRow {
+                model: dated_id.to_string(),
+                ..record
+            };
+            let dated_key = moved.key();
+            let stands = self.pins.contains_key(&dated_key)
+                || self
+                    .lapsed_agents
+                    .get(&dated_key)
+                    .is_some_and(|held| held.last_used_at >= moved.last_used_at);
+            if !stands {
+                self.lapsed_agents.insert(dated_key, moved.clone());
+                rekey.upsert_lapsed_agents.push(moved);
             }
         }
         // A booking names its pin by key, and the suppression in `burn_shares` matches that key against the live
@@ -4149,6 +4240,38 @@ impl RoutingState {
                     .cloned()
                     .expect("record_cooldown just inserted or updated this row");
                 rekey.upsert_cooldowns.push(merged);
+            }
+        }
+
+        // `bound` is asked under the pin's model, the dated id from here on, so a fact left under the spelling would
+        // price no drop until the pair's next observed move.
+        if let Some(spelled) = self.thinking_bindings.remove(spelling) {
+            let dated = self
+                .thinking_bindings
+                .entry(dated_id.to_string())
+                .or_default();
+            for ((account_a, account_b), fact) in spelled {
+                rekey.delete_bindings.push((
+                    spelling.to_string(),
+                    account_a.clone(),
+                    account_b.clone(),
+                ));
+                let pair = (account_a, account_b);
+                let stands = dated
+                    .get(&pair)
+                    .is_some_and(|held| held.observed_at >= fact.observed_at);
+                if !stands {
+                    rekey.upsert_bindings.push(ThinkingBindingRow {
+                        model: dated_id.to_string(),
+                        account_a: pair.0.clone(),
+                        incarnation_a: fact.incarnation_a,
+                        account_b: pair.1.clone(),
+                        incarnation_b: fact.incarnation_b,
+                        bound: fact.bound,
+                        observed_at: fact.observed_at,
+                    });
+                    dated.insert(pair, fact);
+                }
             }
         }
         (rekey, merged_away)
@@ -4332,6 +4455,15 @@ impl RoutingState {
             .into_iter()
             .filter_map(|(key, reason)| self.take_pin(&key).map(|row| (row, reason)))
             .collect();
+        // A landed row that left before its first report with usage closes nothing, and neither does a move off a
+        // holder the id has moved past since: its answer would teach the pair under that holder, and `bound` reads a
+        // pair by its ids. The served side is the pin's own holder, which the take above answers for.
+        let held = &self.pins;
+        self.observations.retain(|key, observation| {
+            held.get(key)
+                .is_some_and(|row| row.epoch == observation.epoch)
+                && !gone(&observation.left, observation.left_incarnation)
+        });
         // The speed is read at the take, since the slow-down purge below drops the entry of an account that holds no
         // pin of the pool, and the last pin of an account would keep a speed of 1. A pin last used more than the
         // record's life back writes none, since its record would end at once.
@@ -4901,7 +5033,7 @@ mod tests {
     fn a_resolution_applied_after_the_load_files_a_later_report_under_the_spelling_at_its_dated_id()
     {
         let mut state = RoutingState::from_load(RoutingLoad::default());
-        state.apply_resolution("spelling", "dated", 0);
+        state.rekey("spelling", "dated", 0);
         assert!(lands_at_the_dated_id(&state, "spelling"));
     }
 
@@ -4917,7 +5049,7 @@ mod tests {
             ..PinBurn::default()
         };
         state.set_fast_burn(&pin.key(), fast);
-        state.apply_resolution("m", "m-20260101", 0);
+        state.rekey("m", "m-20260101", 0);
         let dated = PinKey {
             model: "m-20260101".into(),
             ..pin.key()
@@ -4949,7 +5081,7 @@ mod tests {
             }],
             ..RoutingLoad::default()
         });
-        state.apply_resolution("m", "m-20260101", 0);
+        state.rekey("m", "m-20260101", 0);
         let dated = PinKey {
             model: "m-20260101".into(),
             ..pin.key()
@@ -4995,7 +5127,7 @@ mod tests {
             ..RoutingLoad::default()
         });
         state.mark_ended(&pin.key());
-        state.apply_resolution("m", "m-20260101", 0);
+        state.rekey("m", "m-20260101", 0);
         let dated = PinKey {
             model: "m-20260101".into(),
             ..pin.key()
@@ -5023,7 +5155,7 @@ mod tests {
             ..RoutingLoad::default()
         });
         state.mark_ended(&dated.key());
-        state.apply_resolution("m", "m-20260101", 0);
+        state.rekey("m", "m-20260101", 0);
         assert_eq!(
             (
                 state.pin(&dated.key()).map(|p| p.last_used_at),
@@ -5143,7 +5275,7 @@ mod tests {
             pins: vec![pin.clone()],
             ..RoutingLoad::default()
         });
-        state.apply_resolution("m", "m-20260101", 0);
+        state.rekey("m", "m-20260101", 0);
         let dated = PinKey {
             model: "m-20260101".into(),
             ..pin.key()
@@ -5158,6 +5290,349 @@ mod tests {
             "the rekey moves the row with its flag to the dated id and leaves none under the spelling"
         );
         assert!(state.pin(&dated).is_some_and(|p| p.auxiliary_only));
+    }
+
+    #[test]
+    fn a_fact_learned_under_the_spelling_reads_bound_under_the_dated_id_after_the_resolution() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.learn_binding("m", ("a", 1), ("b", 2), true, 10);
+        let (write, _) = state.rekey("m", "m-20260101", 20);
+        assert!(
+            state.bound("m-20260101", "a", "b"),
+            "the pair reads bound under the dated id"
+        );
+        assert_eq!(
+            (write.delete_bindings, write.upsert_bindings),
+            (
+                vec![("m".to_string(), "a".to_string(), "b".to_string())],
+                vec![ThinkingBindingRow {
+                    model: "m-20260101".into(),
+                    account_a: "a".into(),
+                    incarnation_a: 1,
+                    account_b: "b".into(),
+                    incarnation_b: 2,
+                    bound: true,
+                    observed_at: 10,
+                }]
+            ),
+            "the write deletes the spelling's row and writes the fact under the dated id as it was observed"
+        );
+    }
+
+    /// Whether the pair of `a` and `b` reads bound under `m-20260101` once `m` resolves to it, with the facts the
+    /// rekey writes: the dated id holds a kept fact observed at `dated_at`, loaded as a start loads it, and the
+    /// spelling a bound one learned at `spelled_at`.
+    fn merged(dated_at: i64, spelled_at: i64) -> (bool, Vec<ThinkingBindingRow>) {
+        let mut state = RoutingState::from_load(RoutingLoad {
+            thinking_bindings: vec![ThinkingBindingRow {
+                model: "m-20260101".into(),
+                account_a: "a".into(),
+                incarnation_a: 1,
+                account_b: "b".into(),
+                incarnation_b: 1,
+                bound: false,
+                observed_at: dated_at,
+            }],
+            ..RoutingLoad::default()
+        });
+        state.learn_binding("m", ("a", 1), ("b", 1), true, spelled_at);
+        let (write, _) = state.rekey("m", "m-20260101", 30);
+        (state.bound("m-20260101", "a", "b"), write.upsert_bindings)
+    }
+
+    #[test]
+    fn the_newer_fact_stands_where_both_ids_hold_one_for_a_pair() {
+        assert_eq!(
+            merged(20, 10),
+            (false, Vec::new()),
+            "the dated id's newer kept fact stands"
+        );
+        assert_eq!(
+            merged(10, 20),
+            (
+                true,
+                vec![ThinkingBindingRow {
+                    model: "m-20260101".into(),
+                    account_a: "a".into(),
+                    incarnation_a: 1,
+                    account_b: "b".into(),
+                    incarnation_b: 1,
+                    bound: true,
+                    observed_at: 20,
+                }]
+            ),
+            "the spelling's newer bound fact stands and is written under the dated id"
+        );
+        assert_eq!(
+            merged(10, 10),
+            (false, Vec::new()),
+            "on a tie the dated id's own fact stands"
+        );
+    }
+
+    #[test]
+    fn a_second_resolution_leaves_the_first_dated_ids_facts_and_writes_none() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.learn_binding("m", ("a", 1), ("b", 1), true, 10);
+        state.rekey("m", "m-20260101", 20);
+        let (second, _) = state.rekey("m", "m-20260201", 30);
+        assert_eq!(
+            (
+                state.bound("m-20260101", "a", "b"),
+                state.bound("m-20260201", "a", "b")
+            ),
+            (true, false),
+            "the fact stays under the first dated id, and the second holds none"
+        );
+        assert_eq!(
+            (second.delete_bindings, second.upsert_bindings),
+            (Vec::new(), Vec::new()),
+            "the second resolution writes no fact"
+        );
+    }
+
+    /// The record a lapsed agent of session `s` leaves under `model` on `account`, its pin last used at
+    /// `last_used_at`.
+    fn lapsed(model: &str, account: &str, last_used_at: i64) -> LapsedAgentRow {
+        lapsed_of(
+            &PinRow {
+                model: model.into(),
+                account_id: account.into(),
+                last_used_at,
+                ..burning("s", 1.0).0
+            },
+            1.0,
+        )
+    }
+
+    /// The record `lapsed_agent` reads under session `s`'s dated key once `m` resolves to `m-20260101` over a state
+    /// loaded with `records`, with the records the rekey deletes and writes.
+    fn rekeyed_record(
+        records: Vec<LapsedAgentRow>,
+    ) -> (Option<LapsedAgentRow>, Vec<PinKey>, Vec<LapsedAgentRow>) {
+        let mut state = RoutingState::from_load(RoutingLoad {
+            lapsed_agents: records,
+            ..RoutingLoad::default()
+        });
+        let (write, _) = state.rekey("m", "m-20260101", 30);
+        (
+            state
+                .lapsed_agent(&lapsed("m-20260101", "a", 0).key())
+                .cloned(),
+            write.delete_lapsed_agents,
+            write.upsert_lapsed_agents,
+        )
+    }
+
+    #[test]
+    fn a_lapsed_agents_record_follows_a_resolution_and_the_later_last_use_stands() {
+        let dated_form = |record: &LapsedAgentRow| LapsedAgentRow {
+            model: "m-20260101".into(),
+            ..record.clone()
+        };
+        let spelled = lapsed("m", "a", 10);
+        assert_eq!(
+            rekeyed_record(vec![spelled.clone()]),
+            (
+                Some(dated_form(&spelled)),
+                vec![spelled.key()],
+                vec![dated_form(&spelled)]
+            ),
+            "the record moves to the dated key with the dated id as its model"
+        );
+        let dated = lapsed("m-20260101", "b", 10);
+        assert_eq!(
+            rekeyed_record(vec![spelled.clone(), dated.clone()]),
+            (Some(dated.clone()), vec![spelled.key()], Vec::new()),
+            "on the same last use the dated record stands"
+        );
+        let later = lapsed("m", "a", 11);
+        assert_eq!(
+            rekeyed_record(vec![later.clone(), dated]),
+            (
+                Some(dated_form(&later)),
+                vec![later.key()],
+                vec![dated_form(&later)]
+            ),
+            "a spelled record one millisecond later replaces the dated one"
+        );
+    }
+
+    #[test]
+    fn a_rekey_leaves_no_lapsed_agents_record_beside_a_pin_under_the_dated_key() {
+        let pin = |session: &str, model: &str| PinRow {
+            model: model.into(),
+            ..burning(session, 1.0).0
+        };
+        let record = |session: &str, model: &str| lapsed_of(&pin(session, model), 1.0);
+        // s1's record stands under the spelling and its pin under the dated id, s2's the other way round.
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![pin("s1", "m-20260101"), pin("s2", "m")],
+            lapsed_agents: vec![record("s1", "m"), record("s2", "m-20260101")],
+            ..RoutingLoad::default()
+        });
+        let (write, _) = state.rekey("m", "m-20260101", 30);
+        let dated = |session: &str| pin(session, "m-20260101").key();
+        assert_eq!(
+            state.lapsed_agent(&dated("s2")),
+            None,
+            "a dated record under a key onto which a pin moved leaves"
+        );
+        assert_eq!(
+            state.lapsed_agent(&dated("s1")),
+            None,
+            "a spelled record whose dated key holds a pin lands nowhere"
+        );
+        assert_eq!(
+            (
+                write
+                    .delete_lapsed_agents
+                    .into_iter()
+                    .collect::<HashSet<_>>(),
+                write.upsert_lapsed_agents
+            ),
+            (
+                HashSet::from([pin("s1", "m").key(), dated("s2")]),
+                Vec::new()
+            ),
+            "the write deletes both records and writes none"
+        );
+    }
+
+    /// A state that holds session `s1`'s pin under `claude-sonnet-4-5` on `a` and a model rejection of `b` under the
+    /// same spelling.
+    fn spelled_pin_and_cooldown() -> RoutingState {
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![PinRow {
+                model: "claude-sonnet-4-5".into(),
+                lane: crate::lane_key("claude-sonnet-4-5", "standard", "none", "-"),
+                ..burning("s1", 1.0).0
+            }],
+            ..RoutingLoad::default()
+        });
+        state.record_cooldown(CooldownRow {
+            account_id: "b".into(),
+            scope: CooldownScope::Model("claude-sonnet-4-5".into()),
+            until: 1_000 + HOUR_MS,
+            set_at: 0,
+            reason: crate::select::MODEL_REJECTED_REASON.into(),
+            window: "model_rejection".into(),
+            source_request_id: None,
+            incarnation: 1,
+            spend_share: None,
+        });
+        state
+    }
+
+    #[test]
+    fn a_resolution_moves_every_row_in_one_rekey_and_a_repeat_carries_only_the_resolution() {
+        let mut state = spelled_pin_and_cooldown();
+        let (first, _) = state.rekey("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 2_000);
+        assert_eq!(
+            (
+                first.delete_pins.len(),
+                first
+                    .upsert_pins
+                    .iter()
+                    .map(|p| p.model.as_str())
+                    .collect::<Vec<_>>()
+            ),
+            (1, vec!["claude-sonnet-4-5-20250929"]),
+            "the pin moves: {first:?}"
+        );
+        assert_eq!(
+            (
+                first.delete_cooldowns.clone(),
+                first
+                    .upsert_cooldowns
+                    .iter()
+                    .map(|c| (c.account_id.as_str(), &c.scope))
+                    .collect::<Vec<_>>()
+            ),
+            (
+                vec![(
+                    "b".to_string(),
+                    CooldownScope::Model("claude-sonnet-4-5".into())
+                )],
+                vec![(
+                    "b",
+                    &CooldownScope::Model("claude-sonnet-4-5-20250929".into())
+                )]
+            ),
+            "and the cooldown with it: {first:?}"
+        );
+        assert_eq!(first.resolution.resolved_at, 2_000);
+        let (second, _) = state.rekey("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 3_000);
+        assert!(
+            second.delete_pins.is_empty()
+                && second.upsert_pins.is_empty()
+                && second.delete_cooldowns.is_empty()
+                && second.upsert_cooldowns.is_empty(),
+            "a repeat moves nothing that already moved: {second:?}"
+        );
+        assert_eq!(
+            (
+                second.resolution.dated_id.as_str(),
+                second.resolution.resolved_at
+            ),
+            ("claude-sonnet-4-5-20250929", 3_000),
+            "and carries the resolution row alone"
+        );
+    }
+
+    #[test]
+    fn a_resolution_never_moves_a_spelling_to_a_dated_id_that_is_not_newer() {
+        let mut state = spelled_pin_and_cooldown();
+        state.rekey("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 2_000);
+        let (regressed, _) = state.rekey("claude-sonnet-4-5", "claude-sonnet-4-5-20250601", 3_000);
+        assert!(
+            regressed.delete_pins.is_empty()
+                && regressed.upsert_pins.is_empty()
+                && regressed.delete_cooldowns.is_empty()
+                && regressed.upsert_cooldowns.is_empty(),
+            "an older snapshot moves nothing: {regressed:?}"
+        );
+        assert_eq!(
+            (
+                regressed.resolution.dated_id.as_str(),
+                regressed.resolution.resolved_at
+            ),
+            ("claude-sonnet-4-5-20250929", 3_000),
+            "the mapping stays at the newer snapshot"
+        );
+        assert_eq!(
+            state.canonical("claude-sonnet-4-5"),
+            "claude-sonnet-4-5-20250929",
+            "a lookup still answers the newer snapshot"
+        );
+    }
+
+    #[test]
+    fn a_rekeyed_pin_keeps_its_pace_under_the_new_key() {
+        const AVERAGE_MS: i64 = 1_800_000;
+        let (pin, _) = burning("s1", 1.0);
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![pin.clone()],
+            ..RoutingLoad::default()
+        });
+        state.fold_pace(&pin.key(), 0, AVERAGE_MS);
+        state.fold_pace(&pin.key(), 10_000, AVERAGE_MS);
+        assert_eq!(
+            state.pin_pace(&pin.key()).and_then(|p| p.cycle_ms),
+            Some(10_000.0)
+        );
+        state.rekey("m", "m-20260101", 20_000);
+        let dated = PinKey {
+            model: "m-20260101".into(),
+            ..pin.key()
+        };
+        assert!(state.pin(&dated).is_some(), "the rekey moved the pin");
+        assert_eq!(
+            state.pin_pace(&dated).and_then(|p| p.cycle_ms),
+            Some(10_000.0),
+            "the pace moved with it"
+        );
+        assert!(state.pin_pace(&pin.key()).is_none());
     }
 
     /// A pin of session `s`'s main agent under `model` on `account`, placed at `created_at` and used last at

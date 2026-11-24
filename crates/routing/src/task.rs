@@ -37,9 +37,10 @@ use crate::state::{
     is_plan_window, is_weekly_window, latest_full_reset, mark_holds, oldest_kept_hour,
     plan_windows, round_in_dwell, shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate,
     standing_mark, trace_stands, wait_until, AccountTicket, BurnUnit, CreditsState, DroppedBlocks,
-    EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, Recorded,
-    RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite, UtilizationSample,
-    WindowReading, WindowSource, FIVE_HOUR, HEAD_PERCENT, SEVEN_DAY, SEVEN_DAY_FABLE,
+    EvidenceSource, InFlight, MemberSpend, Observation, OverageEvidence, PinRef, PinUsage,
+    RateTable, Recorded, RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, HEAD_PERCENT, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
 };
 use crate::windows::MODEL_WINDOWS;
 use crate::{model_week, resolve, term, window_length_ms, Candidate, Presented, RegistrySnapshot};
@@ -155,35 +156,6 @@ impl Invalidated {
 enum Stood<'a> {
     Row(&'a PinRow),
     Lapsed(&'a LapsedAgentRow),
-}
-
-/// A landing that took a session off an account whose thinking it held, open until the landed row's first report with
-/// usage says whether the account moved to dropped those blocks.
-struct Observation {
-    /// The landed row's epoch, which a report on that row carries.
-    epoch: u64,
-    left: String,
-    /// The incarnation the row ran on before the move, the left side's holder the learned pair names.
-    left_incarnation: u64,
-    /// The row's last prompt before the move, which an answer with no member is measured against.
-    last_prompt: u64,
-}
-
-impl Observation {
-    /// What the answer shows of the pair, `None` where it shows nothing: its member where it carries one, bound where
-    /// the member lists a block dropped for an account reason and kept where it lists none, and without one a `prompt`
-    /// smaller than the last one before the move reads bound. The client's standing prefix entry is no drop the move
-    /// caused.
-    fn binding(
-        &self,
-        prompt: u64,
-        dropped: Option<&BTreeMap<String, DroppedBlocks>>,
-    ) -> Option<bool> {
-        match dropped {
-            Some(dropped) => Some(dropped.keys().any(|key| under_account_reason(key))),
-            None => (prompt < self.last_prompt).then_some(true),
-        }
-    }
 }
 
 /// Whether a dropped-blocks key names one of the two account reasons, read off the key's suffix: a word of the key can
@@ -2203,9 +2175,6 @@ struct Task {
     /// The reloads the running load answers, those that were waiting when it started, and `None` while no registry
     /// load runs. At most one does.
     load_waiters: Option<Vec<oneshot::Sender<Result<(), String>>>>,
-    /// The moves whose first answer has yet to say whether the account moved to dropped the thinking of the account
-    /// left, by the pin's key. Memory only, so a restart inside one teaches nothing.
-    observations: HashMap<PinKey, Observation>,
     /// While set the loop skips the purge tick, so no purge runs. `Command::ReleasePurge` clears it, and the first
     /// purge runs at the first tick after it.
     purge_held: bool,
@@ -2382,7 +2351,6 @@ pub fn spawn(
         handle_tx: tx.downgrade(),
         invalidated: HashMap::new(),
         load_waiters: None,
-        observations: HashMap::new(),
         #[cfg(any(test, feature = "debug-hooks"))]
         parked: None,
         purge_held,
@@ -4512,7 +4480,7 @@ impl Task {
                         .then(|| self.state.pin_mut(&key))
                         .flatten();
                     if let Some(renewed) = renewed {
-                        let mut learned = None;
+                        let mut answered_prompt = None;
                         renewed.last_used_at = now;
                         renewed.cache_ttl_ms = cache_ttl_ms;
                         // A turn's stream end with its usage is the turn's end a classifier call that follows judges:
@@ -4579,24 +4547,25 @@ impl Task {
                                         }
                                     }
                                 }
-                                learned = self
-                                    .observations
-                                    .remove(&key)
-                                    .filter(|observation| observation.epoch == renewed.epoch)
-                                    .and_then(|observation| {
-                                        let bound = observation.binding(
-                                            usage.prompt_tokens(),
-                                            input_transformations.as_ref(),
-                                        )?;
-                                        Some((
-                                            (observation.left, observation.left_incarnation),
-                                            (renewed.account_id.clone(), renewed.incarnation),
-                                            bound,
-                                        ))
-                                    });
+                                answered_prompt = Some(usage.prompt_tokens());
                             }
                         }
                         let row = renewed.clone();
+                        // A client's answer with usage settles the key's open observation, which teaches the pair only
+                        // where it belongs to the renewed row's epoch. A probe's answer and one without usage leave it.
+                        let learned = answered_prompt.and_then(|prompt| {
+                            let observation = self
+                                .state
+                                .take_observation(&key)
+                                .filter(|observation| observation.epoch == row.epoch)?;
+                            let bound =
+                                observation.binding(prompt, input_transformations.as_ref())?;
+                            Some((
+                                (observation.left, observation.left_incarnation),
+                                (row.account_id.clone(), row.incarnation),
+                                bound,
+                            ))
+                        });
                         self.state.mark_renewed(&key);
                         if turn_ended {
                             self.state
@@ -5189,7 +5158,7 @@ impl Task {
         // observation with a false `kept`, or with a false bound where it carries no member, and teach a landing's
         // pair a false `kept`. The selection hands such a landing its sums at zero, so it opens no observation.
         if zeroes_sums(request) {
-            self.observations.remove(key);
+            self.state.take_observation(key);
             return;
         }
         let (Some(stood_on), Some(landed)) = (stood_on, self.state.pin(key)) else {
@@ -5215,14 +5184,14 @@ impl Task {
             return;
         }
         let (epoch, moved) = (landed.epoch, landed.account_id != *account_id);
-        self.observations.remove(key);
+        self.state.take_observation(key);
         let held = sums.get(account_id).map_or(0, |sum| sum.tokens);
         // A failover's waiting row can name a holder the id has moved past since the purge last ran, and a lapsed
         // agent's record one the id moved past since the purge took its pin, and the answer would teach the pair under
         // that holder: the test the purge's `retain` applies to an open observation.
         if moved && held > 0 && holder(&self.snapshot(), account_id, incarnation).is_some() {
-            self.observations.insert(
-                key.clone(),
+            self.state.open_observation(
+                key,
                 Observation {
                     epoch,
                     left: account_id.clone(),
@@ -5259,15 +5228,6 @@ impl Task {
             pins = purged.pins.len(),
             "purged expired and orphaned routing state"
         );
-        // A landed row that left before its first report with usage closes nothing, and neither does a move off a
-        // holder the id has moved past since: its answer would teach the pair under that holder, and `bound` reads a
-        // pair by its ids. The served side is the pin's own holder, which the purge above already answers for.
-        self.observations.retain(|key, observation| {
-            self.state
-                .pin(key)
-                .is_some_and(|row| row.epoch == observation.epoch)
-                && holder(&snapshot, &observation.left, observation.left_incarnation).is_some()
-        });
         let lapsed: Vec<_> = self
             .invalidated
             .extract_if(|_, entry| !entry.within(now, &snapshot))
@@ -6311,6 +6271,10 @@ mod tests {
             upsert_pins: Vec::new(),
             delete_cooldowns: Vec::new(),
             upsert_cooldowns: vec![cooldown("ghost", &format!("model:{dated_id}"))],
+            delete_bindings: Vec::new(),
+            upsert_bindings: Vec::new(),
+            delete_lapsed_agents: Vec::new(),
+            upsert_lapsed_agents: Vec::new(),
         })
     }
 
