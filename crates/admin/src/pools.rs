@@ -1380,8 +1380,8 @@ fn member_json(
         priority: m.priority,
         eligible: eligible.to_string(),
         regime_fits: projection.map(|p| {
-            p.regime_fits
-                .iter()
+            std::iter::once(&p.base_fit)
+                .chain(&p.regime_fits)
                 .map(|entry| RegimeFitView {
                     regime: entry.regime.clone(),
                     fit: entry.fit.to_string(),

@@ -1519,7 +1519,7 @@ pub(crate) fn standing_mark(pin: &PinRow) -> Option<&PinMark> {
 
 /// How long a lapsed agent's record stands after its pin's last use: the length of the longest window that a burn
 /// projects into.
-pub(crate) const LAPSED_AGENT_MS: i64 = 7 * 24 * 3_600_000;
+pub(crate) const LAPSED_AGENT_MS: i64 = WEEK_MS;
 
 /// The record `pin` leaves as its agent's, with `speed` the slow-down speed in force on its account.
 pub(crate) fn lapsed_of(pin: &PinRow, speed: f64) -> LapsedAgentRow {
@@ -1635,8 +1635,8 @@ pub struct RoutingState {
     model_week_hours: HashMap<(String, String), WeekHours>,
     next_epoch: u64,
     /// The moves whose first answer has yet to say whether the account moved to dropped the thinking of the account
-    /// left, by the pin's key. Memory only, so a restart inside one teaches nothing. An observation belongs to its row
-    /// by the epoch, so it leaves with the row in `take_pin`.
+    /// left, by the pin's key. Memory only, so a restart inside one teaches nothing. It leaves with the row in
+    /// `take_pin`, and with a row that `put_pin` replaces under another epoch.
     observations: HashMap<PinKey, Observation>,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<PinKey, PinRow>,
@@ -1735,8 +1735,6 @@ fn pair(account: &str, other: &str) -> (String, String) {
 /// A landing that took a session off an account whose thinking it held, open until the landed row's first report with
 /// usage says whether the account moved to dropped those blocks.
 pub(crate) struct Observation {
-    /// The landed row's epoch, which a report on that row carries.
-    pub(crate) epoch: u64,
     pub(crate) left: String,
     /// The incarnation the row ran on before the move, the left side's holder the learned pair names.
     pub(crate) left_incarnation: u64,
@@ -1979,6 +1977,7 @@ impl RoutingState {
             Some(replaced) if replaced.epoch == epoch => false,
             replaced => {
                 self.renewed.remove(&key);
+                self.observations.remove(&key);
                 replaced.is_none_or(|replaced| replaced.account_id != account_id)
             }
         };
@@ -2089,7 +2088,7 @@ impl RoutingState {
         self.observations.insert(key.clone(), observation);
     }
 
-    /// Takes the open observation under `key` off the state, whatever its epoch.
+    /// Takes the open observation under `key` off the state.
     pub(crate) fn take_observation(&mut self, key: &PinKey) -> Option<Observation> {
         self.observations.remove(key)
     }
@@ -2140,20 +2139,16 @@ impl RoutingState {
         // taken between the two rejections clears a row the upstream had just set again.
         let later_deadline = row.until > current.until;
         let later_rejection = row.set_at > current.set_at;
+        let (set_at, spend_share) = if later_rejection {
+            (row.set_at, row.spend_share)
+        } else {
+            (current.set_at, current.spend_share)
+        };
         if later_deadline {
-            let set_at = current.set_at.max(row.set_at);
-            let spend_share = if later_rejection {
-                row.spend_share
-            } else {
-                current.spend_share
-            };
             *current = row;
-            current.set_at = set_at;
-            current.spend_share = spend_share;
-        } else if later_rejection {
-            current.set_at = row.set_at;
-            current.spend_share = row.spend_share;
         }
+        current.set_at = set_at;
+        current.spend_share = spend_share;
         later_deadline || later_rejection
     }
 
@@ -3084,17 +3079,10 @@ impl RoutingState {
         &self.share
     }
 
-    /// The regimes of the cost revision in force at `now`, as the share pricer names them: the base regime first, as
-    /// `None` with no entrypoint, then each named regime by name with the entrypoints that it lists, sorted.
-    pub(crate) fn regimes(&self, now: i64) -> Vec<(Option<String>, Vec<String>)> {
-        std::iter::once((None, Vec::new()))
-            .chain(
-                self.share
-                    .regimes(now)
-                    .into_iter()
-                    .map(|(name, entrypoints)| (Some(name), entrypoints)),
-            )
-            .collect()
+    /// The named regimes of the cost revision in force at `now`, as the share pricer names them: each by name with the
+    /// entrypoints that it lists, sorted.
+    pub(crate) fn regimes(&self, now: i64) -> Vec<(String, Vec<String>)> {
+        self.share.regimes(now)
     }
 
     /// Books under the request's id, replacing a booking the request already holds (a failover's new selection).
@@ -4046,10 +4034,11 @@ impl RoutingState {
     pub fn invalidate_pin(&mut self, pin: &PinRef, account_id: &str) -> Option<PinRow> {
         let key = pin.key();
         let key = self.canonical_key(&key);
-        let matches = self
-            .pins
-            .get(&*key)
-            .is_some_and(|p| p.epoch == pin.epoch && p.account_id == account_id);
+        // A session that holds account state keeps its pin through the failover: the retry's selection reads the row
+        // and places a request that carries no conversation for itself.
+        let matches = self.pins.get(&*key).is_some_and(|p| {
+            p.epoch == pin.epoch && p.account_id == account_id && !p.account_bound
+        });
         if matches {
             self.take_pin(&key)
         } else {
@@ -4142,18 +4131,22 @@ impl RoutingState {
             if keep_existing {
                 merged_away.push(pin);
             } else {
+                // A dated row this one replaces leaves with its own mark and its own observation.
+                if let Some(replaced) = self.take_pin(&dated_key) {
+                    merged_away.push(replaced);
+                }
                 if let Some(pace) = pace {
                     self.pin_paces.insert(dated_key.clone(), pace);
                 }
-                // A dated row this one replaces leaves with its own mark and its own observation.
-                match mark {
-                    Some(mark) => self.head_marks.insert(dated_key.clone(), mark),
-                    None => self.head_marks.remove(&dated_key),
-                };
-                match observation {
-                    Some(observation) => self.observations.insert(dated_key.clone(), observation),
-                    None => self.observations.remove(&dated_key),
-                };
+                if let Some(mark) = mark {
+                    self.head_marks.insert(dated_key.clone(), mark);
+                }
+                if let Some(observation) = observation {
+                    self.observations.insert(dated_key.clone(), observation);
+                }
+                if renewed {
+                    self.renewed.insert(dated_key.clone());
+                }
                 // A placement takes a lapsed agent's record with its pin's write, so a record left beside the moved pin
                 // would outlive the pin with an older burn and older sums.
                 if self.lapsed_agents.remove(&dated_key).is_some() {
@@ -4164,28 +4157,17 @@ impl RoutingState {
                     lane: relaned(&pin.lane, spelling, dated_id),
                     ..pin
                 };
-                if let Some(replaced) = self.pins.insert(dated_key.clone(), moved.clone()) {
-                    merged_away.push(replaced);
-                }
-                if renewed {
-                    self.renewed.insert(dated_key.clone());
-                } else {
-                    self.renewed.remove(&dated_key);
-                }
+                self.pins.insert(dated_key.clone(), moved.clone());
                 rekey.upsert_pins.push(moved);
             }
         }
         // A lapsed agent's return selects under the dated key, so a record left under the spelling would hand on no
         // burn, no sums and no bind. One whose dated key holds a pin lands nowhere, since the agent's pin stands.
-        let moved_records: Vec<LapsedAgentRow> = self
+        let moved_records: Vec<(PinKey, LapsedAgentRow)> = self
             .lapsed_agents
-            .values()
-            .filter(|record| record.model == spelling)
-            .cloned()
+            .extract_if(|_, record| record.model == spelling)
             .collect();
-        for record in moved_records {
-            let spelled = record.key();
-            self.lapsed_agents.remove(&spelled);
+        for (spelled, record) in moved_records {
             rekey.delete_lapsed_agents.push(spelled);
             let moved = LapsedAgentRow {
                 model: dated_id.to_string(),
@@ -4247,10 +4229,6 @@ impl RoutingState {
         // `bound` is asked under the pin's model, the dated id from here on, so a fact left under the spelling would
         // price no drop until the pair's next observed move.
         if let Some(spelled) = self.thinking_bindings.remove(spelling) {
-            let dated = self
-                .thinking_bindings
-                .entry(dated_id.to_string())
-                .or_default();
             for ((account_a, account_b), fact) in spelled {
                 rekey.delete_bindings.push((
                     spelling.to_string(),
@@ -4258,20 +4236,19 @@ impl RoutingState {
                     account_b.clone(),
                 ));
                 let pair = (account_a, account_b);
-                let stands = dated
-                    .get(&pair)
+                let stands = self
+                    .thinking_bindings
+                    .get(dated_id)
+                    .and_then(|dated| dated.get(&pair))
                     .is_some_and(|held| held.observed_at >= fact.observed_at);
                 if !stands {
-                    rekey.upsert_bindings.push(ThinkingBindingRow {
-                        model: dated_id.to_string(),
-                        account_a: pair.0.clone(),
-                        incarnation_a: fact.incarnation_a,
-                        account_b: pair.1.clone(),
-                        incarnation_b: fact.incarnation_b,
-                        bound: fact.bound,
-                        observed_at: fact.observed_at,
-                    });
-                    dated.insert(pair, fact);
+                    rekey.upsert_bindings.push(self.learn_binding(
+                        dated_id,
+                        (&pair.0, fact.incarnation_a),
+                        (&pair.1, fact.incarnation_b),
+                        fact.bound,
+                        fact.observed_at,
+                    ));
                 }
             }
         }
@@ -4456,22 +4433,18 @@ impl RoutingState {
             .into_iter()
             .filter_map(|(key, reason)| self.take_pin(&key).map(|row| (row, reason)))
             .collect();
-        // A landed row that left before its first report with usage closes nothing, and neither does a move off a
-        // holder the id has moved past since: its answer would teach the pair under that holder, and `bound` reads a
-        // pair by its ids. The served side is the pin's own holder, which the take above answers for.
-        let held = &self.pins;
-        self.observations.retain(|key, observation| {
-            held.get(key)
-                .is_some_and(|row| row.epoch == observation.epoch)
-                && !gone(&observation.left, observation.left_incarnation)
-        });
+        // A move off a holder the id has moved past since closes nothing: its answer would teach the pair under that
+        // holder, and `bound` reads a pair by its ids. The served side is the pin's own holder, which the take above
+        // answers for.
+        self.observations
+            .retain(|_, observation| !gone(&observation.left, observation.left_incarnation));
         // The speed is read at the take, since the slow-down purge below drops the entry of an account that holds no
         // pin of the pool, and the last pin of an account would keep a speed of 1. A pin last used more than the
         // record's life back writes none, since its record would end at once.
         let lapsed: Vec<LapsedAgentRow> = taken
             .iter()
             .filter(|(row, reason)| {
-                *reason == "expired" && now - row.last_used_at <= LAPSED_AGENT_MS
+                *reason == "expired" && within_ttl(LAPSED_AGENT_MS, row.last_used_at, now)
             })
             .filter_map(|(row, _)| {
                 let pool = snapshot.key_pool(&row.key_id)?;
@@ -4483,25 +4456,22 @@ impl RoutingState {
             .collect();
         let ended: Vec<PinKey> = self
             .lapsed_agents
-            .iter()
-            .filter(|(_, record)| {
-                now - record.last_used_at > LAPSED_AGENT_MS
+            .extract_if(|_, record| {
+                !within_ttl(LAPSED_AGENT_MS, record.last_used_at, now)
                     || snapshot
                         .key(&record.key_id)
                         .is_none_or(|key| key.created_at != record.key_generation)
             })
-            .map(|(key, _)| key.clone())
+            .map(|(key, _)| key)
             .collect();
-        for key in &ended {
-            self.lapsed_agents.remove(key);
-        }
         for record in &lapsed {
             self.lapsed_agents.insert(record.key(), record.clone());
         }
-        // A record written under a key this pass ended replaces that row, so the key leaves the ended ones.
+        // The ended keys left the map ahead of the writes, so an ended key the map holds is one a record written this
+        // pass replaced, and the key leaves the ended ones.
         let lapsed_ended = ended
             .into_iter()
-            .filter(|key| !lapsed.iter().any(|record| record.key() == *key))
+            .filter(|key| !self.lapsed_agents.contains_key(key))
             .collect();
         let (traced, pins): (Vec<_>, Vec<_>) = taken
             .into_iter()

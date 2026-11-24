@@ -1462,8 +1462,9 @@ pub struct AccountProjection {
     /// What the selector holds against the account for a request on no model in particular, with no account tried
     /// and the fast lane off, `None` where it would place on the account at the ask's instant.
     pub obstacle: Option<Obstacle>,
-    /// One fit for each regime of the cost revision in force at the projection's instant: the base regime first, then
-    /// each named regime by name.
+    /// The fit under the base regime, which prices each entrypoint that no named regime lists.
+    pub base_fit: RegimeFit,
+    /// One fit for each named regime of the cost revision in force at the projection's instant, by name.
     pub regime_fits: Vec<RegimeFit>,
     /// The member's budgets with the spend the ledger last reported over each, as a selection's facts list them.
     pub budget: Vec<BudgetFacts>,
@@ -1478,7 +1479,7 @@ impl AccountProjection {
                     .iter()
                     .find(|entry| entry.entrypoints.iter().any(|listed| listed == entrypoint))
             })
-            .unwrap_or_else(|| &self.regime_fits[0])
+            .unwrap_or(&self.base_fit)
     }
 }
 
@@ -2976,11 +2977,12 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 /// window Pace reads for a model without a week of its own, the slow-down entry in force, which the last pinned
 /// selection on the account wrote, the selector's obstacle on the account and the member's budgets. The fits a fresh
 /// placement reads on each member come from `fresh_fit` over the pool's `fresh_prior`, read once for the pool, one fit
-/// for each regime that `RoutingState::regimes` names at `now`, read with the regime's first entrypoint: one read on a
-/// request whose model draws no week of its own gives the member's word under the regime, its runway and the words of
-/// the shared windows, and each model week the account holds a reading of takes its word from a read on that week's
-/// model. A window joins the projection where the base regime's read gives it a word. Each window's runway to its
-/// ceiling comes from `runway`, as a pin's does. Empty for a pool the snapshot does not hold.
+/// under the base regime, read with no entrypoint, and one for each named regime that `RoutingState::regimes` names at
+/// `now`, read with the regime's first entrypoint: one read on a request whose model draws no week of its own gives the
+/// member's word under the regime, its runway and the words of the shared windows, and each model week the account
+/// holds a reading of takes its word from a read on that week's model. A window joins the projection where the base
+/// regime's read gives it a word. Each window's runway to its ceiling comes from `runway`, as a pin's does. Empty for a
+/// pool the snapshot does not hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -3031,10 +3033,8 @@ fn projections(
                     None,
                 )
             });
-            let regime_fits: Vec<RegimeFit> = regimes
-                .iter()
-                .map(|(regime, entrypoints)| {
-                    let entrypoint = entrypoints.first().map(String::as_str);
+            let fit_under =
+                |regime: Option<String>, entrypoints: Vec<String>, entrypoint: Option<&str>| {
                     // The empty id names no model family, so the read draws the shared windows alone and a model week
                     // moves neither the member's word nor its runway.
                     let shared = fresh_fit(
@@ -3058,8 +3058,8 @@ fn projections(
                         }
                     }
                     RegimeFit {
-                        regime: regime.clone(),
-                        entrypoints: entrypoints.clone(),
+                        regime,
+                        entrypoints,
                         fit: fit.as_str(),
                         runway_ms,
                         windows: words
@@ -3067,13 +3067,23 @@ fn projections(
                             .map(|(window, word)| (window, word.as_str()))
                             .collect(),
                     }
+                };
+            let base_fit = fit_under(None, Vec::new(), None);
+            let regime_fits: Vec<RegimeFit> = regimes
+                .iter()
+                .map(|(regime, entrypoints)| {
+                    fit_under(
+                        Some(regime.clone()),
+                        entrypoints.clone(),
+                        entrypoints.first().map(String::as_str),
+                    )
                 })
                 .collect();
             let windows = all_plan_windows()
                 .filter_map(|window| {
                     let projection = achieved.get(window)?;
                     let demand = demands.get(window)?;
-                    if !regime_fits.first()?.windows.contains_key(window) {
+                    if !base_fit.windows.contains_key(window) {
                         return None;
                     }
                     let line = ceiling(pool, window);
@@ -3139,6 +3149,7 @@ fn projections(
                     fallback_ms,
                     false,
                 ),
+                base_fit,
                 regime_fits,
                 budget: budget_facts(state, snapshot, pool_id, account_id),
             }
@@ -4510,8 +4521,6 @@ impl Task {
                         .then(|| self.state.pin_mut(&key))
                         .flatten();
                     if let Some(renewed) = renewed {
-                        let mut answered_prompt = None;
-                        let was_compacted = renewed.compacted;
                         renewed.last_used_at = now;
                         renewed.cache_ttl_ms = cache_ttl_ms;
                         // A turn's stream end with its usage is the turn's end a classifier call that follows judges:
@@ -4531,9 +4540,7 @@ impl Task {
                             // and its effort as it keeps its lane.
                             renewed.entrypoint.clone_from(&pin.entrypoint);
                             renewed.effort.clone_from(&pin.effort);
-                            if compacted {
-                                renewed.compacted = true;
-                            }
+                            renewed.compacted |= compacted;
                             if let Some(usage) = usage {
                                 // Every copy folds whatever the account's kind and nothing is priced here: the
                                 // reader prices the copies its funding selects on the account the pin sits on when
@@ -4565,7 +4572,7 @@ impl Task {
                                 // A marked row keeps its compaction call's prompt until the agent's next turn reads
                                 // the mark. An auxiliary answer in between would move the size that the turn's body is
                                 // compared with.
-                                if !(was_compacted && !turn_ended && !compacted) {
+                                if !renewed.compacted || compacted || turn_ended {
                                     renewed.last_input_tokens = usage.prompt_tokens();
                                 }
                                 if let Some(tokens) = thinking_tokens.filter(|tokens| *tokens > 0) {
@@ -4586,17 +4593,14 @@ impl Task {
                                         }
                                     }
                                 }
-                                answered_prompt = Some(usage.prompt_tokens());
                             }
                         }
                         let row = renewed.clone();
-                        // A client's answer with usage settles the key's open observation, which teaches the pair only
-                        // where it belongs to the renewed row's epoch. A probe's answer and one without usage leave it.
-                        let learned = answered_prompt.and_then(|prompt| {
-                            let observation = self
-                                .state
-                                .take_observation(&key)
-                                .filter(|observation| observation.epoch == row.epoch)?;
+                        // A client's answer with usage settles the key's open observation. A probe's answer and one
+                        // without usage leave it.
+                        let learned = usage.filter(|_| !keepalive).and_then(|usage| {
+                            let prompt = usage.prompt_tokens();
+                            let observation = self.state.take_observation(&key)?;
                             let bound =
                                 observation.binding(prompt, input_transformations.as_ref())?;
                             Some((
@@ -5059,11 +5063,6 @@ impl Task {
         reason: &'static str,
         cause: Option<MoveCause>,
     ) -> Option<StateWrite> {
-        // The session holds account state, so the failover leaves its pin: the retry's selection reads the row and
-        // places a request that carries no conversation for itself.
-        if self.state.pin(&key).is_some_and(|row| row.account_bound) {
-            return None;
-        }
         let row = self.state.invalidate_pin(pin, account_id)?;
         let now = (self.clock)();
         if let Some(event) = released_mark(&self.snapshot(), &row, now) {
@@ -5237,8 +5236,7 @@ impl Task {
         if epoch == Some(landed.epoch) {
             return;
         }
-        let (epoch, moved) = (landed.epoch, landed.account_id != *account_id);
-        self.state.take_observation(key);
+        let moved = landed.account_id != *account_id;
         let held = sums.get(account_id).map_or(0, |sum| sum.tokens);
         // A failover's waiting row can name a holder the id has moved past since the purge last ran, and a lapsed
         // agent's record one the id moved past since the purge took its pin, and the answer would teach the pair under
@@ -5247,7 +5245,6 @@ impl Task {
             self.state.open_observation(
                 key,
                 Observation {
-                    epoch,
                     left: account_id.clone(),
                     left_incarnation: incarnation,
                     last_prompt,

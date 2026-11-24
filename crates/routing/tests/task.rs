@@ -4587,7 +4587,7 @@ async fn a_restored_seven_day_reading_at_one_outside_the_set_reads_spent_beside_
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
-    let base = &a.regime_fits[0].windows;
+    let base = &a.base_fit.windows;
     assert_eq!(
         (base.get(FIVE_HOUR).copied(), base.get(SEVEN_DAY).copied()),
         (Some("fits"), Some("spent")),
@@ -17135,9 +17135,9 @@ async fn a_regime_that_a_later_revision_names_joins_the_fits_at_its_instant() {
     .unwrap();
     handle.report(windows("a", 0.5, 0.1, T - 1)).await;
     let fits = |projections: Vec<phoebis_routing::AccountProjection>| {
-        projection_of_account(&projections, "a")
-            .regime_fits
-            .into_iter()
+        let a = projection_of_account(&projections, "a");
+        std::iter::once(a.base_fit)
+            .chain(a.regime_fits)
             .map(|entry| (entry.regime, entry.fit))
             .collect::<Vec<_>>()
     };
