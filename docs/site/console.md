@@ -1940,23 +1940,24 @@ settings fold lists the pool's twenty-six settings in the card's order with Load
 and its pool had left the registry". A refused record, which no pool setting entered, draws no settings fold, a
 guardrail block's among them, whose Admission line and Answer row carry `guardrail blocked` and the guardrail's name as
 a second chip. A record written before a setting existed reads `not recorded` for it, Load shedding, 5-hour ceiling and
-Weekly ceiling on a version 1 record and the five slow-down and return-to-plan settings on an older version 2 record,
-and a version 1 record lists after the twenty-six, each marked `(then)`, the three settings it carried that a later
-record does not. A record that carries the one ceiling a pool held before its 5-hour and weekly ceilings split reads
-that fraction on both the 5-hour ceiling and the Weekly ceiling rows. "Outcome" lists the pin written, the reservation
-(the account, the share per window and the expiry), the cache-map entries the answer wrote (`pending` until it ends),
-the cache read with the TTL tier of its deepest entry, over the promised prefix where the rung promised one and over the
-whole prompt, the read, the write and the input, where it promised none, the hold, reading `for the reset at {time}`
-where the request waited for a reset, or `for the slow-down until {time}` with the chips `speed 0.5x`, `stretch 42 min
-of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or `for the rewrite in flight of {request} until
-{time}` with `bound 2 min` where it waited for a moved pin's first head, a Cause on a failover's landing or a move with
-a cause (`429 on 5h` or `fast lane 429` for a cooldown, `re-auth required by credential refused` for a mark), the answer
-an exhaustion or a refusal gave, and the spend against a budget. With four entries or more, the cache-map row draws one
-chip per tier with its count and depth range, such as `message ×11 depth 1 to 11`, then its three deepest message
-depths, and its control "All {n} entries" lists every entry until "Latest 3" folds them again. The foot offers the three
-widenings after "Widen to", this minute, this session and this account, names the record's version as `Record v{n}`, and
-"Copy as JSON" copies the record route's answer whole. A record the retention purged reads "The record left with the
-retention", and one still loading "Loading the record".
+Weekly ceiling on a version 1 record and the five slow-down and return-to-plan settings on an older version 2 record. A
+record written before the router recorded Shed on the Fable reservation draws no row for that setting, so it lists
+twenty-five. A version 1 record lists after its twenty-five, each marked `(then)`, the three settings it carried that a
+later record does not. A record that carries the one ceiling a pool held before its 5-hour and weekly ceilings split
+reads that fraction on both the 5-hour ceiling and the Weekly ceiling rows. "Outcome" lists the pin written, the
+reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote (`pending` until
+it ends), the cache read with the TTL tier of its deepest entry, over the promised prefix where the rung promised one
+and over the whole prompt, the read, the write and the input, where it promised none, the hold, reading `for the reset
+at {time}` where the request waited for a reset, or `for the slow-down until {time}` with the chips `speed 0.5x`,
+`stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or `for the rewrite in flight of
+{request} until {time}` with `bound 2 min` where it waited for a moved pin's first head, a Cause on a failover's landing
+or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown, `re-auth required by credential refused` for a
+mark), the answer an exhaustion or a refusal gave, and the spend against a budget. With four entries or more, the
+cache-map row draws one chip per tier with its count and depth range, such as `message ×11 depth 1 to 11`, then its
+three deepest message depths, and its control "All {n} entries" lists every entry until "Latest 3" folds them again. The
+foot offers the three widenings after "Widen to", this minute, this session and this account, names the record's version
+as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A record the retention purged reads "The
+record left with the retention", and one still loading "Loading the record".
 
 An event row opens to a panel of pairs: When to the second, the account and the pool as links, then the kind's own
 pairs. An event that names a request ends with "Source request", which opens the log on that request a quarter hour
