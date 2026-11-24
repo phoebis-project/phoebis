@@ -72,14 +72,14 @@ pub use query::{
     list_requests, list_routing_log, member_spends, moves_by_reason_and_fit, names_one_account,
     parked_count, parked_summary, parse_range, pin_migrations_by_account_and_reason, placements,
     pool_traffic, pools_traffic, recent_events_of_kind, recent_gaps, request_by_id, request_events,
-    revision_spans, rewrite_series, routing_conditions, series_paged, session_activity,
-    session_burn_series, session_identities, BudgetedMember, BurnPoint, CacheEquivalent,
-    CacheFacts, Dashboard, DecisionListRow, EventListRow, FundingFilter, GroupBy, GroupRow,
-    GuardrailCountRow, HourlyWindowSample, LimitResetUsed, LiveKeys, LogKinds, ParkedSummary,
-    PlacementRow, ProbeCounts, ProbeEquivalent, ProbeView, RequestCursor, RequestFilter,
-    RollupFilter, RoutingCondition, RoutingLogCursor, RoutingLogFilter, RoutingLogPage,
-    RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SessionSpendKey,
-    Span, Totals, TrafficBucket, DECISION_KINDS, EVENT_KINDS, MAX_POINTS, MAX_RANGE_MS,
+    rewrite_series, routing_conditions, series_paged, session_activity, session_burn_series,
+    session_identities, BudgetedMember, BurnPoint, CacheEquivalent, CacheFacts, Dashboard,
+    DecisionListRow, EventListRow, FundingFilter, GroupBy, GroupRow, GuardrailCountRow,
+    HourlyWindowSample, LimitResetUsed, LiveKeys, LogKinds, ParkedSummary, PlacementRow,
+    ProbeCounts, ProbeEquivalent, ProbeView, RequestCursor, RequestFilter, RollupFilter,
+    RoutingCondition, RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow,
+    SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SessionSpendKey, Totals,
+    TrafficBucket, DECISION_KINDS, EVENT_KINDS, MAX_POINTS, MAX_RANGE_MS,
 };
 pub use query::{guardrail_sample_page, request_body, request_body_held, SampleRow};
 pub use query::{list_feature_calls, FeatureCallFilter, FeatureCallRow};

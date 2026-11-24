@@ -348,12 +348,12 @@ fn spread(
             let (polls, last_read) = if first_pass {
                 (1, Some(now))
             } else {
-                match usage.latest_for(account) {
+                match usage.standing_for(account).1 {
                     // The age is read off the wall clock, which can step: a negative age counts as zero, and one that
                     // the slot's clock cannot reach back to leaves no last read.
-                    Some(snapshot) => {
+                    Some(latest) => {
                         let age = Duration::from_millis(
-                            u64::try_from(usage.now() - snapshot.fetched_at).unwrap_or(0),
+                            u64::try_from(usage.now() - latest.fetched_at).unwrap_or(0),
                         );
                         (1, now.checked_sub(age))
                     }

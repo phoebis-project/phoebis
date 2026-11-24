@@ -14,7 +14,7 @@ use phoebis_routing::{
 };
 use phoebis_store::{canonical_id, AccountKind, AttachmentSubject, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::db::{
@@ -26,15 +26,15 @@ use crate::histogram::Histogram;
 use crate::pattern::{literal_like, Patterns, ESCAPE};
 use crate::plan::{free_shares, funding_of, CostRevisions, Funding, PlanTables, WindowShares};
 use crate::price::{price_equivalent_at, price_row, price_usd, AttemptFacts, Priced, RowKey};
-use crate::pricing::{Band, PriceRevisions, Speed};
+use crate::pricing::{Band, PriceRevisions, PriceTable, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
 use crate::rollup::{
     add_counts, deltas_of, detail_json, fold_identifier_of, fold_user_agent_of, hour_end, hour_of,
-    last_millisecond, migration_reason, read_account_rollups, read_rollups_paged, row_to_rollup_at,
-    trailing_day_hours, visit_rollups, CostSplit, KeySelector, RollupRow, RollupSelect,
-    RoutingKind, COLUMNS as ROLLUP_COLUMNS, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS,
+    last_millisecond, migration_reason, read_rollups_paged, row_to_rollup_at, trailing_day_hours,
+    visit_rollups, CostSplit, KeySelector, RollupRow, RollupSelect, RoutingKind,
+    COLUMNS as ROLLUP_COLUMNS, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS,
     EXPIRED_BETWEEN_TURNS_UNRELEASED, HIT_SUFFIX, NO_CLASS, NO_EFFORT, NO_PLAN_PROBES,
     OTHER_DIMENSION, TRANSFORMATIONS_MOVED, TRANSFORMATIONS_NONE, TRANSFORMATIONS_REPORTED,
     UNATTRIBUTED,
@@ -544,7 +544,7 @@ fn filter_clauses(
 }
 
 phoebis_store::text_enum! {
-    plain
+    plain deserialize
     /// The request list's order keys, each word the requests table's column it orders by. `ReceivedAt` is the default
     /// and the only key with an index, so the others sort the rows the filters admit. A row without the figure of a
     /// nullable key sorts after every row with it, under either direction.
@@ -588,7 +588,7 @@ impl RequestOrder {
 }
 
 phoebis_store::text_enum! {
-    plain
+    plain deserialize
     /// `desc` (the default) or `asc`, the direction of a paged read's order.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub enum Direction {
@@ -2319,7 +2319,7 @@ pub struct SeriesPoint {
 }
 
 phoebis_store::text_enum! {
-    plain
+    plain deserialize
     /// Which rows a read keeps by who paid for them, off the funding each row was recorded under: `Billed` the billed,
     /// overage, fast and usage-based rows, `Plan` the plan rows. The two partition the rows, so their sums add up to
     /// the unfiltered sum, and the registry's later state moves no row.
@@ -2378,7 +2378,7 @@ impl RollupFilter {
 }
 
 phoebis_store::text_enum! {
-    plain
+    plain deserialize
     /// A dimension the analytics group their rows by.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum GroupBy {
@@ -2396,21 +2396,6 @@ phoebis_store::text_enum! {
         UserAgent => "user_agent",
     }
 }
-
-/// `Deserialize` for a query's word parameter through the parse `text_enum!` generates, so a refusal of the query
-/// extractor names the words.
-macro_rules! word_parameter {
-    ($($name:ident),*) => {$(
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                let word = String::deserialize(deserializer)?;
-                $name::parse(&word)
-                    .ok_or_else(|| serde::de::Error::unknown_variant(&word, $name::WORDS))
-            }
-        }
-    )*};
-}
-word_parameter!(Direction, FundingFilter, GroupBy, RequestOrder);
 
 /// The group a pattern list files an agent under when no pattern matches.
 pub const OTHER_AGENTS: &str = "other";
@@ -3688,50 +3673,37 @@ pub fn latest_extra_usage_share(
     latest_extra_usage_of(conn, LATEST_EXTRA_USAGE_SHARE_SQL, now)
 }
 
-/// One span of hours over which both lists' revisions are constant for the hourly rows: the SQL bounds (seconds,
+/// One span of hours over which the price list's revision is constant for the hourly rows: the SQL bounds (seconds,
 /// half-open) and the instant the span prices at in milliseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Span {
+pub(crate) struct Span {
     pub from_hour: i64,
     pub to_hour: i64,
     /// The last millisecond of the span's first hour, an instant at which `in_force` answers the revision every hour
     /// of the span that no entry splits reads at its end. A boundary hour of the span (`boundary_instants`) prices from
-    /// its request rows instead, so a sum's reader binds it out of its statement. Raised to the earliest instant of
-    /// either list when it lies below it, and a lifetime read's `i64::MIN` as `from_hour` reads that earliest instant,
-    /// so the sentinel is not multiplied.
+    /// its request rows instead, so a sum's reader binds it out of its statement. Raised to the price list's earliest
+    /// instant when it lies below it, and a lifetime read's `i64::MIN` as `from_hour` reads that earliest instant, so
+    /// the sentinel is not multiplied.
     pub at: i64,
 }
 
-/// The spans between `from_hour` and `to_hour` split at the start of the hour each revision of `prices` and, when
-/// given, of `costs` takes effect in, so a SQL sum runs once per span and is priced at that span's revisions, and one
-/// span when no revision starts inside the range. A row of an hour no entry splits is priced whole by the revisions in
-/// force at the end of its hour, and the hour a revision starts in falls in that revision's span. A reader of the
-/// spans binds each boundary hour out of its statement and prices that hour's stored rows by their parts
-/// (`row_parts`), so a request of the hour prices at the revision in force when it arrived while its row is kept.
-/// `costs` is `None` for a dollar sum. The first span's `from_hour` is the caller's (so the rows before the first
-/// revision's instant, which `in_force` reads at the first entry, stay in the sum) and its `at` is clamped as `Span`
-/// says.
-pub fn revision_spans(
-    prices: &PriceRevisions,
-    costs: Option<&CostRevisions>,
-    from_hour: i64,
-    to_hour: i64,
-) -> Vec<Span> {
-    let price_instants = prices.instants();
-    let cost_instants = costs.map_or(&[][..], |costs| costs.instants());
-    // Before a list's first entry `in_force` already reads that entry, so only the later entries move a revision.
-    let mut edges: Vec<i64> = later_instants(prices, costs)
+/// The spans between `from_hour` and `to_hour` split at the start of the hour each revision of `prices` takes effect
+/// in, so a SQL sum runs once per span and is priced at that span's revision, and one span when no revision starts
+/// inside the range. A row of an hour no entry splits is priced whole by the revision in force at the end of its hour,
+/// and the hour a revision starts in falls in that revision's span. A reader of the spans binds each boundary hour out
+/// of its statement and prices that hour's stored rows by their parts (`row_parts`), so a request of the hour prices at
+/// the revision in force when it arrived while its row is kept. The first span's `from_hour` is the caller's (so the
+/// rows before the first revision's instant, which `in_force` reads at the first entry, stay in the sum) and its `at`
+/// is clamped as `Span` says.
+pub(crate) fn revision_spans(prices: &PriceRevisions, from_hour: i64, to_hour: i64) -> Vec<Span> {
+    // Before the list's first entry `in_force` already reads that entry, so only the later entries move a revision.
+    let mut edges: Vec<i64> = later_instants(prices, None)
         .map(hour_of)
         .filter(|hour| *hour > from_hour && *hour < to_hour)
         .collect();
     edges.sort_unstable();
     edges.dedup();
-    let earliest = price_instants
-        .iter()
-        .chain(cost_instants)
-        .min()
-        .copied()
-        .unwrap_or(i64::MIN);
+    let earliest = prices.instants().iter().min().copied().unwrap_or(i64::MIN);
     let starts = std::iter::once(from_hour).chain(edges.iter().copied());
     let ends = edges.iter().copied().chain(std::iter::once(to_hour));
     starts
@@ -4072,6 +4044,22 @@ impl Sides {
         }
         Ok(())
     }
+
+    /// `split_sum` over `[from_hour, to_hour)` as one span, for a reader that prices each group at its own hour, as
+    /// `price_group` does, and so never reads the span's `at`.
+    fn split_range(
+        &self,
+        from_hour: i64,
+        to_hour: i64,
+        piece: impl FnMut(Piece) -> Result<(), LedgerError>,
+    ) -> Result<(), LedgerError> {
+        let span = Span {
+            from_hour,
+            to_hour,
+            at: 0,
+        };
+        self.split_sum([span], piece)
+    }
 }
 
 /// One part of a stored row: the instant it prices at and its five token counts.
@@ -4381,13 +4369,7 @@ fn grouped_totals<K: Ord>(
     let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE {NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2 GROUP BY {group_columns}, {PRICE_GROUP_COLUMNS} ORDER BY {group_columns}, {PRICE_GROUP_COLUMNS}"))?;
     let mut rows_stmt: Option<rusqlite::Statement<'_>> = None;
     let mut out: BTreeMap<K, Totals> = BTreeMap::new();
-    // One span over the range, its `at` unread: `price_group` prices each group at its own hour.
-    let range = Span {
-        from_hour: since_hour,
-        to_hour,
-        at: 0,
-    };
-    sides.split_sum([range], |piece| {
+    sides.split_range(since_hour, to_hour, |piece| {
         match piece {
             Piece::Span(span) => {
                 let rows = stmt.query_map(params![span.from_hour, span.to_hour], |r| {
@@ -4472,7 +4454,10 @@ pub fn session_activity(
     conn: &Connection,
     since: i64,
 ) -> Result<Vec<SessionActivity>, LedgerError> {
-    let mut stmt = conn.prepare(&session_activity_statement(fill_ended(conn)?))?;
+    static ENDED: LazyLock<String> = LazyLock::new(|| session_activity_statement(true));
+    static FILLING: LazyLock<String> = LazyLock::new(|| session_activity_statement(false));
+    // Read per call, since a landing can drop an ended cursor at run time.
+    let mut stmt = conn.prepare_cached(if fill_ended(conn)? { &ENDED } else { &FILLING })?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(SessionActivity {
             key_id: r.get(0)?,
@@ -4753,7 +4738,7 @@ const MEMBER_SPEND_FILTER: &str = "pool_id = ?1 AND account_id = ?2 AND hour >= 
 /// as any other request's. With `metered_only`, a subscription member's metered rows alone count, those filed under
 /// `overage` or `fast`, and a usage-based seat's under `usage_based`. The row names the period kind and its UTC bounds
 /// in ms (`period_end` is the next day or month boundary). Grouped by `canonical_model`, `speed` and `band`, one query
-/// per span of `revision_spans(prices, None, ..)`, each group priced through `estimate_banded` at its band on
+/// per span of `revision_spans(prices, ..)`, each group priced through `estimate_banded` at its band on
 /// `prices.in_force(span.at)`, so a band row prices exactly at the cells its attempts selected and a budget moves with
 /// the revision in force. A boundary hour of the price list is bound out of the sum: its stored rows are read under the
 /// sum's own filter and each part of a row as `row_parts` answers it prices through `estimate_banded` on the entry in
@@ -4785,6 +4770,13 @@ pub fn member_spends(
          WHERE {MEMBER_SPEND_FILTER} GROUP BY canonical_model, speed, band"
     ))?;
     let mut rows_stmt: Option<rusqlite::Statement<'_>> = None;
+    // A model the revision cannot price contributes nothing: the analytics already read such a row as unpriced, and a
+    // budget must not be tripped by a sum it cannot itself account for.
+    let usd_of = |table: &PriceTable, model: &str, speed: &str, band: &str, usage: PinUsage| {
+        table
+            .estimate_banded(model, Speed::of(Some(speed)), Band::of_rollup(band), usage)
+            .map_or(0.0, |split| split.total())
+    };
     for (
         BudgetedMember {
             pool_id,
@@ -4797,7 +4789,7 @@ pub fn member_spends(
     {
         let mut spent_usd = 0.0;
         sides.split_sum(
-            revision_spans(prices, None, period_start / 1_000, period_end / 1_000),
+            revision_spans(prices, period_start / 1_000, period_end / 1_000),
             |piece| {
                 match piece {
                     Piece::Span(span) => {
@@ -4821,16 +4813,7 @@ pub fn member_spends(
                         )?;
                         for row in rows {
                             let (model, speed, band, usage) = row?;
-                            // A model the revision cannot price contributes nothing: the analytics already read such a
-                            // row as unpriced, and a budget must not be tripped by a sum it cannot itself account for.
-                            if let Some(split) = table.estimate_banded(
-                                &model,
-                                Speed::of(Some(&speed)),
-                                Band::of_rollup(&band),
-                                usage,
-                            ) {
-                                spent_usd += split.total();
-                            }
+                            spent_usd += usd_of(table, &model, &speed, &band, usage);
                         }
                     }
                     Piece::Stored(hour) => {
@@ -4847,14 +4830,13 @@ pub fn member_spends(
                         for row in rows {
                             let row = row?;
                             for part in row_parts(&row, &sides) {
-                                if let Some(split) = prices.in_force(part.at).estimate_banded(
+                                spent_usd += usd_of(
+                                    prices.in_force(part.at),
                                     &row.canonical_model,
-                                    Speed::of(Some(&row.speed)),
-                                    Band::of_rollup(&row.band),
+                                    &row.speed,
+                                    &row.band,
                                     part.usage,
-                                ) {
-                                    spent_usd += split.total();
-                                }
+                                );
                             }
                         }
                     }
@@ -5127,13 +5109,7 @@ pub fn pools_traffic(
     ))?;
     let mut rows_args = args.clone();
     let mut rows: Option<rusqlite::Statement<'_>> = None;
-    // One span over the range, its `at` unread: `price_group` prices each group at its own hour.
-    let range = Span {
-        from_hour,
-        to_hour,
-        at: 0,
-    };
-    fold.sides.split_sum([range], |piece| {
+    fold.sides.split_range(from_hour, to_hour, |piece| {
         match piece {
             Piece::Span(span) => {
                 (args[0], args[1]) = (span.from_hour.into(), span.to_hour.into());
@@ -5638,36 +5614,6 @@ fn burn_tiers(tables: &PlanTables) -> BTreeSet<&str> {
         .collect()
 }
 
-/// One rollup row priced into the bucket it falls in, part by part as `row_parts` answers it against `sides`, nothing
-/// for a row before the first bucket's edge.
-#[allow(clippy::too_many_arguments)]
-fn price_burn_row(
-    points: &mut [BurnSums],
-    first: i64,
-    bucket_seconds: i64,
-    row: &RollupRow,
-    tables: &PlanTables,
-    prices: &PriceRevisions,
-    shares: bool,
-    now: i64,
-    sides: &Sides,
-) {
-    let Some(point) = bucket_slot(points, first, bucket_seconds, row.hour) else {
-        return;
-    };
-    // The rollup keeps no completion, so the key reads the band at the row's hour.
-    for part in row_parts(row, sides) {
-        price_usage(
-            point,
-            prices,
-            tables,
-            row.price_key(part.at, now),
-            part.usage,
-            shares,
-        );
-    }
-}
-
 /// The burn series of every group under `group_by`, any dimension `GroupBy` names, within `filter`'s scopes, read
 /// through `read_rollups_paged` and priced into the group's buckets as the pages arrive: each group's points are priced
 /// from that group's rows alone, the shares answered where each group holds one account's rows. A group is answered
@@ -5716,17 +5662,21 @@ pub async fn burn_groups_paged(
             group.held |= row.hour >= from_hour && row.hour < last;
             group.plan_funded |= row.funding_kind() == Funding::Plan;
         }
-        price_burn_row(
-            &mut group.sums,
-            first,
-            filter.bucket_seconds,
-            row,
-            tables,
-            prices,
-            shares,
-            now,
-            &sides,
-        );
+        let Some(point) = bucket_slot(&mut group.sums, first, filter.bucket_seconds, row.hour)
+        else {
+            return;
+        };
+        // The rollup keeps no completion, so the key reads the band at the row's hour.
+        for part in row_parts(row, &sides) {
+            price_usage(
+                point,
+                prices,
+                tables,
+                row.price_key(part.at, now),
+                part.usage,
+                shares,
+            );
+        }
     })
     .await?;
     Ok(groups
@@ -5858,13 +5808,24 @@ pub fn moves_by_reason_and_fit(
     filter: &SeriesFilter,
 ) -> Result<BTreeMap<String, BTreeMap<String, u64>>, LedgerError> {
     let (from_hour, to_hour) = rollup_hours(filter)?;
-    let rows = read_account_rollups(conn, from_hour, to_hour)?;
+    let mut args: Vec<rusqlite::types::Value> = vec![from_hour.into(), to_hour.into()];
+    let mut clauses = vec!["hour >= ?1 AND hour < ?2 AND migrations_json != '{}'".to_string()];
+    in_list("account_id", &filter.accounts, &mut args, &mut clauses);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT migrations_json FROM account_rollups_hourly WHERE {}",
+        clauses.join(" AND ")
+    ))?;
+    let rows = stmt
+        .query_map(params_from_iter(args), |r| {
+            Ok(
+                serde_json::from_str::<BTreeMap<String, u64>>(r.get_ref(0)?.as_str()?)
+                    .unwrap_or_default(),
+            )
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
-    for row in rows
-        .iter()
-        .filter(|r| filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
-    {
-        for (key, count) in &row.migrations {
+    for migrations in &rows {
+        for (key, count) in migrations {
             let (reason, fit) = key.split_once('/').unwrap_or((key, "unknown"));
             *out.entry(reason.to_string())
                 .or_default()
@@ -6210,7 +6171,20 @@ const SESSION_SPEND_COLUMNS: &str =
      r.presented_retired, r.rotation_at";
 
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session reads.
-const SESSION_SPEND_PRICED_FROM: usize = 14;
+const SESSION_SPEND_PRICED_FROM: usize = column_count(SESSION_SPEND_COLUMNS);
+
+/// How many columns a comma-separated list names: its commas plus one.
+const fn column_count(columns: &str) -> usize {
+    let bytes = columns.as_bytes();
+    let (mut count, mut i) = (1, 0);
+    while i < bytes.len() {
+        if bytes[i] == b',' {
+            count += 1;
+        }
+        i += 1;
+    }
+    count
+}
 
 /// The number of request `r`'s serving attempt, its last by number, the attempt the landing takes the row's serving
 /// facts from. The session reads join that attempt's own row, since its price reads members the request row does not
@@ -7218,7 +7192,7 @@ mod tests {
             hour_at("2026-03-01"),
         );
         assert_eq!(
-            revision_spans(&prices, None, from, to),
+            revision_spans(&prices, from, to),
             [
                 Span {
                     from_hour: from,
@@ -7235,7 +7209,7 @@ mod tests {
         );
         let (inside_from, inside_to) = (hour_at("2026-02-02"), hour_at("2026-02-20"));
         assert_eq!(
-            revision_spans(&prices, None, inside_from, inside_to),
+            revision_spans(&prices, inside_from, inside_to),
             [Span {
                 from_hour: inside_from,
                 to_hour: inside_to,
@@ -7245,43 +7219,13 @@ mod tests {
         );
     }
 
-    /// The cost list's dates split too: a cost entry dated 2026-01-15 splits the January span in two.
-    #[test]
-    fn revision_spans_split_at_the_cost_lists_dates_when_given() {
-        let prices = crate::test_tables::api_prices();
-        let first = crate::test_tables::first_entry_costs_text();
-        let (_, entry) = first
-            .split_once("revisions:\n")
-            .expect("the fixture opens with its list");
-        let costs = CostRevisions::from_yaml(&format!(
-            "{first}{}",
-            entry.replacen("effective: 2026-01-01", "effective: 2026-01-15", 1)
-        ))
-        .expect("the cost list with a mid-January entry parses");
-        let (from, mid_january, february, to) = (
-            hour_at("2026-01-02"),
-            hour_at("2026-01-15"),
-            hour_at("2026-02-01"),
-            hour_at("2026-03-01"),
-        );
-        let bounds: Vec<(i64, i64)> = revision_spans(&prices, Some(&costs), from, to)
-            .into_iter()
-            .map(|span| (span.from_hour, span.to_hour))
-            .collect();
-        assert_eq!(
-            bounds,
-            [(from, mid_january), (mid_january, february), (february, to)]
-        );
-    }
-
     /// A lifetime read passes `i64::MIN`: the first span keeps the sentinel as its SQL bound, so `hour >= ?` still
-    /// clears every row, and prices at the earliest instant of either list, so nothing multiplies the sentinel.
+    /// clears every row, and prices at the price list's earliest instant, so nothing multiplies the sentinel.
     #[test]
     fn a_lifetime_span_keeps_the_sentinel_bound_and_prices_at_the_earliest_entry() {
         let prices = crate::test_tables::api_prices();
-        let costs = crate::test_tables::subscription_costs();
         let to = hour_at("2026-03-01");
-        let spans = revision_spans(&prices, Some(&costs.revisions), i64::MIN, to);
+        let spans = revision_spans(&prices, i64::MIN, to);
         assert_eq!(
             (spans[0].from_hour, spans[0].at),
             (i64::MIN, hour_at("2026-01-01") * 1_000)

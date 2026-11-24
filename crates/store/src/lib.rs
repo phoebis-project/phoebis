@@ -4,10 +4,36 @@
 /// reads and writes one text column, so the column's reader and its writer cannot drift apart, and a stored word
 /// outside the set fails the read with the word named. Exported for the ledger's columns, whose expansion resolves the
 /// `rusqlite` paths against the ledger's own dependency. A leading `plain` leaves the column conversions out, so its
-/// expansion names no `rusqlite` path and serves a crate without that dependency, such as `phoebis-attention`.
+/// expansion names no `rusqlite` path and serves a crate without that dependency, such as `phoebis-attention`. A
+/// leading `plain deserialize` adds to that expansion a `Deserialize` through `parse` for a query's word parameter, so
+/// a refusal of the query extractor names the words, with its `serde` paths resolved against the calling crate's own
+/// dependency.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! text_enum {
+    (
+        plain deserialize
+        $(#[$meta:meta])*
+        pub enum $name:ident {
+            $($(#[$variant_meta:meta])* $variant:ident => $word:literal),* $(,)?
+        }
+    ) => {
+        $crate::text_enum! {
+            plain
+            $(#[$meta])*
+            pub enum $name {
+                $($(#[$variant_meta])* $variant => $word),*
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let word = <String as serde::Deserialize>::deserialize(deserializer)?;
+                $name::parse(&word)
+                    .ok_or_else(|| serde::de::Error::unknown_variant(&word, $name::WORDS))
+            }
+        }
+    };
     (
         plain
         $(#[$meta:meta])*

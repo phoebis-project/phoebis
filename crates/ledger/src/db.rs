@@ -66,8 +66,7 @@ const OPEN_OPTIMIZE_MASK: i64 = 0x10012;
 
 pub struct LedgerDb {
     writer: Mutex<Connection>,
-    /// In an `Arc`, so `read` hands its blocking worker the pool.
-    readers: Arc<Readers>,
+    readers: Readers,
     /// The retention purge's own connection, so a slice never holds the writer's lock or turn.
     purger: Mutex<Connection>,
     /// The writes begun and ended through `write`, which `purge` reads to let a waiting write go first.
@@ -250,13 +249,9 @@ impl LedgerDb {
         // Before the readers open, since a connection loads `sqlite_stat1` with its schema and keeps what it loaded.
         analyze_at_open(&purger)?;
         let readers = Readers::open(path)?;
-        Ok(LedgerDb::from_parts(writer, readers, purger))
-    }
-
-    fn from_parts(writer: Connection, readers: Readers, purger: Connection) -> LedgerDb {
-        LedgerDb {
+        Ok(LedgerDb {
             writer: Mutex::new(writer),
-            readers: Arc::new(readers),
+            readers,
             purger: Mutex::new(purger),
             writes: Writes::default(),
             #[cfg(any(test, feature = "debug-hooks"))]
@@ -265,7 +260,7 @@ impl LedgerDb {
             hold_next_writer_read: Mutex::new(None),
             #[cfg(any(test, feature = "debug-hooks"))]
             page_reads: AtomicUsize::new(0),
-        }
+        })
     }
 
     pub async fn schema_version(self: &Arc<Self>) -> Result<u32, LedgerError> {
@@ -361,8 +356,8 @@ impl LedgerDb {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.page_reads.fetch_add(1, Ordering::SeqCst);
         let reader = self.readers.take().await;
-        let pool = Arc::clone(&self.readers);
-        tokio::task::spawn_blocking(move || LedgerDb::lend(&pool, reader, f))
+        let db = Arc::clone(self);
+        tokio::task::spawn_blocking(move || LedgerDb::lend(&db.readers, reader, f))
             .await
             .map_err(|_| LedgerError::ReadCanceled)?
     }
@@ -847,6 +842,14 @@ static INSERT_REQUEST: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
+/// The `attempts` columns in the order `row_to_attempt` reads them, a literal so the landing's insert and
+/// `ATTEMPT_SELECT` `concat!` one list.
+macro_rules! attempt_columns {
+    () => {
+        "request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based, issued_digest, input_transformations, previous_input_tokens, entry_expired, agent_released"
+    };
+}
+
 /// Writes the request and its attempts, answering the rows the id held before, if any: a replacement has to
 /// take its earlier contribution out of every aggregate that was folded from it. `now` is the writer's clock, which
 /// the row's `landed_at` is stamped from. The row's serving facts are derived here from the attempts it writes, so
@@ -942,10 +945,11 @@ pub(crate) fn insert_request_in(
     tx.prepare_cached("DELETE FROM attempts WHERE request_id = ?1")?
         .execute(params![request.id])?;
     for a in attempts {
-        tx.prepare_cached(
-            "INSERT INTO attempts (request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based, issued_digest, input_transformations, previous_input_tokens, entry_expired, agent_released) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51)",
-        )?
+        tx.prepare_cached(concat!(
+            "INSERT INTO attempts (",
+            attempt_columns!(),
+            ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51)"
+        ))?
         .execute(params![
             a.request_id, a.attempt, a.account_id, a.account_kind, a.pin_epoch.map(|n| n as i64), a.started_at, a.finished_at,
             a.ttfb_ms, a.ttfc_ms, a.upstream_status.map(i64::from), a.upstream_request_id, a.outcome, a.cooldown_scope, a.cooldown_until,
@@ -1204,7 +1208,7 @@ macro_rules! request_columns {
 }
 pub(crate) const REQUEST_COLUMNS: &str = request_columns!();
 pub(crate) const REQUEST_SELECT: &str = concat!("SELECT ", request_columns!(), " FROM requests");
-pub(crate) const ATTEMPT_SELECT: &str = "SELECT request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based, issued_digest, input_transformations, previous_input_tokens, entry_expired, agent_released FROM attempts";
+pub(crate) const ATTEMPT_SELECT: &str = concat!("SELECT ", attempt_columns!(), " FROM attempts");
 
 /// Column `i` as an optional count, `None` where it is null.
 pub(crate) fn opt_u64(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<Option<u64>> {
