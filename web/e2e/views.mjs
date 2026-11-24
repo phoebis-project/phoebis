@@ -11436,6 +11436,52 @@ async function routingLogPickLine(theme) {
 }
 
 /**
+ * The candidate table of a placement whose candidate projects each of the three windows, the most lines that a
+ * Projection cell holds: at 1280 by 800 the table needs no more than its wrap's width, so nothing scrolls sideways
+ * and the Verdict column stays in view. Each column's width is recorded. The story's subagent placement on primary,
+ * two minutes before the pass's instant, opens on its request's page a quarter hour either side of its decision,
+ * which the mock dates back from its load, and the bare log loads again after. A card with no candidate of three
+ * projected windows fails by name, since its narrower table would pass with nothing to read. The router's seed
+ * places on its one API-key account, which projects no window, so only the story's pass reads it.
+ */
+async function candidateTableFits(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const id = 'req_5b0d8e27-f63';
+  const at = clockOrigin - 2 * 60_000;
+  const quarter = 15 * 60_000;
+  const rowAt = `.routing-log__table tbody tr[data-row="${id}/1"]`;
+  try {
+    await loadAtOrigin(`/routing-log?request=${id}&from=${new Date(at - quarter).toISOString()}&to=${new Date(at + quarter).toISOString()}`, rowAt);
+    const row = page.locator(rowAt);
+    if ((await row.count()) === 0 || !(await openDecision(row))) {
+      say(`the placement ${id}/1 opened to no card on its request's page`);
+      return;
+    }
+    const read = await page.evaluate(() => {
+      const table = document.querySelector('.routing-log__panel .decision-card .decision-card__candidates');
+      const wrap = table?.closest('.table-wrap');
+      if (!table || !wrap) return null;
+      // Projection stands sixth from a row's end whatever a merged window cell spans.
+      const cells = [...table.querySelectorAll(':scope > tbody > tr')].map((tr) => tr.children[tr.children.length - 6]);
+      return {
+        client: wrap.clientWidth,
+        columns: [...table.querySelectorAll(':scope > thead > tr > th')].map((th) => [th.textContent ?? '', Math.round(th.getBoundingClientRect().width * 10) / 10]),
+        scroll: wrap.scrollWidth,
+        // A cell draws one element a line, and a dash stands alone, so three elements are three projected windows.
+        windows: Math.max(0, ...cells.map((td) => td?.children.length ?? 0)),
+      };
+    });
+    measurements.push(`${theme} /routing-log a placement's candidate table at 1280 by 800 ${JSON.stringify(read)}`);
+    if (read === null) say(`the placement ${id}/1 draws no candidate table`);
+    else if (read.windows < 3) say(`no candidate of the placement ${id}/1 projects three windows (the most is ${read.windows}), so the fit has no full Projection cell to read`);
+    else if (read.scroll > read.client) say(`the candidate table of the placement ${id}/1 needs ${read.scroll}px of its wrap's ${read.client}px at 1280 by 800, its columns ${JSON.stringify(read.columns)}`);
+  } finally {
+    await atRest();
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+}
+
+/**
  * The identity card's subscription end editor on an OAuth account: its date field is the box of the search field in
  * the bar (the page's other plain field, where the label editor's field takes the heading's type), its checkbox
  * label reads Canceled in the type of the Ends label beside it, its Save the size of the Edit end button it opened
@@ -14734,6 +14780,7 @@ try {
       if (view.path === '/routing-log') await freshRowTint(theme, view.path);
       if (view.path === '/routing-log' && mock) await routingLogPickLine(theme);
       if (view.path === '/routing-log' && mock) await routingLogPaceHover(theme);
+      if (view.path === '/routing-log' && mock) await candidateTableFits(theme);
       // Before the fork link, whose base row stays marked current: the shots draw the rows at rest.
       if (view.path === '/sessions' && mock) await sessionsOpenShots(theme);
       if (view.path === '/sessions') await forkLink(theme);

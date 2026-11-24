@@ -2819,7 +2819,7 @@ textarea.input {
   font-size: 11.5px;
 }
 
-/* Packed cells so the nine columns fit the card at both viewports with nothing to scroll sideways. */
+/* Packed cells so the eleven columns fit the card at both viewports with nothing to scroll sideways. */
 .decision-card__candidates {
   font-size: 12.5px;
 }
@@ -2852,6 +2852,14 @@ textarea.input {
 
 .decision-card__candidates .sub {
   line-height: 16px;
+}
+
+/* A projected window reads in the cell's own type, which a `.sub` line would shrink and mute, so the cell breaks its
+   lines itself. The Pace head breaks behind its comma the same way: on one line it is wider than each value under it,
+   and the eleven columns then need more than the card holds at 1280 px. */
+.decision-card__projection > span,
+.decision-card__pace > span {
+  display: block;
 }
 
 /* The prefix cell stacks the hash over its warmth, one value a line, as the window cells do. */

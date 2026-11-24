@@ -111,7 +111,14 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                   <th>Projection</th>
                   <th>Runway</th>
                   <th>In flight</th>
-                  <th>{paceHeader(record)}</th>
+                  <th className="decision-card__pace">
+                    {/* Each part but the last keeps its comma and space, so the head's text stays the header whole. */}
+                    {paceHeader(record)
+                      .split(', ')
+                      .map((part, i, parts) => (
+                        <span key={i}>{i < parts.length - 1 ? `${part}, ` : part}</span>
+                      ))}
+                  </th>
                   <th>Prefix</th>
                   <th>Verdict</th>
                 </tr>
@@ -146,7 +153,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                           </td>
                         ))
                       )}
-                      <td className="num decision-card__window" title={cells.projectionTitle ?? undefined}>
+                      <td className="num decision-card__window decision-card__projection" title={cells.projectionTitle ?? undefined}>
                         {cells.projection.map((line, j) => (
                           <span key={j} className={line === '-' ? 'muted' : undefined}>
                             {line}

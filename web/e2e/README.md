@@ -410,6 +410,10 @@ opened by Enter and by Space with the focus inside its popover and closed by Esc
 the tie's pick line (in the mock pass, on a load of its own once the log's shot is taken: the story's failover that tied
 primary and nightly on Pace before nightly's overage, its Pick station's rows reading "tied primary", "tied nightly",
 "by runway primary" and "drawn no", each in the type, line height and left edge of the strategy row above it), the
+candidate table of a placement whose candidate projects three windows (in the mock pass, on a load of its own once the
+log's shot is taken: the story's subagent placement on primary two minutes before the pass's instant, a Projection cell
+of its card holding a line for each of the three windows, the table inside its wrap at 1280 by 800 with nothing
+scrolling sideways, each column's width recorded), the
 subscription end editor (its checkbox label reading Canceled in the type of the Ends label beside it), the hint a
 confirmed pairing draws in the Usage card while the first reading is in flight (in the mock pass, after the view's shot,
 read whole with its closing period against the note of the story's API-key account annex in type, ink, line height,
