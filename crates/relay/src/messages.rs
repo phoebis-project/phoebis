@@ -4502,11 +4502,13 @@ impl Relay {
                 read: match parser {
                     Some(parser) => BodyRead::Events(parser),
                     // A committed JSON answer is inspected for its usage block, and a rejection for its error type.
+                    // Nothing reads the copy of another answer.
                     None if head.status == 200 => BodyRead::Json {
                         body: Vec::new(),
                         bound: self.limits.max_request_bytes,
                     },
-                    None => BodyRead::Rejection(Vec::new()),
+                    None if head.status >= 400 => BodyRead::Rejection(Vec::new()),
+                    None => BodyRead::Unread,
                 },
                 held,
                 on_error,

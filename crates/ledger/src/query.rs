@@ -1,7 +1,6 @@
 //! Reads for the admin routes: the request log with its filters and cursor, the rollup series and breakdown
 //! with merged histograms, the dashboard's day, and the newest quota sample per window.
 
-use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, LazyLock};
 
@@ -3956,6 +3955,13 @@ fn usage_less(a: PinUsage, b: PinUsage) -> Option<PinUsage> {
 #[derive(Debug, Default)]
 pub(crate) struct Sides(BTreeMap<i64, Vec<Side>>);
 
+/// One piece of a split sum, in the order `split_sum` hands them on: each part of the spans between the loaded boundary
+/// hours, in the spans' order, then each loaded boundary hour inside the spans, ascending.
+enum Piece {
+    Span(Span),
+    Stored(i64),
+}
+
 impl Sides {
     /// The sides of each of `hours` on `conn`, as `boundary_hours` answers them. A reader loads them ahead of its
     /// stored rows: a request that lands between the two reads then joins a row and no side, and prices with the
@@ -4026,15 +4032,14 @@ impl Sides {
     }
 
     /// A priced SQL sum over `spans` (ascending, as `revision_spans` answers them) with the loaded boundary hours bound
-    /// out: each span is cut around those hours and `sum` takes each piece in order, the piece keeping its span's `at`,
-    /// so the statement runs for every hour no entry splits. Then `stored` takes each loaded boundary hour inside the
-    /// spans, ascending, to price that hour's stored rows by their parts, since `price_group` would price the hour
-    /// whole at its end.
+    /// out: each span is cut around those hours and `piece` takes each part in order as a `Piece::Span`, the part
+    /// keeping its span's `at`, so the statement runs for every hour no entry splits. Then `piece` takes each loaded
+    /// boundary hour inside the spans as a `Piece::Stored`, ascending, to price that hour's stored rows by their parts,
+    /// since `price_group` would price the hour whole at its end.
     fn split_sum(
         &self,
         spans: impl IntoIterator<Item = Span>,
-        mut sum: impl FnMut(Span) -> Result<(), LedgerError>,
-        mut stored: impl FnMut(i64) -> Result<(), LedgerError>,
+        mut piece: impl FnMut(Piece) -> Result<(), LedgerError>,
     ) -> Result<(), LedgerError> {
         let mut bound_out = Vec::new();
         for span in spans {
@@ -4046,24 +4051,24 @@ impl Sides {
                 .filter(|hour| *hour >= span.from_hour && *hour < span.to_hour)
             {
                 if hour > start {
-                    sum(Span {
+                    piece(Piece::Span(Span {
                         from_hour: start,
                         to_hour: hour,
                         ..span
-                    })?;
+                    }))?;
                 }
                 start = hour_end(hour);
                 bound_out.push(hour);
             }
             if span.to_hour > start {
-                sum(Span {
+                piece(Piece::Span(Span {
                     from_hour: start,
                     ..span
-                })?;
+                }))?;
             }
         }
         for hour in bound_out {
-            stored(hour)?;
+            piece(Piece::Stored(hour))?;
         }
         Ok(())
     }
@@ -4375,54 +4380,52 @@ fn grouped_totals<K: Ord>(
     let sides = Sides::on(conn, prices, Some(&costs.revisions), since_hour, to_hour)?;
     let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE {NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2 GROUP BY {group_columns}, {PRICE_GROUP_COLUMNS} ORDER BY {group_columns}, {PRICE_GROUP_COLUMNS}"))?;
     let mut rows_stmt: Option<rusqlite::Statement<'_>> = None;
-    let out: RefCell<BTreeMap<K, Totals>> = RefCell::default();
+    let mut out: BTreeMap<K, Totals> = BTreeMap::new();
     // One span over the range, its `at` unread: `price_group` prices each group at its own hour.
     let range = Span {
         from_hour: since_hour,
         to_hour,
         at: 0,
     };
-    sides.split_sum(
-        [range],
-        |piece| {
-            let rows = stmt.query_map(params![piece.from_hour, piece.to_hour], |r| {
-                let Some(key) = key_of(r)? else {
-                    return Ok(None);
-                };
-                let (_, totals) = price_group(r, offset, prices, costs, now)?;
-                Ok(Some((key, totals)))
-            })?;
-            let mut out = out.borrow_mut();
-            for row in rows {
-                if let Some((key, totals)) = row? {
-                    out.entry(key).or_default().add(&totals);
+    sides.split_sum([range], |piece| {
+        match piece {
+            Piece::Span(span) => {
+                let rows = stmt.query_map(params![span.from_hour, span.to_hour], |r| {
+                    let Some(key) = key_of(r)? else {
+                        return Ok(None);
+                    };
+                    let (_, totals) = price_group(r, offset, prices, costs, now)?;
+                    Ok(Some((key, totals)))
+                })?;
+                for row in rows {
+                    if let Some((key, totals)) = row? {
+                        out.entry(key).or_default().add(&totals);
+                    }
                 }
             }
-            Ok(())
-        },
-        |hour| {
-            let stmt = match rows_stmt.as_mut() {
-                Some(stmt) => stmt,
-                None => rows_stmt.insert(conn.prepare(&format!("SELECT {group_columns}, {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2"))?),
-            };
-            let rows = stmt.query_map(params![hour, hour_end(hour)], |r| {
-                let Some(key) = key_of(r)? else {
-                    return Ok(None);
+            Piece::Stored(hour) => {
+                let stmt = match rows_stmt.as_mut() {
+                    Some(stmt) => stmt,
+                    None => rows_stmt.insert(conn.prepare(&format!("SELECT {group_columns}, {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2"))?),
                 };
-                Ok(Some((key, row_to_rollup_at(r, offset)?)))
-            })?;
-            let mut out = out.borrow_mut();
-            for row in rows {
-                if let Some((key, row)) = row? {
-                    out.entry(key)
-                        .or_default()
-                        .add(&row_totals(&row, &sides, prices, costs, now));
+                let rows = stmt.query_map(params![hour, hour_end(hour)], |r| {
+                    let Some(key) = key_of(r)? else {
+                        return Ok(None);
+                    };
+                    Ok(Some((key, row_to_rollup_at(r, offset)?)))
+                })?;
+                for row in rows {
+                    if let Some((key, row)) = row? {
+                        out.entry(key)
+                            .or_default()
+                            .add(&row_totals(&row, &sides, prices, costs, now));
+                    }
                 }
             }
-            Ok(())
-        },
-    )?;
-    Ok(out.into_inner())
+        }
+        Ok(())
+    })?;
+    Ok(out)
 }
 
 /// The requests per account over `[since_hour, to_hour)`, probe rows left out, summed in one statement with no
@@ -4540,9 +4543,9 @@ pub struct SessionIdentity {
 /// this chunks and merges rather than tripping the cap.
 pub(crate) const SESSION_IDENTITY_CHUNK: usize = 900;
 
-/// For each `SessionSpendKey` named, with no time bound: a pin-only session (one whose
-/// requests, if any, are all older than any activity window a caller applies elsewhere) is answered the same
-/// as a fresh one, since this query reads no `since` bound of its own.
+/// For each `SessionSpendKey` named, with no time bound: a pin-only session (one whose requests, if any, are all older
+/// than any activity window a caller applies elsewhere) is answered the same as a fresh one, since this query reads no
+/// `since` bound of its own.
 pub fn session_identities(
     conn: &Connection,
     sessions: &[SessionSpendKey],
@@ -4792,64 +4795,67 @@ pub fn member_spends(
         (period_start, period_end),
     ) in members.iter().zip(periods)
     {
-        let spent_usd = Cell::new(0.0);
+        let mut spent_usd = 0.0;
         sides.split_sum(
             revision_spans(prices, None, period_start / 1_000, period_end / 1_000),
             |piece| {
-                let table = prices.in_force(piece.at);
-                let rows = stmt.query_map(
-                    params![
-                        pool_id,
-                        account_id,
-                        piece.from_hour,
-                        piece.to_hour,
-                        metered_only
-                    ],
-                    |r| {
-                        Ok((
-                            r.get::<_, String>(0)?,
-                            r.get::<_, String>(1)?,
-                            r.get::<_, String>(2)?,
-                            summed_usage(r, 3)?,
-                        ))
-                    },
-                )?;
-                for row in rows {
-                    let (model, speed, band, usage) = row?;
-                    // A model the revision cannot price contributes nothing: the analytics already read such a row as
-                    // unpriced, and a budget must not be tripped by a sum it cannot itself account for.
-                    if let Some(split) = table.estimate_banded(
-                        &model,
-                        Speed::of(Some(&speed)),
-                        Band::of_rollup(&band),
-                        usage,
-                    ) {
-                        spent_usd.set(spent_usd.get() + split.total());
+                match piece {
+                    Piece::Span(span) => {
+                        let table = prices.in_force(span.at);
+                        let rows = stmt.query_map(
+                            params![
+                                pool_id,
+                                account_id,
+                                span.from_hour,
+                                span.to_hour,
+                                metered_only
+                            ],
+                            |r| {
+                                Ok((
+                                    r.get::<_, String>(0)?,
+                                    r.get::<_, String>(1)?,
+                                    r.get::<_, String>(2)?,
+                                    summed_usage(r, 3)?,
+                                ))
+                            },
+                        )?;
+                        for row in rows {
+                            let (model, speed, band, usage) = row?;
+                            // A model the revision cannot price contributes nothing: the analytics already read such a
+                            // row as unpriced, and a budget must not be tripped by a sum it cannot itself account for.
+                            if let Some(split) = table.estimate_banded(
+                                &model,
+                                Speed::of(Some(&speed)),
+                                Band::of_rollup(&band),
+                                usage,
+                            ) {
+                                spent_usd += split.total();
+                            }
+                        }
                     }
-                }
-                Ok(())
-            },
-            |hour| {
-                let rows_stmt = match rows_stmt.as_mut() {
-                    Some(stmt) => stmt,
-                    None => rows_stmt.insert(conn.prepare(&format!(
-                        "SELECT {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {MEMBER_SPEND_FILTER}"
-                    ))?),
-                };
-                let rows = rows_stmt.query_map(
-                    params![pool_id, account_id, hour, hour_end(hour), metered_only],
-                    |r| row_to_rollup_at(r, 0),
-                )?;
-                for row in rows {
-                    let row = row?;
-                    for part in row_parts(&row, &sides) {
-                        if let Some(split) = prices.in_force(part.at).estimate_banded(
-                            &row.canonical_model,
-                            Speed::of(Some(&row.speed)),
-                            Band::of_rollup(&row.band),
-                            part.usage,
-                        ) {
-                            spent_usd.set(spent_usd.get() + split.total());
+                    Piece::Stored(hour) => {
+                        let rows_stmt = match rows_stmt.as_mut() {
+                            Some(stmt) => stmt,
+                            None => rows_stmt.insert(conn.prepare(&format!(
+                                "SELECT {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {MEMBER_SPEND_FILTER}"
+                            ))?),
+                        };
+                        let rows = rows_stmt.query_map(
+                            params![pool_id, account_id, hour, hour_end(hour), metered_only],
+                            |r| row_to_rollup_at(r, 0),
+                        )?;
+                        for row in rows {
+                            let row = row?;
+                            for part in row_parts(&row, &sides) {
+                                if let Some(split) = prices.in_force(part.at).estimate_banded(
+                                    &row.canonical_model,
+                                    Speed::of(Some(&row.speed)),
+                                    Band::of_rollup(&row.band),
+                                    part.usage,
+                                ) {
+                                    spent_usd += split.total();
+                                }
+                            }
                         }
                     }
                 }
@@ -4862,7 +4868,7 @@ pub fn member_spends(
             period: *period,
             period_start,
             period_end,
-            spent_usd: spent_usd.get(),
+            spent_usd,
             observed_at: now,
         });
     }
@@ -4974,7 +4980,7 @@ pub fn placements(
          WHERE json_extract(a.selection, '$.placement') IS NOT NULL \
          AND (a.input_tokens IS NOT NULL OR a.output_tokens IS NOT NULL OR a.cache_read_tokens IS NOT NULL \
               OR a.cache_write_5m_tokens IS NOT NULL OR a.cache_write_1h_tokens IS NOT NULL) \
-         AND r.received_at >= ?1 AND r.received_at < ?2{extra} GROUP BY 1, 2, 3 ORDER BY 1"
+         AND r.received_at >= ?1 AND r.received_at < ?2{extra} GROUP BY 1, 2, 3"
     );
     let mut stmt = conn.prepare(&sql)?;
     let groups = stmt.query_map(params_from_iter(args), |r| {
@@ -5104,12 +5110,10 @@ pub fn pools_traffic(
         now,
         sides,
     )?;
-    let out: RefCell<BTreeMap<String, Vec<TrafficBucket>>> = RefCell::new(
-        pool_ids
-            .iter()
-            .map(|pool_id| (pool_id.clone(), fold.zero.clone()))
-            .collect(),
-    );
+    let mut out: BTreeMap<String, Vec<TrafficBucket>> = pool_ids
+        .iter()
+        .map(|pool_id| (pool_id.clone(), fold.zero.clone()))
+        .collect();
     let mut args: Vec<rusqlite::types::Value> = vec![from_hour.into(), to_hour.into()];
     let mut clauses = vec![format!("{NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2")];
     pool_term(pool_ids, &[], &mut args, &mut clauses);
@@ -5129,45 +5133,45 @@ pub fn pools_traffic(
         to_hour,
         at: 0,
     };
-    fold.sides.split_sum(
-        [range],
-        |piece| {
-            (args[0], args[1]) = (piece.from_hour.into(), piece.to_hour.into());
-            let groups = stmt.query_map(params_from_iter(&args), |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    clamped_count(r, 1)?,
-                    price_group(r, 2, prices, costs, now)?,
-                ))
-            })?;
-            let mut out = out.borrow_mut();
-            for group in groups {
-                let (pool_id, failed, (hour, totals)) = group?;
-                if let Some(buckets) = out.get_mut(&pool_id) {
-                    fold.add_sums(buckets, hour, failed, &totals);
+    fold.sides.split_sum([range], |piece| {
+        match piece {
+            Piece::Span(span) => {
+                (args[0], args[1]) = (span.from_hour.into(), span.to_hour.into());
+                let groups = stmt.query_map(params_from_iter(&args), |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        clamped_count(r, 1)?,
+                        price_group(r, 2, prices, costs, now)?,
+                    ))
+                })?;
+                for group in groups {
+                    let (pool_id, failed, (hour, totals)) = group?;
+                    if let Some(buckets) = out.get_mut(&pool_id) {
+                        fold.add_sums(buckets, hour, failed, &totals);
+                    }
                 }
             }
-            Ok(())
-        },
-        |hour| {
-            let rows = match rows.as_mut() {
-                Some(rows) => rows,
-                None => rows.insert(conn.prepare(&format!(
-                    "SELECT {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {filter}"
-                ))?),
-            };
-            (rows_args[0], rows_args[1]) = (hour.into(), hour_end(hour).into());
-            let mut out = out.borrow_mut();
-            for row in rows.query_map(params_from_iter(&rows_args), |r| row_to_rollup_at(r, 0))? {
-                let row = row?;
-                if let Some(buckets) = out.get_mut(&row.pool_id) {
-                    fold.add(buckets, &row);
+            Piece::Stored(hour) => {
+                let rows = match rows.as_mut() {
+                    Some(rows) => rows,
+                    None => rows.insert(conn.prepare(&format!(
+                        "SELECT {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {filter}"
+                    ))?),
+                };
+                (rows_args[0], rows_args[1]) = (hour.into(), hour_end(hour).into());
+                for row in
+                    rows.query_map(params_from_iter(&rows_args), |r| row_to_rollup_at(r, 0))?
+                {
+                    let row = row?;
+                    if let Some(buckets) = out.get_mut(&row.pool_id) {
+                        fold.add(buckets, &row);
+                    }
                 }
             }
-            Ok(())
-        },
-    )?;
-    Ok(out.into_inner())
+        }
+        Ok(())
+    })?;
+    Ok(out)
 }
 
 /// The zero buckets of a traffic range and the fold that adds figures to the bucket of their hour, nothing before the

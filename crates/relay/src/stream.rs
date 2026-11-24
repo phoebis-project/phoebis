@@ -141,7 +141,7 @@ pub(crate) enum BodyRead {
     /// The first `MAX_BUFFERED_BODY` bytes of the decoded copy of a rejection that is no event stream, which the
     /// completion reads the upstream's error type off.
     Rejection(Vec<u8>),
-    /// Nothing is read: a JSON answer past the bound.
+    /// Nothing is read: a JSON answer past the bound, and an answer that is no event stream, no 200 and no rejection.
     Unread,
 }
 

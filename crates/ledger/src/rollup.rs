@@ -2260,12 +2260,7 @@ fn take_segments(
 /// The seconds of a booked cooldown segment that have not elapsed at `at`: the part of the hour between `at` and
 /// the earlier of the span's end and the hour's end, capped by the segment. `at` and `span_end` are Unix
 /// milliseconds, and `hour` is the hour's start in seconds as `hour_of` answers it.
-pub(crate) fn unelapsed_segment_seconds(
-    at: i64,
-    hour: i64,
-    span_end: i64,
-    segment_seconds: u64,
-) -> u64 {
+fn unelapsed_segment_seconds(at: i64, hour: i64, span_end: i64, segment_seconds: u64) -> u64 {
     let unelapsed = (span_end.min(hour_end(hour) * 1_000) - at.max(hour * 1_000)).max(0) / 1_000;
     (unelapsed as u64).min(segment_seconds)
 }

@@ -841,11 +841,8 @@ impl RoutingTx<'_> {
     }
 
     /// Writes the pair's fact in place of the one it held, only while both ids' holders carry the incarnations the row
-    /// names. Only from the router's batches. Answers whether a row was written.
-    pub fn replace_thinking_binding(
-        &mut self,
-        row: &ThinkingBindingRow,
-    ) -> Result<bool, StoreError> {
+    /// names. Only from the router's batches.
+    pub fn replace_thinking_binding(&mut self, row: &ThinkingBindingRow) -> Result<(), StoreError> {
         replace_thinking_binding_on(self.tx, row)
     }
 
@@ -1201,31 +1198,30 @@ fn delete_lapsed_agent_on(conn: &Connection, key: &PinKey) -> Result<(), StoreEr
 }
 
 /// Writes the pair's fact in place of the one it held, only while both ids' holders carry the incarnations the row
-/// names, and answers whether a row was written.
+/// names.
 fn replace_thinking_binding_on(
     conn: &Connection,
     row: &ThinkingBindingRow,
-) -> Result<bool, StoreError> {
+) -> Result<(), StoreError> {
     // A pair whose account left between the observation and the write lands nowhere, rather than failing the
     // batch on the reference the cascade would have cleared, and so does one whose id a new holder took: the
     // table names no incarnation, so a row that landed would read as the new holder's.
-    let written = conn
-        .prepare_cached(
-            "INSERT OR REPLACE INTO thinking_bindings (model, account_a, account_b, bound, observed_at) \
-             SELECT ?1, ?2, ?3, ?4, ?5 \
-             WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?2 AND incarnation = ?6) \
-             AND EXISTS (SELECT 1 FROM accounts WHERE id = ?3 AND incarnation = ?7)",
-        )?
-        .execute(params![
-            row.model,
-            row.account_a,
-            row.account_b,
-            row.bound,
-            row.observed_at,
-            row.incarnation_a as i64,
-            row.incarnation_b as i64
-        ])?;
-    Ok(written > 0)
+    conn.prepare_cached(
+        "INSERT OR REPLACE INTO thinking_bindings (model, account_a, account_b, bound, observed_at) \
+         SELECT ?1, ?2, ?3, ?4, ?5 \
+         WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?2 AND incarnation = ?6) \
+         AND EXISTS (SELECT 1 FROM accounts WHERE id = ?3 AND incarnation = ?7)",
+    )?
+    .execute(params![
+        row.model,
+        row.account_a,
+        row.account_b,
+        row.bound,
+        row.observed_at,
+        row.incarnation_a as i64,
+        row.incarnation_b as i64
+    ])?;
+    Ok(())
 }
 
 fn upsert_cooldown_on(conn: &Connection, row: &CooldownRow) -> Result<(), StoreError> {

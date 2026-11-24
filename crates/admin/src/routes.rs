@@ -858,7 +858,8 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
     match poll.poll_account(&row).await {
         Ok(snapshot) => {
             // After the usage reading and under its hold, so the list the console loads next carries the block. The
-            // service logs a failed read, and this answer is the usage reading's either way.
+            // service logs a failed read and the poll's method a refused one, and this answer is the usage reading's
+            // either way.
             let _ = poll.read_limit_resets(&row).await;
             let poll = state.usage.poll_status(&id);
             Json(usage_json(&id, Ok(&snapshot), poll.as_ref())).into_response()
@@ -905,7 +906,8 @@ async fn limit_resets_read(
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    // A read that fails or that the hold refuses still opens the dialog, on the stored block and its age.
+    // A read that fails or that the hold refuses still opens the dialog, on the stored block and its age. One the
+    // plan's pause refused answers no block, since the view reads none for a plan that ended.
     let error = state
         .quota_poll()
         .read_limit_resets(&row)

@@ -105,7 +105,7 @@ pub use rollup::{
     fold_keepalive, fold_request, fold_routing_conditions, fold_user_agent, hour_end, hour_of,
     open_cooldown_remainders, read_account_rollups, read_account_rollups_at,
     read_expired_between_turns, read_overview_rollups, read_rollups, read_rollups_paged,
-    trailing_day_hours, AccountRollupRow, CostSplit, ExpiredBetweenTurns, FoldRules, KeySelector,
+    trailing_day_hours, AccountRollupRow, CostSplit, ExpiredBetweenTurns, KeySelector,
     OverviewRollupRow, RollupRow, RollupSelect, RoutingKind, BILLED_FUNDING, CEILING_SETTINGS,
     DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, FAST_FUNDING, FIVE_HOUR_CEILING_SETTING,
     KEY_RANGE_PREDICATE, LONG_BAND, NO_CLASS, OTHER_DIMENSION, OVERAGE_FUNDING, PAGE_HOURS,

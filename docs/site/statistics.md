@@ -87,8 +87,9 @@ the price revision in force when the request arrived, in the hourly sums too whi
 whose request rows the purge took prices whole at the revision in force at the end of the hour.
 
 The hourly rollup counts a request once under each kind its serving attempt lists, with three counts of their own: the
-moved requests whose answer listed a block under an account reason, the answers whose member was empty, and the requests
-whose answer carried the member at all. It keeps no count of blocks and no token estimate.
+moved requests whose answer listed a block under an account reason (`end_user_binding_mismatch` or
+`organization_binding_mismatch`), the answers whose member was empty, and the requests whose answer carried the member
+at all. It keeps no count of blocks and no token estimate.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens. A `content`
 placement, by the conversation's own messages, is a hit when the response read the prefix the entry promised. A
@@ -894,12 +895,12 @@ many 429s the endpoint answered in a row. The `poll_backoff_ended` event that cl
 **`model_unpriced`** holds from the catalog listing that adds a model the cost model does not weigh to the account's
 previous listing, with 0 requests, or from the first plan-funded request on such a model since the start, each such
 request priced at no window share, its figure null ([Plan meter](#plan-meter)). A listing raises it only for an OAuth
-account that is no usage-based seat, since an API-key account's and a usage-based seat's requests are billed at the API
-rates. The ledger keeps the run in memory, so it starts over at a restart, and the next plan-funded request on the model
-raises it again. An account's first listing after a start raises nothing, since no listing of the account stands before
-it, so a model listed before a restart and not used since reads no item until a plan-funded request lands on it or a
-later listing of such an account adds it to that account's previous one. The first read once a cost model entry that
-weighs the model is in force clears it, as does a later plan-funded request priced at such an entry, and its series
+account that is not a usage-based seat, since an API-key account's and a usage-based seat's requests are billed at the
+API rates. The ledger keeps the run in memory, so it starts over at a restart, and the next plan-funded request on the
+model raises it again. An account's first listing after a start raises nothing, since no listing of the account stands
+before it, so a model listed before a restart and not used since reads no item until a plan-funded request lands on it
+or a later listing of such an account adds it to that account's previous one. The first read once a cost model entry
+that weighs the model is in force clears it, as does a later plan-funded request priced at such an entry, and its series
 reads 0 from then on. A client classifier call raises nothing, where a call recorded `client_off` on a model the cost
 model does not weigh raises it as any plan-funded call does. The subject is the model, the dashboard's line reads the
 item as "Model unpriced" in the info tone, and it carries no link, since the cost reference dialog shows the model's

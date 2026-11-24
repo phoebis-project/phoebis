@@ -1681,7 +1681,7 @@ const MOVE_CAUSE_ORDER: [&str; 17] = [
 
 /// The word a live pin's move onto another account carries: the first of `MOVE_CAUSE_ORDER` that `reasons`, the
 /// pin's `release_reasons`, holds, else `released`.
-pub(crate) fn move_word(reasons: &[&'static str]) -> &'static str {
+fn move_word(reasons: &[&'static str]) -> &'static str {
     MOVE_CAUSE_ORDER
         .into_iter()
         .find(|word| reasons.contains(word))
@@ -1837,7 +1837,8 @@ struct Recorder {
     pin: Option<PinFacts>,
     pin_reason: Option<&'static str>,
     /// What stood against the account of the pin the request found, as `release_reasons` read it before the run moved
-    /// anything, for the pin block. Empty where the request found no pin.
+    /// anything, for the pin block and for `run`, which reads `expired` and a move's word off it. Empty where the
+    /// request found no pin.
     released: Vec<&'static str>,
     rule: Option<MigrateReason>,
     source: Option<String>,

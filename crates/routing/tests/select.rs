@@ -6641,8 +6641,7 @@ fn a_probe_whose_attempt_marked_its_pinned_account_with_no_sibling_left_answers_
 
 /// `s1` stands marked on the 5-hour window while a projection window waits and `b` fits its burn, the setup on which a
 /// real request moves under `Shed`: a probe at that instant renews the pin on `a`, and the move waits for the
-/// session's next real request. A pool that slows its pins would not do here, since a probe reads no pace and so no
-/// stretch, and the shed rule answers it `no` before the mark is read.
+/// session's next real request.
 #[test]
 fn a_probe_on_a_marked_pin_renews_it_in_place_and_the_next_real_request_moves_it() {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
@@ -29884,6 +29883,69 @@ fn a_cold_pins_move_costs_the_share_of_the_thinking_it_drops() {
         (mark("warm"), mark("cold")),
         ((true, Some("cheapest")), (false, None)),
         "{round:?}"
+    );
+}
+
+#[test]
+fn a_cold_pin_whose_dropped_thinking_weighs_nothing_as_output_ranks_with_the_pins_that_drop_nothing(
+) {
+    // Two cold pins over a last prompt of 100,000 tokens on Sonnet's bound pair, under a cost model that prices a cache
+    // write and weighs an output token at nothing: `dropping` burns 0.03 of the 5-hour window an hour over a's 40,000,
+    // and `none` 0.01 over a zero sum. dropping's drop weighs nothing, so it ranks by its burn among the pins that drop
+    // nothing and leads none. a at 0.99 projects 1.031 at its reset.
+    let round = thinking_round(
+        vec![
+            thinking_pin("dropping", 3.0, false, 100_000, 40_000),
+            thinking_pin("none", 1.0, false, 100_000, 0),
+        ],
+        &[("claude-sonnet-5", true)],
+        0,
+        0.99,
+    );
+    assert_eq!(round_order(&round), ["dropping", "none", "small"]);
+    let dropping = round_pin(&round, "dropping");
+    assert_eq!(
+        (dropping.dropped_thinking_tokens, dropping.per_drop),
+        (Some(40_000), None),
+        "the move drops a's thinking, and a drop of no weight gives the pin no key over it: {round:?}"
+    );
+}
+
+#[test]
+fn a_pick_whose_write_prices_nothing_names_no_rewrite_window() {
+    // Two warm pins burning 0.03 of the 5-hour window an hour on Sonnet's bound pair, each covering the target of 0.028
+    // that a at 0.967 sets with the three pins' 0.061 an hour. `drained` holds a's 4,000 in its last prompt of 4,000, so
+    // its move writes no token and drops 4,000 that weigh 16,000 at an output weight of 4, which costs less than the
+    // 100,000 that `whole` rewrites. The pick marks drained, whose write prices nothing beside its priced drop.
+    let round = thinking_round(
+        vec![
+            thinking_pin("drained", 3.0, true, 4_000, 4_000),
+            thinking_pin("whole", 3.0, true, 100_000, 0),
+        ],
+        &[("claude-sonnet-5", true)],
+        4,
+        0.967,
+    );
+    let (drained, whole) = (round_pin(&round, "drained"), round_pin(&round, "whole"));
+    assert!(
+        near(drained.per_drop, 0.03 / 16_000.0),
+        "the burn over the weighted drop: {:?}",
+        drained.per_drop
+    );
+    assert_eq!(
+        (
+            drained.marked,
+            drained.note,
+            drained.rewrite,
+            drained.rewrite_window
+        ),
+        (true, Some("cheapest"), None, None),
+        "the pick wrote no token, so its row names no window: {round:?}"
+    );
+    assert_eq!(
+        whole.rewrite_window,
+        Some("seven_day"),
+        "the rewrite the pick priced names its window: {round:?}"
     );
 }
 

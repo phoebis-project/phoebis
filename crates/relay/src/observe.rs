@@ -214,7 +214,7 @@ fn message_index(path: &str) -> Option<u64> {
     let rest = path.strip_prefix("messages.")?;
     let digits = rest.split_once('.').map_or(rest, |(index, _)| index);
     // `parse` alone would take a leading `+`.
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     digits.parse().ok()

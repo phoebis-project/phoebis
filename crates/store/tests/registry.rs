@@ -469,6 +469,7 @@ fn a_registry_before_the_eighth_step_reads_its_pools_with_the_thinking_switch_of
             .insert_pool(
                 &PoolRow {
                     label: "Main".into(),
+                    five_hour_ceiling: 0.95,
                     ..PoolRow::new("main")
                 },
                 "test",

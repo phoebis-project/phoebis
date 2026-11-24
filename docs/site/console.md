@@ -1251,35 +1251,35 @@ Errors by code ("Failed and incomplete responses in range, the refused requests 
 the router refused before any account was asked, not in the counts", or "No request was refused in this range." where
 none was), Refusals by category ("Answers the upstream refused in range, by model and category, each a request that
 succeeded", one bar per model and category linking the Requests view on the stop reason `refusal`, the category and the
-model over the range to the millisecond, each bar labeled with the model's family and version and the category, such as
-`sonnet-5-5 · cyber`, with the whole model id on hover, `none` for a refusal with no category, or "No answer was
-refused in this range." where none was, with the requests that presented a fallback token counted in the subtitle ("1
-request presented a fallback token"), and under a client or user agent filter the matching requests' alone, and under a
-session filter every session's, which its subtitle then names, its links carrying the client pattern and no session,
-plain under a user agent filter as the Misses by reason counts are), Failovers, Migration rewrites with its moves (one
-bar per move reason, stacked by the destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment
-titled `{fit} {n}` and the bar labeled with the reason's total, and under them "Held by the slow-down", a bar per bucket
-of the time the slow-down held requests in the warning tone, its hover `12 requests held 14 min in all`, `no request
-held` on a bucket that held none, and its legend line the range's sum, or `none in range` with no chart), Requests by
-speed, Effort levels, then at full width the card "Guardrails" ("Matches by guardrail in range, every key") with one row
-per guardrail that matched in the range as Guardrail, Observed, Blocked and "Blocked bytes", reading the range alone and
-no other filter, a guardrail the registry no longer holds as `{id} (deleted)` and "No guardrail matched in this range."
-where none did ([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests, OK, Rate limited,
-Failed, Incomplete, Client canceled, Exhausted, Rejected, Refused, Error rate, Failovers, Search and Fetch, the Requests
-header reading "The refused requests are left out, see the Refused column" on hover, the Client canceled header
-"Requests the client canceled. They are left out of the error rate", the Error rate header "The refused requests and the
-client's cancels are left out, see the Refused and Client canceled columns" and the Refused header the Dashboard's
-Refused tile hover. Under the model grouping a request refused before it resolved a model groups under "no model", which
-the Cache by model table leaves out, and a group with no request, as that one, reads a muted dash in its Error rate
-cell, as the head's `{pct}` reads a dash where the range rated no request. A group that counts no request leaves the
-Latency and Cache group tables. The Cost table and the Cost by chart keep such a group only where it still holds a cost,
-as a group of billed keepalive probes alone does, and Traffic keeps it for its Refused column. A request the router
-refused before any account was asked is counted in its group's Refused column and in the "Refusals by code" card, a
-guardrail's block on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the
-outcome columns, the error rate, the cache figures or the latency. A request whose client left before its answer ended
-counts among its group's requests, and the head's errors, the Error rate column and Errors by code leave it out. The
-bars of Errors by code carry the upstream's own error types beside the router's words. Three of Traffic's cards follow
-fewer controls than the bar holds: Refusals by category follows every control but the Agent and Session filters,
+model over the whole hours that the range touches, each bar labeled with the model's family and version and the
+category, such as `sonnet-5-5 · cyber`, with the whole model id on hover, `none` for a refusal with no category, or "No
+answer was refused in this range." where none was, with the requests that presented a fallback token counted in the
+subtitle ("1 request presented a fallback token"), and under a client or user agent filter the matching requests' alone,
+and under a session filter every session's, which its subtitle then names, its links carrying the client pattern and no
+session, plain under a user agent filter as the Misses by reason counts are), Failovers, Migration rewrites with its
+moves (one bar per move reason, stacked by the destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each
+segment titled `{fit} {n}` and the bar labeled with the reason's total, and under them "Held by the slow-down", a bar
+per bucket of the time the slow-down held requests in the warning tone, its hover `12 requests held 14 min in all`, `no
+request held` on a bucket that held none, and its legend line the range's sum, or `none in range` with no chart),
+Requests by speed, Effort levels, then at full width the card "Guardrails" ("Matches by guardrail in range, every key")
+with one row per guardrail that matched in the range as Guardrail, Observed, Blocked and "Blocked bytes", reading the
+range alone and no other filter, a guardrail the registry no longer holds as `{id} (deleted)` and "No guardrail matched
+in this range." where none did ([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests,
+OK, Rate limited, Failed, Incomplete, Client canceled, Exhausted, Rejected, Refused, Error rate, Failovers, Search and
+Fetch, the Requests header reading "The refused requests are left out, see the Refused column" on hover, the Client
+canceled header "Requests the client canceled. They are left out of the error rate", the Error rate header "The refused
+requests and the client's cancels are left out, see the Refused and Client canceled columns" and the Refused header the
+Dashboard's Refused tile hover. Under the model grouping a request refused before it resolved a model groups under "no
+model", which the Cache by model table leaves out, and a group with no request, as that one, reads a muted dash in its
+Error rate cell, as the head's `{pct}` reads a dash where the range rated no request. A group that counts no request
+leaves the Latency and Cache group tables. The Cost table and the Cost by chart keep such a group only where it still
+holds a cost, as a group of billed keepalive probes alone does, and Traffic keeps it for its Refused column. A request
+the router refused before any account was asked is counted in its group's Refused column and in the "Refusals by code"
+card, a guardrail's block on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count,
+the outcome columns, the error rate, the cache figures or the latency. A request whose client left before its answer
+ended counts among its group's requests, and the head's errors, the Error rate column and Errors by code leave it out.
+The bars of Errors by code carry the upstream's own error types beside the router's words. Three of Traffic's cards
+follow fewer controls than the bar holds: Refusals by category follows every control but the Agent and Session filters,
 Migration rewrites the range and the Account filter, its "Held by the slow-down" chart the Pool filter too, and
 Guardrails the range alone. Each names the controls it ignores under its title while one of them is set, the chart under
 its legend line.
@@ -1561,7 +1561,9 @@ position needs reads null. A session with no ledgered request reads a dash with 
 the session's last activity, the instant the sort, the Active within filter and "View in routing log" read: its newest
 request that is neither a keepalive probe nor a token count, so a session kept warm reads the age of its last turn, or
 its last use, the newest use across its conversation pins, main's and its agents', where the ledger holds no such
-request yet. On a session no mod reports, `expires in {span}` stands under it and counts to the instant the router stops
+request yet. A session with no pin reads the receipt of its last request in place of that use, which can be a token
+count's.
+On a session no mod reports, `expires in {span}` stands under it and counts to the instant the router stops
 listing the session, the lesser of the non-companion timeout and the session expiry after the latest of its last use,
 its last request and, where its companion ended the session, that end, with "The router stops listing this session at
 {time}" on hover. A companion session reads no such line. Cache reads main's pin `warm` within its cache TTL of the
@@ -1849,36 +1851,36 @@ tier, the rule or the rung, `held for the reset at 18:20` on a request that wait
 waited for a moved pin's first head, `reserved 10.4% of 5h` on a move or a placement that booked a reservation, the
 pin's warmth and the cache verdict (`cache pending` before the attempt reports usage, and where no rung promised a
 prefix the cache read over the read, the write and the input, `19.3K of 46.6K`, with the three counts on hover). On a
-move whose answer listed a thinking block dropped for the account, the chip `account-bound thinking` follows the cache
-verdict with the count of those blocks, `154 blocks`, and its hover lists each of those kinds with its blocks. "How the
-router decided" draws the walk as a strip of stations in the engine's order, each with its verdict, the path the
-decision took in the accent, every branch it did not take as a stub, a step the record does not carry dashed and reading
-"not run", and the ways out as termini, Chosen, Held for a slot and Refused, the one reached filled in its tone. Three
-more ways out, Held for the reset, Held for the slow-down and Held for the rewrite in flight, are drawn only when the
-decision took them, a spent move that waited for a reset, a request the slow-down held or one that waited for a moved
-pin's first head, each in Held for a slot's place, so the strip names six termini and draws three. A move's track
-carries the Fit station after Move, the destination gate's table: a row per candidate the gate read with its projection,
-rewrite and reserved share on each window the gate read, its runway, the window that binds, its end and its verdict, the
-station's own verdict naming the order the gate took. Reserve stands after Pick, or after the last step where no pick
-ran, and lists the booking (the account, the share reserved and the burn on each window, the expiry and the attempt), or
-reads "Nothing was booked: the pin renewed in place." on a renewal and "Nothing was booked." on any other decision that
-booked nothing. A fresh placement's partitions draw as the stations Spent, At cap, No fit and Winding down. A click or a
-hover on a station, a candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and Escape walk them
-from the keyboard. The Shed station's Windows group reads the slow-down's `speed`, the share of it the holds apply as
-`ramp`, and the speed the holds `realized`, in the order the engine applies them. Its Round group reads, beside the
-trigger's facts, each window's wall (`wall 5h`, `wall 7d`, `wall Fable`), the instant the burn the projection carries
-reaches the window's whole share, absent while the window burns nothing. On a member whose 7-day room stands under its
-Fable reservation the station also reads `Fable reservation`, the reserved share, and while the reservation's round
-still waits, `under since Fable reservation` and `wait Fable reservation`. A pin step's `credit issuer` chip names the
-account that issued the fallback credit token the body carries, on which the request is placed ahead of the pin's
-renewal and the moves, under the credit rule of [Routing](routing.md#selection). A classifier call's pin step draws no
-pin and names the turn the call judges, that turn's account and where the call went, under the classifier rule there. A
-keepalive probe's walk carries a Probe station. It reads the pinned member's `obstacle` where one stands, in the words
-`already tried`, `budget`, `budget unknown`, `credits unavailable`, `in cooldown`, `in overage`, `not available`, `spend
-cap reached` or `subscription ended`, or `no pin` where the probe found no live pin, and `tried yes` or `tried no` for
-whether the probe had tried that member. Where the probe is answered on that standing, the Outcome's Answer row reads
-`status 429` for an obstacle a wait clears, a budget, a cooldown, missing credits, overage or a spend cap, and `status
-503` for any other.
+move whose answer listed a thinking block dropped for the account (the reasons `end_user_binding_mismatch` and
+`organization_binding_mismatch`), the chip `account-bound thinking` follows the cache verdict with the count of those
+blocks, `154 blocks`, and its hover lists each of those kinds with its blocks. "How the router decided" draws the walk
+as a strip of stations in the engine's order, each with its verdict, the path the decision took in the accent, every
+branch it did not take as a stub, a step the record does not carry dashed and reading "not run", and the ways out as
+termini, Chosen, Held for a slot and Refused, the one reached filled in its tone. Three more ways out, Held for the
+reset, Held for the slow-down and Held for the rewrite in flight, are drawn only when the decision took them, a spent
+move that waited for a reset, a request the slow-down held or one that waited for a moved pin's first head, each in Held
+for a slot's place, so the strip names six termini and draws three. A move's track carries the Fit station after Move,
+the destination gate's table: a row per candidate the gate read with its projection, rewrite and reserved share on each
+window the gate read, its runway, the window that binds, its end and its verdict, the station's own verdict naming the
+order the gate took. Reserve stands after Pick, or after the last step where no pick ran, and lists the booking (the
+account, the share reserved and the burn on each window, the expiry and the attempt), or reads "Nothing was booked: the
+pin renewed in place." on a renewal and "Nothing was booked." on any other decision that booked nothing. A fresh
+placement's partitions draw as the stations Spent, At cap, No fit and Winding down. A click or a hover on a station, a
+candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and Escape walk them from the keyboard. The
+Shed station's Windows group reads the slow-down's `speed`, the share of it the holds apply as `ramp`, and the speed the
+holds `realized`, in the order the engine applies them. Its Round group reads, beside the trigger's facts, each window's
+wall (`wall 5h`, `wall 7d`, `wall Fable`), the instant the burn the projection carries reaches the window's whole share,
+absent while the window burns nothing. On a member whose 7-day room stands under its Fable reservation the station also
+reads `Fable reservation`, the reserved share, and while the reservation's round still waits, `under since Fable
+reservation` and `wait Fable reservation`. A pin step's `credit issuer` chip names the account that issued the fallback
+credit token the body carries, on which the request is placed ahead of the pin's renewal and the moves, under the credit
+rule of [Routing](routing.md#selection). A classifier call's pin step draws no pin and names the turn the call judges,
+that turn's account and where the call went, under the classifier rule there. A keepalive probe's walk carries a Probe
+station. It reads the pinned member's `obstacle` where one stands, in the words `already tried`, `budget`, `budget
+unknown`, `credits unavailable`, `in cooldown`, `in overage`, `not available`, `spend cap reached` or `subscription
+ended`, or `no pin` where the probe found no live pin, and `tried yes` or `tried no` for whether the probe had tried
+that member. Where the probe is answered on that standing, the Outcome's Answer row reads `status 429` for an obstacle a
+wait clears, a budget, a cooldown, missing credits, overage or a spend cap, and `status 503` for any other.
 
 "Candidates, by rank" lists every pool member with the chosen or held-on member tinted: Account with its plan beneath
 (the plan the router resolved from the organization type and the tier, "Free" among its words, or the tier word of a

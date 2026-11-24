@@ -1676,16 +1676,13 @@ fn a_pairs_fact_lands_under_the_holders_it_names_and_nowhere_once_an_id_moved_pa
     seed_accounts(&store, &["b"]);
     assert_eq!(store.account("b").unwrap().unwrap().incarnation, 2);
     // A move learned on b's first holder, written after the second took the id.
-    assert!(
-        !store
-            .write_routing(|tx| tx.replace_thinking_binding(&bound_pair(1, 1)))
-            .unwrap(),
-        "a fact of b's previous holder lands nowhere"
-    );
+    store
+        .write_routing(|tx| tx.replace_thinking_binding(&bound_pair(1, 1)))
+        .unwrap();
     assert!(store.load_routing().unwrap().thinking_bindings.is_empty());
-    assert!(store
+    store
         .write_routing(|tx| tx.replace_thinking_binding(&bound_pair(1, 2)))
-        .unwrap());
+        .unwrap();
     assert_eq!(
         store.load_routing().unwrap().thinking_bindings,
         [bound_pair(1, 2)],
@@ -1695,16 +1692,13 @@ fn a_pairs_fact_lands_under_the_holders_it_names_and_nowhere_once_an_id_moved_pa
     store.delete_account("a", "test").unwrap();
     seed_accounts(&store, &["a"]);
     assert_eq!(store.account("a").unwrap().unwrap().incarnation, 2);
-    assert!(
-        !store
-            .write_routing(|tx| tx.replace_thinking_binding(&bound_pair(1, 2)))
-            .unwrap(),
-        "a fact of a's previous holder lands nowhere"
-    );
+    store
+        .write_routing(|tx| tx.replace_thinking_binding(&bound_pair(1, 2)))
+        .unwrap();
     assert!(store.load_routing().unwrap().thinking_bindings.is_empty());
-    assert!(store
+    store
         .write_routing(|tx| tx.replace_thinking_binding(&bound_pair(2, 2)))
-        .unwrap());
+        .unwrap();
     assert_eq!(
         store.load_routing().unwrap().thinking_bindings,
         [bound_pair(2, 2)],

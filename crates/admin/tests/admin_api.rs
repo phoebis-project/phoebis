@@ -7148,6 +7148,8 @@ async fn a_fable_pins_move_cost_reads_its_rewrites_pro_share_of_the_fable_week_o
     let seed = sessions_seed(|generation| {
         vec![phoebis_store::PinRow {
             model: "claude-fable-5-1".into(),
+            last_input_tokens: 1_000,
+            cache_ttl_ms: 300_000,
             lane: phoebis_routing::lane_key("claude-fable-5-1", "standard", "none", "-"),
             ..burning_opus_pin("s1", "business", generation, now, 100.0, 145.0)
         }]

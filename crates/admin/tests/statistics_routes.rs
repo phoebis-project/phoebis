@@ -669,6 +669,24 @@ async fn the_replay_route_answers_500_when_the_parked_rows_cannot_be_read() {
     );
 }
 
+/// A ledger the list cannot read answers the 500 that the API document states. The mapper keeps the caller's 400 for a
+/// range's refusal alone.
+#[tokio::test]
+async fn the_request_list_answers_500_when_the_ledger_cannot_be_read() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // The list's statement selects the column and orders its rows by it.
+    parts
+        .db
+        .write(|c| {
+            c.execute_batch("ALTER TABLE requests RENAME COLUMN received_at TO received_held;")?;
+            Ok(())
+        })
+        .unwrap();
+    let listed = get(&parts.app, "/admin/requests", Some(&cookie)).await;
+    assert_eq!(listed.status(), 500);
+}
+
 #[tokio::test]
 async fn the_replay_route_answers_500_once_the_ledger_writer_has_stopped() {
     let parts = common::admin_parts_full().await;
