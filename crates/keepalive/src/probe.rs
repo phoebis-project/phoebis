@@ -210,7 +210,11 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
     let request = request
         .header(header::CONTENT_LENGTH, job.recipe.body.len())
         .body(Body::from(std::mem::take(&mut job.recipe.body)));
-    let marker = crate::probe_marker(&job.key.0, job.key_generation, job.holder.clone());
+    let marker = phoebis_relay::Probe {
+        key_id: job.key.0.clone(),
+        key_generation: job.key_generation,
+        holder: job.holder.clone(),
+    };
     // Read before the send, so an exchange the relay never answered keys the instant the relay would have received it.
     let sent = engine.now();
     let exchange = match request {

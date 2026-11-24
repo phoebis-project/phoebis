@@ -1428,10 +1428,7 @@ impl Engine {
 
     fn flush_blocking(&self) {
         #[cfg(any(test, feature = "debug-hooks"))]
-        {
-            self.persist_entries.fetch_add(1, Ordering::SeqCst);
-            self.persist_progress.notify_waiters();
-        }
+        self.hooks.raise(&self.hooks.persist_entries);
         // A panic inside a flush poisons the lock, which orders flushes and guards no invariant of its own.
         let _flushing = self
             .flush_lock
@@ -1440,10 +1437,7 @@ impl Engine {
         let now = self.now();
         let mut snapshot = self.lock().persist_snapshot(now);
         #[cfg(any(test, feature = "debug-hooks"))]
-        {
-            self.persist_snapshots.fetch_add(1, Ordering::SeqCst);
-            self.persist_progress.notify_waiters();
-        }
+        self.hooks.raise(&self.hooks.persist_snapshots);
         let settled = std::mem::take(&mut snapshot.settled);
         // Nothing to write means the registry already holds every row, which releases the held settlements too.
         if snapshot.is_empty() {
@@ -1510,13 +1504,13 @@ impl Engine {
     /// How many flushes have read their batch. Compiled only under `debug-hooks`, as `router_views` is.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub fn persist_snapshots(&self) -> u64 {
-        self.persist_snapshots.load(Ordering::SeqCst)
+        self.hooks.persist_snapshots.load(Ordering::SeqCst)
     }
 
     /// How many flushes have entered, counted before the flush lock. Compiled only under `debug-hooks`.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub fn persist_entries(&self) -> u64 {
-        self.persist_entries.load(Ordering::SeqCst)
+        self.hooks.persist_entries.load(Ordering::SeqCst)
     }
 
     /// Resolves once `entries` flushes have entered and `snapshots` have read their batch. A flush raises the counts
@@ -1525,7 +1519,7 @@ impl Engine {
     #[cfg(any(test, feature = "debug-hooks"))]
     pub async fn persist_reached(&self, entries: u64, snapshots: u64) {
         phoebis_routing::wait_until(
-            &self.persist_progress,
+            &self.hooks.persist_progress,
             None,
             || self.persist_entries() >= entries && self.persist_snapshots() >= snapshots,
             || {},

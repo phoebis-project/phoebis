@@ -651,11 +651,7 @@ impl Inner {
                         // The release's label stays until the late result lands, so a probe the release orphaned
                         // settles under it rather than under nothing.
                         agent.last_stop = released;
-                        agent.set_state(AgentState::Busy);
-                        agent.leaves_at = None;
-                        agent.last_activity = now;
-                        // The restart moves the window's start on purpose, so the floor its release left goes.
-                        agent.idle_window_floor = None;
+                        agent.resume(now);
                     }
                     None => {
                         if self.agent_count() >= self.limits.max_agents {
@@ -877,11 +873,7 @@ impl Inner {
                     // starts again as a registration starts it. The subagents stay released until the mod starts
                     // them again, and every generation stays as the end left it.
                     if let Some(main) = session.agents.get_mut(MAIN_AGENT) {
-                        main.set_state(AgentState::Busy);
-                        main.leaves_at = None;
-                        main.last_activity = now;
-                        // The revival moves the window's start on purpose, so the floor the end left goes.
-                        main.idle_window_floor = None;
+                        main.resume(now);
                     } else {
                         // Main's record left one cache TTL after the end, so a resume past it registers main anew as
                         // a fresh start does.

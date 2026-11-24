@@ -3,8 +3,6 @@
 //! it does I/O.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-#[cfg(any(test, feature = "debug-hooks"))]
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,8 +19,6 @@ use phoebis_routing::{
     RouterHandle, DAY_MS, SEVEN_DAY,
 };
 use phoebis_store::{AccountKind, AccountState, CooldownScope, OveragePolicy, PoolRow, Store};
-#[cfg(any(test, feature = "debug-hooks"))]
-use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -974,6 +970,14 @@ impl Agent {
             self.park = None;
         }
     }
+
+    pub(crate) fn resume(&mut self, now: i64) {
+        self.set_state(AgentState::Busy);
+        self.leaves_at = None;
+        self.last_activity = now;
+        // The resume moves the idle window's start on purpose, so the floor the release left goes.
+        self.idle_window_floor = None;
+    }
 }
 
 /// What the ceilings decide for one retained recipe at a tick: probe on, hold the recipe with a reason, or end it.
@@ -1527,26 +1531,37 @@ pub struct Engine {
     pub(crate) parts: EngineParts,
     pub(crate) cancel: CancellationToken,
     pub(crate) workers: TaskTracker,
-    /// How many times `step` has actually asked the router, for a test to hold against one ask per due tick.
-    #[cfg(any(test, feature = "debug-hooks"))]
-    router_view_calls: AtomicU64,
     /// Orders the flushes: a snapshot, its save and its acknowledgment run under it whole, so two flushes never
     /// overlap and an older batch never reaches the store after a newer one.
     pub(crate) flush_lock: Mutex<()>,
-    /// How many flushes have entered, counted before the flush lock, so a test can hold a save and know a second
-    /// flush is queued behind it.
     #[cfg(any(test, feature = "debug-hooks"))]
-    pub(crate) persist_entries: AtomicU64,
-    /// How many flushes have read their batch, for a test to change a row only once the save it races has read it.
-    #[cfg(any(test, feature = "debug-hooks"))]
-    pub(crate) persist_snapshots: AtomicU64,
-    /// Woken as either count rises, which is what a test's wait on them waits on.
-    #[cfg(any(test, feature = "debug-hooks"))]
-    pub(crate) persist_progress: Notify,
+    pub(crate) hooks: DebugHooks,
     /// Events a gap left queued behind it, counted down as they are applied. What arrives inside that backlog cannot
     /// be trusted: the terminal event of any request among them may be one the gap dropped. Apart from the engine's
     /// lock, so an event that takes no lock of its own counts down without one.
     gap_backlog: AtomicUsize,
+}
+
+#[cfg(any(test, feature = "debug-hooks"))]
+#[derive(Default)]
+pub(crate) struct DebugHooks {
+    /// How many flushes have entered, counted before the flush lock, so a test can hold a save and know a second
+    /// flush is queued behind it.
+    pub(crate) persist_entries: std::sync::atomic::AtomicU64,
+    /// Woken as `persist_entries` or `persist_snapshots` rises, which is what a test's wait on them waits on.
+    pub(crate) persist_progress: tokio::sync::Notify,
+    /// How many flushes have read their batch, for a test to change a row only once the save it races has read it.
+    pub(crate) persist_snapshots: std::sync::atomic::AtomicU64,
+    /// How many times `step` has actually asked the router, for a test to hold against one ask per due tick.
+    router_view_calls: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(any(test, feature = "debug-hooks"))]
+impl DebugHooks {
+    pub(crate) fn raise(&self, count: &std::sync::atomic::AtomicU64) {
+        count.fetch_add(1, Ordering::SeqCst);
+        self.persist_progress.notify_waiters();
+    }
 }
 
 impl Engine {
@@ -1571,15 +1586,9 @@ impl Engine {
             parts,
             cancel: CancellationToken::new(),
             workers: TaskTracker::new(),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            router_view_calls: AtomicU64::new(0),
             flush_lock: Mutex::new(()),
             #[cfg(any(test, feature = "debug-hooks"))]
-            persist_entries: AtomicU64::new(0),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            persist_snapshots: AtomicU64::new(0),
-            #[cfg(any(test, feature = "debug-hooks"))]
-            persist_progress: Notify::new(),
+            hooks: DebugHooks::default(),
             gap_backlog: AtomicUsize::new(0),
         })
     }
@@ -1588,7 +1597,8 @@ impl Engine {
     /// release build carries no way to count the scheduler's own router traffic.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub fn router_views(&self) -> u64 {
-        self.router_view_calls
+        self.hooks
+            .router_view_calls
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -4053,7 +4063,7 @@ pub(crate) struct RouterView {
     pub overage: BTreeSet<String>,
     /// `(key, session, agent, canonical model)` to the pinned account's id and the incarnation the pin was made on:
     /// the holder a probe would actually run on, so a sibling's pin never overwrites an agent's own.
-    pub pins: BTreeMap<(String, String, String, String), (String, u64)>,
+    pub pins: BTreeMap<(String, String, String, String), Holder>,
     /// Each pool's keepalive policy, parsed once per tick rather than once per recipe.
     pub policies: HashMap<String, KeepalivePolicy>,
     pub snapshot: Arc<RegistrySnapshot>,
@@ -4086,7 +4096,8 @@ impl Engine {
     /// command per agent in front of selection.
     pub(crate) async fn router_view(&self, now: i64, retained_models: Vec<String>) -> RouterView {
         #[cfg(any(test, feature = "debug-hooks"))]
-        self.router_view_calls
+        self.hooks
+            .router_view_calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let snapshot = self.parts.router.snapshot();
         let canonical = self.dated_names(retained_models).await;
@@ -4100,7 +4111,10 @@ impl Engine {
             .map(|p| {
                 (
                     (p.key_id, p.session_id, p.agent_id, p.model),
-                    (p.account_id, p.incarnation),
+                    Holder {
+                        account_id: p.account_id,
+                        incarnation: p.incarnation,
+                    },
                 )
             })
             .collect();
@@ -4301,25 +4315,29 @@ pub(crate) fn gate(
     let Some(incarnation) = agent.account_incarnation else {
         return Err(Gate::Hold(Reason::PinMoved));
     };
-    let pinned = view.pins.get(&(
-        key_id.clone(),
-        session_id.to_string(),
-        agent.id.clone(),
-        agent.canonical_model.clone(),
-    ));
+    let holder = agent.account.clone().map(|account_id| Holder {
+        account_id,
+        incarnation,
+    });
     // The probe replays the prompt on the holder that last answered the recipe. A pin that names another holder has
     // moved since, and a probe there would write the whole prompt cold, so the recipe waits for the next request that
     // arms it on the pin's account.
-    if let Some((pinned, pinned_incarnation)) = pinned {
-        if agent.account.as_deref() != Some(pinned.as_str()) || incarnation != *pinned_incarnation {
-            return Err(Gate::Hold(Reason::PinMoved));
-        }
+    if view
+        .pins
+        .get(&(
+            key_id.clone(),
+            session_id.to_string(),
+            agent.id.clone(),
+            agent.canonical_model.clone(),
+        ))
+        .is_some_and(|pinned| holder.as_ref() != Some(pinned))
+    {
+        return Err(Gate::Hold(Reason::PinMoved));
     }
-    let Some(account) = agent
-        .account
-        .as_deref()
-        .and_then(|id| view.snapshot.account(id))
-    else {
+    let Some(holder) = holder else {
+        return Err(Gate::Hold(Reason::Paused));
+    };
+    let Some(account) = view.snapshot.account(&holder.account_id) else {
         return Err(Gate::Hold(Reason::Paused));
     };
     if !account.enabled {
@@ -4376,10 +4394,7 @@ pub(crate) fn gate(
     if fast && view.credits.contains(&account.id) {
         return Err(Gate::Hold(Reason::Credits));
     }
-    Ok(Holder {
-        account_id: account.id.clone(),
-        incarnation,
-    })
+    Ok(holder)
 }
 
 #[cfg(test)]
@@ -4818,7 +4833,7 @@ revisions:
                     "main".to_string(),
                     "claude-opus-5-5".to_string(),
                 ),
-                (account.to_string(), incarnation),
+                holder(account, incarnation),
             )]),
             ..pool_view(false)
         }

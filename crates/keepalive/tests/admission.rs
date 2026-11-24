@@ -68,14 +68,14 @@ async fn a_real_request_through_the_relay_arms_a_recipe_and_a_probe_is_ignored()
     let resp =
         r.h.relay
             .probe(
-                phoebis_keepalive::probe_marker(
-                    "desktop",
-                    r.h.store.api_key("desktop").unwrap().unwrap().created_at,
-                    phoebis_routing::Holder {
+                phoebis_relay::Probe {
+                    key_id: "desktop".into(),
+                    key_generation: r.h.store.api_key("desktop").unwrap().unwrap().created_at,
+                    holder: phoebis_routing::Holder {
                         account_id: "a".into(),
                         incarnation: r.incarnation("a"),
                     },
-                ),
+                },
                 r.request("main"),
             )
             .await;
