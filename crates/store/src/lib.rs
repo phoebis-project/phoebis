@@ -464,6 +464,11 @@ impl CompanionKey {
 /// the clock that its other parts read, and a suite passes the wall clock or a cell that it steps.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
+/// A `Clock` that reads the wall clock in Unix milliseconds.
+pub fn wall_clock() -> Clock {
+    Arc::new(|| jiff::Timestamp::now().as_millisecond())
+}
+
 pub struct Store {
     clock: Clock,
     conn: CountedMutex<Connection>,
@@ -1967,18 +1972,14 @@ mod tests {
                 .unwrap();
         }
         let before = store.debug_lock_count();
-        let (accounts, extras) = store.accounts_with_extras().unwrap();
+        let pairs = store.accounts_with_extras().unwrap();
         assert_eq!(store.debug_lock_count() - before, 1);
         assert_eq!(
-            accounts
+            pairs
                 .iter()
-                .map(|row| row.id.as_str())
+                .map(|(row, extras)| (row.id.as_str(), extras.term.account_id.as_str()))
                 .collect::<Vec<_>>(),
-            ["a", "b"]
-        );
-        assert_eq!(
-            extras.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["a", "b"]
+            [("a", "a"), ("b", "b")]
         );
     }
 

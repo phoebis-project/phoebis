@@ -20,7 +20,7 @@ use phoebis_keepalive::{
 use phoebis_ledger::{
     metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing, QuotaPoll,
 };
-use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
+use phoebis_oauth::{CredentialManager, PairingSessions, UsageService};
 use phoebis_relay::{
     Accounting, CatalogService, Limits, ListenLimits, LiveAcceptor, Relay, ShutdownMark,
     REFRESH_TICK,
@@ -142,7 +142,7 @@ pub async fn run_until(
     let profile = profile();
 
     let key = load_storage_key(&config.storage)?;
-    let clock: Clock = Arc::new(|| jiff::Timestamp::now().as_millisecond());
+    let clock = phoebis_store::wall_clock();
     let store = Arc::new(
         Store::open(&config.storage.path, &key, clock.clone())
             .with_context(|| format!("opening the store at {}", config.storage.path.display()))?,
@@ -909,19 +909,15 @@ fn router_config(
             segment_tables.band_segments(window, entrypoint, from, to)
         })
         .with_regimes(move |at| {
-            let rates = regime_tables.regime_rates(phoebis_routing::FIVE_HOUR, at);
-            let mut regimes: Vec<(String, Vec<String>)> = rates
+            let mut regimes: Vec<(String, Vec<String>)> = regime_tables
+                .revisions
+                .in_force(at)
                 .regimes
-                .into_keys()
-                .map(|name| {
-                    let mut entrypoints: Vec<String> = rates
-                        .entrypoints
-                        .iter()
-                        .filter(|(_, regime)| **regime == name)
-                        .map(|(entrypoint, _)| entrypoint.clone())
-                        .collect();
+                .iter()
+                .map(|(name, regime)| {
+                    let mut entrypoints = regime.entrypoints.clone();
                     entrypoints.sort();
-                    (name, entrypoints)
+                    (name.clone(), entrypoints)
                 })
                 .collect();
             regimes.sort();

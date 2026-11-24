@@ -166,7 +166,7 @@ impl Attention {
     ) -> Result<Vec<Condition>, AttentionError> {
         // The registry's reads come before the lock for the same reason: a stalled registry file holds the store's
         // connection mutex, and `observe` waits on this lock.
-        let (accounts, extras) = self.store.accounts_with_extras()?;
+        let accounts = self.store.accounts_with_extras()?;
         let refresh_facts = reader::refresh_facts(&self.store, &accounts)?;
         // The pairs before the lock too: their lock is the router's, which a reload holds across a whole load from
         // disk.
@@ -184,7 +184,6 @@ impl Attention {
             &accounts,
             &refresh_facts,
             &reader::ResetFacts {
-                extras: &extras,
                 warning_days: self.limit_reset_warning_days,
             },
             &self.router,

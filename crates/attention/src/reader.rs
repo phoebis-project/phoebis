@@ -6,7 +6,7 @@
 //! engine, the poll's standing from the usage service, and the exhaustions and drift refusals from the request outcomes
 //! the bus arm keeps.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{
@@ -563,48 +563,29 @@ fn feature_selections(snapshot: &RegistrySnapshot) -> HashMap<String, Vec<Select
 /// end a re-pair stores clears the item at the next read.
 pub(crate) fn refresh_facts(
     store: &Store,
-    accounts: &[AccountRow],
+    accounts: &[(AccountRow, AccountExtras)],
 ) -> Result<HashMap<String, RefreshHistory>, StoreError> {
     let holders: Vec<(&str, u64)> = accounts
         .iter()
-        .filter(|account| account.kind == AccountKind::Oauth)
-        .map(|account| (account.id.as_str(), account.incarnation))
+        .filter(|(account, _)| account.kind == AccountKind::Oauth)
+        .map(|(account, _)| (account.id.as_str(), account.incarnation))
         .collect();
     store.refresh_histories(&holders, REFRESH_RUN_READ)
 }
 
-/// What the two account states, `feature_account_unavailable`, the reset condition and the wall's join read beside the
-/// accounts: each account's stored extras, with an entry for each account of the read, and the warning's days.
-pub(crate) struct ResetFacts<'a> {
-    pub extras: &'a BTreeMap<String, AccountExtras>,
+/// What the reset condition reads beside the accounts and their extras: the warning's days.
+pub(crate) struct ResetFacts {
     pub warning_days: u32,
-}
-
-impl ResetFacts<'_> {
-    /// Whether the poll asks the account, the set whose blocks the router reads.
-    fn asked(&self, account: &AccountRow) -> bool {
-        self.extras
-            .get(&account.id)
-            .is_some_and(|extras| asked(account, extras))
-    }
-
-    /// The stored block of an account the poll asks. A block that does not parse reads as none.
-    fn block(&self, account: &AccountRow) -> Option<LimitResets> {
-        let extras = self.extras.get(&account.id)?;
-        self.asked(account)
-            .then(|| LimitResets::stored(extras))
-            .flatten()
-    }
 }
 
 /// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear, so
 /// a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read this
 /// one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` with their
 /// `refresh_facts` and their extras, and the parked rows, before it takes the reader's state, and a read that fails
-/// fails the whole answer, since a series answered without its evidence could clear a real alarm. `resets` carries
-/// those extras, whose stored limit resets `limit_reset_ending` and the wall's `reset` read and whose state instants
-/// date the two account states and the `feature_account_unavailable` of an account that is not ready, with the
-/// warning's days.
+/// fails the whole answer, since a series answered without its evidence could clear a real alarm. `accounts` pairs each
+/// account with those extras, whose stored limit resets `limit_reset_ending` and the wall's `reset` read and whose
+/// state instants date the two account states and the `feature_account_unavailable` of an account that is not ready,
+/// and `resets` carries the warning's days.
 /// `ledger` carries the parked rows, the fold's routing conditions and the expiries between turns of the last 24 hours
 /// by pool and key. It is `None` where no ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four
 /// routing conditions (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) and
@@ -617,7 +598,7 @@ impl ResetFacts<'_> {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
-    accounts: &[AccountRow],
+    accounts: &[(AccountRow, AccountExtras)],
     refresh_facts: &HashMap<String, RefreshHistory>,
     resets: &ResetFacts,
     router: &RouterHandle,
@@ -636,7 +617,12 @@ pub(crate) fn conditions(
     // Each asked account's block is parsed once per read, for the reset-ending item and the wall's join both.
     let blocks: HashMap<&str, (&AccountRow, LimitResets)> = accounts
         .iter()
-        .filter_map(|account| Some((account.id.as_str(), (account, resets.block(account)?))))
+        .filter_map(|(account, extras)| {
+            let block = asked(account, extras)
+                .then(|| LimitResets::stored(extras))
+                .flatten()?;
+            Some((account.id.as_str(), (account, block)))
+        })
         .collect();
     let mut out = Vec::new();
     // A deleted pool's exhaustion goes with it, so a pool created later under the same id starts clear.
@@ -761,15 +747,11 @@ pub(crate) fn conditions(
             detail: json!({ "client_version": version, "key": drift.key, "trigger": drift.trigger }),
         });
     }
-    for account in accounts {
+    for (account, extras) in accounts {
         let pools = pools_of
             .get(&account.id)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let state_changed_at = resets
-            .extras
-            .get(&account.id)
-            .map(|extras| extras.state_changed_at);
         let condition = |kind: Kind, holds: bool, since: Option<i64>, detail: serde_json::Value| {
             account_condition(
                 kind,
@@ -789,7 +771,7 @@ pub(crate) fn conditions(
         }
         for (kind, held_state) in states {
             let holds = account.state == held_state;
-            let since = state_changed_at.filter(|_| holds);
+            let since = holds.then_some(extras.state_changed_at);
             out.push(condition(
                 kind,
                 holds,
@@ -805,7 +787,7 @@ pub(crate) fn conditions(
             // The listener's own test, so the item holds while the account refuses the calls its selections send.
             // A deletion clears each selection that names the account, so `Deleted` never holds the item.
             let (obstacle, since) = match feature_ready(&snapshot, &account.id, now) {
-                Err(Obstacle::Unready) => (Some("unready"), state_changed_at),
+                Err(Obstacle::Unready) => (Some("unready"), Some(extras.state_changed_at)),
                 // The least of the term's ends, which is no later than the read wherever the term has ended, so a
                 // later end that still stands dates nothing.
                 Err(Obstacle::Ended) => (
@@ -902,7 +884,7 @@ pub(crate) fn conditions(
                     "rate_limited_in_a_row": status.as_ref().map(|s| s.rate_limited_in_a_row),
                 }),
             ));
-            if resets.asked(account) {
+            if asked(account, extras) {
                 let (since, detail) = reset_ending(
                     &account.id,
                     blocks.get(account.id.as_str()).map(|(_, block)| block),
@@ -1046,7 +1028,7 @@ fn reset_ending(
 fn routing_conditions(
     snapshot: &RegistrySnapshot,
     pools_of: &HashMap<String, Vec<String>>,
-    accounts: &[AccountRow],
+    accounts: &[(AccountRow, AccountExtras)],
     rows: &[RoutingCondition],
     blocks: &HashMap<&str, (&AccountRow, LimitResets)>,
     usage: Option<&UsageService>,
@@ -1153,8 +1135,8 @@ fn routing_conditions(
     let subjects = with_orphans(
         accounts
             .iter()
-            .filter(|a| a.kind == AccountKind::Oauth)
-            .map(|a| (a.id.clone(), a.label.clone())),
+            .filter(|(a, _)| a.kind == AccountKind::Oauth)
+            .map(|(a, _)| (a.id.clone(), a.label.clone())),
         rows.iter()
             .filter(|r| {
                 account_kinds

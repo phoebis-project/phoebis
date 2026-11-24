@@ -668,14 +668,18 @@ impl Store {
         all_extras(&self.conn.lock().expect(LOCK_POISONED))
     }
 
-    /// Every account and every account's extras by account id, read under one take of the connection lock, so a
-    /// state and the instant it began come from one state of the registry. The map holds an entry for each row of
-    /// the list.
-    pub fn accounts_with_extras(
-        &self,
-    ) -> Result<(Vec<AccountRow>, BTreeMap<String, AccountExtras>), StoreError> {
+    /// Every account with its extras, read under one take of the connection lock, so a state and the instant it began
+    /// come from one state of the registry.
+    pub fn accounts_with_extras(&self) -> Result<Vec<(AccountRow, AccountExtras)>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        Ok((all_accounts(&conn)?, all_extras(&conn)?))
+        let mut extras = all_extras(&conn)?;
+        Ok(all_accounts(&conn)?
+            .into_iter()
+            .map(|row| {
+                let row_extras = extras.remove(&row.id).unwrap_or_default();
+                (row, row_extras)
+            })
+            .collect())
     }
 
     /// One account's `account_extras` entry, `None` for an unknown id, for a view of that account alone.

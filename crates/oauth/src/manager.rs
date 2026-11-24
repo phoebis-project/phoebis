@@ -825,6 +825,21 @@ impl Inner {
         }
     }
 
+    /// The token of `bundle`, kept as the account's entry under `epoch`, or the token stored now where an invalidation
+    /// outran it.
+    fn publish(
+        &self,
+        account: &AccountRow,
+        bundle: CredentialBundle,
+        epoch: u64,
+    ) -> Result<AccessToken, RefreshFailure> {
+        let token = access_token(account, &bundle);
+        if !self.remember(account, Arc::new(bundle), epoch) {
+            return self.stored_now(account);
+        }
+        Ok(token)
+    }
+
     fn stored_account(&self, account_id: &str) -> Result<AccountRow, AcquireError> {
         self.store
             .account(account_id)?
@@ -921,11 +936,7 @@ impl Inner {
         // stored bundle is already the answer; rotating again would spend a refresh token that has just
         // been replaced. It replaces the entry the caller read too, or every later call would come back here.
         if bundle.generation != observed_generation {
-            let token = access_token(&account, &bundle);
-            if !self.remember(&account, Arc::new(bundle), epoch) {
-                return self.stored_now(&account);
-            }
-            return Ok(token);
+            return self.publish(&account, bundle, epoch);
         }
 
         if let Some(failure) = self.holding_off(account_id) {
@@ -1072,15 +1083,8 @@ impl Inner {
             Some(attempt),
             &fresh,
         ) {
-            Ok(committed) => {
-                // The one write that moves the generation without a reload, so the entry moves with it.
-                let committed = Arc::new(committed);
-                let token = access_token(&account, &committed);
-                if !self.remember(&account, committed, epoch) {
-                    return self.stored_now(&account);
-                }
-                Ok(token)
-            }
+            // The one write that moves the generation without a reload, so the entry moves with it.
+            Ok(committed) => self.publish(&account, committed, epoch),
             // The lifecycle or the incarnation moved while this refresh was in flight, so the slot was
             // disconnected or replaced; a generation race between two commits reads the same to a refresh,
             // since either way the bundle this refresh held no longer names the account's current state.
