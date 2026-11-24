@@ -751,16 +751,20 @@ fn a_ledger_a_newer_build_wrote_fails_check_config_naming_the_path_and_both_vers
         "newer-ledger",
         &format!("stats:\n  ledger_path: {}\n", ledger.display()),
     );
-    phoebis_ledger::LedgerDb::open(&ledger)
+    let db = phoebis_ledger::LedgerDb::open(&ledger).unwrap();
+    // A file that the open just created stands at the newest version this build opens.
+    let opens = phoebis_ledger::LedgerDb::read_schema_version(&ledger)
         .unwrap()
-        .write(|c| {
-            c.execute(
-                "UPDATE meta SET value = '99' WHERE key = 'schema_version'",
-                [],
-            )?;
-            Ok(())
-        })
         .unwrap();
+    db.write(|c| {
+        c.execute(
+            "UPDATE meta SET value = '99' WHERE key = 'schema_version'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    drop(db);
     let out = check_config(&mut phoebis(), &config);
     assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -772,8 +776,7 @@ fn a_ledger_a_newer_build_wrote_fails_check_config_naming_the_path_and_both_vers
     );
     assert!(
         stderr.contains(&format!(
-            "the ledger's schema version 99 is newer than the {} this build opens",
-            phoebis_ledger::LedgerDb::supported_schema_version()
+            "the ledger's schema version 99 is newer than the {opens} this build opens"
         )),
         "{}",
         printed(&out)

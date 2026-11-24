@@ -281,11 +281,6 @@ impl LedgerDb {
             .map_err(version_error(path))
     }
 
-    /// The newest schema this build reads, which `open` refuses a file past.
-    pub fn supported_schema_version() -> u32 {
-        latest_version()
-    }
-
     pub fn write<T>(
         &self,
         f: impl FnOnce(&mut Connection) -> Result<T, LedgerError>,
