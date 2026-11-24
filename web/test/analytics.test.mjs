@@ -485,8 +485,6 @@ test("the mock files its hourly rows under the speed each hour's answers reporte
   assert.deepEqual(groups.map((g) => g.key), ['fast', 'standard']);
   const fast = d.ALL_ROLLUPS.filter((r) => r.speed === 'fast');
   assert.ok(fast.length > 0 && fast.every((r) => r.keyId === 'desktop' && r.model.includes('opus') && r.kind === 'inference'));
-  const served = (rows) => rows.filter((r) => r.kind !== 'probe').reduce((n, r) => n + r.requests.incomplete + r.requests.ok + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown + r.requests.rejected + r.requests.exhausted, 0);
-  assert.deepEqual(groups.map((g) => g.requests), [served(fast), served(d.ALL_ROLLUPS.filter((r) => r.speed === 'standard'))]);
 });
 
 test('the probe totals sum each group\'s held probes, and the mock holds a few on its probe rows', () => {

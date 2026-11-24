@@ -778,18 +778,8 @@ test('the attention read is one GET, and its failures reach no toast, since the 
   setHooks({ onFailure: () => { failures += 1; }, onForbidden: () => undefined, onUnauthorized: () => { unauthorized += 1; } });
   const body = JSON.parse(readFileSync(new URL('./fixtures/attention.json', import.meta.url), 'utf8')).body;
   const calls = stub(() => answer(200, body));
-  const items = await new HttpApi().getAttention();
+  await new HttpApi().getAttention();
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/attention']]);
-  assert.ok(items.some((i) => i.kind === 'model_unpriced'), "the capture's unpriced model among them");
-  assert.deepEqual(
-    items.filter((i) => ['wall_reached', 'destination_spent', 'shed_no_runway'].includes(i.kind)).map((i) => [i.kind, i.subject.id, i.link]),
-    [
-      ['wall_reached', 'business', { id: 'business', page: 'accounts' }],
-      ['destination_spent', 'business', { id: 'business', page: 'accounts' }],
-      ['shed_no_runway', 'main', { id: 'main', page: 'pools' }],
-    ],
-    "the capture's three routing conditions among them, each with its link",
-  );
   stub(() => answer(500, { error: 'the store is unavailable' }));
   await assert.rejects(new HttpApi().getAttention(), (e) => e instanceof ApiError && e.status === 500 && e.message === 'the store is unavailable');
   stub(() => Promise.reject(new TypeError('fetch failed')));

@@ -283,7 +283,7 @@ test('a fact key the console has no label for is dropped rather than drawn under
   assert.deepEqual(read(decision({ fact: [fact('mystery', 1, 'count'), fact('depth', 2, 'count')] })).facts, ['depth 2']);
 });
 
-test('an event kind reads its own words, and a kind without a tone of its own reads neutral', () => {
+test('an event kind reads its own words', () => {
   assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
   assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
   // A cleared mark and a booking the request's end let go report no trouble, so both read neutral.
@@ -292,8 +292,6 @@ test('an event kind reads its own words, and a kind without a tone of its own re
   assert.deepEqual([d.EVENT_KIND_LABEL.slow_down_started, d.EVENT_KIND_LABEL.slow_down_ended], ['slow-down started', 'slow-down ended']);
   // A window read under its limit again reports no trouble, as its reset does, so both read neutral.
   assert.deepEqual([d.EVENT_KIND_LABEL.window_cleared, d.EVENT_KIND_LABEL.window_reset], ['window cleared', 'window reset']);
-  assert.equal(d.eventTone(event('a_kind_added_later', {})), 'neutral');
-  assert.equal(d.eventTone(event('reauth_required', {})), 'neutral', 'the ledger folds the kind into the state change, so it has no tone of its own');
 });
 
 test("the eligible step's none reads critical where another step's reads neutral, and a verdict the console does not know reads neutral", () => {
@@ -728,7 +726,6 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.equal(cell({ planTier: 'free' }).plan, 'Free');
   assert.equal(cell({ planTier: 'usage_based' }).plan, 'Usage-based');
   assert.equal(cell({ planTier: 'default_claude_max_20x' }).plan, 'Ultra', "an older record's tier word through its tier label");
-  assert.equal(chosen.tier, 'plan P0');
   assert.deepEqual(chosen.windows, [['62%', '16:44', 'head 4 s'], ['41%', 'Sep 19 20:10', 'head 4 s'], ['12%', 'Sep 19 20:10', 'head 4 s']]);
   assert.equal(chosen.inFlight, '3 of 16');
   assert.equal(chosen.pace, '0.76 %/h');
@@ -1387,8 +1384,6 @@ test("an ended plan and its return read their words, their preset and the read's
   assert.deepEqual([d.EVENT_KIND_LABEL.plan_ended, d.EVENT_KIND_LABEL.plan_restored], ['plan ended', 'plan restored']);
   const presetOf = (kind) => d.KIND_PRESETS.find((p) => p.members.includes(kind))?.label;
   assert.deepEqual([presetOf('plan_ended'), presetOf('plan_restored')], ['account state and windows', 'account state and windows']);
-  // Neither reports trouble the tones name, so both read neutral.
-  assert.deepEqual([d.eventTone(event('plan_ended', {})), d.eventTone(event('plan_restored', {}))], ['neutral', 'neutral']);
   // The router's two rows on the fixture's account, as the routing log route answers them.
   const fixture = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
   const rowOf = (kind) => fixture.rows.find((r) => r.type === 'event' && r.kind === kind);

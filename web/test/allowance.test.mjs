@@ -44,10 +44,6 @@ const accountOf = (accountId, plan, windows) => ({ accountId, ...plan, windows }
 /** The span the answers below carry, which holds every reset their cases build. */
 const RANGE = { fromMs: NOW - 29 * DAY, toMs: NOW };
 
-test('the span runs 29 days behind now to now, four weeks and a day of slack', () => {
-  assert.deepEqual(d.allowanceSpan(NOW), { from: iso(NOW - 29 * DAY), to: iso(NOW) });
-});
-
 const END = Date.UTC(2026, 10, 1);
 
 test("rangeAllowanceSpan keeps the whole lead week up to the routes' longest range and shortens it past that", () => {

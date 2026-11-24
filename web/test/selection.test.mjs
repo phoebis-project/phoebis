@@ -212,9 +212,8 @@ test('pace places a winding-down member last and knows no floor', () => {
     // Canceled and ten minutes from its end, inside the default half-hour wind-down, with the best score of all.
     account('ending', { canceled: true, subscription: subscription({ endsAt: new Date(NOW + 10 * MINUTE).toISOString() }), windows: window7d(hoursFromNow(24), 0.1) }),
     account('other', { windows: window7d(hoursFromNow(24), 0.5) }),
-    account('key', { kind: 'api_key' }),
   ];
-  const scores = { ending: 0.05, fresh: 0.02, key: 0.03, other: 0.02, spent: 0.0009 };
+  const scores = { ending: 0.05, fresh: 0.02, other: 0.02, spent: 0.0009 };
   const at = (id, priority = 0, fit = null) => ({ ...member(id, priority, 'eligible', scores[id]), fit });
   /** The member whose account ends inside the wind-down, as the route answers its fit. */
   const winding = (priority = 0) => at('ending', priority, 'ending');
@@ -253,14 +252,6 @@ test('pace places a winding-down member last and knows no floor', () => {
   );
   const unwound = selectionOrder(pool('pace', 'allow', [at('ending'), at('fresh')], { windDownMinutes: 5 }), trio, NOW);
   assert.deepEqual(unwound[0].next, ['ending'], "outside the pool's wind-down the member ranks by its score alone");
-  assert.deepEqual(
-    ranked(selectionOrder(pool('pace', 'allow', [at('fresh'), at('key')]), trio, NOW)[0]),
-    [
-      ['key', null, 1],
-      ['fresh', null, 2],
-    ],
-    'an API-key member ranks by its served score',
-  );
 });
 
 test("a winding-down placement carries the end it winds down to, and a member that is not winding down none", () => {

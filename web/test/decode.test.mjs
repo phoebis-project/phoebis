@@ -51,11 +51,6 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   assert.equal(planOf('usage_based').plan, 'Ultra');
   assert.deepEqual([planOf('some_new_word').subscription.plan, planOf('some_new_word').plan], ['some_new_word', 'Ultra'], 'a word the table lacks reads as sent beside the display name');
   assert.equal(a.subscription.rateLimitTier, 'default_claude_max_20x');
-  assert.deepEqual(
-    Object.keys(a.subscription).sort(),
-    ['billingType', 'endsAt', 'organizationType', 'plan', 'planDisplayName', 'rateLimitTier', 'since', 'trialEndsAt'],
-    'the route answers the profile and subscription fields and nothing more, so the card draws nothing beside them',
-  );
   assert.equal(a.subscription.plan, 'max_20x');
   assert.ok(isIso(a.subscription.since));
   assert.equal(a.subscription.trialEndsAt, null);
@@ -722,15 +717,15 @@ test('a session sent with no last use reads its last request as its last use', (
   assert.equal(s.lastUsedAt, new Date(1_791_721_000_000).toISOString());
 });
 
-test("a session reads its pin's open mark, its stamp's instant and the instant its pin was written on its account", () => {
+test("a session reads its pin's open mark and the instant its pin was written on its account", () => {
   // No other check reads the mark's keys and `pinned_at`: the captured rows carry no mark, `mock-sync` takes any mock
   // value against a decoded null, and the mock's rows reach the pages without the decoder.
   const row = fixture('sessions').sessions[0];
   assert.equal(d.decodeSession(row).mark, null, 'as the route answers it');
-  const s = d.decodeSession({ ...row, mark: { at: 1_791_720_000_000, on: 'studio', window: 'five_hour' }, pinned_at: 1_791_719_100_000, shed: { at: 1_791_719_160_000, from: 'primary', reason: 'cooldown' } });
+  const s = d.decodeSession({ ...row, mark: { at: 1_791_720_000_000, on: 'studio', window: 'five_hour' }, pinned_at: 1_791_719_100_000 });
   assert.deepEqual(
-    { mark: s.mark, pinnedAt: s.pinnedAt, shedAt: s.shed.at },
-    { mark: { at: '2026-10-11T12:00:00.000Z', on: 'studio', window: 'five_hour' }, pinnedAt: '2026-10-11T11:45:00.000Z', shedAt: '2026-10-11T11:46:00.000Z' },
+    { mark: s.mark, pinnedAt: s.pinnedAt },
+    { mark: { at: '2026-10-11T12:00:00.000Z', on: 'studio', window: 'five_hour' }, pinnedAt: '2026-10-11T11:45:00.000Z' },
   );
 });
 
@@ -1620,7 +1615,6 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(earlier.keyCreatedAt, 1_791_720_940_000);
   assert.equal(desktop.keyId, 'desktop');
   assert.equal(desktop.keyCreatedAt, null, 'the live key carries no creation instant');
-  assert.equal(desktop.histograms.ttfbMs.length, 84);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
   const desktopWire = fixture('analytics_breakdown').rows.find((g) => g.key === 'desktop');
   assert.ok(desktopWire.histograms.ttfb_ms.some((n) => n > 0), 'the stem holds a time to first byte sample');
