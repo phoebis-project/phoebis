@@ -41,7 +41,7 @@ use crate::rollup::{
     UNATTRIBUTED,
 };
 use crate::session_totals::{
-    Serving, SessionRequest, FACTS_COLUMNS as SESSION_FACTS_COLUMNS,
+    fill_ended, Serving, SessionRequest, FACTS_COLUMNS as SESSION_FACTS_COLUMNS, RESERVED_ID,
     SUMS_COLUMNS as SESSION_SUMS_COLUMNS,
 };
 use crate::LedgerError;
@@ -4461,28 +4461,14 @@ pub struct SessionActivity {
 /// Every (key, key generation, session) with a client request since `since`, with the canonical model, the serving
 /// account and the user agent of its newest request, and the receipt of its newest request that is no token count.
 /// Grouped by generation as well as id, so a key id created again never merges its sessions with an earlier holder's.
-/// One pass over the window's client requests: the newest request of a session is inside the window whenever any of
-/// its requests is, so the window alone answers the newest request's facts. Refused requests stay in the partition, so
-/// a session whose every request was refused keeps its newest request and is listed.
+/// Read from each session's own facts row, which the landing keeps at the session's newest client request, a refused
+/// one included, through the index on the newest receipt. While the session totals' fill has not ended, a session
+/// that holds no facts row yet is read from its request rows of the window, on the same snapshot.
 pub fn session_activity(
     conn: &Connection,
     since: i64,
 ) -> Result<Vec<SessionActivity>, LedgerError> {
-    let count_tokens = Kind::CountTokens.as_str();
-    let mut stmt = conn.prepare(&format!(
-        "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, received_at, canonical_model, \
-         presented_retired, rotation_at, serving_account_id, user_agent, kind FROM requests \
-         WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
-         ranked AS (SELECT recent.*, \
-         ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth, \
-         MAX(CASE WHEN kind != '{count_tokens}' THEN received_at END) \
-         OVER (PARTITION BY key_id, key_generation, grp) AS last_inference_at \
-         FROM recent) \
-         SELECT key_id, key_generation, grp, received_at, canonical_model, \
-         serving_account_id, \
-         presented_retired, rotation_at, user_agent, last_inference_at \
-         FROM ranked WHERE nth = 1 ORDER BY received_at DESC",
-    ))?;
+    let mut stmt = conn.prepare(&session_activity_statement(fill_ended(conn)?))?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(SessionActivity {
             key_id: r.get(0)?,
@@ -4498,6 +4484,41 @@ pub fn session_activity(
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// The activity statement: the facts rows from the instant on through the index, and, while the fill has not ended,
+/// the scan's rows of each session with no mark.
+fn session_activity_statement(fill_ended: bool) -> String {
+    // A row whose receipt stands over no client request holds no newest request, and the scan listed no such session.
+    let facts = format!(
+        "SELECT key_id, key_generation, session_id, last_request_at, last_request_model, last_request_account_id, \
+         last_request_retired, last_request_rotation_at, last_request_user_agent, \
+         CASE WHEN last_inference_at >= ?1 THEN last_inference_at END \
+         FROM session_facts INDEXED BY session_facts_last_request \
+         WHERE last_request_at >= ?1 AND agent_id = '{RESERVED_ID}' AND last_request_id IS NOT NULL"
+    );
+    if fill_ended {
+        return format!("{facts} ORDER BY last_request_at DESC");
+    }
+    let count_tokens = Kind::CountTokens.as_str();
+    format!(
+        "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, received_at, canonical_model, \
+         presented_retired, rotation_at, serving_account_id, user_agent, kind FROM requests \
+         WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1 \
+         AND NOT EXISTS (SELECT 1 FROM session_facts f WHERE f.key_id = requests.key_id \
+         AND f.key_generation = requests.key_generation AND f.session_id = requests.session_id \
+         AND f.agent_id = '{RESERVED_ID}')), \
+         ranked AS (SELECT recent.*, \
+         ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth, \
+         MAX(CASE WHEN kind != '{count_tokens}' THEN received_at END) \
+         OVER (PARTITION BY key_id, key_generation, grp) AS last_inference_at \
+         FROM recent) \
+         {facts} UNION ALL \
+         SELECT key_id, key_generation, grp, received_at, canonical_model, \
+         serving_account_id, \
+         presented_retired, rotation_at, user_agent, last_inference_at \
+         FROM ranked WHERE nth = 1 ORDER BY 4 DESC",
+    )
 }
 
 /// A session's fork facts, read off its first client request. A session the ledger holds no client request for is
@@ -6180,10 +6201,11 @@ impl SessionSpendKey {
 /// them.
 const SESSION_SPEND_COLUMNS: &str =
     "r.session_id, r.key_id, r.key_generation, r.id, r.agent_id, r.agent_type, \
-     r.user_agent, r.request_class, a.account_id, r.kind, r.refused, r.requested_speed";
+     r.user_agent, r.request_class, a.account_id, r.kind, r.refused, r.requested_speed, \
+     r.presented_retired, r.rotation_at";
 
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session reads.
-const SESSION_SPEND_PRICED_FROM: usize = 12;
+const SESSION_SPEND_PRICED_FROM: usize = 14;
 
 /// The number of request `r`'s serving attempt, its last by number, the attempt the landing takes the row's serving
 /// facts from. The session reads join that attempt's own row, since its price reads members the request row does not
@@ -6331,6 +6353,8 @@ fn session_request_of(row: &Row) -> rusqlite::Result<SessionRequest> {
         client: row.get(first + PricedAttempt::CLIENT)?,
         classifier: row.get(first + PricedAttempt::CLASSIFIER)?,
         requested_speed: row.get(11)?,
+        presented_retired: row.get(12)?,
+        rotation_at: row.get(13)?,
         serving,
     })
 }
@@ -6453,6 +6477,26 @@ mod tests {
             !plan
                 .iter()
                 .any(|step| step.contains("rollups_hourly_member")),
+            "{plan:?}"
+        );
+    }
+
+    /// The index and its column hold the letters of `requests`, so a step names the table by the plan's second word.
+    #[test]
+    fn the_activity_read_behind_an_ended_fill_seeks_the_facts_index_and_names_no_request_row() {
+        let plan = plan_of(
+            &session_activity_statement(true),
+            vec![rusqlite::types::Value::from(0_i64)],
+        );
+        assert!(
+            plan.iter().any(|step| step
+                .starts_with("SEARCH session_facts USING INDEX session_facts_last_request")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|step| matches!(step.split(' ').nth(1), Some("requests" | "r"))),
             "{plan:?}"
         );
     }

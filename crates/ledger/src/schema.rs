@@ -517,11 +517,31 @@ CREATE INDEX feature_calls_key ON feature_calls (key_id, received_at);";
 
 /// Step 6 drops the migrated probe count of an hour, which no build wrote above zero. `attempts.entry_expired` and
 /// `attempts.agent_released` hold the two facts the selection hands on beside the size, null on an attempt stored
-/// before the step.
+/// before the step. A session's own facts row gains the members of its newest client request, filled from its request
+/// rows, and an index on its newest receipt, which the Sessions poll seeks. The cursor of the session totals' fill
+/// leaves, so the first start walks the retained requests from the top and marks each session that holds no mark.
 const STEP_6: &str = "\
     ALTER TABLE rollups_hourly DROP COLUMN probe_migrated; \
     ALTER TABLE attempts ADD COLUMN entry_expired INTEGER; \
-    ALTER TABLE attempts ADD COLUMN agent_released INTEGER";
+    ALTER TABLE attempts ADD COLUMN agent_released INTEGER; \
+    ALTER TABLE session_facts ADD COLUMN last_request_id TEXT; \
+    ALTER TABLE session_facts ADD COLUMN last_request_model TEXT; \
+    ALTER TABLE session_facts ADD COLUMN last_request_account_id TEXT; \
+    ALTER TABLE session_facts ADD COLUMN last_request_user_agent TEXT; \
+    ALTER TABLE session_facts ADD COLUMN last_request_retired INTEGER; \
+    ALTER TABLE session_facts ADD COLUMN last_request_rotation_at INTEGER; \
+    CREATE INDEX session_facts_last_request ON session_facts (last_request_at); \
+    UPDATE session_facts SET (last_request_id, last_request_model, last_request_account_id, \
+        last_request_user_agent, last_request_retired, last_request_rotation_at) = \
+        (SELECT r.id, r.canonical_model, \
+            (SELECT a.account_id FROM attempts a WHERE a.request_id = r.id ORDER BY a.attempt DESC LIMIT 1), \
+            r.user_agent, r.presented_retired, r.rotation_at \
+         FROM requests r INDEXED BY requests_session \
+         WHERE r.session_id = session_facts.session_id AND r.key_id = session_facts.key_id \
+         AND r.key_generation = session_facts.key_generation AND r.kind <> 'probe' \
+         ORDER BY r.received_at DESC, r.id DESC LIMIT 1) \
+        WHERE agent_id = ''; \
+    DELETE FROM meta WHERE key = 'session_totals_fill'";
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.

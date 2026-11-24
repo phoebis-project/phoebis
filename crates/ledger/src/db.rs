@@ -2541,6 +2541,69 @@ mod tests {
         assert_eq!(read_version(&conn).unwrap(), latest_version());
     }
 
+    /// Two requests of session `s` under the key `k`, `r-old` on `m-old` and `r-new` on `m-new` a second later, each
+    /// with one served attempt, written straight into the tables of a ledger at step 5.
+    const TWO_REQUESTS_OF_S: &str = "\
+        INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+          key_id, session_id) VALUES \
+          ('r-old', 1000, 'm-old', 'm-old', 0, 'inference', 'client', 'succeeded', 1, 'k', 's'), \
+          ('r-new', 2000, 'm-new', 'm-new', 0, 'inference', 'client', 'succeeded', 1, 'k', 's'); \
+        INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome) VALUES \
+          ('r-old', 1, 'a', 'oauth', 1000, 'succeeded'), ('r-new', 1, 'a', 'oauth', 2000, 'succeeded');";
+
+    /// The session holds its mark from before the step, so the poll's read takes its own row alone.
+    #[test]
+    fn the_sixth_step_fills_each_marked_sessions_newest_request() {
+        let mut conn = prepared_in_memory();
+        migrations::apply(&mut conn, schema::SCHEMA, 1, &schema::MIGRATIONS[..4]).unwrap();
+        conn.execute_batch(TWO_REQUESTS_OF_S).unwrap();
+        conn.execute(
+            "INSERT INTO session_facts (key_id, key_generation, session_id, agent_id, last_request_at, \
+             last_inference_at) VALUES ('k', 0, 's', '', 2000, 2000)",
+            [],
+        )
+        .unwrap();
+        migrations::apply(&mut conn, schema::SCHEMA, 5, schema::MIGRATIONS).unwrap();
+        let sessions = crate::query::session_activity(&conn, 1000).unwrap();
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|s| (s.session_id.as_str(), s.model.as_str()))
+                .collect::<Vec<_>>(),
+            [("s", "m-new")]
+        );
+    }
+
+    /// The fill ended before the step with `s` above its cursor and no mark, as a request landed again can leave it.
+    #[test]
+    fn the_sixth_step_drops_an_ended_cursor_so_the_fill_marks_a_session_with_no_mark() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        let mut conn = Connection::open(&path).unwrap();
+        prepare(&mut conn, &path, &schema::MIGRATIONS[..4]).unwrap();
+        conn.execute_batch(TWO_REQUESTS_OF_S).unwrap();
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES \
+             ('session_totals_fill', '{\"received_at\": 0, \"rowid\": 0, \"ended\": true}')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let db = LedgerDb::open(&path).unwrap();
+        let prices = PriceRevisions::shipped();
+        while crate::session_totals::fill_step(&db, &prices).unwrap() {}
+        let sessions = db
+            .read_blocking(|c| crate::query::session_activity(c, 1000))
+            .unwrap();
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            ["s"]
+        );
+    }
+
     #[tokio::test]
     async fn a_batch_waits_for_a_purge_slice_holding_the_write_lock_and_lands() {
         let dir = tempfile::tempdir().unwrap();

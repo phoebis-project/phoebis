@@ -7,9 +7,9 @@
 //! The landing keeps a marked session's totals in its own transaction and marks a session at its first request. The
 //! fill in the purge task sums each session no landing marked, a whole session at a time, newest first, so a ledger
 //! from before the tables fills behind the start. The fill's cursor stays where the fill ended, so a later start walks
-//! no row unless a threshold moved. A start whose price list moved a threshold clears the sessions whose rows it
-//! re-bands for the fill to sum again, and a family of the retention purge follows the requests' cutoff. The sessions
-//! route reads the rows through `session_figures` and prices them at its own instant.
+//! no row unless a threshold moved or a landing dropped the cursor. A start whose price list moved a threshold clears
+//! the sessions whose rows it re-bands for the fill to sum again, and a family of the retention purge follows the
+//! requests' cutoff. The sessions route reads the rows through `session_figures` and prices them at its own instant.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
@@ -80,6 +80,8 @@ pub(crate) struct SessionRequest {
     pub(crate) classifier: Option<String>,
     pub(crate) request_class: Option<String>,
     pub(crate) received_at: i64,
+    pub(crate) presented_retired: bool,
+    pub(crate) rotation_at: Option<i64>,
     pub(crate) serving: Option<Serving>,
 }
 
@@ -126,6 +128,8 @@ impl SessionRequest {
             classifier: request.classifier.clone(),
             request_class: request.request_class.clone(),
             received_at: request.received_at,
+            presented_retired: request.presented_retired,
+            rotation_at: request.rotation_at,
             serving: attempts.iter().max_by_key(|a| a.attempt).map(|a| Serving {
                 account_id: a.account_id.clone(),
                 account_kind: Some(a.account_kind),
@@ -266,16 +270,28 @@ pub(crate) fn sums_of(
     ))
 }
 
-/// One `session_facts` row's columns beside its key. The session's own row holds the first three, an agent's row the
+/// One `session_facts` row's columns beside its key. The session's own row holds the first four, an agent's row the
 /// rest.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Facts {
     pub(crate) last_request_at: Option<i64>,
+    pub(crate) last_request: Option<LastRequest>,
     pub(crate) last_inference_at: Option<i64>,
     pub(crate) served: Option<Served>,
     pub(crate) first_request_at: Option<i64>,
     pub(crate) newest: Option<Newest>,
     pub(crate) probe: Option<Probed>,
+}
+
+/// The session's newest client request, a refused one included, with what the Sessions poll reads of it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LastRequest {
+    pub(crate) id: String,
+    pub(crate) model: String,
+    pub(crate) account_id: Option<String>,
+    pub(crate) user_agent: Option<String>,
+    pub(crate) on_retired_secret: bool,
+    pub(crate) rotation_at: Option<i64>,
 }
 
 /// The session's newest served client request, with its own user agent, null included.
@@ -311,11 +327,29 @@ fn newer(request: &SessionRequest, pick: Option<(i64, &str)>) -> bool {
 }
 
 impl Facts {
-    /// `request` on the session's own row: the newest receipt of a client request and of one that is no token count,
-    /// refused ones included, and the newest served client request with its own user agent, null included.
+    /// `request` on the session's own row: the newest client request with what the Sessions poll reads of it and the
+    /// newest receipt of one that is no token count, refused ones included, and the newest served client request with
+    /// its own user agent, null included.
     fn add_to_session(&mut self, request: &SessionRequest) {
         if request.probe() {
             return;
+        }
+        let pick = self.last_request_at.map(|at| {
+            let id = self
+                .last_request
+                .as_ref()
+                .map_or("", |last| last.id.as_str());
+            (at, id)
+        });
+        if newer(request, pick) {
+            self.last_request = Some(LastRequest {
+                id: request.id.clone(),
+                model: request.canonical_model.clone(),
+                account_id: request.serving.as_ref().map(|s| s.account_id.clone()),
+                user_agent: request.user_agent.clone(),
+                on_retired_secret: request.presented_retired,
+                rotation_at: request.rotation_at,
+            });
         }
         self.last_request_at = self.last_request_at.max(Some(request.received_at));
         if request.kind != Kind::CountTokens.as_str() {
@@ -463,7 +497,8 @@ pub(crate) fn totals_of(
 /// record held is read again from the session's request rows that remain. The request then adds to a marked session
 /// alone, its counts and its facts, a refused one its facts alone. A session with no mark that holds no other request
 /// under its key takes the request as its first and its mark with it. One that holds another is left to the fill,
-/// which counts the request with the rest.
+/// which counts the request with the rest, and the landing drops the cursor of a fill that ended so that a walk
+/// reaches the session.
 pub(crate) fn land(
     tx: &Transaction<'_>,
     request: &RequestRecord,
@@ -479,7 +514,9 @@ pub(crate) fn land(
         return Ok(());
     };
     let Some(mut own) = read_facts(tx, key, RESERVED_ID)? else {
-        if !exists(tx, HOLDS_ANOTHER, key, Some(&new.id))? {
+        if exists(tx, HOLDS_ANOTHER, key, Some(&new.id))? {
+            drop_cursor_ended(tx)?;
+        } else {
             let mut totals = Totals::new();
             totals.add(&new, prices);
             write_totals(tx, key, &totals)?;
@@ -610,11 +647,12 @@ fn walk(conn: &Connection, from: FillCursor) -> Result<Walk, LedgerError> {
 /// of the row, so the next call sums the session again: no landing batch waits on a session's sum, and no request is
 /// counted twice or left out. The call that finds no row left stores the cursor as ended, and a call that reads an
 /// ended cursor walks no row and writes nothing, so a start behind a fill that ended costs one call. A start behind a
-/// fill that a shutdown cut short goes on below the stored cursor. Two resets drop the cursor, and the fill then walks
-/// from the top: the start's step for a moved threshold, and a purge slice that deleted request rows while the fill
-/// had not ended, since those rows can be the older requests of a session that resumed above the cursor. A session
-/// with no mark above an ended cursor waits for the next walk from the top, which a moved threshold brings, and the
-/// reader sums it from its request rows until then. Answers whether the walk left rows below the cursor.
+/// fill that a shutdown cut short goes on below the stored cursor. Three resets drop the cursor, and the fill then
+/// walks from the top: the start's step for a moved threshold, a purge slice that deleted request rows while the fill
+/// had not ended, since those rows can be the older requests of a session that resumed above the cursor, and a landing
+/// into a session with no mark while the fill has ended. A session with no mark above an ended cursor waits for the
+/// walk that its next landing brings, and the reader sums it from its request rows until then. Answers whether the
+/// walk left rows below the cursor.
 pub(crate) fn fill_step(db: &LedgerDb, prices: &PriceRevisions) -> Result<bool, LedgerError> {
     db.purge(|conn| {
         let (passed, summed) = {
@@ -655,6 +693,20 @@ pub(crate) fn drop_cursor_under_way(tx: &Transaction<'_>) -> Result<(), LedgerEr
         delete_meta(tx, FILL_CURSOR_KEY)?;
     }
     Ok(())
+}
+
+/// Drops the cursor of a fill that ended. The landing calls it for a session with no mark that holds another request,
+/// since a fill that ended walks no row again: the fill then walks from the top and marks the session.
+fn drop_cursor_ended(tx: &Transaction<'_>) -> Result<(), LedgerError> {
+    if read_meta::<FillCursor>(tx, FILL_CURSOR_KEY)?.is_some_and(|cursor| cursor.ended) {
+        delete_meta(tx, FILL_CURSOR_KEY)?;
+    }
+    Ok(())
+}
+
+/// Whether the fill's stored cursor reads ended.
+pub(crate) fn fill_ended(conn: &Connection) -> Result<bool, LedgerError> {
+    Ok(read_meta::<FillCursor>(conn, FILL_CURSOR_KEY)?.is_some_and(|cursor| cursor.ended))
 }
 
 /// The thresholds `BANDS_KEY` holds.
@@ -842,9 +894,11 @@ pub(crate) const SUMS_COLUMNS: &str = "agent_id, probe, account_id, canonical_mo
     classifier, request_class, received_hour, completed_hour, requests, input_tokens, cache_read_tokens, \
     cache_write_5m_tokens, cache_write_1h_tokens, output_tokens";
 
-/// The facts columns past the key's four, in `Facts`' order.
+/// The facts columns past the key's four, in `Facts`' order, with the six of `last_request` at the end.
 pub(crate) const FACTS_COLUMNS: &str = "last_request_at, last_inference_at, served_at, served_id, user_agent, first_request_at, \
-    newest_at, newest_id, newest_model, newest_agent_type, newest_account_id, probe_at, probe_id, probe_model";
+    newest_at, newest_id, newest_model, newest_agent_type, newest_account_id, probe_at, probe_id, probe_model, \
+    last_request_id, last_request_model, last_request_account_id, last_request_user_agent, last_request_retired, \
+    last_request_rotation_at";
 
 static ADD_SUMS: LazyLock<String> = LazyLock::new(|| {
     format!(
@@ -911,7 +965,8 @@ static READ_ALL_FACTS: LazyLock<String> = LazyLock::new(|| {
 static PUT_FACTS: LazyLock<String> = LazyLock::new(|| {
     format!(
         "INSERT OR REPLACE INTO session_facts (key_id, key_generation, session_id, agent_id, {FACTS_COLUMNS}) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)"
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, \
+         ?22, ?23, ?24)"
     )
 });
 
@@ -937,9 +992,15 @@ const LANDED_SINCE: &str =
 /// The picks `Facts::add_to_session` and `Facts::add_to_agent` keep, read again from the request rows. Each read walks
 /// the session index from one end and stops at its first match. `probe` and `count_tokens` are the words of
 /// `Kind::Probe` and `Kind::CountTokens`.
-const SESSION_NEWEST: &str =
-    "SELECT received_at FROM requests INDEXED BY requests_session WHERE session_id = ?3 \
-    AND key_id = ?1 AND key_generation = ?2 AND kind <> 'probe' ORDER BY received_at DESC LIMIT 1";
+static SESSION_NEWEST: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "SELECT r.received_at, r.id, r.canonical_model, a.account_id, r.user_agent, r.presented_retired, \
+         r.rotation_at FROM requests r INDEXED BY requests_session \
+         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
+         WHERE r.session_id = ?3 AND r.key_id = ?1 AND r.key_generation = ?2 AND r.kind <> 'probe' \
+         ORDER BY r.received_at DESC, r.id DESC LIMIT 1"
+    )
+});
 
 const SESSION_NEWEST_INFERENCE: &str = "SELECT received_at FROM requests INDEXED BY requests_session \
     WHERE session_id = ?3 AND key_id = ?1 AND key_generation = ?2 AND kind NOT IN ('probe', 'count_tokens') \
@@ -1114,8 +1175,19 @@ fn facts_of(row: &rusqlite::Row, first: usize) -> rusqlite::Result<Facts> {
     let (model, agent_type, account_id) = (text(8)?, text(9)?, text(10)?);
     let probe = at(11)?.zip(text(12)?);
     let probe_model = text(13)?;
+    let last_request = last_request_at.and(text(14)?);
+    let (request_model, request_account, request_agent) = (text(15)?, text(16)?, text(17)?);
+    let (retired, rotation_at) = (row.get::<_, Option<bool>>(first + 18)?, at(19)?);
     Ok(Facts {
         last_request_at,
+        last_request: last_request.map(|id| LastRequest {
+            id,
+            model: request_model.unwrap_or_default(),
+            account_id: request_account,
+            user_agent: request_agent,
+            on_retired_secret: retired.unwrap_or_default(),
+            rotation_at,
+        }),
         last_inference_at,
         served: served.map(|(at, id)| Served { at, id, user_agent }),
         first_request_at,
@@ -1163,7 +1235,8 @@ fn write_facts(
     agent: &str,
     facts: &Facts,
 ) -> Result<(), LedgerError> {
-    let (served, newest, probe) = (
+    let (last, served, newest, probe) = (
+        facts.last_request.as_ref(),
         facts.served.as_ref(),
         facts.newest.as_ref(),
         facts.probe.as_ref(),
@@ -1188,6 +1261,12 @@ fn write_facts(
         probe.map(|p| p.at),
         probe.map(|p| &p.id),
         probe.map(|p| &p.model),
+        last.map(|l| &l.id),
+        last.map(|l| &l.model),
+        last.and_then(|l| l.account_id.as_ref()),
+        last.and_then(|l| l.user_agent.as_ref()),
+        last.map(|l| l.on_retired_secret),
+        last.and_then(|l| l.rotation_at),
     ])?;
     Ok(())
 }
@@ -1271,7 +1350,20 @@ fn reread(
     for pick in picks {
         match pick {
             Pick::LastRequest => {
-                facts.last_request_at = read_pick(tx, SESSION_NEWEST, &session, |r| r.get(0))?
+                let newest = read_pick(tx, &SESSION_NEWEST, &session, |r| {
+                    Ok((
+                        r.get(0)?,
+                        LastRequest {
+                            id: r.get(1)?,
+                            model: r.get(2)?,
+                            account_id: r.get(3)?,
+                            user_agent: r.get(4)?,
+                            on_retired_secret: r.get(5)?,
+                            rotation_at: r.get(6)?,
+                        },
+                    ))
+                })?;
+                (facts.last_request_at, facts.last_request) = newest.unzip();
             }
             Pick::LastInference => {
                 facts.last_inference_at =
@@ -1816,6 +1908,32 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    /// The fill marks `s` and ends, then a start's moved threshold clears `s` and drops the cursor, so the fill has not
+    /// reached `s` again when the poll reads.
+    #[test]
+    fn a_session_a_moved_threshold_cleared_stays_listed_while_the_fill_is_under_way() {
+        let (db, _dir) = crate::db::open_temp();
+        write_raw(&db, "r-1", "s", JANUARY_2026);
+        let first = haiku_over(1_000);
+        unmark_rebanded_sessions(&db, &first).unwrap();
+        while fill_step(&db, &first).unwrap() {}
+        unmark_rebanded_sessions(&db, &haiku_over(2_000)).unwrap();
+        let sessions = db
+            .read_blocking(|c| crate::query::session_activity(c, JANUARY_2026))
+            .unwrap();
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|s| (
+                    s.session_id.as_str(),
+                    s.model.as_str(),
+                    s.user_agent.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            [("s", "claude-haiku-5-5", None)]
+        );
     }
 
     /// A retention pass under a request retention of one day, run a day and 30 minutes past `JANUARY_2026`, so it

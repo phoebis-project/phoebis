@@ -1,8 +1,9 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use phoebis_store::{
@@ -3510,6 +3511,31 @@ pub(crate) struct Projection {
     pub reset: Option<i64>,
 }
 
+/// One account's projections by window, which the reads of one standings ask share.
+type SharedProjections = Rc<BTreeMap<String, Projection>>;
+
+/// The demand projections of one standings ask by pool and account, so each sibling is projected once for every pin
+/// whose move read ranks it.
+#[derive(Default)]
+pub(crate) struct ProjectionMemo(RefCell<HashMap<(String, String), SharedProjections>>);
+
+impl ProjectionMemo {
+    /// The projections of `account_id` under `pool`, which `project` makes at the pair's first read.
+    fn projections(
+        &self,
+        pool: &PoolRow,
+        account_id: &str,
+        project: impl FnOnce() -> BTreeMap<String, Projection>,
+    ) -> SharedProjections {
+        Rc::clone(
+            self.0
+                .borrow_mut()
+                .entry((pool.id.clone(), account_id.to_string()))
+                .or_insert_with(|| Rc::new(project())),
+        )
+    }
+}
+
 /// The pins the account's pool keeps: a pin under a key of a pool the account left is retained until it ends and
 /// counts in neither a round nor a projection, so a former pool's pins never move this pool's figures. The keep leaves
 /// an ended agent's pin out of every figure as well, until the agent's next request.
@@ -4187,11 +4213,12 @@ pub(crate) fn fit_of(
 ) -> FitRead {
     fit_read(
         state, snapshot, affinity, pool, request, figures, candidate, planned, now, judge, own,
-        false,
+        false, None,
     )
 }
 
-/// `fit_of`'s read, with each window's word in `words` where `words` is set.
+/// `fit_of`'s read, with each window's word in `words` where `words` is set, and the candidate's projection taken
+/// from `memo` where one is given and `own` is none.
 #[allow(clippy::too_many_arguments)]
 fn fit_read(
     state: &RoutingState,
@@ -4206,6 +4233,7 @@ fn fit_read(
     judge: Judge,
     own: Option<&PinKey>,
     words: bool,
+    memo: Option<&ProjectionMemo>,
 ) -> FitRead {
     let mut read = FitRead {
         verdict: FitWord::LeastBad,
@@ -4291,16 +4319,30 @@ fn fit_read(
         })
         .unwrap_or_default();
     let share = state.share();
-    let projections = projections_of(
-        state,
-        snapshot,
-        pool,
-        candidate,
-        tier.unwrap_or_default(),
-        now,
-        BurnRead::Demand,
-        own,
-    );
+    let project = || {
+        projections_of(
+            state,
+            snapshot,
+            pool,
+            candidate,
+            tier.unwrap_or_default(),
+            now,
+            BurnRead::Demand,
+            own,
+        )
+    };
+    // A row under `own` leaves the account's burn, so the memo holds the read with no pin of its own alone.
+    let (memoized, owned);
+    let projections: &BTreeMap<String, Projection> = match memo.filter(|_| own.is_none()) {
+        Some(memo) => {
+            memoized = memo.projections(pool, candidate, project);
+            &memoized
+        }
+        None => {
+            owned = project();
+            &owned
+        }
+    };
     let planned: Vec<&Reservation> = planned
         .iter()
         .filter(|r| r.account_id == candidate)
@@ -4513,6 +4555,7 @@ pub(crate) fn fresh_fit(
         Judge::Placement,
         None,
         true,
+        None,
     )
 }
 
@@ -6504,6 +6547,7 @@ fn destination_of(
     planned: &[Reservation],
     now: i64,
     fallback_ms: i64,
+    memo: Option<&ProjectionMemo>,
 ) -> Option<(String, FitRead)> {
     let window = window_for(&pin.model);
     let set: Vec<&Candidate> = eligible
@@ -6521,7 +6565,7 @@ fn destination_of(
         .map(|c| {
             (
                 c.account_id.clone(),
-                fit_of(
+                fit_read(
                     state,
                     snapshot,
                     affinity,
@@ -6533,6 +6577,8 @@ fn destination_of(
                     now,
                     Judge::Move,
                     None,
+                    false,
+                    memo,
                 ),
             )
         })
@@ -6571,6 +6617,7 @@ fn move_at(
     planned: &[Reservation],
     now: i64,
     fallback_ms: i64,
+    memo: Option<&ProjectionMemo>,
 ) -> (Option<(String, FitRead)>, MoveRead) {
     let found = destination_of(
         state,
@@ -6584,6 +6631,7 @@ fn move_at(
         planned,
         now,
         fallback_ms,
+        memo,
     );
     let read = move_read(
         state,
@@ -6633,6 +6681,8 @@ pub(crate) fn standing_eligible(
 /// `standing_eligible` answers for the pin's pool, model and lane speed, with no booking planned. `pool` is the pool
 /// of the pin's key, `None` where it left the registry. The read carries no cost where no destination stands for the
 /// pin, where its pool left the registry and where the pin holds account state, since no round plans such a move.
+/// `memo` holds the siblings' projections for every pin of one standings ask.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn standing_move_read(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -6641,6 +6691,7 @@ pub(crate) fn standing_move_read(
     pin: &PinRow,
     now: i64,
     fallback_ms: i64,
+    memo: &ProjectionMemo,
 ) -> MoveRead {
     let request = standing_request(pin);
     let affinity_handle = state.affinity();
@@ -6660,6 +6711,7 @@ pub(crate) fn standing_move_read(
                 &[],
                 now,
                 fallback_ms,
+                Some(memo),
             )
         }
         // A pin whose pool left the registry has no siblings to plan a move among.
@@ -6930,6 +6982,7 @@ fn shed_round(
                 &[],
                 now,
                 fallback_ms,
+                None,
             );
             RoundPin {
                 row,
@@ -7057,6 +7110,7 @@ fn shed_round(
                 planned,
                 now,
                 fallback_ms,
+                None,
             );
             (
                 found.map(|(destination, fit)| (destination, fit.runway_ms)),

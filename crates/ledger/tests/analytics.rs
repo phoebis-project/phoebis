@@ -9750,6 +9750,223 @@ fn a_session_of_refusals_alone_is_still_listed() {
     );
 }
 
+/// Request `id` of the session `s` under the key `desktop`, of `kind` on `model` from the user agent `agent`, received
+/// at `at`, with its one attempt on `account` where one served it.
+fn session_request(
+    id: &str,
+    at: i64,
+    kind: &str,
+    model: &str,
+    agent: &str,
+    account: Option<&str>,
+) -> (RequestRecord, Vec<AttemptRecord>) {
+    let attempts: Vec<AttemptRecord> = account
+        .into_iter()
+        .map(|account| AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: AccountKind::Oauth,
+            started_at: at,
+            upstream_status: Some(200),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        })
+        .collect();
+    let request = RequestRecord {
+        id: id.into(),
+        received_at: at,
+        key_id: Some("desktop".into()),
+        session_id: Some("s".into()),
+        model: model.into(),
+        canonical_model: model.into(),
+        kind: kind.into(),
+        origin: "client".into(),
+        user_agent: Some(agent.into()),
+        attempts: attempts.len() as u32,
+        refused: attempts.is_empty(),
+        outcome: if attempts.is_empty() {
+            "rejected"
+        } else {
+            "succeeded"
+        }
+        .into(),
+        ..RequestRecord::default()
+    };
+    (request, attempts)
+}
+
+/// The served request came first under another model, user agent and account, so a session read from its served pick
+/// would answer those.
+#[test]
+fn a_sessions_newest_request_answers_its_own_model_and_user_agent_though_it_was_refused() {
+    let (db, _dir) = common::temp_ledger();
+    for (request, attempts) in [
+        session_request(
+            "r1",
+            WEEKDAY_OFF_PEAK - 120_000,
+            "inference",
+            "claude-opus-5-5",
+            "served-agent",
+            Some("a"),
+        ),
+        session_request(
+            "r2",
+            WEEKDAY_OFF_PEAK - 60_000,
+            "inference",
+            "claude-sonnet-5",
+            "refused-agent",
+            None,
+        ),
+    ] {
+        db.insert_request(&request, &attempts, None).unwrap();
+    }
+    let sessions = db
+        .read_blocking(|c| phoebis_ledger::session_activity(c, WEEKDAY_OFF_PEAK - 3_600_000))
+        .unwrap();
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|s| (
+                s.session_id.as_str(),
+                s.model.as_str(),
+                s.user_agent.as_deref(),
+                s.account_id.as_deref()
+            ))
+            .collect::<Vec<_>>(),
+        [("s", "claude-sonnet-5", Some("refused-agent"), None)]
+    );
+}
+
+/// The inference request lies before the read's instant and the token count inside it, so the session's stored
+/// newest inference is no request of the span.
+#[test]
+fn a_session_whose_one_request_of_the_span_is_a_token_count_answers_no_last_inference() {
+    let (db, _dir) = common::temp_ledger();
+    for (request, attempts) in [
+        session_request(
+            "r1",
+            WEEKDAY_OFF_PEAK - 2 * 3_600_000,
+            "inference",
+            "claude-opus-5-5",
+            "agent",
+            Some("a"),
+        ),
+        session_request(
+            "r2",
+            WEEKDAY_OFF_PEAK - 60_000,
+            "count_tokens",
+            "claude-opus-5-5",
+            "agent",
+            Some("a"),
+        ),
+    ] {
+        db.insert_request(&request, &attempts, None).unwrap();
+    }
+    let sessions = db
+        .read_blocking(|c| phoebis_ledger::session_activity(c, WEEKDAY_OFF_PEAK - 3_600_000))
+        .unwrap();
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|s| (s.session_id.as_str(), s.last_inference_at))
+            .collect::<Vec<_>>(),
+        [("s", None)]
+    );
+}
+
+/// The session's newest request lands again under another session, so `s` keeps its older request alone.
+#[test]
+fn a_request_landed_again_hands_the_newest_members_to_the_request_that_remains() {
+    let (db, _dir) = common::temp_ledger();
+    let (older, older_attempts) = session_request(
+        "r1",
+        WEEKDAY_OFF_PEAK - 120_000,
+        "inference",
+        "claude-opus-5-5",
+        "agent",
+        Some("a"),
+    );
+    let (newer, newer_attempts) = session_request(
+        "r2",
+        WEEKDAY_OFF_PEAK - 60_000,
+        "inference",
+        "claude-sonnet-5",
+        "agent",
+        Some("a"),
+    );
+    db.insert_request(&older, &older_attempts, None).unwrap();
+    db.insert_request(&newer, &newer_attempts, None).unwrap();
+    let moved = RequestRecord {
+        session_id: Some("t".into()),
+        ..newer
+    };
+    db.insert_request(&moved, &newer_attempts, None).unwrap();
+    let sessions = db
+        .read_blocking(|c| phoebis_ledger::session_activity(c, WEEKDAY_OFF_PEAK - 3_600_000))
+        .unwrap();
+    let s = sessions
+        .iter()
+        .find(|a| a.session_id == "s")
+        .unwrap_or_else(|| panic!("the session s is listed: {sessions:?}"));
+    assert_eq!(s.model, "claude-opus-5-5", "{sessions:?}");
+}
+
+/// The purge takes the inference request and keeps the token count, so the settle reads the session's newest
+/// inference again and writes its own row.
+#[test]
+fn a_purge_keeps_the_members_of_a_request_behind_its_cutoff() {
+    let (db, _dir) = common::temp_ledger();
+    for (request, attempts) in [
+        session_request(
+            "r1",
+            WEEKDAY_OFF_PEAK,
+            "inference",
+            "claude-opus-5-5",
+            "first-agent",
+            Some("a"),
+        ),
+        session_request(
+            "r2",
+            WEEKDAY_OFF_PEAK + 3_600_000,
+            "count_tokens",
+            "claude-sonnet-5",
+            "count-agent",
+            Some("b"),
+        ),
+    ] {
+        db.insert_request(&request, &attempts, None).unwrap();
+    }
+    // A retention of one day, run a day and 30 minutes past the first request, takes it alone.
+    let purged = run_retention_blocking(
+        &db,
+        &LedgerConfig {
+            retention_days: 1,
+            ..LedgerConfig::default()
+        },
+        WEEKDAY_OFF_PEAK + DAY_MS + 30 * 60_000,
+        &[],
+        &PriceRevisions::shipped(),
+    )
+    .unwrap();
+    assert_eq!(purged.requests, 1);
+    let sessions = db
+        .read_blocking(|c| phoebis_ledger::session_activity(c, WEEKDAY_OFF_PEAK))
+        .unwrap();
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|s| (
+                s.session_id.as_str(),
+                s.model.as_str(),
+                s.account_id.as_deref(),
+                s.user_agent.as_deref()
+            ))
+            .collect::<Vec<_>>(),
+        [("s", "claude-sonnet-5", Some("b"), Some("count-agent"))]
+    );
+}
+
 /// A probe on a model the revision does not list reads no dollars for its counts or its wasted counts, as an inference
 /// row on the same model reads none.
 #[test]

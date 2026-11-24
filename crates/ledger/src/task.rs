@@ -520,7 +520,16 @@ pub fn spawn(
                 .stats
                 .condition_folds
                 .fetch_add(1, Ordering::Relaxed);
-            // The session totals fill ahead of the first wait and behind each pass, until a run finds none left.
+            // The session totals fill ahead of the first wait and behind each pass, until a run finds none left, and
+            // again once a landing drops the cursor of the fill that ended.
+            if !filling
+                && matches!(
+                    purging.db.read(crate::session_totals::fill_ended).await,
+                    Ok(false)
+                )
+            {
+                filling = true;
+            }
             if filling {
                 filling = fill_sessions(&purging.db, &purging.pricing, &mut tick).await;
             } else {
@@ -1973,8 +1982,8 @@ async fn continue_backfill(db: &Arc<LedgerDb>, mut written: usize) -> Option<usi
 /// The fill of the sessions no landing marked, one session per blocking call, so a shutdown's abort lands between two
 /// sessions and a due purge pass waits for one session at most. Every exit leaves the purge's tick taken, and the
 /// answer says whether the fill goes on behind the pass: a call that finds no session left ends it until the next
-/// start, and a call the ledger refused leaves the run to go on from the cursor, or from the top where that pass
-/// dropped it.
+/// start or until a landing drops the cursor, and a call the ledger refused leaves the run to go on from the cursor, or
+/// from the top where that pass dropped it.
 async fn fill_sessions(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
@@ -2082,6 +2091,85 @@ mod tests {
         assert!(matches!(rx.recv().await, Some(Record::Request { .. })));
         landing.await.unwrap();
         assert_eq!(ledger.dropped(), 0);
+    }
+
+    /// Session `s` holds two requests and no mark above a fill that ended, as a request landed again can leave it, and
+    /// a third request lands into it once the task's first pass found the fill ended.
+    #[tokio::test(start_paused = true)]
+    async fn the_purge_task_starts_the_fill_again_behind_a_landing_that_dropped_an_ended_cursor() {
+        let (db, _dir) = crate::db::open_temp();
+        let db = Arc::new(db);
+        db.write(|c| {
+            c.execute_batch(
+                "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, \
+                 attempts, key_id, session_id) VALUES \
+                 ('r1', 1000, 'm', 'm', 0, 'inference', 'client', 'succeeded', 0, 'k', 's'), \
+                 ('r2', 2000, 'm', 'm', 0, 'inference', 'client', 'succeeded', 0, 'k', 's'); \
+                 INSERT INTO meta (key, value) VALUES \
+                 ('session_totals_fill', '{\"received_at\": 0, \"rowid\": 0, \"ended\": true}')",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let store = Arc::new(
+            Store::open_in_memory(&phoebis_store::StorageKey::generate(), wall()).unwrap(),
+        );
+        let router = phoebis_routing::spawn(
+            store.clone(),
+            Arc::new(|| 0),
+            phoebis_routing::RouterConfig::default(),
+        )
+        .unwrap();
+        let config = LedgerConfig::default();
+        let interval = config.purge_interval;
+        let _ledger = spawn(
+            db.clone(),
+            Arc::new(Pricing::new(PriceRevisions::shipped())),
+            Arc::new(PlanTables::shipped()),
+            store,
+            &Bus::new(),
+            router,
+            Arc::new(|| 7_200_000),
+            Arc::new(Metrics::new()),
+            config,
+        );
+        // The paused clock moves only once every other task is parked, and a blocking call holds it, so the first
+        // pass has read the ended cursor and waits for its tick.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let request = RequestRecord {
+            id: "r3".into(),
+            received_at: 3000,
+            key_id: Some("k".into()),
+            session_id: Some("s".into()),
+            model: "m".into(),
+            canonical_model: "m".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[], None).unwrap();
+        tokio::time::sleep(interval).await;
+        let (ended, sessions) = db
+            .read(|c| {
+                Ok((
+                    crate::session_totals::fill_ended(c)?,
+                    crate::query::session_activity(c, 0)?,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                ended,
+                sessions
+                    .iter()
+                    .map(|s| s.session_id.as_str())
+                    .collect::<Vec<_>>()
+            ),
+            (true, vec!["s"]),
+            "the fill ran to its end again and marked the session"
+        );
     }
 
     #[tokio::test]

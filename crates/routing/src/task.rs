@@ -30,7 +30,7 @@ use crate::select::{
     lapsed_record, mark_cleared_of, obstacle_on, pace_of, projection_of, projections_of, runway,
     slow_down_ramp, spend_spent, standing_eligible, standing_move_read, zeroes_lapsed_sums,
     zeroes_sums, BurnRead, Decided, FailedOver, FitRead, FitWord, Judged, JudgedCharge, MoveRead,
-    Obstacle, Refusal, SelectRequest, SelectResult, RATE_LIMIT_REASON,
+    Obstacle, ProjectionMemo, Refusal, SelectRequest, SelectResult, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -3157,7 +3157,8 @@ fn member_fit(read: &FitRead) -> FitWord {
 /// overage whose evidence names no reset standing for `fallback_ms` past its observation. The unit and the slow-down
 /// entry depend on the account and the pool alone, so each is read once beside the runway. The set a pin's move read
 /// plans among depends on the pool, the pin's model and its lane's speed alone, so `standing_eligible` builds it once
-/// per pool, model and speed.
+/// per pool, model and speed. A sibling's demand projection, which each move read ranks it by, depends on the pool and
+/// the account alone, so the ask projects each sibling once per pool.
 fn pins_standing(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -3169,6 +3170,7 @@ fn pins_standing(
     type AccountRead = (Runway, BurnUnit, Option<PinSlowDown>);
     let mut runways: HashMap<(String, String, Vec<&'static str>), AccountRead> = HashMap::new();
     let mut eligible_sets: HashMap<(String, String, bool), Vec<Candidate>> = HashMap::new();
+    let projections = ProjectionMemo::default();
     pins.into_iter()
         .map(|pin| {
             let pool = snapshot.key_pool(&pin.key_id);
@@ -3221,7 +3223,16 @@ fn pins_standing(
                     }),
                 None => &[],
             };
-            let read = standing_move_read(state, snapshot, pool, eligible, &pin, now, fallback_ms);
+            let read = standing_move_read(
+                state,
+                snapshot,
+                pool,
+                eligible,
+                &pin,
+                now,
+                fallback_ms,
+                &projections,
+            );
             PinStanding {
                 pin: decayed(pin, now, average_ms),
                 burn_unit,
