@@ -660,10 +660,19 @@ test("a pool decodes its warnings and a member's pace score, burn, Fable reserva
   const keyed = p.members.find((m) => m.kind === 'api_key');
   assert.deepEqual([typeof keyed.paceScore, keyed.burn], ['number', null], "an API-key member's score is its remaining allowance, with no burn");
   assert.deepEqual([typeof row.members[0].fable_reservation, p.members[0].fableReservation], ['number', row.members[0].fable_reservation], "the captured first member's reservation reads as the number the route answered");
-  const spending = d.decodePool({ ...row, members: [{ ...row.members[0], burn: 0.085, fable_reservation: 0.31, fit: 'least_bad', pace_score: -0.02, runway_ms: 3_724_138 }] }).members[0];
+  // The shape check passes a list that a read under another wire name decodes as null, so the stem's entries are read.
   assert.deepEqual(
-    [spending.paceScore, spending.burn, spending.fableReservation, spending.fit, spending.runwayMs],
-    [-0.02, 0.085, 0.31, 'least_bad', 3_724_138],
+    p.members[0].regimeFits,
+    [
+      { fit: 'fits', regime: null, runwayMs: null },
+      { fit: 'fits', regime: 'interactive', runwayMs: null },
+    ],
+    "the captured first member's list reads the base entry and the interactive one the route answered",
+  );
+  const spending = d.decodePool({ ...row, members: [{ ...row.members[0], burn: 0.085, fable_reservation: 0.31, pace_score: -0.02, regime_fits: [{ fit: 'least_bad', regime: null, runway_ms: 3_724_138 }] }] }).members[0];
+  assert.deepEqual(
+    [spending.paceScore, spending.burn, spending.fableReservation, spending.regimeFits],
+    [-0.02, 0.085, 0.31, [{ fit: 'least_bad', regime: null, runwayMs: 3_724_138 }]],
     'a spare rate under the burn reads negative, beside a reservation, a fit and a runway of its own',
   );
   const unread = d.decodePool({ ...row, members: [{ account_id: 'business', priority: 0 }] }).members[0];
@@ -1292,13 +1301,13 @@ test('a pool decodes the pin and placement fields and its members\' budgets, and
   const odd = d.decodePool({
     ...wire,
     affinity_mode: 'sometimes',
-    members: [{ ...wire.members[0], eligible: 'maybe', fit: 'roomy', kind: 'robot', spends: [{ period: 'week', period_end: null, spent_usd: 1 }] }],
+    members: [{ ...wire.members[0], eligible: 'maybe', kind: 'robot', regime_fits: [{ fit: 'roomy', regime: null, runway_ms: null }], spends: [{ period: 'week', period_end: null, spent_usd: 1 }] }],
     session_placement: 'by_luck',
     subagent_placement: 'alone',
   });
   assert.deepEqual(
-    [odd.affinityMode, odd.sessionPlacement, odd.subagentPlacement, odd.members[0].spends[0].period, odd.members[0].eligible, odd.members[0].kind, odd.members[0].fit],
-    ['always', 'by_strategy', 'by_strategy', 'month', 'unavailable', 'oauth', null],
+    [odd.affinityMode, odd.sessionPlacement, odd.subagentPlacement, odd.members[0].spends[0].period, odd.members[0].eligible, odd.members[0].kind, odd.members[0].regimeFits],
+    ['always', 'by_strategy', 'by_strategy', 'month', 'unavailable', 'oauth', [{ fit: null, regime: null, runwayMs: null }]],
     'every unknown spelling reads its default',
   );
 });

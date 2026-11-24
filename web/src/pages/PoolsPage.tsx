@@ -30,9 +30,10 @@ import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, NumberInput, PageLink, Refusal, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, NumberInput, PageLink, Refusal, Segmented, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS_CODEC, sortDirOf, type PoolsAddress } from '@/lib/address';
 import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, namedCostLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
+import { regimeWord } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, FEATURE_LABEL, FEATURE_NONE, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, featureAccountOf, featureAccountOptions, featureAccountValue, featureStandingLine, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, SHARE_FIELD_LABELS, type PoolGroup, type WholeEngineKey } from '@/lib/forms';
@@ -42,7 +43,7 @@ import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf,
 import { minuteSpan, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref, words } from '@/lib/routingLog';
 import { orderRows, type SortFigure } from '@/lib/sort';
-import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, spentBadge, type LastResort as LastResortWord, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
+import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolRegimes, poolStatusSentence, selectionOrder, spentBadge, type LastResort as LastResortWord, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
 
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
 // What a first pool needs, said on the create dialog's rail. The words stay while the refusal dots come and go.
@@ -614,9 +615,13 @@ function PoolCard({
   const { unit } = useAppSettings();
   const named = namedCostLabel(unit);
   const warnedAt = pool.warnings.length === 0 ? null : warningGroup(pool.warnings[0]);
-  const tiers = selectionOrder(pool, accounts ?? [], now);
+  const regimes = poolRegimes(pool);
+  // Null until the operator chooses, so the start value follows the lists as they arrive. '' is the base.
+  const [chosen, setChosen] = useState<string | null>(null);
+  const regime = chosen !== null && (chosen === '' || regimes.includes(chosen)) ? chosen : regimes.includes('interactive') ? 'interactive' : '';
+  const tiers = selectionOrder(pool, accounts ?? [], now, regime || null);
   const grouped = kindOrdered(pool);
-  const sentence = poolStatusSentence(pool, accounts, now);
+  const sentence = poolStatusSentence(pool, accounts, now, regime || null);
   const features = FEATURES.filter((f) => f.on(pool));
   const caption = `${STRATEGY_LABEL[pool.strategy]}${grouped ? `${pool.strategy === 'priority' ? ', with' : ','} subscription accounts first` : ''}`;
   const memberOf = (id: string) => pool.members.find((m) => m.accountId === id);
@@ -698,6 +703,12 @@ function PoolCard({
       </header>
 
       <div className="pool__serving">
+        {regimes.length > 0 && (
+          <span className="pool__regime">
+            <span>Regime</span>
+            <Segmented ariaLabel={`Regime of ${pool.name}`} value={regime} onChange={setChosen} options={[...regimes.map((r) => ({ label: regimeWord(r), value: r })), { label: regimeWord(null), value: '' }]} />
+          </span>
+        )}
         <table className="table serving">
           <caption title={RULE_NOTE}>{caption}</caption>
           <thead>

@@ -6910,7 +6910,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     // score alone orders them.
     const { listPools } = api;
     api.listPools = async () =>
-      (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, members: p.members.map((x) => (x.accountId === 'secondary' ? { ...x, eligible: 'eligible', fit: 'fits', paceScore: 0.02 } : x.accountId === 'primary' ? { ...x, fit: 'fits', paceScore: 0.0016 } : x)) } : p));
+      (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, members: p.members.map((x) => (x.accountId === 'secondary' ? { ...x, eligible: 'eligible', paceScore: 0.02, regimeFits: [{ fit: 'fits', regime: null, runwayMs: null }] } : x.accountId === 'primary' ? { ...x, paceScore: 0.0016, regimeFits: [{ fit: 'fits', regime: null, runwayMs: null }] } : x)) } : p));
     const served = await mount('/pools');
     api.listPools = listPools;
     const allCard = [...served.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all');
@@ -6923,6 +6923,45 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
   }
   {
+    // Every member of all reads rewrite only or least bad, so the rewrite-only rung settles and the longest runway on
+    // it takes the next session: secondary's under the interactive regime, primary's under the base one. Nightly
+    // reads least bad in the base entry and rewrite only under the regime, and overflow's list holds the base entry
+    // alone, which it reads under either choice. The card starts on Interactive, since the lists name the regime.
+    const HOUR = 3_600_000;
+    const lists = {
+      nightly: [{ fit: 'least_bad', regime: null, runwayMs: 0 }, { fit: 'rewrite_only', regime: 'interactive', runwayMs: HOUR / 2 }],
+      overflow: [{ fit: 'least_bad', regime: null, runwayMs: 0 }],
+      primary: [{ fit: 'rewrite_only', regime: null, runwayMs: 2 * HOUR }, { fit: 'rewrite_only', regime: 'interactive', runwayMs: HOUR }],
+      secondary: [{ fit: 'rewrite_only', regime: null, runwayMs: HOUR }, { fit: 'rewrite_only', regime: 'interactive', runwayMs: 2 * HOUR }],
+    };
+    const { listPools } = api;
+    api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, members: p.members.map((x) => ({ ...x, eligible: 'eligible', regimeFits: lists[x.accountId] })) } : p));
+    const regimed = await mount('/pools');
+    api.listPools = listPools;
+    const allCard = () => [...regimed.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all');
+    const read = () => {
+      const rows = [...(allCard()?.querySelectorAll('.serving tbody tr') ?? [])];
+      const nightly = rows.find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'nightly');
+      return {
+        chips: [...(nightly?.children[2]?.querySelectorAll('.badge') ?? [])].filter((b) => b.closest('.speed-chip') === null).map((b) => b.textContent?.trim()),
+        next: [...(allCard()?.querySelectorAll('.pool__status a') ?? [])].map((a) => a.textContent?.trim()),
+        order: rows.slice(0, 2).map((tr) => [tr.children[1]?.querySelector('a')?.textContent?.trim(), tr.classList.contains('is-next')]),
+      };
+    };
+    const interactive = read();
+    [...(allCard()?.querySelectorAll('[aria-label="Regime of all"] button') ?? [])].find((b) => b.textContent?.trim() === 'Headless')?.click();
+    await regimed.settle(120);
+    const headless = read();
+    regimed.unmount();
+    results.push({
+      name: "/pools the serving table, a member's last resort and the status sentence follow the card's chosen regime",
+      ok:
+        JSON.stringify(interactive) === JSON.stringify({ chips: ['eligible', 'rewrite only'], next: ['secondary'], order: [['secondary', true], ['primary', false]] }) &&
+        JSON.stringify(headless) === JSON.stringify({ chips: ['eligible', 'least bad'], next: ['primary'], order: [['primary', true], ['secondary', false]] }),
+      missing: [JSON.stringify(interactive), JSON.stringify(headless)],
+    });
+  }
+  {
     // No member of all fits a fresh session in this stub: primary and nightly read rewrite only, nightly a tier down
     // with the longer runway, secondary winds down with the best score, and the metered overflow reads least bad on a
     // full bucket. So the router lands on nightly across the tiers, where the score and the tier walk would name
@@ -6930,12 +6969,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const HOUR = 3_600_000;
     const end = (await api.listAccounts()).find((a) => a.id === 'secondary')?.subscription?.endsAt ?? '';
     const fits = {
-      annex: { fit: 'fits', runwayMs: null },
-      nightly: { fit: 'rewrite_only', paceScore: 0.001, runwayMs: 2 * HOUR },
-      overflow: { fit: 'least_bad', runwayMs: 0 },
-      primary: { fit: 'rewrite_only', paceScore: 0.0016, runwayMs: HOUR },
-      secondary: { fit: 'ending', paceScore: 0.05, runwayMs: null },
-      studio: { fit: 'spent', runwayMs: null },
+      annex: { regimeFits: [{ fit: 'fits', regime: null, runwayMs: null }] },
+      nightly: { paceScore: 0.001, regimeFits: [{ fit: 'rewrite_only', regime: null, runwayMs: 2 * HOUR }] },
+      overflow: { regimeFits: [{ fit: 'least_bad', regime: null, runwayMs: 0 }] },
+      primary: { paceScore: 0.0016, regimeFits: [{ fit: 'rewrite_only', regime: null, runwayMs: HOUR }] },
+      secondary: { paceScore: 0.05, regimeFits: [{ fit: 'ending', regime: null, runwayMs: null }] },
+      studio: { regimeFits: [{ fit: 'spent', regime: null, runwayMs: null }] },
     };
     const { listPools } = api;
     api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'all' || p.id === 'work' ? { ...p, members: p.members.map((x) => ({ ...x, eligible: 'eligible', ...fits[x.accountId] })) } : p));

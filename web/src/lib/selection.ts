@@ -1,4 +1,4 @@
-import type { Account, MemberEligibility, MemberFit, Pool, PoolMember, PoolStrategy } from '@/api/types';
+import type { Account, MemberEligibility, MemberFit, Pool, PoolMember, PoolStrategy, RegimeFit } from '@/api/types';
 import { MEMBER_FIT_VALUES } from '@/api/types';
 import { sentences } from './analytics';
 import { fmtAbsolute, fmtDuration, fmtPct, fmtPeriodEnd, fmtRelative, fmtShortTime, instant, noun, sameLocalDay } from './format';
@@ -141,8 +141,10 @@ function keyOf(member: PoolMember | undefined, strategy: PoolStrategy): number {
 /** Whether a member is inside the pool's wind-down before its window's end, which a member with no end never is. */
 export const windingDown = (pool: Pick<Pool, 'windDownMinutes'>, end: number | null, now: number): boolean => end !== null && now >= end - pool.windDownMinutes * MINUTE;
 
-/** A member's last resort: its fit past `fits`, none for a fitting member or one the router answers no fit for. */
-function resortOf({ fit }: Pick<PoolMember, 'fit'>): LastResort | null {
+/** A member's last resort: its entry's fit past `fits`, none for a fitting member or one the router answers no fit
+ *  for. */
+function resortOf(entry: RegimeFit | null): LastResort | null {
+  const fit = entry?.fit ?? null;
   return fit === null || fit === 'fits' ? null : fit;
 }
 
@@ -150,10 +152,21 @@ function resortOf({ fit }: Pick<PoolMember, 'fit'>): LastResort | null {
  * The runway a placement ranks by on the rungs of `rewrite_only` and `least_bad`, an unbounded one the longest of all,
  * and 0 on every other rung, where the strategy alone orders the members.
  */
-function runwayOf(placement: Placement, member: Pick<PoolMember, 'runwayMs'> | undefined): number {
+function runwayOf(placement: Placement, entry: RegimeFit | null): number {
   if (placement.lastResort !== 'rewrite_only' && placement.lastResort !== 'least_bad') return 0;
-  return member?.runwayMs ?? Number.POSITIVE_INFINITY;
+  return entry?.runwayMs ?? Number.POSITIVE_INFINITY;
 }
+
+/** A member's entry under `regime`: the entry of that name, the base entry where the list lacks it, and none where
+ *  the router answers no list. */
+function regimeFitOf(member: Pick<PoolMember, 'regimeFits'> | undefined, regime: string | null): RegimeFit | null {
+  const fits = member?.regimeFits ?? null;
+  if (fits === null) return null;
+  return fits.find((f) => f.regime === regime) ?? fits.find((f) => f.regime === null) ?? null;
+}
+
+/** The named regimes of a pool's members' lists, each once, in the order the route lists them. */
+export const poolRegimes = (pool: Pick<Pool, 'members'>): string[] => [...new Set(pool.members.flatMap((m) => (m.regimeFits ?? []).flatMap((f) => (f.regime === null ? [] : [f.regime]))))];
 
 /** A kind tier by `GROUP_LABEL`'s order: a paid source files with the metered sources whatever its overage reads. */
 export const kindGroup = (paid: boolean, overage: boolean): 0 | 1 | 2 => (paid ? 2 : overage ? 1 : 0);
@@ -167,9 +180,10 @@ const groupOf = (account: Account | undefined): 0 | 1 | 2 => (account === undefi
 /**
  * The order the router walks for a fresh session of this pool, from the data the routes already serve. `next` is the
  * lead of the first tier that holds a member of the best rung any eligible member reaches, and on a rung that ranks by
- * the runway, the lead among the members with the longest runway over the whole pool.
+ * the runway, the lead among the members with the longest runway over the whole pool. Each member reads its fit and
+ * its runway from its entry under `regime`, null for the base regime.
  */
-export function selectionOrder(pool: Pool, accounts: Account[], now: number = Date.now()): Tier[] {
+export function selectionOrder(pool: Pool, accounts: Account[], now: number, regime: string | null): Tier[] {
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const memberOf = new Map(pool.members.map((m) => [m.accountId, m]));
   const grouped = kindOrdered(pool);
@@ -192,7 +206,7 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
             deferred: !grouped && pool.overagePolicy === 'prefer_plan' && Boolean(planExtraUsage(account)?.inUse),
             end: endOf(account, now),
             ineligible,
-            lastResort: ineligible === null ? resortOf(m) : null,
+            lastResort: ineligible === null ? resortOf(regimeFitOf(m, regime)) : null,
             // The engine's count, one pin per agent and model, so a session whose subagents run on another model
             // counts more than once, as the pool's Active pins does.
             pins: m.activePins,
@@ -211,7 +225,7 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
   const eligibleInPool = built.flatMap((t) => t.placements).filter((p) => p.ineligible === null);
   // The rung the router settles on is the best one any eligible member of the pool reaches.
   const settled = Math.min(...eligibleInPool.map(orderOf));
-  const runwayFor = (p: Placement) => runwayOf(p, memberOf.get(p.account.id));
+  const runwayFor = (p: Placement) => runwayOf(p, regimeFitOf(memberOf.get(p.account.id), regime));
   // On a rung that ranks by the runway the router keeps the longest one over the whole pool before it picks a tier.
   // Every other rung reads 0, so its first tier names `next` as the tier walk finds it.
   const longest = Math.max(...eligibleInPool.filter((p) => orderOf(p) === settled).map(runwayFor));
@@ -316,9 +330,10 @@ function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Acc
 /**
  * One sentence on what the status badge means for this pool, from the verdicts and the order the card already reads.
  * `accounts` is null until the account list is read: without it the order places no member and no return or name can
- * be read, so the sentence says what the pool's own verdicts carry and names no account.
+ * be read, so the sentence says what the pool's own verdicts carry and names no account. The next account is the one
+ * the order names under `regime`, as the serving table draws it.
  */
-export function poolStatusSentence(pool: Pool, accounts: Account[] | null, now: number = Date.now()): PoolStatusSentence {
+export function poolStatusSentence(pool: Pool, accounts: Account[] | null, now: number, regime: string | null): PoolStatusSentence {
   const { status } = pool;
   const word = STATUS_WORD[status];
   const byId = new Map((accounts ?? []).map((a) => [a.id, a]));
@@ -345,7 +360,7 @@ export function poolStatusSentence(pool: Pool, accounts: Account[] | null, now: 
   const count = eligible.length === members ? `all ${members} members take fresh sessions` : `${eligible.length} of ${members} members ${noun(eligible.length, 'takes', 'take')} fresh sessions`;
   if (accounts === null) return say([{ text: members === 1 ? "the pool's one member takes every fresh session." : `${count}.` }]);
   if (members === 1) return say([nameOf(eligible[0].accountId), { text: ' takes every fresh session.' }]);
-  const next = selectionOrder(pool, accounts, now).find((tier) => tier.next.length > 0)?.next ?? [];
+  const next = selectionOrder(pool, accounts, now, regime).find((tier) => tier.next.length > 0)?.next ?? [];
   if (next.length === 0) return say([{ text: 'no listed member takes fresh sessions.' }]);
   return say([{ text: `${count}, and the next one goes to ` }, ...listOf(next.map(nameOf)), { text: '.' }]);
 }

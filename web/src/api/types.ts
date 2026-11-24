@@ -489,6 +489,17 @@ export type MemberEligibility = (typeof ELIGIBILITY_VALUES)[number];
 /** A member's fit for a fresh session, from best to worst: a word's rank is its place in the list. */
 export const MEMBER_FIT_VALUES = ['fits', 'rewrite_only', 'least_bad', 'ending', 'spent'] as const;
 export type MemberFit = (typeof MEMBER_FIT_VALUES)[number];
+/** A fresh session's fit on a member under one regime of the cost model in force. */
+export interface RegimeFit {
+  /** The worst word of the member's 5-hour and 7-day windows under the regime, null for a word outside
+   *  `MEMBER_FIT_VALUES`, which has no rank in the order. */
+  fit: MemberFit | null;
+  /** The regime's name in the cost model, null for the base regime. */
+  regime: string | null;
+  /** The runway the router ranks the member by among the members of its fit, to the pool's ceiling under `fits` and
+   *  `rewrite_only` and to 1.0 under `least_bad`. Null for an unbounded runway and under `ending` and `spent`. */
+  runwayMs: number | null;
+}
 
 export const AFFINITY_MODE_VALUES = ['always', 'when_cached'] as const;
 /** Whether a session's pin is made for every request, or only for one whose body carries a cache marker. */
@@ -525,11 +536,6 @@ export interface PoolMember {
   fableReservation: number | null;
   /** The factor the pool's slow-down computed for the account, null where the account route answers no `slowDown`. */
   factor: number | null;
-  /**
-   * The fit a fresh session reads on the member, the worst word of its 5-hour and 7-day windows, which a model's own
-   * week moves none of. Null while the router does not answer.
-   */
-  fit: MemberFit | null;
   kind: AccountKind;
   /**
    * The router's Pace score for the member whatever its kind: the spare rate for an OAuth member, the remaining
@@ -537,12 +543,8 @@ export interface PoolMember {
    */
   paceScore: number | null;
   priority: number;
-  /**
-   * The runway the router ranks the member by among the members of its fit, to the pool's ceiling under `fits` and
-   * `rewrite_only` and to 1.0 under `least_bad`. Null for an unbounded runway, under `ending` and `spent`, and while the
-   * router does not answer.
-   */
-  runwayMs: number | null;
+  /** One entry for each regime, the base entry first. Null while the router does not answer. */
+  regimeFits: RegimeFit[] | null;
   /** The speed the account's holds realized inside a slow-down span, from 0 to 1. Null outside a span and where
    *  `factor` is. */
   speed: number | null;

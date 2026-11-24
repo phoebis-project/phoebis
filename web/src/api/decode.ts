@@ -421,13 +421,12 @@ export function decodePool(v: unknown): Pool {
       eligible: oneOf(ELIGIBILITY_VALUES, m.eligible) ?? 'unavailable',
       fableReservation: numOrNull(m.fable_reservation),
       factor: numOrNull(m.factor),
-      // A word outside the list has no rank in the order, so it reads as no answer.
-      fit: oneOf(MEMBER_FIT_VALUES, m.fit),
       // The route answers null for an account it cannot find, which is no API-key account either.
       kind: accountKind(m.kind),
       paceScore: numOrNull(m.pace_score),
       priority: num(m.priority),
-      runwayMs: numOrNull(m.runway_ms),
+      // A word outside the list has no rank in the order, so an entry reads it as no answer.
+      regimeFits: m.regime_fits == null ? null : list(m.regime_fits).map(rec).map((f) => ({ fit: oneOf(MEMBER_FIT_VALUES, f.fit), regime: strOrNull(f.regime), runwayMs: numOrNull(f.runway_ms) })),
       speed: numOrNull(m.speed),
       spends: list(m.spends).map(rec).map((s) => ({ period: budgetPeriod(s.period), periodEnd: isoOrNull(s.period_end), spentUsd: num(s.spent_usd) })),
     })),

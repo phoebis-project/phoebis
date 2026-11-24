@@ -31,9 +31,9 @@ const window7d = (resetsAt, utilization = 0.5) => [{ id: '7d', label: '7-day', o
 const extraUsageOn = { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 100, usedCredits: 10 };
 // The eligibility verdict, the Pace score, the fit and its runway ride on the member, because the router computes them
 // against its own live state. A case states them there rather than re-deriving them from the account.
-const member = (accountId, priority, eligible = 'eligible', paceScore = null) => ({ accountId, eligible, fit: null, paceScore, priority, runwayMs: null });
+const member = (accountId, priority, eligible = 'eligible', paceScore = null) => ({ accountId, eligible, paceScore, priority, regimeFits: null });
 /** An eligible member whose fit reads `fit` with the runway `runwayMs`, at `priority` with the served `paceScore`. */
-const fitted = (accountId, priority, fit, runwayMs, paceScore = null) => ({ ...member(accountId, priority, 'eligible', paceScore), fit, runwayMs });
+const fitted = (accountId, priority, fit, runwayMs, paceScore = null) => ({ ...member(accountId, priority, 'eligible', paceScore), regimeFits: [{ fit, regime: null, runwayMs }] });
 /** An eligible member at priority 0 whose served Pace score is `paceScore`. */
 const scored = (accountId, paceScore) => member(accountId, 0, 'eligible', paceScore);
 const pool = (strategy, overagePolicy, members, over = {}) => {
@@ -81,17 +81,17 @@ const accounts = [account('over', { extraUsage: extraUsageOn }), account('plan')
 
 test('an overage P0 beside a plan-funded P1 follows each overage policy', () => {
   const tiers = [member('over', 0), member('plan', 1)];
-  const prefer = selectionOrder(pool('priority', 'prefer_plan', tiers), accounts, NOW);
+  const prefer = selectionOrder(pool('priority', 'prefer_plan', tiers), accounts, NOW, null);
   assert.deepEqual(prefer[0].next, ['over'], 'prefer_plan keeps the overage account eligible and the router lands on it, since no plan-funded sibling shares its tier');
   assert.equal(prefer[0].placements[0].deferred, true);
-  const never = selectionOrder(pool('priority', 'never', [member('over', 0, 'overage'), member('plan', 1)]), accounts, NOW);
+  const never = selectionOrder(pool('priority', 'never', [member('over', 0, 'overage'), member('plan', 1)]), accounts, NOW, null);
   assert.deepEqual(never[0].next, [], 'never makes overage an obstacle');
   assert.equal(never[0].placements[0].ineligible, 'overage');
   assert.deepEqual(never[1].next, ['plan'], 'so the next fresh session lands one tier down');
-  const allow = selectionOrder(pool('priority', 'allow', tiers), accounts, NOW);
+  const allow = selectionOrder(pool('priority', 'allow', tiers), accounts, NOW, null);
   assert.deepEqual(allow[0].next, ['over']);
   assert.equal(allow[0].placements[0].deferred, false, 'allow ignores overage');
-  const sameTier = selectionOrder(pool('priority', 'prefer_plan', [member('over', 0), member('plan', 0)]), accounts, NOW);
+  const sameTier = selectionOrder(pool('priority', 'prefer_plan', [member('over', 0), member('plan', 0)]), accounts, NOW, null);
   assert.deepEqual(sameTier[0].next, ['plan'], 'inside one tier the plan-funded member ranks ahead of the deferred one');
   assert.deepEqual(
     sameTier[0].placements.map((p) => p.rank),
@@ -104,29 +104,29 @@ test('pace ranks by the served score: a heavy burn behind an idle member, a memb
   // console's own: busy has more of its week left, but its sessions burn it faster than idle's pace allows.
   const pair = [account('busy', { windows: window7d(hoursFromNow(24), 0.3) }), account('idle', { windows: window7d(hoursFromNow(24), 0.6) })];
   const ranked = (tier) => tier.placements.map((p) => [p.account.id, p.rank]);
-  const spare = selectionOrder(pool('pace', 'allow', [scored('busy', -0.004), scored('idle', 0.0167)]), pair, NOW);
+  const spare = selectionOrder(pool('pace', 'allow', [scored('busy', -0.004), scored('idle', 0.0167)]), pair, NOW, null);
   assert.deepEqual(ranked(spare[0]), [['idle', 1], ['busy', 2]], 'the spare rate ranks the idle member at 0.6 ahead of the busy one at 0.3');
   assert.deepEqual(spare[0].next, ['idle']);
   const tied = [...pair, account('third', { windows: window7d(hoursFromNow(24), 0.9) })];
-  const even = selectionOrder(pool('pace', 'allow', [scored('busy', 0.01), scored('idle', 0.01), scored('third', 0.002)]), tied, NOW);
+  const even = selectionOrder(pool('pace', 'allow', [scored('busy', 0.01), scored('idle', 0.01), scored('third', 0.002)]), tied, NOW, null);
   assert.deepEqual(even[0].next.sort(), ['busy', 'idle'], 'two members with the same served score are both next');
   assert.deepEqual(ranked(even[0]), [['busy', 1], ['idle', 1], ['third', 2]]);
   // Nearly spent within the hour by its account row, yet the router has read no score for it.
   const unread = [account('unread', { windows: window7d(hoursFromNow(1), 0.95) }), ...pair];
-  const fresh = selectionOrder(pool('pace', 'allow', [scored('busy', -0.004), scored('idle', 0.0167), scored('unread', null)]), unread, NOW);
+  const fresh = selectionOrder(pool('pace', 'allow', [scored('busy', -0.004), scored('idle', 0.0167), scored('unread', null)]), unread, NOW, null);
   assert.deepEqual(ranked(fresh[0]), [['unread', 1], ['idle', 2], ['busy', 3]], 'a member without a served score ranks as untouched, ahead of every scored member');
   // The account rows carry no bucket, so only the served score tells the nearly full bucket from the untouched one.
   const keys = [account('full', { kind: 'api_key' }), account('room', { kind: 'api_key' })];
-  const keyed = selectionOrder(pool('pace', 'allow', [scored('full', 0.03), scored('room', 1)]), keys, NOW);
+  const keyed = selectionOrder(pool('pace', 'allow', [scored('full', 0.03), scored('room', 1)]), keys, NOW, null);
   assert.deepEqual(ranked(keyed[0]), [['room', 1], ['full', 2]], 'an API-key member ranks by its served score, a nearly full bucket behind an untouched one');
-  const random = selectionOrder(pool('priority', 'allow', [scored('busy', -0.004), scored('idle', 0.0167), scored('third', 0.002)]), tied, NOW);
+  const random = selectionOrder(pool('priority', 'allow', [scored('busy', -0.004), scored('idle', 0.0167), scored('third', 0.002)]), tied, NOW, null);
   assert.deepEqual(random[0].next.sort(), ['busy', 'idle', 'third'], 'priority makes every eligible member of the first tier next');
 });
 
 test("the router's verdict decides eligibility and an obstacle trails its tier", () => {
   const trio = [account('busy'), account('cooled'), account('offline')];
   const members = [member('cooled', 0, 'cooldown'), member('offline', 0, 'unavailable'), member('busy', 0)];
-  const tiers = selectionOrder(pool('priority', 'allow', members), trio, NOW);
+  const tiers = selectionOrder(pool('priority', 'allow', members), trio, NOW, null);
   assert.deepEqual(tiers[0].next, ['busy'], 'only the member the router calls eligible is next');
   assert.deepEqual(
     tiers[0].placements.map((p) => [p.account.id, p.ineligible, p.rank]),
@@ -147,7 +147,7 @@ test("a member's pins are the engine's count on the member, one per agent and mo
     { ...member('free', 0), activePins: 0 },
     { ...member('held', 0), activePins: 2 },
   ];
-  const tiers = selectionOrder(pool('priority', 'allow', members), pair, NOW);
+  const tiers = selectionOrder(pool('priority', 'allow', members), pair, NOW, null);
   assert.deepEqual(
     tiers[0].placements.map((p) => [p.account.id, p.pins]),
     [
@@ -160,16 +160,16 @@ test("a member's pins are the engine's count on the member, one per agent and mo
 test('the kind order walks plan oauth, overage oauth, then API keys ahead of priority', () => {
   const trio = [account('key', { kind: 'api_key' }), account('over', { extraUsage: extraUsageOn }), account('plan')];
   const members = [member('key', 0), member('over', 0), member('plan', 1)];
-  const tiers = selectionOrder(pool('priority', 'prefer_plan', members, { preferSubscription: true }), trio, NOW);
+  const tiers = selectionOrder(pool('priority', 'prefer_plan', members, { preferSubscription: true }), trio, NOW, null);
   assert.deepEqual(tiers.map((t) => [t.group, t.priority, t.next]), [[0, 1, ['plan']], [1, 0, []], [2, 0, []]], 'the plan-funded P1 comes first, then the overage P0, then the key');
-  const unflagged = selectionOrder(pool('priority', 'prefer_plan', members), trio, NOW);
+  const unflagged = selectionOrder(pool('priority', 'prefer_plan', members), trio, NOW, null);
   assert.equal(unflagged[0].group, 0, 'with the flag off every member shares one group whatever the strategy');
-  assert.deepEqual(selectionOrder(pool('round_robin', 'allow', [member('a', 0), member('b', 0)]), [account('a'), account('b')], NOW)[0].next.sort(), ['a', 'b'], 'round robin marks every member of the tier as next');
+  assert.deepEqual(selectionOrder(pool('round_robin', 'allow', [member('a', 0), member('b', 0)]), [account('a'), account('b')], NOW, null)[0].next.sort(), ['a', 'b'], 'round robin marks every member of the tier as next');
 });
 
 test('round robin ranks the overage subtier behind the plan-funded one it rotates', () => {
   const members = [member('over', 0), member('plan', 0)];
-  const tiers = selectionOrder(pool('round_robin', 'prefer_plan', members), accounts, NOW);
+  const tiers = selectionOrder(pool('round_robin', 'prefer_plan', members), accounts, NOW, null);
   assert.deepEqual(
     tiers[0].placements.map((p) => [p.account.id, p.deferred, p.rank]),
     [
@@ -179,16 +179,16 @@ test('round robin ranks the overage subtier behind the plan-funded one it rotate
     'the router rotates the plan-funded members alone while they last, so the overage one is not next',
   );
   assert.deepEqual(tiers[0].next, ['plan']);
-  const allow = selectionOrder(pool('round_robin', 'allow', members), accounts, NOW);
+  const allow = selectionOrder(pool('round_robin', 'allow', members), accounts, NOW, null);
   assert.deepEqual(allow[0].next.sort(), ['over', 'plan'], 'allow rotates them together, so both are next');
-  const deferredOnly = selectionOrder(pool('round_robin', 'prefer_plan', [member('over', 0)]), accounts, NOW);
+  const deferredOnly = selectionOrder(pool('round_robin', 'prefer_plan', [member('over', 0)]), accounts, NOW, null);
   assert.deepEqual(deferredOnly[0].next, ['over'], 'a subtier with nothing ahead of it is still the one the router takes');
 });
 
 test('round robin with the subscription preference walks the kind tiers first and rotates inside each', () => {
   const trio = [account('key', { kind: 'api_key' }), account('a'), account('b')];
   const members = [member('key', 0), member('a', 1), member('b', 1)];
-  const tiers = selectionOrder(pool('round_robin', 'allow', members, { preferSubscription: true }), trio, NOW);
+  const tiers = selectionOrder(pool('round_robin', 'allow', members, { preferSubscription: true }), trio, NOW, null);
   assert.deepEqual(
     tiers.map((t) => [t.group, t.priority, t.next.sort()]),
     [
@@ -198,7 +198,7 @@ test('round robin with the subscription preference walks the kind tiers first an
     'the subscription tier leads although its priority is lower, and every member of it is the rotation\'s next',
   );
   assert.deepEqual(tiers[0].placements.map((p) => p.rank), [1, 1], 'the cursor, not a score, picks among them');
-  const flat = selectionOrder(pool('round_robin', 'allow', members), trio, NOW);
+  const flat = selectionOrder(pool('round_robin', 'allow', members), trio, NOW, null);
   assert.deepEqual(flat.map((t) => [t.group, t.priority, t.next]), [[0, 0, ['key']], [0, 1, []]], 'without the preference priority alone orders the tiers');
 });
 
@@ -214,12 +214,12 @@ test('pace places a winding-down member last and knows no floor', () => {
     account('other', { windows: window7d(hoursFromNow(24), 0.5) }),
   ];
   const scores = { ending: 0.05, fresh: 0.02, other: 0.02, spent: 0.0009 };
-  const at = (id, priority = 0, fit = null) => ({ ...member(id, priority, 'eligible', scores[id]), fit });
+  const at = (id, priority = 0, fit = null) => ({ ...member(id, priority, 'eligible', scores[id]), regimeFits: [{ fit, regime: null, runwayMs: null }] });
   /** The member whose account ends inside the wind-down, as the route answers its fit. */
   const winding = (priority = 0) => at('ending', priority, 'ending');
   const ranked = (tier) => tier.placements.map((p) => [p.account.id, p.lastResort, p.rank]);
   assert.deepEqual(LAST_RESORT_LABEL, { ending: 'winding down', least_bad: 'least bad', rewrite_only: 'rewrite only', spent: 'window spent' }, 'each word past fits is a last resort with its label');
-  const pace = selectionOrder(pool('pace', 'allow', [winding(), at('fresh'), at('spent')]), trio, NOW);
+  const pace = selectionOrder(pool('pace', 'allow', [winding(), at('fresh'), at('spent')]), trio, NOW, null);
   assert.deepEqual(
     ranked(pace[0]),
     [
@@ -230,7 +230,7 @@ test('pace places a winding-down member last and knows no floor', () => {
     'the nearly spent member ranks by its score, and the member winding down trails it',
   );
   assert.deepEqual(pace[0].next, ['fresh']);
-  const lower = selectionOrder(pool('pace', 'allow', [winding(), at('other', 1)]), trio, NOW);
+  const lower = selectionOrder(pool('pace', 'allow', [winding(), at('other', 1)]), trio, NOW, null);
   assert.deepEqual(
     lower.map((t) => [t.priority, t.next]),
     [
@@ -239,9 +239,9 @@ test('pace places a winding-down member last and knows no floor', () => {
     ],
     'a member one tier down is taken before the member winding down in the tier above',
   );
-  const lastResort = selectionOrder(pool('pace', 'allow', [winding(), at('spent')]), trio, NOW);
+  const lastResort = selectionOrder(pool('pace', 'allow', [winding(), at('spent')]), trio, NOW, null);
   assert.deepEqual(lastResort[0].next, ['spent'], 'with nothing else left, the nearly spent member places before a member winding down');
-  const priority = selectionOrder(pool('priority', 'allow', [winding(), at('spent')]), trio, NOW);
+  const priority = selectionOrder(pool('priority', 'allow', [winding(), at('spent')]), trio, NOW, null);
   assert.deepEqual(
     ranked(priority[0]),
     [
@@ -250,14 +250,14 @@ test('pace places a winding-down member last and knows no floor', () => {
     ],
     'the wind-down holds under every strategy',
   );
-  const unwound = selectionOrder(pool('pace', 'allow', [at('ending'), at('fresh')], { windDownMinutes: 5 }), trio, NOW);
+  const unwound = selectionOrder(pool('pace', 'allow', [at('ending'), at('fresh')], { windDownMinutes: 5 }), trio, NOW, null);
   assert.deepEqual(unwound[0].next, ['ending'], "outside the pool's wind-down the member ranks by its score alone");
 });
 
 test("a winding-down placement carries the end it winds down to, and a member that is not winding down none", () => {
   const subscription = { billingType: 'monthly', endsAt: new Date(NOW + 10 * MINUTE).toISOString(), organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: null, trialEndsAt: null };
   const pair = [account('ending', { canceled: true, subscription, windows: window7d(hoursFromNow(24), 0.1) }), account('fresh', { windows: window7d(hoursFromNow(24), 0.5) })];
-  const [tier] = selectionOrder(pool('pace', 'allow', [{ ...member('ending', 0), fit: 'ending' }, member('fresh', 0)]), pair, NOW);
+  const [tier] = selectionOrder(pool('pace', 'allow', [{ ...member('ending', 0), regimeFits: [{ fit: 'ending', regime: null, runwayMs: null }] }, member('fresh', 0)]), pair, NOW, null);
   assert.deepEqual(
     tier.placements.map((p) => [p.account.id, p.lastResort, p.end]),
     [
@@ -349,7 +349,7 @@ test("a loaded account whose 5-hour window reset after the slow-down's read draw
 });
 
 test('a member at its budget is skipped with the reason the serving table names', () => {
-  const tiers = selectionOrder(pool('priority', 'allow', [member('plan', 0, 'budget'), member('over', 0)]), accounts, NOW);
+  const tiers = selectionOrder(pool('priority', 'allow', [member('plan', 0, 'budget'), member('over', 0)]), accounts, NOW, null);
   assert.deepEqual(tiers[0].next, ['over'], 'the router passes over a member whose spend reached its budget');
   const skipped = tiers[0].placements.find((p) => p.account.id === 'plan');
   assert.deepEqual([skipped.ineligible, skipped.rank, INELIGIBLE_LABEL[skipped.ineligible]], ['budget', null, 'at budget']);
@@ -357,15 +357,15 @@ test('a member at its budget is skipped with the reason the serving table names'
 
 const labelOf = (id) => accounts.find((a) => a.id === id)?.label ?? id;
 const read = (p, accs = accounts) => {
-  const s = poolStatusSentence(p, accs, NOW);
+  const s = poolStatusSentence(p, accs, NOW, null);
   return `${s.word}: ${s.parts.map((part) => ('text' in part ? part.text : part.label)).join('')}`;
 };
-const linked = (p, accs = accounts) => poolStatusSentence(p, accs, NOW).parts.filter((part) => 'accountId' in part).map((part) => part.accountId);
+const linked = (p, accs = accounts) => poolStatusSentence(p, accs, NOW, null).parts.filter((part) => 'accountId' in part).map((part) => part.accountId);
 const at = (p, status) => ({ ...p, status });
 
 test('a member that does not fit stands behind a fitting one, whatever its score', () => {
   const pair = [account('roomy'), account('tight')];
-  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('roomy', 0, 'fits', null, 0.01), fitted('tight', 0, 'rewrite_only', HOUR, 0.05)]), pair, NOW);
+  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('roomy', 0, 'fits', null, 0.01), fitted('tight', 0, 'rewrite_only', HOUR, 0.05)]), pair, NOW, null);
   assert.deepEqual(
     tier.placements.map((p) => [p.account.id, p.lastResort, p.rank]),
     [
@@ -379,13 +379,13 @@ test('a member that does not fit stands behind a fitting one, whatever its score
 
 test('with no fitting member the better word leads', () => {
   const pair = [account('tight'), account('worst')];
-  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('tight', 0, 'rewrite_only', HOUR, 0.01), fitted('worst', 0, 'least_bad', 3 * HOUR, 0.05)]), pair, NOW);
+  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('tight', 0, 'rewrite_only', HOUR, 0.01), fitted('worst', 0, 'least_bad', 3 * HOUR, 0.05)]), pair, NOW, null);
   assert.deepEqual(tier.next, ['tight'], 'the rewrite lands on tight, so its word leads the longer runway and the better score');
 });
 
 test('the longest runway leads across tiers', () => {
   const four = [account('p0'), account('p1'), account('q0'), account('q1')];
-  const nexts = (members) => selectionOrder(pool('priority', 'allow', members), four, NOW).map((t) => [t.priority, t.next]);
+  const nexts = (members) => selectionOrder(pool('priority', 'allow', members), four, NOW, null).map((t) => [t.priority, t.next]);
   assert.deepEqual(
     nexts([fitted('p0', 0, 'rewrite_only', HOUR), fitted('p1', 1, 'rewrite_only', 3 * HOUR)]),
     [
@@ -406,16 +406,16 @@ test('the longest runway leads across tiers', () => {
 
 test('an unbounded runway is the longest', () => {
   const pair = [account('bounded'), account('unbounded')];
-  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('bounded', 0, 'least_bad', 3 * HOUR, 0.05), fitted('unbounded', 0, 'least_bad', null, 0.01)]), pair, NOW);
+  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('bounded', 0, 'least_bad', 3 * HOUR, 0.05), fitted('unbounded', 0, 'least_bad', null, 0.01)]), pair, NOW, null);
   assert.deepEqual(tier.next, ['unbounded'], 'a null runway is no bound, so it leads three hours and the better score');
 });
 
 test('a spent window ranks behind the wind-down, and a pool of spent members still names its next', () => {
   const trio = [account('cooled'), account('ending'), account('spent')];
-  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('ending', 0, 'ending', null, 0.01), fitted('spent', 0, 'spent', null, 0.05)]), trio, NOW);
+  const [tier] = selectionOrder(pool('pace', 'allow', [fitted('ending', 0, 'ending', null, 0.01), fitted('spent', 0, 'spent', null, 0.05)]), trio, NOW, null);
   assert.deepEqual(tier.next, ['ending'], 'the member that only ends takes the session ahead of the spent one with the better score');
   const spent = at(pool('pace', 'allow', [fitted('spent', 0, 'spent', null, 0.05), member('cooled', 0, 'cooldown')]), 'degraded');
-  assert.deepEqual(selectionOrder(spent, trio, NOW)[0].next, ['spent'], 'with every eligible member spent the router still lands on one');
+  assert.deepEqual(selectionOrder(spent, trio, NOW, null)[0].next, ['spent'], 'with every eligible member spent the router still lands on one');
   assert.equal(read(spent, trio), 'Degraded: 1 of 2 members takes fresh sessions, and the next one goes to spent.', 'the sentence counts the spent member and names it');
 });
 
@@ -435,11 +435,11 @@ test('the status sentence reads one row of the table per pool state', () => {
 
 test('the status sentence names several next accounts and the earliest return', () => {
   const two = at(pool('priority', 'allow', [member('plan', 0), member('over', 0)]), 'active');
-  const names = [...selectionOrder(two, accounts, NOW)[0].next].map(labelOf);
+  const names = [...selectionOrder(two, accounts, NOW, null)[0].next].map(labelOf);
   assert.equal(read(two), `Active: all 2 members take fresh sessions, and the next one goes to ${names[0]} or ${names[1]}.`);
   const withFresh = [...accounts, account('fresh')];
   const three = at(pool('priority', 'allow', [member('plan', 0), member('over', 0), member('fresh', 0)]), 'active');
-  const trio = [...selectionOrder(three, withFresh, NOW)[0].next].map(labelOf);
+  const trio = [...selectionOrder(three, withFresh, NOW, null)[0].next].map(labelOf);
   assert.equal(trio.length, 3);
   assert.equal(read(three, withFresh), `Active: all 3 members take fresh sessions, and the next one goes to ${trio[0]}, ${trio[1]} or ${trio[2]}.`);
   const daily = { ...member('key', 0, 'budget'), budgetUntil: hoursFromNow(5), spends: [{ period: 'day', periodEnd: hoursFromNow(5), spentUsd: 20 }] };
@@ -510,10 +510,10 @@ test('a usage-based member is a metered source: behind every plan account under 
   // The flags an older router answers on such an account read as overage, so the class has to win over them.
   const flagged = { extraUsage: extraUsageOn, overage: { inUse: true, observedAt: hoursFromNow(-1), reset: hoursFromNow(3), since: hoursFromNow(-2) }, usageBased: true };
   const trio = [account('seat', flagged), account('over', { extraUsage: extraUsageOn }), account('plan')];
-  const kind = selectionOrder(pool('priority', 'prefer_plan', [member('seat', 0), member('over', 0), member('plan', 1)], { preferSubscription: true }), trio, NOW);
+  const kind = selectionOrder(pool('priority', 'prefer_plan', [member('seat', 0), member('over', 0), member('plan', 1)], { preferSubscription: true }), trio, NOW, null);
   assert.deepEqual(kind.map((t) => [t.group, t.priority, t.placements.map((p) => p.account.id)]), [[0, 1, ['plan']], [1, 0, ['over']], [2, 0, ['seat']]], 'the seat files in the third tier, behind the overage one');
   for (const strategy of ['pace', 'priority', 'round_robin']) {
-    const flat = selectionOrder(pool(strategy, 'prefer_plan', [member('seat', 0), member('plan', 1)]), trio, NOW);
+    const flat = selectionOrder(pool(strategy, 'prefer_plan', [member('seat', 0), member('plan', 1)]), trio, NOW, null);
     assert.deepEqual(flat.map((t) => [t.group, t.priority, t.placements.map((p) => [p.account.id, p.deferred])]), [[0, 0, [['seat', false]]], [0, 1, [['plan', false]]]], `${strategy}: by priority alone, never deferred`);
     assert.deepEqual(flat[0].next, ['seat'], strategy);
   }
@@ -530,7 +530,7 @@ test('while the accounts are unread the status sentence says only what the verdi
   const unread = [degraded, active, single, exhausted].map((p) => read(p, null));
   assert.deepEqual(unread, ['Degraded: 1 of 2 members takes fresh sessions.', 'Active: all 2 members take fresh sessions.', "Active: the pool's one member takes every fresh session.", 'Exhausted: no member can take a request.']);
   assert.deepEqual(
-    [degraded, active, single, exhausted].flatMap((p) => poolStatusSentence(p, null, NOW).parts.filter((part) => !('text' in part) || /\b(over|plan)\b/.test(part.text))),
+    [degraded, active, single, exhausted].flatMap((p) => poolStatusSentence(p, null, NOW, null).parts.filter((part) => !('text' in part) || /\b(over|plan)\b/.test(part.text))),
     [],
     'no account part and no raw account id',
   );

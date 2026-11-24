@@ -436,6 +436,27 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([codes.get('all'), codes.get('jobs'), codes.get('work')], [['affinity_under_cache_ttl', 'five_hour_ceiling_low', 'weekly_ceiling_low'], ['spent_moves_off', 'warm_never'], []]);
   });
 
+  // Catches a mock that prices every regime's entry at one regime, or copies the base entry's figures. Primary reads
+  // 0.62 of its 5-hour window under all's ceiling of 0.75, with a demand that reaches the ceiling short of the reset
+  // under either prior, and the interactive rates price a fresh session's prior lower, so that runway runs longer. The
+  // mock reads a member's figures when its API is built, so the case builds one at the story's instant, as the smoke
+  // and the browser pass read them.
+  test(`a member's interactive entry reads a runway of its own beside the base entry's, at ${at}`, async () => {
+    const s = await story;
+    const wall = Date.now;
+    Date.now = () => s.now;
+    let api;
+    try {
+      api = new s.lib.MockApi();
+    } finally {
+      Date.now = wall;
+    }
+    await api.login('admin');
+    const fits = (await api.listPools()).find((p) => p.id === 'all').members.find((m) => m.accountId === 'primary').regimeFits;
+    assert.deepEqual(fits.map((f) => [f.regime, f.fit, typeof f.runwayMs]), [[null, 'rewrite_only', 'number'], ['interactive', 'rewrite_only', 'number']]);
+    assert.ok(fits[1].runwayMs > fits[0].runwayMs, `the interactive runway ${fits[1].runwayMs} ms runs longer than the base one ${fits[0].runwayMs} ms`);
+  });
+
   test(`no account's rollup row predates the plan it was served under, at ${at}`, async () => {
     const s = await story;
     const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
