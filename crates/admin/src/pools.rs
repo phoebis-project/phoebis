@@ -11,10 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::{pool_fundings, CeilingInputs, KeepalivePolicy};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy};
-use phoebis_routing::{
-    AccountProjection, BurnRates, BurnUnit, MemberSpend, Obstacle, RegistrySnapshot, FIVE_HOUR,
-    SEVEN_DAY,
-};
+use phoebis_routing::{AccountProjection, BurnUnit, MemberSpend, Obstacle, RegistrySnapshot};
 use phoebis_store::{
     stamp_token, AccountRow, AffinityMode, ApiKeyRow, AttachmentSubject, Feature, MemberWrite,
     OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement, StoreError,
@@ -34,7 +31,7 @@ use crate::routes::{
     AdminQuery, CreatedId,
 };
 use crate::rules::{parse_rules, RuleInput};
-use crate::sessions::{agent_line, AgentContext, BurnPricing, SessionMark};
+use crate::sessions::{agent_line, BurnPricing, SessionMark};
 use crate::AdminState;
 
 const DUPLICATE_ID: &str = "a pool with this id exists";
@@ -1157,10 +1154,7 @@ fn warnings_of(row: &PoolRow, cache_ttl: &CacheTtlPolicy, cohort: usize) -> Vec<
                 .into(),
         ));
     }
-    // The option adds a test to the round that load shedding runs, and only Pace holds a reservation back.
-    if row.shedding.fable_reservation_shedding
-        && !(row.strategy == Strategy::Pace && row.shedding.load_shedding)
-    {
+    if row.shedding.fable_reservation_shedding && !phoebis_routing::reservation_shedding(row) {
         warnings.push(warning(
             "reservation_shedding_idle",
             &["fable_reservation_shedding", "load_shedding", "strategy"],
@@ -1806,75 +1800,49 @@ pub(crate) async fn pins(State(state): State<Arc<AdminState>>, Path(id): Path<St
     if let Err(refusal) = pool(&state, &id) {
         return refusal;
     }
-    let Ok(standings) = state.router.pins_standing().await else {
+    let pins_read = async {
+        (
+            state.router.pool_pins_standing(&id).await,
+            state.router.snapshot(),
+        )
+    };
+    let ((standings, snapshot), reported) =
+        tokio::join!(pins_read, crate::routes::reported_samples(&state));
+    let Ok(standings) = standings else {
         return router_unavailable();
     };
-    let snapshot = state.router.snapshot();
     let now = (state.clock)();
-    let reported = crate::routes::reported_samples(&state).await;
-    let revisions = state.pricing.revisions();
-    let prices = revisions.in_force(now);
-    let rates = BurnRates {
-        dollars: prices.rate_table(),
-        five_hour: state.tables.regime_rates(FIVE_HOUR, now),
-        seven_day: state.tables.regime_rates(SEVEN_DAY, now),
-        fast: prices.fast_rate_table(),
-    };
-    let pricing = BurnPricing {
-        snapshot: &snapshot,
-        reported: &reported,
-        rates: &rates,
-        tables: &state.tables,
+    let pricing = BurnPricing::new(
+        &state,
+        &state.pricing.revisions(),
+        &snapshot,
+        &reported,
         now,
-    };
-    // A pin counts in its key's pool, the test a shedding round's walk makes.
+    );
     let pins = standings
         .iter()
-        .filter(|standing| {
-            snapshot
-                .key(&standing.pin.key_id)
-                .is_some_and(|key| key.pool_id == id)
-        })
         .map(|standing| {
-            let AgentContext {
-                agent_id,
-                model,
-                account_id,
-                account_bound,
-                burn,
-                burn_at,
-                burn_unit,
-                burn_window,
-                ended,
-                fast,
-                move_cost,
-                move_drop_cost,
-                move_drop_size,
-                move_size,
-                warm,
-                warm_until,
-                ..
-            } = agent_line(standing, &pricing);
+            let line = agent_line(standing, &pricing);
             PoolPin {
                 key_id: standing.pin.key_id.clone(),
                 session_id: standing.pin.session_id.clone(),
-                agent_id,
-                model,
-                account_id,
-                account_bound,
-                burn,
-                burn_at,
-                burn_unit,
-                burn_window,
-                ended,
-                fast,
+                agent_id: line.agent_id,
+                model: line.model,
+                account_id: line.account_id,
+                account_bound: line.account_bound,
+                burn: line.burn,
+                burn_at: line.burn_at,
+                burn_unit: line.burn_unit,
+                burn_window: line.burn_window,
+                ended: line.ended,
+                fast: line.fast,
                 mark: standing.pin.mark.as_ref().map(SessionMark::from),
-                move_cost,
-                move_drop_cost,
-                move_drop_size,
-                move_size,
-                warm,
-                warm_until,
+                move_cost: line.move_cost,
+                move_drop_cost: line.move_drop_cost,
+                move_drop_size: line.move_drop_size,
+                move_size: line.move_size,
+                warm: line.warm,
+                warm_until: line.warm_until,
             }
         })
         .collect();

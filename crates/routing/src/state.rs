@@ -1272,7 +1272,7 @@ pub fn load_shedding(pool: &PoolRow) -> bool {
 
 /// Whether the pool sheds on the Fable reservation: the option on a Pace pool that runs shedding rounds, since only
 /// Pace holds a reservation back and the option adds a test to the round that the switch runs.
-pub(crate) fn reservation_shedding(pool: &PoolRow) -> bool {
+pub fn reservation_shedding(pool: &PoolRow) -> bool {
     pool.strategy == Strategy::Pace
         && load_shedding(pool)
         && pool.shedding.fable_reservation_shedding

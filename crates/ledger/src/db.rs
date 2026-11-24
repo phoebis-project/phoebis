@@ -362,6 +362,19 @@ impl LedgerDb {
             .map_err(|_| LedgerError::ReadCanceled)?
     }
 
+    /// `read` with every statement of `f` on one WAL snapshot. `read` lends a connection with no transaction, so a read
+    /// of several statements takes its one snapshot here.
+    pub async fn read_snapshot<T: Send + 'static>(
+        self: &Arc<Self>,
+        f: impl FnOnce(&Connection) -> Result<T, LedgerError> + Send + 'static,
+    ) -> Result<T, LedgerError> {
+        self.read(move |c| {
+            let tx = c.unchecked_transaction()?;
+            f(&tx)
+        })
+        .await
+    }
+
     /// The same read on the calling thread, for the event mirror's one read as the ledger task starts and for tests
     /// that hold no runtime worker to spare. It waits only while every pooled connection is out. Under the runtime
     /// every wait on the pool is `read`'s, and no blocking worker of the runtime waits on the pool here: a worker

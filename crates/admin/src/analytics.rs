@@ -791,12 +791,10 @@ pub(crate) async fn accounts(
     let (rows, samples) = match state
         .ledger
         .db()
-        .read(move |c| {
-            // One WAL snapshot, since a cooldown or a sample landing between two statements would show in one alone.
-            let tx = c.unchecked_transaction()?;
+        .read_snapshot(move |c| {
             Ok((
-                read_account_rollups_at(&tx, from_hour, to_hour, now)?,
-                hourly_window_samples(&tx, from_hour, to_hour)?,
+                read_account_rollups_at(c, from_hour, to_hour, now)?,
+                hourly_window_samples(c, from_hour, to_hour)?,
             ))
         })
         .await

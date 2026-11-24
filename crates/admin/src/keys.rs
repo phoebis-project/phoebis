@@ -434,11 +434,7 @@ async fn recent_activity(
     match state
         .ledger
         .db()
-        .read(move |c| {
-            // The read takes the fill's cursor and the rows on one snapshot, which `read` alone does not open.
-            let tx = c.unchecked_transaction()?;
-            phoebis_ledger::session_activity(&tx, cutoff)
-        })
+        .read_snapshot(move |c| phoebis_ledger::session_activity(c, cutoff))
         .await
     {
         Ok(activity) => activity,

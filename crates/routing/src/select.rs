@@ -3513,7 +3513,7 @@ fn ended_in_pool<'a>(
 }
 
 /// A pin counts in its key's pool, so a former pool's pins never move this pool's figures.
-fn keyed_in(snapshot: &RegistrySnapshot, pool: &PoolRow, p: &PinRow) -> bool {
+pub(crate) fn keyed_in(snapshot: &RegistrySnapshot, pool: &PoolRow, p: &PinRow) -> bool {
     snapshot
         .key(&p.key_id)
         .is_some_and(|k| k.pool_id == pool.id)

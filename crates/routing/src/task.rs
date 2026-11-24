@@ -26,7 +26,7 @@ use crate::record::{
     PinEventFacts, RefusalFacts, RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    account_end, budget_facts, burn_unit, decide, fresh_fit, fresh_prior, lane_is_fast,
+    account_end, budget_facts, burn_unit, decide, fresh_fit, fresh_prior, keyed_in, lane_is_fast,
     lapsed_record, mark_cleared_of, obstacle_on, pace_of, projection_of, projections_of, runway,
     slow_down_ramp, spend_spent, standing_eligible, standing_move_read, zeroes_lapsed_sums,
     zeroes_sums, BurnRead, Decided, FailedOver, FitRead, FitWord, Judged, JudgedCharge, MoveRead,
@@ -1281,6 +1281,10 @@ enum Command {
     PinsStanding {
         reply: oneshot::Sender<Vec<PinStanding>>,
     },
+    PoolPinsStanding {
+        pool_id: String,
+        reply: oneshot::Sender<Vec<PinStanding>>,
+    },
     ProbeHolds {
         reply: oneshot::Sender<ProbeHolds>,
     },
@@ -1934,6 +1938,13 @@ impl RouterHandle {
             reply,
         })
         .await
+    }
+    /// The standing of the pins under `pool_id`'s keys, in the pins' key order: the pool pins read, which leaves every
+    /// other pool's pins uncomputed on the loop that serves selection. A pool the registry does not hold answers none.
+    pub async fn pool_pins_standing(&self, pool_id: &str) -> Result<Vec<PinStanding>, RouterGone> {
+        let pool_id = pool_id.to_string();
+        self.ask(|reply| Command::PoolPinsStanding { pool_id, reply })
+            .await
     }
     /// Every member of `pool_id` with its projections, its Pace score, its slow-down entry in force, its obstacle and
     /// its budgets under that pool's settings (the pins the pool keeps, its burn average, its ceiling), one ask, one
@@ -3917,6 +3928,27 @@ impl Task {
                             && pin.session_id == session_id
                     })
                     .cloned();
+                let _ = reply.send(pins_standing(
+                    &self.state,
+                    &snapshot,
+                    pins,
+                    (self.clock)(),
+                    fallback_ms,
+                ));
+            }
+            Command::PoolPinsStanding { pool_id, reply } => {
+                let snapshot = self.snapshot();
+                let fallback_ms = saturating_ms(self.config.cooldown_fallback);
+                let mut pins: Vec<PinRow> = match snapshot.pool(&pool_id) {
+                    Some(pool) => self
+                        .state
+                        .pin_rows()
+                        .filter(|pin| keyed_in(&snapshot, pool, pin))
+                        .cloned()
+                        .collect(),
+                    None => Vec::new(),
+                };
+                pins.sort_by(|a, b| a.key_parts().cmp(&b.key_parts()));
                 let _ = reply.send(pins_standing(
                     &self.state,
                     &snapshot,

@@ -453,13 +453,10 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // during the read cannot price one answer under two revisions.
     let revisions = state.pricing.revisions();
     let (prices, tables) = (revisions.clone(), state.tables.clone());
-    let read = state.ledger.db().read(move |c| {
-        // One WAL snapshot for every statement: `read` lends a connection and starts no transaction, and a request
-        // landing between two reads would show in the activity and not in the totals.
-        let tx = c.unchecked_transaction()?;
+    let read = state.ledger.db().read_snapshot(move |c| {
         // Grouped by the client's own session, which the router keys pins under, so a request shows on the row of
         // the pin it took.
-        let activity = phoebis_ledger::session_activity(&tx, cutoff)?;
+        let activity = phoebis_ledger::session_activity(c, cutoff)?;
         candidates.extend(
             activity
                 .iter()
@@ -467,11 +464,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 .map(|a| session_key(&a.key_id, a.key_generation, &a.session_id)),
         );
         let keys: Vec<SessionSpendKey> = candidates.into_iter().collect();
-        let figures = phoebis_ledger::session_figures(&tx, &keys, &prices, &tables, now)?;
+        let figures = phoebis_ledger::session_figures(c, &keys, &prices, &tables, now)?;
         Ok((
             activity,
-            phoebis_ledger::session_identities(&tx, &keys)?,
-            phoebis_ledger::session_placements(&tx, &keys, &live_keys)?,
+            phoebis_ledger::session_identities(c, &keys)?,
+            phoebis_ledger::session_placements(c, &keys, &live_keys)?,
             figures,
         ))
     });
@@ -506,20 +503,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // 5-hour window where the set has it and the 7-day window otherwise, through the model's anchor rates on that
     // window over its tier's capacity ratio there, both under the pin's regime. The 7-day anchor rates alone are the
     // Pro-week figure. Each account's window set is read once per request.
-    let prices = revisions.in_force(now);
-    let rates = BurnRates {
-        dollars: prices.rate_table(),
-        five_hour: state.tables.regime_rates(FIVE_HOUR, now),
-        seven_day: state.tables.regime_rates(SEVEN_DAY, now),
-        fast: prices.fast_rate_table(),
-    };
-    let pricing = BurnPricing {
-        snapshot: &snapshot,
-        reported: &reported,
-        rates: &rates,
-        tables: &state.tables,
-        now,
-    };
+    let pricing = BurnPricing::new(state, &revisions, &snapshot, &reported, now);
     // The router decays each pin's copies to the read and reads its runway in the same ask, so the burn priced below
     // and the runway are one instant's, and this crate projects nothing.
     for standing in pins.into_iter().filter(|s| s.pin.last_used_at >= cutoff) {
@@ -548,29 +532,29 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             continue;
         };
         let p = &standing.pin;
-        let priced = price_pin_burn(p, standing.burn_unit, &pricing);
+        let line = agent_line(standing, &pricing);
         rows.insert(
             key.clone(),
             Session {
-                agent_id: Some(p.agent_id.clone()),
-                account_id: Some(p.account_id.clone()),
+                agent_id: Some(line.agent_id),
+                account_id: Some(line.account_id),
                 last_used_at: standings.iter().map(|s| s.pin.last_used_at).max(),
                 pinned: true,
-                burn: priced.burn,
-                burn_unit: Some(standing.burn_unit),
-                burn_window: priced.window.map(String::from),
-                burn_equivalent: priced.equivalent,
-                burn_usd: priced.usd,
-                burn_at: priced.at,
+                burn: line.burn,
+                burn_unit: line.burn_unit,
+                burn_window: line.burn_window,
+                burn_equivalent: line.burn_equivalent,
+                burn_usd: line.burn_usd,
+                burn_at: line.burn_at,
                 runway_ms: standing.runway_ms,
                 runway_bounded: standing.runway_bounded,
                 factor: standing.slow_down.map(|s| s.factor),
                 speed: standing.slow_down.filter(|s| s.slowed).map(|s| s.speed),
                 cycle_ms: standing.cycle_ms,
-                cache_ttl_ms: Some(p.cache_ttl_ms),
-                warm: Some(phoebis_routing::warm(p, now)),
-                last_input_tokens: Some(p.last_input_tokens),
-                effort: p.effort.clone(),
+                cache_ttl_ms: Some(line.cache_ttl_ms),
+                warm: Some(line.warm),
+                last_input_tokens: Some(line.last_input_tokens),
+                effort: line.effort,
                 last_refresh_at: Some(p.last_refresh_at),
                 shed: p.shed.as_ref().map(|shed| SessionShed {
                     from: shed.from.clone(),
@@ -578,14 +562,14 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     reason: shed.reason.clone(),
                 }),
                 mark: p.mark.as_ref().map(SessionMark::from),
-                ended: Some(p.ended),
-                fast: Some(standing.fast()),
-                account_bound: Some(p.account_bound),
-                move_cost: standing.move_read.cost,
-                move_size: standing.move_read.size,
-                move_drop_size: standing.move_read.drop_size,
-                move_drop_cost: standing.move_read.drop_cost,
-                pinned_at: Some(p.created_at),
+                ended: Some(line.ended),
+                fast: Some(line.fast),
+                account_bound: Some(line.account_bound),
+                move_cost: line.move_cost,
+                move_size: line.move_size,
+                move_drop_size: line.move_drop_size,
+                move_drop_cost: line.move_drop_cost,
+                pinned_at: Some(line.pinned_at),
                 ..unpinned_row(key, Some(&p.model))
             },
         );
@@ -789,11 +773,37 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
 
 /// What every pin's burn is priced through, read once per request.
 pub(crate) struct BurnPricing<'a> {
-    pub(crate) snapshot: &'a phoebis_routing::RegistrySnapshot,
-    pub(crate) reported: &'a std::collections::BTreeMap<String, phoebis_routing::UtilizationSample>,
-    pub(crate) rates: &'a BurnRates,
-    pub(crate) tables: &'a phoebis_ledger::PlanTables,
-    pub(crate) now: i64,
+    snapshot: &'a phoebis_routing::RegistrySnapshot,
+    reported: &'a std::collections::BTreeMap<String, phoebis_routing::UtilizationSample>,
+    rates: BurnRates,
+    tables: &'a phoebis_ledger::PlanTables,
+    now: i64,
+}
+
+impl<'a> BurnPricing<'a> {
+    /// The rates of the price revision in force at `now` and of the cost model. The caller passes `revisions`, so a
+    /// route that priced other figures under one read of the list prices the burn under the same revision.
+    pub(crate) fn new(
+        state: &'a AdminState,
+        revisions: &phoebis_ledger::PriceRevisions,
+        snapshot: &'a phoebis_routing::RegistrySnapshot,
+        reported: &'a std::collections::BTreeMap<String, phoebis_routing::UtilizationSample>,
+        now: i64,
+    ) -> BurnPricing<'a> {
+        let prices = revisions.in_force(now);
+        BurnPricing {
+            snapshot,
+            reported,
+            rates: BurnRates {
+                dollars: prices.rate_table(),
+                five_hour: state.tables.regime_rates(FIVE_HOUR, now),
+                seven_day: state.tables.regime_rates(SEVEN_DAY, now),
+                fast: prices.fast_rate_table(),
+            },
+            tables: &state.tables,
+            now,
+        }
+    }
 }
 
 /// A pin's agent line priced through `pricing`, which a pool's pins read too, so a pin answers the same members on
@@ -849,7 +859,7 @@ fn price_pin_burn(p: &phoebis_store::PinRow, unit: BurnUnit, pricing: &BurnPrici
         rates,
         tables,
         now,
-    } = *pricing;
+    } = pricing;
     let (burn, window, equivalent, usd) = match unit {
         BurnUnit::Usd => (
             rates
@@ -874,7 +884,7 @@ fn price_pin_burn(p: &phoebis_store::PinRow, unit: BurnUnit, pricing: &BurnPrici
             // An account tier the cost model does not size prices nothing, as does a model without a weight, so
             // the figure reads null rather than a guess.
             let burn = tier
-                .and_then(|t| tables.tier_factor(t, window, p.entrypoint.as_deref(), now))
+                .and_then(|t| tables.tier_factor(t, window, p.entrypoint.as_deref(), *now))
                 .and_then(|factor| {
                     rates
                         .price_pin(BurnUnit::WindowShare, p, window)
