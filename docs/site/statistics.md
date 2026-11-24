@@ -124,9 +124,10 @@ spelling the request carried, `model_permitted` the account that served the same
 Percentiles for every millisecond latency and for output tokens per second come from a fixed, log-spaced,
 84-bucket histogram whose last bucket ends near 3,652,000, about 61 minutes for a latency. A range spanning several
 hours merges its hourly histograms bucket by bucket before reading the percentile, and the value carries the error of
-the bucket it falls in. A request records an output tokens per second sample only where at least 500 ms pass from its
-first content token to its end. Its time to first byte, time to first content token and duration leave out the time
-the slow-down held it before its head, while a wait for any other reason stays in them.
+the bucket it falls in. A request records an output tokens per second sample only where its answer reports output tokens
+above zero and at least 500 ms pass from its first content token to its end. Its time to first byte, time to first
+content token and duration leave out the time the slow-down held it before its head, while a wait for any other reason
+stays in them.
 
 Every ledger read the admin routes, the usage page, and the metrics listener make runs on a blocking worker off
 the request runtime, so a slow analytics query never delays proxy traffic.

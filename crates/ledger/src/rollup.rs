@@ -632,6 +632,8 @@ pub struct FoldRules {
     pub slow_down_hold: bool,
     /// A tokens-per-second sample needs a span of at least `THROUGHPUT_FLOOR_MS`.
     pub throughput_floor: bool,
+    /// A tokens-per-second sample needs an output above zero.
+    pub throughput_output: bool,
     /// A request whose serving attempt's answer carried the dropped-blocks member counts under
     /// `TRANSFORMATIONS_REPORTED`.
     pub transformations_reported: bool,
@@ -645,6 +647,7 @@ impl FoldRules {
         hit_split: true,
         slow_down_hold: true,
         throughput_floor: true,
+        throughput_output: true,
         transformations_reported: true,
         wide_edges: true,
     };
@@ -860,7 +863,8 @@ pub(crate) fn deltas_under(
         }
         // Both stored samples carry the same wait, so the span between them stands without the hold.
         if let (Some(out), Some(duration), Some(ttfc)) = (
-            last.and_then(|a| a.output_tokens),
+            last.and_then(|a| a.output_tokens)
+                .filter(|out| *out > 0 || !rules.throughput_output),
             request.duration_ms,
             request.ttfc_ms,
         ) {
@@ -3173,6 +3177,28 @@ mod tests {
             one_delta(&ended(800), &answered, &prices()).output_tps_hist,
             sampled(20.0),
             "ten tokens over 500 ms"
+        );
+    }
+
+    /// `request`'s answer with its first content at 300 ms and its end at 1,100 ms, a span of 800 ms over the floor.
+    #[test]
+    fn an_answer_with_no_output_tokens_files_no_tokens_per_second_sample() {
+        let r = RequestRecord {
+            duration_ms: Some(1_100),
+            ..request("succeeded", Some(200), Some("k"))
+        };
+        let answered = |out: u64| [attempt(1, "a", None, None, Some(out))];
+        assert_eq!(
+            one_delta(&r, &answered(0), &prices())
+                .output_tps_hist
+                .count(),
+            0,
+            "an answer with no output records no sample"
+        );
+        assert_eq!(
+            one_delta(&r, &answered(1), &prices()).output_tps_hist,
+            sampled(1.25),
+            "one token over 800 ms"
         );
     }
 

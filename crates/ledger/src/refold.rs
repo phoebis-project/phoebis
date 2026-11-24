@@ -18,11 +18,11 @@
 //!
 //! A fold rule (the expiry between turns read against the body's cache marker, the entry's lifetime and the agent's
 //! release, the hits split off under each miss reason, the slow-down's hold left out of the millisecond samples, the
-//! tokens-per-second floor, the count of the requests whose answer reported its dropped blocks, the wide edge set)
-//! changes what a request adds to its hour, so the first start of a build that holds a rule folds again each retained
-//! request that landed before the rule's mark: its deltas under the rules it was folded under come out and its deltas
-//! under every rule go in, at the thresholds its rows stand under. That pass runs before the band re-fold and resumes
-//! from a cursor of its own.
+//! tokens-per-second floor, the output above zero that a tokens-per-second sample needs, the count of the requests
+//! whose answer reported its dropped blocks, the wide edge set) changes what a request adds to its hour, so the first
+//! start of a build that holds a rule folds again each retained request that landed before the rule's mark: its deltas
+//! under the rules it was folded under come out and its deltas under every rule go in, at the thresholds its rows stand
+//! under. That pass runs before the band re-fold and resumes from a cursor of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
@@ -56,16 +56,18 @@ enum FoldRule {
     HitSplit,
     SlowDownHold,
     ThroughputFloor,
+    ThroughputOutput,
     TransformationsReported,
     WideEdges,
 }
 
 impl FoldRule {
-    const EVERY: [FoldRule; 6] = [
+    const EVERY: [FoldRule; 7] = [
         FoldRule::ExpiryRelease,
         FoldRule::HitSplit,
         FoldRule::SlowDownHold,
         FoldRule::ThroughputFloor,
+        FoldRule::ThroughputOutput,
         FoldRule::TransformationsReported,
         FoldRule::WideEdges,
     ];
@@ -76,6 +78,7 @@ impl FoldRule {
             FoldRule::HitSplit => "hit_split",
             FoldRule::SlowDownHold => "slow_down_hold",
             FoldRule::ThroughputFloor => "throughput_floor",
+            FoldRule::ThroughputOutput => "throughput_output",
             FoldRule::TransformationsReported => "transformations_reported",
             FoldRule::WideEdges => "wide_edges",
         }
@@ -105,6 +108,10 @@ impl FoldRule {
             },
             FoldRule::ThroughputFloor => FoldRules {
                 throughput_floor: false,
+                ..rules
+            },
+            FoldRule::ThroughputOutput => FoldRules {
+                throughput_output: false,
                 ..rules
             },
             FoldRule::TransformationsReported => FoldRules {
@@ -1555,6 +1562,7 @@ mod tests {
         hit_split: false,
         slow_down_hold: false,
         throughput_floor: false,
+        throughput_output: false,
         transformations_reported: false,
         wide_edges: false,
     };
@@ -1866,6 +1874,35 @@ mod tests {
                 ("messages_changed/hit".to_string(), 1)
             ])
         );
+    }
+
+    /// `haiku`'s request carries no miss reason, hold or cache marker, and its span of 800 ms clears the floor, so no
+    /// other open rule moves it.
+    #[test]
+    fn the_rules_pass_takes_a_retained_answers_zero_sample_out_of_its_hour() {
+        let (db, _dir) = crate::db::open_temp();
+        let at = NEW_YEAR + DAY;
+        let mut request = timed("r", at, 100, (100, 300, 1_100));
+        request.1[0].output_tokens = Some(0);
+        store(
+            &db,
+            &request,
+            &list(Some(1_000)),
+            FoldRules {
+                throughput_output: false,
+                ..FoldRules::ALL
+            },
+            0,
+        );
+        let throughput = |db: &LedgerDb| row(db, at, STANDARD_BAND).output_tps_hist;
+        assert_eq!(
+            throughput(&db),
+            sampled(&[0.0]),
+            "a fold without the rule files the zero sample"
+        );
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
+        assert_eq!(throughput(&db).count(), 0);
     }
 
     /// `haiku`'s request carries no timing, miss reason, hold or cache marker, so no other open rule moves it.
