@@ -64,9 +64,9 @@ enum PageRow {
 
 /// One row of the page.
 // Declared for the document and the tests, since the route answers its rows as `PageRow`.
-#[allow(dead_code)]
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(untagged)]
 pub(crate) enum Row {
     Decision(Box<DecisionRow>),
@@ -77,8 +77,10 @@ pub(crate) enum Row {
 /// exhausted row after a hold whose bound ran out reads `held`, the wait, and `answer`, the status the client got,
 /// with a null `unit`. A request that passed an account over at its cap after a wait that freed, as when another
 /// request took the freed slot, reads the same `answer`.
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DecisionRow {
     /// `decision`.
@@ -138,8 +140,10 @@ pub(crate) struct DecisionRow {
     pub status: Option<u16>,
 }
 
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SummaryBy {
     /// `rule`, `rung`, `strategy`, `hold`, `exhaustion`, `refusal` or `none`.
@@ -152,8 +156,10 @@ pub(crate) struct SummaryBy {
     pub tier: Option<(u8, u32, u8)>,
 }
 
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SummaryFact {
     pub key: String,
@@ -167,10 +173,9 @@ pub(crate) struct SummaryFact {
 
 /// A fact's value in its bare JSON form: a boolean, a number, a word or a list of words.
 // Declared for the document and the tests, since the route answers a decision row as a JSON value.
-#[allow(dead_code)]
-#[derive(serde::Serialize)]
-#[cfg_attr(test, derive(serde::Deserialize))]
-#[serde(untagged)]
+#[cfg_attr(not(test), expect(dead_code))]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(test, serde(untagged))]
 pub(crate) enum FactValue {
     Bool(bool),
     Int(i64),
@@ -201,8 +206,10 @@ impl utoipa::PartialSchema for FactValue {
 
 impl ToSchema for FactValue {}
 
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FactEntity {
     /// One of `account`, `key`, `pool` or `model`.
@@ -211,8 +218,10 @@ pub(crate) struct FactEntity {
     pub id: String,
 }
 
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SummaryScore {
     pub account_id: String,
@@ -221,8 +230,10 @@ pub(crate) struct SummaryScore {
 }
 
 /// Where a fresh placement's account came from.
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SummaryPlacement {
     /// `content` (the deepest message boundary), `static` (the deepest static boundary) or `with_main` (the parent
@@ -235,16 +246,20 @@ pub(crate) struct SummaryPlacement {
     pub prefix_tokens: u64,
 }
 
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SummaryWarmth {
     pub verdict: String,
     pub cause: String,
 }
 
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SummaryHold {
     pub account_id: String,
@@ -274,8 +289,10 @@ pub(crate) struct SummaryHold {
     pub waits_for: Option<String>,
 }
 
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SummaryExhaustion {
     pub kind: String,
@@ -291,8 +308,10 @@ pub(crate) struct SummaryExhaustion {
     pub status: Option<u16>,
 }
 
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SummaryRefusal {
     /// The refusal's kind: `key` for the router's own refusals, a resolve refusal among them, `client` for the relay's
@@ -305,8 +324,10 @@ pub(crate) struct SummaryRefusal {
     pub reason: String,
 }
 
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CacheFacts {
     pub hit: bool,
@@ -352,8 +373,10 @@ pub(crate) struct Counts {
 /// placement after its wait are two decisions of one attempt. Record v3 decoded, with `request_id` and `seq` ahead
 /// of it. The record holds what the engine read, in the order it read it, and what it wrote. Every entity is its
 /// id, and no credential, token or message content is in it.
-#[derive(serde::Serialize, ToSchema)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+// The served document reads the type's schema, and no route builds a value.
+#[cfg_attr(not(test), expect(dead_code))]
+#[derive(ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DecisionRecord {
     pub request_id: String,
