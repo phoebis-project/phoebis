@@ -29,7 +29,7 @@ use crate::pricing::{PriceRevisions, Speed};
 use crate::query::{
     add_figures, boundary_instants, clamped_count, price_request, session_facts_statement,
     session_hour_statement, session_requests_of, session_spend_of_statement,
-    session_sums_statement, usage_sum, RequestPrice, SessionSpendKey, SERVING_ATTEMPT_NUMBER,
+    session_sums_statement, usage_sum, RequestPrice, SessionSpendKey, SERVING_ATTEMPT_JOIN,
     SESSION_IDENTITY_CHUNK,
 };
 use crate::record::{AttemptRecord, RequestRecord};
@@ -37,8 +37,8 @@ use crate::refold::{
     delete_meta, first_difference, read_meta, revisions_of, thresholds_of, write_meta, Thresholds,
 };
 use crate::rollup::{
-    fold_identifier_of, hour_of, last_millisecond, serving_speed, trailing_day_hours, StoredWords,
-    NO_CLASS, PLAN_FUNDING, STANDARD_BAND, UNATTRIBUTED,
+    fold_identifier_of, hour_of, last_millisecond, numbered_marks, serving_speed,
+    trailing_day_hours, StoredWords, NO_CLASS, PLAN_FUNDING, STANDARD_BAND, UNATTRIBUTED,
 };
 use crate::{LedgerDb, LedgerError};
 
@@ -698,7 +698,7 @@ pub(crate) fn drop_cursor_under_way(tx: &Transaction<'_>) -> Result<(), LedgerEr
 /// Drops the cursor of a fill that ended. The landing calls it for a session with no mark that holds another request,
 /// since a fill that ended walks no row again: the fill then walks from the top and marks the session.
 fn drop_cursor_ended(tx: &Transaction<'_>) -> Result<(), LedgerError> {
-    if read_meta::<FillCursor>(tx, FILL_CURSOR_KEY)?.is_some_and(|cursor| cursor.ended) {
+    if fill_ended(tx)? {
         delete_meta(tx, FILL_CURSOR_KEY)?;
     }
     Ok(())
@@ -902,20 +902,21 @@ pub(crate) const FACTS_COLUMNS: &str = "last_request_at, last_inference_at, serv
 
 static ADD_SUMS: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "INSERT INTO session_sums (key_id, key_generation, session_id, {SUMS_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, \
-         ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22) ON CONFLICT DO UPDATE SET \
+        "INSERT INTO session_sums (key_id, key_generation, session_id, {SUMS_COLUMNS}) VALUES ({}) \
+         ON CONFLICT DO UPDATE SET \
          requests = requests + excluded.requests, input_tokens = input_tokens + excluded.input_tokens, \
          cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens, \
          cache_write_5m_tokens = cache_write_5m_tokens + excluded.cache_write_5m_tokens, \
          cache_write_1h_tokens = cache_write_1h_tokens + excluded.cache_write_1h_tokens, \
-         output_tokens = output_tokens + excluded.output_tokens"
+         output_tokens = output_tokens + excluded.output_tokens",
+        numbered_marks(3 + SUMS_COLUMNS.split(", ").count())
     )
 });
 
 static PUT_SUMS: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "INSERT OR REPLACE INTO session_sums (key_id, key_generation, session_id, {SUMS_COLUMNS}) VALUES (?1, ?2, \
-         ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)"
+        "INSERT OR REPLACE INTO session_sums (key_id, key_generation, session_id, {SUMS_COLUMNS}) VALUES ({})",
+        numbered_marks(3 + SUMS_COLUMNS.split(", ").count())
     )
 });
 
@@ -965,8 +966,8 @@ static READ_ALL_FACTS: LazyLock<String> = LazyLock::new(|| {
 static PUT_FACTS: LazyLock<String> = LazyLock::new(|| {
     format!(
         "INSERT OR REPLACE INTO session_facts (key_id, key_generation, session_id, agent_id, {FACTS_COLUMNS}) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, \
-         ?22, ?23, ?24)"
+         VALUES ({})",
+        numbered_marks(4 + FACTS_COLUMNS.split(", ").count())
     )
 });
 
@@ -996,7 +997,7 @@ static SESSION_NEWEST: LazyLock<String> = LazyLock::new(|| {
     format!(
         "SELECT r.received_at, r.id, r.canonical_model, a.account_id, r.user_agent, r.presented_retired, \
          r.rotation_at FROM requests r INDEXED BY requests_session \
-         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
+         {SERVING_ATTEMPT_JOIN} \
          WHERE r.session_id = ?3 AND r.key_id = ?1 AND r.key_generation = ?2 AND r.kind <> 'probe' \
          ORDER BY r.received_at DESC, r.id DESC LIMIT 1"
     )
@@ -1017,7 +1018,7 @@ static AGENT_NEWEST: LazyLock<String> = LazyLock::new(|| {
     format!(
         "SELECT r.received_at, r.id, r.canonical_model, r.agent_type, a.account_id \
          FROM requests r INDEXED BY requests_session \
-         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
+         {SERVING_ATTEMPT_JOIN} \
          WHERE r.session_id = ?3 AND r.key_id = ?1 AND r.key_generation = ?2 AND r.agent_id = ?4 \
          AND r.kind <> 'probe' AND r.refused = 0 ORDER BY r.received_at DESC, r.id DESC LIMIT 1"
     )

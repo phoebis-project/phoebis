@@ -441,7 +441,7 @@ const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
 /// decision at or before it. `rollups_hourly.client_canceled` counts a client's cancels apart from `failed`, and each
 /// stored row that is no probe's moves its errors map's `client_gone` count there, off `failed` and out of the map. The
 /// stored account hours that hold nothing are deleted, judged by the eleven columns `AccountRollupRow::holds_nothing`
-/// reads, so the rows a cleared cooldown emptied before the step leave as `unfold_cooldown` deletes them after it.
+/// reads, so the rows a cleared cooldown emptied before the step leave as `unfold_account` deletes them after it.
 /// `rollups_hourly.input_transformations_json` counts the requests per key of the blocks their answer dropped, and a
 /// stored hour reads the empty map, since no attempt stored before the step carries the member.
 /// `attempts.previous_input_tokens` holds the size the selection handed on, `requests.cache_marker` the selection's

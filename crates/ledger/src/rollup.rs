@@ -604,6 +604,10 @@ pub(crate) fn add_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<Strin
     }
 }
 
+fn count_one(map: &mut BTreeMap<String, u64>, key: impl Into<String>) {
+    *map.entry(key.into()).or_default() += 1;
+}
+
 fn subtract_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64>) {
     for (k, v) in from {
         if let Some(n) = into.get_mut(k) {
@@ -618,39 +622,76 @@ fn subtract_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64
 /// The shortest span from the first content to the end that records a tokens-per-second sample.
 pub const THROUGHPUT_FLOOR_MS: u64 = 500;
 
-/// The fold rules a request's deltas are computed under. The landing applies `FoldRules::ALL`, and the re-fold
-/// pass computes a stored request's old deltas under the rules it was folded under.
+/// A fold rule, named by `as_str` in its `meta` row's key and in a rules cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FoldRules {
+pub(crate) enum FoldRule {
     /// An expiry between turns needs a cache marker on the body and an entry past its lifetime, and the expiries of the
     /// agents that were not released count under `EXPIRED_BETWEEN_TURNS_UNRELEASED` too.
-    pub expiry_release: bool,
+    ExpiryRelease,
     /// A request whose serving attempt read `HIT_SHARE_PERCENT` percent or more of its prompt from the cache counts
     /// under its miss reason's `<reason>/hit` key too.
-    pub hit_split: bool,
+    HitSplit,
     /// The three millisecond samples leave out the request's slow-down wait.
-    pub slow_down_hold: bool,
+    SlowDownHold,
     /// A tokens-per-second sample needs a span of at least `THROUGHPUT_FLOOR_MS`.
-    pub throughput_floor: bool,
+    ThroughputFloor,
     /// A tokens-per-second sample needs an output above zero.
-    pub throughput_output: bool,
+    ThroughputOutput,
     /// A request whose serving attempt's answer carried the dropped-blocks member counts under
     /// `TRANSFORMATIONS_REPORTED`.
-    pub transformations_reported: bool,
+    TransformationsReported,
     /// A sample past 100,000 files in its own bucket of the 84 rather than in bucket 63.
-    pub wide_edges: bool,
+    WideEdges,
 }
 
+impl FoldRule {
+    pub(crate) const EVERY: [FoldRule; 7] = [
+        FoldRule::ExpiryRelease,
+        FoldRule::HitSplit,
+        FoldRule::SlowDownHold,
+        FoldRule::ThroughputFloor,
+        FoldRule::ThroughputOutput,
+        FoldRule::TransformationsReported,
+        FoldRule::WideEdges,
+    ];
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            FoldRule::ExpiryRelease => "expiry_release",
+            FoldRule::HitSplit => "hit_split",
+            FoldRule::SlowDownHold => "slow_down_hold",
+            FoldRule::ThroughputFloor => "throughput_floor",
+            FoldRule::ThroughputOutput => "throughput_output",
+            FoldRule::TransformationsReported => "transformations_reported",
+            FoldRule::WideEdges => "wide_edges",
+        }
+    }
+
+    /// The rule a stored name carries, `None` for a name this build holds no rule for.
+    pub(crate) fn parse(name: &str) -> Option<FoldRule> {
+        FoldRule::EVERY
+            .into_iter()
+            .find(|rule| rule.as_str() == name)
+    }
+}
+
+/// The fold rules a request's deltas are computed under, one bit per rule at the rule's discriminant, so `ALL` holds
+/// each rule only while `FoldRule::EVERY` lists every variant. The landing applies `FoldRules::ALL`, and the re-fold
+/// pass computes a stored request's old deltas under the rules it was folded under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FoldRules(u16);
+
 impl FoldRules {
-    pub const ALL: FoldRules = FoldRules {
-        expiry_release: true,
-        hit_split: true,
-        slow_down_hold: true,
-        throughput_floor: true,
-        throughput_output: true,
-        transformations_reported: true,
-        wide_edges: true,
-    };
+    pub(crate) const ALL: FoldRules = FoldRules((1 << FoldRule::EVERY.len()) - 1);
+
+    fn has(self, rule: FoldRule) -> bool {
+        self.0 & (1 << rule as u16) != 0
+    }
+
+    /// The rules a request folded without `rule` was folded under, from the rules a fold applied.
+    pub(crate) fn without(self, rule: FoldRule) -> FoldRules {
+        FoldRules(self.0 & !(1 << rule as u16))
+    }
 }
 
 /// One delta per distinct (band, speed, funding) triple among the attempts with usage, the band from the attempt's
@@ -758,7 +799,7 @@ pub(crate) fn deltas_under(
         d.probes_held = 1;
     } else if request.refused {
         if let Some(code) = &request.error_code {
-            *d.refusals.entry(code.clone()).or_default() += 1;
+            count_one(&mut d.refusals, code);
         }
     } else {
         d.requests = 1;
@@ -784,42 +825,30 @@ pub(crate) fn deltas_under(
         .and_then(AttemptRecord::cache_write_tokens)
         .unwrap_or(0);
     if let Some((a, reason)) = last.and_then(|a| Some((a, a.cache_miss_reason.as_ref()?))) {
-        *d.cache_miss_reasons.entry(reason.clone()).or_default() += 1;
-        if rules.hit_split && read_most_of_its_prompt(a) {
-            *d.cache_miss_reasons
-                .entry(format!("{reason}{HIT_SUFFIX}"))
-                .or_default() += 1;
+        count_one(&mut d.cache_miss_reasons, reason);
+        if rules.has(FoldRule::HitSplit) && read_most_of_its_prompt(a) {
+            count_one(&mut d.cache_miss_reasons, format!("{reason}{HIT_SUFFIX}"));
         }
     }
     if let Some(a) = last.filter(|a| counted && expired_between_turns(request, a, rules)) {
-        *d.cache_miss_reasons
-            .entry(EXPIRED_BETWEEN_TURNS.into())
-            .or_default() += 1;
-        if rules.expiry_release && a.agent_released != Some(true) {
-            *d.cache_miss_reasons
-                .entry(EXPIRED_BETWEEN_TURNS_UNRELEASED.into())
-                .or_default() += 1;
+        count_one(&mut d.cache_miss_reasons, EXPIRED_BETWEEN_TURNS);
+        if rules.has(FoldRule::ExpiryRelease) && a.agent_released != Some(true) {
+            count_one(&mut d.cache_miss_reasons, EXPIRED_BETWEEN_TURNS_UNRELEASED);
         }
     }
     // A request counts once under each key whatever the key's `blocks`, since the readers count requests.
     if let Some((a, dropped)) = last.and_then(|a| Some((a, a.input_transformations.as_ref()?))) {
-        if rules.transformations_reported {
-            *d.input_transformations
-                .entry(TRANSFORMATIONS_REPORTED.into())
-                .or_default() += 1;
+        if rules.has(FoldRule::TransformationsReported) {
+            count_one(&mut d.input_transformations, TRANSFORMATIONS_REPORTED);
         }
         for key in dropped.keys() {
-            *d.input_transformations.entry(key.clone()).or_default() += 1;
+            count_one(&mut d.input_transformations, key);
         }
         if dropped.is_empty() {
-            *d.input_transformations
-                .entry(TRANSFORMATIONS_NONE.into())
-                .or_default() += 1;
+            count_one(&mut d.input_transformations, TRANSFORMATIONS_NONE);
         }
         if dropped.keys().any(|key| under_account_reason(key)) && moved(a) {
-            *d.input_transformations
-                .entry(TRANSFORMATIONS_MOVED.into())
-                .or_default() += 1;
+            count_one(&mut d.input_transformations, TRANSFORMATIONS_MOVED);
         }
     }
     // A held probe and a refused request asked no account and reached no cache, so neither counts under a request
@@ -842,7 +871,7 @@ pub(crate) fn deltas_under(
             }
         }
         let record = |hist: &mut Histogram, value: f64| {
-            if rules.wide_edges {
+            if rules.has(FoldRule::WideEdges) {
                 hist.record(value)
             } else {
                 hist.record_narrow(value)
@@ -850,7 +879,9 @@ pub(crate) fn deltas_under(
         };
         // The slow-down's waits leave the samples, since the held chart shows them, and a `cap`, `reset` or
         // `rewrite` wait stays in, which no chart shows.
-        let hold = slowed_ms.filter(|_| rules.slow_down_hold).unwrap_or(0);
+        let hold = slowed_ms
+            .filter(|_| rules.has(FoldRule::SlowDownHold))
+            .unwrap_or(0);
         let less_hold = |ms: i64| u64::try_from(ms).unwrap_or(0).saturating_sub(hold) as f64;
         if let Some(t) = request.ttfb_ms {
             record(&mut d.ttfb_hist, less_hold(t));
@@ -864,11 +895,11 @@ pub(crate) fn deltas_under(
         // Both stored samples carry the same wait, so the span between them stands without the hold.
         if let (Some(out), Some(duration), Some(ttfc)) = (
             last.and_then(|a| a.output_tokens)
-                .filter(|out| *out > 0 || !rules.throughput_output),
+                .filter(|out| *out > 0 || !rules.has(FoldRule::ThroughputOutput)),
             request.duration_ms,
             request.ttfc_ms,
         ) {
-            let floor = if rules.throughput_floor {
+            let floor = if rules.has(FoldRule::ThroughputFloor) {
                 THROUGHPUT_FLOOR_MS
             } else {
                 1
@@ -882,7 +913,7 @@ pub(crate) fn deltas_under(
             }
         }
         if let Some(code) = request.error_code.as_ref().filter(|_| !client_left) {
-            *d.errors.entry(code.clone()).or_default() += 1;
+            count_one(&mut d.errors, code);
         }
     }
     deltas
@@ -922,7 +953,7 @@ fn expired_between_turns(
             .cache_miss_reason
             .as_deref()
             .is_none_or(|reason| EXPIRY_REASONS.contains(&reason))
-        && (!rules.expiry_release
+        && (!rules.has(FoldRule::ExpiryRelease)
             || (request.cache_marker == Some(true) && serving.entry_expired == Some(true)))
 }
 
@@ -1123,7 +1154,10 @@ pub fn fold_request(
     // trace regardless of this one's.
     if let Some((_, old_attempts)) = previous {
         if let Some((a, tokens)) = serving_rewrite(old_attempts) {
-            unfold_rewrite(tx, hour_of(a.started_at), &a.account_id, tokens)?;
+            // The replaced request's booking comes out, so a replay of the same request never doubles it.
+            unfold_account(tx, hour_of(a.started_at), &a.account_id, tokens, |r| {
+                &mut r.rewrite_tokens
+            })?;
         }
     }
     if let Some((a, tokens)) = serving_rewrite(attempts) {
@@ -1451,7 +1485,8 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             for (bucket, counted) in take_segments(tx, account, scope)? {
                 let seconds = unelapsed_segment_seconds(from, bucket, until, counted);
                 if seconds > 0 {
-                    unfold_cooldown(tx, bucket, account, seconds)?;
+                    // The announcement counted these seconds, which the account never spent.
+                    unfold_account(tx, bucket, account, seconds, |r| &mut r.cooldown_seconds)?;
                 }
                 // The seconds that stay booked pass to the scope that holds the latest end, so its own clear can
                 // take them back.
@@ -2141,27 +2176,17 @@ fn write_account(tx: &Transaction<'_>, row: &AccountRollupRow) -> Result<(), Led
     Ok(())
 }
 
-/// Takes back cooldown seconds an announcement counted that the account never spent.
-fn unfold_cooldown(
+/// Takes `amount` back from the count of an account hour that `count` picks.
+fn unfold_account(
     tx: &Transaction<'_>,
     hour: i64,
     account_id: &str,
-    seconds: u64,
+    amount: u64,
+    count: fn(&mut AccountRollupRow) -> &mut u64,
 ) -> Result<(), LedgerError> {
     let mut row = account_row(tx, hour, account_id)?;
-    row.cooldown_seconds = row.cooldown_seconds.saturating_sub(seconds);
-    write_account(tx, &row)
-}
-
-/// Takes back a replaced request's rewrite booking, so a replay of the same request never doubles it.
-fn unfold_rewrite(
-    tx: &Transaction<'_>,
-    hour: i64,
-    account_id: &str,
-    tokens: u64,
-) -> Result<(), LedgerError> {
-    let mut row = account_row(tx, hour, account_id)?;
-    row.rewrite_tokens = row.rewrite_tokens.saturating_sub(tokens);
+    let booked = count(&mut row);
+    *booked = booked.saturating_sub(amount);
     write_account(tx, &row)
 }
 
@@ -2280,21 +2305,13 @@ pub fn open_cooldown_remainders(
          JOIN (SELECT account_id, SUM(seconds) AS seconds FROM cooldown_segments WHERE hour = ?1 GROUP BY account_id) g \
          ON g.account_id = s.account_id",
     )?;
-    let accounts = stmt.query_map(params![hour], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, i64>(1)?,
-            r.get::<_, i64>(2)? as u64,
-        ))
-    })?;
-    let mut remainders = BTreeMap::new();
-    for account in accounts {
-        let (account_id, latest, seconds) = account?;
-        remainders.insert(
-            account_id,
-            unelapsed_segment_seconds(now, hour, latest, seconds) as i64,
-        );
-    }
+    let remainders = stmt
+        .query_map(params![hour], |r| {
+            let seconds =
+                unelapsed_segment_seconds(now, hour, r.get(1)?, r.get::<_, i64>(2)? as u64);
+            Ok((r.get::<_, String>(0)?, seconds as i64))
+        })?
+        .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
     Ok(remainders)
 }
 
@@ -2356,10 +2373,7 @@ fn key_params(k: &RollupRow) -> [&dyn ToSql; 16] {
 /// The upsert of `columns` into `table` on the conflict target `key`, every column outside `key` taking the written
 /// row's value, bound in `columns`' order.
 fn upsert_statement(table: &str, columns: &str, key: &str) -> String {
-    let marks = (1..=columns.split(", ").count())
-        .map(|i| format!("?{i}"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let marks = numbered_marks(columns.split(", ").count());
     let set = columns
         .split(", ")
         .filter(|column| !key.split(", ").any(|k| k == *column))
@@ -2369,6 +2383,14 @@ fn upsert_statement(table: &str, columns: &str, key: &str) -> String {
     format!(
         "INSERT INTO {table} ({columns}) VALUES ({marks}) ON CONFLICT ({key}) DO UPDATE SET {set}"
     )
+}
+
+/// The marks `?1` to `?<count>`, for a statement that binds `count` values in its columns' order.
+pub(crate) fn numbered_marks(count: usize) -> String {
+    (1..=count)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A map as its column's JSON object, a map that does not encode writing as an empty one.
@@ -2816,6 +2838,8 @@ pub(crate) fn key_range_statement() -> String {
     format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} AND {NO_PLAN_PROBES} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier")
 }
 
+static KEY_RANGE_STATEMENT: LazyLock<String> = LazyLock::new(key_range_statement);
+
 /// The rows of one key over a range, the probe rows that the plan funded left out, narrowed by SQLite rather than in
 /// memory: a reader that wants a single key pays for that key's rows and not for every key's, and decodes no plan probe
 /// to drop it.
@@ -2826,7 +2850,7 @@ pub fn read_rollups_for_key(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&key_range_statement())?;
+    let mut stmt = conn.prepare_cached(&KEY_RANGE_STATEMENT)?;
     let rows = stmt.query_map(
         params![key_id, key_generation, from_hour, to_hour],
         row_to_rollup,

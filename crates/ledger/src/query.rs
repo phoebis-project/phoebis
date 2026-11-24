@@ -6186,12 +6186,13 @@ const fn column_count(columns: &str) -> usize {
     count
 }
 
-/// The number of request `r`'s serving attempt, its last by number, the attempt the landing takes the row's serving
-/// facts from. The session reads join that attempt's own row, since its price reads members the request row does not
-/// carry: the completion, the two cache writes apart, the account kind, the overage flag, the tier and the
+/// The join of request `r`'s serving attempt as `a`, its last by number, the attempt the landing takes the row's
+/// serving facts from. The session reads join that attempt's own row, since its price reads members the request row
+/// does not carry: the completion, the two cache writes apart, the account kind, the overage flag, the tier and the
 /// usage-based class.
-pub(crate) const SERVING_ATTEMPT_NUMBER: &str =
-    "(SELECT a.attempt FROM attempts a WHERE a.request_id = r.id ORDER BY a.attempt DESC LIMIT 1)";
+pub(crate) const SERVING_ATTEMPT_JOIN: &str =
+    "LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = \
+    (SELECT a.attempt FROM attempts a WHERE a.request_id = r.id ORDER BY a.attempt DESC LIMIT 1)";
 
 /// The statement of a session's totals summed from its requests, the fill's and a reader's for a session with no mark,
 /// for one chunk of named sessions: every request of each under its key lifetime, a refused one with its flag, with its
@@ -6209,7 +6210,7 @@ pub(crate) fn session_spend_of_statement(
          SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
          FROM named n CROSS JOIN requests r INDEXED BY requests_session ON r.session_id = n.session_id \
          AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
-         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
+         {SERVING_ATTEMPT_JOIN} \
          ORDER BY r.session_id, r.received_at, r.id"
     );
     (sql, binds)
@@ -6254,7 +6255,7 @@ pub(crate) fn session_hour_statement(
     let sql = format!(
         "SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
          FROM requests r INDEXED BY requests_session \
-         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
+         {SERVING_ATTEMPT_JOIN} \
          WHERE r.session_id = ?1 AND r.key_id = ?2 AND r.key_generation = ?3 \
          AND r.received_at >= ?4 AND r.received_at < ?5 \
          ORDER BY r.received_at, r.id"
