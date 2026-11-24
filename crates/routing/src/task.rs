@@ -3000,6 +3000,9 @@ fn projections(
     members.dedup();
     let prior = fresh_prior(state, snapshot, pool, now);
     let regimes = state.regimes(now);
+    let affinity_handle = state.affinity();
+    let affinity = affinity_handle.read().expect("affinity lock poisoned");
+    let memo = ProjectionMemo::default();
     members
         .into_iter()
         .map(|account_id| {
@@ -3016,16 +3019,18 @@ fn projections(
                 BurnRead::Achieved,
                 None,
             );
-            let demands = projections_of(
-                state,
-                snapshot,
-                pool,
-                account_id,
-                tier,
-                now,
-                BurnRead::Demand,
-                None,
-            );
+            let demands = memo.projections(pool, account_id, || {
+                projections_of(
+                    state,
+                    snapshot,
+                    pool,
+                    account_id,
+                    tier,
+                    now,
+                    BurnRead::Demand,
+                    None,
+                )
+            });
             let regime_fits: Vec<RegimeFit> = regimes
                 .iter()
                 .map(|(regime, entrypoints)| {
@@ -3033,7 +3038,8 @@ fn projections(
                     // The empty id names no model family, so the read draws the shared windows alone and a model week
                     // moves neither the member's word nor its runway.
                     let shared = fresh_fit(
-                        state, snapshot, pool, &prior, account_id, "", entrypoint, now,
+                        state, snapshot, &affinity, pool, &prior, account_id, "", entrypoint, now,
+                        &memo,
                     );
                     let fit = member_fit(&shared);
                     let runway_ms = shared.rung_runway_ms(fit);
@@ -3044,7 +3050,8 @@ fn projections(
                             continue;
                         }
                         let read = fresh_fit(
-                            state, snapshot, pool, &prior, account_id, family, entrypoint, now,
+                            state, snapshot, &affinity, pool, &prior, account_id, family,
+                            entrypoint, now, &memo,
                         );
                         if let Some(&word) = read.words.get(week) {
                             words.insert(week.to_string(), word);
@@ -3172,6 +3179,8 @@ fn pins_standing(
     let mut runways: HashMap<(String, String, Vec<&'static str>), AccountRead> = HashMap::new();
     let mut eligible_sets: HashMap<(String, String, bool), Vec<Candidate>> = HashMap::new();
     let projections = ProjectionMemo::default();
+    let affinity_handle = state.affinity();
+    let affinity = affinity_handle.read().expect("affinity lock poisoned");
     pins.into_iter()
         .map(|pin| {
             let pool = snapshot.key_pool(&pin.key_id);
@@ -3227,6 +3236,7 @@ fn pins_standing(
             let read = standing_move_read(
                 state,
                 snapshot,
+                &affinity,
                 pool,
                 eligible,
                 &pin,
@@ -3495,8 +3505,13 @@ impl Task {
                 let cleared =
                     !(request.probe || request.classifier) && self.state.clear_ended(&pin_key);
                 let before = self.state.pin(&pin_key).cloned();
-                // Read ahead of the selection, which takes the record it places from.
-                let lapsed = lapsed_record(&self.state, &request).cloned();
+                // Read ahead of the selection, which takes the record it places from. The landing reads it only where
+                // no row stood under the key.
+                let lapsed = if before.is_none() {
+                    lapsed_record(&self.state, &pin_key, request.key_generation).cloned()
+                } else {
+                    None
+                };
                 // A failover inside its window, or a deleted account's pin that would still stand, lands on the row its
                 // source lost: the selection prices the session's own burn and names the cause on the record. A key
                 // that holds a pin again is no landing, and neither is the client's classifier call, which holds no

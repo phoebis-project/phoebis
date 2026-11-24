@@ -201,7 +201,8 @@ impl StaticHold {
     }
 }
 
-/// The holds by the model, the boundary, the account, then the canonical lane. No inner map is left empty.
+/// The holds by the model, the account, the canonical lane, then the boundary, so a report resolves its lane's map once
+/// and a read walks one map for a whole chain. No inner map is left empty.
 type StaticHolds = HashMap<String, HashMap<String, HashMap<String, HashMap<String, StaticHold>>>>;
 
 #[derive(Debug, Default)]
@@ -272,7 +273,7 @@ impl AffinityMap {
     }
 
     /// The size of the deepest boundary of `chain` that `account_id` holds live on `lane` at `now`, 0 where it holds
-    /// none. `incarnation_of` reads an id's current incarnation, as `AffinityEntry::held` takes it.
+    /// none. `incarnation` is the account's current incarnation, as `AffinityEntry::held` reads it.
     pub(crate) fn static_held(
         &self,
         model: &str,
@@ -280,18 +281,24 @@ impl AffinityMap {
         lane: &str,
         account_id: &str,
         now: i64,
-        incarnation_of: impl Fn(&str) -> Option<u64>,
+        incarnation: Option<u64>,
     ) -> u64 {
-        let Some(boundaries) = self.static_holds.get(self.canonical(model)) else {
+        let Some(holds) = self
+            .static_holds
+            .get(self.canonical(model))
+            .and_then(|accounts| accounts.get(account_id))
+            .and_then(|lanes| lanes.get(lane))
+        else {
             return 0;
         };
         chain
             .iter()
             .rev()
             .find_map(|boundary| {
-                let hold = boundaries.get(boundary)?.get(account_id)?.get(lane)?;
-                hold.live(now, incarnation_of(account_id))
-                    .then_some(hold.size)
+                holds
+                    .get(boundary)
+                    .filter(|hold| hold.live(now, incarnation))
+                    .map(|hold| hold.size)
             })
             .unwrap_or(0)
     }
@@ -414,23 +421,35 @@ impl AffinityMap {
                 ) {
                     rows.push(row);
                 }
-                if let Some(ttl_ms) = static_ttl_ms {
-                    self.static_holds
-                        .entry(canonical_model.clone())
-                        .or_default()
-                        .entry(boundary.clone())
-                        .or_default()
-                        .entry(report.account_id.clone())
-                        .or_default()
-                        .insert(
-                            lane.clone(),
-                            StaticHold {
-                                incarnation: report.incarnation,
-                                written_at: report.now,
-                                ttl_ms,
-                                size,
-                            },
-                        );
+            }
+            // A second pass, since `upsert` borrows the whole map. The lane's map is resolved once per report, and a
+            // stored hold is overwritten in place, so only a new hold allocates its keys.
+            if let Some(ttl_ms) = static_ttl_ms.filter(|_| !report.static_boundaries.is_empty()) {
+                let accounts = match self.static_holds.get_mut(&canonical_model) {
+                    Some(accounts) => accounts,
+                    None => self.static_holds.entry(canonical_model).or_default(),
+                };
+                let lanes = match accounts.get_mut(&report.account_id) {
+                    Some(lanes) => lanes,
+                    None => accounts.entry(report.account_id.clone()).or_default(),
+                };
+                let holds = match lanes.get_mut(&lane) {
+                    Some(holds) => holds,
+                    None => lanes.entry(lane).or_default(),
+                };
+                for (index, boundary) in report.static_boundaries.iter().enumerate() {
+                    let hold = StaticHold {
+                        incarnation: report.incarnation,
+                        written_at: report.now,
+                        ttl_ms,
+                        size: report.static_sizes.get(index).copied().unwrap_or(0),
+                    };
+                    match holds.get_mut(boundary) {
+                        Some(stored) => *stored = hold,
+                        None => {
+                            holds.insert(boundary.clone(), hold);
+                        }
+                    }
                 }
             }
         }
@@ -477,16 +496,16 @@ impl AffinityMap {
                 hashes.remove(&purged.hash);
             }
         }
-        self.static_holds.retain(|_, boundaries| {
-            boundaries.retain(|_, accounts| {
-                accounts.retain(|account_id, lanes| {
-                    let incarnation = incarnation_of(account_id);
-                    lanes.retain(|_, hold| hold.live(now, incarnation));
-                    !lanes.is_empty()
+        self.static_holds.retain(|_, accounts| {
+            accounts.retain(|account_id, lanes| {
+                let incarnation = incarnation_of(account_id);
+                lanes.retain(|_, holds| {
+                    holds.retain(|_, hold| hold.live(now, incarnation));
+                    !holds.is_empty()
                 });
-                !accounts.is_empty()
+                !lanes.is_empty()
             });
-            !boundaries.is_empty()
+            !accounts.is_empty()
         });
         gone
     }
