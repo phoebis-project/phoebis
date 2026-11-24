@@ -1418,9 +1418,11 @@ plan side. The tab's keepalive figures follow the Client and User agent filters 
 In an hour folded before it the kept-warm, saved, skipped and wasted figures stand under no user agent, and all but the
 kept-warm and saved ones under no client, so there the User agent filter drops those figures and the Client filter drops
 the skipped and wasted ones. Probe cost and the OK, Held and Failed counts read the probes' own request rows, which
-follow both filters in every hour. What a probe is and when it counts as wasted is on [Keepalive](keepalive.md). Cache
-warming counts the probes whatever Include probes says, which its head states, on Probes by outcome and the by-pool
-table's probe columns as on its tiles. That toggle is the one control its figures ignore.
+follow both filters in every hour. So in an hour folded before this build, Net saving under the User agent filter counts
+the probe cost against no saving and can read below zero. What a probe is and when it counts as wasted is on
+[Keepalive](keepalive.md). Cache warming counts the probes whatever Include probes says, which its head states, on
+Probes by outcome and the by-pool table's probe columns as on its tiles. That toggle is the one control its figures
+ignore.
 
 Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the three
 windows the router reads, 5-hour, 7-day and 7-day Fable. Pace reads "The lead over pace per bucket: above zero ahead,
