@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, LandedMark, UsageSnapshot};
 use phoebis_store::{
-    AccountState, Cancellation, CooldownRow, CooldownScope, PinBurn, PinKey, PinRow, PoolRow,
-    RegistryLoad, RekeyWrite, RoutingLoad, RoutingTx, ShedRoundRow, StateCause, Store, StoreError,
-    ThinkingSum,
+    AccountState, Cancellation, CooldownRow, CooldownScope, LapsedAgentRow, PinBurn, PinKey,
+    PinRow, PoolRow, RegistryLoad, RekeyWrite, RoutingLoad, RoutingTx, ShedRoundRow, StateCause,
+    Store, StoreError, ThinkingSum,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
@@ -27,10 +27,10 @@ use crate::record::{
 };
 use crate::select::{
     account_end, budget_facts, burn_unit, decide, fresh_fit, fresh_prior, lane_is_fast,
-    mark_cleared_of, obstacle_on, pace_of, projection_of, projections_of, runway, slow_down_ramp,
-    spend_spent, standing_eligible, standing_move_read, zeroes_sums, BurnRead, Decided, FailedOver,
-    FitRead, FitWord, Judged, JudgedCharge, MoveRead, Obstacle, Refusal, SelectRequest,
-    SelectResult, RATE_LIMIT_REASON,
+    lapsed_record, mark_cleared_of, obstacle_on, pace_of, projection_of, projections_of, runway,
+    slow_down_ramp, spend_spent, standing_eligible, standing_move_read, zeroes_sums, BurnRead,
+    Decided, FailedOver, FitRead, FitWord, Judged, JudgedCharge, MoveRead, Obstacle, Refusal,
+    SelectRequest, SelectResult, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -148,6 +148,13 @@ impl Invalidated {
             )),
         }
     }
+}
+
+/// Where a session stood before a landing: the row under its key or a failover's row, or a lapsed agent's record,
+/// which names no epoch since its pin is gone.
+enum Stood<'a> {
+    Row(&'a PinRow),
+    Lapsed(&'a LapsedAgentRow),
 }
 
 /// A landing that took a session off an account whose thinking it held, open until the landed row's first report with
@@ -2804,6 +2811,7 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             StateWrite::DeleteCooldown(account_id, scope) => {
                 tx.delete_cooldown(account_id, scope)?;
             }
+            StateWrite::DeleteLapsedAgent(key) => tx.delete_lapsed_agent(key)?,
             StateWrite::DeletePin(key) => {
                 tx.delete_pin(key)?;
             }
@@ -2838,6 +2846,7 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             StateWrite::UpsertCredits(row) => {
                 tx.upsert_credits(row)?;
             }
+            StateWrite::UpsertLapsedAgent(row) => tx.upsert_lapsed_agent(row)?,
             StateWrite::UpsertModelWeekHour(row) => {
                 tx.upsert_model_week_hour(row)?;
             }
@@ -3504,6 +3513,8 @@ impl Task {
                 let cleared =
                     !(request.probe || request.classifier) && self.state.clear_ended(&pin_key);
                 let before = self.state.pin(&pin_key).cloned();
+                // Read ahead of the selection, which takes the record it places from.
+                let lapsed = lapsed_record(&self.state, &request).cloned();
                 // A failover inside its window, or a deleted account's pin that would still stand, lands on the row its
                 // source lost: the selection prices the session's own burn and names the cause on the record. A key
                 // that holds a pin again is no landing, and neither is the client's classifier call, which holds no
@@ -3659,10 +3670,13 @@ impl Task {
                     _ => {}
                 }
                 if selected {
-                    // A failover's landing finds no row under the key, since the failover took it.
+                    // A failover's landing finds no row under the key, since the failover took it, and neither does a
+                    // lapsed agent's return, whose record stands in for the row the purge took.
                     let stood_on = before
                         .as_ref()
-                        .or(request.failed_over.as_ref().map(|failed| &failed.row));
+                        .or(request.failed_over.as_ref().map(|failed| &failed.row))
+                        .map(Stood::Row)
+                        .or(lapsed.as_ref().map(Stood::Lapsed));
                     self.observe_landing(&pin_key, stood_on, &request);
                 }
                 record.outcome.pin_events = pin_events.iter().filter_map(pin_event_facts).collect();
@@ -5161,14 +5175,14 @@ impl Task {
         cleared
     }
 
-    /// Opens the observation of a selection that landed the session under `key` on another account than the row it
-    /// stood on, where that row's sum for the account it left is above zero and the snapshot still holds that row's
-    /// holder, in place of the key's open one. A selection that sets the sums to zero drops the key's open
-    /// observation, landing or not.
+    /// Opens the observation of a selection that landed the session under `key` on another account than the one it
+    /// stood on, where the sum of the row or the record it stood on for the account it left is above zero and the
+    /// snapshot still holds that account's holder, in place of the key's open one. A selection that sets the sums to
+    /// zero drops the key's open observation, landing or not.
     fn observe_landing(
         &mut self,
         key: &PinKey,
-        stood_on: Option<&PinRow>,
+        stood_on: Option<Stood<'_>>,
         request: &SelectRequest,
     ) {
         // A compacted prompt holds no earlier block, so its answer drops none: it would close an earlier landing's
@@ -5181,28 +5195,39 @@ impl Task {
         let (Some(stood_on), Some(landed)) = (stood_on, self.state.pin(key)) else {
             return;
         };
-        if landed.epoch == stood_on.epoch {
+        let (epoch, account_id, incarnation, last_prompt, sums) = match stood_on {
+            Stood::Row(row) => (
+                Some(row.epoch),
+                &row.account_id,
+                row.incarnation,
+                row.last_input_tokens,
+                &row.thinking_sums,
+            ),
+            Stood::Lapsed(record) => (
+                None,
+                &record.account_id,
+                record.incarnation,
+                record.last_input_tokens,
+                &record.thinking_sums,
+            ),
+        };
+        if epoch == Some(landed.epoch) {
             return;
         }
-        let (epoch, moved) = (landed.epoch, landed.account_id != stood_on.account_id);
+        let (epoch, moved) = (landed.epoch, landed.account_id != *account_id);
         self.observations.remove(key);
-        let held = stood_on
-            .thinking_sums
-            .get(&stood_on.account_id)
-            .map_or(0, |sum| sum.tokens);
-        // A failover's waiting row can name a holder the id has moved past since the purge last ran, and the answer
-        // would teach the pair under that holder: the test the purge's `retain` applies to an open observation.
-        if moved
-            && held > 0
-            && holder(&self.snapshot(), &stood_on.account_id, stood_on.incarnation).is_some()
-        {
+        let held = sums.get(account_id).map_or(0, |sum| sum.tokens);
+        // A failover's waiting row can name a holder the id has moved past since the purge last ran, and a lapsed
+        // agent's record one the id moved past since the purge took its pin, and the answer would teach the pair under
+        // that holder: the test the purge's `retain` applies to an open observation.
+        if moved && held > 0 && holder(&self.snapshot(), account_id, incarnation).is_some() {
             self.observations.insert(
                 key.clone(),
                 Observation {
                     epoch,
-                    left: stood_on.account_id.clone(),
-                    left_incarnation: stood_on.incarnation,
-                    last_prompt: stood_on.last_input_tokens,
+                    left: account_id.clone(),
+                    left_incarnation: incarnation,
+                    last_prompt,
                 },
             );
         }
@@ -5277,6 +5302,13 @@ impl Task {
             }
             pin_ends.push(StateWrite::DeletePin(key));
         }
+        pin_ends.extend(
+            purged
+                .lapsed_ended
+                .into_iter()
+                .map(StateWrite::DeleteLapsedAgent),
+        );
+        pin_ends.extend(purged.lapsed.into_iter().map(StateWrite::UpsertLapsedAgent));
         // A deleted account's pin that would still stand writes no expiry: the session's next request that takes a
         // pin lands on it as a move off the account.
         for row in purged.traced {
@@ -5887,6 +5919,9 @@ enum DeferredKey {
         scope: CooldownScope,
     },
     Credits(String),
+    /// A lapsed agent's record, apart from `Pin` under the same key: the purge writes a pin's delete and its record's
+    /// upsert together, and under one key the later write would replace the delete.
+    LapsedAgent(PinKey),
     /// A model week's hour of an account: each write carries the hour's whole sum, so the last one stands for all.
     ModelWeekHour {
         account_id: String,
@@ -5919,13 +5954,14 @@ enum DeferredKey {
     },
 }
 
-/// Writes the channel had no room for, the last write per row: a pin's last upsert, delete or end, a window's last
-/// upsert or delete, a window set's last upsert per account, a cooldown's last upsert or delete per scope, an overage,
-/// credits or account state per account, an affinity row's last upsert or delete per key, a pool's last round per
-/// account, a model week hour's last sum, a model's pair's last fact, one round purge, one hour purge, one stale-window
-/// sweep, and every rekey in order. A rekey closes the rows before it into a segment of their own, so a pin's write
-/// dated after a resolution never lands ahead of the rekey that moved its rows. A round may land on either side of the
-/// pin writes held beside it: a mark is read back only for the pin and the epoch its row names.
+/// Writes the channel had no room for, the last write per row: a pin's last upsert, delete or end, a lapsed agent's
+/// record's last upsert or delete, a window's last upsert or delete, a window set's last upsert per account, a
+/// cooldown's last upsert or delete per scope, an overage, credits or account state per account, an affinity row's last
+/// upsert or delete per key, a pool's last round per account, a model week hour's last sum, a model's pair's last fact,
+/// one round purge, one hour purge, one stale-window sweep, and every rekey in order. A rekey closes the rows before it
+/// into a segment of their own, so a pin's write dated after a resolution never lands ahead of the rekey that moved its
+/// rows. A round may land on either side of the pin writes held beside it: a mark is read back only for the pin and the
+/// epoch its row names.
 #[derive(Default)]
 struct Deferred {
     /// Oldest first: each closed segment's rows and the rekey that closed it.
@@ -6032,6 +6068,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             },
             write,
         ),
+        StateWrite::DeleteLapsedAgent(ref key) => one(DeferredKey::LapsedAgent(key.clone()), write),
         StateWrite::DeletePin(ref key) => one(DeferredKey::Pin(key.clone()), write),
         StateWrite::DeleteWindow {
             ref account_id,
@@ -6086,6 +6123,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
         StateWrite::UpsertCredits(ref row) => {
             one(DeferredKey::Credits(row.account_id.clone()), write)
         }
+        StateWrite::UpsertLapsedAgent(ref row) => one(DeferredKey::LapsedAgent(row.key()), write),
         StateWrite::UpsertModelWeekHour(ref row) => one(
             DeferredKey::ModelWeekHour {
                 account_id: row.account_id.clone(),

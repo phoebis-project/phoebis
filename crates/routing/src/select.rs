@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityMode, BudgetPeriod, CooldownRow, CooldownScope,
-    OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, ReturnToPlan,
-    SessionPlacement, ShedStamp, Strategy, SubagentPlacement, ThinkingSum, WarmSessions,
+    LapsedAgentRow, OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow,
+    ReturnToPlan, SessionPlacement, ShedStamp, Strategy, SubagentPlacement, ThinkingSum,
+    WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -25,7 +26,7 @@ use crate::record::{
 };
 use crate::resolve::pool_candidates;
 use crate::state::{
-    all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, keeps_off,
+    all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, keeps_off, lapsed_of,
     load_shedding, mark_holds, plan_windows, reservation_shedding, return_to_plan_dwell_ms,
     round_in_dwell, shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms,
     standing_mark, warm, BandSegment, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage,
@@ -1045,18 +1046,27 @@ pub(crate) fn zeroes_sums(request: &SelectRequest) -> bool {
     request.context_compacted && !request.probe
 }
 
-/// The thinking sums a selection writes on the session's row from the row it stood on: each entry whose holder
-/// `snapshot` still carries, at zero where `zeroes_sums` reads the request. A failover's row and a deleted account's
-/// trace wait outside the state, where the purge's pass does not walk, so the hand-over drops a gone holder's sum
-/// itself.
-pub(crate) fn handed_sums(
-    row: &PinRow,
+/// The lapsed agent's record under the request's key, where the record names the key's generation the request carries:
+/// a key deleted and created again under its id is another key, whose sessions the record never ran.
+pub(crate) fn lapsed_record<'s>(
+    state: &'s RoutingState,
     request: &SelectRequest,
+) -> Option<&'s LapsedAgentRow> {
+    state
+        .lapsed_agent(&request.pin_key())
+        .filter(|record| record.key_generation == request.key_generation)
+}
+
+/// The thinking sums a selection writes on the session's row from `sums`, those of the row the session stood on or of
+/// its lapsed agent's record: each entry whose holder `snapshot` still carries, at zero where `zeroed`. A failover's
+/// row, a deleted account's trace and a lapsed agent's record wait where the purge's pass drops no sum, so the
+/// hand-over drops a gone holder's sum itself.
+pub(crate) fn handed_sums(
+    sums: &BTreeMap<String, ThinkingSum>,
+    zeroed: bool,
     snapshot: &RegistrySnapshot,
 ) -> BTreeMap<String, ThinkingSum> {
-    let zeroed = zeroes_sums(request);
-    row.thinking_sums
-        .iter()
+    sums.iter()
         .filter(|(account, sum)| snapshot.holder(account, sum.incarnation).is_some())
         .map(|(account, sum)| {
             let tokens = if zeroed { 0 } else { sum.tokens };
@@ -1110,11 +1120,12 @@ fn cache_write(tokens: u64, ttl_ms: i64) -> PinUsage {
 
 /// The rewrite per plan window (`rewrite_write`'s write on `tier` at the band of `now`) and the burn per plan window
 /// (the pin's own decayed burn over its account's speed, or for a fresh session the decayed burn of the row a failover
-/// took off its source over that source's speed, else the median of the pool's priced warm pins, each over its
-/// account's speed, absent with none, which reads as zero), on the windows the request's model draws that the
-/// destination `account_id` has. A window nothing prices is absent from both. The destination gate's fit and the
-/// shedding round read it. The third member is the entrypoint the burn is priced under (the pin's, the failed-over
-/// row's, or the request's for the median), whose band a reader that weighs the burn over a span reads it under.
+/// took off its source over that source's speed, else a lapsed agent's kept burn over its record's speed, else the
+/// median of the pool's priced warm pins, each over its account's speed, absent with none, which reads as zero), on the
+/// windows the request's model draws that the destination `account_id` has. A window nothing prices is absent from
+/// both. The destination gate's fit and the shedding round read it. The third member is the entrypoint the burn is
+/// priced under (the pin's, the failed-over row's, or the request's for a lapsed agent and the median), whose band a
+/// reader that weighs the burn over a span reads it under.
 pub(crate) fn pin_figures<'a>(
     state: &RoutingState,
     pool: &PoolRow,
@@ -1143,6 +1154,7 @@ pub(crate) fn pin_figures<'a>(
             Some(failed_over) => failed_over.row.entrypoint.as_deref(),
             None => request.entrypoint.as_deref(),
         },
+        Figures::Lapsed(..) => request.entrypoint.as_deref(),
     };
     let mut rewrite = BTreeMap::new();
     let mut burn = BTreeMap::new();
@@ -1175,12 +1187,17 @@ pub(crate) fn pin_figures<'a>(
                     })
                 })
             }
+            // A returning agent's own burn as its pin left it, over the speed it ran at then: the idle time it spent
+            // away would decay it to nothing.
+            Figures::Lapsed(kept, _) if kept_burn(kept) => share
+                .rate(window, regime, tier, &kept.model, &kept.burn, now)
+                .map(|rate| rate / kept.speed),
             // A pin burns the windows its own model draws, so a Sonnet pin adds nothing to a Fable week's prior. The
             // unpriced ones are left out of the median so one of them does not zero it. A fresh session starts
             // unslowed, so each warm pin counts at its unslowed rate, over its own account's speed. The meter charges
             // the new session under the request's regime, which its pin carries and its booking names, so every warm
             // pin's tokens price under that regime and not their own.
-            Figures::Fresh(warm_pins) => median(
+            Figures::Fresh(warm_pins) | Figures::Lapsed(_, warm_pins) => median(
                 warm_pins
                     .iter()
                     .filter(|p| plan_windows(&p.model).any(|w| w == window))
@@ -1207,20 +1224,32 @@ pub(crate) enum Figures<'a> {
     /// walk since every candidate of the walk reads the same set. A failed-over request's landing reads the burn of the
     /// row its source lost here instead of the median.
     Fresh(&'a [PinRow]),
+    /// A lapsed agent's return: the body as its rewrite, and the burn its record kept, with no decay, over the record's
+    /// speed. A record whose burn members are all zero kept none, and the median of the pool's warm pins, the second
+    /// member, stands in for it.
+    Lapsed(&'a LapsedAgentRow, &'a [PinRow]),
 }
 
 impl<'a> Figures<'a> {
-    /// `pin`'s figures, or the fresh session's from `prior` where there is no pin.
-    fn of(pin: Option<&'a PinRow>, prior: &'a [PinRow]) -> Self {
-        pin.map_or(Figures::Fresh(prior), Figures::Pin)
-    }
-
     fn pin(self) -> Option<&'a PinRow> {
         match self {
             Figures::Pin(pin) => Some(pin),
-            Figures::Fresh(_) => None,
+            Figures::Fresh(_) | Figures::Lapsed(..) => None,
         }
     }
+}
+
+/// Whether a lapsed agent's record kept a burn: a pin that left before an answer with usage renewed it holds each copy
+/// at zero.
+fn kept_burn(kept: &LapsedAgentRow) -> bool {
+    [
+        kept.burn,
+        kept.burn_banded,
+        kept.burn_fast,
+        kept.burn_unmetered,
+    ]
+    .iter()
+    .any(|copy| *copy != PinBurn::default())
 }
 
 /// A fresh session's prior: the warm pins the pool keeps on its members at `now`, each priced per window by
@@ -1851,6 +1880,14 @@ fn run(
     // it is placed for itself and writes no pin. Read off the row whatever `found` names it, so a row whose account
     // left the pool binds as a live one does, and a row that idled out binds nothing.
     let mut follows_bound = false;
+    // What a placement of a returning agent reads in place of a fresh session's figures: the record the purge left
+    // under the request's key, or the one a row idle past the TTL stands in for, since the same selection writes the
+    // pin that carries the figures. An owned copy, since the booking and the pin's write borrow the state mutably. A
+    // token count and a probe place no pin, so they read neither. `lapsed_stored` says the state holds it as a record,
+    // which the pin's write takes.
+    let mut lapsed: Option<LapsedAgentRow> = None;
+    let mut lapsed_stored = false;
+    let reads_lapsed = !(request.count || request.probe);
     if let Some(session) = session {
         let key = request.pin_key();
         // A slot wait ends at the admission, the request's dispatch, which the relay names as the cap hold's end, so
@@ -1967,6 +2004,10 @@ fn run(
                 request.now,
                 state.pin_pace(&current_key),
             ));
+            if found == "expired_idle" && reads_lapsed {
+                let speed = state.slow_down_speed(pool, &current.account_id, request.now);
+                lapsed = Some(lapsed_of(&current, speed));
+            }
             if found == "live" {
                 pin = Some((current, current_key));
             } else {
@@ -1982,6 +2023,10 @@ fn run(
                 request.now,
                 state.pin_pace(&key),
             ));
+            if reads_lapsed {
+                lapsed = lapsed_record(state, request).cloned();
+                lapsed_stored = lapsed.is_some();
+            }
         }
         own_key = Some(key);
     }
@@ -2557,6 +2602,13 @@ fn run(
         Some(_) => Vec::new(),
         None => fresh_prior(state, snapshot, pool, request.now),
     };
+    // The request's own figures, which the fit, rung 4's gate and the booking read alike. A failover's landing keeps
+    // the row its source lost, whatever record the agent left.
+    let figures = match (&moving, &lapsed) {
+        (Some(row), _) => Figures::Pin(row),
+        (None, Some(kept)) if request.failed_over.is_none() => Figures::Lapsed(kept, &prior),
+        (None, _) => Figures::Fresh(&prior),
+    };
     let fitting: Vec<&Candidate> = if moving.is_some() {
         selection_set.clone()
     } else {
@@ -2570,7 +2622,7 @@ fn run(
                 snapshot,
                 pool,
                 request,
-                Figures::Fresh(&prior),
+                figures,
                 &c.account_id,
                 &[],
                 request.now,
@@ -2679,8 +2731,7 @@ fn run(
             snapshot,
             pool,
             request,
-            moving.as_ref(),
-            &prior,
+            figures,
             &affinity_guard,
             &allowed,
             window,
@@ -2833,7 +2884,7 @@ fn run(
                 pool,
                 &chosen.account_id,
                 request,
-                Figures::of(moving.as_ref(), &prior),
+                figures,
                 tier,
                 request.now,
             );
@@ -2911,6 +2962,7 @@ fn run(
                 }),
             moving,
             replaced,
+            lapsed.as_ref(),
         );
         rec.pin_written = Some(PinWritten {
             action: if migrated.is_some() {
@@ -2935,7 +2987,15 @@ fn run(
             );
         }
         let handed = pin_ref(&row);
+        // The record leaves with the pin it fed, a failover's landing among them, so no record outlives a pin under its
+        // key and generation.
+        let taken = lapsed_stored
+            .then(|| state.take_lapsed_agent(&row.key()))
+            .flatten();
         writes.push(StateWrite::UpsertPin(row));
+        if let Some(record) = taken {
+            writes.push(StateWrite::DeleteLapsedAgent(record.key()));
+        }
         handed
     });
     let mut trace_skipped: Vec<Skipped> = obstacles
@@ -3031,7 +3091,9 @@ fn replace_expired(
 /// averages, the classifier copy's model and the last prompt the new row carries, so the destination's projection
 /// counts the pin from the moment it lands, the copy keeps its price and a later move prices its rewrite from a figure.
 /// `replaced` is any row of the pin the placement replaces, `moving` among them, whose thinking sums of the holders
-/// `snapshot` carries the new row takes on.
+/// `snapshot` carries the new row takes on. `lapsed` is a returning agent's record, or the one a row idle past the TTL
+/// stands in for: with no `moving` row the new row takes its burn copies, decayed from the placement on, and where it
+/// replaces no row its sums.
 #[allow(clippy::too_many_arguments)]
 fn fresh_pin(
     request: &SelectRequest,
@@ -3042,7 +3104,30 @@ fn fresh_pin(
     shed: Option<(String, String)>,
     moving: Option<&PinRow>,
     replaced: Option<&PinRow>,
+    lapsed: Option<&LapsedAgentRow>,
 ) -> PinRow {
+    // The rates are typed tokens per second and carry no unit, so the copy needs no re-pricing.
+    let (burn, burn_at, burn_banded, burn_fast, burn_unmetered, burn_unmetered_model) =
+        match (moving, lapsed) {
+            (Some(m), _) => (
+                m.burn,
+                m.burn_at,
+                m.burn_banded,
+                m.burn_fast,
+                m.burn_unmetered,
+                m.burn_unmetered_model.clone(),
+            ),
+            // A record that kept no burn gives a pin that no usage renewed, which names no fold.
+            (None, Some(kept)) => (
+                kept.burn,
+                kept_burn(kept).then_some(request.now),
+                kept.burn_banded,
+                kept.burn_fast,
+                kept.burn_unmetered,
+                kept.burn_unmetered_model.clone(),
+            ),
+            (None, None) => Default::default(),
+        };
     let mut row = PinRow {
         key_id: request.key_id.clone(),
         session_id: session.to_string(),
@@ -3057,13 +3142,12 @@ fn fresh_pin(
         // this request's old one is choosing.
         key_generation: request.key_generation,
         incarnation: chosen.incarnation,
-        // The rates are typed tokens per second and carry no unit, so the copy needs no re-pricing.
-        burn: moving.map_or_else(PinBurn::default, |m| m.burn),
-        burn_at: moving.and_then(|m| m.burn_at),
-        burn_banded: moving.map_or_else(PinBurn::default, |m| m.burn_banded),
-        burn_fast: moving.map_or_else(PinBurn::default, |m| m.burn_fast),
-        burn_unmetered: moving.map_or_else(PinBurn::default, |m| m.burn_unmetered),
-        burn_unmetered_model: moving.and_then(|m| m.burn_unmetered_model.clone()),
+        burn,
+        burn_at,
+        burn_banded,
+        burn_fast,
+        burn_unmetered,
+        burn_unmetered_model,
         last_input_tokens: moving.map_or(0, |m| m.last_input_tokens),
         // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
         last_refresh_at: request.now,
@@ -3085,7 +3169,9 @@ fn fresh_pin(
         effort: request.effort.clone(),
         ended: false,
         thinking_sums: replaced
-            .map(|r| handed_sums(r, request, snapshot))
+            .map(|r| &r.thinking_sums)
+            .or(lapsed.map(|kept| &kept.thinking_sums))
+            .map(|sums| handed_sums(sums, zeroes_sums(request), snapshot))
             .unwrap_or_default(),
         // No row's flag carries over: a request that carries no conversation never moves or replaces a flagged live
         // row, and each other row it replaces names an account whose state the new account does not hold.
@@ -7311,11 +7397,11 @@ fn entry_refusal(
 }
 
 /// Rung 4's own gate on a candidate account, evaluated per candidate rather than inferred from the
-/// post-partition selection set: under the cap, and a fit for the request (the moving `pin`'s figures, or the fresh
-/// prior with none) as the `no_fit` partition reads it, whose first arm reads a winding-down account as `ending`.
-/// Answers the first gate that blocks it: `at_cap` or `no_fit`. The fit leaves the row under `own` out, as the
-/// partition's does. `verdict` is the fit the partition already read for the account, `None` to read it here. The cap
-/// is read here even beside a `verdict`, since the relay moves the in-flight counts from other threads.
+/// post-partition selection set: under the cap, and a fit for the request (the moving `pin`'s figures, a returning
+/// agent's, or the fresh prior) as the `no_fit` partition reads it, whose first arm reads a winding-down account as
+/// `ending`. Answers the first gate that blocks it: `at_cap` or `no_fit`. The fit leaves the row under `own` out, as
+/// the partition's does. `verdict` is the fit the partition already read for the account, `None` to read it here. The
+/// cap is read here even beside a `verdict`, since the relay moves the in-flight counts from other threads.
 #[allow(clippy::too_many_arguments)]
 fn blocked(
     state: &RoutingState,
@@ -7481,10 +7567,10 @@ struct JudgedTurn {
 /// since the cohort's own account outweighs it) or the deepest static boundary past the size gate, the cache
 /// gate and the blocker (rung 4, already under the cap by construction). `allowed` is the selection set before
 /// step 6's own partitions, so the source of a move or an account a preference narrowed around can never win a
-/// placement it would not have won on its own account. `moving` is the pin a move takes off its source, whose figures
-/// the blocker's fit reads, and `None` for a fresh placement. A token count is never placed: it reads no cache, so a
-/// warm prefix would only lift it past the cap and promise its trace a read it can never make. `own` is the request's
-/// pin key, whose row the blocker's fit leaves out. `prior` is the fresh prior step 6 built, empty for a move.
+/// placement it would not have won on its own account. `figures` are the request's own as step 6 reads them, which the
+/// blocker's fit reads: the pin a move takes off its source, a returning agent's, or the fresh prior step 6 built. A
+/// token count is never placed: it reads no cache, so a warm prefix would only lift it past the cap and promise its
+/// trace a read it can never make. `own` is the request's pin key, whose row the blocker's fit leaves out.
 /// `allowances` and `verdicts` are step 6's allowance and fit reads by account, which the rungs reuse where they hold
 /// the account: the state is the same, and step 6 reads the fit of a fresh placement alone.
 #[allow(clippy::too_many_arguments)]
@@ -7493,8 +7579,7 @@ fn placement_of<'a>(
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     request: &SelectRequest,
-    moving: Option<&PinRow>,
-    prior: &[PinRow],
+    figures: Figures<'_>,
     affinity: &AffinityMap,
     allowed: &[&'a Candidate],
     window: &str,
@@ -7649,7 +7734,7 @@ fn placement_of<'a>(
                         snapshot,
                         pool,
                         request,
-                        Figures::of(moving, prior),
+                        figures,
                         &e.account_id,
                         own,
                         read_of(verdicts, &e.account_id),

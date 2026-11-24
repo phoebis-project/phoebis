@@ -99,7 +99,8 @@ fn tenth_step_taken_back(conn: &rusqlite::Connection) {
     conn.execute_batch(
         "ALTER TABLE pins DROP COLUMN account_bound;
          ALTER TABLE pins DROP COLUMN marked_source;
-         ALTER TABLE cooldowns DROP COLUMN spend_share;",
+         ALTER TABLE cooldowns DROP COLUMN spend_share;
+         DROP TABLE lapsed_agents;",
     )
     .unwrap();
 }

@@ -6,7 +6,7 @@
 //! marker. Version 3 adds `usage_window_sets`. Version 7 adds the limit resets' three columns to `accounts`. Version 8
 //! adds `accounts.state_changed_at`, `model_week_hours`, `pins.thinking_sums`, `pools.fable_reservation_shedding`,
 //! `pools.thinking_diagnostics`, `pools.weekly_ceiling` and `thinking_bindings`, renames `pools.window_ceiling` to
-//! `five_hour_ceiling` and drops `session_first_seen`.
+//! `five_hour_ceiling` and drops `session_first_seen`. Version 10 adds `lapsed_agents`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -380,11 +380,28 @@ ALTER TABLE api_keys ADD COLUMN feature_accounts_json TEXT NOT NULL DEFAULT '{}'
 /// A pin whose session holds account state, which stays on its account until a portable turn of the conversation. A
 /// shedding mark names the test that fired its round, null on a mark made before the column, which reads as a
 /// projection round's. An account cooldown of a usage-based seat keeps the spend share at its refusal, null on each
-/// other row and on a seat's row set before the column, which lifts as a share of 1.0.
+/// other row and on a seat's row set before the column, which lifts as a share of 1.0. A lapsed agent's record keeps
+/// the burn and the thinking sums of a pin the purge took as expired, with whether its session held account state, and
+/// the table starts empty.
 const V10: &str = r#"
 ALTER TABLE pins ADD COLUMN account_bound INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN marked_source TEXT;
 ALTER TABLE cooldowns ADD COLUMN spend_share REAL;
+CREATE TABLE lapsed_agents (
+  key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, model TEXT NOT NULL,
+  key_generation INTEGER NOT NULL, account_id TEXT NOT NULL, incarnation INTEGER NOT NULL,
+  last_used_at INTEGER NOT NULL, last_input_tokens INTEGER NOT NULL,
+  burn_input REAL NOT NULL, burn_cache_read REAL NOT NULL, burn_write_5m REAL NOT NULL,
+  burn_write_1h REAL NOT NULL, burn_output REAL NOT NULL,
+  burn_banded_input REAL NOT NULL, burn_banded_cache_read REAL NOT NULL, burn_banded_write_5m REAL NOT NULL,
+  burn_banded_write_1h REAL NOT NULL, burn_banded_output REAL NOT NULL,
+  burn_fast_input REAL NOT NULL, burn_fast_cache_read REAL NOT NULL, burn_fast_write_5m REAL NOT NULL,
+  burn_fast_write_1h REAL NOT NULL, burn_fast_output REAL NOT NULL,
+  burn_unmetered_cache_read REAL NOT NULL, burn_unmetered_input REAL NOT NULL, burn_unmetered_output REAL NOT NULL,
+  burn_unmetered_write_1h REAL NOT NULL, burn_unmetered_write_5m REAL NOT NULL, burn_unmetered_model TEXT,
+  speed REAL NOT NULL, thinking_sums TEXT NOT NULL, account_bound INTEGER NOT NULL,
+  PRIMARY KEY (key_id, session_id, agent_id, model)
+);
 "#;
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or

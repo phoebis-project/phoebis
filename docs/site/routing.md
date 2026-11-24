@@ -410,8 +410,12 @@ rung above it, and on the last rung while an account outside its wind-down stand
 the relay's estimate of the body's tokens as its rewrite and the median burn of the pool's warm sessions as its burn,
 each warm session's rate at the pace it would run unheld, and reads the account's own burn as the burn the sessions
 already on it would make unheld, so an account calm only because the slow-down holds its sessions reads as full (see
-**The demand**, below). A window the account has not read counts as untouched, and an account inside `wind_down_minutes`
-of its subscription end never fits.
+**The demand**, below). An agent whose pin expired for idleness returns with its own burn in place of the median. The
+router keeps the pin's burn average, as the pin's last answer with usage left it, for 7 days after the pin's last use. A
+placement of the agent inside those 7 days reads that average with no decay over the idle time, at the pace the agent
+ran unheld when the pin expired, and the new pin's burn decays from the placement on. An agent whose pin never reported
+usage returns with the median. A window the account has not read counts as untouched, and an account inside
+`wind_down_minutes` of its subscription end never fits.
 
 What remains is ordered in tiers. With `prefer_subscription` on, the set splits into three kind groups walked in order,
 plan quota, overage, then API key. Within a group, or across the whole set with the flag off, tiers order by priority
@@ -909,15 +913,17 @@ The router learns the binding per model and unordered pair of accounts. Each pin
 that account's answers reported for the session (`output_tokens_details.thinking_tokens`), and a client's request that
 carries `x-claude-code-context-compacted` sets each sum to zero, since its compacted prompt holds no earlier block. The
 sums travel with the session: a move keeps them, and so does each placement that replaces the session's pin, whether a
-failover took the pin, or it was released off its account, idle past its TTL or left behind by its pool. When a
-selection lands a session on another account than its pin stood on, and the pin holds thinking of the account it
-leaves, the first answer with usage on the new account settles the pair. Its `input_transformations` member reads the
-pair bound where it lists a block dropped as `end_user_binding_mismatch` or `organization_binding_mismatch`, and kept
-where it lists neither, since the client's standing `prefix_binding_mismatch` entry is no drop the move caused. An
-answer without the member reads the pair bound where its prompt is smaller than the last prompt before the move, and
-settles nothing otherwise. The newest answer replaces what the pair held, and the registry keeps each pair's fact across
-a restart, while a move whose answer has not come yet is forgotten. A pair with no fact of its own reads bound once the
-model holds a bound pair, and unobserved otherwise.
+failover took the pin, or it was released off its account, idle past its TTL or left behind by its pool. The router
+keeps the sums of a pin that expired for idleness for 7 days after the pin's last use, so an agent that returns inside
+them takes its sums up again, and one that returns later starts with none. When a selection lands a session on another
+account than its pin stood on, and the pin holds thinking of the account it leaves, the first answer with usage on the
+new account settles the pair. Its `input_transformations` member reads the pair bound where it lists a block dropped as
+`end_user_binding_mismatch` or `organization_binding_mismatch`, and kept where it lists neither, since the client's
+standing `prefix_binding_mismatch` entry is no drop the move caused. An answer without the member reads the pair bound
+where its prompt is smaller than the last prompt before the move, and settles nothing otherwise. The newest answer
+replaces what the pair held, and the registry keeps each pair's fact across a restart, while a move whose answer has not
+come yet is forgotten. A pair with no fact of its own reads bound once the model holds a bound pair, and unobserved
+otherwise.
 
 A move over a pair that reads bound prices its rewrite as the last prompt, less the pin's sum for the account it
 leaves, plus its sum for the destination, never under zero. A pair that reads kept or unobserved, a session with no pin

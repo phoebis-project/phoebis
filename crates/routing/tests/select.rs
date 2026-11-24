@@ -31694,6 +31694,259 @@ fn the_pin_that_replaces_a_row_idle_past_the_ttl_carries_the_row_s_thinking_sums
     );
 }
 
+/// A slowing pool over `a` and `b` that keeps a session on its account for five minutes past its last use.
+fn lapse_pool() -> RegistrySnapshot {
+    tiered(slowing(Pool {
+        affinity: 300,
+        members: vec![("a", 0), ("b", 1)],
+        load_shedding: false,
+        ..Pool::default()
+    }))
+}
+
+/// `s1`'s pin on `a` burning `input` tokens a second, its burn folded last six hours before `T` and the pin used last
+/// six minutes before it, past the TTL of `lapse_pool`.
+fn lapsing(input: f64) -> PinRow {
+    PinRow {
+        created_at: T - 7 * HOUR,
+        last_used_at: T - 6 * MINUTE,
+        last_refresh_at: T - 6 * MINUTE,
+        burn_at: Some(T - 6 * HOUR),
+        ..burning("s1", "a", input, true, T)
+    }
+}
+
+/// `pins` on the ratio pricer beside `w`'s pin on `b`, warm at `at` and burning 25 input tokens a second, 0.009 of the
+/// 5-hour window an hour: a fresh session's prior.
+fn beside_warm(pins: Vec<PinRow>, at: i64) -> RoutingState {
+    priced(
+        pins.into_iter()
+            .chain([burning("w", "b", 25.0, true, at)])
+            .collect(),
+    )
+}
+
+/// The 5-hour share an hour that `d`'s booking holds for the burn.
+fn booked_burn(d: &Decided) -> f64 {
+    number(fact(line(&d.record, "reserve"), "burn_five_hour"))
+}
+
+/// The thinking sums of each row `d` wrote under `s1`'s key.
+fn written_sums(d: &Decided) -> Vec<&BTreeMap<String, ThinkingSum>> {
+    d.writes
+        .iter()
+        .filter_map(|write| match write {
+            StateWrite::UpsertPin(row) if row.key() == pin_key("s1") => Some(&row.thinking_sums),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `key_recreated` with each account's subscription term kept, so a tiered pool still prices its accounts.
+fn key_recreated_with_terms(s: &RegistrySnapshot, created_at: i64) -> RegistrySnapshot {
+    let load = RegistryLoad {
+        accounts: s.accounts().cloned().collect(),
+        credential_generations: Vec::new(),
+        keys: s
+            .keys()
+            .cloned()
+            .map(|mut k| {
+                if k.id == "k" {
+                    k.created_at = created_at;
+                }
+                k
+            })
+            .collect(),
+        members: s.pools().flat_map(|p| s.members(&p.id).to_vec()).collect(),
+        pools: s.pools().cloned().collect(),
+        retired_secrets: Vec::new(),
+        reused_key_ids: Vec::new(),
+        terms: s
+            .accounts()
+            .filter_map(|a| s.term(&a.id).cloned())
+            .collect(),
+        ..Default::default()
+    };
+    RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+}
+
+/// `s1`'s pin as `lapsing` holds it, with a sum of 4,000 thinking tokens for `a`, and that sum.
+fn lapsing_with_sums() -> (PinRow, BTreeMap<String, ThinkingSum>) {
+    let sums = BTreeMap::from([(
+        "a".to_string(),
+        ThinkingSum {
+            incarnation: 1,
+            tokens: 4_000,
+        },
+    )]);
+    let pin = PinRow {
+        thinking_sums: sums.clone(),
+        ..lapsing(100.0)
+    };
+    (pin, sums)
+}
+
+#[test]
+fn a_lapsed_agents_return_books_its_kept_burn_over_the_stored_speed() {
+    let s = lapse_pool();
+    // s1's pin is the one pin on a, so the purge that takes it drops a's slow-down too.
+    let mut st = beside_warm(vec![lapsing(100.0)], T);
+    st.write_slow_down("p", "a", &seeded_read(1.0, T), 0.5, T, AVERAGE_MS);
+    st.purge(&s, T);
+    let returned = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    let d = decide(&mut st, &s, &returned, &mut rng());
+    // 100 input tokens a second, 0.036 of the 5-hour window an hour, over the speed of 0.5 at the take.
+    let booked = booked_burn(&d);
+    assert!(
+        close(booked, 0.072),
+        "the return books its kept burn over the stored speed: {booked}"
+    );
+}
+
+#[test]
+fn a_lapsed_agent_that_never_reported_usage_returns_with_the_median() {
+    let s = lapse_pool();
+    // No answer with usage renewed s1's pin, so each copy reads zero and the pin names no fold.
+    let never_renewed = PinRow {
+        burn_at: None,
+        ..lapsing(0.0)
+    };
+    let mut st = beside_warm(vec![never_renewed], T);
+    st.purge(&s, T);
+    let returned = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    let d = decide(&mut st, &s, &returned, &mut rng());
+    let booked = booked_burn(&d);
+    assert!(
+        close(booked, 0.009),
+        "the return books w's rate, the median of the pool's warm pins: {booked}"
+    );
+}
+
+#[test]
+fn a_returned_agents_pin_decays_its_burn_from_the_placement() {
+    // The pool's hour of TTL outlasts its half-hour burn average, so the returned pin stands one average later.
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        load_shedding: false,
+        ..Pool::default()
+    });
+    let idle = PinRow {
+        last_used_at: T - 2 * HOUR,
+        last_refresh_at: T - 2 * HOUR,
+        ..lapsing(100.0)
+    };
+    let mut st = beside_warm(vec![idle], T);
+    st.purge(&s, T);
+    let returned = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    assert_eq!(
+        picked(&select(&mut st, &s, &returned, &mut rng()).0),
+        "a",
+        "the return lands on a by priority, away from w"
+    );
+    // The return's end releases its booking, so a's burn below is the pin's alone.
+    st.release_reservation(&returned.request_id);
+    let later = request(&s, Some("s2"), "claude-sonnet-5", true, &[], T + AVERAGE_MS);
+    let d = decide(&mut st, &s, &later, &mut rng());
+    let burn = candidate(&d.record, "a").burn.get(FIVE_HOUR).copied();
+    // s1's kept 0.036 an hour, decayed by one burn average since the placement.
+    assert!(
+        burn.is_some_and(|burn| close(burn, 0.036 * 0.36787944117144233)),
+        "the returned pin's burn decays from the placement: {burn:?}"
+    );
+}
+
+#[test]
+fn a_lapsed_agents_record_stands_for_seven_days_after_the_pins_last_use() {
+    let s = lapse_pool();
+    let (pin, _) = lapsing_with_sums();
+    let last_use = pin.last_used_at;
+    // Each arm takes s1's pin at T and purges again at `purge_at`, where the agent returns, on a state of its own
+    // beside w's pin, warm at the return.
+    let return_at = |purge_at: i64| {
+        let mut st = beside_warm(vec![pin.clone()], purge_at);
+        st.purge(&s, T);
+        st.purge(&s, purge_at);
+        let returned = request(&s, Some("s1"), "claude-sonnet-5", true, &[], purge_at);
+        decide(&mut st, &s, &returned, &mut rng())
+    };
+    let inside = return_at(last_use + 7 * 24 * HOUR - MINUTE);
+    assert!(
+        close(booked_burn(&inside), 0.036),
+        "a minute inside the 7 days the return books s1's kept burn: {}",
+        booked_burn(&inside)
+    );
+    // One purge interval past the 7 days.
+    let past = return_at(last_use + 7 * 24 * HOUR + 60_000);
+    assert!(
+        close(booked_burn(&past), 0.009),
+        "past the 7 days the return books w's rate: {}",
+        booked_burn(&past)
+    );
+    assert_eq!(
+        written_sums(&past),
+        [&BTreeMap::new()],
+        "past the 7 days the return's pin starts with no sums"
+    );
+}
+
+#[test]
+fn a_returned_agents_pin_holds_the_records_thinking_sums() {
+    let s = lapse_pool();
+    let (pin, sums) = lapsing_with_sums();
+    let mut st = beside_warm(vec![pin], T);
+    st.purge(&s, T);
+    let returned = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    let d = decide(&mut st, &s, &returned, &mut rng());
+    assert_eq!(
+        written_sums(&d),
+        [&sums],
+        "the return's pin takes up the sum its purged pin held for a"
+    );
+}
+
+#[test]
+fn a_record_feeds_no_session_of_a_key_created_again_under_its_id() {
+    let s = lapse_pool();
+    let (pin, _) = lapsing_with_sums();
+    let mut st = beside_warm(vec![pin], T);
+    st.purge(&s, T);
+    // The key was deleted and created again under its id after the purge kept s1's record under the old generation.
+    let recreated = key_recreated_with_terms(&s, 5);
+    let returned = request(&recreated, Some("s1"), "claude-sonnet-5", true, &[], T);
+    let d = decide(&mut st, &recreated, &returned, &mut rng());
+    assert!(
+        close(booked_burn(&d), 0.009),
+        "the new key's session books w's rate: {}",
+        booked_burn(&d)
+    );
+    assert_eq!(
+        written_sums(&d),
+        [&BTreeMap::new()],
+        "the new key's session starts with no sums"
+    );
+}
+
+#[test]
+fn a_return_ahead_of_the_purge_books_the_idle_rows_burn_over_the_speed_at_the_selection() {
+    let s = lapse_pool();
+    // No purge ran since s1's pin idled past the TTL, and a reads a speed of 0.5 at the return.
+    let mut st = beside_warm(vec![lapsing(100.0)], T);
+    st.write_slow_down("p", "a", &seeded_read(1.0, T), 0.5, T, AVERAGE_MS);
+    let returned = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    let d = decide(&mut st, &s, &returned, &mut rng());
+    assert_eq!(
+        d.record.pin.as_ref().map(|pin| pin.found),
+        Some("expired_idle"),
+        "the idle row stands at step 1"
+    );
+    // 100 input tokens a second, 0.036 of the 5-hour window an hour, over a's speed at the return.
+    let booked = booked_burn(&d);
+    assert!(
+        close(booked, 0.072),
+        "the return books the idle row's burn over the speed at the selection: {booked}"
+    );
+}
+
 #[test]
 fn a_row_idle_past_the_ttl_stands_through_a_cap_hold_and_the_landing_after_the_wait_names_the_account_it_left(
 ) {
@@ -31779,8 +32032,9 @@ fn a_row_idle_past_the_ttl_stands_through_a_cap_hold_and_the_landing_after_the_w
 const STANDING_AT: i64 = T + 2 * HOUR;
 
 /// A Pace pool of `a`, `b` and `c` read alike at `STANDING_AT`, with `s1`'s row idle past the TTL on `a`, its burn of a
-/// thousand input tokens a second decayed over the two hours since `T`, and `w`'s warm row on `c`, whose burn is a
-/// fresh session's prior and bounds every runway. `a` and `b` then differ by `s1`'s row alone.
+/// thousand input tokens a second decayed over the two hours since `T`, and `w`'s warm row on `c`. The row's burn
+/// undecayed is `s1`'s own request's and bounds each of its runways, and `w`'s burn, a fresh session's prior, bounds
+/// each runway of another session's request. `a` and `b` then differ by `s1`'s row alone.
 fn standing_row_on_a() -> (RegistrySnapshot, RoutingState) {
     let s = tiered(Pool {
         strategy: Strategy::Pace,
@@ -31821,7 +32075,10 @@ fn a_placement_s_fit_and_pace_score_leave_out_the_session_s_own_row_on_the_accou
         "the candidate table's achieved burn reads the row: {:?}",
         a.burn
     );
-    assert!(b.runway_ms.is_some(), "the fresh prior bounds b's runway");
+    assert!(
+        b.runway_ms.is_some(),
+        "s1's own burn, the row's undecayed, bounds b's runway"
+    );
     assert_eq!(
         a.runway_ms, b.runway_ms,
         "the fit projects a without the session's own row"
@@ -31872,12 +32129,17 @@ fn rung_four_s_gate_reads_the_fit_without_the_session_s_own_row_on_the_account_i
         members: vec![("a", 1), ("b", 0)],
         ..Pool::default()
     });
-    // A hundred thousand input tokens a second, decayed over the two hours since `T`, would overrun a's 5-hour window
-    // before its reset an hour out, so a gate that counted the row would pass over a's warm prefix and the strategy
-    // would pick b.
+    // The row idles a minute past the pool's hour of TTL, its burn folded at its last use. The request carries its
+    // 1,200 input tokens a second back undecayed, 0.432 of a's 5-hour window an hour, so a reads 0.932 at its reset an
+    // hour out, under its ceiling of 0.95. Beside the row's own burn decayed over the 61 minutes, 0.489 an hour in all,
+    // a would read 0.989, so a gate that counted the row would pass over a's warm prefix and the strategy would pick b.
+    let idle_since = STANDING_AT - HOUR - MINUTE;
     let mut st = priced(vec![PinRow {
         agent_id: "sub-1".into(),
-        ..gated_pin("s1", "a", 100_000.0)
+        last_used_at: idle_since,
+        last_refresh_at: idle_since,
+        burn_at: Some(idle_since),
+        ..gated_pin("s1", "a", 1_200.0)
     }]);
     for id in ["a", "b"] {
         st.record_sample(

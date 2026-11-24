@@ -1,9 +1,10 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
     AccountKind, AccountRow, AffinityChain, AffinityRow, ApiKeyRow, CompanionPermissions,
-    CooldownRow, CooldownScope, CreditsRow, EvidenceSource, KeyFeatureAccounts, OverageRow,
-    PinBurn, PinKey, PinMark, PinRow, PoolRow, RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow,
-    ShedStamp, StorageKey, Store, ThinkingBindingRow, WindowRow, WindowSetRow,
+    CooldownRow, CooldownScope, CreditsRow, EvidenceSource, KeyFeatureAccounts, LapsedAgentRow,
+    OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolRow, RekeyWrite, ResolutionRow, RulesMode,
+    ShedRoundRow, ShedStamp, StorageKey, Store, ThinkingBindingRow, ThinkingSum, WindowRow,
+    WindowSetRow,
 };
 
 /// The wall clock, for a case that reads no stamp.
@@ -302,6 +303,66 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
     assert!(
         store.load_routing().unwrap().pins.is_empty(),
         "foreign keys cascade the pin"
+    );
+}
+
+#[test]
+fn a_lapsed_agents_record_is_stored_with_its_pins_delete_and_leaves_at_its_placement() {
+    let store = store_with(&["a"]);
+    let lapsing = pin("k", "s", "claude-sonnet-5", "a");
+    store.upsert_pin(&lapsing).unwrap();
+    // The insert binds its values by position: two swapped binds of one type read back unseen where the two columns
+    // hold one value, so each burn copy and each integer member holds a value of its own.
+    let copy = |base: f64| PinBurn {
+        cache_read: base + 0.1,
+        input: base + 0.2,
+        output: base + 0.3,
+        write_1h: base + 0.4,
+        write_5m: base + 0.5,
+    };
+    let record = LapsedAgentRow {
+        key_id: "k".into(),
+        session_id: "s".into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+        key_generation: 1_700,
+        account_id: "a".into(),
+        incarnation: 3,
+        last_used_at: 1_300,
+        last_input_tokens: 4_000,
+        burn: copy(1.0),
+        burn_banded: copy(2.0),
+        burn_fast: copy(3.0),
+        burn_unmetered: copy(4.0),
+        burn_unmetered_model: Some("claude-haiku-5".into()),
+        speed: 0.5,
+        thinking_sums: std::collections::BTreeMap::from([(
+            "a".to_string(),
+            ThinkingSum {
+                incarnation: 3,
+                tokens: 9_000,
+            },
+        )]),
+        account_bound: true,
+    };
+    store
+        .write_routing(|tx| {
+            tx.delete_pin(&lapsing.key())?;
+            tx.upsert_lapsed_agent(&record)
+        })
+        .unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().lapsed_agents,
+        vec![record.clone()],
+        "each column reads back the value written to it"
+    );
+    store
+        .write_routing(|tx| tx.delete_lapsed_agent(&record.key()))
+        .unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().lapsed_agents,
+        Vec::new(),
+        "the placement's delete takes the row"
     );
 }
 
@@ -835,6 +896,7 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
         "ALTER TABLE pins DROP COLUMN account_bound;
          ALTER TABLE pins DROP COLUMN marked_source;
          ALTER TABLE cooldowns DROP COLUMN spend_share;
+         DROP TABLE lapsed_agents;
          ALTER TABLE pools DROP COLUMN feature_accounts_json;
          ALTER TABLE api_keys DROP COLUMN feature_accounts_json;
          ALTER TABLE accounts DROP COLUMN state_changed_at;

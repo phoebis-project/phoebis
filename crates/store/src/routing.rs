@@ -155,6 +155,39 @@ impl PinRow {
     }
 }
 
+/// What the router keeps of an agent whose pin the purge took as expired, for a placement of that agent to read in
+/// place of a fresh session's figures.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LapsedAgentRow {
+    pub key_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub model: String,
+    pub key_generation: i64,
+    /// The account the pin stood on, with the incarnation it stood under.
+    pub account_id: String,
+    pub incarnation: u64,
+    pub last_used_at: i64,
+    pub last_input_tokens: u64,
+    /// The pin's burn members as its last fold left them.
+    pub burn: PinBurn,
+    pub burn_banded: PinBurn,
+    pub burn_fast: PinBurn,
+    pub burn_unmetered: PinBurn,
+    pub burn_unmetered_model: Option<String>,
+    /// The slow-down speed in force on the account when the pin was taken, 1 where none was.
+    pub speed: f64,
+    pub thinking_sums: BTreeMap<String, ThinkingSum>,
+    /// The pin's session held account state when the pin was taken, as the pin's own flag read.
+    pub account_bound: bool,
+}
+
+impl LapsedAgentRow {
+    pub fn key(&self) -> PinKey {
+        PinKey::new(&self.key_id, &self.session_id, &self.agent_id, &self.model)
+    }
+}
+
 /// What a cooldown row holds off: the whole account, the fast lane's rate limit, the fast lane's usage-credits
 /// refusal, or one model by its canonical id. The column, the admin field and the clear route carry it as the text
 /// `account`, `fast`, `fast_credits` or `model:<canonical>`.
@@ -449,6 +482,7 @@ pub struct RoutingLoad {
     pub affinity: Vec<AffinityRow>,
     pub cooldowns: Vec<CooldownRow>,
     pub credits: Vec<CreditsRow>,
+    pub lapsed_agents: Vec<LapsedAgentRow>,
     pub model_week_hours: Vec<ModelWeekHourRow>,
     pub overage: Vec<OverageRow>,
     pub pins: Vec<PinRow>,
@@ -472,6 +506,21 @@ impl Store {
                  FROM usage_credits c JOIN accounts ON accounts.id = c.account_id AND accounts.incarnation = c.incarnation \
                  ORDER BY c.account_id")?
                 .query_map([], |r| Ok(CreditsRow { account_id: r.get(0)?, incarnation: r.get::<_, i64>(1)? as u64, enabled: r.get(2)?, disabled_reason: r.get(3)?, utilization: r.get(4)?, observed_at: r.get(5)? }))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            lapsed_agents: tx.prepare(&format!("SELECT {LAPSED_AGENT_COLUMNS} FROM lapsed_agents ORDER BY key_id, session_id, agent_id, model"))?
+                .query_map([], |r| Ok(LapsedAgentRow {
+                    key_id: r.get("key_id")?, session_id: r.get("session_id")?, agent_id: r.get("agent_id")?,
+                    model: r.get("model")?, key_generation: r.get("key_generation")?,
+                    account_id: r.get("account_id")?, incarnation: r.get::<_, i64>("incarnation")? as u64,
+                    last_used_at: r.get("last_used_at")?,
+                    last_input_tokens: r.get::<_, i64>("last_input_tokens")? as u64,
+                    burn: burn_from(r, BURN_COLUMNS)?, burn_banded: burn_from(r, BURN_BANDED_COLUMNS)?,
+                    burn_fast: burn_from(r, BURN_FAST_COLUMNS)?, burn_unmetered: burn_from(r, BURN_UNMETERED_COLUMNS)?,
+                    burn_unmetered_model: r.get("burn_unmetered_model")?,
+                    speed: r.get("speed")?,
+                    thinking_sums: json_column(r, r.as_ref().column_index("thinking_sums")?)?,
+                    account_bound: r.get("account_bound")?,
+                }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // As with the windows, a previous holder's hours are never loaded.
             model_week_hours: tx.prepare("SELECT h.account_id, h.incarnation, h.window, h.hour, h.share \
@@ -740,6 +789,10 @@ impl RoutingTx<'_> {
         delete_cooldown_on(self.tx, account_id, scope)
     }
 
+    pub fn delete_lapsed_agent(&mut self, key: &PinKey) -> Result<(), StoreError> {
+        delete_lapsed_agent_on(self.tx, key)
+    }
+
     pub fn delete_pin(&mut self, key: &PinKey) -> Result<bool, StoreError> {
         delete_pin_on(self.tx, key)
     }
@@ -837,6 +890,12 @@ impl RoutingTx<'_> {
         upsert_credits_on(self.tx, row)
     }
 
+    /// Writes the record in place of the one its key held. Only the router's batches write a record, so `Store` has no
+    /// single-write form.
+    pub fn upsert_lapsed_agent(&mut self, row: &LapsedAgentRow) -> Result<(), StoreError> {
+        upsert_lapsed_agent_on(self.tx, row)
+    }
+
     /// Writes the hour's sum as the routing state holds it, so a write the backlog kept in place of an earlier one for
     /// the same hour still lands the whole sum. Only for the account's current incarnation, a previous holder's row
     /// replaced, and only from the router's batches. Answers whether a row was written.
@@ -908,6 +967,16 @@ const PIN_COLUMNS: &str = "key_id, session_id, agent_id, model, account_id, epoc
      burn_unmetered_write_5m, burn_unmetered_model, \
      marked_at, marked_on, marked_window, entrypoint, shed_reason, auxiliary_only, effort, ended, thinking_sums, \
      account_bound, marked_source";
+
+// The upsert binds a lapsed agent's columns in this one order, so `upsert_lapsed_agent_on` lists its values in it. The
+// burn columns carry the pins' names, so the load reads both tables through the lists below.
+const LAPSED_AGENT_COLUMNS: &str = "key_id, session_id, agent_id, model, key_generation, account_id, incarnation, \
+     last_used_at, last_input_tokens, \
+     burn_cache_read, burn_input, burn_output, burn_write_1h, burn_write_5m, \
+     burn_banded_cache_read, burn_banded_input, burn_banded_output, burn_banded_write_1h, burn_banded_write_5m, \
+     burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m, \
+     burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
+     burn_unmetered_write_5m, burn_unmetered_model, speed, thinking_sums, account_bound";
 
 // Each burn copy's columns, in `PinBurn`'s field order: `burn_from` takes them by position.
 const BURN_COLUMNS: [&str; 5] = [
@@ -1080,6 +1149,61 @@ fn delete_pin_on(conn: &Connection, key: &PinKey) -> Result<bool, StoreError> {
         "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
     )?;
     Ok(stmt.execute(params![key.key_id, key.session_id, key.agent_id, key.model])? > 0)
+}
+
+static UPSERT_LAPSED_AGENT: LazyLock<String> = LazyLock::new(|| {
+    upsert_sql(
+        "lapsed_agents",
+        LAPSED_AGENT_COLUMNS,
+        &["key_id", "session_id", "agent_id", "model"],
+    )
+});
+
+fn upsert_lapsed_agent_on(conn: &Connection, row: &LapsedAgentRow) -> Result<(), StoreError> {
+    conn.prepare_cached(&UPSERT_LAPSED_AGENT)?.execute(params![
+        row.key_id,
+        row.session_id,
+        row.agent_id,
+        row.model,
+        row.key_generation,
+        row.account_id,
+        row.incarnation as i64,
+        row.last_used_at,
+        row.last_input_tokens as i64,
+        row.burn.cache_read,
+        row.burn.input,
+        row.burn.output,
+        row.burn.write_1h,
+        row.burn.write_5m,
+        row.burn_banded.cache_read,
+        row.burn_banded.input,
+        row.burn_banded.output,
+        row.burn_banded.write_1h,
+        row.burn_banded.write_5m,
+        row.burn_fast.cache_read,
+        row.burn_fast.input,
+        row.burn_fast.output,
+        row.burn_fast.write_1h,
+        row.burn_fast.write_5m,
+        row.burn_unmetered.cache_read,
+        row.burn_unmetered.input,
+        row.burn_unmetered.output,
+        row.burn_unmetered.write_1h,
+        row.burn_unmetered.write_5m,
+        row.burn_unmetered_model,
+        row.speed,
+        serde_json::to_string(&row.thinking_sums)?,
+        row.account_bound
+    ])?;
+    Ok(())
+}
+
+fn delete_lapsed_agent_on(conn: &Connection, key: &PinKey) -> Result<(), StoreError> {
+    conn.prepare_cached(
+        "DELETE FROM lapsed_agents WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
+    )?
+    .execute(params![key.key_id, key.session_id, key.agent_id, key.model])?;
+    Ok(())
 }
 
 fn upsert_cooldown_on(conn: &Connection, row: &CooldownRow) -> Result<(), StoreError> {

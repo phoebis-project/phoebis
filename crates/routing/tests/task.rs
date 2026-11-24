@@ -18,10 +18,10 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, Cancellation,
-    CompanionPermissions, CooldownRow, CooldownScope, KeyFeatureAccounts, MemberWrite, ModelRule,
-    OveragePolicy, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolRow, RoutingLoad, RulesMode,
-    Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow, ThinkingSum, WindowRow,
-    WindowSetRow,
+    CompanionPermissions, CooldownRow, CooldownScope, KeyFeatureAccounts, LapsedAgentRow,
+    MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolRow,
+    RoutingLoad, RulesMode, Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow,
+    ThinkingSum, WindowRow, WindowSetRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -19009,6 +19009,80 @@ async fn a_failovers_landing_teaches_no_pair_under_a_holder_that_left_while_its_
     assert!(
         close(booked, 0.012),
         "the model holds no pair, so the whole 120,000: {booked:?}"
+    );
+}
+
+/// Where `s1`'s return lands when its request already tried `attempted`, and the 5-hour share `s2`'s move from `a` to
+/// `b` books behind it. `s1` returns under its lapsed agent's record of a 100,000-token prompt on `a` with 40,000
+/// tokens of a's thinking, and the return's first answer reads a prompt of 70,000.
+async fn a_move_behind_a_return(attempted: &[&str]) -> (String, Option<f64>) {
+    let store = thinking_store(&["a", "b"], &[]);
+    // Written ahead of the router's start, which loads it.
+    let record = LapsedAgentRow {
+        key_id: "k".into(),
+        session_id: "s1".into(),
+        agent_id: "main".into(),
+        model: SONNET.into(),
+        key_generation: store.api_key("k").unwrap().unwrap().created_at,
+        account_id: "a".into(),
+        incarnation: 1,
+        last_used_at: AT - HOUR,
+        last_input_tokens: 100_000,
+        burn: PinBurn::default(),
+        burn_banded: PinBurn::default(),
+        burn_fast: PinBurn::default(),
+        burn_unmetered: PinBurn::default(),
+        burn_unmetered_model: None,
+        speed: 1.0,
+        thinking_sums: std::collections::BTreeMap::from([(
+            "a".to_string(),
+            ThinkingSum {
+                incarnation: 1,
+                tokens: 40_000,
+            },
+        )]),
+        account_bound: false,
+    };
+    store
+        .write_routing(|tx| tx.upsert_lapsed_agent(&record))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = thinking_router(&store, &[stored_pin(&store, "s2", "a", 2, 10.0)], &now).await;
+    let returned = SelectRequest {
+        attempted: attempted
+            .iter()
+            .map(|account| account.to_string())
+            .collect(),
+        ..turn_of(&handle, "s1", "main", SONNET, AT)
+    };
+    let landed = landed_on(handle.select(returned).await.unwrap()).0;
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            70_000,
+            None,
+            None,
+        ))
+        .await;
+    a_spent(&handle, &["a", "b"], AT).await;
+    let (account, booked) = spent_move(&handle, turn_of(&handle, "s2", "main", SONNET, AT)).await;
+    assert_eq!(account, "b");
+    (landed, booked)
+}
+
+#[tokio::test]
+async fn a_return_onto_another_account_opens_an_observation_and_one_onto_the_same_opens_none() {
+    let (landed, booked) = a_move_behind_a_return(&["a"]).await;
+    assert_eq!(landed, "b");
+    assert!(
+        close(booked, 0.006),
+        "the return onto b taught a and b bound: 100,000 less a's 40,000: {booked:?}"
+    );
+    let (landed, booked) = a_move_behind_a_return(&[]).await;
+    assert_eq!(landed, "a");
+    assert!(
+        close(booked, 0.01),
+        "the return onto a taught the pair nothing: the whole 100,000: {booked:?}"
     );
 }
 

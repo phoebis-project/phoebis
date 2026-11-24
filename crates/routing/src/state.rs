@@ -11,9 +11,9 @@ pub use phoebis_store::EvidenceSource;
 
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CooldownScope, CreditsRow,
-    ModelWeekHourRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow,
-    RekeyWrite, ResolutionRow, RoutingLoad, StateCause, Strategy, ThinkingBindingRow, WindowRow,
-    WindowSetRow,
+    LapsedAgentRow, ModelWeekHourRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolMember,
+    PoolRow, RekeyWrite, ResolutionRow, RoutingLoad, StateCause, Strategy, ThinkingBindingRow,
+    WindowRow, WindowSetRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -410,6 +410,8 @@ pub enum StateWrite {
     },
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, CooldownScope),
+    /// A lapsed agent's record that its placement took, or that the purge ended.
+    DeleteLapsedAgent(PinKey),
     /// A replaced pin's removal, which a pin that leaves for good (a release, a client error, the purge's expiry)
     /// takes as well.
     DeletePin(PinKey),
@@ -445,6 +447,8 @@ pub enum StateWrite {
     UpsertAffinity(Vec<AffinityRow>),
     UpsertCooldown(CooldownRow),
     UpsertCredits(CreditsRow),
+    /// The record the purge wrote for a pin it took as expired.
+    UpsertLapsedAgent(LapsedAgentRow),
     /// One clock hour of a model week's record at the sum the state holds after a completion added to it.
     UpsertModelWeekHour(ModelWeekHourRow),
     UpsertOverage(OverageRow),
@@ -461,6 +465,10 @@ pub struct Purged {
     /// The same entries whole, with why each left, for the expiry events.
     pub affinity_entries: Vec<PurgedEntry>,
     pub cooldowns: Vec<(String, CooldownScope)>,
+    /// The records this purge wrote, one for each pin it took as `expired`.
+    pub lapsed: Vec<LapsedAgentRow>,
+    /// The keys of the records this purge ended, none of them a key that `lapsed` holds.
+    pub lapsed_ended: Vec<PinKey>,
     /// Each dropped pin's row with the one fact that dropped it: `deleted`, `expired`, or `unserved`.
     pub pins: Vec<(PinRow, &'static str)>,
     /// The slow-down entries dropped, by pool id and account id, whole: an open span ends with its entry.
@@ -1509,6 +1517,33 @@ pub(crate) fn standing_mark(pin: &PinRow) -> Option<&PinMark> {
     pin.mark.as_ref().filter(|mark| mark.on == pin.account_id)
 }
 
+/// How long a lapsed agent's record stands after its pin's last use: the length of the longest window that a burn
+/// projects into.
+pub(crate) const LAPSED_AGENT_MS: i64 = 7 * 24 * 3_600_000;
+
+/// The record `pin` leaves as its agent's, with `speed` the slow-down speed in force on its account.
+pub(crate) fn lapsed_of(pin: &PinRow, speed: f64) -> LapsedAgentRow {
+    LapsedAgentRow {
+        key_id: pin.key_id.clone(),
+        session_id: pin.session_id.clone(),
+        agent_id: pin.agent_id.clone(),
+        model: pin.model.clone(),
+        key_generation: pin.key_generation,
+        account_id: pin.account_id.clone(),
+        incarnation: pin.incarnation,
+        last_used_at: pin.last_used_at,
+        last_input_tokens: pin.last_input_tokens,
+        burn: pin.burn,
+        burn_banded: pin.burn_banded,
+        burn_fast: pin.burn_fast,
+        burn_unmetered: pin.burn_unmetered,
+        burn_unmetered_model: pin.burn_unmetered_model.clone(),
+        speed,
+        thinking_sums: pin.thinking_sums.clone(),
+        account_bound: pin.account_bound,
+    }
+}
+
 /// Whether a deleted account's pin stands at `now` as its session's trace: the registry holds no account under the
 /// pin's account id, its key stands under the generation the pin names, and the affinity TTL of the key's pool
 /// holds the row's last use by the purge's own comparison, a zero TTL holding none. A holder created again under the
@@ -1587,6 +1622,9 @@ pub struct RoutingState {
     /// are, and it leaves with the row in `take_pin`, so a restart holds none.
     head_marks: HashMap<PinKey, HeadMark>,
     in_flight: InFlight,
+    /// Each lapsed agent's record by the key of the pin the purge took as expired, which a placement of the agent reads
+    /// in place of a fresh session's figures. Written through and loaded at the start.
+    lapsed_agents: HashMap<PinKey, LapsedAgentRow>,
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
     member_spend: HashMap<(String, String, BudgetPeriod), MemberSpend>,
@@ -1776,6 +1814,11 @@ impl RoutingState {
             funding_retries: HashMap::new(),
             head_marks: HashMap::new(),
             in_flight: InFlight::default(),
+            lapsed_agents: load
+                .lapsed_agents
+                .into_iter()
+                .map(|record| (record.key(), record))
+                .collect(),
             member_spend: HashMap::new(),
             model_week_hours,
             next_epoch,
@@ -1862,6 +1905,17 @@ impl RoutingState {
 
     pub fn pin(&self, key: &PinKey) -> Option<&PinRow> {
         self.pins.get(&*self.canonical_key(key))
+    }
+
+    /// The lapsed agent's record under `key`, found as `pin` finds a row.
+    pub(crate) fn lapsed_agent(&self, key: &PinKey) -> Option<&LapsedAgentRow> {
+        self.lapsed_agents.get(&*self.canonical_key(key))
+    }
+
+    /// Takes the lapsed agent's record under `key` off the state, found as `pin` finds a row.
+    pub(crate) fn take_lapsed_agent(&mut self, key: &PinKey) -> Option<LapsedAgentRow> {
+        let key = self.canonical_key(key);
+        self.lapsed_agents.remove(&*key)
     }
 
     /// The held pin to change in place, found as `pin` finds it: a change that keeps the epoch, as a renewal's.
@@ -4236,7 +4290,9 @@ impl RoutingState {
     /// and a create under one id can both land before one reload, so a row is held against the account only while
     /// the snapshot's holder carries the incarnation it names. A pin names its key's creation time too, and one
     /// whose key or account was replaced reads `deleted`: its holder is gone, whatever took the id. A `deleted` pin
-    /// that `trace_stands` holds leaves as a trace in `traced` in place of `pins`.
+    /// that `trace_stands` holds leaves as a trace in `traced` in place of `pins`. A pin taken as `expired` leaves its
+    /// agent's record in `lapsed`, and a record whose pin's last use lies more than `LAPSED_AGENT_MS` back, or whose
+    /// key the snapshot no longer holds under its generation, ends in `lapsed_ended`.
     pub fn purge(&mut self, snapshot: &RegistrySnapshot, now: i64) -> Purged {
         let gone =
             |account_id: &str, incarnation: u64| snapshot.holder(account_id, incarnation).is_none();
@@ -4272,9 +4328,50 @@ impl RoutingState {
                 }
             })
             .collect();
-        let (traced, pins): (Vec<_>, Vec<_>) = doomed
+        let taken: Vec<_> = doomed
             .into_iter()
             .filter_map(|(key, reason)| self.take_pin(&key).map(|row| (row, reason)))
+            .collect();
+        // The speed is read at the take, since the slow-down purge below drops the entry of an account that holds no
+        // pin of the pool, and the last pin of an account would keep a speed of 1. A pin last used more than the
+        // record's life back writes none, since its record would end at once.
+        let lapsed: Vec<LapsedAgentRow> = taken
+            .iter()
+            .filter(|(row, reason)| {
+                *reason == "expired" && now - row.last_used_at <= LAPSED_AGENT_MS
+            })
+            .filter_map(|(row, _)| {
+                let pool = snapshot.key_pool(&row.key_id)?;
+                Some(lapsed_of(
+                    row,
+                    self.slow_down_speed(pool, &row.account_id, now),
+                ))
+            })
+            .collect();
+        let ended: Vec<PinKey> = self
+            .lapsed_agents
+            .iter()
+            .filter(|(_, record)| {
+                now - record.last_used_at > LAPSED_AGENT_MS
+                    || snapshot
+                        .key(&record.key_id)
+                        .is_none_or(|key| key.created_at != record.key_generation)
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &ended {
+            self.lapsed_agents.remove(key);
+        }
+        for record in &lapsed {
+            self.lapsed_agents.insert(record.key(), record.clone());
+        }
+        // A record written under a key this pass ended replaces that row, so the key leaves the ended ones.
+        let lapsed_ended = ended
+            .into_iter()
+            .filter(|key| !lapsed.iter().any(|record| record.key() == *key))
+            .collect();
+        let (traced, pins): (Vec<_>, Vec<_>) = taken
+            .into_iter()
             .partition(|(row, reason)| *reason == "deleted" && trace_stands(snapshot, row, now));
         let traced = traced.into_iter().map(|(row, _)| row).collect();
         // Both purges below ask of every entry whether its account holds a pin of its pool, so the pins are read once.
@@ -4362,6 +4459,8 @@ impl RoutingState {
             affinity,
             affinity_entries,
             cooldowns,
+            lapsed,
+            lapsed_ended,
             pins,
             slow_downs,
             traced,
