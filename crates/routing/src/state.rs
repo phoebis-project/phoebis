@@ -1990,6 +1990,8 @@ impl RoutingState {
 
     /// Sets the held pin's fast usage in the state alone, for a test that prices a round over fast usage. A renewal
     /// folds its fast usage into the row the task both puts here and writes, so the stored row never lags the state.
+    /// No production path calls it, so it is compiled under `test` and the `debug-hooks` feature alone.
+    #[cfg(any(test, feature = "debug-hooks"))]
     pub fn set_fast_burn(&mut self, key: &PinKey, burn: PinBurn) {
         if let Some(pin) = self.pin_mut(key) {
             pin.burn_fast = burn;
