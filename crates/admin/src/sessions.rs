@@ -58,7 +58,8 @@ pub(crate) struct Session {
     /// null where the ledger holds no request of it the router did not refuse. Its `requests` is the session's count of
     /// client requests, which a reader takes as 0 where `spend` is null.
     pub spend: Option<SessionSpend>,
-    /// The session's client requests of the last 24 hours by class, and their spend.
+    /// The session's client requests of the 24 whole hours before the current hour and the current hour so far, by
+    /// class, and their spend.
     pub day: SessionDay,
     pub pinned: bool,
     /// The pin's typed burn per hour, decayed to the read with its pool's `burn_average_seconds` as a shedding round

@@ -47,7 +47,8 @@ pub(crate) struct SessionSpendPart {
     pub shares: BTreeMap<String, BTreeMap<String, f64>>,
 }
 
-/// The session's client requests of the last 24 hours by class, and their spend.
+/// The session's client requests of the 24 whole hours before the current hour and the current hour so far, by class,
+/// and their spend.
 #[derive(serde::Serialize, ToSchema)]
 #[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]
