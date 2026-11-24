@@ -1395,8 +1395,10 @@ type PinEvent = Pick<RoutingEvent, 'agentId' | 'at' | 'keyId' | 'kind' | 'sessio
 
 /**
  * Main's placements as the route counts them: its `pin_created` and `pin_migrated` events under the row's key and
- * session at or after the row's key generation, and on an earlier holder's row before the live key's. A pinned row
- * whose creation the log does not hold counts it once, since a router's ledger holds it.
+ * session at or after the row's key generation, and on an earlier holder's row before the live key's. Where the story
+ * seeds the row's session with a pin whose creation the log does not hold, the count adds that creation, since a
+ * router's ledger holds it. The added placement follows the seed rather than the listed row's pin, because the ledger
+ * keeps the event when a write takes the pin, as a key's delete does.
  */
 const placementsOf = (s: Session, events: readonly PinEvent[]): number => {
   const live = keyById.get(s.keyId);
@@ -1404,7 +1406,10 @@ const placementsOf = (s: Session, events: readonly PinEvent[]): number => {
   // generation's creation ends a historical row's count.
   const until = s.historical && live !== undefined && Date.parse(live.createdAt) > s.keyGeneration ? Date.parse(live.createdAt) : Number.POSITIVE_INFINITY;
   const own = events.filter((e) => Date.parse(e.at) >= s.keyGeneration && Date.parse(e.at) < until);
-  return own.length + (s.pinned && !own.some((e) => e.kind === 'pin_created') ? 1 : 0);
+  // An earlier holder's row can carry the key id and the session of a live key's pinned row, so the generation tells
+  // the two apart.
+  const seeded = SESSIONS.some((x) => x.pinned && x.keyId === s.keyId && x.keyGeneration === s.keyGeneration && x.sessionId === s.sessionId);
+  return own.length + (seeded && !own.some((e) => e.kind === 'pin_created') ? 1 : 0);
 };
 
 /**

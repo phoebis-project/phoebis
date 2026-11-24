@@ -298,6 +298,27 @@ test('the mock leaves out a session no mod reports once the latest of its last u
   assert.deepEqual(later.filter((s) => s.companion !== 'none').map(key), sessions.filter((s) => s.companion !== 'none').map(key), "every companion row of the story's list still stands two hours on");
 });
 
+test("the mock keeps a session row's placement count once its key is deleted, where the routing log holds no creation of its pin, as the route does", async () => {
+  // The story seeds this laptop session with a pin, and the log drawn at this instant holds no pin event of its main
+  // agent, so the row's one placement is that pin's creation, which a router's ledger holds and keeps when the key's
+  // delete takes the pin.
+  const SESSION = 'c64358b5-b04f-4047-baf2-5e86716ea490';
+  const logged = d.ROUTING_EVENTS.filter((e) => e.keyId === 'laptop' && e.sessionId === SESSION && e.agentId === 'main' && (e.kind === 'pin_created' || e.kind === 'pin_migrated'));
+  assert.deepEqual(logged.map((e) => `${e.kind} at ${e.at}`), [], "the routing log holds no pin event of the session's main agent at this instant");
+  // The delete lands on a mock of the case's own, so the file's shared mock keeps its keys and its sessions.
+  const mock = new d.MockApi();
+  const placements = async () => (await mock.listSessions()).find((s) => s.keyId === 'laptop' && s.sessionId === SESSION)?.placements ?? null;
+  const before = await placements();
+  await mock.deleteKey('laptop');
+  assert.deepEqual([before, await placements()], [1, 1], 'the one placement before the delete and after it');
+});
+
+test('the mock counts no placement for a session a companion registered ahead of its first request, as the route does', async () => {
+  // The story seeds this laptop session with no pin, so the count has no creation to add.
+  const registered = (await api.listSessions()).find((s) => s.sessionId === '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43');
+  assert.equal(registered?.placements ?? null, 0, 'a registered session with no pin reads no placement');
+});
+
 test('the mock answers the keepalive overview over 7 days by default and over 30 under its range, and refuses any other word, as the route does', async () => {
   const bare = await api.getKeepaliveOverview();
   const week = await api.getKeepaliveOverview({ range: '7d' });
