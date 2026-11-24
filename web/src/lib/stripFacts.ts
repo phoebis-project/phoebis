@@ -3,7 +3,7 @@ import { lookup } from '@/lib/counts';
 import { LEGACY_PARTITION_FACTS, PARTITION_FACTS, type Leaf, type Renderer, type Station, type StripAnchor, type StripModel, type Terminus } from '@/lib/decisionStrip';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
-import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact, hashTitle, keyWord, outcomeRows, paceHeader, PLACE_WORD, plain, rungEntry, shortHash, STEP_NAME, valueText, verdictTone, type VerdictTone, verdictWord, walkLines, warmUntil, wordOf, words } from '@/lib/routingLog';
+import { accountChip, ageWord, candidateCells, type Chip, factChips, formatFact, hashTitle, keyWord, notRunReasonChips, outcomeRows, paceHeader, PLACE_WORD, plain, rungEntry, shortHash, STEP_NAME, valueText, verdictTone, type VerdictTone, verdictWord, walkLines, warmUntil, wordOf, words } from '@/lib/routingLog';
 import { knownWindowsFirst, WINDOW_KEYS, windowTag, windowTagOf } from '@/lib/windows';
 
 // A popover's plan: the facts of one station, leaf or terminus as plain data in the console's words, which
@@ -130,7 +130,7 @@ function rowsOf(f: WalkFact, record: DecisionRecord, at: number, unplaced: Popov
 /**
  * The list renderer: the step's groups in their order, each row in its group's key order, and every fact no group
  * names in a trailing unlabeled group. A refusal's admission reads its reason as `walkLines` words it, the client's
- * version off the row.
+ * version off the row, and so does a move rule that did not run, through the formatter that both read.
  */
 function listOf(s: Station, step: WalkStep, record: DecisionRecord, row: DecisionSummary | undefined, at: number): Pick<PopoverPlan, 'block' | 'renderer' | 'unplaced'> {
   const unplaced: PopoverPlan['unplaced'] = [];
@@ -147,6 +147,8 @@ function listOf(s: Station, step: WalkStep, record: DecisionRecord, row: Decisio
     placed.add(f);
     if (refusal !== undefined && f.key === 'reason') return [{ chips: refusal.chips, label: keyWord(f.key) }];
     if (gate !== undefined && f.key === 'no_fit') return [{ chips: [plain(`by the gate's ${verdictWord(gate.verdict)} order`, keyWord(f.key))], label: keyWord(f.key), ...(f.key === marked ? { marked: true } : {}) }];
+    const worded = notRunReasonChips(step, f);
+    if (worded !== undefined) return [{ chips: worded, label: keyWord(f.key) }];
     const fact = f.key !== 'account_id' && f.accountId !== null && f.accountId === on ? { ...f, accountId: null } : f;
     return rowsOf(fact, record, at, unplaced).map((r) => (f.key === marked ? { ...r, marked: true } : r));
   };

@@ -2418,6 +2418,7 @@ test('a session row carries the presence age', () => {
 
 /** An agent line as the route sends it, every member set, the instants in epoch milliseconds. */
 const agentLine = (agent_id, model, members = {}) => ({
+  account_bound: false,
   account_id: 'business',
   agent_id,
   burn: 0.00104,
@@ -2456,8 +2457,8 @@ test("a session row reads main's effort and every agent line with all its member
   const pinnedAt = new Date(1_791_719_000_000).toISOString();
   const warmUntil = new Date(1_791_721_300_000).toISOString();
   assert.deepEqual(s.agentContexts, [
-    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnAt: used, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnUsd: 0.0215, burnWindow: 'five_hour', cacheTtlMs: 300_000, effort: 'low', ended: true, fast: false, lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null, pinnedAt, warm: false, warmUntil },
-    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnAt: readAt, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, effort: 'high', ended: true, fast: false, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null, pinnedAt, warm: true, warmUntil },
+    { accountBound: false, accountId: 'business', agentId: '7b2e', burn: 0.00104, burnAt: used, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnUsd: 0.0215, burnWindow: 'five_hour', cacheTtlMs: 300_000, effort: 'low', ended: true, fast: false, lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null, pinnedAt, warm: false, warmUntil },
+    { accountBound: false, accountId: 'direct', agentId: '4f0c', burn: 0.074, burnAt: readAt, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, effort: 'high', ended: true, fast: false, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null, pinnedAt, warm: true, warmUntil },
   ]);
 });
 
@@ -2705,6 +2706,9 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.ok(sessions.every((s) => typeof s.keyGeneration === 'number' && typeof s.historical === 'boolean'), 'every session says which generation of its key owns it and whether that holder is gone');
   assert.equal(sessions.find((s) => s.sessionId === 's2').agentId, null, 'an unpinned row names no agent');
   assert.equal(sessions.find((s) => s.sessionId === 's-fixture').agentId, 'main', 'a pinned row names the pin\'s own agent');
+  // The stem's flag reads false, which a read under another wire name decodes as null.
+  assert.equal(sessions.find((s) => s.sessionId === 's-fixture').accountBound, false, 'the pinned row reads the flag the stem holds');
+  assert.equal(sessions.find((s) => s.sessionId === 's-fixture').agentContexts.find((c) => c.agentId === 'main').accountBound, false, 'the main line reads the flag the stem holds');
   assert.equal(sessions.find((s) => s.sessionId === 's0').historical, true, 'the row of an earlier holder of the same key id reads historical');
   assert.equal(s1.keyGeneration, fixture('sessions').sessions.find((s) => s.session_id === 's1').key_generation, 'the live holder names the generation its key row carries');
   assert.equal(s1.companion, 'reporting');

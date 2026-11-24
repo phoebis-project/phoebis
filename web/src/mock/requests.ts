@@ -1122,7 +1122,7 @@ interface StorySeed {
  */
 export const STORY_IDS = new Set([
   'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2b9e4c7f-d36', 'req_2c7d9f15-b63', 'req_2d8e5b13-f40', 'req_2d8f6b14-a79', 'req_2e7c90a1-6d4',
-  'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_3c7f2e98-d16', 'req_3d7b9e2f-a41', 'req_3e2b9d47-c18', 'req_3e7a5c19-f84', 'req_3f8c1d94-b57',
+  'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3a9f5d12-b84', 'req_3b8e51f4-0a9', 'req_3c7f2e98-d16', 'req_3d7b9e2f-a41', 'req_3e2b9d47-c18', 'req_3e7a5c19-f84', 'req_3f8c1d94-b57',
   'req_4a9c3e7b-a27', 'req_4b0e9d17-c31', 'req_4b9e2c71-a35',
   'req_4d9a1e6b-c20',
   'req_4e8b1d36-f72', 'req_4f2a8d6e-b7a', 'req_51d0e2b8-7a0', 'req_5b2e8d47-c19', 'req_5c7e2a9d-b14', 'req_5d1f8c3a-b27',
@@ -1130,7 +1130,7 @@ export const STORY_IDS = new Set([
   'req_5e3c8a41-d27', 'req_5f2c8b19-d73',
   'req_63a8d2f5-b17',
   'req_69e30548-32e', 'req_6a1c9e47-b90', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6d0b3f85-a14', 'req_6d2a9f41-c37', 'req_6e1f3b98-a24', 'req_71b5f2c8-e40', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
-  'req_7e2b9f40-c81', 'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8c41f2d7-a93', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_8e1d5a36-c92', 'req_9a07c4e1-d55', 'req_9b4f1c62-a07', 'req_9c4a7e12-f08', 'req_9d4c1a73-e58', 'req_9e1b4c63-a52',
+  'req_7c4a1e86-d39', 'req_7e2b9f40-c81', 'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8c41f2d7-a93', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_8e1d5a36-c92', 'req_9a07c4e1-d55', 'req_9b4f1c62-a07', 'req_9c4a7e12-f08', 'req_9d4c1a73-e58', 'req_9e1b4c63-a52',
   'req_9f2e7c5a-c49', 'req_a1f04c2e-7b3', 'req_a2c94e7b-f15', 'req_a3d8f1b6-c25', 'req_a6c19e73-5d2', 'req_a96e3d52-b18', 'req_b1e7c4a9-a69', 'req_b2bed817-a58',
   'req_b72e9d05-c14', 'req_b7d43a90-e26', 'req_b8c3e9d4-e61', 'req_c3a71e58-b46', 'req_c41d0311-200', 'req_c5d8e2b7-e95', 'req_c8f2a61d-b74', 'req_c90d3f61-a28', 'req_d06a4e73-c29', 'req_d27f5a83-e14', 'req_d2a8f6c1-d50',
   'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e1b6d4f8-b38', 'req_e2c7a4f9-d13', 'req_e4a92c17-b60', 'req_e5a1c093-4d7', 'req_e83b2d65-c57',
@@ -1245,6 +1245,16 @@ export const RESERVATION_MARKED_SESSION_ID = 'f6c2a8d4-3b71-4e95-8a0c-5d9e1b7f2c
  * drawn ids.
  */
 export const RELEASED_SESSION_ID = '3c36d663-d074-42f6-8738-f54da7c9f026';
+/** The story's session whose requests name state that its account holds. */
+export const ACCOUNT_BOUND_SESSION_ID = '2c7e9a41-5b83-4f16-a0d4-8e1b3f6c9d52';
+/**
+ * The conversation turns whose bodies name state that their account holds, such as a file, a container or a skill,
+ * which no member of the mock's request rows can carry: the placement of `ACCOUNT_BOUND_SESSION_ID` on studio, whose
+ * pin the router writes with the flag. The session sends no later turn, so nothing clears it.
+ */
+export const ACCOUNT_BOUND_TURN_IDS: ReadonlySet<string> = new Set(['req_7c4a1e86-d39']);
+/** That session's auxiliary call, which follows the bound pin, so its selection runs no move rule. */
+export const ACCOUNT_BOUND_CALL_ID = 'req_3a9f5d12-b84';
 /** The desktop session the mod ended on nightly, whose row writes its agents' figures out. */
 export const FINISHED_SESSION_ID = '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96';
 /**
@@ -1260,8 +1270,8 @@ export const FINISHED_AGENTS = [
 export const FLEET_SESSION_ID = '8b1f4c2e-6a93-4d07-b5e2-3c9a7f1d4e68';
 /** The approved Ultra's session on bench, on the 7-day window and the Fable week alone. */
 export const WORKSHOP_SESSION_ID = '4a7c2e9b-1d58-4f36-b0e3-7c5a9d2f1e84';
-/** The sessions whose pins' cache entries live for an hour: four of studio's notebook sessions and the workshop's. */
-const HOUR_ENTRY_SESSION_IDS: ReadonlySet<string> = new Set([MARKED_SESSION_IDS[0], MARKED_SESSION_IDS[1], OPENING_SESSION_IDS[1], SLOWED_SESSION_ID, WORKSHOP_SESSION_ID]);
+/** The sessions whose pins' cache entries live for an hour: five of studio's notebook sessions and the workshop's. */
+const HOUR_ENTRY_SESSION_IDS: ReadonlySet<string> = new Set([ACCOUNT_BOUND_SESSION_ID, MARKED_SESSION_IDS[0], MARKED_SESSION_IDS[1], OPENING_SESSION_IDS[1], SLOWED_SESSION_ID, WORKSHOP_SESSION_ID]);
 /** The TTL of the cache entries of a session's pins, as each pin's line carries it in `cacheTtlMs`. The walk's
  *  expiry and the lines both read it, so the fact on an attempt and the line cannot part. */
 export const pinCacheTtlOf = (sessionId: string | null): number => (sessionId !== null && HOUR_ENTRY_SESSION_IDS.has(sessionId) ? HOUR : 5 * MINUTE);
@@ -1762,6 +1772,10 @@ function storySeeds(): StorySeed[] {
       session: SLOWED_SESSION_ID,
       usage: { cacheRead: 67_200, cacheWrite1h: 2_800, input: 2_000, output: 940 },
     },
+    // The account-bound session, placed after the round inside its dwell: its placement names state that studio
+    // holds, and its auxiliary call follows the bound pin there, so the call runs no rule and reads no slow-down.
+    { agentId: 'main', at: t(14, 8), attempts: [{ accountId: 'studio', at: t(14, 8), head5h: 0.8632, ms: 6_000, status: 200 }], id: 'req_7c4a1e86-d39', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: ACCOUNT_BOUND_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 30_000, input: 1_800, output: 700 } },
+    { agentId: 'main', at: t(14, 12), attempts: [{ accountId: 'studio', at: t(14, 12), head5h: 0.8675, ms: 1_000, status: 200 }], id: ACCOUNT_BOUND_CALL_ID, keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'auxiliary', session: ACCOUNT_BOUND_SESSION_ID, unseeded: true, usage: { input: 1_200, output: 90 } },
     // A long-context notebook session early in the day, whose one turn writes its prefix on the hour and which never
     // comes back: the turn `idleWarming` probes after.
     {
@@ -2030,6 +2044,22 @@ for (const s of STORY_SEEDS) if (s.bodyTokens !== undefined) COUNTED_BODY_TOKENS
 
 /** The router's pin key: the request's key, session, agent and canonical model. */
 export const pinKeyOf = (r: RequestLog) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+/**
+ * Whether a request carries its session's conversation, as the router's `carries_conversation` reads it: an inference
+ * of a conversation class or of none. A token count and a probe never do, whatever class they name.
+ */
+export const carriesConversation = (r: Pick<RequestLog, 'kind' | 'requestClass'>): boolean => r.kind === 'inference' && (r.requestClass === null || CONVERSATION_CLASSES.some((c) => c === r.requestClass));
+/** The pin keys of the turns that name account state, the only keys whose pin can hold the flag. */
+const BOUND_PIN_KEYS: ReadonlySet<string> = new Set([...ACCOUNT_BOUND_TURN_IDS].map((id) => pinKeyOf(requestById.get(id)!)));
+/**
+ * Whether the pin under `pinKey` holds state on its account at `at`: its newest conversation turn by then named the
+ * state, since the router writes the flag from each such turn and a portable one clears it.
+ */
+export const accountBoundAt = (pinKey: string, at: number): boolean => {
+  if (!BOUND_PIN_KEYS.has(pinKey)) return false;
+  const newest = REQUESTS.filter((r) => pinKeyOf(r) === pinKey && carriesConversation(r) && Date.parse(r.at) <= at).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+  return newest !== undefined && ACCOUNT_BOUND_TURN_IDS.has(newest.id);
+};
 /** The rows oldest first by arrival, the order the router's pins and a session's turns see them in. */
 const byArrival = () => [...REQUESTS].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 

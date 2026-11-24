@@ -174,9 +174,11 @@ const UNKNOWN_KIND: StationKind = { group: null, renderer: 'chips', stub: null }
 const isRule = (step: string) => step.startsWith('move:');
 
 /**
- * The engine never writes `bound` beside a rule, a partition, a rung or a pick: a bound request renews or exhausts on
- * its own path, so a walk that carries it expects no placeholder. A walk's end is its last step ahead of the Reserve
- * the engine writes behind every walk, a probe's pinned answer among them.
+ * A walk that runs the move rules is pinned, a released one among them, which writes `bound` ahead of its rules. Each
+ * other walk that carries `bound` expects no placeholder: a bound request renews or exhausts on its own path, and a
+ * released one whose pin's account is no candidate records the partitions, the rungs and the pick it is handed on to.
+ * A walk's end is its last step ahead of the Reserve the engine writes behind every walk, a probe's pinned answer among
+ * them.
  */
 function shapeOf(walk: WalkStep[]): StripShape {
   if (walk.some((s) => isRule(s.step))) return 'pinned';

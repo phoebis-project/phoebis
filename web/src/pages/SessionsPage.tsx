@@ -681,7 +681,8 @@ function AccountLink({ account, id }: { account: Account | null; id: string }) {
 
 /**
  * The row's account: a link to its page with the kind on its title, described to a reader that never hovers, the
- * slow-down chip on a slowed pin, the shed mark, and the agents pinned on another account. A dash with no account.
+ * slow-down chip on a slowed pin, the shed mark, the account-bound badge, and the agents pinned on another account. A
+ * dash with no account.
  */
 function RowAccount({ accent, account, others, session, speed }: { accent: boolean; account: Account | null; others: OtherPin[]; session: Session; speed: ReturnType<typeof memberSpeed> }) {
   if (session.accountId === null) return <span className="muted">-</span>;
@@ -691,6 +692,7 @@ function RowAccount({ accent, account, others, session, speed }: { accent: boole
       {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates the chip. */}
       {session.speed !== null && <SpeedChip {...speed} />}
       <ShedBadge session={session} />
+      <BoundBadge bound={session.accountBound} />
       <OtherPins accent={accent} agents={others} lead="Agents on another account:" />
     </span>
   );
@@ -708,6 +710,18 @@ function ShedBadge({ session }: { session: Pick<Session, 'accountId' | 'mark'> }
       leaving
     </Badge>
   );
+}
+
+const ACCOUNT_BOUND_HINT =
+  "This session's requests name state that its account holds, such as a file, a container or a skill. The router keeps its pin on that account, and no rule or round moves it.";
+
+/** The badge of a pin that holds state on its account, and nothing for any other pin. */
+function BoundBadge({ bound }: { bound: boolean | null }) {
+  return bound === true ? (
+    <Badge tone="neutral" title={ACCOUNT_BOUND_HINT}>
+      account-bound
+    </Badge>
+  ) : null;
 }
 
 /** The pin's no-return stamp as the move that wrote it, in the Pin fold's words, or null with no stamp. */
@@ -1440,14 +1454,16 @@ function AgentLine({ line, now, requestsTo }: { line: SessionLine; now: number; 
 /**
  * A line's account: a link to its page with the kind on its title, described to a reader that never hovers, then on the
  * row's own account the row's slow-down chip and shed mark, and on another the account's slow-down chip while it
- * holds. An account the list lacks reads its id alone.
+ * holds. The account-bound badge reads the line's own pin on either account. An account the list lacks reads its id
+ * alone.
  */
-function LineAccount({ account, id, now, row }: { account: Account | null; id: string; now: number; row: Session | null }) {
+function LineAccount({ account, bound, id, now, row }: { account: Account | null; bound: boolean | null; id: string; now: number; row: Session | null }) {
   return (
     <span className="agents__account">
       <AccountLink account={account} id={id} />
       {row === null ? <SpeedChip {...memberSpeed({ speed: null }, account, now)} /> : row.speed !== null && <SpeedChip {...memberSpeed(row, account, now)} />}
       {row !== null && <ShedBadge session={row} />}
+      <BoundBadge bound={bound} />
     </span>
   );
 }
@@ -1509,7 +1525,7 @@ function AgentRow({
         {short === null ? <span className="muted">-</span> : <span className="mono nowrap">{short}</span>}
         <span className="sub">{pin?.effort ?? '-'}</span>
       </td>
-      <td>{accountId === null ? <span className="muted">none</span> : <LineAccount account={cost.accountById.get(accountId) ?? null} id={accountId} now={now} row={accountId === session.accountId ? session : null} />}</td>
+      <td>{accountId === null ? <span className="muted">none</span> : <LineAccount account={cost.accountById.get(accountId) ?? null} bound={pin?.accountBound ?? null} id={accountId} now={now} row={accountId === session.accountId ? session : null} />}</td>
       <td title={tokens ? `${fmtInt(tokens)} tokens` : undefined}>
         <span className={context === '-' ? 'muted' : 'num'}>{context}</span>
       </td>

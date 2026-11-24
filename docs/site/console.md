@@ -1552,9 +1552,11 @@ the session are pinned on another model, its hover naming each agent with its mo
 Account links to the pinned account's page with its kind on hover, then the speed chip on a slowed session with the
 Quota view's hover, the warning badge `leaving` while a shedding round's mark stands on the session's pin, its hover
 naming the account the mark was made on and its window, and a "+N" for the agents pinned on another account. A session
-that a round's move or a failover's landing already took off an account reads no badge. While a Model or an Account
-filter stands, that column's "+N" takes the accent tone where one of the agents it names matches every Agents filter. A
-row with no account reads a dash.
+that a round's move or a failover's landing already took off an account reads no badge. A session whose requests name
+state that its account holds, such as a file, a container or a skill, carries the badge `account-bound` on its row and
+on each such line of its Agents table, and the hover says that the router keeps its pin on that account and that no rule
+or round moves it. While a Model or an Account filter stands, that column's "+N" takes the accent tone where one of the
+agents it names matches every Agents filter. A row with no account reads a dash.
 
 Requests counts the session's client requests the retention keeps under its key, the ones the router refused before any
 account was asked left out, with its last request's age under it and the instant on hover, and "View in requests" lists

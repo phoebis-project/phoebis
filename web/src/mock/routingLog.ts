@@ -18,7 +18,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
 import { DELETED_ACCOUNTS, KEY_REVOKED_AT, RETIRED, WORST_BUCKET, keyById, poolById, storyAccountOf, type PoolSeed } from './pools';
-import { ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, CLIMB_SESSION_ID, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, NO_PIN_DRAWS, OPENING_SESSION_IDS, OPUS_MORNING_SESSION_ID, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, RESERVATION_FABLE_SESSION_ID, RESERVATION_MARKED_SESSION_ID, REWRITE_HELD_ID, ROUTER_RESTARTED_AT, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, pinReadAt, pinStampOf, requestById, resentInPlace, sweepAfter, type CooldownRow } from './requests';
+import { ACCOUNT_BOUND_CALL_ID, ACCOUNT_BOUND_TURN_IDS, ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, CLIMB_SESSION_ID, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, NO_PIN_DRAWS, OPENING_SESSION_IDS, OPUS_MORNING_SESSION_ID, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, RESERVATION_FABLE_SESSION_ID, RESERVATION_MARKED_SESSION_ID, REWRITE_HELD_ID, ROUTER_RESTARTED_AT, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, accountBoundAt, attemptEnd, carriesConversation, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, pinReadAt, pinStampOf, requestById, resentInPlace, sweepAfter, type CooldownRow } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { drawnWindows, droppedThinkingOf, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
@@ -1194,7 +1194,7 @@ function triggerOf(source: RecordCandidate, windows: string[], at: number, pool:
 }
 
 /** The skip words of a pin that leaves the round before the walk. */
-const LEFT_OUT_SKIPS = ['ended', 'fable_model', 'fast_lane', 'no_burn', 'off_window'];
+const LEFT_OUT_SKIPS = ['account_bound', 'ended', 'fable_model', 'fast_lane', 'no_burn', 'off_window'];
 
 /**
  * A round's figures off its pins: the burn it could remove, its target under the cap, what its marks removed, the
@@ -1207,7 +1207,7 @@ function roundOf(round: ShedRound, excess: number | null, pool: PoolSeed) {
   const burnSum = round5(round.pins.reduce((n, p) => n + (p.burn ?? 0), 0));
   const walked = round.pins.filter((p) => p.skip === null || !LEFT_OUT_SKIPS.includes(p.skip));
   const skips = (walked.length > 0 ? walked : round.pins).flatMap((p) => (p.skip === null ? [] : [p.skip]));
-  const reason = round.marks.length > 0 ? null : (['no_runway', 'sliver', 'off_window', 'fable_model', 'ended', 'no_burn', 'unpriced', 'last_pin', 'standing'].find((w) => skips.includes(w)) ?? 'unpriced');
+  const reason = round.marks.length > 0 ? null : (['no_runway', 'sliver', 'off_window', 'fable_model', 'ended', 'account_bound', 'no_burn', 'unpriced', 'last_pin', 'standing'].find((w) => skips.includes(w)) ?? 'unpriced');
   return {
     burnSum,
     outcome: round.marks.length > 0 ? `marked ${round.marks.length}` : 'nothing_to_mark',
@@ -1578,8 +1578,9 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
 /**
  * The move rules a live pin a portable request still reaches walks, the destinations a fired rule names and whether
  * the move gate answered the fitting order, which tells a move's runway ties apart. A token count follows its pin,
- * since it writes none a move could leave, a probe warms the pin it was sent for and never moves it, and a pin past
- * its account's end is released at renewal instead.
+ * since it writes none a move could leave, a probe warms the pin it was sent for and never moves it, a request that
+ * carries no conversation follows a pin that holds account state, since the session's next turn finds its references
+ * on that account alone, and a pin past its account's end is released at renewal instead.
  */
 function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, pin: RecordPin | null, portable: boolean): { gateFits: boolean; movedAmong: string[] | undefined; steps: WalkStep[] } {
   const r = spec.request;
@@ -1588,7 +1589,16 @@ function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, p
   if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || leftPin(spec) || inPlaceOf(spec) !== null)) {
     const source = candidates.find((c) => c.accountId === pin.accountId);
     const endsAt = source?.term?.endsAt ? Date.parse(source.term.endsAt) : null;
-    const skip = r.kind === 'count_tokens' ? 'count' : r.kind === 'probe' ? 'probe' : endsAt !== null && endsAt <= spec.at ? 'subscription_ended' : null;
+    const skip =
+      r.kind === 'count_tokens'
+        ? 'count'
+        : r.kind === 'probe'
+          ? 'probe'
+          : !carriesConversation(r) && accountBoundAt(pinKeyOf(r), spec.at)
+            ? 'account_bound'
+            : endsAt !== null && endsAt <= spec.at
+              ? 'subscription_ended'
+              : null;
     if (skip !== null) {
       for (const rule of RULES) steps.push(step(`move:${rule}`, 'not_run', [fact('reason', skip)]));
     } else {
@@ -1787,7 +1797,8 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   const inPlace = inPlaceOf(spec);
   if (!spec.story && (spec.kind === 'placed' || spec.kind === 'moved')) fillDrawnRivals(spec, candidates, pool);
   if (spec.kind !== 'moved' && walksPlacement(spec)) readPlacementFits(spec, candidates, pool);
-  const portable = r.client !== 'other';
+  // A turn that names state its account holds is no portable request, whatever its client.
+  const portable = r.client !== 'other' && !ACCOUNT_BOUND_TURN_IDS.has(r.id);
   const pinKey = pinKeyOf(r);
   const pinning = pool.affinityTtlSeconds > 0 && r.sessionId !== null && (typeof spec.pin === 'object' || spec.pin === 'none');
   const { pin, pinReason, steps: pinSteps } = pinStepOf(spec, pool, pinKey);
@@ -2695,6 +2706,11 @@ function storySpecs(): Spec[] {
       pinPace: { cycleMs: 42_000, slowDownUntil: t(14, 5) },
       round: roundOfPins(STRETCH_PINS),
     }),
+    // The account-bound session lands on studio inside the round's dwell, and its auxiliary call follows the bound pin
+    // there, leaving its warmth, with no rule run and no slow-down read. The annex stands at its cap again at 14:08,
+    // so the slowed studio, which a fresh session no longer fits, stays the engine's pick for the session.
+    at('req_7c4a1e86-d39', 1, 1, t(14, 8), 'placed', 'studio', { inFlight: { annex: 16 } }),
+    at(ACCOUNT_BOUND_CALL_ID, 1, 1, t(14, 12), 'renewed', 'studio', { pin: live('class_auxiliary', 234_000, 'untouched') }),
   ];
 }
 

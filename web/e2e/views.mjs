@@ -12324,11 +12324,12 @@ async function tableStripes(theme, path) {
 const WRITTEN_SESSION = '7bea4514-4087-4b6a-a410-0dd5cd31cfad';
 
 /**
- * Two addresses that put the written session on a striped and on a plain session row: eighteenth under the last
- * activity's order, its last turn its subagent 4d1a's half an hour back, and first once the search keeps the ids that
- * start with 7b, where it stands alone.
+ * Two addresses that put the written session on a striped and on a plain session row: eighth under the last
+ * activity's order among the desktop key's rows, its last turn its subagent 4d1a's half an hour back, behind every
+ * other desktop row the default filters keep, and first once the search keeps the ids that start with 7b, where it
+ * stands alone.
  */
-const WRITTEN_PLACES = ['/sessions?sort=activity', '/sessions?search=7b&sort=activity'];
+const WRITTEN_PLACES = ['/sessions?key=desktop&sort=activity', '/sessions?search=7b&sort=activity'];
 
 /** The session row an open-row measure opens: the written session's in the mock pass, the router seed's first. */
 const openRowTarget = () => (mock ? page.locator('.sessions-table > tbody > tr.srow', { has: page.locator(`td[title="${WRITTEN_SESSION}"]`) }) : page.locator('.sessions-table > tbody > tr.srow').first());

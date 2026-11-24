@@ -9,7 +9,7 @@ import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById, servedFigures } from './pools';
-import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, fastTurn, pinCacheTtlOf, requestById } from './requests';
+import { ACCOUNT_BOUND_SESSION_ID, BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, accountBoundAt, fastTurn, pinCacheTtlOf, requestById } from './requests';
 import { dropSizeOf, droppedThinkingOf, moveSizeOf, proWeekRewriteOf } from './rewrite';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, tablesFor } from './samples';
@@ -392,13 +392,14 @@ const servedBurnAt = (foldAt: string | null): string | null => (foldAt === null 
  * cold one pay. The size reads null where the pin holds no prompt size and the drop where it drops nothing, each with
  * its cost, and a cost reads null for a model without a weight of its own. A prompt of 0 tokens is no size, as the
  * route answers null where nothing is priced above zero, so a pin with a drop and no size pays the drop's cost alone.
+ * A pin that holds state on its account reads no cost and keeps its sizes, since no rule or round moves it.
  */
-const moveFiguresOf = (tokens: number | null, dropped: number | null, model: string, keyId: string): Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
+const moveFiguresOf = (tokens: number | null, dropped: number | null, model: string, keyId: string, bound: boolean): Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
   const client = CLIENTS[keyId] ?? null;
   const size = moveSizeOf(tokens, dropped, model, client);
   const drop = dropSizeOf(dropped, model, client);
   const dropCost = drop === null ? null : proWeekRewriteOf(drop, model, client);
-  return { moveCost: size === null ? dropCost : proWeekRewriteOf(size, model, client), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
+  return { moveCost: bound ? null : size === null ? dropCost : proWeekRewriteOf(size, model, client), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
 };
 /** A row with no pin, which answers none of its move's figures. */
 const NO_MOVE: Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> = { moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null };
@@ -455,12 +456,12 @@ type UndatedLine = Omit<AgentContext, 'pinnedAt'> & Partial<Pick<AgentContext, '
 /**
  * A pin's line as the route answers it: warm until its last refresh plus its cache TTL, the refresh its caller names,
  * its burn and dollars as folded priced on the pin's own account and model, in that account's unit and window, as the
- * row's are for the display pin, and its lane and its move's figures as the row's are. Its burn folded at its last use
- * unless its caller names the instant, as the display pin's line takes its row's, since the route keeps one fold per
- * pin, and the line serves it decayed to the story's clock with that instant beside it.
+ * row's are for the display pin, and its lane, its flag of held account state and its move's figures as the row's are.
+ * Its burn folded at its last use unless its caller names the instant, as the display pin's line takes its row's, since
+ * the route keeps one fold per pin, and the line serves it decayed to the story's clock with that instant beside it.
  */
 const pinLine = (
-  line: Omit<UndatedLine, keyof BurnFigures | 'fast' | keyof MoveFigures | 'warm' | 'warmUntil'> & Partial<Pick<AgentContext, 'burnAt'>>,
+  line: Omit<UndatedLine, 'accountBound' | keyof BurnFigures | 'fast' | keyof MoveFigures | 'warm' | 'warmUntil'> & Partial<Pick<AgentContext, 'burnAt'>>,
   keyId: string,
   sessionId: string,
   folded: { burn: number | null; dollars: number | null },
@@ -471,14 +472,16 @@ const pinLine = (
   const factor = decayToNow(foldAt, keyId);
   const burn = unit === null || folded.burn === null ? null : folded.burn * factor;
   const warmUntil = warmUntilOf(lastRefreshAt, line.cacheTtlMs);
+  const accountBound = accountBoundAt(`${keyId}|${sessionId}|${line.agentId}|${line.model}`, NOW);
   return {
     ...line,
+    accountBound,
     burn,
     burnAt: servedBurnAt(foldAt),
     ...burnReadingOf(line.accountId, keyId, burn, unit),
     burnUsd: burnUsdOf(folded.dollars === null ? null : folded.dollars * factor, unit, line.model),
     fast: fastPin(keyId, line.model),
-    ...moveFiguresOf(line.lastInputTokens, droppedThinkingOf({ accountId: line.accountId, agentId: line.agentId, keyId, model: line.model, sessionId }, NOW), line.model, keyId),
+    ...moveFiguresOf(line.lastInputTokens, droppedThinkingOf({ accountId: line.accountId, agentId: line.agentId, keyId, model: line.model, sessionId }, NOW), line.model, keyId, accountBound),
     warm: warmAt(warmUntil),
     warmUntil,
   };
@@ -616,6 +619,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
   // A drawn row's pin was written at its first sighting, unless a move or a placement of the story wrote it later.
   const firstSeen = pinned ? ago(createdAgo) : null;
+  const bound = pinned && accountBoundAt(`${spec.keyId}|${sessionId}|main|${spec.model}`, NOW);
   const row: Session = {
     ...SESSION_SAMPLE,
     sessionId,
@@ -646,7 +650,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     // Read off the display pin's line once the lines are written.
     ended: null,
     fast: pinned ? fastPin(spec.keyId, spec.model) : null,
-    ...(pinned ? moveFiguresOf(lastInputRoll, droppedThinkingOf({ accountId: spec.accountId, agentId: 'main', keyId: spec.keyId, model: spec.model, sessionId }, NOW), spec.model, spec.keyId) : NO_MOVE),
+    accountBound: pinned ? bound : null,
+    ...(pinned ? moveFiguresOf(lastInputRoll, droppedThinkingOf({ accountId: spec.accountId, agentId: 'main', keyId: spec.keyId, model: spec.model, sessionId }, NOW), spec.model, spec.keyId, bound) : NO_MOVE),
     ...NO_MARK,
     shed: pinWrite?.shed ?? null,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
@@ -684,6 +689,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
 // and no activity of its own. Its id is written out rather than drawn, which would shift every later roll in this file.
 SESSIONS.push({
   ...SESSION_SAMPLE,
+  accountBound: null,
   accountId: null,
   agentContexts: [],
   agentFacts: [],
@@ -1014,6 +1020,7 @@ const writtenRow = (
   return {
     ...SESSION_SAMPLE,
     ...row,
+    accountBound: line.accountBound,
     agentContexts,
     agentFacts: [],
     burn: line.burn,
@@ -1066,6 +1073,7 @@ const writtenRow = (
  */
 const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGeneration' | 'keyId' | 'lastRequestAt' | 'model' | 'sessionId'>): Session => ({
   ...SESSION_SAMPLE,
+  accountBound: null,
   agentContexts: [],
   agentFacts: [],
   agentId: null,
@@ -1116,16 +1124,17 @@ export const rowsOfDeletedKey = (s: Session): Session[] => {
 
 /**
  * Studio's notebook sessions in work, pinned there while the slow-down holds it: the slowed one with its subagent, whose
- * main pin has the cycle its turns since the placement give, the two the round marked and the one whose turn opened the
- * span, whose pins have none yet. Each burn is the main pin's demand at the account's half speed, and each `burnUsd`
- * that pin's dollars an hour. No recipe warms them. They are written after the recipes rather than rolled, so every
- * drawn row and recipe keeps its rolls.
+ * main pin has the cycle its turns since the placement give, the two the round marked, the one whose turn opened the
+ * span and the account-bound one placed after the round, whose pins have none yet. Each burn is the main pin's demand
+ * at the account's half speed, and each `burnUsd` that pin's dollars an hour. No recipe warms them. They are written
+ * after the recipes rather than rolled, so every drawn row and recipe keeps its rolls.
  */
 const SLOWED_PINS: { agents: { agentId: string; model: string }[]; burn: number; burnUsd: number; cycleMs: number | null; sessionId: string }[] = [
   { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }, { agentId: '7b2e', model: HAIKU }], burn: 0.0125, burnUsd: 0.31, cycleMs: 42_000, sessionId: SLOWED_SESSION_ID },
   { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.0135, burnUsd: 0.33, cycleMs: null, sessionId: MARKED_SESSION_IDS[0] },
   { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.014, burnUsd: 0.35, cycleMs: null, sessionId: MARKED_SESSION_IDS[1] },
   { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.0113, burnUsd: 0.28, cycleMs: null, sessionId: OPENING_SESSION_IDS[1] },
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.0102, burnUsd: 0.25, cycleMs: null, sessionId: ACCOUNT_BOUND_SESSION_ID },
 ];
 // Every pin of the account reads the window's runway: until its burn carries the utilization to the pool's ceiling.
 const studioFive = accountById.get('studio')?.windows.find((w) => w.id === '5h');

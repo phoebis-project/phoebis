@@ -20,6 +20,7 @@ export { ageWord, ALL_KINDS, DECISION_KIND_LABEL, EVENT_KIND_LABEL };
 // alone and never a route or a fixture.
 
 const LABELS = {
+  account_bound: 'account-bound',
   answer: 'answer',
   attempt: 'attempt',
   capture: 'capture',
@@ -762,6 +763,8 @@ function decisionFacts(row: DecisionSummary, now: number): FactPair[] {
     if (SPEED_KEYS.has(f.key) && typeof f.value === 'number') return speedWord(f.value);
     // A cause is the engine's word, which reads as the card words it. An id under any other key keeps its underscores.
     if (f.key === 'cause' && typeof f.value === 'string') return wordOf(WARMTH_CAUSE_WORD, f.value);
+    // A bound landing's pick reads as the walk's pick step words it.
+    if (f.key === 'pick' && f.value === 'account_bound') return LABELS.account_bound;
     return formatFact(f.value, f.unit, now);
   };
   // A key the console has no label for is dropped rather than drawn under a guessed one.
@@ -1090,9 +1093,12 @@ function textWord(key: string, value: string): string {
       return wordOf(LABELS, value);
     case 'obstacle':
       return wordOf(OBSTACLE_WORD, value);
-    default:
-      return SNAKE.test(value) ? words(value) : value;
+    case 'reason':
+      // A bound landing's rungs and pick name the bind in the word a round's pin row reads for it.
+      if (value === 'account_bound') return LABELS.account_bound;
+      break;
   }
+  return SNAKE.test(value) ? words(value) : value;
 }
 
 /** A rewrite or a booking is a small share of its window, so it reads to three figures where a whole percent would read 0%. */
@@ -1186,6 +1192,18 @@ function refusalChips(refusal: Refusal, version: string | null): Chip[] {
   if (refusal.code === 'contract') return [plain(words(refusal.reason), 'contract')];
   return [plain(words(refusal.reason || 'client'), 'drift'), ...(version ? [plain(version, 'client')] : [])];
 }
+
+/** A round's reason for marking nothing, where its words differ from the cause's label on a pin's row. */
+const ROUND_REASON_WORD: Record<string, string> = { account_bound: 'each holds state on its account' };
+/** Why a move rule did not run, where the words differ from the reason's own. */
+const NOT_RUN_REASON_WORD: Record<string, string> = { account_bound: 'the session is account-bound' };
+/** The chips of a move rule's `reason` fact where the rule did not run and the table words the reason: the
+ *  words alone, with no label. Undefined for each other fact, which keeps its own chips. */
+export const notRunReasonChips = (step: Pick<WalkStep, 'step' | 'verdict'>, f: WalkFact): Chip[] | undefined => {
+  if (!step.step.startsWith('move:') || step.verdict !== 'not_run' || f.key !== 'reason' || typeof f.value !== 'string') return undefined;
+  const word = lookup(NOT_RUN_REASON_WORD, f.value);
+  return word === undefined ? undefined : [plain(word)];
+};
 
 export function factChips(f: WalkFact, record: DecisionRecord, now: number): Chip[] {
   const v = f.value;
@@ -1285,7 +1303,7 @@ export function walkLines(record: DecisionRecord, row?: DecisionSummary): WalkLi
         ? refusalChips(refusal, clientVersionOf(row))
         : s.step === 'selection' && s.facts.length === 0
           ? ['moves', 'rungs', 'partitions'].map((p) => plain(p))
-          : s.facts.flatMap((f) => factChips(f, record, at));
+          : s.facts.flatMap((f) => notRunReasonChips(s, f) ?? factChips(f, record, at));
     const entry = rungEntry(s, record);
     lines.push({ chips, ...(entry === undefined ? {} : { hash: entry }), number: lines.length + 1, step: wordOf(STEP_NAME, s.step), verdict: s.verdict });
   }
@@ -2323,7 +2341,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Planned destinations', ...[...new Set(pins.flatMap((p) => (str(p.planned) === null ? [] : [str(p.planned) ?? ''])))].map((id) => accountChip(id)));
       const outcome = str(d.outcome);
       const reason = str(d.reason);
-      add('Outcome', outcome === null ? null : plain(outcome === 'nothing_to_mark' ? `nothing to mark${reason === null ? '' : `: ${wordOf(LABELS, reason)}`}` : words(outcome)));
+      add('Outcome', outcome === null ? null : plain(outcome === 'nothing_to_mark' ? `nothing to mark${reason === null ? '' : `: ${lookup(ROUND_REASON_WORD, reason) ?? wordOf(LABELS, reason)}`}` : words(outcome)));
       add('Next round after', time(d.dwell_until));
       add('Dwell', seconds(d.dwell_seconds));
       if (typeof d.persisted === 'boolean') add('Survive a restart', plain(d.persisted ? 'persisted' : 'not persisted'));

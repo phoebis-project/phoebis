@@ -637,6 +637,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([pool.activePins, pool.members.map((m) => [m.accountId, m.activePins])], [3, [['contract', 3]]], 'the pool and its member count the pin beside the two');
   });
 
+  test(`the account-bound session reads the flag and no move cost beside a move size on its row and its line, at ${at}`, async () => {
+    const s = await story;
+    // The notebook session whose placement names state that studio holds (`ACCOUNT_BOUND_SESSION_ID` in
+    // mock/requests.ts). Its pin has the annex for a destination, so the flag alone takes the cost away.
+    const row = s.sessions.find((x) => x.sessionId === '2c7e9a41-5b83-4f16-a0d4-8e1b3f6c9d52');
+    assert.deepEqual([row.accountBound, row.moveCost, typeof row.moveSize], [true, null, 'number'], 'the row');
+    assert.deepEqual(row.agentContexts.map((c) => [c.agentId, c.accountBound, c.moveCost, typeof c.moveSize]), [['main', true, null, 'number']], 'its line');
+  });
+
   test(`every record of one request reads the request's one boundary count, at ${at}`, async () => {
     const s = await story;
     // The failed attempt on secondary writes no row, and the failover's answer writes eleven message rows on primary.

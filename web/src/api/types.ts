@@ -2138,6 +2138,9 @@ export interface MoveFigures {
 }
 
 export interface AgentContext extends BurnFigures, MoveFigures {
+  /** Whether the pin holds state on its account, such as a file, a container or a skill, so that the router keeps it
+   *  there. */
+  accountBound: boolean | null;
   /** The pin's account. */
   accountId: string;
   agentId: string;
@@ -2230,6 +2233,9 @@ export interface SessionAgentFacts {
  * row's `moveSize` is the rewrite at the pin's destination plus the dropped thinking at the output's weight.
  */
 export interface Session extends BurnFigures, MoveFigures {
+  /** Whether the pin holds state on its account, such as a file, a container or a skill, so that the router keeps it
+   *  there. Null on a row with no pin. */
+  accountBound: boolean | null;
   accountId: string | null;
   /** One entry per conversation pin that draws a line, main's among them, and empty where none does. */
   agentContexts: AgentContext[];

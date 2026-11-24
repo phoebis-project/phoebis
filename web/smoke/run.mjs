@@ -1199,8 +1199,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 33, 0, 6, 3 and 1 pins, one per key, session, agent and model under their keys, on primary,
-  // nightly, secondary, overflow, studio, contract and workshop, over 24 listed pinned rows on seven accounts.
+  // The story's pools hold 33, 0, 7, 3 and 1 pins, one per key, session, agent and model under their keys, on primary,
+  // nightly, secondary, overflow, studio, contract and workshop, over 25 listed pinned rows on seven accounts.
   // Secondary's row idle for two hours left the route's list under the non-companion timeout, and its listed one is
   // 229bf72c, whose keepalive probe renewed the pin on secondary and moved none. The two written sessions bring four of
   // them: the auxiliary-only session's subagent pin and main's auxiliary pin on overflow, and the two pins of the fleet
@@ -1208,7 +1208,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // counting the pinned rows or a note counting every row's account reads otherwise.
   // A hero counting every session row reads otherwise only while the story's row count differs from its pins, so the
   // count is read first and a story where the two meet fails here.
-  const PINS = 43;
+  const PINS = 44;
   const sessionRows = (await api.listSessions()).length;
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({
@@ -1285,7 +1285,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 }
 {
   // The Sessions card's grid counts the live sessions' lines as the Sessions view's summary line counts the rows its
-  // bare address keeps, both read at the clock origin: 36 agents, the lines less the released ones with main counted
+  // bare address keeps, both read at the clock origin: 37 agents, the lines less the released ones with main counted
   // where no line names it, and 12 busy, 7 idle and 4 parked by lifecycle word. The three finished sessions stay out of
   // both, and nightly's notebook row (`sessionSpec[19]`), whose mod went silent beside main's idle recipe, counts idle.
   const cardOf = (page) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Sessions');
@@ -1299,7 +1299,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const summary = line === null ? null : { Agents: line[1], Busy: line[2], Idle: line[3], Parked: line[4] };
   results.push({
     name: "/ the Sessions card's Agents, Busy, Idle and Parked count the live sessions' lines as the Sessions view's summary line counts them",
-    ok: JSON.stringify(grid) === JSON.stringify({ Agents: '36', Busy: '12', Idle: '7', Parked: '4' }) && JSON.stringify(summary) === JSON.stringify(grid),
+    ok: JSON.stringify(grid) === JSON.stringify({ Agents: '37', Busy: '12', Idle: '7', Parked: '4' }) && JSON.stringify(summary) === JSON.stringify(grid),
     missing: [JSON.stringify(grid), subtitle || 'no summary line'],
   });
 }
@@ -1401,8 +1401,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       (failed.notice ?? '').startsWith('Could not load the keepalive overview: ledger locked') &&
       role === 'status' &&
       drawn.grid === 4 &&
-      // The hero's `43` is the mock overview's active pins, which the failed keepalive read leaves drawn.
-      drawn.hero === '43' &&
+      // The hero's `44` is the mock overview's active pins, which the failed keepalive read leaves drawn.
+      drawn.hero === '44' &&
       retry !== undefined &&
       calls === 1 &&
       // `19 of 128` is the Sessions cap after Try again: `ENGINE_SESSIONS.length` of
@@ -1441,8 +1441,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       JSON.stringify(failed.grid) === JSON.stringify(['-', '-', '-', '-']) &&
       (failed.notice ?? '').startsWith('Could not load the recipes: recipes locked') &&
       notice?.getAttribute('role') === 'status' &&
-      // `43` is the mock overview's active pins, which the failed recipes read leaves drawn.
-      JSON.stringify(drawn) === JSON.stringify({ caps: 3, hero: '43' }) &&
+      // `44` is the mock overview's active pins, which the failed recipes read leaves drawn.
+      JSON.stringify(drawn) === JSON.stringify({ caps: 3, hero: '44' }) &&
       calls === 1 &&
       again.notice === null &&
       again.grid.every((figure) => /^\d+$/.test(figure ?? '')),
@@ -18961,6 +18961,21 @@ await forView('/routing-log', async () => {
     });
   }
   {
+    // The auxiliary call of the notebook session that holds state on studio (`ACCOUNT_BOUND_CALL_ID` in
+    // mock/requests.ts) follows its pin, so each move rule reads not run, and the Spent station words the cause.
+    const { card, page } = await story('req_3a9f5d12-b84');
+    scan('account-bound call', card);
+    const spent = stationsOf(card).find((s) => s.id === 'move:spent');
+    const popover = await popoverOf(page, spent?.button);
+    const reason = popoverRowOf(popover, 'reason');
+    page.unmount();
+    results.push({
+      name: "/routing-log a move rule that did not run for an account-bound session reads not run and the session's words in its reason row",
+      ok: spent?.verdict === 'not run' && JSON.stringify(reason) === JSON.stringify(['the session is account-bound']),
+      missing: [JSON.stringify([spent?.verdict ?? null, reason]), rowsRead(popover)],
+    });
+  }
+  {
     const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
     scan('failover attempt', card);
     stripDrawn('failover attempt', card, modelPairs(record), record);
@@ -21437,8 +21452,9 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // Laptop's Failed and the line's errors count the bare 502 of the range's first hour, `req_8f5a2d16-c47`, and the
   // line's errors the rejection beside it, `req_4c1e8b27-d93`, which counts under Rejected. The line's requests count
   // the hour's request the relay sent once more on primary after a failed connect, `req_0e5a7c3b-f92`, which answered,
-  // and the failover session's subagent turn and auxiliary call (`MOVED_PIN_TURN_ID` and `MOVED_PIN_CALL_ID`), each
-  // answered.
+  // the failover session's subagent turn and auxiliary call (`MOVED_PIN_TURN_ID` and `MOVED_PIN_CALL_ID`), and the
+  // account-bound session's turn and auxiliary call on notebook (`ACCOUNT_BOUND_TURN_IDS` and `ACCOUNT_BOUND_CALL_ID`),
+  // each answered.
   // Ci's Failed and the line's errors leave out the stream its client closed, the drawn `req_52f62e67-839`, which counts
   // under Client canceled.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
@@ -21453,7 +21469,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '16', '3'], ['ci', '0', '3'], ['laptop', '7', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '270 requests, 14.4% errors',
+      line === '272 requests, 14.3% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -26742,8 +26758,10 @@ await forView('/keys', async () => {
   // of the conversation whose pin the purge takes twice. The rounds' chains and the recipes' last requests add 28 seed
   // rows, 5 on laptop and 23 on desktop, and the moved pin's first turn `req_6d2a9f41-c37` and auxiliary call
   // `req_9e1b4c63-a52` add 2 on desktop. Desktop's 147 are the 150 requests its key sent since it was issued at 18:00
-  // on Sep 15, less the 3 that a guardrail refused before any account was asked, which the rollups do not count.
-  const weeks = ['234 requests, 7d', '147 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
+  // on Sep 15, less the 3 that a guardrail refused before any account was asked, which the rollups do not count. The
+  // account-bound session's placement and auxiliary call (`ACCOUNT_BOUND_TURN_IDS` and `ACCOUNT_BOUND_CALL_ID`) add 2
+  // on notebook.
+  const weeks = ['234 requests, 7d', '147 requests, 7d', '63 requests, 7d', '20 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
     lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },
@@ -27101,27 +27119,27 @@ await forView('/sessions', async () => {
     page.unmount();
     return got;
   };
-  // The route's 27 rows at the story's instant: the three finished sessions (the two the mod released whole and the
+  // The route's 28 rows at the story's instant: the three finished sessions (the two the mod released whole and the
   // one it ended), fourteen rows a companion reports or went silent on, the registration-only row, the written
-  // auxiliary-only session and nightly's notebook row among them, and ten no companion reports: the laptop row the
+  // auxiliary-only session and nightly's notebook row among them, and eleven no companion reports: the laptop row the
   // ledger never saw, with no last use, and by their last use the written fleet session no mod reports 2 minutes back,
-  // the fleet row 4, the workshop session on bench 6, the pinless fork 16, overflow's desktop row 28 and studio's four
-  // notebook rows 25 to 42. The non-companion timeout leaves out the five past the hour: the refusal-only row 98
+  // the fleet row 4, the workshop session on bench 6, the pinless fork 16, overflow's desktop row 28 and studio's five
+  // notebook rows 18 to 42. The non-companion timeout leaves out the five past the hour: the refusal-only row 98
   // by its newest refusal, the ci rows 118 and 240, the row idle for two hours 120 and the earlier holder 20 hours
-  // back. The defaults keep 24 and hide the three finished. The 24 rows draw 36 agents, the lines less the released
+  // back. The defaults keep 25 and hide the three finished. The 25 rows draw 37 agents, the lines less the released
   // ones: three on the story's first session, four of the written session's seven, two on each of four sessions with a
   // subagent line, the auxiliary-only session's main and its subagent, the two pins of studio's slowed session and of
-  // the fleet session no mod reports, and main's line on each of the other fifteen.
+  // the fleet session no mod reports, and main's line on each of the other sixteen.
   const bare = await read('');
   const drawnOf = (got) => got.drawn.map((id) => listed.find((s) => idOfRow(s) === id)).filter(Boolean);
   results.push({
     name: '/sessions the bare address keeps the rows the default filters keep, with no chip, the finished session hidden and the count of the sessions and their agents, the hidden rows on its hover',
-    ok: finished !== undefined && bare.chips.length === 0 && !bare.finished && bare.drawn.length === 24 && bare.count === '24 sessions · 36 agents' && bare.countTitle === '3 sessions hidden by the filters',
+    ok: finished !== undefined && bare.chips.length === 0 && !bare.finished && bare.drawn.length === 25 && bare.count === '25 sessions · 37 agents' && bare.countTitle === '3 sessions hidden by the filters',
     missing: [`finished ${finished?.sessionId ?? 'absent'}`, JSON.stringify(bare.chips), `${bare.drawn.length} rows`, String(bare.count), String(bare.countTitle)],
   });
   {
     // The Companion filter on reporting and silent keeps the fourteen rows a companion reports or went silent on, which
-    // draw 23 agents: the bare page's 36 less the thirteen of the ten rows no companion reports.
+    // draw 23 agents: the bare page's 37 less the fourteen of the eleven rows no companion reports.
     const only = await read('?companion=reporting,silent');
     const kept = drawnOf(only);
     results.push({
@@ -27133,7 +27151,7 @@ await forView('/sessions', async () => {
         kept.every(companionRow) &&
         kept.some((s) => s.companion === 'silent') &&
         only.count === '14 sessions · 23 agents' &&
-        only.countTitle === '13 sessions hidden by the filters',
+        only.countTitle === '14 sessions hidden by the filters',
       missing: [JSON.stringify(only.chips), `${only.drawn.length} rows`, ...new Set(kept.map((s) => s.companion)), String(only.count), String(only.countTitle)],
     });
   }
@@ -27144,7 +27162,7 @@ await forView('/sessions', async () => {
   });
   {
     // While the filters hide every row the router lists, the card says so with the hidden count and no expiry sentence:
-    // the route's eleven rows no companion reports inside the non-companion timeout, the session the mod ended among
+    // the route's twelve rows no companion reports inside the non-companion timeout, the session the mod ended among
     // them, read under the Companion filter on reporting.
     const { listSessions } = api;
     api.listSessions = async (...args) => (await listSessions.apply(api, args)).filter((s) => s.companion === 'none');
@@ -27155,14 +27173,14 @@ await forView('/sessions', async () => {
     api.listSessions = listSessions;
     results.push({
       name: '/sessions with every row hidden by the filters the card reads No sessions kept by the filters with the hidden count',
-      ok: got.rows === 0 && (got.body ?? '').includes('No sessions kept by the filters') && (got.body ?? '').includes('11 sessions hidden by the filters.') && !(got.body ?? '').includes('session expiry') && !(got.body ?? '').includes('No live sessions'),
+      ok: got.rows === 0 && (got.body ?? '').includes('No sessions kept by the filters') && (got.body ?? '').includes('12 sessions hidden by the filters.') && !(got.body ?? '').includes('session expiry') && !(got.body ?? '').includes('No live sessions'),
       missing: [JSON.stringify(got)],
     });
   }
   {
     // A finished session keeps its lines once shown: the finished sentence opens its detail above the facts, and each
     // line of the Cache warming details reads its ended state with the probes and credits the engine last read. The
-    // filter lists all 27 rows, the three finished ones adding no agent to the bare page's 36, since the end released
+    // filter lists all 28 rows, the three finished ones adding no agent to the bare page's 37, since the end released
     // the ended session's main with its subagents and the Agents count leaves the released lines out. No companion
     // reports the session after its end, and its main keeps the released word: its Agents cell counts none with no word
     // under it, and main's line in its Agents table reads released.
@@ -27194,7 +27212,7 @@ await forView('/sessions', async () => {
       name: '/sessions ?finished=1 lists the finished session under the chip finished sessions, its expanded row the finished sentence above its facts and its three lines each ended with its probes and credits, its main released and counted in no Agents word, and the count names every listed row',
       ok:
         JSON.stringify(chips) === JSON.stringify(['finished sessions']) &&
-        count.text === '27 sessions · 36 agents' &&
+        count.text === '28 sessions · 37 agents' &&
         count.title === null &&
         row !== null &&
         got.text === RELEASED_SENTENCE &&
@@ -27241,7 +27259,7 @@ await forView('/sessions', async () => {
       name: "/sessions ?released=1 draws a live session's released lines under the chip released agents, each with its released badge, and the count names the same agents",
       ok:
         JSON.stringify(on.chips) === JSON.stringify(['released agents']) &&
-        on.count === '24 sessions · 36 agents' &&
+        on.count === '25 sessions · 37 agents' &&
         releasedHere.length > 0 &&
         off.lines.every((l) => !releasedHere.includes(l.id)) &&
         JSON.stringify(on.lines.map((l) => l.id).sort()) === JSON.stringify(lineIds(recipes)) &&
@@ -27284,10 +27302,10 @@ await forView('/sessions', async () => {
         JSON.stringify(picked.chips) === JSON.stringify(['released agents']),
       missing: [JSON.stringify(offered), JSON.stringify(picked)],
     });
-    // The defaults keep the route's 24 rows, the two written sessions and the workshop session among them.
+    // The defaults keep the route's 25 rows, the two written sessions and the workshop session among them.
     results.push({
       name: "/sessions the chip line's Clear all returns the three filters to their defaults and the bare address",
-      ok: JSON.stringify(three) === JSON.stringify(['companion: reporting, silent', 'finished sessions', 'released agents']) && cleared.search === '' && cleared.chips.length === 0 && cleared.rows === 24,
+      ok: JSON.stringify(three) === JSON.stringify(['companion: reporting, silent', 'finished sessions', 'released agents']) && cleared.search === '' && cleared.chips.length === 0 && cleared.rows === 25,
       missing: [JSON.stringify(three), JSON.stringify(cleared)],
     });
   }
@@ -27345,23 +27363,23 @@ await forView('/sessions', async () => {
         rows: ['8b1f4c2e', 'b7e2d5a9'],
       },
       {
-        // Studio's four notebook rows run at half speed (`SLOWED_PINS`), and nightly's notebook row on the same key at
+        // Studio's five notebook rows run at half speed (`SLOWED_PINS`), and nightly's notebook row on the same key at
         // full speed is out.
-        count: '4 sessions · 5 agents',
+        count: '5 sessions · 6 agents',
         name: '/sessions ?slowed=1 keeps the rows slowed below full speed',
         query: '?slowed=1',
-        rows: ['5f8a3c1e', '9c2d7e4a', 'e7a4b2d9', 'c8f4a2e7'],
+        rows: ['5f8a3c1e', '9c2d7e4a', 'e7a4b2d9', 'c8f4a2e7', '2c7e9a41'],
       },
       {
         // A line's account is its pin's, else its recipe's: the story's first session on primary is in by c21e and e4b7
         // on nightly, laptop's c64358b5 on primary by its Haiku 4.5 subagents' line on nightly, laptop's unledgered row
-        // on nightly is out, since it draws main from the row with no pin, and studio's four rows are in by pins no
+        // on nightly is out, since it draws main from the row with no pin, and studio's five rows are in by pins no
         // recipe stands on. The failover session (bcc805b6) on primary is in by its subagent 6c2b's pin on nightly,
         // where its recipe stays on primary.
-        count: '11 sessions · 14 matching agents',
+        count: '12 sessions · 15 matching agents',
         name: "/sessions ?account=nightly,studio keeps the rows with a line on either account, read off the line's recipe or its pin",
         query: '?account=nightly,studio',
-        rows: ['fa23a6da', '89cd1c92', '1c0f9727', '76ddb35b', 'c64358b5', 'bcc805b6', '6d2f8b40', '5f8a3c1e', '9c2d7e4a', 'e7a4b2d9', 'c8f4a2e7'],
+        rows: ['fa23a6da', '89cd1c92', '1c0f9727', '76ddb35b', 'c64358b5', 'bcc805b6', '6d2f8b40', '5f8a3c1e', '9c2d7e4a', 'e7a4b2d9', 'c8f4a2e7', '2c7e9a41'],
       },
       {
         // a7f3 on story 2 is a Plan agent (`STORY_AGENTS`), and the fork c21e on the story's first session is not.
@@ -27371,13 +27389,13 @@ await forView('/sessions', async () => {
         rows: ['229bf72c'],
       },
       {
-        // `no recipe` reads a pin no recipe stands on: studio's four rows, the fleet row, the workshop session and both
+        // `no recipe` reads a pin no recipe stands on: studio's five rows, the fleet row, the workshop session and both
         // pins of the fleet session no mod reports, and not nightly's notebook row, whose pin a recipe stands on, nor a
         // row that draws main from the row with no pin.
-        count: '7 sessions · 9 matching agents',
+        count: '8 sessions · 10 matching agents',
         name: '/sessions ?cache=no recipe keeps the rows with a pin no recipe stands on',
         query: '?cache=no+recipe',
-        rows: ['5f8a3c1e', '9c2d7e4a', 'e7a4b2d9', 'c8f4a2e7', '8b1f4c2e', '4a7c2e9b', 'b7e2d5a9'],
+        rows: ['5f8a3c1e', '9c2d7e4a', 'e7a4b2d9', 'c8f4a2e7', '2c7e9a41', '8b1f4c2e', '4a7c2e9b', 'b7e2d5a9'],
       },
       {
         // A line's effort is its pin's: the story's first session is in by e4b7's low pin beside main's medium, and the
@@ -27543,7 +27561,7 @@ await forView('/sessions', async () => {
     // Each order moves rows past the route's own, and the story holds rows with no first request, which tie and read by
     // session id, and rows with no activity, the registration-only row among both.
     const none = (sort) => drawn.filter((s) => timeOf(s, sort) === null).length;
-    const story = drawn.length === 24 && ![drawn.map(idOfRow), want.activity.rows].some((rows) => JSON.stringify(rows) === JSON.stringify(want.bare.rows)) && none('created') >= 2 && none('activity') >= 1;
+    const story = drawn.length === 25 && ![drawn.map(idOfRow), want.activity.rows].some((rows) => JSON.stringify(rows) === JSON.stringify(want.bare.rows)) && none('created') >= 2 && none('activity') >= 1;
     const wantRadios = {
       ascRadios: [
         ['Created false', 'Last activity true', 'Cost false', 'Requests false'],
@@ -27567,17 +27585,17 @@ await forView('/sessions', async () => {
     // order alone, since a row's lines keep the order their own key gives them.
     const name = '/sessions the sort control orders the rows by Cost and by Requests, largest first and then smallest, each pick writing the address';
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
-    // Each pick's drawn order by session id prefix, read off the 24 rows' `spend.usd` and `spend.requests` (the mock's
+    // Each pick's drawn order by session id prefix, read off the 25 rows' `spend.usd` and `spend.requests` (the mock's
     // fold over the request seed in `web/src/mock/requests.ts`). The five rows with no spend, `0f1d7c64`, `3e9b7c21`,
     // `6d2f8b40`, `b7e2d5a9` and `cd9a5904`, stand last under Cost either way and read by session id, while their zero
     // requests put them first under Requests ascending. `0d588de5`, with its classifier call of 14:02:40, and
     // `d7167642` tie at eight requests, and `229bf72c` and `7bea4514` at seven, each pair read by session id under both
     // directions.
     const ORDERS = {
-      cost: ['bcc805b6', '89cd1c92', '7bea4514', '0d588de5', '4ef130f1', 'fa23a6da', '4a7c2e9b', '5f8a3c1e', 'd7167642', '229bf72c', '76ddb35b', 'c8f4a2e7', 'c64358b5', '9c2d7e4a', '1c0f9727', 'e7a4b2d9', '8b1f4c2e', '5eeed6ce', '7d3e1c20', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
-      costAsc: ['7d3e1c20', '5eeed6ce', '8b1f4c2e', 'e7a4b2d9', '1c0f9727', '9c2d7e4a', 'c64358b5', 'c8f4a2e7', '76ddb35b', '229bf72c', 'd7167642', '5f8a3c1e', '4a7c2e9b', 'fa23a6da', '4ef130f1', '0d588de5', '7bea4514', '89cd1c92', 'bcc805b6', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
-      requests: ['bcc805b6', 'fa23a6da', '0d588de5', 'd7167642', '229bf72c', '7bea4514', '4ef130f1', '76ddb35b', '89cd1c92', '5eeed6ce', '5f8a3c1e', 'c64358b5', '8b1f4c2e', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', 'e7a4b2d9', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
-      requestsAsc: ['0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904', 'e7a4b2d9', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', '8b1f4c2e', '5eeed6ce', '5f8a3c1e', 'c64358b5', '76ddb35b', '89cd1c92', '4ef130f1', '229bf72c', '7bea4514', '0d588de5', 'd7167642', 'fa23a6da', 'bcc805b6'],
+      cost: ['bcc805b6', '89cd1c92', '7bea4514', '0d588de5', '4ef130f1', 'fa23a6da', '4a7c2e9b', '5f8a3c1e', 'd7167642', '229bf72c', '76ddb35b', 'c8f4a2e7', 'c64358b5', '9c2d7e4a', '2c7e9a41', '1c0f9727', 'e7a4b2d9', '8b1f4c2e', '5eeed6ce', '7d3e1c20', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      costAsc: ['7d3e1c20', '5eeed6ce', '8b1f4c2e', 'e7a4b2d9', '1c0f9727', '2c7e9a41', '9c2d7e4a', 'c64358b5', 'c8f4a2e7', '76ddb35b', '229bf72c', 'd7167642', '5f8a3c1e', '4a7c2e9b', 'fa23a6da', '4ef130f1', '0d588de5', '7bea4514', '89cd1c92', 'bcc805b6', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      requests: ['bcc805b6', 'fa23a6da', '0d588de5', 'd7167642', '229bf72c', '7bea4514', '4ef130f1', '76ddb35b', '89cd1c92', '5eeed6ce', '5f8a3c1e', 'c64358b5', '8b1f4c2e', '1c0f9727', '2c7e9a41', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', 'e7a4b2d9', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      requestsAsc: ['0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904', 'e7a4b2d9', '1c0f9727', '2c7e9a41', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', '8b1f4c2e', '5eeed6ce', '5f8a3c1e', 'c64358b5', '76ddb35b', '89cd1c92', '4ef130f1', '229bf72c', '7bea4514', '0d588de5', 'd7167642', 'fa23a6da', 'bcc805b6'],
     };
     const rowIds = (prefixes) => prefixes.map((p) => listed.find((s) => !s.historical && s.sessionId.startsWith(p))).map((s) => (s === undefined ? 'no session' : idOfRow(s)));
     const read = () => ({
@@ -28324,9 +28342,9 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
-    // The summary line under the card's title, over the rows the filters keep: the 36 agents the Agents cells count, 12
+    // The summary line under the card's title, over the rows the filters keep: the 37 agents the Agents cells count, 12
     // busy, 7 idle and 4 parked among them, nightly's notebook row (`sessionSpec[19]`) idle, since its mod went silent
-    // beside main's idle recipe, the 95 client requests of the last 24 hours the rows' `day` folds and a dash for
+    // beside main's idle recipe, the 97 client requests of the last 24 hours the rows' `day` folds and a dash for
     // their spend, since thirteen of the rows' days hold a plan request the cost model priced nothing for and a partial
     // sum would read as the whole, then the $1.59 the day billed in dollars, $1.5855 over these rows of the request
     // seed (mock/requests.ts): the failover session's auxiliary call that fails over into nightly's overage on
@@ -28344,7 +28362,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const parts = /^(.*) · (.*) requests and (.*) \+ (\$[\d.]+) in 24 h$/.exec(subtitle);
     results.push({
       name: "/sessions the card's summary line reads the agents by word, the day's requests and spend, and the dollars billed beside it, and the title its sentence on hover",
-      ok: card?.querySelector('.card__title [title]')?.getAttribute('title') === 'One row per session. Open a row for its agents, its routing and its cache warming.' && parts !== null && parts[1] === '36 agents: 12 busy, 7 idle, 4 parked' && parts[2] === '95' && parts[3] === '-' && parts[4] === '$1.59',
+      ok: card?.querySelector('.card__title [title]')?.getAttribute('title') === 'One row per session. Open a row for its agents, its routing and its cache warming.' && parts !== null && parts[1] === '37 agents: 12 busy, 7 idle, 4 parked' && parts[2] === '97' && parts[3] === '-' && parts[4] === '$1.59',
       missing: [subtitle, card?.querySelector('.card__title')?.outerHTML ?? 'no title'],
     });
   }
@@ -28427,6 +28445,32 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       name: "/sessions a reported row whose main the engine cannot tell reads unknown with its sentence",
       ok: JSON.stringify(badgeOf(unknown)) === JSON.stringify({ cls: 'badge badge--neutral', dot: true, text: 'unknown', title: "The reporter could not tell this agent's state." }),
       missing: [JSON.stringify(badgeOf(unknown))],
+    });
+  }
+  {
+    // The notebook session whose placement names state that studio holds (`ACCOUNT_BOUND_SESSION_ID` in
+    // mock/requests.ts) reads the badge account-bound with its hover in its row's Account cell and in its main line's.
+    const BOUND_ID = '2c7e9a41-5b83-4f16-a0d4-8e1b3f6c9d52';
+    const HINT = "This session's requests name state that its account holds, such as a file, a container or a skill. The router keeps its pin on that account, and no rule or round moves it.";
+    const boundRow = live(BOUND_ID);
+    const bound = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const tr = boundRow === undefined ? null : bound.container.querySelector(`[id="${sessionRowId(boundRow)}"]`);
+    const rowBadge = [...(sessionCell(bound, tr, 'Account')?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'account-bound');
+    tr?.click();
+    await bound.settle(150);
+    const detail = tr?.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+    const lineBadges = [...(detail?.querySelectorAll('table.agents-table > tbody > tr .agents__account .badge') ?? [])].filter((b) => b.textContent?.trim() === 'account-bound');
+    bound.unmount();
+    const want = { cls: 'badge badge--neutral', dot: false, text: 'account-bound', title: HINT };
+    results.push({
+      name: '/sessions an account-bound row reads the badge account-bound with its hover in its Account cell',
+      ok: boundRow !== undefined && JSON.stringify(badgeOf(rowBadge)) === JSON.stringify(want),
+      missing: [JSON.stringify(badgeOf(rowBadge))],
+    });
+    results.push({
+      name: "/sessions the account-bound row's main line reads the badge account-bound with its hover in its Account cell",
+      ok: lineBadges.length === 1 && JSON.stringify(badgeOf(lineBadges[0])) === JSON.stringify(want),
+      missing: [JSON.stringify(lineBadges.map(badgeOf))],
     });
   }
   {
@@ -29322,7 +29366,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
   {
-    // The 24 rows the default filters keep at the story's instant, eleven of them warmed by no recipe: eight pinned
+    // The 25 rows the default filters keep at the story's instant, twelve of them warmed by no recipe: nine pinned
     // rows read `no recipe` under their Cache badge, the written fleet session no mod reports, the workshop session,
     // whose pool keeps no cache warm, and the silent row past its idle limit among them, and three with no pin read `no
     // pin`, the registration-only row among them. The written auxiliary-only session, whose main holds none, reads its
@@ -29335,7 +29379,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
     pinned.unmount();
     const count = (word) => words.filter((w) => w === word).length;
-    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 24 && count('no recipe') === 8 && count('no pin') === 3, missing: [`${drawn.length} rows, ${count('no recipe')} with no recipe, ${count('no pin')} with no pin`] });
+    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 25 && count('no recipe') === 9 && count('no pin') === 3, missing: [`${drawn.length} rows, ${count('no recipe')} with no recipe, ${count('no pin')} with no pin`] });
   }
   // The sessions the mod released whole are finished, so these read with the finished sessions shown.
   await m.navigate('/sessions?finished=1');
@@ -29405,13 +29449,13 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const plus = [...m.container.querySelectorAll('tbody tr.srow .badge')].filter((b) => /^\+\d+$/.test(b.textContent?.trim() ?? ''));
     [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all')?.click();
     await m.settle(250);
-    // The default filters' 24 rows draw 32 lines on an account. Nine are pins no recipe stands on: the written fleet
-    // session no mod reports draws two, studio's four slowed notebook rows five, the fleet row one and the workshop
+    // The default filters' 25 rows draw 33 lines on an account. Ten are pins no recipe stands on: the written fleet
+    // session no mod reports draws two, studio's five slowed notebook rows six, the fleet row one and the workshop
     // session one. The written auxiliary-only session draws its subagent's recipe line. Main's line drawn from a row
     // stands on no pin and no recipe, so it names no account.
     results.push({
       name: "/sessions each line's Account cell links to the account with its kind on the title and in its description and its speed chip while slowed, and the row's +N badges stand with their figure, inside its cell",
-      ok: links.length === 32 && off.length === 0 && kinds.includes('oauth') && kinds.includes('api_key') && links.some((l) => l.chip) && plus.length > 0 && plus.every((b) => b.closest('.srow__pin') !== null),
+      ok: links.length === 33 && off.length === 0 && kinds.includes('oauth') && kinds.includes('api_key') && links.some((l) => l.chip) && plus.length > 0 && plus.every((b) => b.closest('.srow__pin') !== null),
       missing: [`${links.length} lines`, ...new Set(kinds), ...off.slice(0, 6).map((l) => l.link?.outerHTML ?? 'no link'), `${plus.length} +N badges`],
     });
   }
@@ -29437,7 +29481,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const off = read.filter((r) => JSON.stringify(r.got) !== JSON.stringify(r.want));
     results.push({
       name: '/sessions a slowed session draws the speed chip in its Account cell with the slow-down in its hover, and a pinned row with a cycle names it on its Runway hover',
-      ok: want.speed === 0.5 && off.length === 0 && read.filter((r) => r.want.chip !== null).length === 4 && read.filter((r) => r.want.runway === 'cycle 42 s').length === 1,
+      ok: want.speed === 0.5 && off.length === 0 && read.filter((r) => r.want.chip !== null).length === 5 && read.filter((r) => r.want.runway === 'cycle 42 s').length === 1,
       missing: [String(want.speed), ...off.slice(0, 6).map((r) => JSON.stringify(r)), `${read.filter((r) => r.want.chip !== null).length} slowed rows`],
     });
   }
@@ -29497,7 +29541,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // listing it: the lesser of the non-companion timeout and the session expiry, the hour and the day of the mock's
     // settings (`NON_COMPANION_IDLE_SECONDS` and `SESSION_EXPIRE_SECONDS` in mock/operations.ts), after the latest of
     // its last use, its last request and its companion's end. A companion row reads none, since the route keeps it
-    // while its mod reports or went silent. Of the 24 rows the default filters keep, ten no companion reports, and nine
+    // while its mod reports or went silent. Of the 25 rows the default filters keep, eleven no companion reports, and ten
     // of them hold an instant to count from, the laptop row the ledger never saw holding none. The fleet session no mod
     // reports, last used 2 minutes back with no request in the ledger, reads that use plus the hour on hover. The page
     // mounts on the clock's origin, so no row's instant has passed.
@@ -29518,9 +29562,9 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     results.push({
       name: '/sessions reads the instant the route stops listing a row no companion reports under Last used, and no expires line on a companion row',
       ok:
-        lines.length === 24 &&
-        plain.length === 10 &&
-        plain.filter((l) => /^expires in \d+[hmd]/.test(l.text ?? '')).length === 9 &&
+        lines.length === 25 &&
+        plain.length === 11 &&
+        plain.filter((l) => /^expires in \d+[hmd]/.test(l.text ?? '')).length === 10 &&
         reported.every((l) => l.text === null) &&
         noMod?.lastRequestAt === null &&
         /^expires in \d+m$/.test(noModLine?.text ?? '') &&
@@ -29529,11 +29573,11 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.firstChild?.textContent?.trim()));
-  // 19 of the 24 rows the default filters keep hold ledgered requests, the workshop session's two bench rows among
-  // them, and the two rows with no last use, nightly's notebook row and the two written sessions, which reached no
-  // ledger, hold none. The ci key's two rows and the earlier holder, which hold some, left the list under the
-  // non-companion timeout.
-  results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length === 19 && counts.includes(0), missing: counts.map(String) });
+  // 20 of the 25 rows the default filters keep hold ledgered requests, the workshop session's two bench rows and the
+  // account-bound session's two notebook rows among them, and the two rows with no last use, nightly's notebook row
+  // and the two written sessions, which reached no ledger, hold none. The ci key's two rows and the earlier holder,
+  // which hold some, left the list under the non-companion timeout.
+  results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length === 20 && counts.includes(0), missing: counts.map(String) });
 
   // Per-agent pins: a "+N" badge on the Model cell wherever an agent is pinned on another model, recipe or not, its
   // hover naming each one's model and account.
@@ -29641,7 +29685,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         missing: [String(id), bare === undefined ? 'hidden on the bare address' : 'listed on the bare address', JSON.stringify(read)],
       });
     }
-    // The 19 rows the default filters keep that hold ledgered requests read their last request's instant and the other
+    // The 20 rows the default filters keep that hold ledgered requests read their last request's instant and the other
     // five none, the two written sessions among the five. The earlier holder, the ci key's two rows and the
     // refusal-only row, which read a last request, and the row idle for two hours, which reads none, left the list
     // under the non-companion timeout.
@@ -29649,7 +29693,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       const s = sessionOfRow(r, listedNow);
       return { got: cell(r, 'Last request')?.textContent?.trim() ?? '', want: s === undefined ? 'no session' : s.lastRequestAt === null ? 'none' : fmtAbsolute(s.lastRequestAt) };
     });
-    results.push({ name: "/sessions Last request reads the last request's instant or none", ok: lasts.filter((l) => l.got === 'none').length === 5 && lasts.length === 24 && lasts.every((l) => l.got === l.want), missing: lasts.filter((l) => l.got !== l.want).map((l) => JSON.stringify(l)) });
+    results.push({ name: "/sessions Last request reads the last request's instant or none", ok: lasts.filter((l) => l.got === 'none').length === 5 && lasts.length === 25 && lasts.every((l) => l.got === l.want), missing: lasts.filter((l) => l.got !== l.want).map((l) => JSON.stringify(l)) });
     const silentRows = rows().filter((r) => (cell(r, 'Companion')?.textContent?.trim() ?? '').startsWith('silent'));
     const silentState = silentRows.map((r) => cell(r, 'Cache')?.querySelector('.sub')?.textContent?.trim() ?? '');
     results.push({
