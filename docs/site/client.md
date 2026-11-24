@@ -267,9 +267,9 @@ takes one of its key's body-read slots.
 
 `GET /v1/usage` with the key as `Authorization: Bearer <secret>` or `x-api-key: <secret>` answers that key's own usage
 as JSON, or as one HTML page when `Accept` prefers `text/html`. The JSON carries `key` (`id`, `label`, `pool_id`),
-`now`, and `windows` with `24h` and `7d`, each `from`, `to`, `requests`, `succeeded`, `failed`, `incomplete`, `tokens`
-(`input`, `output`, `cache_read`, `cache_write`), `cost_usd` and `models` (per canonical model: `model`, `requests`,
-`tokens`, `cost_usd`). What the figures cover, the key refusal and the HTML page are under
+`now`, and `windows` with `24h` and `7d`, each `from`, `to`, `requests`, `succeeded`, `failed`, `incomplete`,
+`canceled`, `tokens` (`input`, `output`, `cache_read`, `cache_write`), `cost_usd` and `models` (per canonical model:
+`model`, `requests`, `tokens`, `cost_usd`). What the figures cover, the key refusal and the HTML page are under
 [Your key's usage](#your-keys-usage), and a ledger the route cannot read is the `usage_unavailable` row of
 [Refusal codes](#refusal-codes).
 
@@ -374,13 +374,15 @@ body's read ([claude.ai features](claude-ai-features.md#what-the-router-refuses-
 ## Your key's usage
 
 `GET /v1/usage` on the proxy listener answers the usage of the key that presents it, and of no other: requests, tokens
-and the estimated cost over the last 24 hours and the last 7 days, per model, with the key's label and pool. The
-figures are the router's hourly rollups under the key, probe rows left out, the same rollups the operator's analytics
-read. Each window is summed from whole hourly buckets, so it starts at the top of an hour: the `from` the answer
-reports is that hour, up to an hour earlier than the window's name, and the figures cover it all. The figures are this
-key's own from its creation, filed under the generation it was created with, so a deleted key's rows stay with the key
-they belonged to and a later key under the same id never reads them. Nothing about the accounts is answered, and the
-secret never is.
+and the estimated cost over the last 24 hours and the last 7 days, per model, with the key's label and pool. The figures
+are the router's hourly rollups under the key, the same rollups the operator's analytics read. A keepalive probe counts
+as no request, and a probe that the plan did not fund adds its dollars to the cost alone, so a model can read a cost
+beside no request. Each window counts a request that its client canceled under `canceled`, so `succeeded`, `failed`,
+`incomplete` and `canceled` sum to `requests`. Each window is summed from whole hourly buckets, so it starts at the top
+of an hour: the `from` the answer reports is that hour, up to an hour earlier than the window's name, and the figures
+cover it all. The figures are this key's own from its creation, filed under the generation it was created with, so a
+deleted key's rows stay with the key they belonged to and a later key under the same id never reads them. Nothing about
+the accounts is answered, and the secret never is.
 
 ```sh
 curl -sS -H "Authorization: Bearer $CLAUDE_CODE_OAUTH_TOKEN" http://127.0.0.1:8317/v1/usage | jq .windows.\"24h\"

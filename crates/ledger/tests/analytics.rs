@@ -10516,6 +10516,55 @@ fn a_keys_usage_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_i
     assert_eq!(day.cost_usd, 15.0);
 }
 
+/// Two billed probes of the first scope, a million input tokens on the last millisecond before the entry of 18:30 and
+/// a million on its first, read $5 and $10 in the key's own usage, and their model answers the $15 beside no request.
+#[test]
+fn a_keys_usage_prices_a_billed_probe_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
+    let (db, _dir) = common::temp_ledger();
+    let prices = PriceRevisions::from_yaml(TWO_RATES_IN_ONE_HOUR, "test").unwrap();
+    let (key, pool, account) = FIRST_SCOPE;
+    let entry = ms(2026, 1, 15, 18, 30);
+    for (id, at) in [("before", entry - 1), ("on", entry)] {
+        let probe = RequestRecord {
+            id: id.into(),
+            received_at: at,
+            key_id: Some(key.into()),
+            pool_id: Some(pool.into()),
+            canonical_model: "claude-opus-5-5".into(),
+            model: "claude-opus-5-5".into(),
+            kind: "probe".into(),
+            origin: "keepalive".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: AccountKind::ApiKey,
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000_000),
+            ..Default::default()
+        };
+        db.insert_request_at(&probe, &[attempt], None, &prices)
+            .unwrap();
+    }
+    let (day, _) = db
+        .read_blocking(|c| {
+            phoebis_ledger::key_usage_windows(c, key, 0, ms(2026, 1, 15, 19, 0), &prices)
+        })
+        .unwrap();
+    assert_eq!(day.cost_usd, 15.0);
+    assert_eq!(
+        day.models
+            .iter()
+            .map(|m| (m.requests, m.cost_usd))
+            .collect::<Vec<_>>(),
+        [(0, 15.0)]
+    );
+}
+
 /// The keys' totals price the split hour from its stored rows, each priced by request, while the hour's request count
 /// stays the rows' own.
 #[test]

@@ -10,6 +10,7 @@ use axum::middleware::map_response;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use phoebis_bus::Kind;
 use phoebis_oauth::Clock;
 use phoebis_relay::{anthropic_error, authenticated_key, new_request_id, no_store_answer};
 use phoebis_routing::{RouterHandle, DAY_MS, WEEK_MS};
@@ -23,20 +24,23 @@ use crate::{LedgerDb, LedgerError, PriceRevisions, Pricing};
 
 pub const USAGE_PATH: &str = "/v1/usage";
 
-/// One window of a key's own usage, summed from the hourly rollups filed under its `(key_id, key_generation)`. The
-/// usage route leaves each probe row out, its dollars among them.
+/// One window of a key's own usage, summed from the hourly rollups filed under its `(key_id, key_generation)`. A probe
+/// counts as no request: a probe that the plan did not fund adds its dollars to `cost_usd` and to its model's, and a
+/// probe that the plan funded adds nothing.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct KeyUsageWindow {
     pub from: i64,
     pub to: i64,
     pub requests: u64,
     pub succeeded: u64,
-    /// Every request that ended in a failure: failed, rate limited, exhausted, and rejected. A request that its client
-    /// canceled counts in `requests` alone.
+    /// Every request that ended in a failure: failed, rate limited, exhausted, and rejected.
     pub failed: u64,
     /// The committed answers whose body ended before its end, counted apart from `failed` since the client
     /// received part of the answer.
     pub incomplete: u64,
+    /// The requests that their client canceled, which are no failure of the router's or of an account's. With
+    /// `succeeded`, `failed` and `incomplete` it sums to `requests`.
+    pub canceled: u64,
     pub tokens: UsageTokens,
     pub cost_usd: f64,
     /// Per canonical model, sorted by model id.
@@ -79,7 +83,7 @@ fn add(tokens: &mut UsageTokens, row: &RollupRow) {
 /// Each row's dollars price from its parts as `row_parts` answers them, once for both windows: a row of an hour no
 /// price entry splits at the revision in force at the end of its hour, and a request of a boundary hour at the
 /// revision in force when it arrived, from the sides loaded ahead of the rows. A client classifier call the plan paid
-/// adds zero, and each probe row is left out, its dollars among them.
+/// adds zero, and a probe row adds its dollars alone, where the plan did not fund it.
 pub fn key_usage_windows(
     conn: &Connection,
     key_id: &str,
@@ -89,15 +93,18 @@ pub fn key_usage_windows(
 ) -> Result<(KeyUsageWindow, KeyUsageWindow), LedgerError> {
     let day_hour = hour_of(now - DAY_MS);
     let week_hour = hour_of(now - WEEK_MS);
+    // One snapshot for the sides and the rows: a request that landed between two snapshots would join a row and no
+    // side, and price at its hour's end.
+    let tx = conn.unchecked_transaction()?;
     let sides = Sides::on_key(
-        conn,
+        &tx,
         prices,
         key_id,
         key_generation,
         week_hour,
         hour_ceil(now),
     )?;
-    let rows = read_rollups_for_key(conn, key_id, key_generation, week_hour, hour_ceil(now))?;
+    let rows = read_rollups_for_key(&tx, key_id, key_generation, week_hour, hour_ceil(now))?;
     let (mut day, mut week) = (
         WindowSum::new(day_hour, now),
         WindowSum::new(week_hour, now),
@@ -135,23 +142,36 @@ impl WindowSum {
     }
 
     fn add(&mut self, row: &RollupRow, usd: f64) {
+        if row.kind == Kind::Probe.as_str() {
+            // A probe counts as no request. One that prices at nothing draws no model line, as the operator's
+            // breakdown keeps a group of probes alone only where their billed dollars stand above zero.
+            if usd > 0.0 {
+                self.window.cost_usd += usd;
+                self.model(row).cost_usd += usd;
+            }
+            return;
+        }
         let out = &mut self.window;
         out.requests += row.requests;
         out.succeeded += row.succeeded;
         out.failed += row.failed + row.rate_limited + row.exhausted + row.rejected;
         out.incomplete += row.incomplete;
+        out.canceled += row.client_canceled;
         out.cost_usd += usd;
         add(&mut out.tokens, row);
-        let entry = self
-            .models
+        let entry = self.model(row);
+        entry.requests += row.requests;
+        entry.cost_usd += usd;
+        add(&mut entry.tokens, row);
+    }
+
+    fn model(&mut self, row: &RollupRow) -> &mut ModelUsage {
+        self.models
             .entry(row.canonical_model.clone())
             .or_insert_with_key(|model| ModelUsage {
                 model: model.clone(),
                 ..ModelUsage::default()
-            });
-        entry.requests += row.requests;
-        entry.cost_usd += usd;
-        add(&mut entry.tokens, row);
+            })
     }
 
     fn finish(self) -> KeyUsageWindow {
@@ -346,10 +366,10 @@ fn window_html(title: &str, w: &KeyUsageWindow) -> String {
         ));
     }
     format!(
-        "<section><h2>{title}</h2><p class=\"sum\">{} requests, {} succeeded, {} failed, {} incomplete, ${:.4}</p>\
+        "<section><h2>{title}</h2><p class=\"sum\">{} requests, {} succeeded, {} failed, {} incomplete, {} canceled, ${:.4}</p>\
          <table><thead><tr><th>Model</th><th>Requests</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Cost</th></tr></thead>\
          <tbody>{rows}</tbody></table></section>",
-        w.requests, w.succeeded, w.failed, w.incomplete, w.cost_usd
+        w.requests, w.succeeded, w.failed, w.incomplete, w.canceled, w.cost_usd
     )
 }
 
@@ -371,7 +391,7 @@ fn render_html(answer: &UsageAnswer) -> String {
          th,td{{border-bottom:1px solid #ddd;padding:.35rem .5rem;text-align:left}}.n{{text-align:right;font-variant-numeric:tabular-nums}}\
          @media (prefers-color-scheme:dark){{body{{color:#e6e6e6;background:#151515}}th,td{{border-color:#333}}.key{{color:#aaa}}}}</style></head>\
          <body><h1>Usage of {label}</h1><p class=\"key\">key <code>{id}</code>, pool <code>{pool}</code>, \
-         figures from the router's hourly rollups with probes left out, generated <time>{now}</time></p>\
+         figures from the router's hourly rollups, billed keepalive probes counted in the cost alone, generated <time>{now}</time></p>\
          {day}{week}</body></html>",
         label = escape_html(&answer.key.label),
         id = escape_html(&answer.key.id),
@@ -387,18 +407,21 @@ mod tests {
     use super::{wants_html, window_html, KeyUsageWindow};
 
     #[test]
-    fn a_windows_sum_line_names_its_incomplete_count_beside_failed() {
+    fn a_windows_sum_line_names_its_incomplete_and_canceled_counts_beside_failed() {
         let window = KeyUsageWindow {
-            requests: 6,
+            requests: 10,
             succeeded: 3,
             failed: 2,
             incomplete: 1,
+            canceled: 4,
             cost_usd: 0.25,
             ..KeyUsageWindow::default()
         };
         let html = window_html("Last 24 hours", &window);
         assert!(
-            html.contains("2 failed") && html.contains("1 incomplete"),
+            html.contains("2 failed")
+                && html.contains("1 incomplete")
+                && html.contains("4 canceled"),
             "{html}"
         );
     }

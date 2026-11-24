@@ -2818,11 +2818,12 @@ pub const KEY_RANGE_PREDICATE: &str =
 /// `read_rollups_for_key`'s statement, its order included, spelled once so the seeded plan test explains the
 /// statement the read runs. It binds `KEY_RANGE_PREDICATE`'s four values.
 pub(crate) fn key_range_statement() -> String {
-    format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} AND kind != 'probe' ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier")
+    format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} AND {NO_PLAN_PROBES} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier")
 }
 
-/// The rows of one key over a range, probes left out, narrowed by SQLite rather than in memory: a reader that wants
-/// a single key pays for that key's rows and not for every key's, and decodes no probe row to drop it.
+/// The rows of one key over a range, the probe rows that the plan funded left out, narrowed by SQLite rather than in
+/// memory: a reader that wants a single key pays for that key's rows and not for every key's, and decodes no plan probe
+/// to drop it.
 pub fn read_rollups_for_key(
     conn: &Connection,
     key_id: &str,

@@ -3873,7 +3873,8 @@ const SIDE_CHUNK: usize = 500;
 /// millisecond joins the side after it, as `in_force` reads that entry from its instant on. An hour whose request rows
 /// the purge took answers sides that hold no count. The sides assume that today's `deltas_of` names the key under which
 /// a kept request's tokens stand, so a request whose stored row keeps an older band can split a row of today's. A
-/// `key` of `(key_id, key_generation)` reads that key's requests alone and no probe, for a reader of that key's rows.
+/// `key` of `(key_id, key_generation)` reads that key's requests alone, its probes among them, for a reader of that
+/// key's rows.
 pub(crate) fn earlier_sides(
     conn: &Connection,
     hour: i64,
@@ -3903,7 +3904,7 @@ pub(crate) fn earlier_sides(
         Ok(())
     };
     let one_key = if key.is_some() {
-        " AND key_id = ?3 AND key_generation = ?4 AND kind != 'probe'"
+        " AND key_id = ?3 AND key_generation = ?4"
     } else {
         ""
     };
@@ -3989,8 +3990,8 @@ impl Sides {
         )
     }
 
-    /// `on` for a reader of one key's rows that prices dollars alone: the sides hold that key's requests and no probe,
-    /// since a side pairs with a row of its own key and the reader takes no probe row.
+    /// `on` for a reader of one key's rows that prices dollars alone: the sides hold that key's requests, since a side
+    /// pairs with a row of its own key.
     pub(crate) fn on_key(
         conn: &Connection,
         prices: &PriceRevisions,

@@ -1,5 +1,5 @@
-//! A window sums one key's rollups alone, probes left out, and the route it backs answers only the caller's
-//! own key, a deleted key's rows staying under its own generation.
+//! A window sums one key's rollups alone, the plan's probes left out, and the route it backs answers only the
+//! caller's own key, a deleted key's rows staying under its own generation.
 mod common;
 
 use std::sync::atomic::Ordering;
@@ -112,7 +112,8 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
         None,
     )
     .unwrap();
-    // A probe under the same key is folded into its own rollup row and must not reach the key's own totals.
+    // A probe that the plan funded under the same key is folded into its own rollup row and must not reach the key's
+    // own totals.
     db.insert_request(
         &request("r5", "k1", "claude-sonnet-5-5", "probe", "succeeded", 200),
         &[used("r5")],
@@ -172,6 +173,113 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
         ),
         (0, 0, 0, 0.0, 0),
         "a key with no rows under its id answers an empty window"
+    );
+}
+
+#[test]
+fn a_window_counts_a_request_its_client_canceled_apart_from_a_failed_one() {
+    let (db, _dir) = common::temp_ledger();
+    let sonnet = "claude-sonnet-5-5";
+    let canceled = RequestRecord {
+        error_code: Some(phoebis_relay::CLIENT_GONE_CODE.into()),
+        ..request("r5", "k1", sonnet, "inference", "canceled", 200)
+    };
+    for (request, attempt) in [
+        (
+            request("r1", "k1", sonnet, "inference", "succeeded", 200),
+            used("r1"),
+        ),
+        (
+            request("r2", "k1", sonnet, "inference", "succeeded", 200),
+            used("r2"),
+        ),
+        (
+            request("r3", "k1", sonnet, "inference", "failed", 500),
+            unused("r3"),
+        ),
+        (
+            request("r4", "k1", sonnet, "inference", "incomplete", 200),
+            used("r4"),
+        ),
+        (canceled, unused("r5")),
+    ] {
+        db.insert_request(&request, &[attempt], None).unwrap();
+    }
+    let (day, _) = db
+        .read_blocking(|c| key_usage_windows(c, "k1", 0, 10_000, &PriceRevisions::shipped()))
+        .unwrap();
+    assert_eq!(
+        (
+            day.requests,
+            day.succeeded,
+            day.failed,
+            day.incomplete,
+            day.canceled
+        ),
+        (5, 2, 1, 1, 1)
+    );
+}
+
+/// Sonnet 5.5 at $10 per million input tokens, the one model the list prices.
+const TEN_DOLLARS_PER_MILLION_INPUT: &str = "\
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-sonnet-5-5: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 1, output: 50}
+";
+
+#[test]
+fn a_window_adds_a_billed_probes_dollars_and_nothing_else_of_a_probe() {
+    let (db, _dir) = common::temp_ledger();
+    let prices = PriceRevisions::from_yaml(TEN_DOLLARS_PER_MILLION_INPUT, "test").unwrap();
+    let sonnet = "claude-sonnet-5-5";
+    let input_alone = |id: &str, input: u64, usage_based: bool| AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: AccountKind::Oauth,
+        outcome: "succeeded".into(),
+        input_tokens: Some(input),
+        usage_based,
+        ..Default::default()
+    };
+    for (request, attempt) in [
+        (
+            request("r1", "k1", sonnet, "inference", "succeeded", 200),
+            input_alone("r1", 1_000_000, false),
+        ),
+        // A usage-based seat's probe, $5 that the plan did not fund.
+        (
+            request("r2", "k1", sonnet, "probe", "succeeded", 200),
+            input_alone("r2", 500_000, true),
+        ),
+        // The plan's probe, which would read $20.
+        (
+            request("r3", "k1", sonnet, "probe", "succeeded", 200),
+            input_alone("r3", 2_000_000, false),
+        ),
+        // A billed probe on a model that the list lacks, which prices at nothing.
+        (
+            request("r4", "k1", "claude-haiku-5", "probe", "succeeded", 200),
+            input_alone("r4", 1_000_000, true),
+        ),
+    ] {
+        db.insert_request_at(&request, &[attempt], None, &prices)
+            .unwrap();
+    }
+    let (day, _) = db
+        .read_blocking(|c| key_usage_windows(c, "k1", 0, 10_000, &prices))
+        .unwrap();
+    assert_eq!(
+        (day.cost_usd, day.requests, day.tokens.input),
+        (15.0, 1, 1_000_000)
+    );
+    assert_eq!(
+        day.models
+            .iter()
+            .map(|m| (m.model.as_str(), m.cost_usd, m.requests, m.tokens.input))
+            .collect::<Vec<_>>(),
+        [(sonnet, 15.0, 1, 1_000_000)]
     );
 }
 
