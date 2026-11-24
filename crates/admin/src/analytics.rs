@@ -637,9 +637,9 @@ fn window_json(s: &HourlyWindowSample, term: Option<&SubscriptionTerm>) -> Windo
     }
 }
 
-/// Raises the peak of `window` on an account's hour or sum to `utilization` where that reads higher. Each of the three
-/// spellings of the Fable week (`fable`, `seven_day_fable` and `seven_day_overage_included`) raises its one peak, and
-/// a window with no peak of its own raises nothing.
+/// Raises the peak of `window` on an account's hour or sum to `utilization` where that reads higher. Each spelling of
+/// the Fable week that `account_window_id` answers as `SEVEN_DAY_FABLE` raises its one peak, and a window with no peak
+/// of its own raises nothing.
 fn raise_peak(row: &mut AccountRollupRow, window: &str, utilization: f64) {
     let peak = match account_window_id(window) {
         FIVE_HOUR => &mut row.utilization_5h_max,

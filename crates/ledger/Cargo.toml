@@ -42,7 +42,8 @@ http-body-util = { workspace = true }
 phoebis-cch = { path = "../cch" }
 # An integration test builds the library without `cfg(test)`, so the seam it reaches needs the feature on.
 phoebis-ledger = { path = ".", features = ["debug-hooks", "test-support"] }
-# The limit resets parser's re-export a rig writes its block with, kept off the dependency above as the store's are.
+# The oauth crate's gated re-exports, the limit resets parser a rig writes its block with and the usage parse it
+# builds a poll with, kept off the dependency above as the store's are.
 phoebis-oauth = { path = "../oauth", features = ["test-support"] }
 # The tests read the embedded fixture files, which the feature gates.
 phoebis-profile = { path = "../profile", features = ["test-support"] }

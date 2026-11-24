@@ -22,7 +22,7 @@ use crate::exchange::{
 use crate::inflight::{spawn_into, InflightMap, Joined};
 use crate::limit_resets::{
     fold_claim_answer, grant_states, parse_claim_answer, parse_limit_resets, ClaimAnswer,
-    GrantStatus, LimitResets, SEVEN_DAY_FABLE,
+    GrantStatus, LimitResets, FABLE_WEEK_SPELLINGS, SEVEN_DAY_FABLE, SEVEN_DAY_OVERAGE_INCLUDED,
 };
 use crate::manager::{
     retry_after_ms, AccessToken, AcquireError, Clock, CredentialManager, LandedMark,
@@ -69,9 +69,9 @@ const PLAN_REFUSED_CODE: &str = "oauth_not_allowed_for_organization";
 /// The standing's last error while the poll sends an account whose plan ended no usage request.
 const PLAN_ENDED: &str = "plan ended";
 
-/// Top-level keys the 2.1.270 binary and the Management Center source use for the Fable weekly window,
-/// read only when `limits[]` is absent from the response.
-const FABLE_KEY_ALIASES: &[&str] = &["cinder_cove", "iguana_necktie"];
+/// The gap in points between a body's two readings of the Fable week past which the poll warns. A wider one would
+/// be the first sign of a second model week under the overage-included name.
+const FABLE_WEEK_GAP_POINTS: f64 = 3.0;
 
 /// The key a snapshot gives the Fable week, so an answer built from the router's windows reads like one the
 /// endpoint gave.
@@ -336,11 +336,12 @@ impl PollIssue {
 
 /// Reads every top-level object with a `utilization` member as a window, keeping its key. `extra_usage`
 /// carries a `utilization` of its own but describes purchased credit rather than a quota window, so it is
-/// parsed separately. The Fable weekly window comes from `limits[]` when present. A top-level key is read
-/// only as a fallback for the wire shapes captured before that field existed. The spend reading comes from
-/// the body's `spend` object where it carries the spent amount with its currency and exponent, else from the
-/// extra-usage amounts where they carry the used credits, a currency and `decimal_places`, and is none
-/// otherwise.
+/// parsed separately. The Fable weekly window comes from the Fable entry of `limits[]` where the body holds
+/// one. A top-level window under a spelling of `FABLE_WEEK_SPELLINGS` is the Fable week where `limits` names
+/// none, the first in the list's order and under the key `FABLE_WINDOW_KEY`, and no window stands under a
+/// spelling. The spend reading comes from the body's `spend` object where it carries the spent amount with
+/// its currency and exponent, else from the extra-usage amounts where they carry the used credits, a
+/// currency and `decimal_places`, and is none otherwise.
 pub fn parse_usage(body: &[u8]) -> Result<ParsedUsage, OauthError> {
     let map = json_object(body, "usage response")?;
 
@@ -358,23 +359,34 @@ pub fn parse_usage(body: &[u8]) -> Result<ParsedUsage, OauthError> {
     };
     let spend = spend_reading(map.get("spend"), extra_usage.as_ref());
 
-    let (fable_window, fable_week_share) = match map.get("limits") {
-        Some(limits) => match fable_from_limits(limits) {
-            Some((index, window)) => {
-                // The alias is the same quota under the name an older response used, so leaving it among the
-                // windows would show the operator one limit twice.
-                windows.retain(|window| !FABLE_KEY_ALIASES.contains(&window.key.as_str()));
-                (Some(window), fable_week_share(&map, index))
-            }
-            None => (None, None),
-        },
-        None => {
-            let alias = windows
-                .iter()
-                .position(|w| FABLE_KEY_ALIASES.contains(&w.key.as_str()));
-            (alias.map(|index| windows.remove(index)), None)
-        }
-    };
+    // A spelling is the same quota under another name, so leaving it among the windows would show the operator one
+    // limit twice.
+    let spelled: Vec<UsageWindow> = FABLE_WEEK_SPELLINGS
+        .iter()
+        .filter_map(|spelling| {
+            let index = windows.iter().position(|window| window.key == *spelling)?;
+            Some(windows.remove(index))
+        })
+        .collect();
+
+    let (fable_window, fable_week_share, overage_included) =
+        match map.get("limits").and_then(fable_from_limits) {
+            Some((index, window)) => (
+                Some(window),
+                fable_week_share(&map, index),
+                spelled
+                    .into_iter()
+                    .find(|window| window.key == SEVEN_DAY_OVERAGE_INCLUDED),
+            ),
+            None => (
+                spelled.into_iter().next().map(|window| UsageWindow {
+                    key: FABLE_WINDOW_KEY.to_string(),
+                    ..window
+                }),
+                None,
+                None,
+            ),
+        };
 
     Ok(ParsedUsage {
         windows,
@@ -383,6 +395,7 @@ pub fn parse_usage(body: &[u8]) -> Result<ParsedUsage, OauthError> {
         spend,
         raw_keys,
         fable_week_share,
+        overage_included,
     })
 }
 
@@ -469,6 +482,9 @@ pub struct ParsedUsage {
     pub spend: Option<SpendReading>,
     pub raw_keys: Vec<String>,
     pub fable_week_share: Option<f64>,
+    /// The window under `seven_day_overage_included` that left the list while an entry of `limits` stands as the Fable
+    /// week, for the poll's comparison of the two readings.
+    pub(crate) overage_included: Option<UsageWindow>,
 }
 
 /// Why a fetch did not produce a usable payload. Kept apart from `UsageError`, which surfaces only when the
@@ -1795,6 +1811,20 @@ impl Inner {
         let result = self
             .request_usage(token.secret.expose(), fence, permit)
             .await;
+        let gap = result.as_ref().ok().and_then(|parsed| {
+            let limits = parsed.fable_window.as_ref()?.utilization?;
+            let overage_included = parsed.overage_included.as_ref()?.utilization?;
+            ((limits - overage_included).abs() > FABLE_WEEK_GAP_POINTS)
+                .then_some((limits, overage_included))
+        });
+        if let Some((limits_percent, overage_included_percent)) = gap {
+            tracing::warn!(
+                account = %account_id,
+                limits_percent,
+                overage_included_percent,
+                "the usage body's two readings of the Fable week differ by more than {FABLE_WEEK_GAP_POINTS} points"
+            );
+        }
         (sent_at, result)
     }
 

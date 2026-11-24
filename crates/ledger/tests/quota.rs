@@ -3465,6 +3465,7 @@ fn seat_poll(body: &[u8], fetched_at: i64) -> phoebis_oauth::UsageSnapshot {
         spend,
         raw_keys,
         fable_week_share,
+        ..
     } = phoebis_oauth::parse_usage(body).unwrap();
     phoebis_oauth::UsageSnapshot {
         account_id: "seat".into(),

@@ -29,6 +29,8 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
+# The oauth crate's gated re-exports of the usage parse, which a case builds its poll with.
+phoebis-oauth = { path = "../oauth", features = ["test-support"] }
 phoebis-profile = { path = "../profile" }
 # An integration test builds the library without `cfg(test)`, so the report hold it reaches needs `debug-hooks` and
 # the exports of the selection that it reads need `test-support`.

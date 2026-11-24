@@ -7531,6 +7531,7 @@ async fn a_seats_poll_reads_the_share_from_extra_usage_utilization_and_not_from_
         spend,
         raw_keys,
         fable_week_share,
+        ..
     } = phoebis_oauth::parse_usage(UNEQUAL_SEAT_USAGE).unwrap();
     let snapshot = UsageSnapshot {
         account_id: "a".into(),

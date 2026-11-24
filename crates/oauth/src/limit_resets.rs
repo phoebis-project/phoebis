@@ -12,22 +12,23 @@ pub const SEVEN_DAY_FABLE: &str = "seven_day_fable";
 /// The usage endpoint's key for the week a head reports as `7d_oi`, the overage-included week.
 pub const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
 
-/// The one id a window is answered under: the Fable week as `seven_day_fable`, whether a reading names it by the usage
-/// endpoint's `fable` key or as the overage-included week. The overage-included week reads as the Fable week until a
-/// second model week arrives by head, since the upstream's name for it is generic.
+/// The names under which a reading holds the Fable week, each answered as `SEVEN_DAY_FABLE`. The usage parse takes
+/// the first of them that a body holds as a top-level window, in this order.
+pub(crate) const FABLE_WEEK_SPELLINGS: [&str; 4] = [
+    "cinder_cove",
+    FABLE_WINDOW_KEY,
+    "iguana_necktie",
+    SEVEN_DAY_OVERAGE_INCLUDED,
+];
+
+/// The one id a window is answered under: the Fable week as `seven_day_fable` under each of its spellings in
+/// `FABLE_WEEK_SPELLINGS`, and every other window under its own key. The overage-included week reads as the Fable week
+/// until a second model week arrives by head, since the upstream's name for it is generic.
 pub fn account_window_id(key: &str) -> &str {
-    if key == FABLE_WINDOW_KEY {
+    if FABLE_WEEK_SPELLINGS.contains(&key) {
         SEVEN_DAY_FABLE
     } else {
-        fable_week_of(key)
-    }
-}
-
-/// A window name as the router spells it: the upstream's name for the Fable week maps, every other reads as sent.
-fn fable_week_of(name: &str) -> &str {
-    match name {
-        SEVEN_DAY_OVERAGE_INCLUDED => SEVEN_DAY_FABLE,
-        other => other,
+        key
     }
 }
 
@@ -242,7 +243,10 @@ fn window_names(value: &Value) -> Option<Vec<String>> {
     value
         .as_array()?
         .iter()
-        .map(|name| name.as_str().map(|name| fable_week_of(name).to_string()))
+        .map(|name| {
+            name.as_str()
+                .map(|name| account_window_id(name).to_string())
+        })
         .collect()
 }
 
@@ -431,6 +435,21 @@ mod tests {
             states(&block, 1_000),
             vec![GrantStatus::Usable, GrantStatus::Usable],
             "the first clears five_hour alone and is of the kind session, the second of the kind weekly"
+        );
+    }
+
+    #[test]
+    fn a_grant_that_clears_an_older_spelling_reads_the_fable_week() {
+        let block = parsed(
+            r#"{"cedar_ember":{"eligible":true,"grants":[
+                {"id":"rg-a-1","label":"Launch reset","clears":["iguana_necktie"],"resets_left":1,"resets_total":1,
+                 "usable_now":true,"starts_at":"1970-01-01T00:00:00Z","ends_at":"1970-01-02T00:00:00Z"}
+            ]}}"#,
+        );
+        assert_eq!(
+            block.grants[0].clears,
+            vec!["seven_day_fable".to_string()],
+            "an older spelling of the Fable week reads under the week's one id"
         );
     }
 

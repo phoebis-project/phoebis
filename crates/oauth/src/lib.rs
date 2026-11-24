@@ -31,8 +31,12 @@ pub use session::{
     Started, SESSION_TTL_MS,
 };
 pub use usage::{
-    parse_usage, BackoffEdge, BackoffEndCause, BackoffHook, Claim, ClaimOutcome, ClaimRefusal,
-    ClaimReply, ExtraUsage, LatestStanding, LimitResetsMemory, ParsedUsage, PollFault, PollIssue,
-    PollOutcome, PollStatus, Refused, SpendReading, UsageError, UsageService, UsageSnapshot,
-    UsageWindow, BACKOFF_CAP_MS, FABLE_WINDOW_KEY,
+    BackoffEdge, BackoffEndCause, BackoffHook, Claim, ClaimOutcome, ClaimRefusal, ClaimReply,
+    ExtraUsage, LatestStanding, LimitResetsMemory, PollFault, PollIssue, PollOutcome, PollStatus,
+    Refused, SpendReading, UsageError, UsageService, UsageSnapshot, UsageWindow, BACKOFF_CAP_MS,
+    FABLE_WINDOW_KEY,
 };
+// The poll is the usage parse's one production caller, and it reaches it inside the crate. A suite reads the parse
+// for its own cases, and a rig builds a snapshot from a body with it.
+#[cfg(any(test, feature = "test-support"))]
+pub use usage::{parse_usage, ParsedUsage};

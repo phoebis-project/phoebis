@@ -64,6 +64,73 @@ fn the_fable_window_comes_from_limits_regardless_of_the_named_key() {
     );
 }
 
+/// The Fable window's key and figure beside the keys of the other windows, in the body's order.
+fn fable_and_window_keys(body: &[u8]) -> (Option<(String, Option<f64>)>, Vec<String>) {
+    let parsed = parse_usage(body).unwrap();
+    (
+        parsed
+            .fable_window
+            .map(|window| (window.key, window.utilization)),
+        parsed
+            .windows
+            .into_iter()
+            .map(|window| window.key)
+            .collect(),
+    )
+}
+
+#[test]
+fn a_body_with_no_limits_reads_the_overage_included_week_as_the_fable_week() {
+    let body = br#"{"five_hour":{"utilization":10,"resets_at":null},"seven_day_overage_included":{"utilization":37,"resets_at":null}}"#;
+    assert_eq!(
+        fable_and_window_keys(body),
+        (
+            Some(("fable".to_string(), Some(37.0))),
+            vec!["five_hour".to_string()]
+        ),
+        "the overage-included week is a spelling of the Fable week, so it stands under no raw key"
+    );
+}
+
+#[test]
+fn a_limits_list_with_no_fable_entry_still_reads_the_overage_included_week() {
+    let body = br#"{"five_hour":{"utilization":10,"resets_at":null},"seven_day_overage_included":{"utilization":37,"resets_at":null},"limits":[{"kind":"weekly_scoped","percent":15,"scope":{"model":{"display_name":"Opus"}}}]}"#;
+    assert_eq!(
+        fable_and_window_keys(body),
+        (
+            Some(("fable".to_string(), Some(37.0))),
+            vec!["five_hour".to_string()]
+        ),
+        "a limits list that names no Fable entry leaves the top-level spelling to stand as the Fable week"
+    );
+}
+
+#[test]
+fn a_fable_entry_of_limits_stands_over_the_overage_included_week() {
+    let body = br#"{"five_hour":{"utilization":10,"resets_at":null},"seven_day_overage_included":{"utilization":37,"resets_at":null},"limits":[{"kind":"weekly_scoped","percent":42,"scope":{"model":{"display_name":"Fable"}}}]}"#;
+    assert_eq!(
+        fable_and_window_keys(body),
+        (
+            Some(("fable".to_string(), Some(42.0))),
+            vec!["five_hour".to_string()]
+        ),
+        "the entry of limits is the Fable week, and the same week under its upstream name leaves the windows"
+    );
+}
+
+#[test]
+fn the_first_spelling_in_the_lists_order_is_the_fable_week_and_the_other_leaves() {
+    let body = br#"{"five_hour":{"utilization":10,"resets_at":null},"iguana_necktie":{"utilization":37,"resets_at":null},"cinder_cove":{"utilization":21,"resets_at":null}}"#;
+    assert_eq!(
+        fable_and_window_keys(body),
+        (
+            Some(("fable".to_string(), Some(21.0))),
+            vec!["five_hour".to_string()]
+        ),
+        "cinder_cove comes first in the list of spellings whatever the body's order, and iguana_necktie leaves"
+    );
+}
+
 #[test]
 fn the_fable_weeks_share_is_the_one_under_its_limit_index() {
     let body = br#"{"limits":[{"kind":"weekly_scoped","percent":10,"scope":{"model":{"display_name":"Opus"}}},{"kind":"weekly_scoped","percent":46,"scope":{"model":{"display_name":"Fable"}}}],"weekly_scoped_shares":[{"limit_index":0,"used_percent_of_weekly":7,"allowance_percent_of_weekly":50},{"limit_index":1,"used_percent_of_weekly":23,"allowance_percent_of_weekly":50}]}"#;
