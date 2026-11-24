@@ -26736,12 +26736,14 @@ await forView('/keys', async () => {
   again.unmount();
   const shown = (arrow, rows, search, label, word, lines = [], lineTitle = null) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native', lines, lineTitle });
   const ascending = shown('up', ['batch', 'from-pool', 'fleet', 'bench', 'ci', 'notebook', 'laptop', 'desktop'], '?sort=cost&dir=asc', 'Cost, 7d', 'ascending');
-  // Laptop's week holds the rejection, the bare 502 and the request sent again after a failed connect of the log's first
-  // hour, `req_4c1e8b27-d93`, `req_8f5a2d16-c47` and `req_0e5a7c3b-f92`, each a request the rollups count. Desktop's
-  // holds the two turns of the conversation that moved off the deleted retired workspace and the three turns of the
-  // conversation whose pin the purge takes twice. The rounds' chains and the recipes' last requests add 28 seed rows,
-  // 5 on laptop and 23 on desktop.
-  const weeks = ['234 requests, 7d', '145 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
+  // Laptop's week holds the rejection, the bare 502 and the request sent again after a failed connect of the log's
+  // first hour, `req_4c1e8b27-d93`, `req_8f5a2d16-c47` and `req_0e5a7c3b-f92`, each a request the rollups count.
+  // Desktop's holds the two turns of the conversation that moved off the deleted retired workspace and the three turns
+  // of the conversation whose pin the purge takes twice. The rounds' chains and the recipes' last requests add 28 seed
+  // rows, 5 on laptop and 23 on desktop, and the moved pin's first turn `req_6d2a9f41-c37` and auxiliary call
+  // `req_9e1b4c63-a52` add 2 on desktop. Desktop's 147 are the 150 requests its key sent since it was issued at 18:00
+  // on Sep 15, less the 3 that a guardrail refused before any account was asked, which the rollups do not count.
+  const weeks = ['234 requests, 7d', '147 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
     lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },
