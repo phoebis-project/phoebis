@@ -64,9 +64,20 @@ pub struct PinMark {
     pub at: i64,
     pub on: String,
     pub window: String,
-    /// The word of the test that fired the mark's round, as `TriggerSource::as_str` spells it. `None` on a mark stored
-    /// before the column, which is a projection round's.
-    pub source: Option<String>,
+    /// The `MarkSource` variant of the test that fired the mark's round. `None` on a mark stored before the column,
+    /// which is a projection round's, and on a stored word outside the set.
+    pub source: Option<MarkSource>,
+}
+
+text_enum! {
+    plain
+    /// The test that fired a mark's round, stored as its word beside the mark.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum MarkSource {
+        FableReservation => "fable_reservation",
+        Projection => "projection",
+        SlowDown => "slow_down",
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -613,8 +624,12 @@ impl Store {
     ) -> Result<T, StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.park_on_routing_hold();
-        let clock = self.clock.clone();
-        self.routing_transaction(|tx| f(&mut RoutingTx { clock, tx }))
+        self.routing_transaction(|tx| {
+            f(&mut RoutingTx {
+                clock: &self.clock,
+                tx,
+            })
+        })
     }
 
     /// One `BEGIN IMMEDIATE` transaction under `routing_commit`, which an error from `f` rolls back.
@@ -784,7 +799,7 @@ fn all_resolutions(conn: &Connection) -> Result<Vec<ResolutionRow>, StoreError> 
 
 /// The routing writes on one open transaction. Each is the inner form of the public method of the same name.
 pub struct RoutingTx<'a> {
-    pub(crate) clock: Clock,
+    pub(crate) clock: &'a Clock,
     pub(crate) tx: &'a Transaction<'a>,
 }
 
@@ -944,28 +959,69 @@ fn in_transaction<T>(
     Ok(value)
 }
 
+/// The burn columns a pin and a lapsed agent share, in the order `burn_params!` binds them. Both column lists splice
+/// them in, so a burn column added here reaches both upserts.
+macro_rules! burn_columns {
+    () => {
+        "burn_cache_read, burn_input, burn_output, burn_write_1h, burn_write_5m, \
+         burn_banded_cache_read, burn_banded_input, burn_banded_output, burn_banded_write_1h, burn_banded_write_5m, \
+         burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m, \
+         burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
+         burn_unmetered_write_5m, burn_unmetered_model"
+    };
+}
+
+/// The binds of a pin's or a lapsed agent's upsert: the statement's own head, the burn members in the order of
+/// `burn_columns!`, then the statement's own tail.
+macro_rules! burn_params {
+    ($row:ident, [$($head:expr),+ $(,)?], [$($tail:expr),+ $(,)?] $(,)?) => {
+        params![
+            $($head,)+
+            $row.burn.cache_read,
+            $row.burn.input,
+            $row.burn.output,
+            $row.burn.write_1h,
+            $row.burn.write_5m,
+            $row.burn_banded.cache_read,
+            $row.burn_banded.input,
+            $row.burn_banded.output,
+            $row.burn_banded.write_1h,
+            $row.burn_banded.write_5m,
+            $row.burn_fast.cache_read,
+            $row.burn_fast.input,
+            $row.burn_fast.output,
+            $row.burn_fast.write_1h,
+            $row.burn_fast.write_5m,
+            $row.burn_unmetered.cache_read,
+            $row.burn_unmetered.input,
+            $row.burn_unmetered.output,
+            $row.burn_unmetered.write_1h,
+            $row.burn_unmetered.write_5m,
+            $row.burn_unmetered_model,
+            $($tail),+
+        ]
+    };
+}
+
 // The upsert binds the pin's columns in this one order, so `upsert_pin_on` lists its values in it. The load reads each
 // column by its name.
-const PIN_COLUMNS: &str = "key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, \
+const PIN_COLUMNS: &str = concat!(
+    "key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, \
      key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, \
-     static_hash, tail_hash, lane, \
-     burn_cache_read, burn_input, burn_output, burn_write_1h, burn_write_5m, \
-     burn_banded_cache_read, burn_banded_input, burn_banded_output, burn_banded_write_1h, burn_banded_write_5m, \
-     burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m, \
-     burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
-     burn_unmetered_write_5m, burn_unmetered_model, \
-     marked_at, marked_on, marked_window, entrypoint, shed_reason, auxiliary_only, effort, ended, thinking_sums, \
-     account_bound, marked_source, compacted";
+     static_hash, tail_hash, lane, ",
+    burn_columns!(),
+    ", marked_at, marked_on, marked_window, entrypoint, shed_reason, auxiliary_only, effort, ended, thinking_sums, \
+     account_bound, marked_source, compacted"
+);
 
 // The upsert binds a lapsed agent's columns in this one order, so `upsert_lapsed_agent_on` lists its values in it. The
 // burn columns carry the pins' names, so the load reads both tables through the lists below.
-const LAPSED_AGENT_COLUMNS: &str = "key_id, session_id, agent_id, model, key_generation, account_id, incarnation, \
-     last_used_at, last_input_tokens, \
-     burn_cache_read, burn_input, burn_output, burn_write_1h, burn_write_5m, \
-     burn_banded_cache_read, burn_banded_input, burn_banded_output, burn_banded_write_1h, burn_banded_write_5m, \
-     burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m, \
-     burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
-     burn_unmetered_write_5m, burn_unmetered_model, speed, thinking_sums, account_bound, compacted";
+const LAPSED_AGENT_COLUMNS: &str = concat!(
+    "key_id, session_id, agent_id, model, key_generation, account_id, incarnation, \
+     last_used_at, last_input_tokens, ",
+    burn_columns!(),
+    ", speed, thinking_sums, account_bound, compacted"
+);
 
 // Each burn copy's columns, in `PinBurn`'s field order: `burn_from` takes them by position.
 const BURN_COLUMNS: [&str; 5] = [
@@ -1035,7 +1091,10 @@ fn mark_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<PinMark>> {
                 at,
                 on,
                 window,
-                source: r.get("marked_source")?,
+                source: r
+                    .get::<_, Option<String>>("marked_source")?
+                    .as_deref()
+                    .and_then(MarkSource::parse),
             }),
             _ => None,
         },
@@ -1062,69 +1121,61 @@ fn upsert_sql(table: &str, columns: &str, key: &[&str]) -> String {
     )
 }
 
-static UPSERT_PIN: LazyLock<String> = LazyLock::new(|| {
-    upsert_sql(
-        "pins",
-        PIN_COLUMNS,
-        &["key_id", "session_id", "agent_id", "model"],
-    )
-});
+const PIN_KEY: &[&str] = &["key_id", "session_id", "agent_id", "model"];
+
+// The columns of `PIN_KEY`, bound by `delete_by_pin_key_on` in `PinKey`'s field order.
+const PIN_KEY_WHERE: &str = "key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4";
+
+static DELETE_PIN: LazyLock<String> =
+    LazyLock::new(|| format!("DELETE FROM pins WHERE {PIN_KEY_WHERE}"));
+
+static DELETE_LAPSED_AGENT: LazyLock<String> =
+    LazyLock::new(|| format!("DELETE FROM lapsed_agents WHERE {PIN_KEY_WHERE}"));
+
+static UPSERT_PIN: LazyLock<String> = LazyLock::new(|| upsert_sql("pins", PIN_COLUMNS, PIN_KEY));
 
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
-    conn.prepare_cached(&UPSERT_PIN)?.execute(params![
-        pin.key_id,
-        pin.session_id,
-        pin.agent_id,
-        pin.model,
-        pin.account_id,
-        pin.epoch as i64,
-        pin.created_at,
-        pin.last_used_at,
-        pin.key_generation,
-        pin.incarnation as i64,
-        pin.burn_at,
-        pin.last_input_tokens as i64,
-        pin.last_refresh_at,
-        pin.cache_ttl_ms,
-        pin.shed.as_ref().map(|shed| &shed.from),
-        pin.shed.as_ref().map(|shed| shed.at),
-        pin.static_hash,
-        pin.tail_hash,
-        pin.lane,
-        pin.burn.cache_read,
-        pin.burn.input,
-        pin.burn.output,
-        pin.burn.write_1h,
-        pin.burn.write_5m,
-        pin.burn_banded.cache_read,
-        pin.burn_banded.input,
-        pin.burn_banded.output,
-        pin.burn_banded.write_1h,
-        pin.burn_banded.write_5m,
-        pin.burn_fast.cache_read,
-        pin.burn_fast.input,
-        pin.burn_fast.output,
-        pin.burn_fast.write_1h,
-        pin.burn_fast.write_5m,
-        pin.burn_unmetered.cache_read,
-        pin.burn_unmetered.input,
-        pin.burn_unmetered.output,
-        pin.burn_unmetered.write_1h,
-        pin.burn_unmetered.write_5m,
-        pin.burn_unmetered_model,
-        pin.mark.as_ref().map(|mark| mark.at),
-        pin.mark.as_ref().map(|mark| &mark.on),
-        pin.mark.as_ref().map(|mark| &mark.window),
-        pin.entrypoint.as_deref().unwrap_or_default(),
-        pin.shed.as_ref().and_then(|shed| shed.reason.as_ref()),
-        pin.auxiliary_only,
-        pin.effort.as_deref().unwrap_or_default(),
-        pin.ended,
-        serde_json::to_string(&pin.thinking_sums)?,
-        pin.account_bound,
-        pin.mark.as_ref().and_then(|mark| mark.source.as_ref()),
-        pin.compacted
-    ])?;
+    conn.prepare_cached(&UPSERT_PIN)?.execute(burn_params!(
+        pin,
+        [
+            pin.key_id,
+            pin.session_id,
+            pin.agent_id,
+            pin.model,
+            pin.account_id,
+            pin.epoch as i64,
+            pin.created_at,
+            pin.last_used_at,
+            pin.key_generation,
+            pin.incarnation as i64,
+            pin.burn_at,
+            pin.last_input_tokens as i64,
+            pin.last_refresh_at,
+            pin.cache_ttl_ms,
+            pin.shed.as_ref().map(|shed| &shed.from),
+            pin.shed.as_ref().map(|shed| shed.at),
+            pin.static_hash,
+            pin.tail_hash,
+            pin.lane,
+        ],
+        [
+            pin.mark.as_ref().map(|mark| mark.at),
+            pin.mark.as_ref().map(|mark| &mark.on),
+            pin.mark.as_ref().map(|mark| &mark.window),
+            pin.entrypoint.as_deref().unwrap_or_default(),
+            pin.shed.as_ref().and_then(|shed| shed.reason.as_ref()),
+            pin.auxiliary_only,
+            pin.effort.as_deref().unwrap_or_default(),
+            pin.ended,
+            serde_json::to_string(&pin.thinking_sums)?,
+            pin.account_bound,
+            pin.mark
+                .as_ref()
+                .and_then(|mark| mark.source)
+                .map(MarkSource::as_str),
+            pin.compacted,
+        ]
+    ))?;
     Ok(())
 }
 
@@ -1133,68 +1184,51 @@ fn none_if_empty(text: String) -> Option<String> {
     Some(text).filter(|text| !text.is_empty())
 }
 
-/// The pin's row alone, whether it leaves for good or for a replacement.
-fn delete_pin_on(conn: &Connection, key: &PinKey) -> Result<bool, StoreError> {
-    let mut stmt = conn.prepare_cached(
-        "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
-    )?;
+/// Runs `statement`, a delete by `PIN_KEY_WHERE`, for `key`, answering whether a row went.
+fn delete_by_pin_key_on(
+    conn: &Connection,
+    statement: &str,
+    key: &PinKey,
+) -> Result<bool, StoreError> {
+    let mut stmt = conn.prepare_cached(statement)?;
     Ok(stmt.execute(params![key.key_id, key.session_id, key.agent_id, key.model])? > 0)
 }
 
-static UPSERT_LAPSED_AGENT: LazyLock<String> = LazyLock::new(|| {
-    upsert_sql(
-        "lapsed_agents",
-        LAPSED_AGENT_COLUMNS,
-        &["key_id", "session_id", "agent_id", "model"],
-    )
-});
+/// The pin's row alone, whether it leaves for good or for a replacement.
+fn delete_pin_on(conn: &Connection, key: &PinKey) -> Result<bool, StoreError> {
+    delete_by_pin_key_on(conn, &DELETE_PIN, key)
+}
+
+static UPSERT_LAPSED_AGENT: LazyLock<String> =
+    LazyLock::new(|| upsert_sql("lapsed_agents", LAPSED_AGENT_COLUMNS, PIN_KEY));
 
 fn upsert_lapsed_agent_on(conn: &Connection, row: &LapsedAgentRow) -> Result<(), StoreError> {
-    conn.prepare_cached(&UPSERT_LAPSED_AGENT)?.execute(params![
-        row.key_id,
-        row.session_id,
-        row.agent_id,
-        row.model,
-        row.key_generation,
-        row.account_id,
-        row.incarnation as i64,
-        row.last_used_at,
-        row.last_input_tokens as i64,
-        row.burn.cache_read,
-        row.burn.input,
-        row.burn.output,
-        row.burn.write_1h,
-        row.burn.write_5m,
-        row.burn_banded.cache_read,
-        row.burn_banded.input,
-        row.burn_banded.output,
-        row.burn_banded.write_1h,
-        row.burn_banded.write_5m,
-        row.burn_fast.cache_read,
-        row.burn_fast.input,
-        row.burn_fast.output,
-        row.burn_fast.write_1h,
-        row.burn_fast.write_5m,
-        row.burn_unmetered.cache_read,
-        row.burn_unmetered.input,
-        row.burn_unmetered.output,
-        row.burn_unmetered.write_1h,
-        row.burn_unmetered.write_5m,
-        row.burn_unmetered_model,
-        row.speed,
-        serde_json::to_string(&row.thinking_sums)?,
-        row.account_bound,
-        row.compacted
-    ])?;
+    conn.prepare_cached(&UPSERT_LAPSED_AGENT)?
+        .execute(burn_params!(
+            row,
+            [
+                row.key_id,
+                row.session_id,
+                row.agent_id,
+                row.model,
+                row.key_generation,
+                row.account_id,
+                row.incarnation as i64,
+                row.last_used_at,
+                row.last_input_tokens as i64,
+            ],
+            [
+                row.speed,
+                serde_json::to_string(&row.thinking_sums)?,
+                row.account_bound,
+                row.compacted,
+            ]
+        ))?;
     Ok(())
 }
 
 fn delete_lapsed_agent_on(conn: &Connection, key: &PinKey) -> Result<(), StoreError> {
-    conn.prepare_cached(
-        "DELETE FROM lapsed_agents WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
-    )?
-    .execute(params![key.key_id, key.session_id, key.agent_id, key.model])?;
-    Ok(())
+    delete_by_pin_key_on(conn, &DELETE_LAPSED_AGENT, key).map(drop)
 }
 
 /// Writes the pair's fact in place of the one it held, only while both ids' holders carry the incarnations the row

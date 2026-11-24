@@ -178,8 +178,8 @@ pub use registry::{
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CooldownScope, CreditsRow, EvidenceSource,
-    LapsedAgentRow, ModelWeekHourRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, RekeyWrite,
-    ResolutionRow, RoutingLoad, RoutingTx, ShedRoundRow, ShedStamp, ThinkingBindingRow,
+    LapsedAgentRow, MarkSource, ModelWeekHourRow, OverageRow, PinBurn, PinKey, PinMark, PinRow,
+    RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, ShedRoundRow, ShedStamp, ThinkingBindingRow,
     ThinkingSum, WindowRow, WindowSetRow,
 };
 pub use schema::SCHEMA_VERSION;
@@ -565,7 +565,7 @@ impl Store {
     #[cfg(any(test, feature = "test-support"))]
     pub fn open_in_memory(key: &StorageKey, clock: Clock) -> Result<Store, StoreError> {
         let mut conn = Connection::open_in_memory()?;
-        prepare_in_memory(&mut conn, schema::MIGRATIONS)?;
+        prepare(&mut conn, schema::MIGRATIONS)?;
         check_or_seal_canary(&mut conn, key, Path::new(":memory:"))?;
         Ok(Store::from_parts(conn, key, None, clock))
     }
@@ -1334,7 +1334,12 @@ fn open_canary(key: &StorageKey, value: &str) -> Result<Vec<u8>, StoreError> {
 
 /// Runs `SCHEMA`, the baseline at version 1, then the steps above the stored `schema_version`.
 fn prepare(conn: &mut Connection, steps: &[(u32, &str)]) -> Result<(), StoreError> {
-    let current = prepare_head(conn)?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
+    // A per-connection setting, never written to the database file, so it costs nothing to set before the
+    // version is even known.
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    let current = check_schema(conn)?;
     // WAL lets the router task's reads run beside an admin write. Unlike `foreign_keys` this rewrites the database
     // header, so it waits behind the version check too.
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -1344,23 +1349,6 @@ fn prepare(conn: &mut Connection, steps: &[(u32, &str)]) -> Result<(), StoreErro
     // session release again.
     conn.pragma_update(None, "synchronous", "FULL")?;
     Ok(migrations::apply(conn, schema::SCHEMA, current, steps)?)
-}
-
-/// The in-memory form of `prepare`: an in-memory database has no journal, so it sets none.
-#[cfg(any(test, feature = "test-support"))]
-fn prepare_in_memory(conn: &mut Connection, steps: &[(u32, &str)]) -> Result<(), StoreError> {
-    let current = prepare_head(conn)?;
-    Ok(migrations::apply(conn, schema::SCHEMA, current, steps)?)
-}
-
-/// The settings that both forms of `prepare` give a connection ahead of its journal, answering the stored version.
-fn prepare_head(conn: &mut Connection) -> Result<u32, StoreError> {
-    conn.busy_timeout(BUSY_TIMEOUT)?;
-    conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
-    // A per-connection setting, never written to the database file, so it costs nothing to set before the
-    // version is even known.
-    conn.pragma_update(None, "foreign_keys", "ON")?;
-    check_schema(conn)
 }
 
 /// What a registry's `meta` without its `schema_version` row reads as: version 1, the baseline `schema::SCHEMA`
@@ -2108,7 +2096,7 @@ mod tests {
             params![(schema::SCHEMA_VERSION + 1).to_string()],
         )
         .unwrap();
-        let error = prepare_in_memory(&mut conn, schema::MIGRATIONS).unwrap_err();
+        let error = prepare(&mut conn, schema::MIGRATIONS).unwrap_err();
         assert!(
             matches!(
                 error,

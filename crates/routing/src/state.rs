@@ -11,9 +11,9 @@ pub use phoebis_store::EvidenceSource;
 
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CooldownScope, CreditsRow,
-    LapsedAgentRow, ModelWeekHourRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolMember,
-    PoolRow, RekeyWrite, ResolutionRow, RoutingLoad, StateCause, Strategy, ThinkingBindingRow,
-    WindowRow, WindowSetRow,
+    LapsedAgentRow, MarkSource, ModelWeekHourRow, OverageRow, PinBurn, PinKey, PinMark, PinRow,
+    PoolMember, PoolRow, RekeyWrite, ResolutionRow, RoutingLoad, StateCause, Strategy,
+    ThinkingBindingRow, WindowRow, WindowSetRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -3902,14 +3902,14 @@ impl RoutingState {
         key: &PinKey,
         at: i64,
         window: &str,
-        source: &str,
+        source: MarkSource,
     ) -> Option<PinRow> {
         let pin = self.pins.get_mut(key)?;
         pin.mark = Some(PinMark {
             at,
             on: pin.account_id.clone(),
             window: window.to_string(),
-            source: Some(source.to_string()),
+            source: Some(source),
         });
         Some(pin.clone())
     }

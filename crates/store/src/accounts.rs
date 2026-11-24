@@ -247,6 +247,8 @@ const ACCOUNT_SELECT: &str =
     "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, \
      revision, state, state_cause FROM accounts";
 
+static ALL_ACCOUNTS: LazyLock<String> = LazyLock::new(|| format!("{ACCOUNT_SELECT} ORDER BY id"));
+
 /// Shared by `Store::account` and the account edit, which reads the row it changes inside its own transaction.
 pub(crate) fn account_in(
     conn: &rusqlite::Connection,
@@ -279,7 +281,7 @@ pub(crate) fn account_kind_in(
 /// Shared by `Store::accounts` and `load_registry`, so the registry snapshot can read the account list
 /// inside its own transaction instead of through the store's connection lock.
 pub(crate) fn all_accounts(conn: &rusqlite::Connection) -> Result<Vec<AccountRow>, StoreError> {
-    let mut stmt = conn.prepare(&format!("{ACCOUNT_SELECT} ORDER BY id"))?;
+    let mut stmt = conn.prepare_cached(&ALL_ACCOUNTS)?;
     let rows = stmt.query_map([], row_to_account)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(StoreError::from)
@@ -767,7 +769,7 @@ const LIMIT_RESETS_FENCE: &str =
     "id = ?1 AND incarnation = ?2 AND lifecycle_generation = ?3 AND limit_resets_epoch = ?4";
 
 // The columns `row_to_term` reads, in its order, then the ones `row_to_extras` alone reads.
-pub(crate) const TERM_COLUMNS: &str =
+const TERM_COLUMNS: &str =
     "id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
      subscription_tier, kind, profile_json, plan_ended_at, \
      limit_resets_json, limit_resets_read_at, limit_resets_epoch, created_at, state_changed_at";
@@ -775,8 +777,11 @@ pub(crate) const TERM_COLUMNS: &str =
 static TERM_BY_ID: LazyLock<String> =
     LazyLock::new(|| format!("SELECT {TERM_COLUMNS} FROM accounts WHERE id = ?1"));
 
+pub(crate) static ALL_TERMS: LazyLock<String> =
+    LazyLock::new(|| format!("SELECT {TERM_COLUMNS} FROM accounts ORDER BY id"));
+
 fn all_extras(conn: &rusqlite::Connection) -> Result<BTreeMap<String, AccountExtras>, StoreError> {
-    let mut stmt = conn.prepare(&format!("SELECT {TERM_COLUMNS} FROM accounts"))?;
+    let mut stmt = conn.prepare_cached(&ALL_TERMS)?;
     let extras = stmt
         .query_map([], row_to_extras)?
         .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;

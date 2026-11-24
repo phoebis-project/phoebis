@@ -416,7 +416,7 @@ fn row_to_resolved_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<ResolvedAt
 }
 
 /// The resolved attempt a pairing writes beside the credential it committed, settled at `at`.
-pub(crate) fn record_pairing_attempt(
+fn record_pairing_attempt(
     tx: &rusqlite::Transaction<'_>,
     account_id: &str,
     incarnation: u64,
@@ -660,9 +660,6 @@ impl Store {
         self.fail_injected_commit()?;
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        // One instant for the supersession and the pairing's own row, so the pairing reads as the newest settled
-        // attempt whatever the clock does between the two writes.
-        let now = self.now_ms();
         let generation = self
             .commit_credentials_in(
                 &tx,
@@ -672,7 +669,7 @@ impl Store {
                 expected_generation,
                 bundle,
                 CommitKind::Pairing,
-                now,
+                self.now_ms(),
             )?
             .generation;
         // The block was read under the pairing before this one, and the pairing's first reading reads it again. A
@@ -681,14 +678,6 @@ impl Store {
             "UPDATE accounts SET limit_resets_json = NULL, limit_resets_read_at = NULL, \
              limit_resets_epoch = limit_resets_epoch + 1 WHERE id = ?1",
             params![account_id],
-        )?;
-        record_pairing_attempt(
-            &tx,
-            account_id,
-            incarnation,
-            lifecycle_generation,
-            generation,
-            now,
         )?;
         tx.commit()?;
         Ok(generation)
@@ -705,9 +694,9 @@ impl Store {
     }
 
     /// The body of the three credential commits, `commit_credentials`, `commit_pairing` and `create_paired_account`,
-    /// inside the caller's transaction, which the caller commits. `kind` names the commit, and `now` stamps the
-    /// credential row and every attempt it settles. Answers the bundle as the row holds it, the carried members
-    /// among them.
+    /// inside the caller's transaction, which the caller commits. `kind` names the commit, and a pairing's commit also
+    /// writes the pairing's resolved attempt. `now` stamps the credential row, every attempt it settles and the
+    /// pairing's attempt. Answers the bundle as the row holds it, the carried members among them.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn commit_credentials_in(
         &self,
@@ -855,6 +844,18 @@ impl Store {
             if updated == 0 && !attempt_exists(tx, id, account_id)? {
                 return Err(StoreError::AttemptNotFound(id));
             }
+        }
+        // One instant for the supersession and the pairing's own row, so the pairing reads as the newest settled
+        // attempt whatever the clock does between the two writes.
+        if let CommitKind::Pairing = kind {
+            record_pairing_attempt(
+                tx,
+                account_id,
+                incarnation,
+                lifecycle_generation,
+                new_generation,
+                now,
+            )?;
         }
         Ok(CredentialBundle {
             access_token: Secret::new(&payload.access_token),

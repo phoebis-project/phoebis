@@ -4,11 +4,11 @@ use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, AccountUpdate,
     Affinity, AffinityChain, AffinityMode, ApiKeyRow, AttachmentSubject, BudgetPeriod, CanaryRead,
     Cancellation, CompanionPermissions, Failover, FeatureOverride, GuardrailAttachment,
-    GuardrailRow, Identity, KeepaliveAgentRow, KeepaliveBatch, KeyFeatureAccounts, MemberWrite,
-    MemoryKey, MemoryRecord, MemoryStore, ModelRule, NewBundle, OveragePolicy, PinBurn, PinMark,
-    PinRow, PoolFeatureAccounts, PoolRow, PresetStamp, ReturnToPlan, RulesMode, Secret,
-    SessionPlacement, ShedStamp, SlowDown, StateCause, StorageKey, Store, StoreError, Strategy,
-    SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
+    GuardrailRow, Identity, KeepaliveAgentRow, KeepaliveBatch, KeyFeatureAccounts, MarkSource,
+    MemberWrite, MemoryKey, MemoryRecord, MemoryStore, ModelRule, NewBundle, OveragePolicy,
+    PinBurn, PinMark, PinRow, PoolFeatureAccounts, PoolRow, PresetStamp, ReturnToPlan, RulesMode,
+    Secret, SessionPlacement, ShedStamp, SlowDown, StateCause, StorageKey, Store, StoreError,
+    Strategy, SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
 };
 
 /// The wall clock, for a case that reads no stamp.
@@ -731,7 +731,7 @@ fn a_pin_with_a_distinct_value_in_every_integer_field_and_every_optional_group_s
             at: 7,
             on: "a".into(),
             window: "five_hour".into(),
-            source: Some("fable_reservation".into()),
+            source: Some(MarkSource::FableReservation),
         }),
         entrypoint: Some("cli".into()),
         effort: Some("high".into()),

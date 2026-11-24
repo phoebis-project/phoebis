@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityMode, BudgetPeriod, CooldownRow, CooldownScope,
-    LapsedAgentRow, OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow,
-    ReturnToPlan, SessionPlacement, ShedStamp, Strategy, SubagentPlacement, ThinkingSum,
+    LapsedAgentRow, MarkSource, OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember,
+    PoolRow, ReturnToPlan, SessionPlacement, ShedStamp, Strategy, SubagentPlacement, ThinkingSum,
     WarmSessions,
 };
 use rand::{Rng, RngExt};
@@ -5415,7 +5415,7 @@ fn move_of<'a>(
             ));
             facts.push(Fact::list("skipped", round.skipped));
             for mark in &round.marks {
-                state.mark_pin(&mark.key, now, trigger.window, trigger.source.as_str());
+                state.mark_pin(&mark.key, now, trigger.window, trigger.source.mark_source());
             }
             rec.shed_round = Some(ShedRoundRecord {
                 account_id: source.to_string(),
@@ -5474,7 +5474,7 @@ fn move_of<'a>(
     let reserved_mark = state
         .pin(key)
         .and_then(standing_mark)
-        .is_some_and(|mark| mark.source.as_deref() == Some(TriggerSource::FABLE_RESERVATION));
+        .is_some_and(|mark| mark.source == Some(MarkSource::FableReservation));
     let gate = gate(
         state,
         snapshot,
@@ -5930,15 +5930,17 @@ pub(crate) enum TriggerSource {
 }
 
 impl TriggerSource {
-    /// The Fable reservation's word, which a mark of its round carries as its source.
-    pub(crate) const FABLE_RESERVATION: &'static str = "fable_reservation";
+    /// The source a mark of this test's round carries.
+    pub(crate) fn mark_source(self) -> MarkSource {
+        match self {
+            TriggerSource::FableReservation { .. } => MarkSource::FableReservation,
+            TriggerSource::Projection { .. } => MarkSource::Projection,
+            TriggerSource::SlowDown { .. } => MarkSource::SlowDown,
+        }
+    }
 
     pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            TriggerSource::FableReservation { .. } => Self::FABLE_RESERVATION,
-            TriggerSource::Projection { .. } => "projection",
-            TriggerSource::SlowDown { .. } => "slow_down",
-        }
+        self.mark_source().as_str()
     }
 
     pub(crate) fn excess(self) -> Option<f64> {

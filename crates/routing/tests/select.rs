@@ -19,10 +19,10 @@ use phoebis_routing::{
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
     Cancellation, CompanionPermissions, CooldownRow, CooldownScope, Failover, KeyFeatureAccounts,
-    ModelWeekHourRow, OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow,
-    RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding,
-    SlowDown, Strategy, SubagentPlacement, SubscriptionTerm, ThinkingBindingRow, ThinkingSum,
-    WarmSessions,
+    MarkSource, ModelWeekHourRow, OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember,
+    PoolRow, RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow,
+    Shedding, SlowDown, Strategy, SubagentPlacement, SubscriptionTerm, ThinkingBindingRow,
+    ThinkingSum, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -1814,7 +1814,7 @@ fn a_pin_marked_by_a_reservation_round_never_moves_onto_a_sibling_under_its_rese
             at: RESERVATION_WAITED,
             on: "a".into(),
             window: SEVEN_DAY.into(),
-            source: Some("fable_reservation".into()),
+            source: Some(MarkSource::FableReservation),
         })
     );
     assert_eq!(
@@ -1839,7 +1839,7 @@ fn a_pin_marked_by_a_reservation_round_never_moves_onto_a_sibling_under_its_rese
             at: RESERVATION_WAITED,
             on: "a".into(),
             window: SEVEN_DAY.into(),
-            source: Some("projection".into()),
+            source: Some(MarkSource::Projection),
         })
     );
     assert_eq!(

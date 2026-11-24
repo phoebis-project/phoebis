@@ -1227,10 +1227,7 @@ impl Store {
                 .query_map([], |r| r.get(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             terms: tx
-                .prepare(&format!(
-                    "SELECT {} FROM accounts ORDER BY id",
-                    crate::accounts::TERM_COLUMNS
-                ))?
+                .prepare_cached(&crate::accounts::ALL_TERMS)?
                 .query_map([], crate::accounts::row_to_term)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };
@@ -1815,14 +1812,6 @@ impl Store {
                 at,
             )?
             .generation;
-        crate::credentials::record_pairing_attempt(
-            &tx,
-            &row.id,
-            incarnation,
-            row.lifecycle_generation,
-            generation,
-            at,
-        )?;
         record_change(
             &tx,
             at,
