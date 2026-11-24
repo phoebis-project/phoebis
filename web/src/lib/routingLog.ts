@@ -2435,13 +2435,15 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('End from', text(d.end_source));
       break;
     }
-    // A dropped row's plan and tier price the use's row on the allowance read and draw no row here, as on a reset.
+    // A dropped row's plan and tier price its use's or its plan change's row on the allowance read and draw no row
+    // here, as on a reset.
     case 'window_cleared':
     case 'window_dropped':
       add('Window', window === null ? null : plain(windowTagWord(window)));
       add('Before', pct(d.utilization_before));
       add('After', pct(d.utilization));
       add('Reset', time(d.reset));
+      if (d.pair_changed === true) add('Plan changed', plain('yes'));
       if (row.kind === 'window_cleared') add('Read from', text(d.source, SOURCE_WORD));
       break;
     case 'window_reset':

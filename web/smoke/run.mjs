@@ -5886,34 +5886,50 @@ await forView('/accounts', async () => {
     // Studio's seed (`claude_max` on `default_claude_max_5x` in mock/accounts.ts) started its subscription 16 days
     // back, an upgrade from Pro inside its second-newest week, so its weekly resets (`WEEKLY_RESETS`) at or before that
     // start carry Pro's pair and the newer ones its own. Its 7-day window left 0.44, 0.39, 0.5 and 0.47 of its week,
-    // newest first, and its Fable week 0.79, 0.84, 0.76 and 0.82, read here off the route with each reset's pair. A
-    // week prices at the tier it ran under: the week under Pro reads to the one its share reads at Max as Pro's 7-day
-    // capacity stands to Max's on the cost table the page reads, and the total adds the weeks' own figures rather than
-    // pricing the summed shares at the current tier. Its used reset three hours back cleared the Fable week (its drop's
-    // seed beside its claim in mock/routingLog.ts), so the route lists a `claim` row under the week's own reset, still
-    // ahead, which leads that column at the drop's instant with the "reset used" badge, and the total names the use
-    // apart from the four weeks.
+    // newest first, and its Fable week 0.79, 0.84, 0.76 and 0.82, read here off the route with each reset's pair. The
+    // upgrade cut the Fable week from 0.14 (`STUDIO_PLAN_CHANGE` in mock/routingLog.ts), so the route lists a
+    // `plan_changed` row with Pro's pair under the reset of the week open then. A week prices at the tier it ran under:
+    // the week under Pro reads to the one its share reads at Max as Pro's 7-day capacity stands to Max's on the cost
+    // table the page reads, and the total adds the weeks' own figures rather than pricing the summed shares at the
+    // current tier. Its used reset three hours back cleared the Fable week (its drop's seed beside its claim in
+    // mock/routingLog.ts), so the route lists a `claim` row under the week's own reset, still ahead. A row that a drop
+    // wrote stands at the drop's instant with its badge, the use's "reset used" leading the Fable column and the plan
+    // change's "plan changed" among the weeks, priced at Pro's tier. The column keeps the newest four resets, the plan
+    // change among them, so the oldest Fable week leaves it, and each use newer than the oldest of the four, and the
+    // total names the use apart from the four weeks.
     const studio = story.get('studio');
     const since = Date.parse(studio.subscription.since);
     const span = { from: new Date(CLOCK_ORIGIN - 29 * 24 * 3_600_000).toISOString(), to: new Date(CLOCK_ORIGIN).toISOString() };
     const windows = (await api.getAnalyticsUnusedAllowance(span, { accountIds: ['studio'] })).accounts[0]?.windows ?? [];
-    const ranUnder = (r) => (Date.parse(r.resetAt) <= since ? 'default_claude_ai' : studio.subscription.rateLimitTier);
+    const ranUnder = (r) => (r.source === 'plan_changed' || Date.parse(r.resetAt) <= since ? 'default_claude_ai' : studio.subscription.rateLimitTier);
     const ratio = tierCapacity(costs, 'default_claude_ai', 'seven_day') / tierCapacity(costs, studio.subscription.rateLimitTier, 'seven_day');
-    // A window's two lists in the order its column draws them, a claim at its drop and a reset at its own instant.
+    const BADGE = new Map([
+      ['claim', 'reset used'],
+      ['plan_changed', 'plan changed'],
+    ]);
+    const drawnAt = (r) => Date.parse(BADGE.has(r.source) ? r.observedAt : r.resetAt);
+    const newestFirst = (rows) => [...rows].sort((a, b) => drawnAt(b) - drawnAt(a));
+    // A window's rows by the instant each draws at, newest first.
     const drawnOf = (window) => {
       const w = windows.find((x) => x.window === window);
-      return [...(w?.resets ?? []).map((r) => [r, r.resetAt]), ...(w?.claims ?? []).map((r) => [r, r.observedAt])].sort(([, a], [, b]) => Date.parse(b) - Date.parse(a)).map(([r]) => r);
+      return newestFirst([...(w?.resets ?? []), ...(w?.claims ?? [])]);
+    };
+    // The rows a column draws: the newest four resets and each use newer than the oldest of them.
+    const keptOf = (window) => {
+      const w = windows.find((x) => x.window === window);
+      const resets = newestFirst(w?.resets ?? []).slice(0, 4);
+      return newestFirst([...resets, ...(w?.claims ?? []).filter((r) => resets.length === 0 || drawnAt(r) > drawnAt(resets.at(-1)))]);
     };
     const columnWant = (label, window) => {
-      const resets = drawnOf(window);
+      const resets = keptOf(window);
       const own = resets.map((r) => figureIn(r.shareLeft, ranUnder(r), window));
       const uses = resets.filter((r) => r.source === 'claim').length;
-      const used = resets[0]?.source === 'claim';
+      const badge = BADGE.get(resets[0]?.source) ?? null;
       return {
         head: [label, weekShort(own[0], 'ultra')],
-        reset: used ? `left at ${instantOf(Date.parse(resets[0].observedAt))} reset used` : `left at the reset of ${instantOf(Date.parse(resets[0]?.resetAt))}`,
-        resetBadge: used ? 'reset used' : null,
-        rows: resets.slice(1).map((r, i) => [day(Date.parse(r.resetAt)), weekShort(own[i + 1], 'ultra')]),
+        reset: badge === null ? `left at the reset of ${instantOf(drawnAt(resets[0]))}` : `left at ${instantOf(drawnAt(resets[0]))} ${badge}`,
+        resetBadge: badge,
+        rows: resets.slice(1).map((r, i) => [BADGE.has(r.source) ? `${day(drawnAt(r))} ${BADGE.get(r.source)}` : day(drawnAt(r)), weekShort(own[i + 1], 'ultra')]),
         total: [`Total, ${resets.length - uses} weeks${uses === 0 ? '' : ` and ${uses} used reset`}`, weekShort(sum(own), 'ultra')],
       };
     };
@@ -5928,9 +5944,9 @@ await forView('/accounts', async () => {
     const proWeek = weekShort(figureIn(sevenDay[2]?.shareLeft ?? NaN, studio.subscription.rateLimitTier, 'seven_day') * ratio, 'ultra');
     const atCurrent = weekShort(figureIn(sum(sevenDay.map((r) => r.shareLeft)), studio.subscription.rateLimitTier, 'seven_day'), 'ultra');
     results.push({
-      name: "/accounts/studio each week prices at the tier it ran under, the weeks before the upgrade at Pro's and the total adding the weeks' own figures, and its used reset leads the Fable column with the \"reset used\" badge",
+      name: "/accounts/studio each week prices at the tier it ran under, the weeks before the upgrade at Pro's and the total adding the weeks' own figures, its used reset leads the Fable column with the \"reset used\" badge, and its plan change stands among the Fable weeks at its drop with the \"plan changed\" badge",
       ok:
-        JSON.stringify(pairs) === '["seven_day max_5x,max_5x,pro,pro","seven_day_fable max_5x,max_5x,max_5x,pro,pro"]' &&
+        JSON.stringify(pairs) === '["seven_day max_5x,max_5x,pro,pro","seven_day_fable max_5x,max_5x,max_5x,pro,pro,pro"]' &&
         JSON.stringify(drawn) === JSON.stringify(want) &&
         drawn?.[0]?.rows[1]?.[1] === proWeek &&
         drawn[0].total[1] !== atCurrent,

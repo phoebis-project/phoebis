@@ -3243,13 +3243,15 @@ export const WINDOW_DROP_MARGIN = 0.05;
 export const wholePoints = (utilization: number): number => Math.round(utilization * 100);
 
 /** The detail `dropDetail` writes, a type alias so a routing event's detail map takes it. */
-export type DropDetail = { plan: ReadingPair['plan']; reset: number; tier: ReadingPair['tier']; utilization: number; utilization_before: number; window: string };
+export type DropDetail = { pair_changed: boolean; plan: ReadingPair['plan']; reset: number; tier: ReadingPair['tier']; utilization: number; utilization_before: number; window: string };
 
 /**
- * A drop's detail as the router writes it: the stored reading's figure before the use, the first poll's after it, the
- * week's unchanged reset in epoch milliseconds and the stored reading's pair.
+ * A drop's detail as the router writes it: the stored reading's figure before the fall, the figure of the poll that
+ * writes the event, the week's unchanged reset in epoch milliseconds, the stored reading's pair, and whether the
+ * writing poll's pair differs from it.
  */
-export const dropDetail = (window: string, before: number, after: number, reset: number, pair: ReadingPair): DropDetail => ({
+export const dropDetail = (window: string, before: number, after: number, reset: number, pair: ReadingPair, pairChanged = false): DropDetail => ({
+  pair_changed: pairChanged,
   plan: pair.plan,
   reset,
   tier: pair.tier,
@@ -3374,6 +3376,20 @@ const WEEKLY_RESETS: EventSeed[] = [
   ...weeklyResets('studio', 'seven_day_fable', resetOf('studio', '7d_fable'), [0.79, 0.84, 0.76, 0.82]),
   ...weeklyResets('sunset', 'seven_day', NOW + SUNSET_WEEK_RESETS_IN, [0.52, 0.48, 0.57]),
 ];
+
+/**
+ * Studio's upgrade at its subscription's start, as the router reads it: the same use against five times the allowance
+ * cut its Fable week from 0.14 to 0.03 under the reset of the week that stood open then. The poll at the start read
+ * the fall first, so the poll behind it writes the drop with the pair before the fall, Pro's, and its own pair named
+ * another, and no claim joins the drop, so its row reads as a plan change. The router writes a drop per window and only
+ * past the margin, and the 7-day window fell by no more than the margin, so the Fable week's drop stands alone.
+ */
+const STUDIO_PLAN_CHANGE: EventSeed = {
+  accountId: 'studio',
+  at: iso(STUDIO_BEFORE_UPGRADE.through + POLL_INTERVAL_MS),
+  detail: dropDetail('seven_day_fable', 0.14, 0.03, resetOf('studio', '7d_fable') - 2 * WEEK, readingPairAt('studio', STUDIO_BEFORE_UPGRADE.through), true),
+  kind: 'window_dropped',
+};
 
 /**
  * The events beside the decisions: every pin event and model answer the requests' windows hold, the pins the
@@ -3542,6 +3558,7 @@ function buildEvents(): RoutingEvent[] {
     { accountId: 'research', at: iso(RESEARCH_BUDGET_AT), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(RESEARCH_BUDGET_AT) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'jobs', requestId: BUDGET_CROSSING_ID },
     { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', ...currentPair('primary'), reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
     ...WEEKLY_RESETS,
+    STUDIO_PLAN_CHANGE,
     { accountId: 'overflow', at: iso(OVERFLOW_LAPSED_AT), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
     {
       accountId: 'nightly',

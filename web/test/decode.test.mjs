@@ -982,6 +982,16 @@ test('the unused allowance decoder files a claim row apart from the resets of it
   assert.deepEqual([window.resets.map((r) => r.source), window.claims.map((r) => r.source), window.totalShareLeft], [['sample', 'sample'], ['claim'], 1.5]);
 });
 
+test('the unused allowance decoder orders a plan change among the resets by its drop', () => {
+  const end = 1_791_633_600_000;
+  const at = (hours) => end - hours * 3_600_000;
+  const row = (hours, source, observedHours = hours) => ({ observed_at: at(observedHours), reset_at: at(hours), share_left: 0.5, source });
+  // The route's order is by the reset, and a plan change carries the old week's reset, which lies ahead.
+  const windows = [{ resets: [row(-96, 'plan_changed', 72), row(24, 'sample'), row(192, 'sample')], resets_counted: 3, total_share_left: 1.5, window: 'seven_day' }];
+  const [window] = d.decodeUnusedAllowance({ accounts: [{ account_id: 'a', plan: null, tier: null, windows }], from: at(720), to: end }).accounts[0].windows;
+  assert.deepEqual([window.resets.map((r) => r.source), window.claims.length], [['sample', 'plan_changed', 'sample'], 0]);
+});
+
 test("an unused allowance reset keeps the plan and the tier of the reading it replaced, beside the account's current pair", () => {
   const end = 1_791_633_600_000;
   const pairOf = (pair) => {

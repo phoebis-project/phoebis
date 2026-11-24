@@ -1486,6 +1486,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const answer = await s.api.getAnalyticsUnusedAllowance(span);
     assert.deepEqual([answer.from, answer.to], [span.from, span.to]);
     assert.deepEqual(answer.accounts.map((a) => a.accountId), ['nightly', 'primary', 'secondary', 'studio', 'sunset'], 'one entry per subscription account with a weekly reset, by id');
+    // Sunset's first row is its term's end and studio's third Fable row its plan change, which no `window_reset` wrote.
+    const unlogged = (a, w) => (a.accountId === 'sunset' ? w.resets.slice(1) : a.accountId === 'studio' && w.window === 'seven_day_fable' ? w.resets.toSpliced(2, 1) : w.resets);
     for (const a of answer.accounts) {
       const account = accountOf.get(a.accountId);
       assert.deepEqual([a.plan, a.tier], [account.subscription.plan, account.subscription.rateLimitTier], a.accountId);
@@ -1495,10 +1497,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           .filter((e) => e.accountId === a.accountId && e.detail.window === w.window)
           .sort((x, y) => y.detail.reset_at - x.detail.reset_at)
           .map((e) => ({ observedAt: e.at, plan: e.detail.plan, resetAt: iso(e.detail.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - e.detail.utilization_before)), source: e.detail.observed, tier: e.detail.tier }));
-        assert.deepEqual(a.accountId === 'sunset' ? w.resets.slice(1) : w.resets, fromLog, `${a.accountId} ${w.window}: the log's resets, newest first`);
+        assert.deepEqual(unlogged(a, w), fromLog, `${a.accountId} ${w.window}: the log's resets, newest first`);
         assert.ok(near(w.totalShareLeft, sum([...w.resets, ...w.claims], (r) => r.shareLeft)), `${a.accountId} ${w.window}: the total over the rows of both lists`);
       }
     }
+    // Studio's upgrade at its subscription's start dropped its Fable week from 0.14 (`STUDIO_PLAN_CHANGE` in
+    // mock/routingLog.ts), so 0.86 was left under Pro's pair. The poll behind the one at the start wrote the drop under
+    // the reset of the week open then, two weeks before the window's current one, and the row stands at its drop,
+    // behind the week that ended nine days back.
+    const upgraded = accountOf.get('studio');
+    const upgradedFable = answer.accounts.find((a) => a.accountId === 'studio').windows.find((w) => w.window === 'seven_day_fable');
+    assert.deepEqual(upgradedFable.resets[2], { observedAt: iso(Date.parse(upgraded.subscription.since) + 5 * 60_000), plan: 'pro', resetAt: iso(Date.parse(upgraded.fableWindow.resetsAt) - 2 * WEEK), shareLeft: 0.86, source: 'plan_changed', tier: 'default_claude_ai' }, "studio's plan change");
     // The week the end cut short reads the last sample of sunset's 7-day series before the end, the reading its seed
     // names, 0.46, so 0.54 of the week was left. Its pair is that of the stored reading, the series' newest sample:
     // sunset's last clean poll, five minutes before the end and so before the plan-ended flag, which read it under Pro.

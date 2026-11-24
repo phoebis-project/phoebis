@@ -956,8 +956,10 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
     const plan = pair.plan === 'free' || pair.plan === 'usage_based' ? planWordLabel(pair.plan) : hintPlan(holder, pair.tier);
     return plan === null ? resetHover(reset) : `${resetHover(reset)}\n${ownShareHover(plan, w.window, reset.shareLeft)}`;
   };
-  // A term's end and a used reset fall inside a week, so their line names their own instant rather than a reset.
-  const sourceWord = (reset: AllowanceReset): string | null => (reset.source === 'term_ended' ? 'term ended' : reset.source === 'claim' ? 'reset used' : null);
+  // A term's end, a used reset and a plan change fall inside a week, so their line names their own instant rather than
+  // a reset.
+  const sourceWord = (reset: AllowanceReset): string | null =>
+    reset.source === 'term_ended' ? 'term ended' : reset.source === 'claim' ? 'reset used' : reset.source === 'plan_changed' ? 'plan changed' : null;
   const latestWord = latest === undefined ? null : sourceWord(latest);
   return (
     <div className="allowance__col">

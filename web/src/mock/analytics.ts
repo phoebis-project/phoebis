@@ -3,6 +3,7 @@ import type {
   Account, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, QuotaHistory, Reconciliation, ReconciliationsAnswer,
   RefusalCategoriesAnswer, RefusalCategoryRow, RequestKind, RequestLog, RewritePoint, RewritesAnswer, RoutingEvent, SubscriptionCosts, UnusedAllowanceAnswer, WastedProbeReason,
 } from '@/api/types';
+import { drawnInstant } from '@/lib/allowance';
 import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
@@ -1031,33 +1032,37 @@ export function termEndOf(a: Account, at: number): number | null {
 const CLAIM_JOIN_MS = HOUR;
 
 /**
- * Whether a `window_dropped` row cleared its window, as the ledger joins it: the newest `used` claim of the account in
- * the hour before the drop decides through its `cleared` list where it holds a parsed answer, and with no such claim,
- * or one with no parsed answer, the drop cleared where the poll after it reads under the margin.
+ * The word of a `window_dropped` row's allowance row, as the ledger joins it, or null where the drop did not clear its
+ * window: the newest `used` claim of the account in the hour before the drop decides through its `cleared` list where
+ * it holds a parsed answer, and the row reads `claim`. With no such claim, or one with no parsed answer, the drop
+ * cleared where its figure after reads under the margin, and the row reads `plan_changed` where the drop's event
+ * names a changed pair, else `claim`.
  */
-function dropCleared(drop: EventSeed, window: string, utilization: number, events: EventSeed[]): boolean {
+function dropCleared(drop: EventSeed, window: string, utilization: number, events: EventSeed[]): 'claim' | 'plan_changed' | null {
   const at = Date.parse(drop.at);
   const claim = events
     .filter((e) => e.kind === 'limit_reset_claimed' && e.accountId === drop.accountId && e.detail.outcome === 'used' && Date.parse(e.at) <= at && at - Date.parse(e.at) <= CLAIM_JOIN_MS)
     .reduce<EventSeed | null>((newest, e) => (newest === null || Date.parse(e.at) > Date.parse(newest.at) ? e : newest), null);
-  if (claim !== null && claim.detail.result !== null) return (claim.detail as ClaimDetail).cleared.includes(window);
-  return wholePoints(utilization) < wholePoints(WINDOW_DROP_MARGIN);
+  if (claim !== null && claim.detail.result !== null) return (claim.detail as ClaimDetail).cleared.includes(window) ? 'claim' : null;
+  if (wholePoints(utilization) >= wholePoints(WINDOW_DROP_MARGIN)) return null;
+  return (drop.detail as DropDetail).pair_changed ? 'plan_changed' : 'claim';
 }
 
 /**
  * The weekly resets in range per subscription account as the route answers them, from the story's `window_reset` rows
- * with the pair each event carries, a `claim` row for each `window_dropped` row in range that cleared its window, at
- * the drop's instant with the share left before it and the week's unchanged reset, and, for an account whose term
- * ended in range, one `term_ended` reset per weekly window at the end, its share the last reading of the window's quota
- * history strictly before the end, as the ledger reads `observed_at < end`. Its pair is the one the router's stored
- * reading of the window carries, for which the window's newest sample of the history stands in: the pair the story
- * stores for a reading at that sample's instant, and null for both where the history holds no sample. A reset at or
- * after an end the read has reached is left out, an end before the range's start included, as the ledger drops the
- * resets at or after every end it lists, so the week the end cut short counts once, and so is a drop at or after it.
- * The `term_ended` rows build for an end inside the range alone. The term is read at the range's end capped at the
- * story's now, the windows run in key order, the 7-day window first, and each window answers two lists as the decoder
- * parts the route's rows: `claims` by the drop's instant and `resets` by the reset's, each newest first, with two rows
- * of one instant in the route's order.
+ * with the pair each event carries, a `claim` or a `plan_changed` row for each `window_dropped` row in range that
+ * cleared its window, at the drop's instant with the share left before it and the week's unchanged reset, its word as
+ * `dropCleared` reads it, and, for an account whose term ended in range, one `term_ended` reset per weekly window at
+ * the end, its share the last reading of the window's quota history strictly before the end, as the ledger reads
+ * `observed_at < end`. Its pair is the one the router's stored reading of the window carries, for which the window's
+ * newest sample of the history stands in: the pair the story stores for a reading at that sample's instant, and null
+ * for both where the history holds no sample. A reset at or after an end the read has reached is left out, an end
+ * before the range's start included, as the ledger drops the resets at or after every end it lists, so the week the end
+ * cut short counts once, and so is a drop at or after it. The `term_ended` rows build for an end inside the range
+ * alone. The term is read at the range's end capped at the story's now, the windows run in key order, the 7-day window
+ * first, and each window answers two lists as the decoder parts the route's rows, each list newest first by the instant
+ * a row draws at, the drop's for a claim and a plan change and the reset's for each other row, with two rows of one
+ * instant in the route's order.
  */
 export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], history: QuotaHistory[], span: Range, filters: Pick<AnalyticsQuery, 'accountIds'> = {}): UnusedAllowanceAnswer {
   const fromMs = Date.parse(span.from);
@@ -1086,8 +1091,9 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
           add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset_at), shareLeft: leftOf(d.utilization_before), source: d.observed, tier: d.tier });
         } else if (e.kind === 'window_dropped') {
           const d = e.detail as DropDetail;
-          if (hoursOfKey(d.window) !== 168 || (elapsed !== null && at >= elapsed) || !dropCleared(e, d.window, d.utilization, claims.get(a.id) ?? [])) continue;
-          add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset), shareLeft: leftOf(d.utilization_before), source: 'claim', tier: d.tier });
+          const source = hoursOfKey(d.window) !== 168 || (elapsed !== null && at >= elapsed) ? null : dropCleared(e, d.window, d.utilization, claims.get(a.id) ?? []);
+          if (source === null) continue;
+          add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset), shareLeft: leftOf(d.utilization_before), source, tier: d.tier });
         }
       }
       if (ended !== null) {
@@ -1106,9 +1112,9 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
         .sort(([x], [y]) => byteOrder(x, y))
         .map(([window, listedResets]) => {
           const ordered = [...listedResets].sort((x, y) => Date.parse(y.resetAt) - Date.parse(x.resetAt) || Date.parse(y.observedAt) - Date.parse(x.observedAt));
-          const newest = (key: 'observedAt' | 'resetAt') => (x: AllowanceReset, y: AllowanceReset) => Date.parse(y[key]) - Date.parse(x[key]);
-          const claims = ordered.filter((r) => r.source === 'claim').sort(newest('observedAt'));
-          const resets = ordered.filter((r) => r.source !== 'claim').sort(newest('resetAt'));
+          const newest = (x: AllowanceReset, y: AllowanceReset) => Date.parse(drawnInstant(y)) - Date.parse(drawnInstant(x));
+          const claims = ordered.filter((r) => r.source === 'claim').sort(newest);
+          const resets = ordered.filter((r) => r.source !== 'claim').sort(newest);
           return { claims, resets, totalShareLeft: ordered.reduce((sum, r) => sum + r.shareLeft, 0), window };
         });
       return windows.length === 0 ? [] : [{ accountId: a.id, ...subscriptionPair(a.subscription), windows }];

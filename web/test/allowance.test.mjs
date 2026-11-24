@@ -101,6 +101,13 @@ test("a column draws a use under the term's end that cut its week, by its drop a
   assert.deepEqual(d.drawnRows([ended], [claim]), [ended, claim]);
 });
 
+test('the four weeks keep a use newer than a plan change that is their oldest row', () => {
+  const change = { observedAt: iso(NOW - 3 * DAY), plan: null, resetAt: iso(NOW + 4 * DAY), shareLeft: 0.5, source: 'plan_changed', tier: null };
+  const claim = { observedAt: iso(NOW - DAY), plan: null, resetAt: iso(NOW + 4 * DAY), shareLeft: 0.4, source: 'claim', tier: null };
+  const kept = d.newestResets({ claims: [claim], resets: [change], totalShareLeft: 0.9, window: 'seven_day' });
+  assert.deepEqual([kept.resets, kept.claims], [[change], [claim]]);
+});
+
 test("a figure is the account's own share priced in the chosen week, a Fable-week reset at half its 7-day figure", () => {
   // Half of a Max week is four Pro weeks: a fifth of an Ultra week, half a Max week. Half of its Fable week, a week of
   // half the capacity, is two Pro weeks.
@@ -332,6 +339,15 @@ test('a used reset in a window with no natural reset draws its share in the rang
   const [row] = d.allowanceRows({ accounts: [accountOf('early', MAX_20X, [window])], from: iso(NOW - 29 * DAY), to: iso(NOW) }, COSTS, 'ultra', RANGE);
   const { inRange, last } = row.figures.seven_day;
   assert.deepEqual([inRange.text, last], ['40% Ultra week', { kind: 'none', text: '-', title: d.NO_RESET_IN_RANGE }]);
+});
+
+test('a plan change counts among the resets of the range that holds its drop, and as no use', () => {
+  // The drop two days back cut a week that resets five days ahead, past the range's end.
+  const change = { observedAt: iso(NOW - 2 * DAY), plan: null, resetAt: iso(NOW + 5 * DAY), shareLeft: 0.5, source: 'plan_changed', tier: null };
+  const window = { claims: [], resets: [change], totalShareLeft: 0.5, window: 'seven_day' };
+  const week = { fromMs: NOW - 7 * DAY, toMs: NOW };
+  const [row] = d.allowanceRows({ accounts: [accountOf('changed', MAX_20X, [window])], from: iso(week.fromMs), to: iso(week.toMs) }, COSTS, 'ultra', week);
+  assert.deepEqual([row.resets, row.used], [1, 0]);
 });
 
 test('a used reset alone that ran under a pair the cost model prices no capacity for marks its account unpriced', () => {
