@@ -7505,7 +7505,6 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
         turn_end: phoebis_routing::RenewalEnd::Turn,
         thinking_tokens: None,
         input_transformations: None,
-        compacted: false,
     };
     parts.router.report(renewal(true, 60_000)).await;
     parts.router.report(renewal(false, 600)).await;

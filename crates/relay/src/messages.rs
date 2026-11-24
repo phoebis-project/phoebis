@@ -33,8 +33,7 @@ use phoebis_routing::{
     ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, HoldReason, Holder, JudgedCharge,
     KeyPermit, LaneFacts, OverageEvidence, PinRef, PinnedObstacle, Portability, PredecessorQuery,
     Presented, Refusal, RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError,
-    RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace, BUDGET_WINDOW,
-    MAIN_AGENT,
+    RouterHandle, SelectRequest, SelectResult, Selection, BUDGET_WINDOW, MAIN_AGENT,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope, MemoryStore,
@@ -89,7 +88,7 @@ use crate::ratelimit::{head_sample, retry_after, HeadReading, UnifiedHeaders};
 use crate::sse::SkippingParser;
 use crate::stream::{
     drain_bounded, relay_body, AffinityFacts, BodyRead, Checkin, Cut, Drained, HeldText, OnError,
-    OnMessageId, Publish, Relayed, Renewal, Waiting, MAX_BUFFERED_BODY,
+    OnMessageId, Publish, Relayed, Renewal, TurnClass, Waiting, MAX_BUFFERED_BODY,
 };
 use crate::{
     edit_body, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftKind, Markerless, NativeEdit,
@@ -814,20 +813,15 @@ impl Trace {
         self.arm_completion(key);
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn selected(
         &self,
         attempt: u8,
-        account: &AccountRow,
+        selection: &Selection,
         usage_based: bool,
-        pin_epoch: Option<u64>,
         started_at: i64,
         cache_ttl_ms: Option<i64>,
-        trace: Option<&SelectionTrace>,
-        previous_input_tokens: Option<u64>,
-        entry_expired: Option<bool>,
-        agent_released: Option<bool>,
     ) {
+        let account = &selection.account;
         self.publish_fact(Event::AccountSelected(AccountSelected {
             request_id: self.request_id.clone(),
             attempt,
@@ -835,13 +829,17 @@ impl Trace {
             incarnation: account.incarnation,
             account_kind: account.kind.as_str().into(),
             usage_based,
-            pin_epoch,
+            pin_epoch: selection.pin.as_ref().map(|pin| pin.epoch),
             started_at,
             cache_ttl_ms,
-            selection: trace.and_then(|t| serde_json::to_string(t).ok()),
-            previous_input_tokens,
-            entry_expired,
-            agent_released,
+            // A probe replays a recipe rather than making its own placement, so its own trace names no choice worth
+            // showing on a request drawer.
+            selection: (self.kind != Kind::Probe)
+                .then(|| serde_json::to_string(&selection.trace).ok())
+                .flatten(),
+            previous_input_tokens: selection.previous_input_tokens,
+            entry_expired: selection.entry_expired,
+            agent_released: selection.agent_released,
         }))
         .await;
     }
@@ -1781,9 +1779,7 @@ impl Relay {
             hints.request_class.as_deref(),
             &self.router,
         );
-        let turn = matches!(hints.request_class.as_deref(), Some("main" | "subagent"));
-        let subagent = hints.request_class.as_deref() == Some("subagent");
-        let compaction = hints.request_class.as_deref() == Some("compaction");
+        let class = TurnClass::of(hints.request_class.as_deref());
         crate::facts::note_entrypoint_disagreement(
             &trace.request_id,
             identity.entrypoint.as_deref(),
@@ -2101,18 +2097,17 @@ impl Relay {
             cache_ttl_policy,
             caller: &parts.headers,
             chains: facts.chains.as_ref(),
+            class,
             classifier,
             client_diagnostics,
             client_gzip,
             client_hash,
             client_version,
-            compaction,
             deadline,
             diagnostics,
             fallback_ms,
             fast: facts.shape.speed.as_deref() == Some("fast"),
             floor_held: AtomicBool::new(false),
-            holder: probe.as_ref().map(|p| p.holder.clone()),
             identity: &identity,
             key: &key,
             lane,
@@ -2127,11 +2122,9 @@ impl Relay {
             raw: &raw,
             restore,
             retry_in_place: Duration::from_secs(failover.retry_in_place_seconds),
-            subagent,
             target: &target,
             thinking_diagnostics,
             trace: &trace,
-            turn,
             wait_bound: deadline
                 .unwrap_or(received_at + self.limits.head_timeout.as_millis() as i64),
         };
@@ -2225,7 +2218,7 @@ impl Relay {
                     fallback_ms,
                     revision: snapshot.revision,
                     probe: admitted.trace.kind == Kind::Probe,
-                    holder: admitted.holder.clone(),
+                    holder: probe.as_ref().map(|p| p.holder.clone()),
                     count: admitted.trace.kind == Kind::CountTokens,
                     request_class: hints.request_class.clone(),
                     context_compacted: hints.context_compacted.is_some(),
@@ -2830,17 +2823,10 @@ impl Relay {
                 .trace
                 .selected(
                     *attempt,
-                    account,
+                    selection,
                     usage_based,
-                    pin_epoch,
                     (self.clock)(),
                     cache_ttl_ms(ttl),
-                    // A probe replays a recipe rather than making its own placement, so its own trace names no
-                    // choice worth showing on a request drawer.
-                    (admitted.trace.kind != Kind::Probe).then_some(&selection.trace),
-                    selection.previous_input_tokens,
-                    selection.entry_expired,
-                    selection.agent_released,
                 )
                 .await;
             // `inject_betas` is what this leg asks for; what the caller already sent is the head builder's to
@@ -3642,7 +3628,7 @@ impl Relay {
                 .then(|| self.release_on(&ctx, head.status))
                 .flatten();
             return Next::Respond(
-                self.authentication_exhausted(&mut ctx, &head, outcome, release)
+                self.authentication_exhausted(&mut ctx, outcome, release)
                     .await,
             );
         }
@@ -3697,20 +3683,12 @@ impl Relay {
     async fn authentication_exhausted(
         &self,
         ctx: &mut Responding<'_>,
-        head: &ResponseHead,
         mut outcome: RelayOutcome,
         release: Option<Renewal>,
     ) -> Response {
         let mut waiting = Waiting::default();
         if let Some(release) = release {
-            release.send(
-                (self.clock)(),
-                head.status,
-                None,
-                &ResponseFacts::default(),
-                false,
-                &mut waiting,
-            );
+            release.release(&mut waiting);
         }
         ctx.ending(EXHAUSTED);
         let mut failure = exhaustion_failure(&Exhaustion::Untimed, (self.clock)());
@@ -3745,16 +3723,13 @@ impl Relay {
         ctx.selection.pin.as_ref().map(|pin| Renewal {
             router: self.router.clone(),
             pin: pin.clone(),
-            keepalive: ctx.admitted.trace.kind == Kind::Probe,
+            kind: ctx.admitted.trace.kind,
             cache_ttl_ms: ctx
                 .cache_ttl_ms
                 .or(ctx.admitted.markers_ttl_ms)
                 .unwrap_or(DEFAULT_CACHE_TTL_MS),
             fresh: ctx.fresh_pin,
-            turn: ctx.admitted.turn,
-            subagent: ctx.admitted.subagent,
-            compaction: ctx.admitted.compaction,
-            renews: ctx.admitted.trace.kind != Kind::CountTokens,
+            class: ctx.admitted.class,
             generations: (
                 ctx.account.incarnation,
                 ctx.account.lifecycle_generation,
@@ -5107,6 +5082,9 @@ struct Admitted<'a> {
     /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
     /// chain.
     chains: Option<&'a Chains>,
+    /// The request's class, read once at admission and carried to every leg's renewal, which reads from it what the
+    /// answer's end ended.
+    class: TurnClass,
     /// The request is the client's own auto-mode classifier call (`ClientFacts.classifier`), read once at admission
     /// and shared by every leg: its selection carries the flag, and its usage reports carry the selection's judged
     /// value, whose charge reads `On` where the leg's account is the judged turn's.
@@ -5118,9 +5096,6 @@ struct Admitted<'a> {
     /// The client stamped a hash the drift check verified, which every leg re-signs (`NativeEdit::client_hash`).
     client_hash: bool,
     client_version: Option<String>,
-    /// The request's class is `compaction`, read once at admission beside `turn` and carried to every leg's renewal: a
-    /// whole answer under it marks the pin.
-    compaction: bool,
     /// The relay's clock past which the attempt loop answers the exhaustion rather than selecting again, and at
     /// which a wait on an account's backoff ends: admission plus `head_timeout` less `ATTEMPT_DEADLINE_MARGIN`.
     /// `None` when `head_timeout` is no longer than the margin.
@@ -5139,8 +5114,6 @@ struct Admitted<'a> {
     /// reference, so no leg needs a parameter for it; atomic because `Admitted` is borrowed across the handler's
     /// awaits and that future has to be `Send`.
     floor_held: AtomicBool,
-    /// The holder that a probe's marker names. `None` for a request that is no probe.
-    holder: Option<Holder>,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
     /// The cache lane the request writes to, composed once at admission since no failover changes the body.
@@ -5172,18 +5145,12 @@ struct Admitted<'a> {
     /// The pool's `retry_in_place_seconds`: the longest throttle waited out on the same account, and the
     /// longest a held selection waits for a slot.
     retry_in_place: Duration,
-    /// The request's class is `subagent`, read once at admission beside `turn` and carried to every leg's renewal: an
-    /// answer under it that stops with `end_turn` ends the agent.
-    subagent: bool,
     target: &'a str,
     /// Whether a leg asks for the thinking-binding beta, resolved at admission: the pool's `thinking_diagnostics`
     /// switch is on, the request is not a `count_tokens` request, and the body's `thinking.type` is a string other
     /// than `disabled`.
     thinking_diagnostics: bool,
     trace: &'a Trace,
-    /// The request's class is a turn's, `main` or `subagent`, read once at admission and carried to every leg's
-    /// renewal: a client stream's end under it is the turn's end the router notes for the classifier call that follows.
-    turn: bool,
     /// The bound a reset wait and the slow-down and rewrite holds sleep under: `deadline` where the head timeout leaves
     /// one, else the head timeout itself, so a short head timeout bounds the waits that would otherwise outlast it.
     wait_bound: i64,

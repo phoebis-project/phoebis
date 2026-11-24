@@ -14,16 +14,26 @@ pub fn portable_of(root: &Value) -> Portability {
     if object.contains_key("container") {
         return Portability::Hold;
     }
-    object
+    let blocks = object
         .get("messages")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|message| message.get("content").and_then(Value::as_array))
-        .flatten()
-        .map(block_class)
-        .max()
-        .unwrap_or(Portability::Portable)
+        .flatten();
+    strongest(Portability::Portable, blocks)
+}
+
+/// The strongest of `class` and the classes that `blocks` give. `Hold` tops the order, so the walk stops at the
+/// first block that gives it.
+fn strongest<'a>(mut class: Portability, blocks: impl Iterator<Item = &'a Value>) -> Portability {
+    for block in blocks {
+        class = class.max(block_class(block));
+        if class == Portability::Hold {
+            break;
+        }
+    }
+    class
 }
 
 /// The class a block gives the request, with the blocks below it: the release class for a `web_search_tool_result`,
@@ -49,16 +59,15 @@ fn block_class(block: &Value) -> Portability {
     } else {
         Portability::Portable
     };
+    let own = by_type.max(by_file);
+    if own == Portability::Hold {
+        return own;
+    }
     let own_blocks = block.get("content").and_then(Value::as_array);
     let source_blocks = source
         .and_then(|source| source.get("content"))
         .and_then(Value::as_array);
-    own_blocks
-        .into_iter()
-        .chain(source_blocks)
-        .flatten()
-        .map(block_class)
-        .fold(by_type.max(by_file), Portability::max)
+    strongest(own, own_blocks.into_iter().chain(source_blocks).flatten())
 }
 
 #[cfg(test)]

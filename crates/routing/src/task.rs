@@ -803,12 +803,15 @@ pub struct SelectAnswer {
 /// What a renewal's stream end ended, which `Report::PinRenewed` carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenewalEnd {
-    /// No turn: a compaction, an auxiliary call or a keepalive probe.
+    /// No turn: a compaction call whose answer did not end whole with a stop reason, an auxiliary call or a keepalive
+    /// probe.
     NoTurn,
     /// A `main` or `subagent` turn, whose stream's end is the end of the agent's turn that `latest_turn_pin` answers.
     Turn,
     /// A subagent's turn whose answer stopped with `end_turn`: the turn ended and its agent with it.
     AgentEnded,
+    /// A compaction call whose answer ended whole with a stop reason, which marks the pin for the agent's next turn.
+    Compacted,
 }
 
 /// Every report that names an account names its holder too: an id is reusable, and a report whose
@@ -911,15 +914,13 @@ pub enum Report {
         cache_ttl_ms: i64,
         /// The answer reported `usage.speed` `fast`.
         fast: bool,
-        /// What the stream's end ended, as the relay read it from the request's class, the answer's stop reason and
-        /// whether a keepalive probe sent the request.
+        /// What the stream's end ended, as the relay read it from the request's class, the answer's stop reason,
+        /// whether the answer ended whole and whether a keepalive probe sent the request.
         turn_end: RenewalEnd,
         /// The answer's `output_tokens_details.thinking_tokens`, `None` where it reported none.
         thinking_tokens: Option<u64>,
         /// The blocks the answer dropped per `<type>.<reason>` key, `None` where the answer held no such member.
         input_transformations: Option<BTreeMap<String, DroppedBlocks>>,
-        /// The request was a compaction call whose stream ended whole with a stop reason.
-        compacted: bool,
     },
     Sample {
         account_id: String,
@@ -4487,7 +4488,6 @@ impl Task {
                 turn_end,
                 thinking_tokens,
                 input_transformations,
-                compacted,
             } => {
                 let key = self.canonical_pin(&mut pin);
                 if let Some(current) = self.state.pin(&key) {
@@ -4540,7 +4540,7 @@ impl Task {
                             // and its effort as it keeps its lane.
                             renewed.entrypoint.clone_from(&pin.entrypoint);
                             renewed.effort.clone_from(&pin.effort);
-                            renewed.compacted |= compacted;
+                            renewed.compacted |= turn_end == RenewalEnd::Compacted;
                             if let Some(usage) = usage {
                                 // Every copy folds whatever the account's kind and nothing is priced here: the
                                 // reader prices the copies its funding selects on the account the pin sits on when
@@ -4572,7 +4572,10 @@ impl Task {
                                 // A marked row keeps its compaction call's prompt until the agent's next turn reads
                                 // the mark. An auxiliary answer in between would move the size that the turn's body is
                                 // compared with.
-                                if !renewed.compacted || compacted || turn_ended {
+                                if !renewed.compacted
+                                    || turn_end == RenewalEnd::Compacted
+                                    || turn_ended
+                                {
                                     renewed.last_input_tokens = usage.prompt_tokens();
                                 }
                                 if let Some(tokens) = thinking_tokens.filter(|tokens| *tokens > 0) {

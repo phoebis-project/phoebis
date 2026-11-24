@@ -10,7 +10,7 @@ use axum::body::Body;
 use bytes::{Bytes, BytesMut};
 use futures::future::BoxFuture;
 use phoebis_bus::{
-    InputTransformation, Interruption, Outcome, Phase, ResponseChunk, ResponseFacts, Usage,
+    InputTransformation, Interruption, Kind, Outcome, Phase, ResponseChunk, ResponseFacts, Usage,
 };
 use phoebis_oauth::Clock;
 use phoebis_routing::{
@@ -195,22 +195,40 @@ pub(crate) struct Publish {
 pub(crate) struct Renewal {
     pub router: RouterHandle,
     pub pin: PinRef,
-    /// Whether a keepalive probe sent the request, rather than the client.
-    pub keepalive: bool,
+    /// Which sent the request: a keepalive probe, a token count or the client's own inference request.
+    pub kind: Kind,
     pub cache_ttl_ms: i64,
     /// Whether this request created the pin rather than renewing one that already served.
     pub fresh: bool,
-    /// The request's class is a turn's, `main` or `subagent`, so its stream's end is the turn's end the router notes.
-    pub turn: bool,
-    /// The request's class is `subagent`, so an answer that stops with `end_turn` ends the agent.
-    pub subagent: bool,
-    /// The request's class is `compaction`, so an answer that ends whole marks the pin for the agent's next turn.
-    pub compaction: bool,
-    /// False for a token count: it writes no cache, so its answer renews nothing, though a client error on a
-    /// pin it created still releases that pin.
-    pub renews: bool,
+    /// The request's class, which with the answer's stop reason tells what the answer's end ended.
+    pub class: TurnClass,
     /// The attempt's (incarnation, lifecycle, credential) generations, which fence a release.
     pub generations: (u64, u64, u64),
+}
+
+/// The class that a request's `x-claude-code-request-class` header names, which tells a renewal what the answer's
+/// end ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TurnClass {
+    /// A compaction call: an answer that ends whole with a stop reason marks the pin for the agent's next turn.
+    Compaction,
+    /// A main turn: its stream's end is the turn's end the router notes for the classifier call that follows.
+    Main,
+    /// Any other class, or no header: the answer ends no turn.
+    Other,
+    /// A subagent's turn: it ends as a `Main` turn does, and an answer that stops with `end_turn` ends the agent too.
+    Subagent,
+}
+
+impl TurnClass {
+    pub(crate) fn of(class: Option<&str>) -> TurnClass {
+        match class {
+            Some("compaction") => TurnClass::Compaction,
+            Some("main") => TurnClass::Main,
+            Some("subagent") => TurnClass::Subagent,
+            _ => TurnClass::Other,
+        }
+    }
 }
 
 /// The client errors that end a pin their own request created: the pin never served, so keeping it would hold
@@ -221,6 +239,20 @@ impl Renewal {
     /// Whether an answer of `status` releases the pin instead of renewing it.
     pub(crate) fn releases(&self, status: u16) -> bool {
         self.fresh && RELEASING_STATUSES.contains(&status)
+    }
+
+    /// The release of the pin, for an answer whose status `releases` holds.
+    pub(crate) fn release(self, waiting: &mut Waiting) {
+        let (incarnation, lifecycle_generation, credential_generation) = self.generations;
+        waiting.send(
+            &self.router,
+            Report::PinReleased {
+                pin: self.pin,
+                incarnation,
+                lifecycle_generation,
+                credential_generation,
+            },
+        );
     }
 
     /// `complete` says the answer arrived whole: a stream that ended clean after its stop, or a body decoded whole.
@@ -234,31 +266,26 @@ impl Renewal {
         waiting: &mut Waiting,
     ) {
         if self.releases(status) {
-            let (incarnation, lifecycle_generation, credential_generation) = self.generations;
-            waiting.send(
-                &self.router,
-                Report::PinReleased {
-                    pin: self.pin,
-                    incarnation,
-                    lifecycle_generation,
-                    credential_generation,
-                },
-            );
+            return self.release(waiting);
+        }
+        // A token count writes no cache, so its answer renews nothing. A client error on a pin it created still takes
+        // the release above.
+        if self.kind == Kind::CountTokens {
             return;
         }
-        if !self.renews {
-            return;
-        }
+        let keepalive = self.kind == Kind::Probe;
         // A probe replays another request's class and its answer the turn's stop reason, so it ends no turn and no
-        // agent.
-        let turn_end = if self.keepalive {
-            RenewalEnd::NoTurn
-        } else if self.subagent && response.stop_reason.as_deref() == Some("end_turn") {
-            RenewalEnd::AgentEnded
-        } else if self.turn {
-            RenewalEnd::Turn
-        } else {
-            RenewalEnd::NoTurn
+        // agent, and its replay of a compaction call marks nothing.
+        let turn_end = match self.class {
+            _ if keepalive => RenewalEnd::NoTurn,
+            TurnClass::Subagent if response.stop_reason.as_deref() == Some("end_turn") => {
+                RenewalEnd::AgentEnded
+            }
+            TurnClass::Main | TurnClass::Subagent => RenewalEnd::Turn,
+            TurnClass::Compaction if complete && response.stop_reason.is_some() => {
+                RenewalEnd::Compacted
+            }
+            TurnClass::Compaction | TurnClass::Other => RenewalEnd::NoTurn,
         };
         waiting.send(
             &self.router,
@@ -266,17 +293,12 @@ impl Renewal {
                 pin: self.pin,
                 now,
                 usage: usage.filter(|u| !u.is_empty()).map(pin_usage),
-                keepalive: self.keepalive,
+                keepalive,
                 cache_ttl_ms: self.cache_ttl_ms,
                 fast: response.speed.as_deref() == Some("fast"),
                 turn_end,
                 thinking_tokens: usage.and_then(|u| u.thinking_tokens),
                 input_transformations: response.input_transformations.as_ref().map(dropped_blocks),
-                // A probe replays a compaction call's class too, and marks nothing, as it ends no turn.
-                compacted: self.compaction
-                    && !self.keepalive
-                    && complete
-                    && response.stop_reason.is_some(),
             },
         );
     }

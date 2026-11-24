@@ -8273,7 +8273,6 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
             turn_end: RenewalEnd::NoTurn,
             thinking_tokens: None,
             input_transformations: None,
-            compacted: false,
         })
         .await;
     let pin = handle.pins().await.unwrap().remove(0);
@@ -8320,7 +8319,6 @@ fn renewal(pin: PinRef, now: i64, usage: PinUsage, keepalive: bool, cache_ttl_ms
         },
         thinking_tokens: None,
         input_transformations: None,
-        compacted: false,
     }
 }
 
@@ -8534,7 +8532,6 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
             turn_end: RenewalEnd::Turn,
             thinking_tokens: None,
             input_transformations: None,
-            compacted: false,
         })
         .await;
     let pins = handle.pins().await.unwrap();
@@ -8642,7 +8639,6 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
             turn_end: RenewalEnd::Turn,
             thinking_tokens: None,
             input_transformations: None,
-            compacted: false,
         })
         .await;
     handle
@@ -9175,7 +9171,6 @@ fn speed_renewal(pin: PinRef, now: i64, fast: bool, input: u64) -> Report {
         turn_end: RenewalEnd::Turn,
         thinking_tokens: None,
         input_transformations: None,
-        compacted: false,
     }
 }
 
@@ -10290,7 +10285,6 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
             turn_end: RenewalEnd::AgentEnded,
             thinking_tokens: None,
             input_transformations: None,
-            compacted: false,
         })
         .await;
     handle
@@ -10463,7 +10457,6 @@ async fn a_projection_leaves_out_the_burn_of_a_pin_whose_agent_ended_until_the_a
             turn_end: RenewalEnd::AgentEnded,
             thinking_tokens: None,
             input_transformations: None,
-            compacted: false,
         })
         .await;
     handle
@@ -10991,7 +10984,6 @@ async fn every_set_of_an_ended_agents_mark_and_its_clear_by_an_exhausted_request
             turn_end: RenewalEnd::AgentEnded,
             thinking_tokens: None,
             input_transformations: None,
-            compacted: false,
         })
         .await;
     handle.shutdown().await.unwrap();
@@ -11025,7 +11017,6 @@ async fn every_set_of_an_ended_agents_mark_and_its_clear_by_an_exhausted_request
             turn_end: RenewalEnd::AgentEnded,
             thinking_tokens: None,
             input_transformations: None,
-            compacted: false,
         })
         .await;
     handle.shutdown().await.unwrap();
@@ -17541,7 +17532,6 @@ async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probe
         },
         thinking_tokens: None,
         input_transformations: None,
-        compacted: false,
     };
     let stored = || async { handle.pins().await.unwrap().remove(0).effort };
     assert_eq!(
@@ -17595,7 +17585,6 @@ async fn a_token_count_behind_a_turn_keeps_the_effort_the_turn_stamped() {
             turn_end: RenewalEnd::Turn,
             thinking_tokens: None,
             input_transformations: None,
-            compacted: false,
         })
         .await;
     now.store(3_000, Ordering::SeqCst);
@@ -18348,7 +18337,6 @@ async fn an_auxiliary_calls_end_on_another_agents_turn_pin_does_not_redirect_the
             turn_end: RenewalEnd::NoTurn,
             thinking_tokens: None,
             input_transformations: None,
-            compacted: false,
         })
         .await;
     let call = SelectRequest {
@@ -18468,7 +18456,6 @@ fn answered(pin: PinRef, prompt: u64, thinking: Option<u64>, dropped: Option<&st
                 },
             )])
         }),
-        compacted: false,
     }
 }
 
@@ -18575,8 +18562,8 @@ async fn a_compacted_move_opens_no_observation_so_its_answer_leaves_its_pair_unl
 }
 
 /// The renewal of `pin` at `now` by a call that ends no turn, whose answer read a prompt of `prompt` input tokens: a
-/// compaction call's that answered whole where `compacted`, else an auxiliary call's.
-fn off_turn_answer(pin: PinRef, prompt: u64, compacted: bool, now: i64) -> Report {
+/// compaction call's that answered whole where `turn_end` is `Compacted`, else an auxiliary call's.
+fn off_turn_answer(pin: PinRef, prompt: u64, turn_end: RenewalEnd, now: i64) -> Report {
     Report::PinRenewed {
         pin,
         now,
@@ -18587,10 +18574,9 @@ fn off_turn_answer(pin: PinRef, prompt: u64, compacted: bool, now: i64) -> Repor
         keepalive: false,
         cache_ttl_ms: 300_000,
         fast: false,
-        turn_end: RenewalEnd::NoTurn,
+        turn_end,
         thinking_tokens: None,
         input_transformations: None,
-        compacted,
     }
 }
 
@@ -18649,7 +18635,7 @@ async fn a_confirming_turn_that_lands_on_another_account_opens_no_observation() 
         .report(off_turn_answer(
             session_pin(&handle, "s1").await,
             100_000,
-            true,
+            RenewalEnd::Compacted,
             AT,
         ))
         .await;
@@ -18688,7 +18674,7 @@ async fn an_auxiliary_call_leaves_the_mark_so_the_turn_behind_it_zeroes() {
         .report(off_turn_answer(
             session_pin(&handle, "s1").await,
             100_000,
-            true,
+            RenewalEnd::Compacted,
             AT,
         ))
         .await;
@@ -18705,7 +18691,7 @@ async fn an_auxiliary_call_leaves_the_mark_so_the_turn_behind_it_zeroes() {
         .report(off_turn_answer(
             session_pin(&handle, "s1").await,
             10_000,
-            false,
+            RenewalEnd::NoTurn,
             AT,
         ))
         .await;
@@ -18736,7 +18722,7 @@ async fn a_lapsed_agents_return_from_a_marked_record_zeroes_its_sums_and_opens_n
         .report(off_turn_answer(
             session_pin(&handle, "s1").await,
             100_000,
-            true,
+            RenewalEnd::Compacted,
             AT - HOUR - 1,
         ))
         .await;
@@ -19802,7 +19788,6 @@ async fn a_rounds_record_states_the_rewrite_of_a_pin_whose_pair_reads_bound_at_t
             turn_end: RenewalEnd::Turn,
             thinking_tokens: Some(1_000),
             input_transformations: None,
-            compacted: false,
         })
         .await;
     handle
