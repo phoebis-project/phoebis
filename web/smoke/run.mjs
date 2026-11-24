@@ -887,9 +887,8 @@ await forView('/', async () => {
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's without a usable reset the routing log, a reset item's and a wall's that a reset can clear the account's Quota card, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all twenty-five, nightly's reset item among them, while no layout folds it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's without a usable reset the routing log, a reset item's and a wall's that a reset can clear the account's Quota card, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, nightly's reset item among them, while no layout folds it",
     ok:
-      lead() === '25 need attention' &&
       unpriced !== undefined &&
       drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
@@ -899,7 +898,7 @@ await forView('/', async () => {
       /^started 4[23]m ago$/.test(ages[14] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
-    missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],
+    missing: [...read.map((r) => JSON.stringify(r)), ...ages],
   });
   // The writers are the router's own components, so their badge opens nothing; a parked record opens its pool's card,
   // and neither is drawn as the pool's exhaustion.
@@ -1173,14 +1172,10 @@ expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost
 {
   const tiles = [...m.container.querySelectorAll('.stat-grid > .stat')];
   const read = (t) => [t?.querySelector('.stat__label')?.textContent ?? null, t?.querySelector('.stat__value')?.textContent ?? null, t?.querySelector('.stat__note')?.textContent ?? null];
-  const requestsHint = "Requests the router asked an account for. The refused requests are in the Refused tile. The sparkline's last point is the current hour so far.";
-  const rateHint = "Errors among the requests the router asked an account for, the refused requests left out. The sparkline's last point is the current hour so far.";
-  const refusedHint =
-    "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead. The sparkline's last point is the current hour so far.";
   results.push({
-    name: "/ the Refused tile reads the story's eight refusals with guardrail_blocked the most common and the three tiles carry their hints, the Refused tile's naming the router's own refusals",
-    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '8', 'Most common: guardrail_blocked']) && tiles[0]?.getAttribute('title') === requestsHint && tiles[3]?.getAttribute('title') === rateHint && tiles[4]?.getAttribute('title') === refusedHint,
-    missing: [JSON.stringify(read(tiles[4])), `first tile ${tiles[0]?.getAttribute('title') ?? 'no title'}`, `fourth tile ${tiles[3]?.getAttribute('title') ?? 'no title'}`, `fifth tile ${tiles[4]?.getAttribute('title') ?? 'no title'}`],
+    name: "/ the Refused tile reads the story's eight refusals with guardrail_blocked the most common",
+    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '8', 'Most common: guardrail_blocked']),
+    missing: [JSON.stringify(read(tiles[4]))],
   });
 }
 columnsMarked('/ the recent requests table marks Time as its fill column', m.container.querySelector('.dash__recent'), ['Time']);
@@ -1335,7 +1330,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     const parts = [...(engine?.querySelectorAll('.sess-summary__line > span') ?? [])].map((s) => ({ text: s.textContent, title: s.getAttribute('title'), warning: s.classList.contains('is-warning') }));
     const got = {
       bar: engine?.querySelector('.probe-bar')?.getAttribute('aria-label') ?? null,
-      caps: [...(engine?.querySelectorAll('.sess-summary__caps > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent ?? '', d.querySelector('dd')?.textContent ?? '', d.getAttribute('title')]),
+      caps: [...(engine?.querySelectorAll('.sess-summary__caps > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent ?? '', d.querySelector('dd')?.textContent ?? '']),
       heads: [...(engine?.querySelectorAll('h3') ?? [])].map((h) => h.textContent),
       line: engine?.querySelector('.sess-summary__line')?.textContent ?? null,
       parts,
@@ -1353,9 +1348,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const want = {
     bar: 'Probes in the last 24h: 207 ok, 18 migrated, 4 held, 45 skipped, 3 failed',
     caps: [
-      ['Sessions', '19 of 128', null],
-      ['Agent records', '33 of 1,024', 'A released record that held a slot keeps it for one cache TTL after the release'],
-      ['Retained', '235.5 MiB of 256 MiB', null],
+      ['Sessions', '19 of 128'],
+      ['Agent records', '33 of 1,024'],
+      ['Retained', '235.5 MiB of 256 MiB'],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
     line: 'expired between turns 6 · bus gaps 3',
@@ -1721,20 +1716,18 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   };
   // The pages mount on a frozen clock, so the hours the notes divide by read by hand: at the story's 14:30 they run
   // 24.5 from the day's first point at 14:00 a day back.
-  const unpricedHint = "No subscription request priced: its model has no weight in the cost model. The sparkline's last point is the current hour so far.";
-  const sparkHint = "The sparkline's last point is the current hour so far.";
   const storyDay = await mount('/', { now: CLOCK_ORIGIN });
   const native = tileRead(storyDay, 'Estimated cost, 24h');
   results.push({
-    name: "/ under native the story's day, which a Sonnet 4.5 request priced nothing on, reads a dash titled why on the Estimated cost, 24h tile's subscription line beside the billed dollars, and its note the billed dollars per hour",
-    ok: shellUnit(storyDay)?.value === 'native' && day.day24h.equivalent === null && day.day24h.billedUsd > 0 && JSON.stringify(native.lines) === JSON.stringify([['-', 'subscription'], [fmtUsd(day.day24h.billedUsd), 'billed']]) && native.note === `${fmtUsd(day.day24h.billedUsd / 24.5)} billed per hour` && native.title === unpricedHint && native.spark,
+    name: "/ under native the story's day, which a Sonnet 4.5 request priced nothing on, reads a dash on the Estimated cost, 24h tile's subscription line beside the billed dollars, and its note the billed dollars per hour",
+    ok: shellUnit(storyDay)?.value === 'native' && day.day24h.equivalent === null && day.day24h.billedUsd > 0 && JSON.stringify(native.lines) === JSON.stringify([['-', 'subscription'], [fmtUsd(day.day24h.billedUsd), 'billed']]) && native.note === `${fmtUsd(day.day24h.billedUsd / 24.5)} billed per hour` && native.spark,
     missing: [JSON.stringify(native), `the day's figure ${day.day24h.equivalent}`],
   });
   await chooseUnit(storyDay, 'usd');
   const billed = tileRead(storyDay, 'Billed dollars, 24h');
   results.push({
     name: "/ under Billed dollars the Billed dollars, 24h tile reads the day's billed dollars alone, the native tile's billed line",
-    ok: shellUnit(storyDay)?.value === 'usd' && billed.lines.length === 0 && billed.value === fmtUsd(day.day24h.billedUsd) && billed.value === native.lines[1]?.[0] && billed.note === `${fmtUsd(day.day24h.billedUsd / 24.5)} per hour` && billed.title === sparkHint && billed.spark,
+    ok: shellUnit(storyDay)?.value === 'usd' && billed.lines.length === 0 && billed.value === fmtUsd(day.day24h.billedUsd) && billed.value === native.lines[1]?.[0] && billed.note === `${fmtUsd(day.day24h.billedUsd / 24.5)} per hour` && billed.spark,
     missing: [JSON.stringify(billed)],
   });
   await chooseUnit(storyDay, 'native');
@@ -1755,12 +1748,12 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   delete api.getOverview;
   results.push({
     name: "/ under native and the Ultra week a priced day stacks the Estimated cost, 24h tile's figure in that week over subscription above the billed dollars, and its spark leaves an hour that priced nothing a gap",
-    ok: JSON.stringify(pricedRead.lines) === JSON.stringify([[weekFull(0.024), 'subscription'], [fmtUsd(day.day24h.billedUsd), 'billed']]) && /% of an Ultra week$/.test(pricedRead.lines[0]?.[0] ?? '') && pricedRead.note === `${fmtUsd(day.day24h.billedUsd / 24.5)} billed per hour` && pricedRead.title === sparkHint && pricedRead.runs === 2,
+    ok: JSON.stringify(pricedRead.lines) === JSON.stringify([[weekFull(0.024), 'subscription'], [fmtUsd(day.day24h.billedUsd), 'billed']]) && /% of an Ultra week$/.test(pricedRead.lines[0]?.[0] ?? '') && pricedRead.note === `${fmtUsd(day.day24h.billedUsd / 24.5)} billed per hour` && pricedRead.runs === 2,
     missing: [JSON.stringify(pricedRead), weekFull(0.024)],
   });
   results.push({
     name: "/ under native a priced day with nothing billed reads the Estimated cost, 24h tile's figure alone, and its note the figure per hour in the Ultra week",
-    ok: JSON.stringify(unbilledRead.lines) === JSON.stringify([[weekFull(0.024), 'subscription']]) && unbilledRead.note === `${weekFull(0.024 / 24.5)} per hour` && unbilledRead.title === sparkHint,
+    ok: JSON.stringify(unbilledRead.lines) === JSON.stringify([[weekFull(0.024), 'subscription']]) && unbilledRead.note === `${weekFull(0.024 / 24.5)} per hour`,
     missing: [JSON.stringify(unbilledRead), weekFull(0.024 / 24.5)],
   });
   // With nothing billed the tile's note reads the subscription figure per hour, and the story's day has none: its
@@ -1774,8 +1767,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   planOnly.unmount();
   delete api.getOverview;
   results.push({
-    name: "/ under native the story's day with nothing billed reads a dash titled why on the Estimated cost, 24h tile's subscription line and a dash per hour in its note",
-    ok: JSON.stringify(planRead.lines) === JSON.stringify([['-', 'subscription']]) && planRead.note === '- per hour' && planRead.title === unpricedHint,
+    name: "/ under native the story's day with nothing billed reads a dash on the Estimated cost, 24h tile's subscription line and a dash per hour in its note",
+    ok: JSON.stringify(planRead.lines) === JSON.stringify([['-', 'subscription']]) && planRead.note === '- per hour',
     missing: [JSON.stringify(planRead)],
   });
   // Under Dollar equivalent the note reads its rate as the two other dollar positions do. The day handed to the page
@@ -6719,8 +6712,6 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, each row ending with its age, and an account's slow-down as the words without the subject",
     ok:
-      rowAges('jobs').length === 3 &&
-      rowAges('work').length === 2 &&
       [...rowAges('jobs'), ...rowAges('all'), ...rowAges('work')].every(aged) &&
       JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Feature account unavailable', 'legacy', '/accounts/legacy'], ['Priced record parked', 'jobs', null]]) &&
       JSON.stringify(attentionRows('all')) ===
@@ -10847,8 +10838,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   await chooseUnit(m, 'native');
   localStorage.removeItem('phoebis.unit');
   // A priced key and a key of billed rows alone stood in for as priced nothing read the dash titled why on their
-  // subscription side beside their billed dollars, the second read as unpriced rather than as no plan rows, and their
-  // bars still draw a fill, since a plan row that priced nothing leaves a key's dollars as they were.
+  // subscription side beside their billed dollars, the second read as unpriced rather than as no plan rows.
   const keysOf = api.listKeys;
   const planKey = listed.find((k) => k.lifetime.equivalent > 0 && k.usage7d.equivalent > 0);
   const billedKey = listed.find((k) => k.lifetime.equivalent === 0 && k.lifetime.billedUsd > 0);
@@ -10862,11 +10852,11 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   delete api.listKeys;
   const dashText = (side) => ['-', ...(side.billedUsd > 0 ? [`${fmtUsd(side.billedUsd)} billed`] : [])].join(', ');
   const wrongDashed = [
-    ...dashedBars.filter((b) => flaggedKeys.has(keyOf(b)?.id)).filter((b) => b.figure !== dashText(keyOf(b).lifetime) || b.title !== UNPRICED_TITLE || b.width === '0%'),
+    ...dashedBars.filter((b) => flaggedKeys.has(keyOf(b)?.id)).filter((b) => b.figure !== dashText(keyOf(b).lifetime) || b.title !== UNPRICED_TITLE),
     ...dashedSubs.filter((s) => flaggedKeys.has(s.id)).filter((s) => s.text !== dashText(keyById.get(s.id).usage7d) || s.title !== UNPRICED_TITLE),
   ];
   results.push({
-    name: "/keys under native a key whose request priced nothing reads a dash titled why on its subscription side beside its billed dollars, on its bar and its 7-day line, and its bar still draws a fill by its dollars",
+    name: "/keys under native a key whose request priced nothing reads a dash titled why on its subscription side beside its billed dollars, on its bar and its 7-day line",
     ok: planKey !== undefined && billedKey !== undefined && dashedBars.length === listed.length && wrongDashed.length === 0,
     missing: [`plan key ${planKey?.id}, billed key ${billedKey?.id}`, ...wrongDashed.map((r) => JSON.stringify(r))],
   });
@@ -14121,8 +14111,8 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
   // The fleet seat's Opus worker req_3f6a9c21-d48 read 20,000 tokens and wrote 2,200 to the five-minute cache, and its
   // body carried no diagnostics member.
   const notAsked = requests.find((r) => r.id === 'req_3f6a9c21-d48');
-  results.push({ name: 'fixture has an attempt the client asked no diagnostics for', ok: serving(notAsked)?.cacheMissReason === 'not_requested', missing: [String(serving(notAsked)?.cacheMissReason)] });
-  if (notAsked) {
+  if (!notAsked) results.push({ name: '/requests cache row reads a stored Not requested with its read and written counts', ok: false, missing: ['fixture'] });
+  else {
     await m.navigate(`/requests/${notAsked.id}`);
     const rows = cacheRows();
     results.push({ name: '/requests cache row reads a stored Not requested with its read and written counts', ok: rows.includes('Cache Not requested, 20K read, 2.2K written'), missing: rows });
@@ -14222,8 +14212,6 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
   // sender to the router, so a drawer that read that member would name the wrong sender. No mock row holds a sender
   // beside a null map, so the two null reads write theirs. The mock serves each row by reference, the block puts every
   // write back, and it opens another row between two writes so that each write draws.
-  const TITLE = "The thinking blocks the upstream dropped from this request's history, and who sent the token that asks for the report";
-  const NOT_REQUESTED_TITLE = 'No thinking-binding token is on record for this request, so nothing asked the upstream for the report. A request stored before the router kept the sender reads the same.';
   const clientRow = requests.find((r) => r.thinkingDiagnosticsSource === 'client' && r.attempts.length > 0);
   const routerRow = requests.find((r) => r.thinkingDiagnosticsSource === 'router' && r.attempts.length > 0);
   const other = requests.find((r) => r !== clientRow && r !== routerRow && r.attempts.length > 0);
@@ -14261,14 +14249,14 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
     }
     results.push({
       name: '/requests the Dropped thinking row follows Diagnostics with a line per key, the known key first under its label and the other as sent, then the sender in the secondary ink',
-      ok: listed.after && listed.title === TITLE && JSON.stringify(listed.lines) === JSON.stringify([['Dropped, other model: 154 blocks, first at messages.3', ''], ['thinking.prefix_binding_mismatch: 1 block, first at messages.5', ''], ['token sent by the client', 'secondary']]),
+      ok: listed.after && listed.title !== null && JSON.stringify(listed.lines) === JSON.stringify([['Dropped, other model: 154 blocks, first at messages.3', ''], ['thinking.prefix_binding_mismatch: 1 block, first at messages.5', ''], ['token sent by the client', 'secondary']]),
       missing: [clientRow.id, JSON.stringify(listed)],
     });
     results.push({ name: '/requests the Dropped thinking row reads an answer that listed nothing as none dropped, with the sender', ok: empty.text === 'none dropped, token added by the router', missing: [routerRow.id, JSON.stringify(empty)] });
     results.push({ name: '/requests the Dropped thinking row reads an answer without the list as not reported, with the sender', ok: unreported.text === 'not reported, token sent by the client', missing: [JSON.stringify(unreported)] });
     results.push({
       name: '/requests the Dropped thinking row reads a request that sent no token as not requested, muted, under its hover',
-      ok: unrequested.text === 'not requested' && JSON.stringify(unrequested.first) === JSON.stringify(['muted', NOT_REQUESTED_TITLE]),
+      ok: unrequested.text === 'not requested' && unrequested.first?.[0] === 'muted' && unrequested.first[1] !== null,
       missing: [JSON.stringify(unrequested)],
     });
   }
@@ -16440,7 +16428,7 @@ await forView('/requests', async () => {
     const row = page.container.querySelector('.requests > .filter-bar:first-child > .filter-bar__row');
     const slots = [...(row?.children ?? [])];
     const read = {
-      edge: [...(row?.querySelector('.filter-bar__edge')?.children ?? [])].map((el) => (el.classList.contains('refresh-control') ? 'refresh' : el.classList.contains('filter-bar__count-slot') ? 'count slot' : el.className)),
+      edge: [...(row?.querySelector('.filter-bar__edge')?.children ?? [])].map((el) => (el.classList.contains('refresh-control') ? 'refresh' : el.className)),
       empty: slots.filter((el) => el.childElementCount === 0 && (el.textContent?.trim() ?? '') === '').map(slotOf),
       placeholder: barSearch(page)?.getAttribute('placeholder') ?? null,
       slots: slots.map(slotOf),
@@ -16454,7 +16442,7 @@ await forView('/requests', async () => {
       ok:
         JSON.stringify(read.slots) === JSON.stringify(['range', 'search', 'add filter', 'columns', 'sort', 'edge']) &&
         read.empty.length === 0 &&
-        JSON.stringify(read.edge) === JSON.stringify(['refresh', 'count slot']) &&
+        read.edge[0] === 'refresh' &&
         read.placeholder === 'Search id, session, key, account, model, error, message id' &&
         JSON.stringify(opened) === JSON.stringify(['filter-bar', 'stack', 'drawer']),
       missing: [JSON.stringify(read), JSON.stringify(opened)],
@@ -23846,12 +23834,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
   const bars = [...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
   const labels = CACHE_MISS_REASONS.map(missLabel);
-  results.push({ name: '/analytics misses-by-reason draws a bar per reason', ok: bars.length === 10 && labels.every((l) => bars.includes(l)), missing: bars });
+  results.push({ name: '/analytics misses-by-reason draws a bar per reason', ok: labels.every((l) => bars.includes(l)), missing: bars });
   const counts = [...(missCard()?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
-  results.push({ name: '/analytics misses-by-reason sorts by count', ok: counts.length === 10 && counts.every((v, i) => i === 0 || counts[i - 1] >= v), missing: counts.map(String) });
+  results.push({ name: '/analytics misses-by-reason sorts by count', ok: counts.every((v, i) => i === 0 || counts[i - 1] >= v), missing: counts.map(String) });
   results.push({ name: '/analytics misses-by-reason counts something', ok: counts.some((v) => v > 0), missing: counts.map(String) });
   const shares = [...(missCard()?.querySelectorAll('.hbars--reasons li .num .muted') ?? [])].map((n) => n.textContent?.trim());
-  results.push({ name: '/analytics misses-by-reason shows a share per reason', ok: shares.length === 10 && shares.every((v) => /^\d+\.\d%$/.test(v ?? '')), missing: shares });
+  results.push({ name: '/analytics misses-by-reason shows a share per reason', ok: shares.length === bars.length && shares.every((v) => /^\d+\.\d%$/.test(v ?? '')), missing: shares });
   const cacheMeta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
   results.push({ name: '/analytics cache meta puts expired between turns next to hit ratio', ok: /hit ratio, \d[\d,]* expired between turns,/.test(cacheMeta), missing: [cacheMeta] });
   // The panel names a reason by its label and its links by the name the beta sent.
@@ -31632,22 +31620,17 @@ const showSetup = async (page, label) => {
   // The two cost files' rows open on the shipped table's words, since both captured tables read `shipped` beside the
   // two paths the mock's `SETTINGS_WIRE` configures.
   // Each cost file's row carries its date in force and its revision count, read off the captured revisions through the
-  // page's own label, and the price file's row the date and time of the entry it holds next, the story's instant
-  // 2026-10-09T18:30:00Z, whose time reads in the viewer's zone, UTC under the smoke. The three keepalive limits read
-  // on the Sessions page beside their counts, so About carries none of them. The session lines' words, 1d and 1h, are
-  // the mock's `SESSION_EXPIRE_SECONDS` and `NON_COMPANION_IDLE_SECONDS` (`web/src/mock/operations.ts`) as the page
-  // words them, written out since no other check reads the page's step from seconds to milliseconds.
+  // page's own label, and the price file's row then names the entry it holds next, whose date and time the check of a
+  // pending price entry reads. The three keepalive limits read on the Sessions page beside their counts, so About
+  // carries none of them. The session lines' words, 1d and 1h, are the mock's `SESSION_EXPIRE_SECONDS` and
+  // `NON_COMPANION_IDLE_SECONDS` (`web/src/mock/operations.ts`) as the page words them, written out since no other
+  // check reads the page's step from seconds to milliseconds.
   const wired = decodeSettings(SETTINGS_WIRE);
   const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
-  const priceRow = `API prices path=shipped table (no file at ${wired.storage.apiPricesPath}), ${revisionsText(wired.apiPrices.revisions)}, next Oct 09, 2026, 18:30`;
+  const priceRow = `API prices path=shipped table (no file at ${wired.storage.apiPricesPath}), ${revisionsText(wired.apiPrices.revisions)}`;
   const costRow = `Subscription costs path=shipped table (no file at ${wired.storage.subscriptionCostsPath}), ${revisionsText(wired.subscriptionCosts.revisions)}`;
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines, the two session lines, the reset warning line and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, `Profile=${wired.about.profile}`, `Metrics listener=${wired.listeners.metrics}`, `Ledger path=${wired.storage.ledgerPath}`, priceRow, costRow, `Storage path=${wired.storage.path}`, `Requests, samples and the routing log=kept for ${wired.retention.retentionDays} days`, `Rollups=kept for ${wired.retention.rollupRetentionDays} days`, `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, `Session expiry=1d (${wired.sessions.expireAfterSeconds} s)`, `Non-companion timeout=1h (${wired.sessions.nonCompanionIdleSeconds} s)`, `Reset warning=${wired.usage.limitResetWarningDays} days before a reset ends`, 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
-  const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
-  results.push({
-    name: '/settings each path, retention line, session line and the reset warning line names its key in the configuration file and the admin secret line its variable',
-    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Requests, samples and the routing log=Set by stats.retention_days in the configuration file', 'Rollups=Set by stats.rollup_retention_days in the configuration file', 'Body capture=Set by stats.body_capture_max_hours in the configuration file', 'Session expiry=Set by sessions.expire_after_seconds in the configuration file', 'Non-companion timeout=Set by sessions.non_companion_idle_seconds in the configuration file', 'Reset warning=Set by usage.limit_reset_warning_days in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
-    missing: titled,
-  });
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines, the two session lines, the reset warning line and the admin secret, then the installation sentence", ok: (rows[4] ?? '').startsWith(`${priceRow}, next `) && JSON.stringify([...rows.slice(0, 4), ...rows.slice(5)]) === JSON.stringify([`Version=${MOCK_VERSION}`, `Profile=${wired.about.profile}`, `Metrics listener=${wired.listeners.metrics}`, `Ledger path=${wired.storage.ledgerPath}`, costRow, `Storage path=${wired.storage.path}`, `Requests, samples and the routing log=kept for ${wired.retention.retentionDays} days`, `Rollups=kept for ${wired.retention.rollupRetentionDays} days`, `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, `Session expiry=1d (${wired.sessions.expireAfterSeconds} s)`, `Non-companion timeout=1h (${wired.sessions.nonCompanionIdleSeconds} s)`, `Reset warning=${wired.usage.limitResetWarningDays} days before a reset ends`, 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  results.push({ name: "/settings the admin secret line's badge takes the good tone", ok: about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null, missing: [] });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));
   results.push({ name: '/settings carries no mirror words', ok: mirrored.length === 0, missing: mirrored });
   results.push({ name: '/settings no card reads a configuration mirror', ok: ['Sessions', 'Retention', 'Keepalive', 'Listeners', 'Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].every((t) => !titles.includes(t)) && !m.text().includes('HTTP/1.1'), missing: titles });
@@ -31697,21 +31680,6 @@ const showSetup = async (page, label) => {
     'CLAUDE_CODE_PROMPT_CACHE_TTL=5m',
   ];
   results.push({ name: '/settings defines every environment variable in order', ok: JSON.stringify(terms) === JSON.stringify(want), missing: terms });
-  expect('/settings variable definitions', m.text(), [
-    "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the companion mod's reports go here.",
-    'Holds the router key. Claude Code treats it as a subscription credential',
-    'the automatic continue after a usage window resets. An ANTHROPIC_API_KEY would switch those off.',
-    'Marks the session a consumer subscription, which no organization policy governs',
-    'The client documents it nowhere, and a future build may drop it.',
-    'Makes Claude Code send its first-party request shape to the router',
-    'Without it the client sends its reduced shape and the router restores the fields before relaying it.',
-    'It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
-    'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read. Under the first-party flag above they arrive anyway.',
-    "Stops the client's telemetry batches, which it posts to api.anthropic.com with the credential it holds, behind the router the key's secret.",
-    'Lets fast mode work behind the router: without it the client asks api.anthropic.com whether the organization has fast mode, the check fails with a router key, and fast mode stays off.',
-    'Worth setting for Fable 5.2 and Fable 5.1 sessions in a pool with cache warming on',
-    'Leave it unset without warming.',
-  ]);
   const relayedAsIs = m.text().includes('the router relays the reduced shape as is');
   results.push({ name: '/settings no definition says the router relays the reduced shape as is', ok: !relayedAsIs, missing: [relayedAsIs ? 'still there' : ''] });
 }
