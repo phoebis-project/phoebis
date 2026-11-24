@@ -16,7 +16,7 @@ import { type Clock, wallClock } from '@/lib/clock';
 import { has, lookup } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
-import { modelRulesRefusal, poolWarnings, termEnded, type NumericKeepaliveKey } from '@/lib/forms';
+import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf, readWindows } from '@/lib/quota';
@@ -28,7 +28,7 @@ import { ATTENTION, byKindThenSince, featureAccountUnavailableOf, pairingExpirin
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, rowsOfDeletedKey, sessionsListedAt } from './operations';
-import { KEYS, POOLS, UNLOADED_MEMBERS, UNTIL_DRAWN, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
+import { KEYS, POOLS, UNTIL_DRAWN, budgetUntilOf, composedFor, eligibilityOf, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, FEATURE_CALLS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
@@ -373,45 +373,11 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
  */
 const statusOf = (a: Account, enabled: boolean, flag = flagOf(a.status)): Account['status'] => accountStatusOf(flag, enabled, a.cooldowns);
 
-type BudgetedSeed = Pick<PoolMember, 'budgetDailyUsd' | 'budgetMonthlyUsd' | 'spends'>;
-
-/**
- * The router's end for a member at a budget, which the route answers as `budget_until`: among the budgets whose
- * report, its period not yet over, has reached the budget, the latest period end, since a day's end clears
- * nothing while the month's budget stands; null while none is reached.
- */
-const budgetUntilOf = (member: BudgetedSeed, now: number): string | null =>
-  member.spends
-    .filter((s) => {
-      const budget = s.period === 'day' ? member.budgetDailyUsd : member.budgetMonthlyUsd;
-      return budget !== null && s.spentUsd >= budget && s.periodEnd !== null && Date.parse(s.periodEnd) > now;
-    })
-    .reduce<string | null>((latest, s) => (latest === null || Date.parse(s.periodEnd ?? '') > Date.parse(latest) ? s.periodEnd : latest), null);
-
 /**
  * Whether the stored document reports a plan, as the router's `reports_no_plan` reads a profile: every organization
  * type but the free one, so a row with no document reports one too.
  */
 const reportsPlan = (a: Pick<Account, 'subscription'>): boolean => a.subscription?.organizationType !== 'claude_free';
-
-/**
- * The pool route's reading of a member, in the selector's order: an account the registry lacks is unavailable, a member
- * the router has not loaded is unknown, since it answers no projection before it reads any obstacle, then paused or not
- * ready is unavailable, then past its term is subscription ended, then an account-wide cooldown, then a spend at or
- * past either of the member's budgets inside the period it was reported for, then a usage-based seat whose spend window
- * reads at or past its limit, then overage the router observed under a policy that admits none.
- */
-const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'], member: BudgetedSeed): MemberEligibility => {
-  if (!a) return 'unavailable';
-  if (UNLOADED_MEMBERS.has(a.id)) return 'unknown';
-  if (!a.routingEnabled || flagOf(a.status) !== null) return 'unavailable';
-  if (termEnded(a, Date.now())) return 'subscription_ended';
-  if (a.cooldowns.some((c) => c.scope === 'account' && Date.parse(c.until) > Date.now())) return 'cooldown';
-  if (budgetUntilOf(member, Date.now()) !== null) return 'budget';
-  if (a.spend !== null && (a.spend.utilization ?? 0) >= 1) return 'spent';
-  if (policy === 'never' && a.overage?.inUse) return 'overage';
-  return 'eligible';
-};
 
 /**
  * A written member as the route answers it: the kind, the burn, the Pace score, the speed and the fit read off the
@@ -601,7 +567,7 @@ export class MockApi implements Api {
     revision: stampToken(1, p.updatedAt),
     members: p.members.map((m) => {
       const account = this.accounts.find((a) => a.id === m.accountId);
-      return { ...m, budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p) };
+      return { ...m, budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m, Date.now()), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p) };
     }),
   }));
   /** The story's limit reset blocks, each use's answer folded in as the router's store folds it. */
@@ -1057,7 +1023,7 @@ export class MockApi implements Api {
       keepaliveResolved: this.resolvedOf(input),
       members: input.members.map((m) => {
         const account = this.accounts.find((a) => a.id === m.accountId);
-        return writtenMember(m, account, input, (member) => eligibilityOf(account, input.overagePolicy, member));
+        return writtenMember(m, account, input, (member) => eligibilityOf(account, input.overagePolicy, member, Date.now()));
       }),
       // The route starts a pool with no list when the body leaves it out, whatever the sample row holds.
       modelRules: input.modelRules ?? [],
@@ -1738,7 +1704,7 @@ export class MockApi implements Api {
       members: input.members.map((m) => {
         const account = this.accounts.find((a) => a.id === m.accountId);
         const kept = verdict.get(m.accountId) ?? 'eligible';
-        return writtenMember(m, account, input, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member) : kept));
+        return writtenMember(m, account, input, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member, Date.now()) : kept));
       }),
       ...restamp(current),
     };

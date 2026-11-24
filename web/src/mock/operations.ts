@@ -8,11 +8,11 @@ import { compareRequests } from '@/lib/requests';
 import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
-import { keyById, poolById, servedFigures } from './pools';
+import { eligibilityOf, keyById, poolById, servedFigures } from './pools';
 import { ACCOUNT_BOUND_SESSION_ID, BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, accountBoundAt, fastTurn, pinCacheTtlOf, requestById } from './requests';
 import { dropSizeOf, droppedThinkingOf, moveSizeOf, proWeekRewriteOf } from './rewrite';
 import { createRng } from './rng';
-import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, tablesFor } from './samples';
+import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, regimeFor, tablesFor } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead, iso, startOfHour } from './time';
 
 const rng = createRng(2_024);
@@ -387,19 +387,38 @@ const decayToNow = (foldAt: string | null, keyId: string): number => {
 /** The instant the route answers beside a decayed burn: its read, or a fold that lies past it. */
 const servedBurnAt = (foldAt: string | null): string | null => (foldAt === null ? null : iso(Math.max(NOW, Date.parse(foldAt))));
 /**
+ * Whether a pin on `accountId` under `keyId` has a destination: a sibling of the pin's pool, its own account apart,
+ * with room for the pin. A sibling counts where the pools route reads it as eligible, and it has room where its entry
+ * of `regimeFits` under the regime of the key's client label, the base entry for a key with no label, reads `fits`.
+ * The router's move fit also books the pin's own rewrite and burn, which the served figures do not hold, so a fresh
+ * session's fit stands in for it.
+ */
+const hasDestination = (accountId: string, keyId: string): boolean => {
+  const pool = poolById.get(keyById.get(keyId)?.poolId ?? '');
+  if (pool === undefined) return false;
+  const regime = regimeFor(CLIENTS[keyId] ?? null);
+  return pool.members.some(
+    (m) =>
+      m.accountId !== accountId &&
+      eligibilityOf(accountById.get(m.accountId), pool.overagePolicy, m, NOW) === 'eligible' &&
+      servedFigures(m.accountId, NOW, pool).regimeFits?.find((f) => f.regime === regime)?.fit === 'fits',
+  );
+};
+/**
  * A pin's move as the mock's rounds read it, under the regime its key's client label names: the size the round divides
  * its burn by, the dropped thinking at the output's weight, and the Pro-week figure of each, the cost a warm move and a
  * cold one pay. The size reads null where the pin holds no prompt size and the drop where it drops nothing, each with
  * its cost, and a cost reads null for a model without a weight of its own. A prompt of 0 tokens is no size, as the
  * route answers null where nothing is priced above zero, so a pin with a drop and no size pays the drop's cost alone.
- * A pin that holds state on its account reads no cost and keeps its sizes, since no rule or round moves it.
+ * A pin that no round can move reads no cost and keeps its other figures: one that holds state on its account, and one
+ * whose pool holds no destination for it by `hasDestination`.
  */
-const moveFiguresOf = (tokens: number | null, dropped: number | null, model: string, keyId: string, bound: boolean): Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
+const moveFiguresOf = (tokens: number | null, dropped: number | null, model: string, accountId: string, keyId: string, bound: boolean): Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
   const client = CLIENTS[keyId] ?? null;
   const size = moveSizeOf(tokens, dropped, model, client);
   const drop = dropSizeOf(dropped, model, client);
   const dropCost = drop === null ? null : proWeekRewriteOf(drop, model, client);
-  return { moveCost: bound ? null : size === null ? dropCost : proWeekRewriteOf(size, model, client), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
+  return { moveCost: bound || !hasDestination(accountId, keyId) ? null : size === null ? dropCost : proWeekRewriteOf(size, model, client), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
 };
 /** A row with no pin, which answers none of its move's figures. */
 const NO_MOVE: Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> = { moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null };
@@ -481,7 +500,7 @@ const pinLine = (
     ...burnReadingOf(line.accountId, keyId, burn, unit),
     burnUsd: burnUsdOf(folded.dollars === null ? null : folded.dollars * factor, unit, line.model),
     fast: fastPin(keyId, line.model),
-    ...moveFiguresOf(line.lastInputTokens, droppedThinkingOf({ accountId: line.accountId, agentId: line.agentId, keyId, model: line.model, sessionId }, NOW), line.model, keyId, accountBound),
+    ...moveFiguresOf(line.lastInputTokens, droppedThinkingOf({ accountId: line.accountId, agentId: line.agentId, keyId, model: line.model, sessionId }, NOW), line.model, line.accountId, keyId, accountBound),
     warm: warmAt(warmUntil),
     warmUntil,
   };
@@ -651,7 +670,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     ended: null,
     fast: pinned ? fastPin(spec.keyId, spec.model) : null,
     accountBound: pinned ? bound : null,
-    ...(pinned ? moveFiguresOf(lastInputRoll, droppedThinkingOf({ accountId: spec.accountId, agentId: 'main', keyId: spec.keyId, model: spec.model, sessionId }, NOW), spec.model, spec.keyId, bound) : NO_MOVE),
+    ...(pinned ? moveFiguresOf(lastInputRoll, droppedThinkingOf({ accountId: spec.accountId, agentId: 'main', keyId: spec.keyId, model: spec.model, sessionId }, NOW), spec.model, spec.accountId, spec.keyId, bound) : NO_MOVE),
     ...NO_MARK,
     shed: pinWrite?.shed ?? null,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),

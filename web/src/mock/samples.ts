@@ -37,12 +37,14 @@ export const TABLES = SETTINGS_SAMPLE.subscriptionCosts;
 /** The label prefix the ledger strips to read a client's entrypoint, as `entrypoint_of_client` does. */
 const ENTRYPOINT_PREFIX = 'claude-code/';
 
-/** The tables a request prices under: the regime whose client list names the label over the base, as the router
- *  prices it, and the base for a label no regime names. A regime lists entrypoint tokens such as `cli` while a row's
- *  label reads `claude-code/cli`, so the helper takes the token off the label and names the regime whose
- *  `entrypoints` hold it. */
-export const tablesFor = (client: string | null, costs: SubscriptionCosts = TABLES): SubscriptionCosts => {
+/** The regime whose client list names the label, and null, the base, for a label no regime names. A regime lists
+ *  entrypoint tokens such as `cli` while a row's label reads `claude-code/cli`, so the helper takes the token off the
+ *  label and names the regime whose `entrypoints` hold it. */
+export const regimeFor = (client: string | null, costs: SubscriptionCosts = TABLES): string | null => {
   const token = client?.startsWith(ENTRYPOINT_PREFIX) ? client.slice(ENTRYPOINT_PREFIX.length) : null;
-  const regime = token === null ? undefined : Object.keys(costs.regimes).find((name) => costs.regimes[name].entrypoints.includes(token));
-  return withRegime(costs, regime ?? null);
+  return (token === null ? undefined : Object.keys(costs.regimes).find((name) => costs.regimes[name].entrypoints.includes(token))) ?? null;
 };
+
+/** The tables a request prices under: the regime whose client list names the label over the base, as the router
+ *  prices it, and the base for a label no regime names. */
+export const tablesFor = (client: string | null, costs: SubscriptionCosts = TABLES): SubscriptionCosts => withRegime(costs, regimeFor(client, costs));

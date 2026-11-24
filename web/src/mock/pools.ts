@@ -1,9 +1,10 @@
-import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
-import type { Account, AccountKind, ApiKey, BudgetPeriod, CacheTtl, MemberFit, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range, RegimeFit, SubscriptionCosts } from '@/api/types';
+import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS, type PoolInput } from '@/api/client';
+import type { Account, AccountKind, ApiKey, BudgetPeriod, CacheTtl, MemberEligibility, MemberFit, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range, RegimeFit, SubscriptionCosts } from '@/api/types';
 import { MEMBER_FIT_VALUES } from '@/api/types';
 import { inBand, regimeNames, tierCapacity, withRegime, type CostWindow } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
-import { endOf } from '@/lib/quota';
+import { termEnded } from '@/lib/forms';
+import { endOf, flagOf } from '@/lib/quota';
 import { windingDown } from '@/lib/selection';
 import { windowKeyId } from '@/lib/windows';
 import { SHARED_WINDOWS, accountById, blankAccountRow, lastReadingOf } from './accounts';
@@ -113,6 +114,40 @@ export function servedFigures(accountId: string, now: number, pool: Pick<Pool, '
   const speed = slowed !== null && slowed.since !== null ? slowed.speed : null;
   return { burn: week?.burn ?? null, fableReservation: pace.fableReservation, factor, paceScore: pace.score, regimeFits, speed };
 }
+
+type BudgetedSeed = Pick<PoolMember, 'budgetDailyUsd' | 'budgetMonthlyUsd' | 'spends'>;
+
+/**
+ * The router's end for a member at a budget, which the route answers as `budget_until`: among the budgets whose
+ * report, its period not yet over, has reached the budget, the latest period end, since a day's end clears
+ * nothing while the month's budget stands, and null while none is reached.
+ */
+export const budgetUntilOf = (member: BudgetedSeed, now: number): string | null =>
+  member.spends
+    .filter((s) => {
+      const budget = s.period === 'day' ? member.budgetDailyUsd : member.budgetMonthlyUsd;
+      return budget !== null && s.spentUsd >= budget && s.periodEnd !== null && Date.parse(s.periodEnd) > now;
+    })
+    .reduce<string | null>((latest, s) => (latest === null || Date.parse(s.periodEnd ?? '') > Date.parse(latest) ? s.periodEnd : latest), null);
+
+/**
+ * The pool route's reading of a member at `now`, in the selector's order: an account the registry lacks is unavailable,
+ * a member the router has not loaded is unknown, since it answers no projection before it reads any obstacle, then
+ * paused or not ready is unavailable, then past its term is subscription ended, then an account-wide cooldown, then a
+ * spend at or past either of the member's budgets inside the period it was reported for, then a usage-based seat whose
+ * spend window reads at or past its limit, then overage the router observed under a policy that admits none.
+ */
+export const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'], member: BudgetedSeed, now: number): MemberEligibility => {
+  if (!a) return 'unavailable';
+  if (UNLOADED_MEMBERS.has(a.id)) return 'unknown';
+  if (!a.routingEnabled || flagOf(a.status) !== null) return 'unavailable';
+  if (termEnded(a, now)) return 'subscription_ended';
+  if (a.cooldowns.some((c) => c.scope === 'account' && Date.parse(c.until) > now)) return 'cooldown';
+  if (budgetUntilOf(member, now) !== null) return 'budget';
+  if (a.spend !== null && (a.spend.utilization ?? 0) >= 1) return 'spent';
+  if (policy === 'never' && a.overage?.inUse) return 'overage';
+  return 'eligible';
+};
 /**
  * A pool as the story seeds it and the mock stores it, over its kind of member. The route lists a pool's keys from the
  * key registry, so the story seeds none on the pool itself. Its pins are its members' sum, which the pool view reads,
