@@ -465,6 +465,7 @@ fn cooled(account: &str, scope: &str, until: i64, window: &str, reason: &str) ->
         window: window.into(),
         source_request_id: None,
         incarnation: 1,
+        spend_share: None,
     }
 }
 

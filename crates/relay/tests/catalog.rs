@@ -895,6 +895,7 @@ async fn a_listing_that_drops_the_dated_entry_keeps_the_dated_id_and_its_denial_
                 window: "model_rejection".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: None,
             lifecycle_generation: 1,

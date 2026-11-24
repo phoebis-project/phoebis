@@ -1348,7 +1348,11 @@ estimate over the reading's instant otherwise, so once that reset passes with no
 the window is drawn with its amounts and no meter until the next reading. The account view reads the same lapse from the
 router wherever the router holds the reading. The fast lane's credits read follows the same expiry: past the reset
 `org_spend_cap_reached` refuses none of the seat's fast requests, while the poll's own reason and a disabled flag still
-do.
+do. A `429` of the seat cools it as a whole under the window and until the reset that the response names, and the
+cooldown keeps the spend share that the router held at that refusal, 1.0 where it held none. A poll's spend reading
+taken after the refusal that names a lower share lifts the cooldown, since a spend does not fall inside its window, as
+long as the reading has room: a share under one, no reason of its own and no disabled flag. A reading at or over the
+kept share leaves it, and the hold at a share of one or more stands with or without the cooldown.
 
 Under `allow`, a subscription account whose five-hour window, seven-day window or model week is spent stays a candidate
 on the overage path for every model, since extra usage funds every model: the router sends the request, and a `429`

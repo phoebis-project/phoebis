@@ -2021,7 +2021,8 @@ impl RoutingState {
     }
 
     /// The later deadline always wins, as in the store, and `set_at` advances on its own whenever the
-    /// incoming rejection is the newer one. True when either moved, which is what puts the row on the writer.
+    /// incoming rejection is the newer one. The spend share goes with `set_at`, so the row keeps the share of the
+    /// rejection whose `set_at` it keeps. True when either moved, which is what puts the row on the writer.
     pub fn record_cooldown(&mut self, mut row: CooldownRow) -> bool {
         row.scope = self.canonical_scope(&row.scope);
         let key = (row.account_id.clone(), row.scope.clone());
@@ -2036,10 +2037,17 @@ impl RoutingState {
         let later_rejection = row.set_at > current.set_at;
         if later_deadline {
             let set_at = current.set_at.max(row.set_at);
+            let spend_share = if later_rejection {
+                row.spend_share
+            } else {
+                current.spend_share
+            };
             *current = row;
             current.set_at = set_at;
+            current.spend_share = spend_share;
         } else if later_rejection {
             current.set_at = row.set_at;
+            current.spend_share = row.spend_share;
         }
         later_deadline || later_rejection
     }
@@ -5835,6 +5843,7 @@ mod tests {
             window: window.into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         };
         state.record_cooldown(row("account", 5_000, FIVE_HOUR));
         state.record_cooldown(row("fast", 3_000, "fast"));
@@ -5879,6 +5888,7 @@ mod tests {
             window: window.into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         };
         let sample = |readings: &[(&str, f64)]| {
             readings.iter().fold(
@@ -5948,6 +5958,7 @@ mod tests {
             window: "seven_day_opus".into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         });
         let poll = sampled(&[SEVEN_DAY], 0.5, 2_000, true);
         state.record_sample("a", poll.clone(), 2_000);
@@ -5976,6 +5987,7 @@ mod tests {
             window: FIVE_HOUR.into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         });
         let recovered = |state: &mut RoutingState, poll: UtilizationSample| {
             state.record_sample("a", poll.clone(), poll.observed_at);

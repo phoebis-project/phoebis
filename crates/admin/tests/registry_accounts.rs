@@ -748,6 +748,7 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
                 window: "retry_after".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: None,
             lifecycle_generation: 1,

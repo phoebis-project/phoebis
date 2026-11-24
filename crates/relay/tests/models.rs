@@ -233,6 +233,7 @@ async fn a_member_whose_fetch_fails_contributes_nothing_and_a_cooled_model_still
                 window: "model_rejection".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: None,
             lifecycle_generation: 1,

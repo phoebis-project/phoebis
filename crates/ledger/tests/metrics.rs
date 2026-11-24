@@ -381,6 +381,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
                 window: "w".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             })
             .unwrap();
     }

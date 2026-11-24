@@ -390,6 +390,7 @@ async fn a_pinned_fast_session_under_a_plan_window_cooldown_is_served_on_its_acc
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: None,
             incarnation: 1,

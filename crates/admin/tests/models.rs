@@ -25,6 +25,7 @@ fn report_cooldown(account_id: &str, scope: &str, until: i64) -> Report {
             window: "model_rejection".into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         },
         pin: None,
         lifecycle_generation: 1,

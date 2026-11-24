@@ -75,6 +75,7 @@ fn cooldown(account: &str, scope: &str, until: i64) -> CooldownRow {
         window: "five_hour".into(),
         source_request_id: None,
         incarnation: 1,
+        spend_share: None,
     }
 }
 
@@ -180,25 +181,31 @@ fn a_cooldown_records_when_it_was_set_and_the_winning_deadline_brings_its_own() 
     let store = store_with(&["a"]);
     let mut first = cooldown("a", "account", 10_000);
     first.set_at = 1_000;
+    first.spend_share = Some(0.5);
     store.upsert_cooldown(&first).unwrap();
     let row = store.load_routing().unwrap().cooldowns.pop().unwrap();
-    assert_eq!((row.until, row.set_at), (10_000, 1_000));
+    assert_eq!(
+        (row.until, row.set_at, row.spend_share),
+        (10_000, 1_000, Some(0.5))
+    );
     let mut shorter = cooldown("a", "account", 5_000);
     shorter.set_at = 2_000;
+    shorter.spend_share = Some(0.6);
     store.upsert_cooldown(&shorter).unwrap();
     let row = store.load_routing().unwrap().cooldowns.pop().unwrap();
     assert_eq!(
-        (row.until, row.set_at),
-        (10_000, 2_000),
-        "the deadline that lost leaves the standing one in place, dated by the newer rejection"
+        (row.until, row.set_at, row.spend_share),
+        (10_000, 2_000, Some(0.6)),
+        "the deadline that lost leaves the standing one in place, dated by the newer rejection, whose share it keeps"
     );
     let mut longer = cooldown("a", "account", 20_000);
     longer.set_at = 3_000;
+    longer.spend_share = Some(0.7);
     store.upsert_cooldown(&longer).unwrap();
     let row = store.load_routing().unwrap().cooldowns.pop().unwrap();
     assert_eq!(
-        (row.until, row.set_at),
-        (20_000, 3_000),
+        (row.until, row.set_at, row.spend_share),
+        (20_000, 3_000, Some(0.7)),
         "and the one that wins brings its own, so a sample is compared against the rejection it belongs to"
     );
 }
@@ -827,6 +834,7 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     conn.execute_batch(
         "ALTER TABLE pins DROP COLUMN account_bound;
          ALTER TABLE pins DROP COLUMN marked_source;
+         ALTER TABLE cooldowns DROP COLUMN spend_share;
          ALTER TABLE pools DROP COLUMN feature_accounts_json;
          ALTER TABLE api_keys DROP COLUMN feature_accounts_json;
          ALTER TABLE accounts DROP COLUMN state_changed_at;

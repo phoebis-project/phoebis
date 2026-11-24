@@ -4139,6 +4139,15 @@ impl Task {
                 row.set_at = (self.clock)();
                 row.incarnation = incarnation;
                 row.scope = self.state.canonical_scope(&row.scope);
+                // The share held at a seat's refusal is the line that a later spend reading must come under to lift
+                // the row, whatever reason and window the refusal named.
+                row.spend_share = if row.scope == CooldownScope::Account {
+                    self.state
+                        .spend_window(&self.snapshot(), &account_id, row.set_at)
+                        .map(|window| window.utilization.unwrap_or(1.0))
+                } else {
+                    None
+                };
                 // A fast-lane row moves the session for fast mode alone; the name tells the drawer it was no
                 // rate limit on the account's standard traffic.
                 let fast_lane = match row.scope {
@@ -4206,6 +4215,9 @@ impl Task {
                 state.incarnation = incarnation;
                 let observed_at = state.observed_at;
                 let room = state.blocked().is_none();
+                let seat_share = state
+                    .utilization
+                    .filter(|_| snapshot.usage_based(&account_id));
                 let row = RoutingState::credits_row(&account_id, &state);
                 // Read before the fold replaces it, and the holder's own: another holder's state is no edge. The edge's
                 // before is the state the selector read at this clock, a lapsed spend share included.
@@ -4241,6 +4253,8 @@ impl Task {
                 // reading lifts the credits row and the spent-window rows: an account rate limit naming a plan
                 // window, and a model's rate limit, which on an OAuth account (the only kind the poll reads) is its
                 // week's. The fast lane's rate limit and a model rejection stay, since the reading measures neither.
+                // A spend does not fall inside its window, so on a usage-based seat a share under the one held at the
+                // refusal is the first reading that shows room again.
                 let now = (self.clock)();
                 let mut lifted: Vec<CooldownScope> = self
                     .state
@@ -4250,7 +4264,9 @@ impl Task {
                         CooldownScope::FastCredits => true,
                         CooldownScope::Model(_) => row.reason == RATE_LIMIT_REASON,
                         CooldownScope::Account => {
-                            row.reason == RATE_LIMIT_REASON && is_plan_window(&row.window)
+                            (row.reason == RATE_LIMIT_REASON && is_plan_window(&row.window))
+                                || seat_share
+                                    .is_some_and(|share| share < row.spend_share.unwrap_or(1.0))
                         }
                         CooldownScope::Fast => false,
                     })
@@ -6240,6 +6256,7 @@ mod tests {
             window: "five_hour".into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         }
     }
 

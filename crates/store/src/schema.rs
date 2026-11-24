@@ -379,10 +379,12 @@ ALTER TABLE api_keys ADD COLUMN feature_accounts_json TEXT NOT NULL DEFAULT '{}'
 
 /// A pin whose session holds account state, which stays on its account until a portable turn of the conversation. A
 /// shedding mark names the test that fired its round, null on a mark made before the column, which reads as a
-/// projection round's.
+/// projection round's. An account cooldown of a usage-based seat keeps the spend share at its refusal, null on each
+/// other row and on a seat's row set before the column, which lifts as a share of 1.0.
 const V10: &str = r#"
 ALTER TABLE pins ADD COLUMN account_bound INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN marked_source TEXT;
+ALTER TABLE cooldowns ADD COLUMN spend_share REAL;
 "#;
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or

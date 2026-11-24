@@ -5295,6 +5295,7 @@ pub(crate) fn failover_reports(
             window: cooldown.window,
             source_request_id: Some(request_id.to_string()),
             incarnation: generations.0,
+            spend_share: None,
         };
         reports.push(Report::Cooldown {
             account_id: account_id.to_string(),

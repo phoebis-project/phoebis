@@ -348,6 +348,7 @@ async fn the_suffix_is_folded_before_the_cooldown_lookup_and_absent_from_the_wir
                 window: "model_rejection".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: None,
             lifecycle_generation: 1,

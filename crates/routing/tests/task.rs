@@ -628,6 +628,7 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: None,
             lifecycle_generation: 1,
@@ -1050,6 +1051,7 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
                     window: "five_hour".into(),
                     source_request_id: None,
                     incarnation: 1,
+                    spend_share: None,
                 },
                 pin: None,
                 lifecycle_generation: 1,
@@ -1077,6 +1079,7 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
             window: "five_hour".into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         })
         .unwrap();
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
@@ -1205,6 +1208,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: None,
             lifecycle_generation: 1,
@@ -1237,6 +1241,7 @@ fn model_cooldown(account_id: &str, scope: &str, now: i64) -> Report {
             window: "five_hour".into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         },
         pin: None,
         lifecycle_generation: 1,
@@ -2118,6 +2123,7 @@ async fn a_cooldown_about_a_replaced_credential_is_dropped_and_the_pin_survives(
                 window: "none".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(pin_of(&handle).await),
             lifecycle_generation: 1,
@@ -2151,6 +2157,7 @@ async fn a_cooldown_about_a_replaced_credential_is_dropped_and_the_pin_survives(
                 window: "none".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: None,
             lifecycle_generation: 1,
@@ -2198,6 +2205,7 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
                 window: "seven_day".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: None,
             lifecycle_generation: 1,
@@ -2305,6 +2313,7 @@ fn cooldown_row(account: &str) -> CooldownRow {
         window: "seven_day".into(),
         source_request_id: None,
         incarnation: 1,
+        spend_share: None,
     }
 }
 
@@ -3537,6 +3546,7 @@ async fn a_failovers_entry_past_its_minute_hands_nothing_on_inside_the_pools_ttl
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(selection.pin.expect("a session pin")),
             lifecycle_generation: 1,
@@ -5106,6 +5116,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
                 window: "five_hour".into(),
                 source_request_id: Some("req_1".into()),
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(pin),
             lifecycle_generation: 1,
@@ -5446,6 +5457,7 @@ fn cooled(account: &str, scope: &str, until: i64, reason: &str, window: &str) ->
             window: window.into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         },
         pin: None,
         lifecycle_generation: 1,
@@ -6128,6 +6140,7 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(pin),
             lifecycle_generation: 1,
@@ -6217,6 +6230,7 @@ async fn a_fast_row_with_a_pin_invalidates_it_under_fast_lane() {
                 window: "fast".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(pin),
             lifecycle_generation: 1,
@@ -6363,6 +6377,7 @@ async fn a_fail_over_after_a_cooldown_lands_on_the_invalidated_pins_own_burn() {
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(pin_of(&handle).await),
             lifecycle_generation: 1,
@@ -6641,6 +6656,208 @@ async fn a_credits_reading_with_room_lifts_the_spent_window_rows_and_leaves_a_mo
         scopes().await,
         ["account", "model:claude-opus-5"],
         "a reading with room keeps an account rate limit that names no plan window"
+    );
+}
+
+/// A refusal of the seat `a` as a whole under `overage`, which is no plan window, so the lift of a spent plan window
+/// leaves the row and the seat's own share decides it.
+fn seat_refused(until: i64) -> Report {
+    cooled("a", "account", until, "rate_limit", "overage")
+}
+
+/// The scopes of the rows that the router holds. A case reads them behind each refusal and between two polls, since
+/// the loop drains a pending poll ahead of a queued report and two pending polls of one account fold to the newer.
+async fn cooled_scopes(handle: &RouterHandle) -> Vec<String> {
+    handle
+        .cooldowns()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.scope.to_string())
+        .collect()
+}
+
+/// The scope and the cause of the next row that the router clears.
+async fn next_cleared(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> (CooldownScope, &'static str) {
+    loop {
+        if let phoebis_routing::RouterEvent::CooldownCleared { scope, cause, .. } =
+            next_event(events).await
+        {
+            return (scope, cause);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_spend_reading_under_the_share_at_the_refusal_lifts_the_seats_row() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle.report(credits_at(true, None, Some(97.0), 500)).await;
+    handle.report(seat_refused(1_000 + 5 * HOUR)).await;
+    assert_eq!(cooled_scopes(&handle).await, ["account"]);
+    handle
+        .report(credits_at(true, None, Some(97.0), 2_000))
+        .await;
+    assert_eq!(
+        cooled_scopes(&handle).await,
+        ["account"],
+        "a reading at the share held at the refusal leaves the row"
+    );
+    handle
+        .report(credits_at(true, None, Some(96.0), 3_000))
+        .await;
+    assert_eq!(
+        cooled_scopes(&handle).await,
+        Vec::<String>::new(),
+        "a reading under that share lifts the row"
+    );
+    assert_eq!(
+        next_cleared(&mut events).await,
+        (CooldownScope::Account, "recovered")
+    );
+}
+
+#[tokio::test]
+async fn a_seat_refused_with_no_share_held_lifts_under_one() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle.report(seat_refused(1_000 + 5 * HOUR)).await;
+    assert_eq!(cooled_scopes(&handle).await, ["account"]);
+    handle
+        .report(credits_at(true, None, Some(100.0), 2_000))
+        .await;
+    assert_eq!(
+        cooled_scopes(&handle).await,
+        ["account"],
+        "a reading at one leaves the row"
+    );
+    handle
+        .report(credits_at(true, None, Some(99.0), 3_000))
+        .await;
+    assert_eq!(
+        cooled_scopes(&handle).await,
+        Vec::<String>::new(),
+        "a refusal with no share held keeps one, so a reading under one lifts the row"
+    );
+    assert_eq!(
+        next_cleared(&mut events).await,
+        (CooldownScope::Account, "recovered")
+    );
+}
+
+/// The clock moves between the two refusals, since the router dates each by its own clock and a refusal at the
+/// standing instant moves nothing.
+#[tokio::test]
+async fn a_reading_between_the_shares_of_two_refusals_lifts_the_seats_row() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle.report(credits_at(true, None, Some(90.0), 500)).await;
+    handle.report(seat_refused(1_000 + 5 * HOUR)).await;
+    assert_eq!(cooled_scopes(&handle).await, ["account"]);
+    handle
+        .report(credits_at(true, None, Some(97.0), 1_500))
+        .await;
+    assert_eq!(
+        cooled_scopes(&handle).await,
+        ["account"],
+        "a reading over the first refusal's share leaves the row"
+    );
+    now.store(2_000, Ordering::SeqCst);
+    handle.report(seat_refused(1_000 + 5 * HOUR)).await;
+    assert_eq!(cooled_scopes(&handle).await, ["account"]);
+    handle
+        .report(credits_at(true, None, Some(95.0), 3_000))
+        .await;
+    assert_eq!(
+        cooled_scopes(&handle).await,
+        Vec::<String>::new(),
+        "the second refusal brings its share under the standing deadline, and a reading under it lifts the row"
+    );
+    assert_eq!(
+        next_cleared(&mut events).await,
+        (CooldownScope::Account, "recovered")
+    );
+}
+
+/// The clock moves between the two refusals, as in the case of two refusals under one deadline.
+#[tokio::test]
+async fn a_refusal_under_a_later_deadline_brings_its_share_to_the_seats_row() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle.report(credits_at(true, None, Some(90.0), 500)).await;
+    handle.report(seat_refused(1_000 + 5 * HOUR)).await;
+    assert_eq!(cooled_scopes(&handle).await, ["account"]);
+    handle
+        .report(credits_at(true, None, Some(97.0), 1_500))
+        .await;
+    assert_eq!(
+        cooled_scopes(&handle).await,
+        ["account"],
+        "a reading over the first refusal's share leaves the row"
+    );
+    now.store(2_000, Ordering::SeqCst);
+    handle.report(seat_refused(2_000 + 6 * HOUR)).await;
+    assert_eq!(cooled_scopes(&handle).await, ["account"]);
+    handle
+        .report(credits_at(true, None, Some(95.0), 3_000))
+        .await;
+    assert_eq!(
+        cooled_scopes(&handle).await,
+        Vec::<String>::new(),
+        "the refusal that wins the deadline brings its share, and a reading under it lifts the row"
+    );
+    assert_eq!(
+        next_cleared(&mut events).await,
+        (CooldownScope::Account, "recovered")
+    );
+}
+
+#[tokio::test]
+async fn a_seats_row_with_no_stored_share_lifts_under_one() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    store
+        .upsert_cooldown(&CooldownRow {
+            account_id: "a".into(),
+            scope: CooldownScope::Account,
+            until: 1_000 + 5 * HOUR,
+            set_at: 500,
+            reason: "rate_limit".into(),
+            window: "overage".into(),
+            source_request_id: None,
+            incarnation: 1,
+            spend_share: None,
+        })
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(cooled_scopes(&handle).await, ["account"]);
+    handle
+        .report(credits_at(true, None, Some(99.0), 2_000))
+        .await;
+    assert_eq!(
+        cooled_scopes(&handle).await,
+        Vec::<String>::new(),
+        "a row stored with no share reads one, so a reading under one lifts it"
+    );
+    assert_eq!(
+        next_cleared(&mut events).await,
+        (CooldownScope::Account, "recovered")
     );
 }
 
@@ -7760,6 +7977,7 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(pin),
             lifecycle_generation: 1,
@@ -7969,6 +8187,7 @@ async fn a_late_fast_429_from_the_lane_the_session_left_never_deletes_its_standa
                 window: "fast".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(fast),
             lifecycle_generation: 1,
@@ -8024,6 +8243,7 @@ async fn a_cooldown_reported_with_a_bound_pins_ref_leaves_the_pin() {
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(pin),
             lifecycle_generation: 1,
@@ -10824,6 +11044,7 @@ async fn a_marked_pin_moved_off_its_cooled_account_inside_a_decision_clears_its_
             window: "retry_after".into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         })
         .unwrap();
     let now = Arc::new(AtomicI64::new(AT));
@@ -10987,6 +11208,7 @@ async fn a_cooldown_report_naming_a_marked_pin_clears_its_mark_as_released() {
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(PinRef {
                 key_id: "k".into(),
@@ -11161,6 +11383,7 @@ async fn a_mark_a_round_makes_on_the_requests_own_pin_clears_as_moved_when_the_s
             window: "retry_after".into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         })
         .unwrap();
     let now = Arc::new(AtomicI64::new(AT));
@@ -17072,6 +17295,7 @@ async fn a_fail_over_whose_landing_was_held_names_the_account_left_on_the_next_r
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(pin_of(&handle).await),
             lifecycle_generation: 1,
@@ -17658,6 +17882,7 @@ async fn a_classifier_call_inside_a_failover_window_reads_no_failover_and_leaves
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: Some(pin),
             lifecycle_generation: 1,
@@ -18106,6 +18331,7 @@ async fn a_placement_that_releases_the_pin_off_a_cooled_account_hands_its_sums_o
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: None,
             incarnation: 1,

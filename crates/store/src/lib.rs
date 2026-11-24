@@ -1848,6 +1848,7 @@ mod tests {
             window: "five_hour".into(),
             source_request_id: None,
             incarnation: 1,
+            spend_share: None,
         }
     }
 

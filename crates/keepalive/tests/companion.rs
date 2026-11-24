@@ -369,6 +369,7 @@ async fn a_disabled_or_unready_account_is_absent_and_a_cooled_one_present_with_i
                 window: "five_hour".into(),
                 source_request_id: None,
                 incarnation: 1,
+                spend_share: None,
             },
             pin: None,
             lifecycle_generation: 1,

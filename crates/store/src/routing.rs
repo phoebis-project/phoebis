@@ -216,7 +216,7 @@ impl ToSql for CooldownScope {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CooldownRow {
     pub account_id: String,
     pub scope: CooldownScope,
@@ -228,6 +228,9 @@ pub struct CooldownRow {
     pub window: String,
     pub source_request_id: Option<String>,
     pub incarnation: u64,
+    /// The spend share that the router held when it dated the row, 1.0 where it held none, on an account row of a
+    /// usage-based seat. `None` on each other row.
+    pub spend_share: Option<f64>,
 }
 
 /// Where an account's overage evidence came from: a response head or a usage sample. Stored as `head` or `sample`,
@@ -461,8 +464,8 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction()?;
         let load = RoutingLoad {
-            cooldowns: tx.prepare("SELECT account_id, scope, until, set_at, reason, window, source_request_id, incarnation FROM cooldowns ORDER BY account_id, scope")?
-                .query_map([], |r| Ok(CooldownRow { account_id: r.get(0)?, scope: r.get(1)?, until: r.get(2)?, set_at: r.get(3)?, reason: r.get(4)?, window: r.get(5)?, source_request_id: r.get(6)?, incarnation: r.get::<_, i64>(7)? as u64 }))?
+            cooldowns: tx.prepare("SELECT account_id, scope, until, set_at, reason, window, source_request_id, incarnation, spend_share FROM cooldowns ORDER BY account_id, scope")?
+                .query_map([], |r| Ok(CooldownRow { account_id: r.get(0)?, scope: r.get(1)?, until: r.get(2)?, set_at: r.get(3)?, reason: r.get(4)?, window: r.get(5)?, source_request_id: r.get(6)?, incarnation: r.get::<_, i64>(7)? as u64, spend_share: r.get(8)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // As with the windows, a previous holder's state is never loaded.
             credits: tx.prepare("SELECT c.account_id, c.incarnation, c.enabled, c.disabled_reason, c.utilization, c.observed_at \
@@ -1080,14 +1083,15 @@ fn delete_pin_on(conn: &Connection, key: &PinKey) -> Result<bool, StoreError> {
 }
 
 fn upsert_cooldown_on(conn: &Connection, row: &CooldownRow) -> Result<(), StoreError> {
-    conn.prepare_cached("INSERT INTO cooldowns (account_id, scope, until, set_at, reason, window, source_request_id, incarnation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+    conn.prepare_cached("INSERT INTO cooldowns (account_id, scope, until, set_at, reason, window, source_request_id, incarnation, spend_share) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
          ON CONFLICT(account_id, scope) DO UPDATE SET \
            set_at = MAX(cooldowns.set_at, excluded.set_at), \
+           spend_share = CASE WHEN excluded.set_at > cooldowns.set_at THEN excluded.spend_share ELSE cooldowns.spend_share END, \
            reason = CASE WHEN excluded.until > cooldowns.until THEN excluded.reason ELSE cooldowns.reason END, \
            window = CASE WHEN excluded.until > cooldowns.until THEN excluded.window ELSE cooldowns.window END, \
            source_request_id = CASE WHEN excluded.until > cooldowns.until THEN excluded.source_request_id ELSE cooldowns.source_request_id END, \
            until = MAX(cooldowns.until, excluded.until), \
-           incarnation = excluded.incarnation")?.execute(params![row.account_id, row.scope, row.until, row.set_at, row.reason, row.window, row.source_request_id, row.incarnation as i64])?;
+           incarnation = excluded.incarnation")?.execute(params![row.account_id, row.scope, row.until, row.set_at, row.reason, row.window, row.source_request_id, row.incarnation as i64, row.spend_share])?;
     Ok(())
 }
 
