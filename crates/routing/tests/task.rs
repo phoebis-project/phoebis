@@ -19087,6 +19087,105 @@ async fn a_return_onto_another_account_opens_an_observation_and_one_onto_the_sam
 }
 
 #[tokio::test]
+async fn a_lapsed_agents_record_reaches_the_store_at_the_purge_and_leaves_it_at_the_return_or_past_seven_days(
+) {
+    let store = seeded(&["a"]);
+    let start = 8 * 24 * HOUR;
+    let key_generation = store.api_key("k").unwrap().unwrap().created_at;
+    let record = |session: &str, last_used_at: i64| LapsedAgentRow {
+        key_id: "k".into(),
+        session_id: session.into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+        key_generation,
+        account_id: "a".into(),
+        incarnation: 1,
+        last_used_at,
+        last_input_tokens: 0,
+        burn: PinBurn::default(),
+        burn_banded: PinBurn::default(),
+        burn_fast: PinBurn::default(),
+        burn_unmetered: PinBurn::default(),
+        burn_unmetered_model: None,
+        speed: 1.0,
+        thinking_sums: Default::default(),
+        account_bound: false,
+    };
+    // Ahead of the start: a record last used a minute more than 7 days back, one last used an hour back, and a pin
+    // under a key the registry does not hold. The start's purge deletes that pin as unserved, which writes no record,
+    // in the batch that ends the aged record, so the pin's delete says that batch landed.
+    let unserved = PinRow {
+        key_id: "gone".into(),
+        ..stored_pin(&store, "s9", "a", 9, 10.0)
+    };
+    store
+        .write_routing(|tx| {
+            tx.upsert_lapsed_agent(&record("aged", start - 7 * 24 * HOUR - 60_000))?;
+            tx.upsert_lapsed_agent(&record("kept", start - HOUR))?;
+            tx.upsert_pin(&unserved)
+        })
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(start));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let records = || -> Vec<String> {
+        store
+            .load_routing()
+            .unwrap()
+            .lapsed_agents
+            .into_iter()
+            .map(|record| record.session_id)
+            .collect()
+    };
+    let pinned = |session: &str| {
+        store
+            .load_routing()
+            .unwrap()
+            .pins
+            .iter()
+            .any(|pin| pin.session_id == session)
+    };
+    wait_for(WRITTEN, || (!pinned("s9")).then_some(())).await;
+    assert_eq!(
+        records(),
+        ["kept"],
+        "the start's purge ends the record past its 7 days in the store"
+    );
+    handle
+        .select(request(&handle, Some("s1"), start))
+        .await
+        .unwrap();
+    wait_for(WRITTEN, || pinned("s1").then_some(())).await;
+    // One millisecond past the pool's hour-long affinity TTL, so the purge takes s1's pin as idle, and the pin's delete
+    // rides the batch that holds its record.
+    now.store(start + HOUR + 1, Ordering::SeqCst);
+    wait_for(WRITTEN, || (!pinned("s1")).then_some(())).await;
+    assert_eq!(
+        records(),
+        ["kept", "s1"],
+        "the purge that takes s1's pin stores its record"
+    );
+    // The return's pin rides the batch that takes its record.
+    handle
+        .select(request(&handle, Some("s1"), start + HOUR + 1))
+        .await
+        .unwrap();
+    wait_for(WRITTEN, || pinned("s1").then_some(())).await;
+    assert_eq!(
+        records(),
+        ["kept"],
+        "the return takes s1's record off the store, and the record inside its 7 days stands"
+    );
+}
+
+#[tokio::test]
 async fn a_rounds_record_states_the_rewrite_of_a_pin_whose_pair_reads_bound_at_the_smaller_size() {
     let store = averaged(thinking_store(&["a", "b"], &[("a", "b", true)]));
     // The record's figure reads the pricer's Pro-week equivalent: a ten-millionth per cache-write token.
