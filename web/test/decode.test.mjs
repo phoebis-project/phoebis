@@ -1652,6 +1652,7 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.ok(desktopWire.histograms.ttfb_ms.some((n) => n > 0), 'the stem holds a time to first byte sample');
   assert.deepEqual(desktop.histograms.ttfbMs, desktopWire.histograms.ttfb_ms, 'the decoder keeps the counts the route answered');
   assert.equal(desktop.cacheMissReasons.none, desktopWire.cache_miss_reasons.none);
+  assert.equal(desktop.inputTransformationsReported, 1, 'the group reads its reported count off the route');
   assert.equal(desktop.tokens.thinking, desktopWire.tokens.thinking);
   assert.equal(desktop.wastedProbeReasons.idle_limit, 0);
   assert.equal('savings' in desktop, false, 'the group carries the probe figures and no savings member');
@@ -2220,7 +2221,7 @@ test('the fold counts a request once under each key and an empty answer apart', 
     ],
     'all',
   );
-  assert.deepEqual([{ ...group.inputTransformations }, group.inputTransformationsNone], [{ 'thinking_dropped.model_binding_mismatch': 1 }, 1]);
+  assert.deepEqual([{ ...group.inputTransformations }, group.inputTransformationsNone, group.inputTransformationsReported], [{ 'thinking_dropped.model_binding_mismatch': 1 }, 1, 2]);
 });
 
 test('the fold counts a move only where an account key is listed', () => {

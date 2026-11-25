@@ -41,6 +41,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   inputTransformations: emptyCounts(),
   inputTransformationsMoved: 0,
   inputTransformationsNone: 0,
+  inputTransformationsReported: 0,
   keptWarm: { planRequests: 0, planTokens1h: 0, planTokens5m: 0, requests: 0, tokens1h: 0, tokens5m: 0 },
   key,
   keyCreatedAt: null,
@@ -266,12 +267,13 @@ export function keptRows(rows: RequestLog[], options: PatternOptions): RequestLo
 
 /**
  * One request's share of the dropped-block counts, as the router's rollup folds it off the serving attempt's answer:
- * one under each key whatever its blocks, since the readers count requests, one under `none` for an answer that listed
- * nothing, one moved where the request moved and a key names an account reason, and nothing for an answer without the
- * member.
+ * one reported for an answer that carries the member, one under each key whatever its blocks, since the readers count
+ * requests, one under `none` for an answer that listed nothing, one moved where the request moved and a key names an
+ * account reason, and nothing for an answer without the member.
  */
-export function countDropped(into: Pick<AnalyticsGroup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone'>, dropped: InputTransformations | null, moved: boolean): void {
+export function countDropped(into: Pick<AnalyticsGroup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone' | 'inputTransformationsReported'>, dropped: InputTransformations | null, moved: boolean): void {
   if (dropped === null) return;
+  into.inputTransformationsReported += 1;
   const keys = Object.keys(dropped);
   for (const key of keys) addCount(into.inputTransformations, key);
   if (keys.length === 0) into.inputTransformationsNone += 1;
@@ -447,7 +449,7 @@ const plusBoth = <K extends string>(a: Record<K, number> | null, b: Record<K, nu
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
   for (const g of groups) {
-    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'clientCanceled', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'inputTransformationsMoved', 'inputTransformationsNone', 'probeCostUsd', 'rateLimited', 'refused', 'rejected', 'requests', 'savingUsd', 'succeeded', 'uncacheable', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
+    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'clientCanceled', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'inputTransformationsMoved', 'inputTransformationsNone', 'inputTransformationsReported', 'probeCostUsd', 'rateLimited', 'refused', 'rejected', 'requests', 'savingUsd', 'succeeded', 'uncacheable', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
     out.cost = plusSplit(out.cost, g.cost);
     out.billed = plusSplit(out.billed, g.billed);
     out.costEquivalent = plus(out.costEquivalent, g.costEquivalent);

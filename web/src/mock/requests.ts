@@ -3305,7 +3305,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
       const cacheMissReasons = tally(partRows.flatMap((r) => r.attempts), (a) => a.cacheMissReason, emptyCacheMissReasons());
       // A hit counts under the serving attempt's reason, the one the route counts a request's reason on.
       const cacheMissReasonHits = tally(partRows, (r) => (hitUnderReason(r) ? servedMissReason(r) : null));
-      const dropped: Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone'> = { inputTransformations: emptyCounts(), inputTransformationsMoved: 0, inputTransformationsNone: 0 };
+      const dropped: Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone' | 'inputTransformationsReported'> = { inputTransformations: emptyCounts(), inputTransformationsMoved: 0, inputTransformationsNone: 0, inputTransformationsReported: 0 };
       for (const r of partRows) {
         const serving = servingAttempt(r);
         // The routing log writes the story's traces after these rows, so a move reads off the event a trace names.
@@ -3444,12 +3444,12 @@ function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean, draws = t
  * key sent no token reports nothing. No history row of a model that binds its thinking holds a thinking figure in its
  * usage, so no hour lists the account key or counts a move.
  */
-function synthesizeDropped(hd: Rng, lane: Lane, kind: RequestKind, answered: number): Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone'> {
+function synthesizeDropped(hd: Rng, lane: Lane, kind: RequestKind, answered: number): Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone' | 'inputTransformationsReported'> {
   const inputTransformations = emptyCounts();
   const reported = thinkingSourceOf(lane.keyId, lane.poolId, kind) === null ? 0 : answered;
   const prefix = reported > 0 && hd.chance(0.2) ? hd.int(1, Math.min(2, reported)) : 0;
   if (prefix > 0) inputTransformations[PREFIX_KEY] = prefix;
-  return { inputTransformations, inputTransformationsMoved: 0, inputTransformationsNone: reported - prefix };
+  return { inputTransformations, inputTransformationsMoved: 0, inputTransformationsNone: reported - prefix, inputTransformationsReported: reported };
 }
 
 // The smoke run reads the holder's day and the mock consistency tests read the cap raise through this module.
@@ -3687,6 +3687,8 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
   const wastedProbeReasons = emptyWastedProbeReasons();
   wastedProbeReasons.idle_limit = 1;
   const outcomes: HourlyRollup['requests'] = { ...ZERO_OUTCOMES, ok: 1 };
+  // The one probe answered, and it reports under the token rule: none where the key sends no token.
+  const reported = thinkingSourceOf(r.keyId, r.poolId, 'probe') === null ? 0 : 1;
   return [
     {
       hour: iso(startOfHour(at)),
@@ -3716,10 +3718,10 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       cacheMissReasonHits: emptyCounts(),
       cacheMissReasons: emptyCacheMissReasons(),
       expiredBetweenTurns: 0,
-      // The one probe answered, and it reports under the token rule: none where the key sends no token.
       inputTransformations: emptyCounts(),
       inputTransformationsMoved: 0,
-      inputTransformationsNone: thinkingSourceOf(r.keyId, r.poolId, 'probe') === null ? 0 : 1,
+      inputTransformationsNone: reported,
+      inputTransformationsReported: reported,
       uncacheable: 0,
       uncached: 0,
       costUsd,

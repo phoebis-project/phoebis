@@ -766,7 +766,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     errors: counts(g.errors), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
     incomplete: num(g.incomplete),
-    inputTransformations: counts(g.input_transformations), inputTransformationsMoved: num(g.input_transformations_moved), inputTransformationsNone: num(g.input_transformations_none),
+    inputTransformations: counts(g.input_transformations), inputTransformationsMoved: num(g.input_transformations_moved), inputTransformationsNone: num(g.input_transformations_none), inputTransformationsReported: num(g.input_transformations_reported),
     keptWarm: {
       planRequests: num(rec(g.kept_warm).plan_requests), planTokens1h: num(rec(g.kept_warm).plan_tokens_1h), planTokens5m: num(rec(g.kept_warm).plan_tokens_5m),
       requests: num(rec(g.kept_warm).requests), tokens1h: num(rec(g.kept_warm).tokens_1h), tokens5m: num(rec(g.kept_warm).tokens_5m),

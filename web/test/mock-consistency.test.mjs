@@ -3931,8 +3931,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The hours ahead of the request log's first one hold no row of their own.
     const drawn = s.allRollups.filter((r) => sends.includes(r.keyId) && Date.parse(r.hour) < s.totalledFrom && r.requests.ok > 0);
     assert.ok(silent.length > 0 && drawn.length > 0, 'the story holds hours with no rows of both kinds of key');
-    for (const r of silent) assert.deepEqual([Object.entries(r.inputTransformations), r.inputTransformationsMoved, r.inputTransformationsNone], [[], 0, 0], `${r.hour} on ${r.keyId}, a key that sends no token, counts a dropped block`);
-    for (const r of drawn) assert.equal(sum(Object.values(r.inputTransformations), (n) => n) + r.inputTransformationsNone, r.requests.ok, `${r.hour} on ${r.keyId} does not count each of its answered requests once`);
+    for (const r of silent) assert.deepEqual([Object.entries(r.inputTransformations), r.inputTransformationsMoved, r.inputTransformationsNone, r.inputTransformationsReported], [[], 0, 0, 0], `${r.hour} on ${r.keyId}, a key that sends no token, counts a dropped block or a report`);
+    for (const r of drawn) {
+      assert.equal(sum(Object.values(r.inputTransformations), (n) => n) + r.inputTransformationsNone, r.requests.ok, `${r.hour} on ${r.keyId} does not count each of its answered requests once`);
+      assert.equal(r.inputTransformationsReported, r.requests.ok, `${r.hour} on ${r.keyId} does not count each of its answered requests as reported`);
+    }
   });
 
   test(`the story holds one request whose comparison was still running, landed on its agent's last account under the client's member, at ${at}`, async () => {

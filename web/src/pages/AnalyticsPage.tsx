@@ -24,7 +24,7 @@ import { SectionBar, sectionPanel } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { NO_RESET_IN_RANGE, allowanceRows, fleetFigures, rangeAllowanceSpan, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure, type AllowanceRow, type FleetFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, coveredWindow, dollarsOf, equivalentOrDash, errorRateOf, failureHead, firstBucketPartial, foldBurn, heldBars, heldHover, heldSpan, hitRatioOf, hitRatioText, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, coveredWindow, dollarsOf, equivalentOrDash, errorRateOf, failureHead, firstBucketPartial, foldBurn, heldBars, heldHover, heldSpan, hitRatioOf, hitRatioText, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, reportedCovers, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { ignoredNote, type AnalyticsControl } from '@/lib/analyticsControls';
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
@@ -559,6 +559,9 @@ export function AnalyticsPage() {
   const latest = useMemo(() => latestGenerations(rows), [rows]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups, includeProbes }, latest)), [stale, sessionId, series.data, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, includeProbes, latest]);
   const buckets = useMemo(() => bucketsOf(points), [points]);
+  // The Dropped thinking blocks card's totals come from the breakdown, and whether its base covers the range from the
+  // buckets of this answer.
+  const reportedCovered = useMemo(() => reportedCovers(points), [points]);
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
@@ -957,12 +960,12 @@ export function AnalyticsPage() {
                 </LineChart>
               </ChartCard>
 
-              <Card title="Misses by reason" subtitle={MISS_REASON_BLURB}>
+              <Card title="Misses by reason" subtitle={sentences([MISS_REASON_BLURB, MISS_SHARE_BASE])}>
                 {loading ? <Skeleton height={190} /> : <ReasonBars link={linkInput} plainLinks={plainLinks} totals={totals} />}
               </Card>
 
-              <Card title="Dropped thinking blocks" subtitle={DROPPED_THINKING_BLURB}>
-                {loading ? <Skeleton height={190} /> : <DroppedThinkingBars link={linkInput} plainLinks={plainLinks} totals={totals} />}
+              <Card title="Dropped thinking blocks" subtitle={sentences([DROPPED_THINKING_BLURB, DROPPED_SHARE_BASE])}>
+                {loading ? <Skeleton height={190} /> : <DroppedThinkingBars covered={reportedCovered} link={linkInput} plainLinks={plainLinks} totals={totals} />}
               </Card>
 
               <ChartCard
@@ -1490,7 +1493,7 @@ function CountBars({ color, empty, rows }: { color: string; empty: string; rows:
  * is the label's hover, for a label that shortens what it names. A `second` part takes its `portion` of the bar after
  * the first, in its own ink and with its own hover.
  */
-function HBarRow({ color, count, fill, label, labelClass, rowClass, second, share, title }: { color: string; count: ReactNode; fill: number; label: string; labelClass?: string; rowClass?: string; second?: { color: string; portion: number; title: string }; share: string; title?: string }) {
+function HBarRow({ color, count, fill, label, labelClass, rowClass, second, share, title }: { color: string; count: ReactNode; fill: number; label: string; labelClass?: string; rowClass?: string; second?: { color: string; portion: number; title: string }; share: string | null; title?: string }) {
   return (
     <li className={rowClass}>
       <span className={labelClass} title={title}>{label}</span>
@@ -1506,7 +1509,8 @@ function HBarRow({ color, count, fill, label, labelClass, rowClass, second, shar
         )}
       </div>
       <span className="num">
-        {count} <span className="muted">{share}</span>
+        {count}
+        {share !== null && <> <span className="muted">{share}</span></>}
       </span>
     </li>
   );
@@ -1577,7 +1581,9 @@ function CountLink({ children, target }: { children: ReactNode; target: Requests
   );
 }
 
-const requestShare = (count: number, totals: Pick<AnalyticsGroup, 'requests'>): string => fmtPct(totals.requests ? count / totals.requests : 0, 1);
+const MISS_SHARE_BASE = 'Share of the requests that the card counts';
+const DROPPED_SHARE_BASE = 'Share of the requests whose answer reported its dropped blocks';
+const shareOf = (count: number, base: number): string | null => (base > 0 ? fmtPct(count / base, 1) : null);
 
 /** A count of the reasons panel or the dropped thinking blocks card, linking its requests under `narrow`, and in its
  *  group where a table's row holds it. */
@@ -1592,6 +1598,7 @@ function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks
     .sort((a, b) => b.count - a.count);
   const max = Math.max(1, ...rows.map((r) => r.count));
   if (rows.every((r) => r.count === 0)) return <p className="muted">No diagnostics in range.</p>;
+  const base = rows.reduce((s, r) => s + r.count, 0);
   return (
     <ul className="plain-list hbars hbars--reasons">
       {rows.map((r) => (
@@ -1602,7 +1609,7 @@ function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks
           fill={r.count / max}
           label={missLabel(r.reason)}
           second={r.hits > 0 ? { color: ink.muted, portion: r.hits / r.count, title: reasonHitTitle(r.hits) } : undefined}
-          share={requestShare(r.count, totals)}
+          share={shareOf(r.count, base)}
         />
       ))}
     </ul>
@@ -1614,10 +1621,12 @@ const DROPPED_THINKING_BLURB = 'From the thinking-binding beta: requests whose a
 /**
  * One bar per key of the blocks the answers dropped, largest first, a key under an account reason in the fault ink,
  * then the moved requests and the requests with nothing dropped as plain lines, since the Requests filter lists keys
- * alone.
+ * alone. A share reads of the answers that reported their blocks, and only where `covered` holds, since a bucket with
+ * keys and no reported count leaves its requests out of that base.
  */
-function DroppedThinkingBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks: boolean; totals: AnalyticsGroup }) {
+function DroppedThinkingBars({ covered, link, plainLinks, totals }: { covered: boolean; link: ReasonLink; plainLinks: boolean; totals: AnalyticsGroup }) {
   const ink = useChartInk();
+  const reportedShare = (count: number) => (covered ? shareOf(count, totals.inputTransformationsReported) : null);
   // The sort is stable, so a tie keeps the order the console lists the keys in.
   const rows = transformationOrder(Object.keys(totals.inputTransformations))
     .map((key) => ({ count: countOf(totals.inputTransformations, key), key }))
@@ -1626,6 +1635,7 @@ function DroppedThinkingBars({ link, plainLinks, totals }: { link: ReasonLink; p
   const none = totals.inputTransformationsNone;
   if (rows.length === 0 && moved === 0 && none === 0) return <p className="muted">No answer reported its thinking blocks in range.</p>;
   const max = Math.max(1, ...rows.map((r) => r.count));
+  const noneShare = reportedShare(none);
   return (
     <div className="stack">
       {rows.length > 0 && (
@@ -1637,7 +1647,7 @@ function DroppedThinkingBars({ link, plainLinks, totals }: { link: ReasonLink; p
               count={<LinkedCount count={r.count} link={link} narrow={{ inputTransformations: [r.key] }} plainLinks={plainLinks} />}
               fill={r.count / max}
               label={transformationLabel(r.key)}
-              share={requestShare(r.count, totals)}
+              share={reportedShare(r.count)}
             />
           ))}
         </ul>
@@ -1645,7 +1655,8 @@ function DroppedThinkingBars({ link, plainLinks, totals }: { link: ReasonLink; p
       <ul className="plain-list">
         <li>Moved to another account: {fmtInt(moved)}</li>
         <li>
-          Nothing dropped: {fmtInt(none)} <span className="muted">{requestShare(none, totals)}</span>
+          Nothing dropped: {fmtInt(none)}
+          {noneShare !== null && <> <span className="muted">{noneShare}</span></>}
         </li>
       </ul>
     </div>

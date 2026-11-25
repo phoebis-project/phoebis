@@ -79,6 +79,8 @@ export interface HourlyRollup {
   inputTransformationsMoved: number;
   /** The requests whose serving attempt's answer listed no dropped block. */
   inputTransformationsNone: number;
+  /** The requests whose serving attempt's answer carried the dropped-blocks member. */
+  inputTransformationsReported: number;
   /** Requests whose cache read was kept alive by a probe, and the tokens they read under each TTL. */
   keptWarm: { requests: number; tokens1h: number; tokens5m: number };
   keyId: string;
@@ -382,6 +384,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     inputTransformations,
     inputTransformationsMoved: sumOf(counted, (r) => r.inputTransformationsMoved),
     inputTransformationsNone: sumOf(counted, (r) => r.inputTransformationsNone),
+    inputTransformationsReported: sumOf(counted, (r) => r.inputTransformationsReported),
     // A row's funding is its credited request's, so the plan-funded credits are the plan rows' own.
     keptWarm: { planRequests: planKept.requests, planTokens1h: planKept.tokens1h, planTokens5m: planKept.tokens5m, ...kept },
     key,

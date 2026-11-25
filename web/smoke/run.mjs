@@ -25625,16 +25625,26 @@ await forView('/analytics', async () => {
   // a key the console has no label for stands between the two known ones, so the bars read largest first and the
   // unknown key keeps its name. An empty map beside a count of requests with nothing dropped still draws the lines, so
   // the card's empty text waits for both counts as well as the map. The first group's keys arrive in another order
-  // than the console lists them, so the table's columns read the list's order.
+  // than the console lists them, so the table's columns read the list's order. Each group's answers all reported their
+  // blocks, so a share reads of the group's requests.
   const breakdownRead = api.getAnalyticsBreakdown;
+  const seriesRead = api.getAnalyticsSeries;
   const END_USER = 'thinking_dropped.end_user_binding_mismatch';
   const PREFIX = 'thinking_dropped.prefix_binding_mismatch';
   const FUTURE = 'thinking.future_reason';
-  const cardWith = async (classes) => {
-    api.getAnalyticsBreakdown = async (q) => {
+  const hourAt = (back) => new Date((Math.floor(CLOCK_ORIGIN / 3_600_000) - back) * 3_600_000).toISOString();
+  // The cards read their totals off the breakdown and the range's buckets off the series, so both answer the stub's
+  // groups, the series in the buckets that `points` names.
+  const stubbed = (groups, points) => {
+    const shaped = async (q, list) => {
       const [template] = await breakdownRead.call(api, q);
-      return template === undefined ? [] : classes.map((c, i) => ({ ...template, key: `group-${i}`, label: `group-${i}`, ...c }));
+      return template === undefined ? [] : list.map((c, i) => ({ ...template, key: `group-${i}`, label: `group-${i}`, ...c }));
     };
+    api.getAnalyticsBreakdown = (q) => shaped(q, groups);
+    api.getAnalyticsSeries = (q) => Promise.all(points.map(async (p) => ({ at: p.at, groups: await shaped(q, p.groups) })));
+  };
+  const cardWith = async (classes, points = [{ at: hourAt(1), groups: classes }]) => {
+    stubbed(classes, points);
     const page = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
     const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Dropped thinking blocks');
     const table = [...page.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Dropped thinking blocks by key');
@@ -25655,18 +25665,38 @@ await forView('/analytics', async () => {
     return read;
   };
   const drawn = await cardWith([
-    { inputTransformations: { [PREFIX]: 6, [END_USER]: 2 }, inputTransformationsMoved: 1, inputTransformationsNone: 20, requests: 40 },
-    { inputTransformations: { [FUTURE]: 3, [PREFIX]: 1 }, inputTransformationsMoved: 0, inputTransformationsNone: 5, requests: 10 },
+    { inputTransformations: { [PREFIX]: 6, [END_USER]: 2 }, inputTransformationsMoved: 1, inputTransformationsNone: 20, inputTransformationsReported: 40, requests: 40 },
+    { inputTransformations: { [FUTURE]: 3, [PREFIX]: 1 }, inputTransformationsMoved: 0, inputTransformationsNone: 5, inputTransformationsReported: 10, requests: 10 },
   ]);
   const empty = await cardWith([
-    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 0, requests: 40 },
-    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 0, requests: 10 },
+    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 0, inputTransformationsReported: 40, requests: 40 },
+    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 0, inputTransformationsReported: 10, requests: 10 },
   ]);
   const undropped = await cardWith([
-    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 20, requests: 40 },
-    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 10, requests: 10 },
+    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 20, inputTransformationsReported: 40, requests: 40 },
+    { inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 10, inputTransformationsReported: 10, requests: 10 },
   ]);
+  // Each card divides by the requests that it covers: Dropped thinking blocks by the answers that reported their blocks
+  // while each bucket of the range carries that count, and Misses by reason by the sum of its reasons. Each stub holds
+  // more requests than the card's base, so a share of the requests in range reads lower.
+  const reported = await cardWith([{ inputTransformations: { [PREFIX]: 2 }, inputTransformationsMoved: 0, inputTransformationsNone: 2, inputTransformationsReported: 4, requests: 10 }]);
+  // The older bucket stands for an hour whose requests the ledger no longer held when the router first kept the count:
+  // its keys stand beside no reported count, so the range's count leaves out some of the requests under the keys.
+  const unreported = await cardWith(
+    [{ inputTransformations: { [PREFIX]: 5 }, inputTransformationsMoved: 0, inputTransformationsNone: 4, inputTransformationsReported: 6, requests: 10 }],
+    [
+      { at: hourAt(2), groups: [{ inputTransformations: { [PREFIX]: 2 }, inputTransformationsMoved: 0, inputTransformationsNone: 1, inputTransformationsReported: 0, requests: 3 }] },
+      { at: hourAt(1), groups: [{ inputTransformations: { [PREFIX]: 3 }, inputTransformationsMoved: 0, inputTransformationsNone: 3, inputTransformationsReported: 6, requests: 7 }] },
+    ],
+  );
+  const missGroup = { cacheMissReasonHits: {}, cacheMissReasons: { messages_changed: 2, none: 1, system_changed: 1 }, requests: 10 };
+  stubbed([missGroup], [{ at: hourAt(1), groups: [missGroup] }]);
+  const missPage = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
+  const missCard = [...missPage.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Misses by reason');
+  const missShares = Object.fromEntries([...(missCard?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.children[0]?.textContent?.trim() ?? '', li.querySelector('.num .muted')?.textContent ?? null]));
+  missPage.unmount();
   api.getAnalyticsBreakdown = breakdownRead;
+  api.getAnalyticsSeries = seriesRead;
   const want = {
     drawn: {
       bars: [
@@ -25703,6 +25733,37 @@ await forView('/analytics', async () => {
     name: '/analytics draws the dropped thinking blocks by key, and the two reserved counts as plain figures',
     ok: JSON.stringify(got) === JSON.stringify(want),
     missing: Object.entries(got).map(([read, value]) => `${read} ${JSON.stringify(value)}`),
+  });
+  const reportedWant = {
+    bars: [{ count: '2', key: PREFIX, label: 'Dropped, prefix changed', share: '50.0%' }],
+    lines: [
+      { linked: false, share: null, text: 'Moved to another account: 0' },
+      { linked: false, share: '50.0%', text: 'Nothing dropped: 2' },
+    ],
+  };
+  const reportedGot = { bars: reported.bars, lines: reported.lines };
+  results.push({
+    name: '/analytics a dropped blocks bar reads its share of the answers that reported',
+    ok: JSON.stringify(reportedGot) === JSON.stringify(reportedWant),
+    missing: [JSON.stringify(reportedGot)],
+  });
+  const unreportedWant = {
+    bars: [{ count: '5', key: PREFIX, label: 'Dropped, prefix changed', share: null }],
+    lines: [
+      { linked: false, share: null, text: 'Moved to another account: 0' },
+      { linked: false, share: null, text: 'Nothing dropped: 4' },
+    ],
+  };
+  const unreportedGot = { bars: unreported.bars, lines: unreported.lines };
+  results.push({
+    name: '/analytics the dropped blocks card draws no share over a bucket with no reported count',
+    ok: JSON.stringify(unreportedGot) === JSON.stringify(unreportedWant),
+    missing: [JSON.stringify(unreportedGot)],
+  });
+  results.push({
+    name: '/analytics a misses by reason bar reads its share of the reasons that the card counts',
+    ok: missShares['History edited'] === '50.0%',
+    missing: [JSON.stringify(missShares)],
   });
 });
 

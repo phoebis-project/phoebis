@@ -1819,6 +1819,9 @@ export interface AnalyticsGroup {
   inputTransformationsMoved: number;
   /** The requests whose serving attempt's answer listed no dropped block. */
   inputTransformationsNone: number;
+  /** The answered requests whose answer carried the dropped-blocks member, the base of the card's shares. 0 for an hour
+   *  whose requests the ledger no longer held when the router first kept the count. */
+  inputTransformationsReported: number;
   /**
    * The kept-warm requests and the tokens they read warm, booked per TTL, each with its plan-funded part: the credits
    * whose request a plan account served.

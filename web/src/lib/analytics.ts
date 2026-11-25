@@ -1,5 +1,5 @@
 import type { Api } from '@/api/client';
-import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundedSum, HeldPoint, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
+import type { Account, AccountRollup, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundedSum, HeldPoint, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import type { AnalyticsAddress } from '@/lib/address';
 import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow, type FiguredPoint } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
@@ -336,6 +336,17 @@ export const hitRatioText = (g: Pick<AnalyticsGroup, 'cacheHits' | 'cacheMisses'
   const ratio = hitRatioOf(g);
   return ratio === null ? '-' : print(ratio);
 };
+/**
+ * Whether the reported count covers the range: no bucket holds a dropped-block count (a key, the moved count or the
+ * count of answers with nothing dropped) beside a reported count of zero. An hour whose requests the ledger no longer
+ * held when the router first kept the count holds its keys and no count, and a range that reaches one mostly holds
+ * newer hours too, so the range's sum cannot tell.
+ */
+export const reportedCovers = (points: AnalyticsPoint[]): boolean =>
+  points.every((p) => {
+    const dropped = p.groups.some((g) => g.inputTransformationsMoved > 0 || g.inputTransformationsNone > 0 || Object.values(g.inputTransformations).some((n) => n > 0));
+    return !dropped || p.groups.some((g) => g.inputTransformationsReported > 0);
+  });
 /**
  * The answered and the failed probes, the count a side's probe cost latches on and the Cache warming notes print as
  * the probes sent. The wire's `failed` count also holds the exhausted and rejected probes the relay refuses itself. A
