@@ -2336,7 +2336,7 @@ const PRIMARY_STAMP_BURN = 0.115;
  * the move of 11:08:30 and the Fable pin on its conversation's renewal of 11:02:40.
  */
 const RESERVATION_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.0016, cold: true, keyId: 'desktop', lastInputTokens: 36_000, marked: true, model: 'claude-sonnet-5-5', note: null, sessionId: RESERVATION_MARKED_SESSION_ID, skip: null },
+  { agentId: 'main', burn: 0.0016, cold: true, keyId: 'desktop', lastInputTokens: 36_000, marked: true, model: 'claude-sonnet-5-5', note: 'cheapest', sessionId: RESERVATION_MARKED_SESSION_ID, skip: null },
   { agentId: 'e90b', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: false, model: 'claude-sonnet-4-5', note: 'current', sessionId: sessionId('c64358b5'), skip: 'unpriced' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 52_000, marked: false, model: 'claude-fable-5-1', note: null, sessionId: RESERVATION_FABLE_SESSION_ID, skip: 'fable_model' },
 ];
@@ -2922,13 +2922,14 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
 /**
  * A round's `shedding_round` event off the decision that ran it: the window that fired with its projection and horizon
  * from the shed line and the line its trigger read as the ceiling, the wall where the projection fired at a reset or an
- * end horizon, the round's figures, and each pin with the rewrite and the runway it would take on the destination
- * planned for it, each planned move counted against the next one's runway there. The rewrite is the pin's Pro-week
- * figure under `rewrite_unit`, a figure of the pin alone, so an API-key destination reads it too, with the weekly
- * window the pick compared on named, and the share floor the round applied. Each pin names the thinking its move drops,
- * null on a kept pair and with no destination. A round the Fable reservation fired names the reservation, which any
- * other round holds null. An event of an earlier build (`EARLIER_BUILD`) stored the rewrite as the story's 20x
- * equivalent of that window and names no unit, no floor, no dropped thinking and no reservation.
+ * end horizon, the round's figures, and each pin that the pick's walk read, a mark or not, with the rewrite and the
+ * runway it would take on the destination that read found, each move planned before the read counted against its
+ * runway there. A mark alone names its destination. The rewrite is the pin's Pro-week figure under `rewrite_unit`, a
+ * figure of the pin alone, so an API-key destination reads it too, with the weekly window the pick compared on named,
+ * and the share floor the round applied. Each pin names the thinking its move drops, null on a kept pair and with no
+ * destination. A round the Fable reservation fired names the reservation, which any other round holds null. An event
+ * of an earlier build (`EARLIER_BUILD`) stored the rewrite as the story's 20x equivalent of that window and names no
+ * unit, no floor, no dropped thinking and no reservation.
  */
 function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
   const earlier = EARLIER_BUILD.has(decision);
@@ -2960,13 +2961,12 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
   // does.
   const planned = new Map<string, RecordCandidate>();
   const scoreOf = (c: RecordCandidate) => c.pace?.score ?? 0;
-  // A mark's destination as its own move would read it: a free eligible sibling holding allowance that the pin fits
+  // A pin's destination as its own move would read it: a free eligible sibling holding allowance that the pin fits
   // to the horizon, ranked by the pool's strategy, by tier and under Pace by score, the longest runway breaking the
-  // strategy's tie. Round robin's cursor names one turn, so the runway never speaks there. The order reads a walked
-  // pin's destination the same way with no move booked (`order`). The fit and the booking price the write at the
-  // destination, the last prompt less the thinking a bound pair drops (`bound`).
+  // strategy's tie. Round robin's cursor names one turn, so the runway never speaks there. The walk reads it with the
+  // moves booked so far, and the order with none (`order`). The fit and the booking price the write at the
+  // destination, the last prompt less the thinking a bound pair drops (`bound`). Null where nothing fits.
   const read = (p: RoundPin, bound: number | null, order = false) => {
-    if (!p.marked && !order) return { planned: null, rewrite: null, runway: null, window: null };
     const tokens = rewriteTokensOf(p.lastInputTokens, bound);
     const siblings = record.candidates.filter((c) => c.obstacle === null && c.accountId !== accountId && c.inFlight < c.inFlightCap && holdsAllowance(c, p.model));
     const reads = siblings.map((c) => {
@@ -2977,18 +2977,63 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
     const ranked = [...fitting].sort((x, y) => (tierBefore(x.base.tier, y.base.tier) ? -1 : tierBefore(y.base.tier, x.base.tier) ? 1 : pool.strategy === 'pace' ? scoreOf(y.base) - scoreOf(x.base) : 0));
     const ties = ranked.filter((x) => tierKey(x.base.tier) === tierKey(ranked[0].base.tier) && (pool.strategy !== 'pace' || scoreOf(x.base) === scoreOf(ranked[0].base)));
     const chosen = pool.strategy === 'round_robin' ? ranked[0] : longestOf(ties)[0];
-    if (!chosen) return { planned: null, rewrite: null, runway: null, window: null };
-    if (order) return { planned: chosen.base.accountId, rewrite: null, runway: null, window: null };
+    if (!chosen) return null;
     const rewrite = rewriteOf(tokens, p.model);
-    for (const [w, x] of Object.entries(rewrite)) if (chosen.base.windows[w]) chosen.base.windows[w].reserved = round5((chosen.base.windows[w].reserved ?? 0) + x);
-    chosen.base.burn = { ...chosen.base.burn, [window]: (chosen.base.burn[window] ?? 0) + (p.burn ?? 0) };
-    planned.set(chosen.base.accountId, chosen.base);
     // A pin with no prompt size reported yet is unsized, so its rewrite reads nothing, and the Pro-week figure is null
     // on a model without a weight of its own. It is the write alone, at the destination, which keeps none of the
     // thinking the move drops. The engine names the window the pick compared on beside a figure alone.
     const figure = p.lastInputTokens === 0 ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(tokens, p.model, CLIENTS[p.keyId] ?? null, pinCacheTtlOf(p.sessionId));
-    return { planned: chosen.base.accountId, rewrite: figure, runway: chosen.fit.runwayMs, window: figure === null ? null : rewriteWindowOf(p.model) };
+    const book = () => {
+      for (const [w, x] of Object.entries(rewrite)) if (chosen.base.windows[w]) chosen.base.windows[w].reserved = round5((chosen.base.windows[w].reserved ?? 0) + x);
+      chosen.base.burn = { ...chosen.base.burn, [window]: (chosen.base.burn[window] ?? 0) + (p.burn ?? 0) };
+      planned.set(chosen.base.accountId, chosen.base);
+    };
+    return { book, figures: { destination: chosen.base.accountId, rewrite: figure, runway: chosen.fit.runwayMs, window: figure === null ? null : rewriteWindowOf(p.model) } };
   };
+  // An earlier build read no dropped thinking.
+  const boundOf = (p: RoundPin) => (earlier ? null : droppedThinkingOf({ accountId, agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId }, at));
+  const walkedOf = (p: RoundPin) => p.skip === null || !LEFT_OUT_SKIPS.includes(p.skip);
+  const unread = { destination: null, rewrite: null, runway: null, window: null };
+  /** The round's pick as the router plans it. The walk takes the pins in the order's sequence. At each position
+   *  it reads the pins from there on whose burn covers the rest, each with the earlier marks' destinations
+   *  booked, and the pick's own booking joins behind those reads. With no covering pin to pick, it reads the pin
+   *  at the position with the same bookings where its seed marks it or finds it no runway. A pin that the walk
+   *  never reads keeps the order's read. */
+  const pickReplayOf = (pins: RoundPin[]) => {
+    const replay = new Map<RoundPin, { destination: string | null; rewrite: number | null; runway: number | null; window: string | null }>();
+    const walk = pins.filter(walkedOf);
+    const look = (p: RoundPin) => {
+      const found = read(p, boundOf(p));
+      replay.set(p, found?.figures ?? unread);
+      return found;
+    };
+    // A standing mark is a move pending, and `never` walks the cold pins alone, which the order puts first.
+    const reachable = (p: RoundPin) => p.skip !== 'standing' && !(pool.warmSessions === 'never' && !p.cold);
+    let removed = walk.filter((p) => p.skip === 'standing').reduce((n, p) => n + (p.burn ?? 0), 0);
+    for (const [i, p] of walk.entries()) {
+      if (removed >= round.target) break;
+      if (!reachable(p) || p.burn === null) continue;
+      const rest = round.target - removed;
+      // The guard reads no destination for a pin it keeps, and the seeds name the pin it kept `last_pin`.
+      const covering = walk.slice(i).filter((q) => reachable(q) && q.skip !== 'last_pin' && q.burn !== null && q.burn >= rest);
+      const compared = covering.map((q) => [q, look(q)] as const);
+      const pick = compared.find(([q]) => q.marked);
+      if (pick) {
+        pick[1]?.book();
+        break;
+      }
+      if (p.burn < rest && (p.marked || p.skip === 'no_runway')) {
+        const own = look(p);
+        if (p.marked) {
+          own?.book();
+          removed += p.burn;
+        }
+      }
+    }
+    for (const p of walk) if (!replay.has(p)) replay.set(p, { ...unread, destination: read(p, boundOf(p), true)?.figures.destination ?? null });
+    return replay;
+  };
+  const replay = pickReplayOf(pins);
   return {
     accountId,
     agentId: record.request.agentId,
@@ -3008,21 +3053,21 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
       outcome: round.outcome,
       persisted: true,
       pins: pins.map((p) => {
-        // An earlier build read no dropped thinking. A pin names the drop where the pick or the order read it a
-        // destination, and a pin that leaves before the walk has none.
-        const bound = earlier ? null : droppedThinkingOf({ accountId, agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId }, at);
-        const figures = read(p, bound);
-        const walked = p.skip === null || !LEFT_OUT_SKIPS.includes(p.skip);
-        const dropped = bound !== null && walked && (figures.planned ?? read(p, bound, true).planned) !== null ? bound : null;
-        // The drop that the order read for the pin, before the round booked a destination.
-        const orderDrop = dropSizeOf(dropped, p.model, CLIENTS[p.keyId] ?? null, pinCacheTtlOf(p.sessionId));
+        // A pin names the drop where the read its figures follow found a destination, and a pin that leaves before
+        // the walk has none. The record's destination is a mark's alone.
+        const bound = boundOf(p);
+        const figures = replay.get(p) ?? unread;
+        const dropped = bound !== null && figures.destination !== null ? bound : null;
+        // The router sizes both keys at the order, which read the pin before the round booked a destination.
+        const orderDropped = bound !== null && walkedOf(p) && read(p, bound, true) !== null ? bound : null;
+        const orderDrop = dropSizeOf(orderDropped, p.model, CLIENTS[p.keyId] ?? null, pinCacheTtlOf(p.sessionId));
         // The burn per token of the move's size, the rewrite plus the dropped thinking at the output's weight. A pin
         // with no prompt size divides by one token, the cheapest rewrite.
-        const size = moveSizeOf(p.lastInputTokens, dropped, p.model, CLIENTS[p.keyId] ?? null, pinCacheTtlOf(p.sessionId)) ?? 1;
+        const size = moveSizeOf(p.lastInputTokens, orderDropped, p.model, CLIENTS[p.keyId] ?? null, pinCacheTtlOf(p.sessionId)) ?? 1;
         return {
           agent_id: p.agentId, burn: p.burn, cold: p.cold, ...(earlier ? {} : { dropped_thinking_tokens: dropped }), key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note,
           ...(earlier ? {} : { per_drop: p.burn === null || orderDrop === null ? null : Number((p.burn / orderDrop).toPrecision(7)) }),
-          per_rewrite: p.burn === null ? null : Number((p.burn / size).toPrecision(7)), planned: figures.planned, rewrite: figures.rewrite,
+          per_rewrite: p.burn === null ? null : Number((p.burn / size).toPrecision(7)), planned: p.marked ? figures.destination : null, rewrite: figures.rewrite,
           rewrite_window: figures.window, runway_ms: figures.runway, session_id: p.sessionId, skip: p.skip,
         };
       }),

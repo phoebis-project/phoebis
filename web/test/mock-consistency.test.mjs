@@ -2773,7 +2773,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(held > 0, 'a held shed line');
   });
 
-  test(`every round's pin the pick read prices its rewrite as the Pro-week figure with the window it compared on named beside a figure alone, and the story's two oldest rounds, an earlier build's, as they stored them, at ${at}`, async () => {
+  test(`every round's pin that carries a rewrite prices it as the Pro-week figure with the window it compared on named beside a figure alone, and the story's two oldest rounds, an earlier build's, as they stored them, at ${at}`, async () => {
     const s = await story;
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
     // The model's own week where it draws one, else the 7-day window.
@@ -2788,28 +2788,50 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // 480, and 40,000 Sonnet 5.5 tokens, both pins on a 1-hour lane, at its weight 1.5 and the 1-hour write's 1.25 are
     // 55,350 and 75,000 units, over the Pro tier's 90,000,000 on the week. The reservation round's 36,000 tokens at the
     // 5-minute write's 1.25 are 67,500 units on the desktop key, whose CLI client prices under the interactive regime's
-    // Pro week of 112,500,000.
+    // Pro week of 112,500,000. The three pins the stretch round's pick compared and left unmarked, each on a 1-hour
+    // lane of the notebook key, whose client no regime names: 61,000 Haiku 4.5 tokens at its weight 1 and 52,000 and
+    // 69,000 Sonnet 5.5 tokens at 1.5, each at the 1-hour write's 1.25, are 76,250, 97,500 and 129,375 units over
+    // 90,000,000.
     const storedRewrite = { 22_000: 0.00008, 88_000: 0.00031 };
-    const proWeekRewrite = { 29_520: 55_350 / 90_000_000, 36_000: 67_500 / 112_500_000, 40_000: 75_000 / 90_000_000 };
+    const proWeekRewrite = { 29_520: 55_350 / 90_000_000, 36_000: 67_500 / 112_500_000, 40_000: 75_000 / 90_000_000, 52_000: 97_500 / 90_000_000, 61_000: 76_250 / 90_000_000, 69_000: 129_375 / 90_000_000 };
     const read = { api_key: 0, oauth: 0 };
     let stored = 0;
     for (const e of rounds) {
       for (const p of e.detail.pins) {
         const where = `${e.requestId}: ${p.session_id}`;
-        if (p.planned === null) {
-          assert.deepEqual([p.rewrite, p.rewrite_window], [null, null], where);
+        if (p.rewrite === null) {
+          assert.equal(p.rewrite_window, null, where);
           continue;
         }
         const figure = older.has(e) ? storedRewrite[p.last_input_tokens] : proWeekRewrite[p.last_input_tokens - (p.dropped_thinking_tokens ?? 0)];
         assert.equal(p.rewrite_window, weekOf(p.model), where);
         // The figure the console reads off the cost model reaches its last digit by another order of operations.
         assert.ok(Math.abs(p.rewrite - figure) <= figure * 1e-12, `${where}: ${p.rewrite} against ${figure}`);
-        if (older.has(e) && p.rewrite !== null) stored += 1;
-        read[s.accounts.find((a) => a.id === p.planned).kind] += 1;
+        if (older.has(e)) stored += 1;
+        // The record names a mark's destination alone.
+        if (p.planned !== null) read[s.accounts.find((a) => a.id === p.planned).kind] += 1;
       }
     }
     assert.ok(stored > 0, 'an older round keeps a stored figure, so the Rewrite cell reads both kinds');
     assert.ok(read.api_key > 0 && read.oauth > 0, `the pins the pick read by destination kind: ${JSON.stringify(read)}`);
+  });
+
+  test(`a round's unmarked pin carries a rewrite exactly where the pick compared it beside its mark, the three the stretch round's pick left, at ${at}`, async () => {
+    const s = await story;
+    const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
+    // The stretch round of 14:05, 25 minutes before the clock, marks its 0.028 pin at its own position, since no pin
+    // covers the target there. At the 0.027 pin's position each pin left covers the rest, so the pick reads those four
+    // with the first mark's booking in, marks the 0.027 pin and leaves `7b2e`, the 0.0206 pin and the current pin with
+    // the figures it read. No step reads the sliver `3c9a`, and the 11:00 round's pick ends its walk ahead of its
+    // current and laptop pins.
+    assert.deepEqual(
+      rounds.flatMap((e) => e.detail.pins.filter((p) => p.rewrite !== null && p.planned === null).map((p) => [e.at, p.session_id, p.agent_id])),
+      [
+        [iso(s.now - 25 * 60_000), '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65', '7b2e'],
+        [iso(s.now - 25 * 60_000), 'c8f4a2e7-5d19-4b36-a7c2-1e9b3d6f8a24', 'main'],
+        [iso(s.now - 25 * 60_000), '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65', 'main'],
+      ],
+    );
   });
 
   test(`the Fable-week round walks its Fable pin alone, where it is the last pin, leaves its Opus pin off the window and marks nothing for the last pin, at ${at}`, async () => {
