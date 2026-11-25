@@ -38,6 +38,17 @@ test('noResetWord reads a window with a reset by its share', () => {
   assert.equal(d.noResetWord({ resetsAt: '2026-10-28T09:00:00Z', utilization: 0.2 }), null, 'a share and a reset, so the reset line draws');
 });
 
+test('burnWords names no burn for a window that has not opened, and the burn for a used window with no reset', () => {
+  assert.equal(d.burnWords({ burn: 0.05, resetsAt: null, utilization: 0 }), null, 'nothing used and no reset, so nothing to project');
+  assert.match(d.burnWords({ burn: 0.05, resetsAt: null, utilization: 0.2 }), /5\.0%/, 'a used share the poll reported no reset for');
+});
+
+test("a window's state hover reads the missing share ahead of the missing reset", () => {
+  const resetsAt = '2026-10-28T09:00:00Z';
+  assert.ok(d.stateWordTitle({ resetsAt, utilization: null }).includes(d.fmtAbsolute(resetsAt)), 'no share beside a reset, so the hover names the reset');
+  assert.match(d.stateWordTitle({ resetsAt: null, utilization: 0.2 }), /no reset/, 'a share with no reset, so the hover names the missing reset');
+});
+
 test('the largest share reads the shares that the windows hold, and null where none holds one', () => {
   assert.equal(d.largestShare([{ utilization: null }, { utilization: 0.4 }, { utilization: 0.1 }]), 0.4);
   assert.equal(d.largestShare([{ utilization: null }, { utilization: null }]), null, 'no share on any window');
