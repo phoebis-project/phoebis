@@ -490,8 +490,8 @@ async fn a_stale_lifecycle_report_cannot_override_a_new_request() {
     r.event(json!({"event": "heartbeat"})).await.unwrap();
     let old = r.request_generation("main");
     r.engine.observe(r.observed("new", "main", BODY));
-    let _ = r
-        .post(
+    assert_eq!(
+        r.post(
             KEY,
             json!({
                 "event": "state",
@@ -503,7 +503,11 @@ async fn a_stale_lifecycle_report_cannot_override_a_new_request() {
                 "request_generation": old
             }),
         )
-        .await;
+        .await
+        .unwrap_err()
+        .code,
+        "stale_request_generation"
+    );
     assert_eq!(r.view("main").agent_state, Lifecycle::Busy);
     // A late completion about the old request arms nothing: it is no longer pending.
     r.engine

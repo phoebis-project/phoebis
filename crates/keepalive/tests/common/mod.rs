@@ -462,9 +462,9 @@ impl Rig {
     }
 
     /// A report under the harness key, with the next sequence, posted to the events route. `body` is a JSON object. The
-    /// rig fills `protocol` and `sequence`, and `session_id` and `instance_id` each where the body does not name it: the
-    /// rig's one session, and `instance_of` that session, so `session_end` and `session_start` need only the session
-    /// id a multi-session test is driving.
+    /// rig fills `protocol` and `sequence`, and `session_id` and `instance_id` each where the body does not name it:
+    /// the rig's one session, and `instance_of` that session, so `session_end` and `session_start` need only the
+    /// session id a multi-session test is driving.
     pub async fn event(&mut self, mut body: Value) -> Result<Acked, Refused> {
         let session_id = self.fill(&mut body);
         let registers = body["event"] == "session_start";

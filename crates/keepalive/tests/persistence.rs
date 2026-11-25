@@ -102,9 +102,8 @@ async fn observe_on(r: &mut Rig, session: &str, agent: &str) {
     r.pump(Some(&id)).await;
 }
 
-/// A report filled as `Rig::event` fills it and sent through `Rig::post`, for a case that holds the registry's write
-/// lock: a save waiting on that lock holds the store's connection, and the route reads the key off the router's
-/// snapshot, never the store.
+/// A report filled as `Rig::event` fills it and posted under the harness key. It adopts nothing of the answer, so the
+/// rig's instances and generations stay as the reports before it left them.
 async fn report(r: &mut Rig, mut body: Value) -> Result<Acked, Refused> {
     r.sequence += 1;
     let fields = body

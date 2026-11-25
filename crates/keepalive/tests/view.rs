@@ -235,7 +235,7 @@ async fn the_retained_not_retained_held_and_paused_states_follow_the_table() {
     );
     edit_pool(&r, |pool| pool.enabled = false).await;
     // The events route refuses the key of a disabled pool, so the companion sends no report while the pool is
-    // disabled, and none behind the enable once the lease lapsed under the disabled pool.
+    // disabled. After that refusal it sends none behind the enable either, and the lease runs out at its 90 seconds.
     r.advance(60_000);
     r.step().await;
     assert_eq!(read(&r, "main"), (RecipeState::Held, Reason::PoolDisabled));
@@ -325,7 +325,7 @@ async fn a_recipe_held_on_a_disabled_pool_reads_retained_once_the_pool_is_enable
     assert!(due.is_some());
     edit_pool(&r, |pool| pool.enabled = false).await;
     // The events route refuses the key of a disabled pool, so the companion sends no report while the pool is
-    // disabled, and none behind the enable once the lease lapsed under the disabled pool.
+    // disabled. After that refusal it sends none behind the enable either, and the lease runs out at its 90 seconds.
     r.advance(60_000);
     r.step().await;
     let held = row(&r, "main");
