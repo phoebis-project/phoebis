@@ -20,8 +20,8 @@ use phoebis_bus::{
     RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber, Usage,
 };
 use phoebis_keepalive::{
-    decode_json_event, Ack, Engine, EngineParts, EventError, EventReport, KeepaliveLimits,
-    KeepalivePolicy, KeepaliveTiming, Lifecycle, Reason, RecipeView,
+    keepalive_router, AgentState, Engine, EngineParts, KeepaliveLimits, KeepalivePolicy,
+    KeepaliveTiming, Lifecycle, Reason, RecipeView, EVENTS_PATH,
 };
 use phoebis_ledger::{
     spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
@@ -65,6 +65,40 @@ pub fn real_answer() -> Respond {
         headers: vec![],
         body: br#"{"id":"msg_r","type":"message","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":2000,"ephemeral_1h_input_tokens":0},"output_tokens":10}}"#.to_vec(),
     }
+}
+
+/// The events route's acknowledgment, read from the answer's body. `AckedAgent` holds the members that the route
+/// writes for one agent of a registration's answer.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct Acked {
+    pub agent_id: Option<String>,
+    pub agents: Option<Vec<AckedAgent>>,
+    pub instance_id: String,
+    pub lease_expires_ms: i64,
+    pub request_generation: u64,
+    pub sequence: u64,
+    pub session_id: String,
+}
+
+/// One agent of a registration's answer. `park` holds the park's members as the route wrote them, and it is empty for
+/// an agent that is not parked.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct AckedAgent {
+    pub agent_id: String,
+    #[serde(flatten)]
+    pub park: serde_json::Map<String, serde_json::Value>,
+    pub request_generation: u64,
+    pub state: AgentState,
+}
+
+/// The events route's refusal: the answer's status with the members of its body.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct Refused {
+    pub code: String,
+    pub instance_id: Option<String>,
+    pub request_generation: Option<u64>,
+    #[serde(skip)]
+    pub status: u16,
 }
 
 pub struct Rig {
@@ -296,7 +330,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         _ledger_dir: ledger_dir,
         _scratch: scratch,
     };
-    rig.event(json!({"event": "session_start"})).unwrap();
+    rig.event(json!({"event": "session_start"})).await.unwrap();
     rig
 }
 
@@ -353,16 +387,6 @@ pub fn session_start_as(
     body
 }
 
-/// A body through the decoder, for a case that hands the engine a report under a key or a generation of its own. It
-/// fills `protocol` with 1 where the body names none, as `Rig::event` does.
-pub fn decoded(mut body: Value) -> Result<EventReport, EventError> {
-    body.as_object_mut()
-        .expect("a report's body is a JSON object")
-        .entry("protocol")
-        .or_insert(1.into());
-    decode_json_event(&serde_json::to_vec(&body).unwrap())
-}
-
 impl Rig {
     /// A second engine over the same ledger, store and router: a real restart, whose fresh `Inner` starts
     /// empty and holds only what the persistence round trip brings back, the first engine's `flush_persisted`
@@ -405,13 +429,13 @@ impl Rig {
 
     /// `advance` in steps inside the companion's lease, each followed by a heartbeat, as an attending companion
     /// renews it: for a test that moves the clock past the lease and then reports on the session.
-    pub fn advance_attended(&mut self, ms: i64) {
+    pub async fn advance_attended(&mut self, ms: i64) {
         let mut left = ms;
         while left > 0 {
             let step = left.min(phoebis_keepalive::LEASE_MS / 2);
             self.advance(step);
             left -= step;
-            self.event(json!({"event": "heartbeat"})).unwrap();
+            self.event(json!({"event": "heartbeat"})).await.unwrap();
         }
     }
 
@@ -437,11 +461,34 @@ impl Rig {
             .unwrap_or_default()
     }
 
-    /// A report under the harness key, with the next sequence, decoded as the route decodes a body and handed to
-    /// `Engine::apply_event`. `body` is a JSON object. The rig fills `protocol` and `sequence`, and `session_id` and
-    /// `instance_id` each where the body does not name it: the rig's one session, and `instance_of` that session, so
-    /// `session_end` and `session_start` need only the session id a multi-session test is driving.
-    pub fn event(&mut self, mut body: Value) -> Result<Ack, EventError> {
+    /// A report under the harness key, with the next sequence, posted to the events route. `body` is a JSON object. The
+    /// rig fills `protocol` and `sequence`, and `session_id` and `instance_id` each where the body does not name it: the
+    /// rig's one session, and `instance_of` that session, so `session_end` and `session_start` need only the session
+    /// id a multi-session test is driving.
+    pub async fn event(&mut self, mut body: Value) -> Result<Acked, Refused> {
+        let session_id = self.fill(&mut body);
+        let registers = body["event"] == "session_start";
+        let agent_id = body["agent_id"].as_str().map(String::from);
+        let acked = self.post(KEY, body).await;
+        // A refused start registered nothing, so the session keeps the instance the engine still holds.
+        if let (true, Ok(ack)) = (registers, &acked) {
+            self.instances
+                .insert(ack.session_id.clone(), ack.instance_id.clone());
+        }
+        self.adopt(&session_id, agent_id.as_deref(), &acked);
+        acked
+    }
+
+    /// A body under another key's secret, for a case that reports as a second holder. The rig fills the body as
+    /// `event` does. It keeps no instance and no generation of the answer, since the rig's maps hold the harness key's
+    /// sessions.
+    pub async fn event_as(&mut self, secret: &str, mut body: Value) -> Result<Acked, Refused> {
+        self.fill(&mut body);
+        self.post(secret, body).await
+    }
+
+    /// The fills of `event`, answering the session id that the body names after them.
+    fn fill(&mut self, body: &mut Value) -> String {
         self.sequence += 1;
         let fields = body
             .as_object_mut()
@@ -457,23 +504,45 @@ impl Rig {
         if !fields.contains_key("instance_id") {
             fields.insert("instance_id".into(), self.instance_of(&session_id).into());
         }
-        let registers = body["event"] == "session_start";
-        let agent_id = body["agent_id"].as_str().map(String::from);
-        let generation = self.generation("desktop");
-        let acked = decode_json_event(&serde_json::to_vec(&body).unwrap())
-            .and_then(|report| self.engine.apply_event("desktop", generation, report));
-        // A refused start registered nothing, so the session keeps the instance the engine still holds.
-        if let (true, Ok(ack)) = (registers, &acked) {
-            self.instances
-                .insert(ack.session_id.clone(), ack.instance_id.clone());
+        session_id
+    }
+
+    /// A body as the case wrote it, under the bearer `secret`: the rig fills `protocol` where the body names none and
+    /// nothing else, and it keeps no instance and no generation of the answer.
+    pub async fn post(&self, secret: &str, mut body: Value) -> Result<Acked, Refused> {
+        body.as_object_mut()
+            .expect("a report's body is a JSON object")
+            .entry("protocol")
+            .or_insert(1.into());
+        let request = Request::builder()
+            .method("POST")
+            .uri(EVENTS_PATH)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {secret}"))
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        // Built per post, since a restart test replaces the rig's engine.
+        let answer = keepalive_router(self.engine.clone())
+            .oneshot(request)
+            .await
+            .unwrap();
+        let status = answer.status().as_u16();
+        let bytes = answer.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&bytes);
+        if status == 200 {
+            return Ok(serde_json::from_slice(&bytes)
+                .unwrap_or_else(|_| panic!("an acknowledgment, not {text}")));
         }
-        self.adopt(&session_id, agent_id.as_deref(), &acked);
-        acked
+        // A 401 of the key's check carries the relay's error body and no code, which is no refusal of the report.
+        match serde_json::from_slice::<Refused>(&bytes) {
+            Ok(refused) => Err(Refused { status, ..refused }),
+            Err(_) => panic!("the events route answered {status} with no refusal code: {text}"),
+        }
     }
 
     /// Keeps each generation an answer carries: every agent of a registration, the agent an agent event names, main's
     /// on a session-level answer, and the current one a refusal names.
-    fn adopt(&mut self, session_id: &str, agent_id: Option<&str>, acked: &Result<Ack, EventError>) {
+    fn adopt(&mut self, session_id: &str, agent_id: Option<&str>, acked: &Result<Acked, Refused>) {
         match acked {
             Ok(ack) => {
                 for agent in ack.agents.iter().flatten() {
@@ -519,17 +588,17 @@ impl Rig {
     /// An agent report through `event` under the generation the agent's last answer carried. Where the engine moved
     /// the generation with no answer in between, the refusal names the current one, and the report goes once more
     /// under it, as the mod sends it. A case that sends a stale generation on purpose builds its report itself.
-    pub fn report(&mut self, mut body: Value) -> Result<Ack, EventError> {
+    pub async fn report(&mut self, mut body: Value) -> Result<Acked, Refused> {
         let session_id = body["session_id"].as_str().unwrap_or("session").to_string();
         let agent = body["agent_id"]
             .as_str()
             .expect("an agent report names its agent")
             .to_string();
         body["request_generation"] = self.request_generation_on(&session_id, &agent).into();
-        match self.event(body.clone()) {
+        match self.event(body.clone()).await {
             Err(refusal) if refusal.code == "stale_request_generation" => {
                 body["request_generation"] = refusal.request_generation.into();
-                self.event(body)
+                self.event(body).await
             }
             acked => acked,
         }
@@ -537,8 +606,8 @@ impl Rig {
 
     /// The instance each session of the rig registered under, kept by `event` from the `session_start` it sent
     /// (the rig's default session starts as "instance"), so a report finds it without reading the engine. A start
-    /// a test hands to `r.engine.apply_event` itself bypasses `event` and misses this map, so that test names the
-    /// instance in every report it sends after it.
+    /// a test sends through `post` itself bypasses `event` and misses this map, so that test names the instance in
+    /// every report it sends after it.
     pub fn instance_of(&self, session_id: &str) -> String {
         self.instances
             .get(session_id)
@@ -547,13 +616,14 @@ impl Rig {
     }
 
     /// The acknowledgment of a same-instance re-registration of the rig's session, the mod's view of the session.
-    pub fn reregister(&mut self) -> Ack {
+    pub async fn reregister(&mut self) -> Acked {
         let instance_id = self.instance_of("session");
         self.event(json!({
             "event": "session_start",
             "session_id": "session",
             "instance_id": instance_id
         }))
+        .await
         .expect("a same-instance re-registration of the rig's session")
     }
 
@@ -564,12 +634,12 @@ impl Rig {
 
     /// A `parked` word goes out as a background park, the shape the mod sends, since the route refuses a park
     /// without its kind.
-    pub fn state(&mut self, agent: &str, state: &str) {
+    pub async fn state(&mut self, agent: &str, state: &str) {
         let mut body = json!({"event": "state", "agent_id": agent, "state": state});
         if state == "parked" {
             body["park_kind"] = "background".into();
         }
-        self.report(body).unwrap();
+        self.report(body).await.unwrap();
     }
 
     /// The recipe view's row of one agent of the rig's session, through `Engine::recipes`, which lists an agent once

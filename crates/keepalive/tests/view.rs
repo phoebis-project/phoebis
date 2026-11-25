@@ -18,9 +18,9 @@ fn row(r: &Rig, agent: &str) -> RecipeView {
         .unwrap_or_else(|| panic!("no row for {agent}: {:?}", r.engine.recipes()))
 }
 
-fn report(r: &mut Rig, agent: &str, mut fields: Value) {
+async fn report(r: &mut Rig, agent: &str, mut fields: Value) {
     fields["agent_id"] = agent.into();
-    r.report(fields).unwrap();
+    r.report(fields).await.unwrap();
 }
 
 async fn edit_pool(r: &Rig, edit: impl FnOnce(&mut phoebis_store::PoolRow)) {
@@ -44,10 +44,10 @@ fn exhaust_both(r: &Rig) {
 }
 
 /// Moves the clock to `at`, outside any lease, and takes the session back as the mod's next start would.
-fn jump_to(r: &mut Rig, at: i64) {
+async fn jump_to(r: &mut Rig, at: i64) {
     let now = r.now();
     r.advance(at - now);
-    r.reregister();
+    r.reregister().await;
 }
 
 #[tokio::test]
@@ -65,7 +65,8 @@ async fn a_recipe_row_carries_the_state_the_cause_the_park_and_the_counts() {
             "park_kind": "background",
             "deadline": deadline
         }),
-    );
+    )
+    .await;
     let parked = row(&r, "main");
     assert_eq!(
         (
@@ -104,7 +105,7 @@ async fn a_recipe_row_carries_the_state_the_cause_the_park_and_the_counts() {
         (Some("a"), "claude-sonnet-4-5", 300, Some(start)),
         "the pinned account, the model, the TTL and the last request"
     );
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let probed = row(&r, "main");
     assert_eq!(
@@ -113,7 +114,7 @@ async fn a_recipe_row_carries_the_state_the_cause_the_park_and_the_counts() {
         "{probed:?}"
     );
     // Past the first request's five-minute TTL and inside the entry the probe kept, a real request reads it warm.
-    r.advance_attended(40_000);
+    r.advance_attended(40_000).await;
     r.observe("main").await;
     let credited = row(&r, "main");
     assert_eq!(
@@ -122,7 +123,7 @@ async fn a_recipe_row_carries_the_state_the_cause_the_park_and_the_counts() {
         "{credited:?}"
     );
     // The next UTC day reads zeros before anything happens on it, and its first probe counts from zero.
-    jump_to(&mut r, DAY + MINUTE);
+    jump_to(&mut r, DAY + MINUTE).await;
     let next_day = row(&r, "main");
     assert_eq!(
         (next_day.probes_today, next_day.credited_today),
@@ -130,7 +131,7 @@ async fn a_recipe_row_carries_the_state_the_cause_the_park_and_the_counts() {
         "{next_day:?}"
     );
     r.observe("main").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let reset = row(&r, "main");
     assert_eq!(
@@ -149,9 +150,9 @@ async fn the_day_counters_read_zero_after_midnight_without_a_probe_or_a_credit()
     let mut r = rig(RigSpec::default()).await;
     // The rig's probe is due 270 s after the request, so it goes out at 23:50 UTC.
     let at = DAY - 10 * MINUTE;
-    jump_to(&mut r, at - 270_000);
+    jump_to(&mut r, at - 270_000).await;
     r.observe("main").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let before = row(&r, "main");
     assert_eq!(
@@ -195,9 +196,9 @@ async fn the_day_counters_read_zero_after_midnight_without_a_probe_or_a_credit()
     );
     assert_eq!(row(&r, "main").probes_today, 0);
     // The next probe is the event that starts the new day.
-    r.reregister();
+    r.reregister().await;
     r.observe("main").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let saved = r.saved("main").await;
     assert_eq!(
@@ -218,6 +219,7 @@ async fn the_retained_not_retained_held_and_paused_states_follow_the_table() {
     };
     assert_eq!(read(&r, "main"), (RecipeState::Retained, Reason::Scheduled));
     r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap();
     r.observe_with(
         "worker",
@@ -232,12 +234,14 @@ async fn the_retained_not_retained_held_and_paused_states_follow_the_table() {
         (RecipeState::NotRetained, Reason::ForcedTool)
     );
     edit_pool(&r, |pool| pool.enabled = false).await;
-    r.advance_attended(60_000);
+    // The events route refuses the key of a disabled pool, so the companion sends no report while the pool is
+    // disabled, and none behind the enable once the lease lapsed under the disabled pool.
+    r.advance(60_000);
     r.step().await;
     assert_eq!(read(&r, "main"), (RecipeState::Held, Reason::PoolDisabled));
     edit_pool(&r, |pool| pool.enabled = true).await;
     exhaust_both(&r);
-    r.advance_attended(210_000);
+    r.advance(210_000);
     r.step().await;
     assert_eq!(
         read(&r, "main"),
@@ -251,7 +255,7 @@ async fn a_probe_exhaustion_reads_paused_and_a_gate_hold_reads_held_until_the_ne
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     exhaust_both(&r);
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let exhausted = row(&r, "main");
     assert_eq!(
@@ -260,7 +264,7 @@ async fn a_probe_exhaustion_reads_paused_and_a_gate_hold_reads_held_until_the_ne
         "the 429's first rung would land at the entry's expiry: {exhausted:?}"
     );
     // The accounts' cooldown holds the paused recipe at the next tick, and the hold re-arms nothing.
-    r.advance_attended(1_000);
+    r.advance_attended(1_000).await;
     r.step().await;
     let cooled = row(&r, "main");
     assert_eq!(
@@ -270,7 +274,7 @@ async fn a_probe_exhaustion_reads_paused_and_a_gate_hold_reads_held_until_the_ne
     );
     // Past the accounts' reset the next real request selects one again.
     r.advance(5_000_000);
-    r.reregister();
+    r.reregister().await;
     r.observe("main").await;
     let rearmed = row(&r, "main");
     assert_eq!(
@@ -299,7 +303,7 @@ async fn a_probe_exhaustion_reads_paused_and_a_gate_hold_reads_held_until_the_ne
         .unwrap();
     r.h.router.reload().await.unwrap();
     plant_spend(&r, "over-budget", 5.01).await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let held = row(&r, "main");
     assert_eq!(
@@ -320,7 +324,9 @@ async fn a_recipe_held_on_a_disabled_pool_reads_retained_once_the_pool_is_enable
     let due = row(&r, "main").next_probe_at;
     assert!(due.is_some());
     edit_pool(&r, |pool| pool.enabled = false).await;
-    r.advance_attended(60_000);
+    // The events route refuses the key of a disabled pool, so the companion sends no report while the pool is
+    // disabled, and none behind the enable once the lease lapsed under the disabled pool.
+    r.advance(60_000);
     r.step().await;
     let held = row(&r, "main");
     assert_eq!(
@@ -330,7 +336,7 @@ async fn a_recipe_held_on_a_disabled_pool_reads_retained_once_the_pool_is_enable
     );
     // Enabled again before the probe is due: the next tick shows the schedule the hold kept.
     edit_pool(&r, |pool| pool.enabled = true).await;
-    r.advance_attended(60_000);
+    r.advance(60_000);
     r.step().await;
     let armed = row(&r, "main");
     assert_eq!(
@@ -353,7 +359,8 @@ async fn the_session_row_carries_the_presence_age() {
         &mut r,
         "main",
         json!({"event": "activity", "kind": "presence"}),
-    );
+    )
+    .await;
     r.advance(12_000);
     assert_eq!(r.engine.sessions()[0].presence_age_seconds, Some(12));
 }
@@ -366,11 +373,12 @@ async fn a_session_whose_main_holds_no_recipe_reads_the_newest_other_agents_reci
     let mut r = rig(RigSpec::default()).await;
     for agent in ["worker-1", "worker-2"] {
         r.event(json!({"event": "agent_start", "agent_id": agent}))
+            .await
             .unwrap();
         r.observe(agent).await;
-        r.advance_attended(1_000);
+        r.advance_attended(1_000).await;
     }
-    r.state("worker-2", "idle");
+    r.state("worker-2", "idle").await;
     assert_eq!(
         r.engine.sessions()[0].keepalive.state,
         Some(AgentState::Idle),
@@ -385,7 +393,7 @@ async fn a_session_whose_main_holds_no_recipe_reads_the_newest_other_agents_reci
 #[tokio::test]
 async fn mains_lifecycle_word_stands_beside_an_empty_summary_while_main_holds_no_recipe() {
     let mut r = rig(RigSpec::default()).await;
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     assert_eq!(
         serde_json::from_value::<Reason>(r.saved("main").await["reason"].clone()).unwrap(),
         Reason::AwaitingRequest
@@ -431,11 +439,11 @@ async fn an_ended_recipe_keeps_its_row_with_the_cause() {
     })
     .await;
     r.observe("main").await;
-    r.state("main", "idle");
-    r.advance_attended(270_000);
+    r.state("main", "idle").await;
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(row(&r, "main").state, RecipeState::Retained);
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     r.step().await;
     assert!(
         r.engine.recipes_for("desktop", "session").is_empty(),
@@ -493,11 +501,12 @@ async fn a_pool_disabled_hold_on_a_recipe_awaiting_its_evidence_ends_awaiting_it
     r.engine.observe(selected);
     assert_eq!(row(&r, "main").cause, Reason::AwaitingCacheEvidence);
     edit_pool(&r, |pool| pool.enabled = false).await;
-    r.advance_attended(10_000);
+    // The events route refuses the key of a disabled pool, so the companion sends no report there.
+    r.advance(10_000);
     r.step().await;
     assert_eq!(row(&r, "main").cause, Reason::PoolDisabled);
     edit_pool(&r, |pool| pool.enabled = true).await;
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     r.step().await;
     let awaiting = row(&r, "main");
     assert_eq!(
@@ -512,10 +521,11 @@ async fn a_paused_recipe_keeps_its_cause_through_a_disabled_pool() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     exhaust_both(&r);
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     edit_pool(&r, |pool| pool.enabled = false).await;
-    r.advance_attended(1_000);
+    // The events route refuses the key of a disabled pool, so the companion sends no report there.
+    r.advance(1_000);
     r.step().await;
     let disabled = row(&r, "main");
     assert_eq!(
@@ -526,7 +536,7 @@ async fn a_paused_recipe_keeps_its_cause_through_a_disabled_pool() {
     // Enabled again, the accounts' cooldown holds the recipe at the gate, and the pause bit keeps it `paused` under
     // the hold's cause.
     edit_pool(&r, |pool| pool.enabled = true).await;
-    r.advance_attended(1_000);
+    r.advance_attended(1_000).await;
     r.step().await;
     let enabled = row(&r, "main");
     assert_eq!(
@@ -548,7 +558,7 @@ async fn a_paused_recipe_drops_its_prompt_at_its_entrys_expiry_and_still_reads_p
     r.observe("main").await;
     let start = r.now();
     exhaust_both(&r);
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let paused = row(&r, "main");
     assert_eq!(
@@ -559,14 +569,14 @@ async fn a_paused_recipe_drops_its_prompt_at_its_entrys_expiry_and_still_reads_p
     let probes = paused.probes_today;
     // The request's entry is five minutes long and the failed probe wrote none, so it expires 300 s after the request.
     let now = r.now();
-    r.advance_attended(start + 300_000 - 1 - now);
+    r.advance_attended(start + 300_000 - 1 - now).await;
     r.step().await;
     let warm = row(&r, "main");
     assert!(
         r.engine.stats().retained_bytes > 0,
         "the entry is warm a millisecond short of its expiry: {warm:?}"
     );
-    r.advance_attended(1);
+    r.advance_attended(1).await;
     r.step().await;
     let cold = row(&r, "main");
     let saved = r.saved("main").await;

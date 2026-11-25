@@ -1780,24 +1780,23 @@ fn refused_request(id: &str, at: i64, session: &str, agent: &str, key_generation
     }
 }
 
-/// The harness with the pool `main` over `business` and the key `desktop`, and the key's generation.
-async fn sessions_on_desktop() -> (common::Full, String, i64) {
+/// The harness with the pool `main` over `business` and the key `desktop`, the key's generation and its secret.
+async fn sessions_on_desktop() -> (common::Full, String, i64, String) {
     on_desktop(common::admin_parts_full().await).await
 }
 
 /// `sessions_on_desktop` over the harness `parts`.
-async fn on_desktop(parts: common::Full) -> (common::Full, String, i64) {
+async fn on_desktop(parts: common::Full) -> (common::Full, String, i64, String) {
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
-    post(
+    let secret = common::created_key_secret(
         &parts.app,
-        "/admin/keys",
+        &cookie,
         r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-        Some(&cookie),
     )
     .await;
     let generation = common::generation(&parts.store, "desktop");
-    (parts, cookie, generation)
+    (parts, cookie, generation, secret)
 }
 
 fn sessions_row(sessions: &serde_json::Value, session: &str) -> serde_json::Value {
@@ -1814,26 +1813,19 @@ fn sessions_row(sessions: &serde_json::Value, session: &str) -> serde_json::Valu
 /// session's life finds its newest request.
 #[tokio::test]
 async fn a_companion_sessions_last_request_reads_its_newest_request_past_the_session_expiry() {
-    let (parts, cookie, generation) = sessions_on_desktop().await;
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            generation,
-            phoebis_keepalive::decode_json_event(
-                serde_json::json!({
-                    "protocol": 1,
-                    "event": "session_start",
-                    "session_id": "s-companion",
-                    "instance_id": "i1",
-                    "sequence": 1
-                })
-                .to_string()
-                .as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    let (parts, cookie, generation, secret) = sessions_on_desktop().await;
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &secret,
+        serde_json::json!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s-companion",
+            "instance_id": "i1",
+            "sequence": 1
+        }),
+    )
+    .await;
     let at = common::NOW - 25 * HOUR;
     parts.ledger.record(agent_request(
         "r-old",
@@ -1948,7 +1940,7 @@ async fn a_sessions_placements_count_mains_placements_and_moves_and_no_other_age
 #[tokio::test]
 async fn a_sessions_last_inference_reads_its_turn_and_its_last_request_the_later_token_count_past_a_probe(
 ) {
-    let (parts, cookie, generation) = sessions_on_desktop().await;
+    let (parts, cookie, generation, _) = sessions_on_desktop().await;
     let now = common::NOW;
     for (id, at, kind) in [
         ("r-turn", now - 3_000, "inference"),
@@ -1977,7 +1969,7 @@ async fn a_sessions_last_inference_reads_its_turn_and_its_last_request_the_later
 /// the session listed. A second subagent's one request was refused, so it makes no entry.
 #[tokio::test]
 async fn a_session_and_each_agent_read_their_first_request_refused_ones_kept_past_the_expiry() {
-    let (parts, cookie, generation) = sessions_on_desktop().await;
+    let (parts, cookie, generation, _) = sessions_on_desktop().await;
     let now = common::NOW;
     let day = 24 * HOUR;
     for request in [
@@ -2066,7 +2058,7 @@ async fn a_session_and_each_agent_read_their_first_request_refused_ones_kept_pas
 /// request inside the current hour keeps the session listed.
 #[tokio::test]
 async fn a_sessions_day_counts_the_hour_24_hours_back_and_leaves_out_the_hour_before_it() {
-    let (parts, cookie, generation) = sessions_on_desktop().await;
+    let (parts, cookie, generation, _) = sessions_on_desktop().await;
     let now = common::NOW;
     for (id, at) in [
         ("r-day-before", now - 25 * HOUR),
@@ -2096,7 +2088,7 @@ async fn a_sessions_day_counts_the_hour_24_hours_back_and_leaves_out_the_hour_be
 /// since, in landing order: `r-tie-b` lands first and `r-tie-a` last.
 #[tokio::test]
 async fn two_requests_of_one_instant_landing_after_a_poll_answer_the_greater_ids_user_agent() {
-    let (parts, cookie, generation) = sessions_on_desktop().await;
+    let (parts, cookie, generation, _) = sessions_on_desktop().await;
     let now = common::NOW;
     let sent = |id: &str, at: i64, user_agent: &str| {
         let Record::Request {
@@ -2233,7 +2225,7 @@ async fn a_sessions_spend_prices_each_request_of_an_hour_a_price_entry_splits_wi
         "file",
     )
     .unwrap();
-    let (parts, cookie, generation) =
+    let (parts, cookie, generation, _) =
         on_desktop(common::admin_parts_full_priced(prices).await).await;
     for request in [
         agent_request(
@@ -2305,7 +2297,7 @@ async fn a_plan_request_that_completes_inside_the_peak_band_reads_the_five_hour_
          tier_order: [fable, opus, sonnet, haiku]\n    model_tier:\n      claude-sonnet-5: sonnet\n",
     )
     .unwrap();
-    let (parts, cookie, generation) = on_desktop(
+    let (parts, cookie, generation, _) = on_desktop(
         common::admin_parts_full_costed(phoebis_ledger::test_tables::tables(costs)).await,
     )
     .await;
@@ -2354,7 +2346,7 @@ async fn two_requests_under_the_long_context_threshold_bill_at_the_standard_cell
         "file",
     )
     .unwrap();
-    let (parts, cookie, generation) =
+    let (parts, cookie, generation, _) =
         on_desktop(common::admin_parts_full_priced(prices).await).await;
     for (id, at) in [
         ("r-key-1", common::NOW - 2_000),
@@ -2393,7 +2385,7 @@ async fn two_requests_under_the_long_context_threshold_bill_at_the_standard_cell
 /// lands first, and `r-w-a` on Sonnet 5 on `business`, which lands last. The greater id names `w`'s entry.
 #[tokio::test]
 async fn an_agents_entry_is_named_by_the_greater_id_of_its_newest_instant_whichever_lands_last() {
-    let (parts, cookie, generation) = sessions_on_desktop().await;
+    let (parts, cookie, generation, _) = sessions_on_desktop().await;
     let now = common::NOW;
     for (id, at, model, account) in [
         ("r-w-1", now - 3_000, "claude-sonnet-5", "business"),
@@ -6328,37 +6320,24 @@ async fn one_held_probe() -> (common::Full, String) {
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
     parts.router.reload().await.unwrap();
-    let created = json(
-        post(
-            &parts.app,
-            "/admin/keys",
-            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-            Some(&cookie),
-        )
-        .await,
+    let secret = common::created_key_secret(
+        &parts.app,
+        &cookie,
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
     )
     .await;
-    let secret = created["secret"].as_str().unwrap().to_string();
-    let generation = common::generation(&parts.store, "desktop");
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            generation,
-            phoebis_keepalive::decode_json_event(
-                serde_json::json!({
-                    "protocol": 1,
-                    "event": "session_start",
-                    "session_id": "s1",
-                    "instance_id": "i1",
-                    "sequence": 1
-                })
-                .to_string()
-                .as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &secret,
+        serde_json::json!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 1
+        }),
+    )
+    .await;
     phoebis_keepalive::spawn_observer(parts.keepalive.clone());
     parts.up.add_credential_rule(
         common::API_KEY,

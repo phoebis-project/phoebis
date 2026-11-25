@@ -186,9 +186,9 @@ async fn a_gzip_request_observed_is_replayed_plain_by_its_probe() {
 async fn a_probe_preserves_routing_and_constraints() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     let lease_before = r.now() + r.lease_ms();
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let sent = r.up.requests();
     let probe = sent.last().unwrap();
@@ -241,7 +241,7 @@ async fn a_probe_preserves_routing_and_constraints() {
         "a probe does not renew activity"
     );
     assert_eq!(r.engine.sessions()[0].companion, CompanionState::Reporting);
-    let ack = r.event(json!({"event": "heartbeat"})).unwrap();
+    let ack = r.event(json!({"event": "heartbeat"})).await.unwrap();
     assert_eq!(ack.lease_expires_ms, r.now() + r.lease_ms());
     assert!(
         ack.lease_expires_ms > lease_before,
@@ -304,7 +304,7 @@ fn placeholder_body() -> String {
 /// body as the fake upstream received it.
 async fn probe_of_a_placeholder_request(r: &mut Rig) -> Vec<u8> {
     r.observe_with("main", &placeholder_body()).await;
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     r.advance(270_000);
     r.step().await;
     let sent = r.up.requests();
@@ -373,12 +373,12 @@ async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     })
     .await;
     r.observe("main").await;
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     let original = r.saved("main").await["last_activity"].clone();
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
-    r.event(json!({"event": "heartbeat"})).unwrap();
-    r.advance_attended(270_000);
+    r.event(json!({"event": "heartbeat"})).await.unwrap();
+    r.advance_attended(270_000).await;
     r.step().await;
     let status = r.view("main");
     assert_eq!(
@@ -408,12 +408,12 @@ async fn held_re_sends_stop_at_the_router_until_it_serves_one() {
     })
     .await;
     r.observe("main").await;
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     behind.store(true, Ordering::SeqCst);
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     for _ in 0..2 {
-        r.advance_attended(5_000);
+        r.advance_attended(5_000).await;
         r.step().await;
     }
     let status = r.view("main");
@@ -431,7 +431,7 @@ async fn held_re_sends_stop_at_the_router_until_it_serves_one() {
         "each refusal counts under its own outcome and none as failed: {text}"
     );
     behind.store(false, Ordering::SeqCst);
-    r.advance_attended(5_000);
+    r.advance_attended(5_000).await;
     r.step().await;
     let status = r.view("main");
     assert_eq!(
@@ -439,7 +439,7 @@ async fn held_re_sends_stop_at_the_router_until_it_serves_one() {
         (4, Reason::Scheduled),
         "the router serves the probe once its ledger caught up: {status:?}"
     );
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let status = r.view("main");
     assert_eq!(
@@ -479,20 +479,18 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
         "the lapse leaves the session unattended"
     );
     assert_eq!(
-        r.engine
-            .apply_event(
-                "desktop",
-                r.generation("desktop"),
-                decoded(json!({
-                    "event": "heartbeat",
-                    "session_id": "session",
-                    "instance_id": "instance",
-                    "sequence": 99
-                }))
-                .unwrap()
-            )
-            .unwrap_err()
-            .code,
+        r.post(
+            KEY,
+            json!({
+                "event": "heartbeat",
+                "session_id": "session",
+                "instance_id": "instance",
+                "sequence": 99
+            })
+        )
+        .await
+        .unwrap_err()
+        .code,
         "instance_ended"
     );
     r.advance(180_000);
@@ -516,7 +514,7 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
     // The release case: nothing revives a released agent, and the prompt is gone at once.
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    r.state("main", "released");
+    r.state("main", "released").await;
     assert_eq!(r.engine.stats().retained_bytes, 0);
     r.engine.observe(r.observed("late", "main", BODY));
     r.advance(270_000);
@@ -564,9 +562,10 @@ async fn probes_again(r: &mut Rig, agent: &str) {
 
 /// Starts the released main again under the generation its release answered, as the mod does, so a real request can
 /// arm the record.
-fn start_main_again(r: &mut Rig) {
+async fn start_main_again(r: &mut Rig) {
     let generation = r.request_generation("main");
     r.event(json!({"event": "agent_start", "agent_id": "main", "request_generation": generation}))
+        .await
         .expect("a released agent starts again under the generation its release named");
 }
 
@@ -579,7 +578,7 @@ async fn a_probe_held_upstream() -> Rig {
         "/v1/messages",
         Respond::Gated(Box::new(probe_answer(2_000, 0))),
     );
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.engine.step().await;
     wait_for(std::time::Duration::from_secs(5), || {
         (r.up.requests().len() == 2).then_some(())
@@ -639,7 +638,7 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
     assert_eq!(r.engine.stats().retained_bytes, 0);
 
     let mut r = a_probe_held_upstream().await;
-    r.state("main", "released");
+    r.state("main", "released").await;
     r.up.release();
     no_probe_running(&r.engine).await;
     assert_eq!(
@@ -660,7 +659,7 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
         "release: the late result touched no recipe state: {status:?}"
     );
     // The orphaned result gave the record's slot back: started again and armed, the record probes.
-    start_main_again(&mut r);
+    start_main_again(&mut r).await;
     probes_again(&mut r, "main").await;
 }
 
@@ -679,13 +678,13 @@ async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
         "/v1/messages",
         Respond::Gated(Box::new(probe_answer(2_000, 0))),
     );
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.engine.step().await;
     wait_for(std::time::Duration::from_secs(5), || {
         (r.up.requests().len() == 2).then_some(())
     })
     .await;
-    r.state("main", "released");
+    r.state("main", "released").await;
     r.up.release();
     no_probe_running(&r.engine).await;
     r.pump(None).await;
@@ -725,7 +724,7 @@ async fn an_orphaned_probe_whose_agent_survives_settles_under_its_stop() {
         "at the cost its ledger row carries: {wasted_usd} against {charged}"
     );
     // The late result gave the record's slot back: started again and armed, the record probes.
-    start_main_again(&mut r);
+    start_main_again(&mut r).await;
     probes_again(&mut r, "main").await;
 }
 
@@ -850,15 +849,16 @@ async fn a_probe_orphaned_by_a_release_and_then_a_revival_settles_under_the_rele
         "/v1/messages",
         Respond::Gated(Box::new(probe_answer(2_000, 0))),
     );
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.engine.step().await;
     wait_for(std::time::Duration::from_secs(5), || {
         (r.up.requests().len() == 2).then_some(())
     })
     .await;
-    r.state("main", "released");
+    r.state("main", "released").await;
     let generation = r.request_generation("main");
     r.event(json!({"event": "agent_start", "agent_id": "main", "request_generation": generation}))
+        .await
         .expect("a released agent starts again under the generation its release named");
     r.up.release();
     no_probe_running(&r.engine).await;
@@ -912,20 +912,18 @@ async fn a_replacement_registration_during_a_probe_keeps_the_new_agents_in_fligh
     })
     .await;
     // A second instance takes the session: a new main agent under the same ids, its own recipe, its own probe.
-    r.engine
-        .apply_event(
-            "desktop",
-            r.generation("desktop"),
-            decoded(json!({
-                "event": "session_start",
-                "session_id": "session",
-                "instance_id": "second",
-                "sequence": 1,
-                "previous_instance_id": "instance"
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+    r.post(
+        KEY,
+        json!({
+            "event": "session_start",
+            "session_id": "session",
+            "instance_id": "second",
+            "sequence": 1,
+            "previous_instance_id": "instance"
+        }),
+    )
+    .await
+    .unwrap();
     r.observe("main").await;
     r.up.push_credential_rule(
         A,
@@ -1053,6 +1051,7 @@ async fn concurrency_is_bounded_by_max_workers_alone() {
     for n in 1..=MAX_WORKERS {
         let agent = format!("worker-{n}");
         r.event(json!({"event": "agent_start", "agent_id": agent.clone()}))
+            .await
             .unwrap();
         agents.push(agent);
     }
@@ -2244,7 +2243,7 @@ async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, 
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", real_answer());
     r.observe_with("main", &fast_body()).await;
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", read_back_at(served));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(r.view("main").probes_today, 1);
     let cost = phoebis_ledger::PriceRevisions::shipped()
@@ -2311,7 +2310,7 @@ async fn a_fast_recipe_served_standard_prices_at_the_standard_cells() {
 
 /// `fast_probe_served`'s probe settled wasted by a release, and every rollup row once its settlement has landed.
 async fn released_and_settled(r: &mut Rig) -> Vec<phoebis_ledger::RollupRow> {
-    r.state("main", "released");
+    r.state("main", "released").await;
     wait_for(std::time::Duration::from_secs(5), || {
         let rows = rollups(r);
         rows.iter().any(|row| row.wasted_probes > 0).then_some(rows)

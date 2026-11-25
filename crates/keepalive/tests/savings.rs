@@ -431,7 +431,7 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     for _ in 0..3 {
         r.advance(270_000);
         r.step().await;
@@ -465,13 +465,13 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
     for _ in 0..2 {
-        r.advance_attended(270_000);
+        r.advance_attended(270_000).await;
         r.step().await;
     }
     r.observe_with("main", &body).await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
-    r.state("main", "released");
+    r.state("main", "released").await;
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
     assert_eq!(
         probe_rows(&rows).wasted_probe_reasons,
@@ -480,9 +480,9 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     // session_end and a replacement carry their own labels.
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
-    r.event(json!({"event": "session_end"})).unwrap();
+    r.event(json!({"event": "session_end"})).await.unwrap();
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
     assert_eq!(
         probe_rows(&rows)
@@ -600,9 +600,9 @@ async fn a_probe_sent_while_a_request_is_open_waits_for_the_request_after_it() {
         .await;
         open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
         r.engine.observe(completed(&r, "first", 0));
-        r.advance_attended(60_000);
+        r.advance_attended(60_000).await;
         open_request_as(&r, "second", OTHER_CLIENT, read, 2_000 - read).await;
-        r.advance_attended(270_000);
+        r.advance_attended(270_000).await;
         r.step().await;
         assert_eq!(
             r.view("main").probes_today,
@@ -612,7 +612,7 @@ async fn a_probe_sent_while_a_request_is_open_waits_for_the_request_after_it() {
         // The second request's completion leaves the probe alone: the session's end below settles it, so a credit or
         // a cold return at the completion fails the read of its label.
         r.engine.observe(completed(&r, "second", read));
-        r.event(json!({"event": "session_end"})).unwrap();
+        r.event(json!({"event": "session_end"})).await.unwrap();
         let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes > 0).await;
         assert_eq!(
             probe_rows(&rows).wasted_probe_reasons,
@@ -655,19 +655,19 @@ async fn a_failed_request_decides_none_of_the_probes_it_kept_and_leaves_them_to_
             r.engine.observe(completed(&r, "first", 0));
             // A covering probe, which the failed request below decides nothing about: the next success credits it or
             // the lapse settles it, which the rows read whole.
-            r.advance_attended(270_000);
+            r.advance_attended(270_000).await;
             r.step().await;
-            r.advance_attended(10_000);
+            r.advance_attended(10_000).await;
             open_request_as(&r, "second", OTHER_CLIENT, 0, 2_000).await;
             r.engine.observe(failed(&r, "second", head));
             let expected = if next {
                 // Past the first request's five-minute TTL and inside the probe's entry.
-                r.advance_attended(50_000);
+                r.advance_attended(50_000).await;
                 open_request_as(&r, "third", OTHER_CLIENT, 2_000, 0).await;
                 r.engine.observe(completed(&r, "third", 2_000));
                 (1, BTreeMap::new())
             } else {
-                r.advance_attended(290_000);
+                r.advance_attended(290_000).await;
                 r.step().await;
                 r.engine.flush_persisted().await;
                 (0, BTreeMap::from([("expired".to_string(), 1)]))
@@ -698,10 +698,10 @@ async fn a_canceled_request_between_two_probes_leaves_the_first_to_the_chain_the
     .await;
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(r.saved_unanswered("main").await, 1, "a covering probe");
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     open_request_as(&r, "canceled", OTHER_CLIENT, 0, 2_000).await;
     r.engine
         .observe(r.complete("canceled", phoebis_bus::Outcome::Canceled, None));
@@ -712,7 +712,7 @@ async fn a_canceled_request_between_two_probes_leaves_the_first_to_the_chain_the
         (Some(NOW + 540_000), Reason::RequestCanceled),
         "the cancel restored the recipe on the first probe's entry"
     );
-    r.advance_attended(260_000);
+    r.advance_attended(260_000).await;
     r.step().await;
     let status = r.view("main");
     assert_eq!(
@@ -724,10 +724,10 @@ async fn a_canceled_request_between_two_probes_leaves_the_first_to_the_chain_the
         (2, Some(NOW + 810_000), Reason::Scheduled),
         "the kept probe and the restored recipe's probe, which read the entry back 540 s in and kept it to 840 s"
     );
-    r.advance_attended(30_000);
+    r.advance_attended(30_000).await;
     r.step().await;
     r.engine.flush_persisted().await;
-    r.advance_attended(30_000);
+    r.advance_attended(30_000).await;
     open_request_as(&r, "warm", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "warm", 2_000));
     let rows = final_rollups(&r).await;
@@ -754,18 +754,18 @@ async fn a_failed_request_between_two_probes_then_the_restored_recipes_lapse(cat
     .await;
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(
         r.saved_unanswered("main").await,
         1,
         "a covering probe, its entry to 570 s"
     );
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     // At 280 s the first recipe goes aside on its entry to 570 s, and this request's first stream event arms its own
     // recipe on an entry to 580 s, due at 550 s.
     open_request_as(&r, "second", OTHER_CLIENT, 0, 2_000).await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(
         (
@@ -775,7 +775,7 @@ async fn a_failed_request_between_two_probes_then_the_restored_recipes_lapse(cat
         (2, 2),
         "the kept probe and the probe that landed at 550 s while the second request streamed, its entry to 850 s"
     );
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     r.engine.observe(failed(&r, "second", Some(40)));
     assert_eq!(
         r.view("main").next_probe_at,
@@ -792,20 +792,20 @@ async fn a_failed_request_between_two_probes_then_the_restored_recipes_lapse(cat
                 body: br#"{"type":"error","error":{"type":"api_error","message":"x"}}"#.to_vec(),
             },
         );
-        r.advance_attended(1_000);
+        r.advance_attended(1_000).await;
         r.step().await;
         assert_eq!(
             r.saved("main").await["paused"],
             serde_json::json!(true),
             "the catch-up probe's 5xx paused the restored recipe"
         );
-        r.advance_attended(9_000);
+        r.advance_attended(9_000).await;
     } else {
-        r.advance_attended(10_000);
+        r.advance_attended(10_000).await;
     }
     r.step().await;
     r.engine.flush_persisted().await;
-    r.advance_attended(30_000);
+    r.advance_attended(30_000).await;
     open_request_as(&r, "warm", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "warm", 2_000));
     let rows = final_rollups(&r).await;
@@ -1080,10 +1080,11 @@ async fn a_recipe_a_failed_request_left_armed_lapses_and_is_evicted_as_any_armed
     .await;
     for agent in ["worker", "third"] {
         r.event(json!({"event": "agent_start", "agent_id": agent}))
+            .await
             .unwrap();
     }
     r.observe("main").await;
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     r.engine.observe(r.observed("failing", "main", BODY));
     r.engine.observe(r.selected("failing", "a"));
     r.engine.observe(failed(&r, "failing", None));
@@ -1091,7 +1092,7 @@ async fn a_recipe_a_failed_request_left_armed_lapses_and_is_evicted_as_any_armed
         r.view("main").next_probe_at.is_some(),
         "the failure left main's recipe armed"
     );
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     r.observe("worker").await;
     r.observe("third").await;
     assert_eq!(
@@ -1142,6 +1143,7 @@ async fn an_aside_recipe_counts_against_the_memory_bound_and_yields_first_to_its
     })
     .await;
     r.event(json!({"event": "agent_start", "agent_id": "side"}))
+        .await
         .unwrap();
     let retained = |r: &Rig| {
         let bytes = r.engine.stats().retained_bytes;
@@ -1200,9 +1202,9 @@ async fn a_probe_sent_while_a_request_is_open_outlives_that_request_failing_past
     .await;
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     open_request_as(&r, "second", OTHER_CLIENT, 0, 2_000).await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(
         r.view("main").probes_today,
@@ -1212,7 +1214,7 @@ async fn a_probe_sent_while_a_request_is_open_outlives_that_request_failing_past
     // The probe waits for the request after the failed one: the session's end below settles it, so a failure that
     // dropped it or settled it fails the read of its label.
     r.engine.observe(failed(&r, "second", Some(40)));
-    r.event(json!({"event": "session_end"})).unwrap();
+    r.event(json!({"event": "session_end"})).await.unwrap();
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes > 0).await;
     assert_eq!(
         probe_rows(&rows).wasted_probe_reasons,
@@ -1248,15 +1250,15 @@ async fn paused_retry(start: phoebis_bus::Usage) -> Rig {
     open_request_with(&r, "first", &hour, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
     assert_eq!(r.view("main").ttl_seconds, 3_600);
-    r.advance_attended(3_600_000 - 360_000);
+    r.advance_attended(3_600_000 - 360_000).await;
     r.step().await;
     assert_eq!(r.saved_unanswered("main").await, 1, "a covering probe");
     // Past the hour the first request's entry lived, and inside the hour the probe refreshed.
-    r.advance_attended(420_000);
+    r.advance_attended(420_000).await;
     open_request_with(&r, "second", &hour, 2_000, 0).await;
     // The probe due while the second request streams reads half the prefix back, which pauses the agent.
     r.up.push_credential_rule(A, "/v1/messages", probe_answer(1_000, 1_000));
-    r.advance_attended(3_600_000 - 360_000);
+    r.advance_attended(3_600_000 - 360_000).await;
     r.step().await;
     assert_eq!(
         (
@@ -1351,10 +1353,10 @@ async fn the_probes_a_bus_gap_leaves_keep_their_recipes_speed() {
     let fast = opus_body().replacen('{', r#"{"speed":"fast","#, 1);
     open_request_with(&r, "first", &fast, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     open_request_with(&r, "second", &fast, 2_000, 0).await;
     r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(
         (
@@ -1365,12 +1367,12 @@ async fn the_probes_a_bus_gap_leaves_keep_their_recipes_speed() {
         "the probe landed while the second request streamed"
     );
     r.engine.bus_gap(1, 0);
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     // The warm return on the fast lane answers the probe: one left unanswered would settle under the session's end
     // below, which the rows read as nothing wasted.
     open_request_with(&r, "third", &fast, 2_000, 0).await;
     r.engine.observe(completed(&r, "third", 2_000));
-    r.event(json!({"event": "session_end"})).unwrap();
+    r.event(json!({"event": "session_end"})).await.unwrap();
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
         r.db.read_blocking(|c| {
@@ -1433,15 +1435,15 @@ async fn a_warm_return_without_the_credit_answers_the_probes_it_kept() {
     .await;
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(r.saved_unanswered("main").await, 1);
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     // The warm return answers the probe: one left unanswered would settle under the session's end below, which the
     // rows read as nothing wasted.
     open_request_as(&r, "second", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "second", 2_000));
-    r.event(json!({"event": "session_end"})).unwrap();
+    r.event(json!({"event": "session_end"})).await.unwrap();
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
         r.db.read_blocking(|c| {
@@ -1472,9 +1474,9 @@ async fn a_cache_read_on_another_model_settles_the_probes_kept_on_the_first_as_a
     r.engine.observe(completed(&r, "first", 0));
     // A covering probe, which the failed request below decides nothing about and the third request settles as the one
     // cold return the rows read.
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     let other = opus_body();
     r.engine.observe(r.observed("second", "main", &other));
     r.engine.observe(r.selected("second", "a"));
@@ -1485,7 +1487,7 @@ async fn a_cache_read_on_another_model_settles_the_probes_kept_on_the_first_as_a
         "claude-sonnet-4-5",
         "the failed request restored the first turn's recipe and decided nothing"
     );
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     open_request_with(&r, "third", &other, 2_000, 0).await;
     r.engine.observe(completed(&r, "third", 2_000));
     r.ledger.clone().shutdown().await.unwrap();
@@ -1541,18 +1543,18 @@ async fn a_credit_on_the_standard_lane_leaves_the_fast_probe_kept_beside_it_to_s
     open_request_with(&r, "first", &fast, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
     r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     // The rows below read the fast probe settled as expired by its own entry, so it stays kept through the failed
     // request, and the credit that the standard probe alone can earn on its lane.
     assert_eq!(r.view("main").probes_today, 1, "a covering fast probe");
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     r.engine.observe(r.observed("second", "main", &standard));
     r.engine.observe(r.selected("second", "a"));
     r.engine.observe(failed(&r, "second", None));
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     open_request_with(&r, "third", &standard, 0, 2_000).await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(
         r.view("main").probes_today,
@@ -1560,7 +1562,7 @@ async fn a_credit_on_the_standard_lane_leaves_the_fast_probe_kept_beside_it_to_s
         "a covering standard probe landed while the third request streamed"
     );
     r.engine.bus_gap(1, 0);
-    r.advance_attended(40_000);
+    r.advance_attended(40_000).await;
     open_request_with(&r, "fourth", &standard, 2_000, 0).await;
     r.engine.observe(completed(&r, "fourth", 2_000));
     assert_eq!(r.saved_unanswered("main").await, 0);
@@ -1600,7 +1602,7 @@ async fn fourth_request_rows(offset: i64) -> Vec<RollupRow> {
     open_request_with(&r, "first", &fast, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
     r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     // The callers' rows read the fast probe settled as expired, and the standard probe's credit or its expiry.
     assert_eq!(
@@ -1608,13 +1610,13 @@ async fn fourth_request_rows(offset: i64) -> Vec<RollupRow> {
         1,
         "arrived {arrived} ms in: a covering fast probe"
     );
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     r.engine.observe(r.observed("second", "main", &standard));
     r.engine.observe(r.selected("second", "a"));
     r.engine.observe(failed(&r, "second", None));
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     open_request_with(&r, "third", &standard, 0, 2_000).await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(
         r.view("main").probes_today,
@@ -1623,7 +1625,7 @@ async fn fourth_request_rows(offset: i64) -> Vec<RollupRow> {
     );
     r.engine.bus_gap(1, 0);
     // The standard probe refreshed its five-minute entry 560 s in, so it lapses 860 s in.
-    r.advance_attended(offset);
+    r.advance_attended(offset).await;
     open_request_with(&r, "fourth", &standard, 2_000, 0).await;
     r.engine.observe(completed(&r, "fourth", 2_000));
     assert_eq!(
@@ -1715,13 +1717,13 @@ async fn a_fast_probe_inside_its_entry_earns_no_credit_on_the_standard_lane() {
     r.engine.observe(completed(&r, "first", 0));
     assert_eq!(r.view("main").ttl_seconds, 3_600, "a one-hour entry");
     r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
-    r.advance_attended(3_600_000 - 360_000);
+    r.advance_attended(3_600_000 - 360_000).await;
     r.step().await;
     // The rows below read the probe settled as the one cold return, so it stood unanswered until the request.
     assert_eq!(r.view("main").probes_today, 1, "a covering fast probe");
     // The probe refreshed its one-hour entry 3,240 s in, so it is there until 6,840 s in; the request arrives
     // 3,640 s in, past the hour since the first.
-    r.advance_attended(400_000);
+    r.advance_attended(400_000).await;
     open_request_with(&r, "second", &standard, 2_000, 0).await;
     r.engine.observe(completed(&r, "second", 2_000));
     r.ledger.clone().shutdown().await.unwrap();
@@ -1779,7 +1781,7 @@ async fn an_api_key_account_s_credit_settlement_and_skip_rows_file_under_billed(
     .await;
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     for _ in 0..4 {
         r.advance(270_000);
         r.step().await;
@@ -2070,12 +2072,12 @@ async fn a_plan_probe_and_an_overage_probe_both_wasted_file_one_row_per_funding_
                 body: read_back,
             },
         );
-        r.advance_attended(270_000);
+        r.advance_attended(270_000).await;
         r.step().await;
     }
     // The session's end settles both: the rows below read one wasted probe per funding.
     assert_eq!(r.view("main").probes_today, 2, "two probes nobody answered");
-    r.event(json!({"event": "session_end"})).unwrap();
+    r.event(json!({"event": "session_end"})).await.unwrap();
     let rows = final_rollups(&r).await;
     let mut by_funding: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
     for row in rows.iter().filter(|row| row.kind == "probe") {
@@ -2116,11 +2118,11 @@ async fn a_settlement_after_its_account_is_deleted_files_under_the_kind_the_prob
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
     // One probe nobody answered, which the session's end settles as the one wasted row below.
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     r.h.store.delete_account("a", "test").unwrap();
     r.h.router.reload().await.unwrap();
-    r.event(json!({"event": "session_end"})).unwrap();
+    r.event(json!({"event": "session_end"})).await.unwrap();
     let rows = final_rollups(&r).await;
     let settled: Vec<(&str, &str, u64)> = rows
         .iter()
@@ -2153,13 +2155,13 @@ async fn a_credit_binds_to_the_account_the_probe_warmed() {
     .await;
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     // The rows below read this probe settled as the one cold return when the request on b completes.
     assert_eq!(r.view("main").probes_today, 1, "a covering probe on a");
     // The probe refreshed its five-minute entry 270 s in, so it is there until 570 s in; the request arrives 400 s
     // in, past the five minutes since the first.
-    r.advance_attended(130_000);
+    r.advance_attended(130_000).await;
     r.engine.observe(r.observed("second", "main", BODY));
     r.engine.observe(r.selected("second", "b"));
     let mut served = completed(&r, "second", 2_000);
@@ -2197,14 +2199,14 @@ async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_expired
     r.engine.observe(completed(&r, "first", 0));
     // A covering probe, which stays kept through the failed request and which the third request settles as the one
     // expired probe the rows below read.
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     r.engine.observe(r.observed("second", "main", BODY));
     r.engine.observe(r.selected("second", "a"));
     r.engine.observe(failed(&r, "second", None));
     // The probe refreshed its five-minute entry 270 s in, so it expires 570 s in.
-    r.advance_attended(290_000);
+    r.advance_attended(290_000).await;
     open_request_as(&r, "third", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "third", 2_000));
     r.ledger.clone().shutdown().await.unwrap();
@@ -2625,6 +2627,7 @@ async fn a_tick_follows_a_resolution_for_a_compaction_open_on_an_ended_recipe() 
     })
     .await;
     r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap();
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
@@ -2721,13 +2724,13 @@ async fn a_compaction_credit_files_under_the_ttl_its_own_usage_proves() {
         ));
         r.engine.observe(completed(&r, "first", 0));
         assert_eq!(r.view("main").ttl_seconds, 3_600, "a one-hour entry");
-        r.advance_attended(3_600_000 - 360_000);
+        r.advance_attended(3_600_000 - 360_000).await;
         r.step().await;
         // The compaction below reads the entry this probe kept and is credited.
         assert_eq!(r.view("main").probes_today, 1, "a covering probe");
         // The probe refreshed its one-hour entry 3,240 s in, so it is there until 6,840 s in, and the compaction
         // arrives 3,640 s in, past the hour since the first.
-        r.advance_attended(400_000);
+        r.advance_attended(400_000).await;
         r.engine.observe(r.observed_with(
             "compaction",
             "main",
@@ -2832,11 +2835,11 @@ async fn a_retry_after_a_failed_turn_earns_the_credit_inside_the_probes_entry_an
         open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
         r.engine.observe(completed(&r, "first", 0));
         // A covering probe, which the retry below is credited for or settles as expired.
-        r.advance_attended(270_000);
+        r.advance_attended(270_000).await;
         r.step().await;
-        r.advance_attended(60_000);
+        r.advance_attended(60_000).await;
         a_turn_failed_with_a_500(&r, "failed");
-        r.advance_attended(retry_after);
+        r.advance_attended(retry_after).await;
         open_request_as(&r, "retry", OTHER_CLIENT, 2_000, 0).await;
         r.engine.observe(completed(&r, "retry", 2_000));
         let rows = final_rollups(&r).await;
@@ -2885,9 +2888,9 @@ async fn a_request_whose_replay_answers_a_401_is_credited_as_a_plain_success() {
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
     // A covering probe, which the replayed request below is credited for.
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     let arrived = r.now();
     r.engine.observe(r.observed("replayed", "main", BODY));
     r.engine.observe(r.selected("replayed", "a"));
@@ -2961,10 +2964,10 @@ async fn a_turn_whose_completion_the_engine_missed_starts_the_next_kept_warm_gap
         let first_at = r.now();
         open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
         r.engine.observe(completed(&r, "first", 0));
-        r.advance_attended(200_000);
+        r.advance_attended(200_000).await;
         let second_at = r.now();
         open_request_as(&r, "second", OTHER_CLIENT, 2_000, 0).await;
-        r.advance_attended(270_000);
+        r.advance_attended(270_000).await;
         r.step().await;
         assert_eq!(
             (
@@ -2979,7 +2982,7 @@ async fn a_turn_whose_completion_the_engine_missed_starts_the_next_kept_warm_gap
             "failed" => r.engine.observe(failed(&r, "second", Some(40))),
             _ => {}
         }
-        r.advance_attended(20_000);
+        r.advance_attended(20_000).await;
         open_request_as(&r, "third", OTHER_CLIENT, 2_000, 0).await;
         let payload = r.saved("main").await;
         assert_eq!(
@@ -3015,9 +3018,9 @@ async fn a_compaction_over_an_open_turn_moves_no_answered_instant_and_that_turns
     .await;
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(200_000);
+    r.advance_attended(200_000).await;
     open_request_as(&r, "second", OTHER_CLIENT, 2_000, 0).await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     // The third request below is credited for this probe.
     assert_eq!(
@@ -3025,11 +3028,11 @@ async fn a_compaction_over_an_open_turn_moves_no_answered_instant_and_that_turns
         1,
         "the probe landed while the second turn was open"
     );
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     r.engine
         .observe(compaction_named(&r, "compaction", "claude-sonnet-4-5"));
     r.engine.observe(failed(&r, "second", Some(40)));
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     open_request_as(&r, "third", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "third", 2_000));
     let rows = final_rollups(&r).await;
@@ -3059,12 +3062,12 @@ async fn final_rollups(r: &Rig) -> Vec<RollupRow> {
 async fn a_covering_probe_then_a_rewrite(r: &mut Rig) -> PinUsage {
     open_request_as(r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(r, "first", 0));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let first_cost =
         probe_rows(&rollups(r, |rows| tokens(probe_rows(rows).usage()) > 0).await).usage();
     r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     // Each caller's rows read both probes settled or answered, so both stood unanswered here.
     let status = r.view("main");
@@ -3093,7 +3096,7 @@ async fn a_covering_probe_whose_entry_lapsed_settles_expired_while_the_rewrite_a
     })
     .await;
     let first_cost = a_covering_probe_then_a_rewrite(&mut r).await;
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     open_request_as(&r, "second", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "second", 2_000));
     let rows = final_rollups(&r).await;
@@ -3125,7 +3128,7 @@ async fn a_request_past_both_entries_settles_both_probes_expired_and_earns_no_cr
     })
     .await;
     a_covering_probe_then_a_rewrite(&mut r).await;
-    r.advance_attended(360_000);
+    r.advance_attended(360_000).await;
     open_request_as(&r, "second", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "second", 2_000));
     let rows = final_rollups(&r).await;
@@ -3152,7 +3155,7 @@ async fn a_request_inside_both_entries_that_reads_nothing_settles_both_as_cold_r
     })
     .await;
     a_covering_probe_then_a_rewrite(&mut r).await;
-    r.advance_attended(20_000);
+    r.advance_attended(20_000).await;
     open_request_as(&r, "second", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "second", 0));
     let rows = final_rollups(&r).await;
@@ -3179,7 +3182,7 @@ async fn a_request_past_the_first_entry_and_inside_the_second_that_reads_nothing
     })
     .await;
     a_covering_probe_then_a_rewrite(&mut r).await;
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     open_request_as(&r, "second", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "second", 0));
     let rows = final_rollups(&r).await;
@@ -3206,7 +3209,7 @@ async fn a_chain_of_three_probes(r: &mut Rig) {
     open_request_as(r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(r, "first", 0));
     for _ in 0..3 {
-        r.advance_attended(270_000);
+        r.advance_attended(270_000).await;
         r.step().await;
     }
     let status = r.view("main");
@@ -3235,7 +3238,7 @@ async fn a_chain_of_three_probes_answered_warm_inside_its_last_entry_settles_non
     })
     .await;
     a_chain_of_three_probes(&mut r).await;
-    r.advance_attended(90_000);
+    r.advance_attended(90_000).await;
     open_request_as(&r, "second", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "second", 2_000));
     assert_eq!(r.saved_unanswered("main").await, 0);
@@ -3263,7 +3266,7 @@ async fn a_chain_whose_last_entry_lapsed_before_the_request_settles_all_three_pr
     .await;
     a_chain_of_three_probes(&mut r).await;
     // Past the last entry's end with no tick, so no fourth probe joins the chain at 1,080 s.
-    r.advance_attended(310_000);
+    r.advance_attended(310_000).await;
     open_request_as(&r, "second", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "second", 2_000));
     let rows = final_rollups(&r).await;
@@ -3290,7 +3293,7 @@ async fn a_compaction_request_inside_the_chains_last_entry_answers_every_probe_o
     })
     .await;
     a_chain_of_three_probes(&mut r).await;
-    r.advance_attended(90_000);
+    r.advance_attended(90_000).await;
     r.engine.observe(r.observed_with(
         "compaction",
         "main",
@@ -3366,10 +3369,10 @@ async fn a_kept_warm_credit_keys_the_client_of_the_request_it_credits() {
     )
     .await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     // Past each request's five minutes and inside the entry the probe after it kept.
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     open_observed(
         &r,
         "second",
@@ -3383,14 +3386,14 @@ async fn a_kept_warm_credit_keys_the_client_of_the_request_it_credits() {
     )
     .await;
     r.engine.observe(completed(&r, "second", 2_000));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(
         r.view("main").probes_today,
         2,
         "a probe kept the second request's entry"
     );
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     r.engine.observe(sent_from(
         r.observed_with(
             "compaction",
@@ -3466,7 +3469,7 @@ async fn a_probe_of_a_recipe_a_failed_turn_rearmed_keys_the_client_of_the_turn_t
     )
     .await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     open_observed(
         &r,
         "second",
@@ -3480,14 +3483,14 @@ async fn a_probe_of_a_recipe_a_failed_turn_rearmed_keys_the_client_of_the_turn_t
     )
     .await;
     r.engine.observe(failed(&r, "second", Some(40)));
-    r.advance_attended(210_000);
+    r.advance_attended(210_000).await;
     r.step().await;
     assert_eq!(
         r.view("main").probes_today,
         1,
         "the re-armed recipe's probe went out"
     );
-    r.event(json!({"event": "session_end"})).unwrap();
+    r.event(json!({"event": "session_end"})).await.unwrap();
     let rows = final_rollups(&r).await;
     assert_eq!(
         rows.iter()
@@ -3566,10 +3569,10 @@ async fn a_later_probe_that_did_not_cover_the_entry_leaves_the_credit_to_the_old
     .await;
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     r.up.push_credential_rule(A, "/v1/messages", probe_answer(100, 1_900));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let status = r.view("main");
     assert_eq!(
@@ -3581,7 +3584,7 @@ async fn a_later_probe_that_did_not_cover_the_entry_leaves_the_credit_to_the_old
         (2, 2, Reason::PartialCacheCoverage),
         "the second probe fell short of the entry 540 s in: {status:?}"
     );
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     open_request_as(&r, "second", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "second", 2_000));
     let rows = final_rollups(&r).await;
@@ -3609,12 +3612,12 @@ async fn a_later_probe_that_read_part_of_the_prefix_starts_a_chain_of_its_own_so
     .await;
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let first_cost =
         probe_rows(&rollups(&r, |rows| tokens(probe_rows(rows).usage()) > 0).await).usage();
     r.up.push_credential_rule(A, "/v1/messages", probe_answer(100, 1_900));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let status = r.view("main");
     assert_eq!(
@@ -3626,7 +3629,7 @@ async fn a_later_probe_that_read_part_of_the_prefix_starts_a_chain_of_its_own_so
         (2, 2, Reason::PartialCacheCoverage),
         "the second probe fell short of the entry 540 s in: {status:?}"
     );
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     open_request_as(&r, "second", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "second", 2_000));
     let rows = final_rollups(&r).await;
@@ -3702,7 +3705,7 @@ async fn an_expiry_swept_by_a_reader_settles_from_that_call() {
             "expire" => r.engine.expire(),
             _ => {
                 // The sweep ends the session the report names, so the report itself is refused after it.
-                let refused = r.event(json!({"event": "heartbeat"}));
+                let refused = r.event(json!({"event": "heartbeat"})).await;
                 assert!(refused.is_err(), "{refused:?}");
             }
         }
@@ -3732,7 +3735,7 @@ async fn a_paid_probe_held_upstream(session_expiry: Duration) -> Rig {
         "/v1/messages",
         Respond::Gated(Box::new(probe_answer(2_000, 0))),
     );
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.engine.step().await;
     wait_for(Duration::from_secs(5), || {
         (r.up.requests().len() == 2).then_some(())
@@ -3794,7 +3797,7 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
     );
 
     let mut r = a_paid_probe_held_upstream(day).await;
-    r.state("main", "released");
+    r.state("main", "released").await;
     let rows = served_probe_rows(&r).await;
     let probe = probe_rows(&rows);
     assert!(read_dollars(&r, &rows).0 > 0.0, "release");
@@ -3805,20 +3808,18 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
     );
 
     let r = a_paid_probe_held_upstream(day).await;
-    r.engine
-        .apply_event(
-            "desktop",
-            r.generation("desktop"),
-            decoded(json!({
-                "event": "session_start",
-                "session_id": "session",
-                "instance_id": "second",
-                "sequence": 1,
-                "previous_instance_id": "instance"
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+    r.post(
+        KEY,
+        json!({
+            "event": "session_start",
+            "session_id": "session",
+            "instance_id": "second",
+            "sequence": 1,
+            "previous_instance_id": "instance"
+        }),
+    )
+    .await
+    .unwrap();
     let rows = served_probe_rows(&r).await;
     let probe = probe_rows(&rows);
     assert!(read_dollars(&r, &rows).0 > 0.0, "replace");
@@ -4071,14 +4072,14 @@ async fn a_probe_answered_with_output_is_settled_as_wasted() {
     r.observe_with("main", &body).await;
     // A 2xx answer with valid usage that generated output: paid for, and no evidence about the entry.
     r.up.push_credential_rule(A, "/v1/messages", Respond::Json { status: 200, headers: vec![], body: br#"{"id":"m","type":"message","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":0,"cache_read_input_tokens":2000,"output_tokens":1}}"#.to_vec() });
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     // The release below settles this one probe as the wasted row the case reads.
     let status = r.view("main");
     assert_eq!(status.cause, Reason::UnexpectedOutput, "{status:?}");
     let rows = rollups(&r, |rows| tokens(probe_rows(rows).usage()) > 0).await;
     let cost = probe_rows(&rows).usage();
-    r.state("main", "released");
+    r.state("main", "released").await;
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
     let probe = probe_rows(&rows);
     assert_eq!(
@@ -4327,10 +4328,10 @@ async fn probe_on_the_pro_tier_of(organization_type: &str) -> (String, Option<f6
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
     // Attended, so the companion still holds its lease when it reports the release.
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(r.view("main").probes_today, 1, "{organization_type}");
-    r.state("main", "released");
+    r.state("main", "released").await;
     let rows = final_rollups(&r).await;
     let settled = rows
         .iter()
@@ -4432,14 +4433,14 @@ async fn a_credit_keys_its_requests_tier_and_band() {
     })
     .await;
     r.advance(phoebis_ledger::test_tables::JANUARY_2026 - r.now());
-    r.event(json!({"event": "session_start"})).unwrap();
+    r.event(json!({"event": "session_start"})).await.unwrap();
     let body = body_on(HAIKU);
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(r.view("main").probes_today, 1);
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
     let kept = r.observe_with("main", &body).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
@@ -4519,14 +4520,14 @@ async fn a_credit_answered_across_a_revision_boundary_files_at_its_requests_arri
     // The first request at 23:53 on January 31, its probe at 23:57:30 and the credited request at 23:58:30, the
     // session started again past the jump.
     r.advance(february - 420_000 - r.now());
-    r.event(json!({"event": "session_start"})).unwrap();
+    r.event(json!({"event": "session_start"})).await.unwrap();
     let body = body_on(HAIKU);
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(r.view("main").probes_today, 1);
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     r.up.push_credential_rule(
         A,
         "/v1/messages",
@@ -4546,7 +4547,7 @@ async fn a_credit_answered_across_a_revision_boundary_files_at_its_requests_arri
         "the relay received the request on January 31"
     );
     // The engine observes the request only after midnight, so its own clock at the observation reads February.
-    r.advance_attended(february + 60_000 - received);
+    r.advance_attended(february + 60_000 - received).await;
     r.pump(None).await;
     r.up.release();
     let resp = pending.await.unwrap();
@@ -4628,10 +4629,10 @@ async fn a_plan_funded_probe_on_a_model_without_a_weight_prices_no_figure() {
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
     // Attended, so the companion still holds its lease when it reports the release.
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(r.view("main").probes_today, 1);
-    r.state("main", "released");
+    r.state("main", "released").await;
     let rows = final_rollups(&r).await;
     let settled = rows
         .iter()
@@ -4676,20 +4677,20 @@ async fn a_long_context_probe_settled_wasted_the_next_day_files_under_its_own_ho
     // 2026-01-31 at 23:50 UTC, the session started again past the jump.
     let late_january = 1_769_903_400_000;
     r.advance(late_january - r.now());
-    r.event(json!({"event": "session_start"})).unwrap();
+    r.event(json!({"event": "session_start"})).await.unwrap();
     let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-5-5");
     r.up.push_credential_rule(OAUTH, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
     // One probe, which the release below settles as the one wasted row the case reads.
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let exchanged = r.now();
     let prices = r.pricing.clone();
     let february = phoebis_ledger::effective_instant("2026-02-01").expect("a date");
     assert!(exchanged < february, "the probe ran on January 31");
-    r.advance_attended(600_000);
+    r.advance_attended(600_000).await;
     assert!(r.now() >= february, "the settlement runs on February 1");
-    r.state("main", "released");
+    r.state("main", "released").await;
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
     let settled: Vec<&RollupRow> = rows.iter().filter(|row| row.wasted_probes > 0).collect();
     assert_eq!(
@@ -4737,7 +4738,7 @@ async fn a_probe_answered_across_a_revision_boundary_files_its_cost_and_its_wast
     );
     // A request at 23:54:30 UTC on January 31, so its probe is due at 23:59, the session started again past the jump.
     r.advance(february - 330_000 - r.now());
-    r.event(json!({"event": "session_start"})).unwrap();
+    r.event(json!({"event": "session_start"})).await.unwrap();
     let body = BODY.replace("claude-sonnet-4-5", HAIKU);
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -4746,7 +4747,7 @@ async fn a_probe_answered_across_a_revision_boundary_files_its_cost_and_its_wast
         "/v1/messages",
         Respond::Gated(Box::new(probe_answer(2_000, 0))),
     );
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.engine.step().await;
     wait_for(Duration::from_secs(5), || {
         (r.up.requests().len() == 2).then_some(())
@@ -4757,7 +4758,7 @@ async fn a_probe_answered_across_a_revision_boundary_files_its_cost_and_its_wast
         received < february,
         "the relay received the probe on January 31"
     );
-    r.advance_attended(february + 30_000 - received);
+    r.advance_attended(february + 30_000 - received).await;
     r.up.release();
     let rig = &r;
     fake_upstream::wait_for_async(Duration::from_secs(5), || async move {
@@ -4766,7 +4767,7 @@ async fn a_probe_answered_across_a_revision_boundary_files_its_cost_and_its_wast
     .await;
     r.pump(None).await;
     // The probe landed after midnight and stands unanswered: the release below settles it as the one wasted row.
-    r.state("main", "released");
+    r.state("main", "released").await;
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
     let mut keyed: Vec<(i64, &str, u64, u64)> = rows
         .iter()

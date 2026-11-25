@@ -11,7 +11,7 @@ use phoebis_bus::{
     ResponseChunk, ResponseHead, Usage,
 };
 use phoebis_keepalive::{
-    Ack, Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary, Lifecycle, Reason, RecipeState,
+    Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary, Lifecycle, Reason, RecipeState,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
 use serde_json::json;
@@ -272,21 +272,19 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
     r.observe("main").await;
     assert_eq!(r.view("main").cause, Reason::Scheduled);
     // A replacement from another instance discards the recipes and owns the session from here on.
-    r.engine
-        .apply_event(
-            "desktop",
-            r.generation("desktop"),
-            decoded(json!({
-                "event": "session_start",
-                "session_id": "session",
-                "instance_id": "second",
-                "sequence": 1,
-                "previous_instance_id": "instance",
-                "owner_id": "owner-2"
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+    r.post(
+        KEY,
+        json!({
+            "event": "session_start",
+            "session_id": "session",
+            "instance_id": "second",
+            "sequence": 1,
+            "previous_instance_id": "instance",
+            "owner_id": "owner-2"
+        }),
+    )
+    .await
+    .unwrap();
     // The new main has sent no request, so the session view words it: busy under `AwaitingRequest` reads
     // `registered`.
     assert_eq!(
@@ -384,8 +382,8 @@ const OWNER_MISMATCH_LINE: &str = "a request named another owner than the sessio
 async fn a_sessions_first_owner_mismatch_logs_one_warning_naming_the_session_and_its_second_logs_none(
 ) {
     let mut r = rig(RigSpec::default()).await;
-    r.event(registered_by("session", "owner-1")).unwrap();
-    r.event(registered_by("other", "owner-1")).unwrap();
+    r.event(registered_by("session", "owner-1")).await.unwrap();
+    r.event(registered_by("other", "owner-1")).await.unwrap();
     let (captured, _sink) = capture_tracing();
     for (id, session) in [("r-1", "session"), ("r-2", "session"), ("r-3", "other")] {
         r.engine.observe(owned(&r, id, session, "owner-2"));
@@ -413,9 +411,10 @@ async fn a_sessions_first_owner_mismatch_logs_one_warning_naming_the_session_and
     );
     let refused = r
         .event(json!({"event": "session_start", "instance_id": "second"}))
+        .await
         .unwrap_err();
     assert_eq!(
-        (refused.code, refused.instance_id),
+        (refused.code.as_str(), refused.instance_id),
         ("instance_conflict", None),
         "a start from another instance still meets the live holder unnamed"
     );
@@ -424,7 +423,7 @@ async fn a_sessions_first_owner_mismatch_logs_one_warning_naming_the_session_and
 #[tokio::test]
 async fn a_request_naming_another_owner_after_the_holders_lease_lapsed_takes_the_session_over() {
     let mut r = rig(RigSpec::default()).await;
-    r.event(registered_by("session", "owner-1")).unwrap();
+    r.event(registered_by("session", "owner-1")).await.unwrap();
     r.advance(r.lease_ms());
     let mut req = r.request("main");
     relay_common::set_header(&mut req, "x-keepalive-owner-id", "owner-2");
@@ -445,7 +444,7 @@ async fn a_request_naming_another_owner_after_the_holders_lease_lapsed_takes_the
     );
     // The re-registration renews the lease and names no owner, so the owner the takeover recorded stands and is the
     // one the fence compares against, and the first owner's request is the foreign one.
-    r.reregister();
+    r.reregister().await;
     r.engine
         .observe(owned(&r, "r-first-owner", "session", "owner-1"));
     assert_eq!(
@@ -461,7 +460,7 @@ async fn a_request_naming_another_owner_within_a_restored_sessions_window_change
         ..RigSpec::default()
     })
     .await;
-    r.event(registered_by("session", "owner-1")).unwrap();
+    r.event(registered_by("session", "owner-1")).await.unwrap();
     r.observe("main").await;
     r.engine.flush_persisted().await;
     r.engine = r.restart().await;
@@ -488,23 +487,23 @@ async fn a_stale_lifecycle_report_cannot_override_a_new_request() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     // A session-level answer carries main's generation as it stands before the new request.
-    r.event(json!({"event": "heartbeat"})).unwrap();
+    r.event(json!({"event": "heartbeat"})).await.unwrap();
     let old = r.request_generation("main");
     r.engine.observe(r.observed("new", "main", BODY));
-    let _ = r.engine.apply_event(
-        "desktop",
-        r.generation("desktop"),
-        decoded(json!({
-            "event": "state",
-            "session_id": "session",
-            "instance_id": "instance",
-            "sequence": r.sequence + 1,
-            "agent_id": "main",
-            "state": "released",
-            "request_generation": old
-        }))
-        .unwrap(),
-    );
+    let _ = r
+        .post(
+            KEY,
+            json!({
+                "event": "state",
+                "session_id": "session",
+                "instance_id": "instance",
+                "sequence": r.sequence + 1,
+                "agent_id": "main",
+                "state": "released",
+                "request_generation": old
+            }),
+        )
+        .await;
     assert_eq!(r.view("main").agent_state, Lifecycle::Busy);
     // A late completion about the old request arms nothing: it is no longer pending.
     r.engine
@@ -614,7 +613,7 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     r.engine.observe(r.selected("req", "a"));
     r.engine
         .observe(r.complete("req", Outcome::Succeeded, Some(usage(0, 2_000))));
-    let encoded = format!("{:?}{:?}", r.view("main"), r.reregister());
+    let encoded = format!("{:?}{:?}", r.view("main"), r.reregister().await);
     assert!(
         !encoded.contains("private prompt")
             && !encoded.contains(KEY)
@@ -622,6 +621,7 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     );
     assert_eq!(
         r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+            .await
             .unwrap_err()
             .code,
         "agent_limit",
@@ -649,6 +649,7 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     })
     .await;
     r2.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap();
     // Two recipes over 16 MiB each pass the 32 MiB budget together.
     let mid = format!(
@@ -684,12 +685,13 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     .await;
     for agent in ["active", "newest"] {
         r3.event(json!({"event": "agent_start", "agent_id": agent}))
+            .await
             .unwrap();
     }
     r3.observe("main").await;
-    r3.state("main", "idle");
+    r3.state("main", "idle").await;
     // One probe nobody came back for, which the wasted rows below read as the eviction's one.
-    r3.advance_attended(270_000);
+    r3.advance_attended(270_000).await;
     r3.step().await;
     r3.observe("active").await;
     r3.observe("newest").await;
@@ -734,8 +736,9 @@ fn arm(r: &Rig, id: &str, session: &str, agent: &str, bytes: usize) {
         .observe(r.complete(id, Outcome::Succeeded, Some(usage(0, 2_000))));
 }
 
-fn start_agent(r: &mut Rig, agent: &str) {
+async fn start_agent(r: &mut Rig, agent: &str) {
     r.event(json!({"event": "agent_start", "agent_id": agent}))
+        .await
         .unwrap();
 }
 
@@ -755,6 +758,7 @@ async fn a_registered_session_holds_no_slot_until_its_first_request_and_one_over
     })
     .await;
     r.event(session_start("other"))
+        .await
         .expect("the rig's session has sent nothing, so it holds no slot");
     arm(&r, "first", "session", "main", 1_000);
     let held = r.engine.stats().retained_bytes;
@@ -809,6 +813,7 @@ async fn a_first_request_whose_agents_pass_the_agent_cap_keeps_nothing_and_takes
     })
     .await;
     r.event(session_start("other"))
+        .await
         .expect("the rig's main holds no agent slot before its session's first request");
     arm(&r, "first", "session", "main", 1_000);
     let held = r.engine.stats().retained_bytes;
@@ -842,6 +847,7 @@ async fn a_session_refused_the_slot_expires_one_expiry_after_its_newest_refused_
     })
     .await;
     r.event(session_start("other"))
+        .await
         .expect("the rig's session has sent nothing, so it holds no slot");
     arm(&r, "first", "session", "main", 1_000);
     arm(&r, "second", "other", "main", 1_000);
@@ -884,9 +890,11 @@ async fn a_same_generation_replacement_keeps_the_slot_its_session_took() {
     })
     .await;
     r.event(session_start("other"))
+        .await
         .expect("the rig's session has sent nothing, so it holds no slot");
     arm(&r, "first", "session", "main", 1_000);
     r.event(session_start_as("session", "second", Some("instance")))
+        .await
         .expect("a replacement of a live session takes no slot of its own");
     arm(&r, "second", "other", "main", 1_000);
     let cause = r
@@ -916,14 +924,14 @@ async fn eviction_takes_unattended_then_the_oldest_idle_and_nothing_when_it_cann
     };
     let mut r = rig(spec()).await;
     for agent in ["older", "newer", "third"] {
-        start_agent(&mut r, agent);
+        start_agent(&mut r, agent).await;
     }
     arm(&r, "older", "session", "older", 10_000);
-    r.state("older", "idle");
-    r.advance_attended(10_000);
+    r.state("older", "idle").await;
+    r.advance_attended(10_000).await;
     arm(&r, "newer", "session", "newer", 10_000);
-    r.state("newer", "idle");
-    r.advance_attended(10_000);
+    r.state("newer", "idle").await;
+    r.advance_attended(10_000).await;
     arm(&r, "third", "session", "third", 10_000);
     let mut kept = r.engine.recipes_for("desktop", "session");
     kept.sort();
@@ -937,14 +945,16 @@ async fn eviction_takes_unattended_then_the_oldest_idle_and_nothing_when_it_cann
     );
 
     let mut r = rig(spec()).await;
-    r.event(session_start_as("other", "second", None)).unwrap();
+    r.event(session_start_as("other", "second", None))
+        .await
+        .unwrap();
     for agent in ["idle", "newest"] {
-        start_agent(&mut r, agent);
+        start_agent(&mut r, agent).await;
     }
     arm(&r, "idle", "session", "idle", 10_000);
-    r.state("idle", "idle");
+    r.state("idle", "idle").await;
     // Past the lease of `other`, which no heartbeat renews, while `session` stays attended.
-    r.advance_attended(100_000);
+    r.advance_attended(100_000).await;
     arm(&r, "unattended", "other", "main", 10_000);
     arm(&r, "newest", "session", "newest", 10_000);
     let unattended = view_of(&r.engine, "other", "main").unwrap();
@@ -956,11 +966,11 @@ async fn eviction_takes_unattended_then_the_oldest_idle_and_nothing_when_it_cann
 
     let mut r = rig(spec()).await;
     for agent in ["busy", "idle", "large"] {
-        start_agent(&mut r, agent);
+        start_agent(&mut r, agent).await;
     }
     arm(&r, "busy", "session", "busy", 10_000);
     arm(&r, "idle", "session", "idle", 10_000);
-    r.state("idle", "idle");
+    r.state("idle", "idle").await;
     arm(&r, "large", "session", "large", 16_000);
     let mut kept = r.engine.recipes_for("desktop", "session");
     kept.sort();
@@ -986,16 +996,17 @@ async fn an_oversized_request_invalidates_only_its_own_agent() {
     .await;
     r.observe("main").await;
     r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap();
     r.observe("worker").await;
     // A same-instance registration of the live session answers each agent's generation and touches no agent.
-    let before = r.reregister();
+    let before = r.reregister().await;
     let large = format!(
         r#"{{"model":"m","max_tokens":10,"messages":[{{"role":"user","content":"{}"}}]}}"#,
         "x".repeat(32 << 20)
     );
     r.engine.observe(r.observed("oversized", "worker", &large));
-    let after = r.reregister();
+    let after = r.reregister().await;
     let status = r.view("worker");
     assert!(
         listed_generation(&after, "worker") > listed_generation(&before, "worker")
@@ -1011,7 +1022,7 @@ async fn an_oversized_request_invalidates_only_its_own_agent() {
 }
 
 /// The generation a registration's answer lists for `agent`.
-fn listed_generation(ack: &Ack, agent: &str) -> u64 {
+fn listed_generation(ack: &Acked, agent: &str) -> u64 {
     ack.agents
         .iter()
         .flatten()
@@ -1051,7 +1062,7 @@ async fn a_body_whose_edited_member_is_spelled_with_an_escape_is_not_retained() 
 async fn unknown_ownership_needs_a_state_report_and_a_restart_rearms() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    r.state("main", "unknown");
+    r.state("main", "unknown").await;
     r.observe("main").await;
     assert_eq!(
         (
@@ -1061,20 +1072,22 @@ async fn unknown_ownership_needs_a_state_report_and_a_restart_rearms() {
         ),
         (Lifecycle::Unknown, None, Reason::AgentUnknown)
     );
-    r.state("main", "busy");
+    r.state("main", "busy").await;
     r.observe("main").await;
     assert!(
         r.view("main").next_probe_at.is_some(),
         "the state report restored observation"
     );
     r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap();
     r.observe("worker").await;
-    r.state("worker", "released");
+    r.state("worker", "released").await;
     let generation = r.request_generation("worker");
     r.event(
         json!({"event": "agent_start", "agent_id": "worker", "request_generation": generation}),
     )
+    .await
     .unwrap();
     r.observe("worker").await;
     assert!(
@@ -1087,6 +1100,7 @@ async fn unknown_ownership_needs_a_state_report_and_a_restart_rearms() {
 async fn a_bus_gap_discards_the_pending_observation_and_keeps_an_armed_recipe() {
     let mut r = rig(RigSpec::default()).await;
     r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap();
     r.observe("worker").await;
     assert_eq!(r.view("worker").cause, Reason::Scheduled);
@@ -1436,7 +1450,7 @@ async fn a_compaction_that_ends_short_keeps_the_previous_recipe(
 ) {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let before = without_guard(&r, "main");
     assert_eq!(
@@ -1450,7 +1464,7 @@ async fn a_compaction_that_ends_short_keeps_the_previous_recipe(
         "{before:?}"
     );
     let retained = r.engine.stats().retained_bytes;
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     compact(&r, "compaction", "b", status, read, outcome);
     assert_eq!(
         (without_guard(&r, "main"), r.engine.stats().retained_bytes),
@@ -1459,7 +1473,7 @@ async fn a_compaction_that_ends_short_keeps_the_previous_recipe(
     );
     assert_eq!(last_guard(&r, "main"), Some(Guard::Compaction));
     // 540 s in, the probe the first probe's entry scheduled.
-    r.advance_attended(260_000);
+    r.advance_attended(260_000).await;
     r.step().await;
     let resumed = r.view("main");
     assert_eq!(
@@ -1490,7 +1504,7 @@ async fn a_chain_of_two_probes(r: &mut Rig) {
     open_turn(r, "first", 0, 2_000).await;
     r.engine.observe(completed(r, "first", 0));
     for _ in 0..2 {
-        r.advance_attended(270_000);
+        r.advance_attended(270_000).await;
         r.step().await;
     }
     let status = r.view("main");
@@ -1517,7 +1531,7 @@ async fn a_completed_compaction_answers_the_chain_earns_its_credit_and_stops_the
     })
     .await;
     a_chain_of_two_probes(&mut r).await;
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     compact(&r, "compaction", "a", 200, 2_000, Outcome::Succeeded);
     let status = r.view("main");
     assert_eq!(
@@ -1551,7 +1565,7 @@ async fn a_completed_compaction_answers_the_chain_earns_its_credit_and_stops_the
         "the Sessions row's keepalive member reads null once the recipe stopped"
     );
     // 870 s in, past the stopped recipe's next due time.
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(
         r.view("main").probes_today,
@@ -1586,11 +1600,11 @@ async fn a_completed_compaction_judges_the_kept_and_the_unanswered_probes_as_one
     .await;
     open_turn(&r, "first", 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     open_turn(&r, "second", 2_000, 0).await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     r.engine
         .observe(r.complete("second", Outcome::Failed, Some(usage(0, 0))));
@@ -1604,7 +1618,7 @@ async fn a_completed_compaction_judges_the_kept_and_the_unanswered_probes_as_one
         (2, 2, Reason::RequestFailed),
         "one probe handed back, one sent while the failed turn was open: {status:?}"
     );
-    r.advance_attended(50_000);
+    r.advance_attended(50_000).await;
     compact(&r, "compaction", "a", 200, 2_000, Outcome::Succeeded);
     let status = r.view("main");
     assert_eq!(
@@ -1633,10 +1647,10 @@ async fn a_completed_compaction_that_reads_nothing_settles_the_probes_before_it_
     .await;
     open_turn(&r, "first", 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     assert_eq!(
         (
@@ -1645,7 +1659,7 @@ async fn a_completed_compaction_that_reads_nothing_settles_the_probes_before_it_
         ),
         (2, 2)
     );
-    r.advance_attended(60_000);
+    r.advance_attended(60_000).await;
     compact(&r, "compaction", "a", 200, 0, Outcome::Succeeded);
     let status = r.view("main");
     assert_eq!(
@@ -1681,7 +1695,7 @@ async fn an_open_compaction_holds_the_recipe_unprobed_and_a_bus_gap_ends_it_as_a
     r.engine.observe(r.selected("compaction", "a"));
     r.engine.observe(head(&r, "compaction", 200));
     // 280 s in, past the probe due 270 s in and inside the entry, which ends 300 s in.
-    r.advance_attended(280_000);
+    r.advance_attended(280_000).await;
     r.step().await;
     assert_eq!(
         without_guard(&r, "main"),
@@ -1714,11 +1728,11 @@ async fn a_turn_admitted_while_a_compaction_is_open_ends_the_compaction_as_a_fai
     .await;
     open_turn(&r, "first", 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     r.engine.observe(compaction(&r, "compaction"));
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     open_turn(&r, "next", 2_000, 0).await;
     r.engine.observe(r.selected("compaction", "a"));
     r.engine.observe(head(&r, "compaction", 200));
@@ -1749,12 +1763,12 @@ async fn a_turn_admitted_while_a_compaction_is_open_ends_the_compaction_as_a_fai
 #[tokio::test]
 async fn a_subagent_registered_again_after_its_release_holds_no_open_compaction() {
     let mut r = rig(RigSpec::default()).await;
-    start_agent(&mut r, "worker");
+    start_agent(&mut r, "worker").await;
     r.observe("worker").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     // 310 s in, past the first turn's own entry and inside the probe's, which ends 570 s in.
-    r.advance_attended(40_000);
+    r.advance_attended(40_000).await;
     r.engine.observe(r.observed_with(
         "compaction",
         "worker",
@@ -1767,11 +1781,12 @@ async fn a_subagent_registered_again_after_its_release_holds_no_open_compaction(
     r.engine.observe(r.selected("compaction", "a"));
     r.engine.observe(head(&r, "compaction", 200));
     r.engine.observe(message_start("compaction", 2_000, 0));
-    r.state("worker", "released");
+    r.state("worker", "released").await;
     let generation = r.request_generation("worker");
     r.event(
         json!({"event": "agent_start", "agent_id": "worker", "request_generation": generation}),
     )
+    .await
     .unwrap();
     r.engine.observe(completed(&r, "compaction", 2_000));
     let status = r.view("worker");
@@ -1798,17 +1813,17 @@ async fn the_lapse_sweep_leaves_the_probes_of_an_open_compaction_to_its_completi
     })
     .await;
     a_chain_of_two_probes(&mut r).await;
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     open_turn(&r, "second", 2_000, 0).await;
     r.engine
         .observe(r.complete("second", Outcome::Failed, Some(usage(0, 0))));
-    r.advance_attended(10_000);
+    r.advance_attended(10_000).await;
     r.engine.observe(compaction(&r, "compaction"));
     r.engine.observe(r.selected("compaction", "a"));
     r.engine.observe(head(&r, "compaction", 200));
     r.engine.observe(message_start("compaction", 2_000, 0));
     // 850 s in, past the chain's last entry.
-    r.advance_attended(290_000);
+    r.advance_attended(290_000).await;
     r.step().await;
     r.engine.flush_persisted().await;
     assert_eq!(

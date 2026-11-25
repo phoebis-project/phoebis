@@ -156,7 +156,7 @@ async fn tick(r: &mut Rig, at: i64, attended: bool) {
             .min();
         let next = due.map_or(at, |due| due.min(at)).max(now);
         if attended {
-            r.advance_attended(next - now);
+            r.advance_attended(next - now).await;
         } else {
             r.advance(next - now);
         }
@@ -204,12 +204,12 @@ async fn wasted(r: &Rig, probes: u64) -> BTreeMap<String, u64> {
     .await
 }
 
-fn report(r: &mut Rig, agent: &str, mut fields: Value) {
+async fn report(r: &mut Rig, agent: &str, mut fields: Value) {
     fields["agent_id"] = agent.into();
-    r.report(fields).unwrap();
+    r.report(fields).await.unwrap();
 }
 
-fn park(r: &mut Rig, agent: &str, kind: &str, deadline: Option<i64>, wake_at: Option<i64>) {
+async fn park(r: &mut Rig, agent: &str, kind: &str, deadline: Option<i64>, wake_at: Option<i64>) {
     let mut fields = json!({"event": "state", "state": "parked", "park_kind": kind});
     if let Some(deadline) = deadline {
         fields["deadline"] = deadline.into();
@@ -217,11 +217,11 @@ fn park(r: &mut Rig, agent: &str, kind: &str, deadline: Option<i64>, wake_at: Op
     if let Some(wake_at) = wake_at {
         fields["wake_at"] = wake_at.into();
     }
-    report(r, agent, fields);
+    report(r, agent, fields).await;
 }
 
-fn presence(r: &mut Rig) {
-    report(r, "main", json!({"event": "activity", "kind": "presence"}));
+async fn presence(r: &mut Rig) {
+    report(r, "main", json!({"event": "activity", "kind": "presence"})).await;
 }
 
 /// The end of the newest entry the agent's pending probes wrote, read off the payload a save wrote.
@@ -276,7 +276,7 @@ async fn main_idle_is_probed_until_the_window_ends_with_idle_limit() {
     let mut r = rig(dollars(policy(|p| p.max_idle_seconds = 1_800))).await;
     r.observe("main").await;
     let start = r.now();
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     tick_to(&mut r, start + 1_800_000 - 1).await;
     let view = r.view("main");
     assert_eq!(
@@ -300,7 +300,7 @@ async fn an_idle_window_above_the_break_even_runs_to_its_set_limit() {
     let mut r = rig(dollars(policy(|p| p.max_idle_seconds = 3_600))).await;
     r.observe("main").await;
     let start = r.now();
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     ends_at(
         &mut r,
         "main",
@@ -316,9 +316,9 @@ async fn presence_restarts_the_window_and_marks_nothing_busy() {
     let mut r = rig(plan(policy(|_| {}))).await;
     r.observe("main").await;
     let start = r.now();
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     tick_to(&mut r, start + 50 * MINUTE).await;
-    presence(&mut r);
+    presence(&mut r).await;
     assert_eq!(
         (
             r.view("main").agent_state,
@@ -349,7 +349,7 @@ async fn a_park_on_a_task_is_probed_past_the_window_until_max_parked_seconds_or_
     let mut r = rig(plan(policy(|p| p.max_parked_seconds = Some(5_400)))).await;
     r.observe("main").await;
     let start = r.now();
-    park(&mut r, "main", "background", Some(start + 2 * HOUR), None);
+    park(&mut r, "main", "background", Some(start + 2 * HOUR), None).await;
     tick_to(&mut r, start + HOUR + 5 * MINUTE).await;
     assert!(
         retained(&r, "main") && r.view("main").agent_state == Lifecycle::Parked,
@@ -369,7 +369,7 @@ async fn a_park_on_a_task_is_probed_past_the_window_until_max_parked_seconds_or_
     let mut r = rig(plan(policy(|_| {}))).await;
     r.observe("main").await;
     let start = r.now();
-    park(&mut r, "main", "background", Some(start + 2 * HOUR), None);
+    park(&mut r, "main", "background", Some(start + 2 * HOUR), None).await;
     tick_to(&mut r, start + 2 * HOUR - 1).await;
     assert_eq!(
         (r.view("main").agent_state, retained(&r, "main")),
@@ -403,12 +403,13 @@ async fn a_deadline_ends_the_park_and_restarts_the_window_in_both_orderings() {
             "background",
             Some(start + 30 * MINUTE),
             None,
-        );
+        )
+        .await;
         if mod_first {
             // The mod's heartbeat closes the command past its deadline and reports idle before the router ticks.
             tick_to(&mut r, start + 30 * MINUTE - 1).await;
-            r.advance_attended(1);
-            r.state("main", "idle");
+            r.advance_attended(1).await;
+            r.state("main", "idle").await;
         }
         tick_to(&mut r, start + 30 * MINUTE).await;
         assert_eq!(
@@ -434,7 +435,7 @@ async fn a_scheduled_park_is_probed_to_a_wake_within_the_horizon_and_held_with_h
     let mut r = rig(plan(policy(|_| {}))).await;
     r.observe("main").await;
     let start = r.now();
-    park(&mut r, "main", "scheduled", None, Some(start + 90 * MINUTE));
+    park(&mut r, "main", "scheduled", None, Some(start + 90 * MINUTE)).await;
     tick_to(&mut r, start + HOUR).await;
     let at_hour = r.view("main").probes_today;
     tick_to(&mut r, start + 90 * MINUTE - 1).await;
@@ -458,7 +459,7 @@ async fn a_scheduled_park_is_probed_to_a_wake_within_the_horizon_and_held_with_h
     .await;
     r.observe("main").await;
     let start = r.now();
-    park(&mut r, "main", "scheduled", None, Some(start + 72 * HOUR));
+    park(&mut r, "main", "scheduled", None, Some(start + 72 * HOUR)).await;
     tick_to(&mut r, start + HOUR - 1).await;
     assert_eq!(
         (r.view("main").cause, r.view("main").next_probe_at),
@@ -501,7 +502,7 @@ async fn a_scheduled_park_is_probed_to_a_wake_within_the_horizon_and_held_with_h
         "the hold settles its probes once"
     );
     // A nearer wake re-opens it while the entry the last probe kept is still warm.
-    park(&mut r, "main", "scheduled", None, Some(start + 3 * HOUR));
+    park(&mut r, "main", "scheduled", None, Some(start + 3 * HOUR)).await;
     tick_to(&mut r, start + HOUR + 30_000).await;
     let reopened = r.view("main");
     assert_eq!(
@@ -524,7 +525,7 @@ async fn a_horizon_hold_ends_expired_once_its_entry_lapses_and_shows_no_probe_du
     .await;
     r.observe("main").await;
     let start = r.now();
-    park(&mut r, "main", "scheduled", None, Some(start + 72 * HOUR));
+    park(&mut r, "main", "scheduled", None, Some(start + 72 * HOUR)).await;
     tick_to(&mut r, start + HOUR - 1).await;
     // The probe due at the hour is the one the hold withholds, and the entry the one before it kept expires a lead
     // after that due time.
@@ -574,20 +575,22 @@ async fn a_disabled_pool_lapses_a_recipe_at_its_expiry_and_one_enabled_again_ins
     .await;
     r.observe("main").await;
     let start = r.now();
-    park(&mut r, "main", "background", Some(start + 2 * MINUTE), None);
+    park(&mut r, "main", "background", Some(start + 2 * MINUTE), None).await;
     edit_pool(&r, |pool| pool.enabled = false).await;
-    tick_to(&mut r, start + 2 * MINUTE).await;
+    // The events route refuses the key of a disabled pool, so the companion sends no report while the pool is
+    // disabled, and none behind the enable once the lease lapsed under the disabled pool.
+    tick_silent_to(&mut r, start + 2 * MINUTE).await;
     assert_eq!(
         (r.view("main").agent_state, r.view("main").cause),
         (Lifecycle::Idle, Reason::PoolDisabled),
         "the deadline that passes under the disabled pool ends the park on time"
     );
-    tick_to(&mut r, start + 300_000 - 1).await;
+    tick_silent_to(&mut r, start + 300_000 - 1).await;
     assert_eq!(
         (r.view("main").cause, retained(&r, "main")),
         (Reason::PoolDisabled, true)
     );
-    tick_to(&mut r, start + 300_000).await;
+    tick_silent_to(&mut r, start + 300_000).await;
     assert_eq!(
         (
             r.view("main").cause,
@@ -604,10 +607,10 @@ async fn a_disabled_pool_lapses_a_recipe_at_its_expiry_and_one_enabled_again_ins
     r.observe("main").await;
     let start = r.now();
     edit_pool(&r, |pool| pool.enabled = false).await;
-    tick_to(&mut r, start + 3 * MINUTE).await;
+    tick_silent_to(&mut r, start + 3 * MINUTE).await;
     assert_eq!(r.view("main").cause, Reason::PoolDisabled);
     edit_pool(&r, |pool| pool.enabled = true).await;
-    tick_to(&mut r, start + 4 * MINUTE).await;
+    tick_silent_to(&mut r, start + 4 * MINUTE).await;
     assert_eq!(
         (r.view("main").cause, r.view("main").probes_today),
         (Reason::Scheduled, 1),
@@ -620,7 +623,7 @@ async fn a_park_with_no_deadline_ends_at_the_break_even_under_a_null_parked_ceil
     let mut r = rig(plan(policy(|_| {}))).await;
     r.observe("main").await;
     let start = r.now();
-    park(&mut r, "main", "background", None, None);
+    park(&mut r, "main", "background", None, None).await;
     ends_at(
         &mut r,
         "main",
@@ -643,7 +646,7 @@ async fn a_paused_recipe_held_under_horizon_settles_its_probes_there_and_keeps_i
     .await;
     r.observe("main").await;
     let start = r.now();
-    park(&mut r, "main", "scheduled", None, Some(start + 72 * HOUR));
+    park(&mut r, "main", "scheduled", None, Some(start + 72 * HOUR)).await;
     tick_to(&mut r, start + 3_500_000).await;
     // An answer with no usage pauses the recipe and cools no account, so no gate hold rewrites the pause's reason.
     r.up.push_credential_rule(
@@ -705,7 +708,8 @@ async fn held_under_a_one_hour_horizon() -> (Rig, i64) {
         "scheduled",
         None,
         Some(start + 150 * MINUTE),
-    );
+    )
+    .await;
     tick_to(&mut r, start + HOUR).await;
     assert_eq!(
         (r.view("main").cause, retained(&r, "main")),
@@ -772,7 +776,8 @@ async fn a_raised_horizon_releases_a_held_recipe_and_a_key_opt_out_discards_it()
     let (mut r, _) = held_under_a_one_hour_horizon().await;
     edit_pool(&r, |pool| pool.enabled = false).await;
     let now = r.now();
-    tick_to(&mut r, now + 1).await;
+    // The events route refuses the key of a disabled pool, so the companion sends no report there.
+    tick_silent_to(&mut r, now + 1).await;
     assert_eq!(
         (r.view("main").cause, retained(&r, "main")),
         (Reason::PoolDisabled, true),
@@ -786,11 +791,11 @@ async fn a_passed_wake_ends_the_park_like_a_deadline_in_both_orderings() {
         let mut r = rig(plan(policy(|_| {}))).await;
         r.observe("main").await;
         let start = r.now();
-        park(&mut r, "main", "scheduled", None, Some(start + 30 * MINUTE));
+        park(&mut r, "main", "scheduled", None, Some(start + 30 * MINUTE)).await;
         if mod_first {
             tick_to(&mut r, start + 30 * MINUTE - 1).await;
-            r.advance_attended(1);
-            r.state("main", "idle");
+            r.advance_attended(1).await;
+            r.state("main", "idle").await;
         }
         tick_to(&mut r, start + 30 * MINUTE).await;
         assert_eq!(
@@ -821,7 +826,8 @@ async fn both_kinds_are_active_while_any_rule_says_probe() {
         "both",
         Some(start + 3 * HOUR),
         Some(start + 100 * MINUTE),
-    );
+    )
+    .await;
     tick_to(&mut r, start + 95 * MINUTE).await;
     assert_eq!(
         (r.view("main").agent_state, retained(&r, "main")),
@@ -845,7 +851,7 @@ async fn a_repeated_park_of_the_same_kind_keeps_the_parked_ceilings_start() {
     let mut r = rig(plan(policy(|p| p.max_parked_seconds = Some(5_400)))).await;
     r.observe("main").await;
     let start = r.now();
-    park(&mut r, "main", "background", Some(start + 3 * HOUR), None);
+    park(&mut r, "main", "background", Some(start + 3 * HOUR), None).await;
     tick_to(&mut r, start + 30 * MINUTE).await;
     park(
         &mut r,
@@ -853,7 +859,8 @@ async fn a_repeated_park_of_the_same_kind_keeps_the_parked_ceilings_start() {
         "background",
         Some(start + 3 * HOUR + 30 * MINUTE),
         None,
-    );
+    )
+    .await;
     ends_at(
         &mut r,
         "main",
@@ -868,6 +875,7 @@ async fn a_repeated_park_of_the_same_kind_keeps_the_parked_ceilings_start() {
 async fn a_subagents_park_follows_the_park_rules_and_no_idle_window_applies_to_it() {
     let mut r = rig(plan(policy(|_| {}))).await;
     r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap();
     r.observe("worker").await;
     let start = r.now();
@@ -877,7 +885,8 @@ async fn a_subagents_park_follows_the_park_rules_and_no_idle_window_applies_to_i
         "background",
         Some(start + 90 * MINUTE),
         None,
-    );
+    )
+    .await;
     tick_to(&mut r, start + 90 * MINUTE - 1).await;
     assert!(
         retained(&r, "worker"),
@@ -892,6 +901,7 @@ async fn a_subagents_park_follows_the_park_rules_and_no_idle_window_applies_to_i
     // A busy subagent has no ceiling of its own.
     let mut r = rig(dollars(policy(|_| {}))).await;
     r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap();
     r.observe_with("worker", &hour_body()).await;
     let start = r.now();
@@ -918,7 +928,7 @@ async fn a_silent_session_is_probed_under_the_window_from_its_last_real_request_
     let mut r = rig(plan(policy(|_| {}))).await;
     r.observe("main").await;
     let start = r.now();
-    park(&mut r, "main", "background", Some(start + 3 * HOUR), None);
+    park(&mut r, "main", "background", Some(start + 3 * HOUR), None).await;
     tick_silent_to(&mut r, start + HOUR - 1).await;
     assert_eq!(
         r.engine.sessions()[0].companion,
@@ -967,7 +977,7 @@ async fn a_price_file_with_no_usable_row_falls_back_to_the_shipped_tightest_row(
     .await;
     r.observe("main").await;
     let start = r.now();
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     tick_to(&mut r, start + 2_760_000 - 1).await;
     assert!(retained(&r, "main"), "{:?}", r.view("main"));
     tick_to(&mut r, start + 2_760_000).await;
@@ -1005,7 +1015,7 @@ async fn funding_and_ttl_pick_the_break_even() {
         let mut r = rig(spec).await;
         r.observe_with("main", &body).await;
         let start = r.now();
-        r.state("main", "idle");
+        r.state("main", "idle").await;
         tick_to(&mut r, start + window - 1).await;
         assert!(retained(&r, "main"), "{name}: {:?}", r.view("main"));
         tick_to(&mut r, start + window).await;
@@ -1033,7 +1043,7 @@ async fn a_fast_recipes_ceilings_read_the_fast_cells() {
     .await;
     r.observe_with("main", &fast_body()).await;
     let start = r.now();
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     ends_at(
         &mut r,
         "main",

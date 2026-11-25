@@ -30,9 +30,6 @@ pub use engine::{
     EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns, Park, ParkKind,
     PrefixAnchor, Reason, SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS, MAIN_AGENT,
 };
-pub use events::{
-    decode_json_event, Ack, AckAgent, Event, EventError, EventReport, Reported, PROTOCOL,
-};
 pub use facts::{AgentFacts, SessionFacts};
 pub use probe::PROBE_DEADLINE;
 pub use recipe::{

@@ -6871,7 +6871,11 @@ async fn sessions_harness_priced(
     pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
 ) -> common::Full {
     let seed = sessions_seed(pins).await;
-    common::admin_parts_full_on_priced(seed.store.clone(), seed.clock_cell.clone(), prices).await
+    let mut parts =
+        common::admin_parts_full_on_priced(seed.store.clone(), seed.clock_cell.clone(), prices)
+            .await;
+    parts.desktop_secret = seed.desktop_secret.clone();
+    parts
 }
 
 /// `sessions_harness_with` pricing dollars and shares through the ledger's test tables rather than the shipped files.
@@ -6879,7 +6883,11 @@ async fn sessions_harness_on_test_tables(
     pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
 ) -> common::Full {
     let seed = sessions_seed(pins).await;
-    common::admin_parts_full_test_tables(Some((seed.store.clone(), seed.clock_cell.clone()))).await
+    let mut parts =
+        common::admin_parts_full_test_tables(Some((seed.store.clone(), seed.clock_cell.clone())))
+            .await;
+    parts.desktop_secret = seed.desktop_secret.clone();
+    parts
 }
 
 /// `sessions_harness_with` with the sessions route bounded by `session_expiry` and `non_companion_idle` rather than
@@ -6890,29 +6898,31 @@ async fn sessions_harness_bounded(
     pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
 ) -> common::Full {
     let seed = sessions_seed(pins).await;
-    common::admin_parts_full_on_bounded(
+    let mut parts = common::admin_parts_full_on_bounded(
         seed.store.clone(),
         seed.clock_cell.clone(),
         session_expiry,
         non_companion_idle,
     )
-    .await
+    .await;
+    parts.desktop_secret = seed.desktop_secret.clone();
+    parts
 }
 
 /// The harness `sessions_harness_with` writes its store through: the pool, the key, the business account's tier and
-/// `pins`.
+/// `pins`. It holds the key's secret, which a harness over the same store hands on.
 async fn sessions_seed(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>) -> common::Full {
     use common::{generation, login, post};
-    let seed = common::admin_parts_full().await;
+    let mut seed = common::admin_parts_full().await;
     let seeding = login(&seed.app, "admin-secret").await;
     post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&seeding)).await;
-    post(
+    let secret = common::created_key_secret(
         &seed.app,
-        "/admin/keys",
+        &seeding,
         r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-        Some(&seeding),
     )
     .await;
+    seed.desktop_secret = Some(secret);
     name_the_tier(&seed.store, "business", "default_claude_max_20x");
     for pin in pins(generation(&seed.store, "desktop")) {
         seed.store.upsert_pin(&pin).unwrap();
@@ -8800,7 +8810,11 @@ async fn sessions_harness_costed(
     pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
 ) -> common::Full {
     let seed = sessions_seed(pins).await;
-    common::admin_parts_full_on_costed(seed.store.clone(), seed.clock_cell.clone(), costs).await
+    let mut parts =
+        common::admin_parts_full_on_costed(seed.store.clone(), seed.clock_cell.clone(), costs)
+            .await;
+    parts.desktop_secret = seed.desktop_secret.clone();
+    parts
 }
 
 #[tokio::test]
@@ -9675,12 +9689,21 @@ fn context_pin(
 
 /// Registers `session` with the companion and each of `agents` under it, main and each agent with one observed turn so
 /// the keepalive's view carries its recipe, then releases each of `released` as the mod reports it.
-fn register_companion(parts: &common::Full, session: &str, agents: &[&str], released: &[&str]) {
+async fn register_companion(
+    parts: &common::Full,
+    session: &str,
+    agents: &[&str],
+    released: &[&str],
+) {
     let generation = common::generation(&parts.store, "desktop");
+    let secret = parts
+        .desktop_secret
+        .as_deref()
+        .expect("the harness created the key desktop");
     let mut sequence = 0;
     // The generation each agent's last answer carried, which a state report goes out under.
     let mut answered: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
-    let mut report = |event: &str, agent: Option<&str>, state: Option<&str>| {
+    let mut report = async |event: &str, agent: Option<&str>, state: Option<&str>| {
         sequence += 1;
         let request_generation =
             state.map(|_| answered.get(agent.unwrap()).copied().unwrap_or_default());
@@ -9699,22 +9722,27 @@ fn register_companion(parts: &common::Full, session: &str, agents: &[&str], rele
         if let Some(request_generation) = request_generation {
             body["request_generation"] = request_generation.into();
         }
-        let ack = common::report_as_the_mod(&parts.keepalive, generation, body);
-        if let Some(agent) = ack.agent_id {
-            answered.insert(agent, ack.request_generation);
+        let ack = common::report_as_the_mod(&parts.keepalive, secret, body).await;
+        if let Some(agent) = ack["agent_id"].as_str() {
+            answered.insert(
+                agent.to_string(),
+                ack["request_generation"]
+                    .as_u64()
+                    .expect("an acknowledgment names the agent's generation"),
+            );
         }
     };
-    report("session_start", None, None);
+    report("session_start", None, None).await;
     let observe = |agent: &str| {
         parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: format!("k-{session}-{agent}"), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some(session.into()), agent_id: Some(agent.to_string()), parent_agent_id: (agent != "main").then(|| "main".into()), owner_id: None, model: "claude-opus-5".into(), canonical_model: "claude-opus-5".into(), wire_model: "claude-opus-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-opus-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: common::NOW, fallback_digest: None, cache_marker: false }));
     };
     observe("main");
     for agent in agents {
-        report("agent_start", Some(agent), None);
+        report("agent_start", Some(agent), None).await;
         observe(agent);
     }
     for agent in released {
-        report("state", Some(agent), Some("released"));
+        report("state", Some(agent), Some("released")).await;
     }
 }
 
@@ -9981,8 +10009,9 @@ async fn a_companion_session_lists_main_and_each_unreleased_agents_conversation_
         "s1",
         &["worker-1", "worker-2", "worker-3"],
         &["worker-3"],
-    );
-    register_companion(&parts, "s2", &["worker-9"], &["worker-9"]);
+    )
+    .await;
+    register_companion(&parts, "s2", &["worker-9"], &["worker-9"]).await;
     let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         ["s1", "s2"].iter().all(|session| {
             v["sessions"]
@@ -10055,7 +10084,7 @@ async fn a_session_whose_requests_named_the_long_context_twin_answers_its_pins_p
     .await;
     let generation = common::generation(&parts.store, "desktop");
     let cookie = login(&parts.app, "admin-secret").await;
-    register_companion(&parts, "s-long", &["worker-1", "worker-2"], &[]);
+    register_companion(&parts, "s-long", &["worker-1", "worker-2"], &[]).await;
     for (id, session, agent, model, at) in [
         ("r1", "s-long", "main", "claude-opus-5", NOW - 60_000),
         ("r2", "s-long", "worker-1", "claude-opus-5", NOW - 40_000),
@@ -10624,7 +10653,7 @@ async fn a_session_no_companion_reports_leaves_after_the_timeout_and_its_old_lin
     )
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
-    register_companion(&parts, "s-companion", &[], &[]);
+    register_companion(&parts, "s-companion", &[], &[]).await;
     let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         v["sessions"]
             .as_array()
@@ -10844,7 +10873,10 @@ async fn an_ended_session_with_no_pin_and_no_request_leaves_once_its_end_is_olde
     )
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
-    let generation = common::generation(&parts.store, "desktop");
+    let secret = parts
+        .desktop_secret
+        .as_deref()
+        .expect("the harness created the key desktop");
     // Each session registers and ends at `at`, sending no request, as a client opened and closed at once does.
     for (session, at) in [
         ("s-ended-long-ago", NOW - 601_000),
@@ -10852,25 +10884,18 @@ async fn an_ended_session_with_no_pin_and_no_request_leaves_once_its_end_is_olde
     ] {
         parts.clock_cell.store(at, Ordering::SeqCst);
         for (sequence, event) in [(1, "session_start"), (2, "session_end")] {
-            parts
-                .keepalive
-                .apply_event(
-                    "desktop",
-                    generation,
-                    phoebis_keepalive::decode_json_event(
-                        serde_json::json!({
-                            "protocol": 1,
-                            "event": event,
-                            "session_id": session,
-                            "instance_id": "i1",
-                            "sequence": sequence
-                        })
-                        .to_string()
-                        .as_bytes(),
-                    )
-                    .unwrap(),
-                )
-                .unwrap();
+            common::report_as_the_mod(
+                &parts.keepalive,
+                secret,
+                serde_json::json!({
+                    "protocol": 1,
+                    "event": event,
+                    "session_id": session,
+                    "instance_id": "i1",
+                    "sequence": sequence
+                }),
+            )
+            .await;
         }
     }
     parts.clock_cell.store(NOW, Ordering::SeqCst);

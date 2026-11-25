@@ -1114,6 +1114,7 @@ async fn a_one_hour_recipe_holds_under_affinity_too_short_on_a_thirty_minute_pin
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .await
         .unwrap();
     let hour = BODY.replace(
         r#""cache_control":{"type":"ephemeral"}"#,
@@ -1236,6 +1237,7 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
     r.h.router.reload().await.unwrap();
     r.observe("main").await;
     r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap();
     // Round robin lands the session's second fresh placement on the pool's other account, so main and its
     // subagent hold two pins on two accounts rather than sharing one.

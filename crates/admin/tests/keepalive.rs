@@ -363,33 +363,25 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
-    post(
+    let secret = common::created_key_secret(
         &parts.app,
-        "/admin/keys",
+        &cookie,
         r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-        Some(&cookie),
     )
     .await;
     // A registration alone lists the session.
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            common::generation(&parts.store, "desktop"),
-            phoebis_keepalive::decode_json_event(
-                serde_json::json!({
-                    "protocol": 1,
-                    "event": "session_start",
-                    "session_id": "s1",
-                    "instance_id": "i1",
-                    "sequence": 1
-                })
-                .to_string()
-                .as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &secret,
+        serde_json::json!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 1
+        }),
+    )
+    .await;
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = listed["sessions"]
         .as_array()
@@ -621,31 +613,22 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
-    post(
+    let secret = common::created_key_secret(
         &parts.app,
-        "/admin/keys",
+        &cookie,
         r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-        Some(&cookie),
     )
     .await;
-    let generation = common::generation(&parts.store, "desktop");
-    let report = |body: serde_json::Value| {
-        parts
-            .keepalive
-            .apply_event(
-                "desktop",
-                generation,
-                phoebis_keepalive::decode_json_event(body.to_string().as_bytes()).unwrap(),
-            )
-            .unwrap()
-    };
+    let report =
+        |body: serde_json::Value| common::report_as_the_mod(&parts.keepalive, &secret, body);
     report(serde_json::json!({
         "protocol": 1,
         "event": "session_start",
         "session_id": "s1",
         "instance_id": "i1",
         "sequence": 1
-    }));
+    }))
+    .await;
     report(serde_json::json!({
         "protocol": 1,
         "event": "session_facts",
@@ -658,7 +641,8 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
         "repository": "https://git.example/acme/storefront.git",
         "repository_root": "/home/dev/work/storefront",
         "title": "Checkout retry rework"
-    }));
+    }))
+    .await;
     let started = report(serde_json::json!({
         "protocol": 1,
         "event": "agent_start",
@@ -666,7 +650,8 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
         "instance_id": "i1",
         "sequence": 3,
         "agent_id": "a1"
-    }));
+    }))
+    .await;
     report(serde_json::json!({
         "protocol": 1,
         "event": "agent_facts",
@@ -674,11 +659,12 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
         "instance_id": "i1",
         "sequence": 4,
         "agent_id": "a1",
-        "request_generation": started.request_generation,
+        "request_generation": started["request_generation"],
         "agent_type": "code-reviewer",
         "description": "Review the retry loop",
         "name": "reviewer"
-    }));
+    }))
+    .await;
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = listed["sessions"]
         .as_array()
@@ -761,33 +747,25 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
-    post(
+    let secret = common::created_key_secret(
         &parts.app,
-        "/admin/keys",
+        &cookie,
         r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-        Some(&cookie),
     )
     .await;
     let generation = common::generation(&parts.store, "desktop");
-    let started = parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            generation,
-            phoebis_keepalive::decode_json_event(
-                serde_json::json!({
-                    "protocol": 1,
-                    "event": "session_start",
-                    "session_id": "s1",
-                    "instance_id": "i1",
-                    "sequence": 1
-                })
-                .to_string()
-                .as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    let started = common::report_as_the_mod(
+        &parts.keepalive,
+        &secret,
+        serde_json::json!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 1
+        }),
+    )
+    .await;
     let now = common::NOW;
     parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r1".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None, cache_marker: false }));
     parts.keepalive.observe(phoebis_bus::Event::AccountSelected(
@@ -845,7 +823,7 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     // generation the registration answered, which main's request moved since.
     common::report_as_the_mod(
         &parts.keepalive,
-        generation,
+        &secret,
         serde_json::json!({
             "event": "state",
             "session_id": "s1",
@@ -853,9 +831,10 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
             "sequence": 2,
             "agent_id": "main",
             "state": "idle",
-            "request_generation": started.request_generation
+            "request_generation": started["request_generation"]
         }),
-    );
+    )
+    .await;
     parts.keepalive.step().await;
     let retained = parts.keepalive.stats().retained_bytes;
     assert!(retained > 0, "the request's recipe is retained");
@@ -997,29 +976,21 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     );
     // An ended session keeps its entry until the expiry and holds no slot, so the count beside the cap leaves it out.
     let s2 = |event: &str, sequence: u64| {
-        parts
-            .keepalive
-            .apply_event(
-                "desktop",
-                generation,
-                phoebis_keepalive::decode_json_event(
-                    serde_json::json!({
-                        "protocol": 1,
-                        "event": event,
-                        "session_id": "s2",
-                        "instance_id": "i2",
-                        "sequence": sequence
-                    })
-                    .to_string()
-                    .as_bytes(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
+        common::report_as_the_mod(
+            &parts.keepalive,
+            &secret,
+            serde_json::json!({
+                "protocol": 1,
+                "event": event,
+                "session_id": "s2",
+                "instance_id": "i2",
+                "sequence": sequence
+            }),
+        )
     };
-    s2("session_start", 1);
+    s2("session_start", 1).await;
     parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r2".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some("s2".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None, cache_marker: false }));
-    s2("session_end", 2);
+    s2("session_end", 2).await;
     assert_eq!(parts.keepalive.stats().sessions, 2, "the ended entry stays");
     let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
     assert_eq!(
@@ -1124,7 +1095,7 @@ struct Companion<'a> {
 }
 
 impl<'a> Companion<'a> {
-    fn start(parts: &'a common::Full, session: &'static str) -> Companion<'a> {
+    async fn start(parts: &'a common::Full, session: &'static str) -> Companion<'a> {
         let mut companion = Companion {
             parts,
             generation: common::generation(&parts.store, "desktop"),
@@ -1132,11 +1103,11 @@ impl<'a> Companion<'a> {
             session,
             sequence: 0,
         };
-        companion.report("session_start", None);
+        companion.report("session_start", None).await;
         companion
     }
 
-    fn report(&mut self, event: &str, state: Option<&str>) {
+    async fn report(&mut self, event: &str, state: Option<&str>) {
         self.sequence += 1;
         let mut body = serde_json::json!({
             "event": event,
@@ -1149,8 +1120,15 @@ impl<'a> Companion<'a> {
             body["state"] = state.into();
             body["request_generation"] = self.main_generation.into();
         }
-        let ack = common::report_as_the_mod(&self.parts.keepalive, self.generation, body);
-        self.main_generation = ack.request_generation;
+        let secret = self
+            .parts
+            .desktop_secret
+            .as_deref()
+            .expect("the harness created the key desktop");
+        let ack = common::report_as_the_mod(&self.parts.keepalive, secret, body).await;
+        self.main_generation = ack["request_generation"]
+            .as_u64()
+            .expect("an acknowledgment names main's generation");
     }
 
     /// Main's request at the harness clock's instant on the chain `boundaries` names, answered.
@@ -1257,21 +1235,21 @@ impl<'a> Companion<'a> {
 
     /// The harness clock moved to `until` in steps inside the companion's lease, each followed by a heartbeat, as an
     /// attending companion renews it.
-    fn attend_to(&mut self, until: i64) {
+    async fn attend_to(&mut self, until: i64) {
         let cell = &self.parts.clock_cell;
         while cell.load(std::sync::atomic::Ordering::SeqCst) < until {
             let now = cell.load(std::sync::atomic::Ordering::SeqCst);
             let next = (now + phoebis_keepalive::LEASE_MS / 2).min(until);
             cell.store(next, std::sync::atomic::Ordering::SeqCst);
-            self.report("heartbeat", None);
+            self.report("heartbeat", None).await;
         }
     }
 }
 
 /// A pool `main` over `direct` with keepalive off, so no probe runs whatever the clock does, and the key `desktop` in
-/// it: main's idle windows count under `main` all the same.
+/// it, whose secret the harness holds: main's idle windows count under `main` all the same.
 async fn idle_returns_harness() -> common::Full {
-    let parts = common::admin_parts_full().await;
+    let mut parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(
         &parts.app,
@@ -1280,13 +1258,13 @@ async fn idle_returns_harness() -> common::Full {
         Some(&cookie),
     )
     .await;
-    post(
+    let secret = common::created_key_secret(
         &parts.app,
-        "/admin/keys",
+        &cookie,
         r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-        Some(&cookie),
     )
     .await;
+    parts.desktop_secret = Some(secret);
     parts
 }
 
@@ -1317,18 +1295,18 @@ async fn main_idle_returns(parts: &common::Full, query: &str) -> serde_json::Val
 #[tokio::test]
 async fn the_overview_sums_the_idle_returns_of_the_last_7_utc_days_and_of_30_under_range_30d() {
     let parts = idle_returns_harness().await;
-    let mut first = Companion::start(&parts, "s1");
+    let mut first = Companion::start(&parts, "s1").await;
     first.main_request("r1", &["b1"]);
-    first.report("state", Some("idle"));
+    first.report("state", Some("idle")).await;
     parts.keepalive.step().await;
-    first.attend_to(common::NOW + 6 * MINUTE);
+    first.attend_to(common::NOW + 6 * MINUTE).await;
     first.main_request("r2", &["b1", "b2"]);
     parts
         .clock_cell
         .store(common::NOW + 10 * DAY, std::sync::atomic::Ordering::SeqCst);
-    let mut later = Companion::start(&parts, "s2");
+    let mut later = Companion::start(&parts, "s2").await;
     later.main_request("r3", &["d1"]);
-    later.report("state", Some("idle"));
+    later.report("state", Some("idle")).await;
     parts.keepalive.step().await;
     let last_seven = idle_returns_counted([1, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10]);
     assert_eq!(
@@ -1354,13 +1332,13 @@ async fn a_return_after_midnight_counts_on_its_reachs_day_so_a_range_from_the_ne
 ) {
     let parts = idle_returns_harness().await;
     let midnight = (common::NOW / DAY + 1) * DAY;
-    let mut companion = Companion::start(&parts, "s1");
+    let mut companion = Companion::start(&parts, "s1").await;
     companion.main_request("r1", &["b1"]);
-    companion.report("state", Some("idle"));
+    companion.report("state", Some("idle")).await;
     parts.keepalive.step().await;
-    companion.attend_to(midnight - MINUTE);
+    companion.attend_to(midnight - MINUTE).await;
     parts.keepalive.step().await;
-    companion.attend_to(midnight + MINUTE);
+    companion.attend_to(midnight + MINUTE).await;
     companion.main_request("r2", &["b1", "b2"]);
     let both = idle_returns_counted(
         [1, 1, 1, 1, 1, 1, 1, 1, 0, 0],
@@ -1467,11 +1445,10 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
-    post(
+    let secret = common::created_key_secret(
         &parts.app,
-        "/admin/keys",
+        &cookie,
         r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-        Some(&cookie),
     )
     .await;
     let g = common::generation(&parts.store, "desktop");
@@ -1497,25 +1474,18 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
             bodies: None,
         });
     }
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            g,
-            phoebis_keepalive::decode_json_event(
-                serde_json::json!({
-                    "protocol": 1,
-                    "event": "session_start",
-                    "session_id": "s1",
-                    "instance_id": "i1",
-                    "sequence": 1
-                })
-                .to_string()
-                .as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &secret,
+        serde_json::json!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 1
+        }),
+    )
+    .await;
     parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r3".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: g, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None, cache_marker: false }));
     parts.keepalive.observe(phoebis_bus::Event::AccountSelected(
         phoebis_bus::AccountSelected {
@@ -1734,30 +1704,37 @@ fn line_pin(session: &str, agent: &str, model: &str, key_generation: i64) -> pho
 }
 
 /// The pool `main` over `business` behind key `desktop` holding `pins`, written through one harness and served by a
-/// second one, since the router task loads its pins at spawn.
+/// second one, since the router task loads its pins at spawn. The second one holds the key's secret, which verifies
+/// against the store they share.
 async fn lines_harness(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>) -> common::Full {
     let seed = common::admin_parts_full().await;
     let seeding = login(&seed.app, "admin-secret").await;
     post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&seeding)).await;
-    post(
+    let secret = common::created_key_secret(
         &seed.app,
-        "/admin/keys",
+        &seeding,
         r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-        Some(&seeding),
     )
     .await;
     for pin in pins(common::generation(&seed.store, "desktop")) {
         seed.store.upsert_pin(&pin).unwrap();
     }
-    common::admin_parts_full_on(seed.store.clone(), seed.clock_cell.clone()).await
+    let mut parts = common::admin_parts_full_on(seed.store.clone(), seed.clock_cell.clone()).await;
+    parts.desktop_secret = Some(secret);
+    parts
 }
 
 /// Registers `session` with the companion, with one observed turn of main and of each of `agents`, so the engine holds
 /// a recipe for each and the row is a companion row.
-fn register_with_the_engine(parts: &common::Full, session: &str, agents: &[&str]) {
+async fn register_with_the_engine(parts: &common::Full, session: &str, agents: &[&str]) {
     let generation = common::generation(&parts.store, "desktop");
+    let engine = &parts.keepalive;
+    let secret = parts
+        .desktop_secret
+        .as_deref()
+        .expect("the harness created the key desktop");
     let mut sequence = 0;
-    let mut report = |event: &str, agent: Option<&str>| {
+    let mut report = move |event: &str, agent: Option<&str>| {
         sequence += 1;
         let mut body = serde_json::json!({
             "protocol": 1,
@@ -1769,22 +1746,15 @@ fn register_with_the_engine(parts: &common::Full, session: &str, agents: &[&str]
         if let Some(agent) = agent {
             body["agent_id"] = agent.into();
         }
-        parts
-            .keepalive
-            .apply_event(
-                "desktop",
-                generation,
-                phoebis_keepalive::decode_json_event(body.to_string().as_bytes()).unwrap(),
-            )
-            .unwrap();
+        common::report_as_the_mod(engine, secret, body)
     };
     let observe = |agent: &str| {
         parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: format!("k-{session}-{agent}"), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some(session.into()), agent_id: Some(agent.to_string()), parent_agent_id: (agent != "main").then(|| "main".into()), owner_id: None, model: "claude-opus-5".into(), canonical_model: "claude-opus-5".into(), wire_model: "claude-opus-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-opus-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: common::NOW, fallback_digest: None, cache_marker: false }));
     };
-    report("session_start", None);
+    report("session_start", None).await;
     observe("main");
     for agent in agents {
-        report("agent_start", Some(agent));
+        report("agent_start", Some(agent)).await;
         observe(agent);
     }
 }
@@ -1917,7 +1887,7 @@ async fn a_main_pins_line_reads_its_conversation_pin_beside_a_newer_auxiliary_pi
             .ledger
             .record(classed_request(id, "s1", "main", model, Some(class), at, g));
     }
-    register_with_the_engine(&parts, "s1", &[]);
+    register_with_the_engine(&parts, "s1", &[]).await;
     assert_eq!(
         lines(&parts, &cookie, &[("s1", 2)]).await,
         [serde_json::json!([line("main", "claude-opus-5", now - 50, Some("busy"))])],
@@ -1982,8 +1952,8 @@ async fn a_pin_whose_requests_are_all_auxiliary_draws_no_line() {
             g,
         ));
     }
-    register_with_the_engine(&parts, "s-borrowed", &["worker-1"]);
-    register_with_the_engine(&parts, "s-auxiliary", &[]);
+    register_with_the_engine(&parts, "s-borrowed", &["worker-1"]).await;
+    register_with_the_engine(&parts, "s-auxiliary", &[]).await;
     assert_eq!(
         lines(&parts, &cookie, &[("s-borrowed", 2), ("s-auxiliary", 1)]).await,
         [
@@ -2030,28 +2000,24 @@ async fn a_main_registered_again_after_its_sessions_end_reads_registered_on_its_
 ) {
     let parts = lines_harness(|g| vec![line_pin("s1", "main", "claude-opus-5", g)]).await;
     let cookie = login(&parts.app, "admin-secret").await;
-    register_with_the_engine(&parts, "s1", &[]);
-    let generation = common::generation(&parts.store, "desktop");
+    register_with_the_engine(&parts, "s1", &[]).await;
+    let secret = parts
+        .desktop_secret
+        .as_deref()
+        .expect("the harness created the key desktop");
     for (sequence, event) in [(2, "session_end"), (3, "session_start")] {
-        parts
-            .keepalive
-            .apply_event(
-                "desktop",
-                generation,
-                phoebis_keepalive::decode_json_event(
-                    serde_json::json!({
-                        "protocol": 1,
-                        "event": event,
-                        "session_id": "s1",
-                        "instance_id": "i1",
-                        "sequence": sequence
-                    })
-                    .to_string()
-                    .as_bytes(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
+        common::report_as_the_mod(
+            &parts.keepalive,
+            secret,
+            serde_json::json!({
+                "protocol": 1,
+                "event": event,
+                "session_id": "s1",
+                "instance_id": "i1",
+                "sequence": sequence
+            }),
+        )
+        .await;
     }
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = listed["sessions"]
@@ -2091,33 +2057,24 @@ async fn a_deleted_keys_session_is_historical_with_no_companion() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
-    post(
+    let secret = common::created_key_secret(
         &parts.app,
-        "/admin/keys",
+        &cookie,
         r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-        Some(&cookie),
     )
     .await;
-    let g = common::generation(&parts.store, "desktop");
-    let registered = parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            g,
-            phoebis_keepalive::decode_json_event(
-                serde_json::json!({
-                    "protocol": 1,
-                    "event": "session_start",
-                    "session_id": "s1",
-                    "instance_id": "i1",
-                    "sequence": 1
-                })
-                .to_string()
-                .as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    let registered = common::report_as_the_mod(
+        &parts.keepalive,
+        &secret,
+        serde_json::json!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 1
+        }),
+    )
+    .await;
     // The session and its live agent each report a fact, so the row behind the deletion has one of each to leave out.
     for body in [
         serde_json::json!({
@@ -2135,18 +2092,11 @@ async fn a_deleted_keys_session_is_historical_with_no_companion() {
             "instance_id": "i1",
             "sequence": 3,
             "agent_id": "main",
-            "request_generation": registered.request_generation,
+            "request_generation": registered["request_generation"],
             "name": "lead"
         }),
     ] {
-        parts
-            .keepalive
-            .apply_event(
-                "desktop",
-                g,
-                phoebis_keepalive::decode_json_event(body.to_string().as_bytes()).unwrap(),
-            )
-            .unwrap();
+        common::report_as_the_mod(&parts.keepalive, &secret, body).await;
     }
     let listed = common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         v["sessions"]
@@ -2261,11 +2211,10 @@ async fn an_ended_session_is_listed_without_a_companion() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
-    post(
+    let secret = common::created_key_secret(
         &parts.app,
-        "/admin/keys",
+        &cookie,
         r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-        Some(&cookie),
     )
     .await;
     let start = |sequence: u64, event: &str| {
@@ -2277,15 +2226,7 @@ async fn an_ended_session_is_listed_without_a_companion() {
             "sequence": sequence
         })
     };
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            common::generation(&parts.store, "desktop"),
-            phoebis_keepalive::decode_json_event(start(1, "session_start").to_string().as_bytes())
-                .unwrap(),
-        )
-        .unwrap();
+    common::report_as_the_mod(&parts.keepalive, &secret, start(1, "session_start")).await;
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     assert_eq!(
         listed["sessions"]
@@ -2302,15 +2243,7 @@ async fn an_ended_session_is_listed_without_a_companion() {
         Some("registered"),
         "main has sent no request since its registration, so the row words it registered rather than busy"
     );
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            common::generation(&parts.store, "desktop"),
-            phoebis_keepalive::decode_json_event(start(2, "session_end").to_string().as_bytes())
-                .unwrap(),
-        )
-        .unwrap();
+    common::report_as_the_mod(&parts.keepalive, &secret, start(2, "session_end")).await;
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = listed["sessions"]
         .as_array()
@@ -2349,37 +2282,24 @@ async fn a_probe_leaves_the_keys_last_used_at_alone() {
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
     parts.router.reload().await.unwrap();
-    let created = json(
-        post(
-            &parts.app,
-            "/admin/keys",
-            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-            Some(&cookie),
-        )
-        .await,
+    let secret = common::created_key_secret(
+        &parts.app,
+        &cookie,
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
     )
     .await;
-    let secret = created["secret"].as_str().unwrap().to_string();
-    let generation = common::generation(&parts.store, "desktop");
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            generation,
-            phoebis_keepalive::decode_json_event(
-                serde_json::json!({
-                    "protocol": 1,
-                    "event": "session_start",
-                    "session_id": "s1",
-                    "instance_id": "i1",
-                    "sequence": 1
-                })
-                .to_string()
-                .as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &secret,
+        serde_json::json!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 1
+        }),
+    )
+    .await;
     phoebis_keepalive::spawn_observer(parts.keepalive.clone());
     parts.up.add_credential_rule(
         common::API_KEY,

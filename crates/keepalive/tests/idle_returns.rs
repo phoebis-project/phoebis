@@ -117,9 +117,9 @@ fn retained_for(days: u32) -> RigSpec {
 }
 
 /// The clock to `at` with the lease renewed on the way and no tick between, so the next tick or request counts at `at`.
-fn attend_to(r: &mut Rig, at: i64) {
+async fn attend_to(r: &mut Rig, at: i64) {
     let now = r.now();
-    r.advance_attended(at - now);
+    r.advance_attended(at - now).await;
 }
 
 fn reached_in(r: &Rig, pool: &str) -> [u64; 10] {
@@ -161,7 +161,7 @@ async fn idle_after_request(r: &mut Rig) -> i64 {
 async fn idle_after_request_with(r: &mut Rig, body: &str) -> i64 {
     r.observe_with("main", body).await;
     let start = r.now();
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     start
 }
 
@@ -179,7 +179,7 @@ async fn tick_to(r: &mut Rig, start: i64, minutes: i64) {
             .filter(|due| *due > now)
             .min();
         let next = due.unwrap_or(end).min(now + MINUTE).min(end);
-        r.advance_attended(next - now);
+        r.advance_attended(next - now).await;
         r.step().await;
     }
 }
@@ -193,15 +193,16 @@ async fn tick_silent_to(r: &mut Rig, start: i64, minutes: i64) {
     }
 }
 
-fn activity(r: &mut Rig, kind: &str) {
+async fn activity(r: &mut Rig, kind: &str) {
     r.report(json!({"event": "activity", "agent_id": "main", "kind": kind}))
+        .await
         .unwrap();
 }
 
 /// A prompt a local command answered: the mod reports the prompt, then idle, and no request is sent.
-fn local_command(r: &mut Rig) {
-    activity(r, "prompt");
-    r.state("main", "idle");
+async fn local_command(r: &mut Rig) {
+    activity(r, "prompt").await;
+    r.state("main", "idle").await;
 }
 
 /// Moves the rig's key into a new pool `warm`, with the router reloaded so the next tick reads it there.
@@ -282,7 +283,7 @@ async fn a_return_on_the_same_prefix_raises_returned_in_its_bucket() {
         "the ticks had raised the return's bucket already"
     );
     // The turn ends and main is idle again: the next window opens from the return.
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     tick_to(&mut r, start, 13).await;
     assert_eq!(
         (reached(&r), returned(&r)),
@@ -302,8 +303,8 @@ async fn two_windows_closing_on_two_utc_days_write_two_rows_per_bucket() {
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
     r.observe_with("main", &next_turn()).await;
-    r.state("main", "idle");
-    attend_to(&mut r, DAY + 12 * MINUTE);
+    r.state("main", "idle").await;
+    attend_to(&mut r, DAY + 12 * MINUTE).await;
     r.step().await;
     r.observe_with("main", &next_turn()).await;
     let first = (
@@ -344,7 +345,7 @@ async fn a_window_whose_closing_request_raised_its_bucket_the_next_day_counts_th
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
-    attend_to(&mut r, DAY + MINUTE);
+    attend_to(&mut r, DAY + MINUTE).await;
     r.observe_with("main", &next_turn()).await;
     assert_eq!(
         by_day(&r, "main"),
@@ -367,9 +368,9 @@ async fn a_window_whose_closing_request_raised_its_bucket_the_next_day_counts_th
 async fn a_return_after_midnight_in_a_bucket_a_tick_reached_before_it_counts_on_the_reachs_day() {
     let mut r = rig(RigSpec::default()).await;
     idle_after_request(&mut r).await;
-    attend_to(&mut r, DAY - MINUTE);
+    attend_to(&mut r, DAY - MINUTE).await;
     r.step().await;
-    attend_to(&mut r, DAY + MINUTE);
+    attend_to(&mut r, DAY + MINUTE).await;
     r.observe_with("main", &next_turn()).await;
     let days = by_day(&r, "main");
     assert_eq!(
@@ -396,8 +397,8 @@ async fn a_day_past_the_retention_leaves_at_the_roll_and_stays_gone_after_a_save
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
     r.observe_with("main", &next_turn()).await;
-    r.state("main", "idle");
-    attend_to(&mut r, DAY + 12 * MINUTE);
+    r.state("main", "idle").await;
+    attend_to(&mut r, DAY + 12 * MINUTE).await;
     r.step().await;
     r.engine.flush_persisted().await;
     assert!(
@@ -406,7 +407,7 @@ async fn a_day_past_the_retention_leaves_at_the_roll_and_stays_gone_after_a_save
             .all(|(reached, _)| reached.iter().any(|count| *count > 0)),
         "both days before the roll"
     );
-    attend_to(&mut r, 2 * DAY + 12 * MINUTE);
+    attend_to(&mut r, 2 * DAY + 12 * MINUTE).await;
     r.step().await;
     let days = by_day(&r, "main");
     assert_eq!(
@@ -460,7 +461,7 @@ async fn a_retention_of_0_keeps_every_day() {
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
     r.observe_with("main", &next_turn()).await;
-    attend_to(&mut r, 2 * DAY + 12 * MINUTE);
+    attend_to(&mut r, 2 * DAY + 12 * MINUTE).await;
     r.step().await;
     let counted = (
         [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -488,7 +489,7 @@ async fn a_retention_of_0_keeps_every_day() {
 async fn a_return_whose_reach_day_left_at_the_roll_counts_nothing() {
     let mut r = rig(retained_for(2)).await;
     let start = idle_after_request(&mut r).await;
-    attend_to(&mut r, start + 32 * 60 * MINUTE + MINUTE);
+    attend_to(&mut r, start + 32 * 60 * MINUTE + MINUTE).await;
     r.step().await;
     let days = by_day(&r, "main");
     assert_eq!(
@@ -496,7 +497,7 @@ async fn a_return_whose_reach_day_left_at_the_roll_counts_nothing() {
         (([0; 10], [0; 10]), [1; 10]),
         "every bucket reached on the second day"
     );
-    attend_to(&mut r, 3 * DAY + MINUTE);
+    attend_to(&mut r, 3 * DAY + MINUTE).await;
     r.observe_with("main", &next_turn()).await;
     let over = r
         .engine
@@ -519,9 +520,9 @@ async fn a_request_at_its_prompts_instant_starts_the_next_window() {
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
     // The prompt report and its request read the same clock instant.
-    activity(&mut r, "prompt");
+    activity(&mut r, "prompt").await;
     r.observe_with("main", &next_turn()).await;
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     tick_to(&mut r, start, 13).await;
     assert_eq!(
         (reached(&r), returned(&r)),
@@ -538,8 +539,8 @@ async fn a_request_on_an_unknown_main_moves_no_start() {
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
-    r.state("main", "unknown");
-    r.advance_attended(MINUTE);
+    r.state("main", "unknown").await;
+    r.advance_attended(MINUTE).await;
     r.observe_with("main", &next_turn()).await;
     assert_eq!(
         (reached(&r), returned(&r)),
@@ -549,8 +550,8 @@ async fn a_request_on_an_unknown_main_moves_no_start() {
         ),
         "the request ends the window"
     );
-    r.advance_attended(MINUTE);
-    r.state("main", "idle");
+    r.advance_attended(MINUTE).await;
+    r.state("main", "idle").await;
     tick_to(&mut r, start, 15).await;
     assert_eq!(
         reached(&r),
@@ -595,7 +596,7 @@ async fn a_return_between_ticks_raises_the_buckets_it_crossed() {
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 4).await;
     assert_eq!(reached(&r), [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    r.advance_attended(8 * MINUTE);
+    r.advance_attended(8 * MINUTE).await;
     r.observe_with("main", &next_turn()).await;
     assert_eq!(reached(&r), [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(returned(&r), [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
@@ -618,7 +619,7 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 3).await;
-    local_command(&mut r);
+    local_command(&mut r).await;
     tick_to(&mut r, start, 12).await;
     let other = r#"{"model":"claude-opus-5","max_tokens":1024,"messages":[{"role":"user","content":"a different conversation"}]}"#;
     r.engine.observe(r.observed_with(
@@ -637,7 +638,7 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
-    r.event(session_end("session")).unwrap();
+    r.event(session_end("session")).await.unwrap();
     tick_silent_to(&mut r, start, 40).await;
     assert_eq!(
         (reached(&r), returned(&r)),
@@ -645,8 +646,8 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
         "session end"
     );
     // The same instance registers the session again, and its window starts at the revival, never at the old start.
-    r.event(json!({"event": "session_start"})).unwrap();
-    r.state("main", "idle");
+    r.event(json!({"event": "session_start"})).await.unwrap();
+    r.state("main", "idle").await;
     tick_to(&mut r, start, 41).await;
     assert_eq!(
         (reached(&r), returned(&r)),
@@ -659,14 +660,14 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 3).await;
-    local_command(&mut r);
+    local_command(&mut r).await;
     tick_to(&mut r, start, 12).await;
     tick_silent_to(&mut r, start, 40).await;
-    r.event(json!({"event": "session_start"})).unwrap();
+    r.event(json!({"event": "session_start"})).await.unwrap();
     tick_to(&mut r, start, 45).await;
     assert_eq!((reached(&r), returned(&r)), (counted, [0; 10]), "lapse");
-    activity(&mut r, "prompt");
-    r.state("main", "idle");
+    activity(&mut r, "prompt").await;
+    r.state("main", "idle").await;
     tick_to(&mut r, start, 52).await;
     assert_eq!(
         (reached(&r), returned(&r)),
@@ -680,11 +681,12 @@ async fn a_released_main_closes_its_window() {
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
-    r.state("main", "released");
+    r.state("main", "released").await;
     let generation = r.request_generation("main");
     r.event(json!({"event": "agent_start", "agent_id": "main", "request_generation": generation}))
+        .await
         .unwrap();
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     tick_to(&mut r, start, 20).await;
     assert_eq!(
         (reached(&r), returned(&r)),
@@ -713,8 +715,8 @@ async fn a_key_that_moves_pools_keeps_the_open_window_in_its_first_pool() {
             ([1, 1, 1, 0, 0, 0, 0, 0, 0, 0], [0; 10]),
             "the open window, keepalive {keepalive}"
         );
-        r.state("main", "parked");
-        r.state("main", "idle");
+        r.state("main", "parked").await;
+        r.state("main", "idle").await;
         tick_to(&mut r, start, 21).await;
         assert_eq!(
             (reached_in(&r, "main"), reached_in(&r, "warm")),
@@ -740,8 +742,8 @@ async fn a_key_that_moves_pools_keeps_the_open_window_in_its_first_pool() {
     );
     move_key_to_warm(&r).await;
     tick_to(&mut r, start, 12).await;
-    r.state("main", "parked");
-    r.state("main", "idle");
+    r.state("main", "parked").await;
+    r.state("main", "idle").await;
     tick_to(&mut r, start, 13).await;
     assert_eq!(
         (reached_in(&r, "main"), reached_in(&r, "warm")),
@@ -1223,7 +1225,7 @@ async fn an_attended_session_without_a_recipe_still_reaches_buckets() {
     // through the key.
     move_key_to_warm(&r).await;
     let start = r.now();
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     tick_to(&mut r, start, 6).await;
     let pools: Vec<String> = r.engine.idle_returns_over(r.now(), 1).into_keys().collect();
     assert_eq!(pools, vec!["warm".to_string()]);
@@ -1254,10 +1256,10 @@ async fn a_prompt_report_before_the_request_keeps_the_episodes_age() {
         let mut r = rig(RigSpec::default()).await;
         let start = idle_after_request(&mut r).await;
         tick_to(&mut r, start, 20).await;
-        activity(&mut r, "prompt");
+        activity(&mut r, "prompt").await;
         if tick_between {
             // The request lands at 30 minutes, in the next bucket, and is still judged at the prompt's age.
-            r.advance_attended(10 * MINUTE);
+            r.advance_attended(10 * MINUTE).await;
             r.step().await;
         }
         r.observe_with("main", &next_turn()).await;
@@ -1278,7 +1280,7 @@ async fn a_prompt_that_sends_no_request_lets_the_window_run_on() {
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 3).await;
-    activity(&mut r, "prompt");
+    activity(&mut r, "prompt").await;
     tick_to(&mut r, start, 10).await;
     assert_eq!(
         reached(&r),
@@ -1286,7 +1288,7 @@ async fn a_prompt_that_sends_no_request_lets_the_window_run_on() {
         "the prompt holds the count for its request"
     );
     // A local command answered the prompt, and the mod reports idle with no request sent.
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     tick_to(&mut r, start, 20).await;
     assert_eq!(
         reached(&r),
@@ -1308,12 +1310,13 @@ async fn the_end_of_a_park_without_a_request_starts_a_new_window() {
             "park_kind": "background",
             "deadline": start + 10 * MINUTE
         }))
+        .await
         .unwrap();
         if mod_first {
             // The mod's heartbeat closes the command at its deadline and reports idle before the router ticks.
             tick_to(&mut r, start, 9).await;
-            r.advance_attended(MINUTE);
-            r.state("main", "idle");
+            r.advance_attended(MINUTE).await;
+            r.state("main", "idle").await;
         }
         tick_to(&mut r, start, 12).await;
         assert_eq!(
@@ -1324,15 +1327,11 @@ async fn the_end_of_a_park_without_a_request_starts_a_new_window() {
     }
 }
 
-/// One report of the second key's session, under its own instance and sequence.
-fn laptop(r: &Rig, sequence: &mut u64, mut body: Value) {
-    *sequence += 1;
-    body["sequence"] = (*sequence).into();
+/// One report of the second key's session, under its own instance.
+async fn laptop(r: &mut Rig, mut body: Value) {
     body["session_id"] = "laptop".into();
     body["instance_id"] = "laptop".into();
-    r.engine
-        .apply_event("laptop", r.generation("laptop"), decoded(body).unwrap())
-        .unwrap();
+    r.event_as(LAPTOP_SECRET, body).await.unwrap();
 }
 
 #[tokio::test]
@@ -1358,17 +1357,16 @@ async fn the_counters_are_per_pool() {
     r.h.router.reload().await.unwrap();
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 8).await;
-    let mut sequence = 0;
-    laptop(&r, &mut sequence, json!({"event": "session_start"}));
+    laptop(&mut r, json!({"event": "session_start"})).await;
     laptop(
-        &r,
-        &mut sequence,
+        &mut r,
         json!({"event": "state", "agent_id": "main", "state": "idle", "request_generation": 0}),
-    );
+    )
+    .await;
     for _ in 0..8 {
         r.advance(MINUTE / 2);
-        r.event(json!({"event": "heartbeat"})).unwrap();
-        laptop(&r, &mut sequence, json!({"event": "heartbeat"}));
+        r.event(json!({"event": "heartbeat"})).await.unwrap();
+        laptop(&mut r, json!({"event": "heartbeat"})).await;
         r.step().await;
     }
     r.observe_with("main", &next_turn()).await;
@@ -1393,10 +1391,10 @@ async fn a_busy_main_a_subagent_and_a_silent_session_count_nothing() {
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 3).await;
-    r.state("main", "busy");
+    r.state("main", "busy").await;
     tick_to(&mut r, start, 20).await;
     assert_eq!(reached(&r), [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], "busy");
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     tick_to(&mut r, start, 21).await;
     assert_eq!(
         reached(&r),
@@ -1407,8 +1405,9 @@ async fn a_busy_main_a_subagent_and_a_silent_session_count_nothing() {
     let mut r = rig(RigSpec::default()).await;
     let start = r.now();
     r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap();
-    r.state("worker", "parked");
+    r.state("worker", "parked").await;
     tick_to(&mut r, start, 20).await;
     assert!(
         r.engine.idle_returns_over(r.now(), 1).is_empty(),
@@ -1417,7 +1416,7 @@ async fn a_busy_main_a_subagent_and_a_silent_session_count_nothing() {
     // A session whose lease lapsed before any tick opens none.
     let mut r = rig(RigSpec::default()).await;
     let start = r.now();
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     r.advance(2 * MINUTE);
     tick_silent_to(&mut r, start, 20).await;
     assert!(r.engine.idle_returns_over(r.now(), 1).is_empty(), "silent");
@@ -1472,7 +1471,7 @@ async fn an_idle_report_and_a_prompt_inside_the_same_second_count_the_first_buck
 {
     let mut r = rig(RigSpec::default()).await;
     idle_after_request(&mut r).await;
-    activity(&mut r, "prompt");
+    activity(&mut r, "prompt").await;
     r.observe_with("main", &next_turn()).await;
     assert_eq!(
         (reached(&r), returned(&r)),
@@ -1497,8 +1496,9 @@ async fn a_park_report_and_a_prompt_inside_the_same_second_count_the_first_bucke
         "park_kind": "background",
         "deadline": start + 60 * MINUTE
     }))
+    .await
     .unwrap();
-    activity(&mut r, "prompt");
+    activity(&mut r, "prompt").await;
     r.observe_with("main", &next_turn()).await;
     assert_eq!(
         (reached(&r), returned(&r)),
@@ -1521,10 +1521,10 @@ async fn a_presence_report_after_a_backward_clock_step_opens_a_window_that_count
     // The lease lapses at 7 minutes 30 seconds, and the tick at 8 minutes closes the window with the floor at its
     // start. A lapsed session answers a report as an ended instance, so the same instance registers it again.
     tick_silent_to(&mut r, start, 8).await;
-    r.event(json!({"event": "session_start"})).unwrap();
+    r.event(json!({"event": "session_start"})).await.unwrap();
     // The wall clock steps back to a second before the window began, and the person types.
     r.advance(start - 1_000 - r.now());
-    activity(&mut r, "presence");
+    activity(&mut r, "presence").await;
     tick_to(&mut r, start, 12).await;
     assert_eq!(
         reached(&r),
@@ -1545,7 +1545,7 @@ async fn a_return_after_a_presence_report_counts_at_the_windows_age() {
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 180).await;
-    activity(&mut r, "presence");
+    activity(&mut r, "presence").await;
     tick_to(&mut r, start, 184).await;
     r.observe_with("main", &next_turn()).await;
     // 3 hours 4 minutes is 11,040 seconds, inside the bucket from 7,200 to 14,400.
@@ -1557,7 +1557,7 @@ async fn a_window_open_at_a_presence_report_reaches_its_next_bucket() {
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 180).await;
-    activity(&mut r, "presence");
+    activity(&mut r, "presence").await;
     tick_to(&mut r, start, 240).await;
     // The tick at 4 hours, 14,400 seconds, crosses into the bucket that starts there.
     assert_eq!(reached(&r), [1, 1, 1, 1, 1, 1, 1, 0, 0, 0]);

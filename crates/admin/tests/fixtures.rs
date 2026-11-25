@@ -1737,25 +1737,18 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )],
         bodies: None,
     });
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            key_generation,
-            phoebis_keepalive::decode_json_event(
-                j!({
-                    "protocol": 1,
-                    "event": "session_start",
-                    "session_id": "s1",
-                    "instance_id": "i1",
-                    "sequence": 1
-                })
-                .to_string()
-                .as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &key_secret,
+        j!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 1
+        }),
+    )
+    .await;
     // The companion session's main pin and a pin of each of its two agents, each placed under an effort word, renewed
     // with a prompt and holding one live cache-map entry rooted at the session, so `sessions.json` carries the row's
     // prompt and effort and the lines of main and its agents. Each selection is narrowed to one member, so no two pins
@@ -2093,26 +2086,19 @@ async fn every_route_is_captured_and_holds_its_shape() {
         (2, "worker-1", "claude-sonnet-5", "business"),
         (3, "worker-2", "claude-sonnet-5-5", "direct"),
     ] {
-        parts
-            .keepalive
-            .apply_event(
-                "desktop",
-                key_generation,
-                phoebis_keepalive::decode_json_event(
-                    j!({
-                        "protocol": 1,
-                        "event": "agent_start",
-                        "session_id": "s1",
-                        "instance_id": "i1",
-                        "sequence": sequence,
-                        "agent_id": agent
-                    })
-                    .to_string()
-                    .as_bytes(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
+        common::report_as_the_mod(
+            &parts.keepalive,
+            &key_secret,
+            j!({
+                "protocol": 1,
+                "event": "agent_start",
+                "session_id": "s1",
+                "instance_id": "i1",
+                "sequence": sequence,
+                "agent_id": agent
+            }),
+        )
+        .await;
         let request_id = format!("k-{agent}");
         parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: request_id.clone(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some(agent.into()), parent_agent_id: Some("main".into()), owner_id: None, model: model.into(), canonical_model: model.into(), wire_model: model.into(), stream: false, headers: vec![], body: bytes::Bytes::from(format!(r#"{{"model":"{model}","max_tokens":10,"messages":[{{"role":"user","content":"hi"}}]}}"#)), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None, cache_marker: false }));
         parts
@@ -2191,73 +2177,49 @@ async fn every_route_is_captured_and_holds_its_shape() {
         }
         body
     };
-    let refused = parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            key_generation,
-            phoebis_keepalive::decode_json_event(released(None).to_string().as_bytes()).unwrap(),
-        )
-        .expect_err("a report under no generation is stale");
-    let release = parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            key_generation,
-            phoebis_keepalive::decode_json_event(
-                released(refused.request_generation).to_string().as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            key_generation,
-            phoebis_keepalive::decode_json_event(
-                j!({
-                    "protocol": 1,
-                    "event": "agent_start",
-                    "session_id": "s1",
-                    "instance_id": "i1",
-                    "sequence": 5,
-                    "agent_id": "worker-2",
-                    "request_generation": release.request_generation
-                })
-                .to_string()
-                .as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    let (status, refused) =
+        common::report_answer(&parts.keepalive, &key_secret, &released(None)).await;
+    assert_ne!(status, 200, "a report under no generation is stale");
+    let release = common::report_as_the_mod(
+        &parts.keepalive,
+        &key_secret,
+        released(refused["request_generation"].as_u64()),
+    )
+    .await;
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &key_secret,
+        j!({
+            "protocol": 1,
+            "event": "agent_start",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 5,
+            "agent_id": "worker-2",
+            "request_generation": release["request_generation"]
+        }),
+    )
+    .await;
     // The companion reports the session's facts and those of `worker-1` ahead of the capture loop, so the captured row
     // carries both sets.
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            key_generation,
-            phoebis_keepalive::decode_json_event(
-                j!({
-                    "protocol": 1,
-                    "event": "session_facts",
-                    "session_id": "s1",
-                    "instance_id": "i1",
-                    "sequence": 6,
-                    "branch": "fix/checkout-retry",
-                    "cwd": "/home/dev/work/storefront/api",
-                    "project": "/home/dev/work/storefront",
-                    "repository": "https://git.example/acme/storefront.git",
-                    "repository_root": "/home/dev/work/storefront",
-                    "title": "Checkout retry rework"
-                })
-                .to_string()
-                .as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &key_secret,
+        j!({
+            "protocol": 1,
+            "event": "session_facts",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 6,
+            "branch": "fix/checkout-retry",
+            "cwd": "/home/dev/work/storefront/api",
+            "project": "/home/dev/work/storefront",
+            "repository": "https://git.example/acme/storefront.git",
+            "repository_root": "/home/dev/work/storefront",
+            "title": "Checkout retry rework"
+        }),
+    )
+    .await;
     let agent_facts = |request_generation: Option<u64>| {
         let mut body = j!({
             "protocol": 1,
@@ -2276,27 +2238,15 @@ async fn every_route_is_captured_and_holds_its_shape() {
         body
     };
     // The agent's generation moved with its request, so the report learns it from the refusal, as the mod does.
-    let refused = parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            key_generation,
-            phoebis_keepalive::decode_json_event(agent_facts(None).to_string().as_bytes()).unwrap(),
-        )
-        .expect_err("a report under no generation is stale");
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            key_generation,
-            phoebis_keepalive::decode_json_event(
-                agent_facts(refused.request_generation)
-                    .to_string()
-                    .as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    let (status, refused) =
+        common::report_answer(&parts.keepalive, &key_secret, &agent_facts(None)).await;
+    assert_ne!(status, 200, "a report under no generation is stale");
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &key_secret,
+        agent_facts(refused["request_generation"].as_u64()),
+    )
+    .await;
     parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None, cache_marker: false }));
     parts
         .keepalive
@@ -3129,25 +3079,14 @@ async fn every_route_is_captured_and_holds_its_shape() {
         }
         body
     };
-    let refused = parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            key_generation,
-            phoebis_keepalive::decode_json_event(idle(None).to_string().as_bytes()).unwrap(),
-        )
-        .expect_err("a report under no generation is stale");
-    parts
-        .keepalive
-        .apply_event(
-            "desktop",
-            key_generation,
-            phoebis_keepalive::decode_json_event(
-                idle(refused.request_generation).to_string().as_bytes(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    let (status, refused) = common::report_answer(&parts.keepalive, &key_secret, &idle(None)).await;
+    assert_ne!(status, 200, "a report under no generation is stale");
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &key_secret,
+        idle(refused["request_generation"].as_u64()),
+    )
+    .await;
     parts.keepalive.step().await;
     let response = get(app, "/admin/keepalive/overview", Some(&cookie)).await;
     assert_eq!(response.status(), 200);

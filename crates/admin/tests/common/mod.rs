@@ -119,6 +119,9 @@ pub struct Full {
     pub bus: Bus,
     pub clock_cell: Arc<AtomicI64>,
     pub db: Arc<LedgerDb>,
+    /// The secret of the key `desktop` where a case's harness created that key through `created_key_secret`, for the
+    /// reports the case sends as the mod. `None` from every builder of this module.
+    pub desktop_secret: Option<String>,
     pub keepalive: Arc<Engine>,
     pub ledger: Ledger,
     pub pricing: Arc<Pricing>,
@@ -551,6 +554,7 @@ fn full_from(parts: Parts) -> Full {
         bus: parts.bus,
         clock_cell: parts.clock_cell,
         db: parts.db,
+        desktop_secret: None,
         keepalive: parts.keepalive,
         ledger: parts.ledger,
         pricing: parts.pricing,
@@ -669,32 +673,66 @@ pub fn generation(store: &Store, key_id: &str) -> i64 {
     store.api_key(key_id).unwrap().unwrap().created_at
 }
 
-/// Applies one companion report under the `desktop` key as the mod sends it: under the request generation the body
-/// carries, which the caller takes from the agent's last answer, and once more under the generation that a
-/// `stale_request_generation` refusal names, under the same sequence, which the refusal did not take. The engine moves
-/// an agent's generation at its real request with no answer in between. `body` is a JSON object, decoded as the route
-/// decodes one, and `protocol` is filled with 1 where the body names none.
-pub fn report_as_the_mod(
-    engine: &Engine,
-    key_generation: i64,
+/// Creates a router key through `POST /admin/keys` with the case's own body and answers the secret of the 201 answer,
+/// which the route shows this once.
+pub async fn created_key_secret(app: &Router, cookie: &str, body: &str) -> String {
+    let created = post(app, "/admin/keys", body, Some(cookie)).await;
+    assert_eq!(created.status(), StatusCode::CREATED, "the key is created");
+    json(created).await["secret"]
+        .as_str()
+        .expect("a created key answers its secret once")
+        .to_string()
+}
+
+/// Posts one report to the events route under the bearer `secret` and answers the acknowledgment's body.
+///
+/// The report goes as the mod sends it: under the request generation the body carries, which the caller takes from
+/// the agent's last answer, and once more under the generation that a `stale_request_generation` refusal names, under
+/// the same sequence, which the refusal did not take. The engine moves an agent's generation at its real request with
+/// no answer in between. `body` is a JSON object, and `protocol` is filled with 1 where the body names none.
+pub async fn report_as_the_mod(
+    engine: &Arc<Engine>,
+    secret: &str,
     mut body: serde_json::Value,
-) -> phoebis_keepalive::Ack {
+) -> serde_json::Value {
+    let (mut status, mut answer) = report_answer(engine, secret, &body).await;
+    if status == StatusCode::CONFLICT && answer["code"] == "stale_request_generation" {
+        body["request_generation"] = answer["request_generation"].clone();
+        (status, answer) = report_answer(engine, secret, &body).await;
+    }
+    assert_eq!(status, StatusCode::OK, "the report is taken: {answer}");
+    answer
+}
+
+/// One post of `body` to the events route over `engine` under the bearer `secret`, sent once whatever the route
+/// answers, for a case that reads a refusal: the answer's status and body. `protocol` is filled with 1 where the body
+/// names none.
+pub async fn report_answer(
+    engine: &Arc<Engine>,
+    secret: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let mut body = body.clone();
     body.as_object_mut()
         .expect("a report's body is a JSON object")
         .entry("protocol")
         .or_insert(1.into());
-    let send = |body: &serde_json::Value| {
-        let report =
-            phoebis_keepalive::decode_json_event(&serde_json::to_vec(body).unwrap()).unwrap();
-        engine.apply_event("desktop", key_generation, report)
-    };
-    match send(&body) {
-        Err(refused) if refused.code == "stale_request_generation" => {
-            body["request_generation"] = refused.request_generation.into();
-            send(&body).unwrap()
-        }
-        answered => answered.unwrap(),
-    }
+    let request = Request::builder()
+        .method("POST")
+        .uri(phoebis_keepalive::EVENTS_PATH)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {secret}"))
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let answer = phoebis_keepalive::keepalive_router(engine.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = answer.status();
+    let bytes = answer.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into()));
+    (status, body)
 }
 
 pub async fn admin_app() -> (Router, FakeUpstream) {

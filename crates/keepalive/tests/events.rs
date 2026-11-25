@@ -2,10 +2,12 @@
 mod common;
 use common::*;
 use phoebis_keepalive::{
-    decode_json_event, AgentState, CompanionState, EventError, KeepaliveLimits, Lifecycle, Reason,
-    RecipeState, Reported, SessionFacts,
+    AgentState, CompanionState, KeepaliveLimits, Lifecycle, Reason, RecipeState, SessionFacts,
 };
 use serde_json::json;
+
+/// The secret of the second key `laptop`, which a case creates where it reports as that key's holder.
+const LAPTOP_SECRET: &str = "phoebis-laptop-key";
 
 /// A real request on main of `session` under `key_id`, the first of which gives the session its slot.
 fn first_request(r: &Rig, key_id: &str, session: &str) {
@@ -30,21 +32,21 @@ async fn the_session_bound_counts_live_sessions_only() {
     .await;
     // Each sends a request before its end, so the end alone is what leaves it no slot.
     for i in 0..128 {
-        rig.event(session_start(&format!("s-{i}"))).unwrap();
+        rig.event(session_start(&format!("s-{i}"))).await.unwrap();
         first_request(&rig, "desktop", &format!("s-{i}"));
-        rig.event(session_end(&format!("s-{i}"))).unwrap();
+        rig.event(session_end(&format!("s-{i}"))).await.unwrap();
     }
-    let ack = rig.event(session_start("s-128"));
+    let ack = rig.event(session_start("s-128")).await;
     assert!(ack.is_ok(), "128 ended sessions hold no slot: {ack:?}");
     // The rig's own bootstrap session and "s-128" hold two of the 128 slots once each sends a request, so the rest
     // of the budget is 126 before the next live-bringing start is refused.
     first_request(&rig, "desktop", "session");
     first_request(&rig, "desktop", "s-128");
     for i in 0..126 {
-        rig.event(session_start(&format!("t-{i}"))).unwrap();
+        rig.event(session_start(&format!("t-{i}"))).await.unwrap();
         first_request(&rig, "desktop", &format!("t-{i}"));
     }
-    let refused = rig.event(session_start("t-126")).unwrap_err();
+    let refused = rig.event(session_start("t-126")).await.unwrap_err();
     assert_eq!(refused.code, "session_limit");
     assert!(
         rig.engine
@@ -68,13 +70,14 @@ async fn a_restart_of_an_ended_session_under_a_new_instance_takes_a_slot() {
     })
     .await;
     first_request(&rig, "desktop", "session");
-    rig.event(session_start_as("a", "i1", None)).unwrap();
-    rig.event(session_end("a")).unwrap();
-    rig.event(session_start_as("b", "i-b", None)).unwrap();
+    rig.event(session_start_as("a", "i1", None)).await.unwrap();
+    rig.event(session_end("a")).await.unwrap();
+    rig.event(session_start_as("b", "i-b", None)).await.unwrap();
     first_request(&rig, "desktop", "b");
     // The tombstone's entry exists, so a bound over "adds an entry" would let this through.
     let refused = rig
         .event(session_start_as("a", "i2", Some("i1")))
+        .await
         .unwrap_err();
     assert_eq!(refused.code, "session_limit");
 }
@@ -90,19 +93,19 @@ async fn a_same_instance_recovery_of_a_live_session_takes_no_slot() {
     })
     .await;
     first_request(&rig, "desktop", "session");
-    rig.event(session_start_as("a", "i1", None)).unwrap();
+    rig.event(session_start_as("a", "i1", None)).await.unwrap();
     first_request(&rig, "desktop", "a");
     rig.advance(rig.lease_ms() + 1_000); // the lease lapsed; the session is live and unattended
-    let ack = rig.event(session_start_as("a", "i1", None));
+    let ack = rig.event(session_start_as("a", "i1", None)).await;
     assert!(
         ack.is_ok(),
         "a live session's own instance re-adopts it: {ack:?}"
     );
 }
 
-fn refusal(code: &'static str, status: u16) -> EventError {
-    EventError {
-        code,
+fn refusal(code: &str, status: u16) -> Refused {
+    Refused {
+        code: code.into(),
         instance_id: None,
         request_generation: None,
         status,
@@ -114,10 +117,11 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     let mut r = rig(RigSpec::default()).await;
     // A same-instance re-registration with a higher sequence renews the lease and keeps agent state.
     r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap();
-    r.state("worker", "parked");
+    r.state("worker", "parked").await;
     r.advance(1_000);
-    let renewed = r.event(json!({"event": "session_start"})).unwrap();
+    let renewed = r.event(json!({"event": "session_start"})).await.unwrap();
     assert_eq!(renewed.lease_expires_ms, r.now() + r.lease_ms());
     let worker = renewed
         .agents
@@ -146,15 +150,17 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     r.advance(1_000);
     let untouched = r
         .report(json!({"event": "activity", "agent_id": "worker", "kind": "prompt"}))
+        .await
         .unwrap();
     assert_eq!(untouched.lease_expires_ms, renewed.lease_expires_ms);
-    let reheartbeat = r.event(json!({"event": "heartbeat"})).unwrap();
+    let reheartbeat = r.event(json!({"event": "heartbeat"})).await.unwrap();
     assert_eq!(reheartbeat.lease_expires_ms, r.now() + r.lease_ms());
     // Agents: a restart of a released agent needs the generation its release named.
-    r.state("worker", "released");
+    r.state("worker", "released").await;
     let generation = r.request_generation("worker");
     assert_eq!(
         r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+            .await
             .unwrap_err(),
         refusal("agent_exists", 409),
         "a restart without the generation"
@@ -165,6 +171,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
             "agent_id": "worker",
             "request_generation": generation
         }))
+        .await
         .unwrap();
     // Busy under `AwaitingRequest`, which the session view words `registered`.
     assert_eq!(
@@ -174,7 +181,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     // The failed start did not advance the sequence: the next accepted one is one past the last accepted.
     assert_eq!(restarted.sequence, r.sequence);
     // session_end releases every agent and ends the instance; anything after it is refused.
-    r.event(json!({"event": "session_end"})).unwrap();
+    r.event(json!({"event": "session_end"})).await.unwrap();
     assert_eq!(
         (
             r.engine.sessions()[0].companion,
@@ -186,24 +193,22 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         .iter()
         .all(|id| r.lifecycle(id) == Some(Lifecycle::Released)));
     assert_eq!(
-        r.event(json!({"event": "heartbeat"})).unwrap_err(),
+        r.event(json!({"event": "heartbeat"})).await.unwrap_err(),
         refusal("instance_ended", 409)
     );
     // A replacement that names the ended instance takes over with a fresh main agent.
     let replaced = r
-        .engine
-        .apply_event(
-            "desktop",
-            r.generation("desktop"),
-            decoded(json!({
+        .post(
+            KEY,
+            json!({
                 "event": "session_start",
                 "session_id": "session",
                 "instance_id": "next",
                 "sequence": 1,
                 "previous_instance_id": "instance"
-            }))
-            .unwrap(),
+            }),
         )
+        .await
         .unwrap();
     assert_eq!(
         (
@@ -226,20 +231,25 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
         ..RigSpec::default()
     })
     .await;
-    // The same session id under another key is another session: neither key sees the other's.
+    // The same session id under another key is another session: neither key sees the other's. The route reads the key
+    // off the router's snapshot, so the router reloads behind the creation.
+    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
+    key.id = "laptop".into();
+    key.label = "laptop".into();
+    key.secret_digest = r.h.store.api_key_digest(LAPTOP_SECRET).to_vec();
+    key.prefix = phoebis_store::key_prefix(LAPTOP_SECRET);
+    r.h.store.insert_api_key(&key, "test").unwrap();
+    r.h.router.reload().await.unwrap();
     let laptop = r
-        .engine
-        .apply_event(
-            "laptop",
-            r.generation("laptop"),
-            decoded(json!({
+        .event_as(
+            LAPTOP_SECRET,
+            json!({
                 "event": "session_start",
                 "session_id": "session",
-                "instance_id": "elsewhere",
-                "sequence": 1
-            }))
-            .unwrap(),
+                "instance_id": "elsewhere"
+            }),
         )
+        .await
         .unwrap();
     assert_eq!(laptop.instance_id, "elsewhere");
     first_request(&r, "desktop", "session");
@@ -253,25 +263,25 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
         [("desktop", "session"), ("laptop", "session")]
     );
     assert_eq!(
-        r.engine
-            .apply_event(
-                "desktop",
-                r.generation("desktop"),
-                decoded(json!({
-                    "event": "session_start",
-                    "session_id": "third",
-                    "instance_id": "i3",
-                    "sequence": 1
-                }))
-                .unwrap()
-            )
-            .unwrap_err(),
+        r.post(
+            KEY,
+            json!({
+                "event": "session_start",
+                "session_id": "third",
+                "instance_id": "i3",
+                "sequence": 1
+            })
+        )
+        .await
+        .unwrap_err(),
         refusal("session_limit", 429)
     );
     r.event(json!({"event": "agent_start", "agent_id": "w1"}))
+        .await
         .unwrap();
     assert_eq!(
         r.event(json!({"event": "agent_start", "agent_id": "w2"}))
+            .await
             .unwrap_err(),
         refusal("agent_limit", 429),
         "three agents across two sessions"
@@ -324,10 +334,10 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
     assert_eq!(r.view("main").cause, reason);
     assert_eq!(r.engine.recipes(), armed);
     assert_eq!(
-        r.event(json!({"event": "heartbeat"})).unwrap_err(),
+        r.event(json!({"event": "heartbeat"})).await.unwrap_err(),
         refusal("instance_ended", 409)
     );
-    let again = r.event(json!({"event": "session_start"})).unwrap();
+    let again = r.event(json!({"event": "session_start"})).await.unwrap();
     assert_eq!(again.instance_id, "instance");
     assert_eq!(
         r.engine.sessions()[0].companion,
@@ -358,12 +368,13 @@ async fn a_released_subagent_reaches_the_router_so_its_pin_leaves_the_next_round
     let pool = r.h.store.pool("main").unwrap().expect("the rig's pool");
     // Two burn averages on, so the window's stamp below stands past the trigger's wait at the round.
     let since = r.now();
-    r.advance_attended(2 * burn_average_ms(&pool));
+    r.advance_attended(2 * burn_average_ms(&pool)).await;
     r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .await
         .unwrap();
     r.observe("main").await;
     r.observe("sub").await;
-    r.state("sub", "released");
+    r.state("sub", "released").await;
     r.h.router
         .report(Report::Sample {
             account_id: "a".into(),
@@ -406,62 +417,64 @@ async fn a_released_subagent_reaches_the_router_so_its_pin_leaves_the_next_round
     );
 }
 
-/// The session's facts as the conversion of a report keeps them.
-fn kept(fields: serde_json::Value) -> SessionFacts {
-    let mut body = serde_json::json!({
-        "protocol": 1,
-        "event": "session_facts",
-        "session_id": "session",
-        "instance_id": "instance",
-        "sequence": 1,
-    });
+/// The session's facts as a `session_facts` report through the events route leaves them on a rig of their own, read
+/// from the Sessions read, since the route's answer carries no fact.
+async fn kept(fields: serde_json::Value) -> SessionFacts {
+    let mut r = rig(RigSpec::default()).await;
+    let mut body = serde_json::json!({"event": "session_facts"});
     body.as_object_mut()
         .unwrap()
         .extend(fields.as_object().unwrap().clone());
-    match decode_json_event(&serde_json::to_vec(&body).unwrap()) {
-        Ok(report) => match report.event {
-            Reported::SessionFacts { facts } => facts,
-            other => panic!("a session_facts report, not {other:?}"),
-        },
-        Err(refused) => panic!("the report is taken, not refused as {}", refused.code),
+    if let Err(refused) = r.event(body).await {
+        panic!("the report is taken, not refused as {}", refused.code);
     }
+    r.engine
+        .sessions()
+        .into_iter()
+        .find(|s| s.key_id == "desktop" && s.session_id == "session")
+        .expect("the rig's session")
+        .facts
 }
 
-#[test]
-fn a_title_is_cut_at_a_character_boundary() {
+#[tokio::test]
+async fn a_title_is_cut_at_a_character_boundary() {
     let title = format!("{}é", "a".repeat(255));
     assert_eq!(
-        kept(serde_json::json!({ "title": title })).title(),
+        kept(serde_json::json!({ "title": title })).await.title(),
         Some("a".repeat(255).as_str())
     );
 }
 
-#[test]
-fn a_title_loses_its_control_and_format_characters() {
+#[tokio::test]
+async fn a_title_loses_its_control_and_format_characters() {
     assert_eq!(
-        kept(serde_json::json!({ "title": "fix\u{1b}[31m\u{202e}the\n\tcart" })).title(),
+        kept(serde_json::json!({ "title": "fix\u{1b}[31m\u{202e}the\n\tcart" }))
+            .await
+            .title(),
         Some("fix[31mthe cart")
     );
 }
 
-#[test]
-fn a_path_over_its_cap_is_absent() {
+#[tokio::test]
+async fn a_path_over_its_cap_is_absent() {
     let whole = format!("/{}", "p".repeat(1_023));
     assert_eq!(
-        kept(serde_json::json!({ "project": whole })).project(),
+        kept(serde_json::json!({ "project": whole }))
+            .await
+            .project(),
         Some(whole.as_str()),
         "a path of 1,024 bytes is kept"
     );
     let over = format!("/{}", "p".repeat(1_024));
     assert_eq!(
-        kept(serde_json::json!({ "project": over })).project(),
+        kept(serde_json::json!({ "project": over })).await.project(),
         None,
         "a path of 1,025 bytes would name another directory if cut"
     );
 }
 
-#[test]
-fn a_remote_is_reduced_to_host_and_path() {
+#[tokio::test]
+async fn a_remote_is_reduced_to_host_and_path() {
     let long_raw = format!(
         "https://git.example/acme/storefront.git?{}",
         "x".repeat(1_000)
@@ -545,21 +558,25 @@ fn a_remote_is_reduced_to_host_and_path() {
         ("https://git.example/acme/storefront\u{a0}.git", None),
         ("https://\u{a0}git.example/acme/storefront.git", None),
     ];
-    let wrong: Vec<String> = rows
-        .iter()
-        .filter_map(|(remote, want)| {
-            let facts = kept(serde_json::json!({ "repository": remote }));
-            (facts.repository() != *want)
-                .then(|| format!("{remote}: got {:?}, want {want:?}", facts.repository()))
-        })
-        .collect();
+    let mut wrong: Vec<String> = Vec::new();
+    for (remote, want) in &rows {
+        let facts = kept(serde_json::json!({ "repository": remote })).await;
+        if facts.repository() != *want {
+            wrong.push(format!(
+                "{remote}: got {:?}, want {want:?}",
+                facts.repository()
+            ));
+        }
+    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-#[test]
-fn a_title_of_control_characters_alone_is_absent() {
+#[tokio::test]
+async fn a_title_of_control_characters_alone_is_absent() {
     assert_eq!(
-        kept(serde_json::json!({ "title": "\u{1b}\u{202e}\u{200b}\n" })).title(),
+        kept(serde_json::json!({ "title": "\u{1b}\u{202e}\u{200b}\n" }))
+            .await
+            .title(),
         None
     );
 }

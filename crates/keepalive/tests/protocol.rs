@@ -10,8 +10,7 @@ use common::*;
 use fake_upstream::Respond;
 use http_body_util::BodyExt;
 use phoebis_keepalive::{
-    keepalive_router, AgentState, CompanionState, EventError, Lifecycle, ParkKind, SessionView,
-    EVENTS_PATH,
+    keepalive_router, AgentState, CompanionState, Lifecycle, ParkKind, SessionView, EVENTS_PATH,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, RulesMode};
@@ -159,23 +158,24 @@ fn other_key_row(r: &Rig, id: &str) -> ApiKeyRow {
 }
 
 /// An `agent_start` for `agent` on the rig's own session, under `generation` where the mod names one.
-fn agent_start(r: &mut Rig, agent: &str, generation: Option<u64>) -> Result<(), EventError> {
+async fn agent_start(r: &mut Rig, agent: &str, generation: Option<u64>) -> Result<(), Refused> {
     let mut body = json!({"event": "agent_start", "agent_id": agent});
     if let Some(generation) = generation {
         body["request_generation"] = generation.into();
     }
-    r.event(body).map(|_| ())
+    r.event(body).await.map(|_| ())
 }
 
 /// An `idle` report for `agent` on the rig's own session under `generation`: the refusal's code and generation, or
 /// `None` where the engine took the report.
-fn idle_report(r: &mut Rig, agent: &str, generation: u64) -> Option<(&'static str, Option<u64>)> {
+async fn idle_report(r: &mut Rig, agent: &str, generation: u64) -> Option<(String, Option<u64>)> {
     r.event(json!({
         "event": "state",
         "agent_id": agent,
         "state": "idle",
         "request_generation": generation
     }))
+    .await
     .err()
     .map(|refused| (refused.code, refused.request_generation))
 }
@@ -1207,17 +1207,17 @@ async fn a_registration_answer_carries_a_parked_agents_park() {
 async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_registers_anew() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    agent_start(&mut r, "worker", None).unwrap();
-    r.state("worker", "released");
+    agent_start(&mut r, "worker", None).await.unwrap();
+    r.state("worker", "released").await;
     let released = r.request_generation("worker");
     assert_eq!((released, r.engine.stats().agents), (1, 2));
-    r.advance_attended(3_599_999);
+    r.advance_attended(3_599_999).await;
     assert_eq!(
-        idle_report(&mut r, "worker", released),
-        Some(("agent_released", Some(released))),
+        idle_report(&mut r, "worker", released).await,
+        Some(("agent_released".to_string(), Some(released))),
         "the record refuses a late report until one cache TTL has passed since the release"
     );
-    r.advance_attended(1);
+    r.advance_attended(1).await;
     r.step().await;
     assert!(
         r.lifecycle("worker").is_none(),
@@ -1229,11 +1229,13 @@ async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_regi
         "the engine's count and the session's drop by the record"
     );
     assert_eq!(
-        idle_report(&mut r, "worker", released),
-        Some(("unknown_agent", None)),
+        idle_report(&mut r, "worker", released).await,
+        Some(("unknown_agent".to_string(), None)),
         "a report under the id that left answers as for any id the session does not hold"
     );
-    agent_start(&mut r, "worker", None).expect("a start after the leave registers anew");
+    agent_start(&mut r, "worker", None)
+        .await
+        .expect("a start after the leave registers anew");
     // The start's answer carries the generation, and the session view words Busy under `AwaitingRequest` as
     // `registered`.
     assert_eq!(
@@ -1250,11 +1252,13 @@ async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_regi
 async fn a_start_before_a_released_agent_leaves_reuses_its_record_and_clears_the_leave() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    agent_start(&mut r, "worker", None).unwrap();
-    r.state("worker", "released");
+    agent_start(&mut r, "worker", None).await.unwrap();
+    r.state("worker", "released").await;
     let released = r.request_generation("worker");
-    r.advance_attended(1_000);
-    agent_start(&mut r, "worker", Some(released)).expect("the start reuses the released record");
+    r.advance_attended(1_000).await;
+    agent_start(&mut r, "worker", Some(released))
+        .await
+        .expect("the start reuses the released record");
     // Busy under `AwaitingRequest`, which the session view words `registered`.
     assert_eq!(
         (
@@ -1264,7 +1268,7 @@ async fn a_start_before_a_released_agent_leaves_reuses_its_record_and_clears_the
         ),
         (released + 1, Some(Lifecycle::Registered), 2)
     );
-    r.advance_attended(3_600_000);
+    r.advance_attended(3_600_000).await;
     r.step().await;
     assert_eq!(
         (r.lifecycle("worker"), r.engine.stats().agents),
@@ -1285,21 +1289,21 @@ async fn a_released_agent_leaves_after_the_longest_ttl_of_its_pools_cache_ttl_po
         ..RigSpec::default()
     })
     .await;
-    agent_start(&mut r, "worker", None).unwrap();
+    agent_start(&mut r, "worker", None).await.unwrap();
     // The record takes its pool from its last real request.
     r.observe("worker").await;
-    r.state("worker", "released");
+    r.state("worker", "released").await;
     let released = r.request_generation("worker");
-    r.advance_attended(299_999);
+    r.advance_attended(299_999).await;
     assert_eq!(
-        idle_report(&mut r, "worker", released),
-        Some(("agent_released", Some(released))),
+        idle_report(&mut r, "worker", released).await,
+        Some(("agent_released".to_string(), Some(released))),
         "held until five minutes after the release"
     );
-    r.advance_attended(1);
+    r.advance_attended(1).await;
     assert_eq!(
-        idle_report(&mut r, "worker", released),
-        Some(("unknown_agent", None)),
+        idle_report(&mut r, "worker", released).await,
+        Some(("unknown_agent".to_string(), None)),
         "and gone at five minutes"
     );
 }
@@ -1309,9 +1313,9 @@ async fn a_released_agent_leaves_after_the_longest_ttl_of_its_pools_cache_ttl_po
 #[tokio::test]
 async fn a_released_agents_recipe_line_leaves_the_sessions_read_with_its_record() {
     let mut r = rig(RigSpec::default()).await;
-    agent_start(&mut r, "worker", None).unwrap();
+    agent_start(&mut r, "worker", None).await.unwrap();
     r.observe("worker").await;
-    r.state("worker", "released");
+    r.state("worker", "released").await;
     let lines = |r: &Rig| {
         r.engine
             .recipes()
@@ -1320,9 +1324,9 @@ async fn a_released_agents_recipe_line_leaves_the_sessions_read_with_its_record(
             .map(|line| line.agent_state)
             .collect::<Vec<_>>()
     };
-    r.advance_attended(3_599_999);
+    r.advance_attended(3_599_999).await;
     assert_eq!(lines(&r), vec![Lifecycle::Released]);
-    r.advance_attended(1);
+    r.advance_attended(1).await;
     r.step().await;
     assert!(lines(&r).is_empty(), "the line went with the record");
 }
@@ -1336,21 +1340,21 @@ async fn a_released_record_with_a_probe_in_flight_at_its_leave_waits_for_the_res
         ..RigSpec::default()
     })
     .await;
-    agent_start(&mut r, "worker", None).unwrap();
+    agent_start(&mut r, "worker", None).await.unwrap();
     r.observe("worker").await;
     r.up.push_credential_rule(
         A,
         "/v1/messages",
         Respond::Gated(Box::new(probe_answer(2_000, 0))),
     );
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.engine.step().await;
     wait_for(Duration::from_secs(5), || {
         (r.up.requests().len() == 2).then_some(())
     })
     .await;
-    r.state("worker", "released");
-    r.advance_attended(3_600_000);
+    r.state("worker", "released").await;
+    r.advance_attended(3_600_000).await;
     r.engine.step().await;
     // The probe in flight is the request the upstream still holds, which the wait above saw arrive.
     assert_eq!(
@@ -1393,10 +1397,10 @@ async fn a_released_record_with_a_probe_in_flight_at_its_leave_waits_for_the_res
 #[tokio::test]
 async fn a_session_end_keeps_the_leave_of_a_record_the_mod_released_before_it() {
     let mut r = rig(RigSpec::default()).await;
-    agent_start(&mut r, "worker", None).unwrap();
-    r.state("worker", "released");
-    r.advance_attended(1_000);
-    r.event(session_end("session")).unwrap();
+    agent_start(&mut r, "worker", None).await.unwrap();
+    r.state("worker", "released").await;
+    r.advance_attended(1_000).await;
+    r.event(session_end("session")).await.unwrap();
     r.advance(3_599_000);
     r.step().await;
     assert!(
@@ -1419,8 +1423,8 @@ async fn a_session_end_keeps_the_leave_of_a_record_the_mod_released_before_it() 
 async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_the_clock_alone() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    r.state("main", "idle");
-    r.advance_attended(270_000);
+    r.state("main", "idle").await;
+    r.advance_attended(270_000).await;
     r.step().await;
     let generation = r.request_generation("main");
     let base = r.sequence;
@@ -1552,7 +1556,7 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
 #[tokio::test]
 async fn a_scheduled_park_ends_whole_when_its_wake_passes_and_the_answer_carries_no_park() {
     let mut r = rig(RigSpec::default()).await;
-    agent_start(&mut r, "worker", None).unwrap();
+    agent_start(&mut r, "worker", None).await.unwrap();
     r.observe("worker").await;
     let base = r.sequence;
     let app = keepalive_router(r.engine.clone());
@@ -1603,7 +1607,7 @@ async fn a_scheduled_park_ends_whole_when_its_wake_passes_and_the_answer_carries
 #[tokio::test]
 async fn a_both_park_whose_deadline_passes_first_narrows_to_scheduled_and_keeps_its_wake() {
     let mut r = rig(RigSpec::default()).await;
-    agent_start(&mut r, "worker", None).unwrap();
+    agent_start(&mut r, "worker", None).await.unwrap();
     r.observe("worker").await;
     let base = r.sequence;
     let app = keepalive_router(r.engine.clone());
@@ -1669,7 +1673,7 @@ async fn a_both_park_whose_deadline_passes_first_narrows_to_scheduled_and_keeps_
 #[tokio::test]
 async fn a_both_park_whose_wake_passes_first_narrows_to_background_and_drops_its_wake() {
     let mut r = rig(RigSpec::default()).await;
-    agent_start(&mut r, "worker", None).unwrap();
+    agent_start(&mut r, "worker", None).await.unwrap();
     r.observe("worker").await;
     let base = r.sequence;
     let app = keepalive_router(r.engine.clone());
@@ -1739,6 +1743,7 @@ async fn a_park_report_with_a_part_its_kind_does_not_take_answers_invalid_event(
     // report carries the generation the start answered and its stray part is its one fault.
     let generation = r
         .event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap()
         .request_generation;
     let base = r.sequence;
@@ -2059,10 +2064,10 @@ async fn a_same_instance_start_revives_an_ended_session_so_a_clear_then_a_resume
 async fn a_revival_inside_the_cache_ttl_keeps_main_and_clears_its_leave() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    r.event(session_end("session")).unwrap();
+    r.event(session_end("session")).await.unwrap();
     r.advance(1_000);
-    r.reregister();
-    r.advance_attended(3_599_000);
+    r.reregister().await;
+    r.advance_attended(3_599_000).await;
     r.step().await;
     // The revival leaves main busy under `AwaitingRequest`, which the session view words `registered`.
     assert_eq!(
@@ -2078,7 +2083,7 @@ async fn a_revival_inside_the_cache_ttl_keeps_main_and_clears_its_leave() {
 async fn a_revival_after_mains_record_left_registers_main_anew() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    r.event(session_end("session")).unwrap();
+    r.event(session_end("session")).await.unwrap();
     r.advance(3_600_000);
     r.step().await;
     assert!(
@@ -2086,7 +2091,7 @@ async fn a_revival_after_mains_record_left_registers_main_anew() {
         "main's record left one cache TTL after the end"
     );
     assert_eq!(r.engine.stats().agents, 0);
-    let revived = r.reregister();
+    let revived = r.reregister().await;
     assert_eq!(
         serde_json::to_value(&revived.agents).unwrap(),
         json!([{"agent_id": "main", "request_generation": 0, "state": "busy"}]),
@@ -2110,10 +2115,11 @@ async fn a_revival_that_would_register_main_past_the_agent_cap_answers_agent_lim
     })
     .await;
     r.observe("main").await;
-    r.event(session_end("session")).unwrap();
+    r.event(session_end("session")).await.unwrap();
     r.advance(3_600_000);
     r.step().await;
     r.event(session_start("other"))
+        .await
         .expect("the slot main's record left takes another session");
     // The other session's main takes the agent slot at its first request.
     let mut first = r.observed("other", "main", BODY);
@@ -2121,14 +2127,20 @@ async fn a_revival_that_would_register_main_past_the_agent_cap_answers_agent_lim
         request.session_id = Some("other".into());
     }
     r.engine.observe(first);
-    let refused = r.event(session_start("session")).unwrap_err();
-    assert_eq!((refused.code, refused.status), ("agent_limit", 429));
+    let refused = r.event(session_start("session")).await.unwrap_err();
+    assert_eq!(
+        (refused.code.as_str(), refused.status),
+        ("agent_limit", 429)
+    );
     assert!(
         r.lifecycle("main").is_none(),
         "the refused revival registered no main"
     );
     assert_eq!(
-        r.event(json!({"event": "heartbeat"})).unwrap_err().code,
+        r.event(json!({"event": "heartbeat"}))
+            .await
+            .unwrap_err()
+            .code,
         "instance_ended",
         "and left the session ended"
     );
@@ -2148,18 +2160,19 @@ async fn an_ended_sessions_released_records_hold_their_agent_slots_until_they_le
     })
     .await;
     r.observe("main").await;
-    r.event(session_end("session")).unwrap();
+    r.event(session_end("session")).await.unwrap();
     r.advance(3_599_999);
     r.step().await;
-    let refused = r.event(session_start("other")).unwrap_err();
+    let refused = r.event(session_start("other")).await.unwrap_err();
     assert_eq!(
-        (refused.code, refused.status),
+        (refused.code.as_str(), refused.status),
         ("agent_limit", 429),
         "main's released record still holds its slot"
     );
     r.advance(1);
     r.step().await;
     r.event(session_start("other"))
+        .await
         .expect("the leave frees main's slot");
 }
 
@@ -2174,8 +2187,10 @@ async fn a_facts_report_replaces_the_whole_set() {
         }
         body
     };
-    r.event(session_facts(Some("Checkout retry"))).unwrap();
-    r.event(session_facts(None)).unwrap();
+    r.event(session_facts(Some("Checkout retry")))
+        .await
+        .unwrap();
+    r.event(session_facts(None)).await.unwrap();
     let view = session_view(&r);
     assert_eq!(
         (view.facts.branch(), view.facts.title()),
@@ -2184,6 +2199,7 @@ async fn a_facts_report_replaces_the_whole_set() {
     );
     let generation = r
         .event(json!({"event": "agent_start", "agent_id": "a1"}))
+        .await
         .unwrap()
         .request_generation;
     let agent_facts = |name: Option<&str>| {
@@ -2196,8 +2212,8 @@ async fn a_facts_report_replaces_the_whole_set() {
             "request_generation": generation
         })
     };
-    r.event(agent_facts(Some("reviewer"))).unwrap();
-    r.event(agent_facts(None)).unwrap();
+    r.event(agent_facts(Some("reviewer"))).await.unwrap();
+    r.event(agent_facts(None)).await.unwrap();
     let facts = &session_view(&r).agent_facts["a1"];
     assert_eq!(
         (facts.description(), facts.name()),
@@ -2211,8 +2227,12 @@ async fn agent_facts_for_an_unheld_agent_is_refused_and_adds_no_record() {
     let agents = session_agents(&r);
     let refused = r
         .event(json!({"event": "agent_facts", "agent_id": "ghost", "name": "reviewer"}))
+        .await
         .unwrap_err();
-    assert_eq!((refused.code, refused.status), ("unknown_agent", 409));
+    assert_eq!(
+        (refused.code.as_str(), refused.status),
+        ("unknown_agent", 409)
+    );
     assert_eq!(
         session_agents(&r),
         agents,
@@ -2225,6 +2245,7 @@ async fn agent_facts_leaves_a_parked_agent_parked() {
     let mut r = rig(RigSpec::default()).await;
     let generation = r
         .event(json!({"event": "agent_start", "agent_id": "a1"}))
+        .await
         .unwrap()
         .request_generation;
     let deadline = r.now() + 60_000;
@@ -2236,6 +2257,7 @@ async fn agent_facts_leaves_a_parked_agent_parked() {
         "deadline": deadline,
         "request_generation": generation
     }))
+    .await
     .unwrap();
     r.event(json!({
         "event": "agent_facts",
@@ -2243,9 +2265,11 @@ async fn agent_facts_leaves_a_parked_agent_parked() {
         "name": "reviewer",
         "request_generation": generation
     }))
+    .await
     .unwrap();
     let agents = r
         .reregister()
+        .await
         .agents
         .expect("a registration lists the session's agents");
     let a1 = agents
@@ -2273,9 +2297,9 @@ async fn agent_facts_leaves_a_parked_agent_parked() {
 #[tokio::test]
 async fn session_facts_renews_no_lease() {
     let mut r = rig(RigSpec::default()).await;
-    let lease = r.reregister().lease_expires_ms;
+    let lease = r.reregister().await.lease_expires_ms;
     r.advance(30_000);
-    let ack = r.event(json!({"event": "session_facts"})).unwrap();
+    let ack = r.event(json!({"event": "session_facts"})).await.unwrap();
     assert_eq!(
         ack.lease_expires_ms, lease,
         "a facts report says nothing of the companion's liveness"

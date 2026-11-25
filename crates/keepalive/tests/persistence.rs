@@ -12,8 +12,8 @@ use common::*;
 use fake_upstream::{install_at, Captured, Respond};
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
-    Ack, CompanionState, Engine, EventError, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming,
-    Lifecycle, ParkKind, Reason, LEASE_MS,
+    CompanionState, Engine, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, Lifecycle, ParkKind,
+    Reason, LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
@@ -102,9 +102,10 @@ async fn observe_on(r: &mut Rig, session: &str, agent: &str) {
     r.pump(Some(&id)).await;
 }
 
-/// `Rig::event` under a key generation read beforehand. The rig reads it from the store, whose connection a save
-/// waiting on the registry's write lock holds, so a report sent while the test holds that lock goes through here.
-fn report(r: &mut Rig, key_generation: i64, mut body: Value) -> Result<Ack, EventError> {
+/// A report filled as `Rig::event` fills it and sent through `Rig::post`, for a case that holds the registry's write
+/// lock: a save waiting on that lock holds the store's connection, and the route reads the key off the router's
+/// snapshot, never the store.
+async fn report(r: &mut Rig, mut body: Value) -> Result<Acked, Refused> {
     r.sequence += 1;
     let fields = body
         .as_object_mut()
@@ -119,7 +120,7 @@ fn report(r: &mut Rig, key_generation: i64, mut body: Value) -> Result<Ack, Even
     if !fields.contains_key("instance_id") {
         fields.insert("instance_id".into(), r.instance_of(&session_id).into());
     }
-    decoded(body).and_then(|report| r.engine.apply_event("desktop", key_generation, report))
+    r.post(KEY, body).await
 }
 
 /// A `state` report for `agent` under the generation of the agent's last answer, which the caller holds current, so no
@@ -157,18 +158,18 @@ async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_lo
     let start = DAY - 400_000;
     let now = r.now();
     r.advance(start - now);
-    r.reregister();
+    r.reregister().await;
     r.observe("main").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
-    r.advance_attended(40_000);
+    r.advance_attended(40_000).await;
     r.observe("main").await;
-    r.advance_attended(120_000);
+    r.advance_attended(120_000).await;
     let presence = json!({"event": "activity", "agent_id": "main", "kind": "presence"});
-    r.report(presence).unwrap();
+    r.report(presence).await.unwrap();
     let seen = r.now();
     let deadline = r.now() + 2 * 3_600_000;
-    r.report(parked_until(deadline)).unwrap();
+    r.report(parked_until(deadline)).await.unwrap();
     r.advance(MINUTE);
     let stats = r.engine.stats();
     r.engine.flush_persisted().await;
@@ -234,38 +235,39 @@ async fn a_heartbeat_after_the_restart_answers_instance_ended_and_the_same_insta
 ) {
     let mut r = rig(on_disk()).await;
     r.observe("main").await;
-    r.event(heartbeat()).unwrap();
+    r.event(heartbeat()).await.unwrap();
     let sequence = r.sequence;
     r.engine.flush_persisted().await;
     r.engine = r.restart().await;
     r.engine.load_persisted().await;
 
     assert_eq!(
-        r.event(heartbeat()).unwrap_err().code,
+        r.event(heartbeat()).await.unwrap_err().code,
         "instance_ended",
         "a silent session answers the mod's heartbeat as an ended instance"
     );
-    let ack = r.reregister();
+    let ack = r.reregister().await;
     assert_eq!(ack.sequence, sequence + 2, "the same instance re-adopts it");
     assert_eq!(r.engine.sessions()[0].companion, CompanionState::Reporting);
-    let generation = r.generation("desktop");
-    let stale = r.engine.apply_event(
-        "desktop",
-        generation,
-        decoded(json!({
-            "event": "heartbeat",
-            "session_id": "session",
-            "instance_id": "instance",
-            "sequence": sequence
-        }))
-        .unwrap(),
-    );
+    let stale = r
+        .post(
+            KEY,
+            json!({
+                "event": "heartbeat",
+                "session_id": "session",
+                "instance_id": "instance",
+                "sequence": sequence
+            }),
+        )
+        .await;
     assert_eq!(
         stale.unwrap_err().code,
         "stale_sequence",
         "the sequence the save carried still fences a report the mod already sent"
     );
-    r.event(heartbeat()).expect("the next sequence is accepted");
+    r.event(heartbeat())
+        .await
+        .expect("the next sequence is accepted");
     assert_eq!(
         r.engine.recipes_for("desktop", "session"),
         vec!["main".to_string()],
@@ -278,6 +280,7 @@ async fn an_agents_facts_survive_a_save_and_a_load() {
     let mut r = rig(on_disk()).await;
     let generation = r
         .event(json!({"event": "agent_start", "agent_id": "a1"}))
+        .await
         .unwrap()
         .request_generation;
     r.event(json!({
@@ -288,6 +291,7 @@ async fn an_agents_facts_survive_a_save_and_a_load() {
         "name": "reviewer",
         "request_generation": generation
     }))
+    .await
     .unwrap();
     r.engine.flush_persisted().await;
     r.engine = r.restart().await;
@@ -334,6 +338,7 @@ fn owned_request(r: &Rig, id: &str, request_class: Option<&str>, owner: &str) ->
 async fn an_auxiliary_requests_takeover_of_a_lapsed_session_saves_its_owner_across_the_restart() {
     let mut r = rig(on_disk()).await;
     r.event(json!({"event": "session_start", "owner_id": "owner-1"}))
+        .await
         .unwrap();
     r.advance(LEASE_MS);
     // The lapse is swept and saved first, so the one session write the takeover's flush can carry is the takeover's.
@@ -351,7 +356,7 @@ async fn an_auxiliary_requests_takeover_of_a_lapsed_session_saves_its_owner_acro
     r.engine = r.restart().await;
     r.engine.load_persisted().await;
     // The re-registration renews the lease and names no owner, so the fence compares against the owner the load read.
-    r.reregister();
+    r.reregister().await;
     r.engine
         .observe(owned_request(&r, "r-first-owner", None, "owner-1"));
     assert_eq!(
@@ -365,12 +370,14 @@ async fn an_auxiliary_requests_takeover_of_a_lapsed_session_saves_its_owner_acro
 async fn the_generations_survive_so_the_next_state_report_is_not_a_409() {
     let mut r = rig(on_disk()).await;
     r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .await
         .unwrap();
     r.observe("main").await;
     r.observe("main").await;
     r.observe("sub").await;
     let listed = r
         .reregister()
+        .await
         .agents
         .expect("a registration lists the session's agents");
     let generation_of = |agent: &str| {
@@ -386,7 +393,7 @@ async fn the_generations_survive_so_the_next_state_report_is_not_a_409() {
     r.engine = r.restart().await;
     r.engine.load_persisted().await;
 
-    let ack = r.reregister();
+    let ack = r.reregister().await;
     let acked: Vec<(String, u64)> = ack
         .agents
         .unwrap()
@@ -407,6 +414,7 @@ async fn the_generations_survive_so_the_next_state_report_is_not_a_409() {
             "state": "idle",
             "request_generation": generation
         }))
+        .await
         .unwrap_or_else(|e| panic!("{agent} under its saved generation: {e:?}"));
     }
 }
@@ -414,8 +422,8 @@ async fn the_generations_survive_so_the_next_state_report_is_not_a_409() {
 #[tokio::test]
 async fn an_ended_session_and_an_expired_recipe_are_dropped_at_the_load_under_expired_at_restart() {
     let mut r = rig(on_disk()).await;
-    r.event(session_start("gone")).unwrap();
-    r.event(session_end("gone")).unwrap();
+    r.event(session_start("gone")).await.unwrap();
+    r.event(session_end("gone")).await.unwrap();
     r.observe("main").await;
     r.engine.flush_persisted().await;
     assert_eq!(
@@ -478,8 +486,8 @@ async fn the_idle_age_counters_round_trip() {
     .await;
     let today = NOW / DAY;
     r.observe("main").await;
-    r.state("main", "idle");
-    r.advance_attended(6 * MINUTE);
+    r.state("main", "idle").await;
+    r.advance_attended(6 * MINUTE).await;
     r.step().await;
     // The next turn of the same conversation, six minutes into the window.
     r.observe_with("main", &next_turn()).await;
@@ -492,8 +500,8 @@ async fn the_idle_age_counters_round_trip() {
         "a window six minutes old reached the first two buckets and returned in the second"
     );
     // The window open from that return reaches its later buckets on the next UTC day.
-    r.state("main", "idle");
-    r.advance_attended(DAY);
+    r.state("main", "idle").await;
+    r.advance_attended(DAY).await;
     r.step().await;
     let counted = [today, today + 1].map(|day| day_counts(&r.engine, day));
     assert!(
@@ -541,13 +549,13 @@ fn saved_days(r: &Rig) -> BTreeSet<i64> {
 async fn the_only_day_rolled_off(r: &mut Rig) -> i64 {
     let today = NOW / DAY;
     r.observe("main").await;
-    r.state("main", "idle");
-    r.advance_attended(6 * MINUTE);
+    r.state("main", "idle").await;
+    r.advance_attended(6 * MINUTE).await;
     r.step().await;
     r.observe_with("main", &next_turn()).await;
     r.engine.flush_persisted().await;
     assert_eq!(saved_days(r), BTreeSet::from([today]));
-    r.advance_attended(DAY);
+    r.advance_attended(DAY).await;
     r.engine.flush_persisted().await;
     r.step().await;
     assert!(
@@ -608,8 +616,9 @@ async fn an_open_windows_bucket_day_round_trips() {
     let mut r = rig(RigSpec::default()).await;
     let today = NOW / DAY;
     r.observe("main").await;
-    r.state("main", "idle");
-    r.advance_attended((today + 1) * DAY - MINUTE - r.now());
+    r.state("main", "idle").await;
+    r.advance_attended((today + 1) * DAY - MINUTE - r.now())
+        .await;
     r.step().await;
     r.engine.flush_persisted().await;
     assert_eq!(
@@ -639,8 +648,8 @@ async fn an_open_windows_bucket_day_round_trips() {
 async fn a_return_of_a_window_loaded_without_its_buckets_day_counts_nothing() {
     let mut r = rig(on_disk()).await;
     r.observe("main").await;
-    r.state("main", "idle");
-    r.advance_attended(6 * MINUTE);
+    r.state("main", "idle").await;
+    r.advance_attended(6 * MINUTE).await;
     r.step().await;
     r.engine.flush_persisted().await;
     let conn = registry(&r);
@@ -722,7 +731,7 @@ fn lapse_while_down(r: &Rig) {
 async fn the_anchor_pair_round_trips_in_the_last_prefix_and_the_open_windows_anchor() {
     let mut r = rig(on_disk()).await;
     r.observe_with("main", &marked_first_of_three()).await;
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     let (static_hash, boundaries) = chain_of(&marked_first_of_three());
     let pair = serde_json::json!([static_hash, boundaries[2], boundaries[1]]);
     let marked = serde_json::json!(boundaries[0]);
@@ -793,7 +802,7 @@ async fn the_previous_prompt_round_trips() {
 async fn a_row_saved_with_the_static_hash_and_tail_pair_loads_with_no_boundary_before_the_last() {
     let mut r = rig(on_disk()).await;
     r.observe_with("main", &two_messages()).await;
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     r.engine.flush_persisted().await;
     let (static_hash, boundaries) = chain_of(&two_messages());
     let tail_pair = serde_json::json!([static_hash, boundaries[1]]);
@@ -903,7 +912,7 @@ async fn a_flush_that_rewrites_an_agent_with_an_unchanged_recipe_leaves_its_seal
     r.engine.flush_persisted().await;
     let sealed = stored_body(&r, "main");
     assert!(sealed.0.is_some() && sealed.1.is_some() && sealed.2 > 0);
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     r.engine.flush_persisted().await;
     assert_eq!(
         saved_field(&r, "session", "main", "state"),
@@ -927,7 +936,7 @@ async fn a_flush_after_the_recipe_ends_clears_its_sealed_body() {
     r.observe("main").await;
     r.engine.flush_persisted().await;
     assert!(stored_body(&r, "main").0.is_some());
-    r.state("main", "released");
+    r.state("main", "released").await;
     r.engine.flush_persisted().await;
     assert_eq!(
         stored_body(&r, "main"),
@@ -944,6 +953,7 @@ async fn a_flush_after_the_recipe_ends_clears_its_sealed_body() {
         "instance_id": "second",
         "previous_instance_id": "instance"
     }))
+    .await
     .unwrap();
     r.engine.flush_persisted().await;
     assert_eq!(
@@ -975,10 +985,11 @@ async fn a_flush_after_the_recipe_ends_clears_its_sealed_body() {
 async fn the_shutdown_quiesces_drains_saves_and_then_clears() {
     let mut r = rig(on_disk()).await;
     r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .await
         .unwrap();
     r.observe("main").await;
     r.observe("sub").await;
-    r.state("main", "idle");
+    r.state("main", "idle").await;
     r.engine.shutdown().await;
 
     assert_eq!(
@@ -1053,7 +1064,7 @@ async fn a_request_that_completes_during_shutdown_is_refused_and_counted_and_the
         saved_field(&r, "session", "main", "reason"),
         "awaiting_cache_evidence"
     );
-    assert_eq!(r.event(heartbeat()).unwrap_err().code, "quiesced");
+    assert_eq!(r.event(heartbeat()).await.unwrap_err().code, "quiesced");
     assert_eq!(r.engine.stats().late_updates, 3);
 }
 
@@ -1063,13 +1074,13 @@ async fn a_request_that_completes_during_shutdown_is_refused_and_counted_and_the
 async fn a_shutdown_while_an_earlier_save_is_held_lands_both_saves_in_order() {
     let mut r = rig(on_disk()).await;
     r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .await
         .unwrap();
     r.observe("main").await;
     r.engine.flush_persisted().await;
-    r.state("main", "idle");
-    r.state("sub", "idle");
+    r.state("main", "idle").await;
+    r.state("sub", "idle").await;
     let held_at = r.now();
-    let generation = r.generation("desktop");
     let held = registry(&r);
     held.execute_batch("BEGIN IMMEDIATE").unwrap();
     let engine = r.engine.clone();
@@ -1078,7 +1089,7 @@ async fn a_shutdown_while_an_earlier_save_is_held_lands_both_saves_in_order() {
     // After the held save read its batch: only a later save carries this.
     r.advance(MINUTE);
     let parked = state_of(&r, "main", "parked");
-    report(&mut r, generation, parked).unwrap();
+    report(&mut r, parked).await.unwrap();
     let engine = r.engine.clone();
     let shutdown = on_own_thread(async move { engine.shutdown().await });
     // The shutdown's flush has entered and waits on the flush lock the held save holds.
@@ -1116,6 +1127,7 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
 {
     let mut r = rig(on_disk()).await;
     r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .await
         .unwrap();
     r.observe("main").await;
     r.engine.flush_persisted().await;
@@ -1124,9 +1136,8 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
     // A save that fails: a trigger in the registry file refuses every session row, which the store's own connection
     // meets on its next write whatever the file's journal mode. The subagent's change is carried by that save and
     // touched by nothing after it.
-    r.state("main", "idle");
-    r.state("sub", "idle");
-    let generation = r.generation("desktop");
+    r.state("main", "idle").await;
+    r.state("sub", "idle").await;
     let conn = registry(&r);
     conn.execute_batch("BEGIN IMMEDIATE").unwrap();
     let engine = r.engine.clone();
@@ -1134,7 +1145,7 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
     r.engine.persist_reached(2, 2).await;
     // Between the failed save's snapshot and its outcome.
     let parked = state_of(&r, "main", "parked");
-    report(&mut r, generation, parked).unwrap();
+    report(&mut r, parked).await.unwrap();
     conn.execute_batch(
         "CREATE TRIGGER refuse_insert BEFORE INSERT ON keepalive_sessions BEGIN SELECT RAISE(ABORT, 'refused'); END; \
          CREATE TRIGGER refuse_update BEFORE UPDATE ON keepalive_sessions BEGIN SELECT RAISE(ABORT, 'refused'); END; \
@@ -1167,7 +1178,7 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
         "kind": "presence",
         "request_generation": r.request_generation("main")
     });
-    report(&mut r, generation, presence).unwrap();
+    report(&mut r, presence).await.unwrap();
     conn.execute_batch("COMMIT").unwrap();
     next.join().unwrap();
     assert_eq!(
@@ -1215,13 +1226,14 @@ async fn two_sessions() -> (Rig, usize, usize) {
     let mut r = rig(on_disk()).await;
     r.observe("main").await;
     // One probe the next request has not answered yet, which a disposal settles as wasted.
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     let older = r.engine.stats().retained_bytes;
     r.engine.flush_persisted().await;
     r.advance(MINUTE);
-    r.event(session_start("newer")).unwrap();
+    r.event(session_start("newer")).await.unwrap();
     r.event(json!({"event": "agent_start", "session_id": "newer", "agent_id": "sub"}))
+        .await
         .unwrap();
     observe_on(&mut r, "newer", "main").await;
     let newer = r.engine.stats().retained_bytes - older;
@@ -1328,7 +1340,7 @@ async fn a_restart_under_the_session_cap_restores_the_session_that_sent_a_reques
     r.observe("main").await;
     r.engine.flush_persisted().await;
     r.advance(MINUTE);
-    r.event(session_start("newer")).unwrap();
+    r.event(session_start("newer")).await.unwrap();
     r.engine.flush_persisted().await;
     let second = r
         .restart_with_limits(KeepaliveLimits {
@@ -1353,6 +1365,7 @@ async fn a_restart_under_the_session_cap_restores_the_session_that_sent_a_reques
 async fn a_saved_session_without_its_slot_member_holds_its_slot_where_it_carries_a_request_time() {
     let mut r = rig(on_disk()).await;
     r.event(session_start("second"))
+        .await
         .expect("the default caps leave room for a second session");
     r.observe("main").await;
     r.engine.flush_persisted().await;
@@ -1411,6 +1424,7 @@ async fn a_refused_session_restored_by_a_restart_leaves_one_expiry_after_its_new
     })
     .await;
     r.event(session_start("other"))
+        .await
         .expect("the rig's session has sent nothing, so it holds no slot");
     r.observe("main").await;
     r.engine.flush_persisted().await;
@@ -1445,10 +1459,11 @@ async fn a_refused_session_restored_by_a_restart_leaves_one_expiry_after_its_new
 async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_probe_settles() {
     let mut r = rig(on_disk()).await;
     r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .await
         .unwrap();
     r.observe("main").await;
     r.observe("sub").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     r.engine.flush_persisted().await;
     let main_bytes = {
@@ -1498,8 +1513,9 @@ async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_pr
 }
 
 /// An `agent_start` for `agent` on the rig's own session, with the refusal's code and status.
-fn agent_start(r: &mut Rig, agent: &str) -> Result<(), (&'static str, u16)> {
+async fn agent_start(r: &mut Rig, agent: &str) -> Result<(), (String, u16)> {
     r.event(json!({"event": "agent_start", "agent_id": agent}))
+        .await
         .map(|_| ())
         .map_err(|refused| (refused.code, refused.status))
 }
@@ -1517,32 +1533,32 @@ async fn a_session_at_the_agent_limit_frees_a_slot_when_its_released_record_leav
     })
     .await;
     r.observe("main").await;
-    agent_start(&mut r, "worker").unwrap();
+    agent_start(&mut r, "worker").await.unwrap();
     assert_eq!(
-        agent_start(&mut r, "other"),
-        Err(("agent_limit", 429)),
+        agent_start(&mut r, "other").await,
+        Err(("agent_limit".to_string(), 429)),
         "main and the worker fill the cap"
     );
-    r.state("worker", "released");
+    r.state("worker", "released").await;
     assert_eq!(
-        agent_start(&mut r, "other"),
-        Err(("agent_limit", 429)),
+        agent_start(&mut r, "other").await,
+        Err(("agent_limit".to_string(), 429)),
         "the released record still holds its slot"
     );
-    r.advance_attended(3_599_999);
+    r.advance_attended(3_599_999).await;
     assert_eq!(
-        (agent_start(&mut r, "other"), r.engine.stats().agents),
-        (Err(("agent_limit", 429)), 2),
+        (agent_start(&mut r, "other").await, r.engine.stats().agents),
+        (Err(("agent_limit".to_string(), 429)), 2),
         "until one cache TTL has passed since the release"
     );
-    r.advance_attended(1);
+    r.advance_attended(1).await;
     r.step().await;
     assert_eq!(
         r.engine.stats().agents,
         1,
         "the leave frees the released record's slot"
     );
-    assert_eq!(agent_start(&mut r, "other"), Ok(()));
+    assert_eq!(agent_start(&mut r, "other").await, Ok(()));
     assert_eq!(r.engine.stats().agents, 2);
 }
 
@@ -1560,7 +1576,7 @@ async fn a_flush_saves_an_unanswered_probe_with_what_its_credit_and_its_settleme
     })
     .await;
     r.observe("main").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     r.engine.flush_persisted().await;
     assert_eq!(
@@ -1622,9 +1638,9 @@ async fn a_flush_saves_an_unanswered_probe_with_what_its_credit_and_its_settleme
 async fn a_restored_released_record_leaves_at_the_first_tick_past_its_saved_leave() {
     let mut r = rig(on_disk()).await;
     r.observe("main").await;
-    agent_start(&mut r, "sub").unwrap();
+    agent_start(&mut r, "sub").await.unwrap();
     let released_at = r.now();
-    r.state("sub", "released");
+    r.state("sub", "released").await;
     r.engine.flush_persisted().await;
     assert_eq!(
         saved_field(&r, "session", "sub", "leaves_at"),
@@ -1665,13 +1681,13 @@ async fn a_restored_released_record_leaves_at_the_first_tick_past_its_saved_leav
 async fn a_saved_released_record_whose_leave_passed_while_the_router_was_down_does_not_load() {
     let mut r = rig(on_disk()).await;
     r.observe("main").await;
-    agent_start(&mut r, "worker").unwrap();
+    agent_start(&mut r, "worker").await.unwrap();
     r.engine.flush_persisted().await;
     // Saved after the worker, so the load reaches the released records before it.
-    r.advance_attended(1_000);
+    r.advance_attended(1_000).await;
     for sub in ["sub-a", "sub-b"] {
-        agent_start(&mut r, sub).unwrap();
-        r.state(sub, "released");
+        agent_start(&mut r, sub).await.unwrap();
+        r.state(sub, "released").await;
     }
     r.engine.flush_persisted().await;
     r.advance(3_600_000);
@@ -1693,9 +1709,9 @@ async fn a_saved_released_record_whose_leave_passed_while_the_router_was_down_do
         (false, false, true, 2),
         "the released records do not load, and the live worker loads under the cap"
     );
-    r.reregister();
+    r.reregister().await;
     assert_eq!(
-        agent_start(&mut r, "other"),
+        agent_start(&mut r, "other").await,
         Ok(()),
         "a new agent registers under the cap at once"
     );
@@ -1718,8 +1734,8 @@ async fn a_saved_released_record_whose_leave_passed_while_the_router_was_down_do
 #[tokio::test]
 async fn a_saved_released_record_without_a_leave_loads_with_none_and_stays() {
     let mut r = rig(on_disk()).await;
-    agent_start(&mut r, "sub").unwrap();
-    r.state("sub", "released");
+    agent_start(&mut r, "sub").await.unwrap();
+    r.state("sub", "released").await;
     r.engine.flush_persisted().await;
     let (sessions, mut agents) = (saved_sessions(&r), saved_agents(&r));
     for row in agents.iter_mut().filter(|row| row.agent_id == "sub") {
@@ -1962,7 +1978,7 @@ async fn a_flush_saves_the_class_of_a_seats_records_and_a_payload_from_before_th
 async fn a_saved_probe_whose_speed_reads_null_restores_and_settles_at_standard() {
     let mut r = rig(on_disk()).await;
     r.observe("main").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     r.engine.flush_persisted().await;
     assert_eq!(saved_unanswered(&r, "session", "main"), 1);
@@ -1981,8 +1997,8 @@ async fn a_saved_probe_whose_speed_reads_null_restores_and_settles_at_standard()
     r.engine.load_persisted().await;
     // The companion takes the restored session back and reports main released, which settles the probe as wasted, so
     // the one wasted row below is the probe saved with a null speed coming back.
-    r.reregister();
-    r.state("main", "released");
+    r.reregister().await;
+    r.state("main", "released").await;
     r.engine.flush_persisted().await;
     let speeds = wait_for(Duration::from_secs(30), || {
         let rows =
@@ -2039,7 +2055,7 @@ async fn a_restored_recipes_settlement_and_skip_key_the_client_and_the_user_agen
         }));
     r.engine
         .observe(r.complete("first", Outcome::Succeeded, Some(written)));
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     r.engine.flush_persisted().await;
     assert_eq!(
@@ -2049,21 +2065,29 @@ async fn a_restored_recipes_settlement_and_skip_key_the_client_and_the_user_agen
     );
     r.engine = r.restart().await;
     r.engine.load_persisted().await;
-    r.reregister();
+    r.reregister().await;
+    // The events route refuses the key of a disabled pool, so the companion sends no report there: the heartbeats go
+    // out ahead of the disable, and the release behind the pool's enable.
+    r.advance_attended(270_000).await;
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.enabled = false;
     r.h.store
         .update_pool(&pool, pool.updated_at, "test")
         .unwrap();
     r.h.router.reload().await.unwrap();
-    r.advance_attended(270_000);
     r.step().await;
     assert_eq!(
         r.view("main").cause,
         Reason::PoolDisabled,
         "the restored recipe's due probe was withheld"
     );
-    r.state("main", "released");
+    let mut pool = r.h.store.pool("main").unwrap().unwrap();
+    pool.enabled = true;
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.state("main", "released").await;
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
         r.db.read_blocking(|c| {
@@ -2205,19 +2229,30 @@ async fn a_start_under_a_new_key_generation_leaves_one_saved_row_for_the_session
     r.engine.flush_persisted().await;
     let old = r.generation("desktop");
     // A later holder of the key id registers the same session id, which replaces the earlier holder's session in place.
-    r.engine
-        .apply_event(
-            "desktop",
-            old + 1,
-            decoded(json!({
-                "event": "session_start",
-                "session_id": "session",
-                "instance_id": "later",
-                "sequence": 1
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+    // The operator deletes the key and creates it again, and the route reads the key off the router's snapshot, so the
+    // router reloads behind the creation.
+    const LATER_SECRET: &str = "phoebis-later-holder";
+    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
+    r.h.store.delete_api_key("desktop", "test").unwrap();
+    key.secret_digest = r.h.store.api_key_digest(LATER_SECRET).to_vec();
+    key.prefix = phoebis_store::key_prefix(LATER_SECRET);
+    r.h.store.insert_api_key(&key, "test").unwrap();
+    r.h.router.reload().await.unwrap();
+    let later = r.generation("desktop");
+    assert_ne!(
+        later, old,
+        "the key created again takes a generation of its own"
+    );
+    r.event_as(
+        LATER_SECRET,
+        json!({
+            "event": "session_start",
+            "session_id": "session",
+            "instance_id": "later"
+        }),
+    )
+    .await
+    .unwrap();
     r.engine.flush_persisted().await;
 
     assert_eq!(
@@ -2225,14 +2260,14 @@ async fn a_start_under_a_new_key_generation_leaves_one_saved_row_for_the_session
             .into_iter()
             .map(|s| (s.session_id, s.key_generation))
             .collect::<Vec<_>>(),
-        vec![("session".to_string(), old + 1)],
+        vec![("session".to_string(), later)],
         "the earlier holder's row went as the later one's was written"
     );
-    assert!(saved_agents(&r).iter().all(|a| a.key_generation == old + 1));
+    assert!(saved_agents(&r).iter().all(|a| a.key_generation == later));
     let second = r.restart().await;
     second.load_persisted().await;
     assert_eq!(second.stats().sessions, 1);
-    assert_eq!(second.sessions()[0].key_generation, old + 1);
+    assert_eq!(second.sessions()[0].key_generation, later);
 }
 
 #[tokio::test]
@@ -2277,6 +2312,7 @@ async fn a_second_load_leaves_the_sessions_the_engine_holds_and_their_rows() {
 async fn a_session_whose_main_agent_cannot_be_read_is_dropped_whole() {
     let mut r = rig(on_disk()).await;
     r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .await
         .unwrap();
     r.observe("main").await;
     r.observe("sub").await;
@@ -2429,7 +2465,7 @@ async fn a_restored_park_past_the_idle_window_survives_one_lease_length_and_ends
     .await;
     r.observe("main").await;
     let start = r.now();
-    r.report(parked_until(start + 2 * 3_600_000)).unwrap();
+    r.report(parked_until(start + 2 * 3_600_000)).await.unwrap();
     // Fifteen minutes into the park, past the ten-minute idle window, probed at every due time under the parked
     // ceiling with the lease renewed.
     let end = start + 15 * MINUTE;
@@ -2443,7 +2479,7 @@ async fn a_restored_park_past_the_idle_window_survives_one_lease_length_and_ends
             .filter(|due| *due > now)
             .min();
         let next = due.unwrap_or(end).min(now + MINUTE / 2).min(end);
-        r.advance_attended(next - now);
+        r.advance_attended(next - now).await;
         r.step().await;
     }
     assert_eq!(
@@ -2497,6 +2533,7 @@ async fn a_restored_both_park_keeps_its_deadline_and_its_wake() {
         "deadline": deadline,
         "wake_at": wake
     }))
+    .await
     .unwrap();
     r.engine.flush_persisted().await;
 
@@ -2528,9 +2565,10 @@ async fn a_restored_park_drops_a_saved_part_its_kind_does_not_take() {
     let mut r = rig(on_disk()).await;
     let worker = r
         .event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .await
         .unwrap()
         .request_generation;
-    let main = r.event(heartbeat()).unwrap().request_generation;
+    let main = r.event(heartbeat()).await.unwrap().request_generation;
     let wake = r.now() + 10 * MINUTE;
     let deadline = r.now() + 60 * MINUTE;
     r.event(json!({
@@ -2541,6 +2579,7 @@ async fn a_restored_park_drops_a_saved_part_its_kind_does_not_take() {
         "deadline": deadline,
         "request_generation": main
     }))
+    .await
     .unwrap();
     r.event(json!({
         "event": "state",
@@ -2550,6 +2589,7 @@ async fn a_restored_park_drops_a_saved_part_its_kind_does_not_take() {
         "wake_at": wake,
         "request_generation": worker
     }))
+    .await
     .unwrap();
     r.engine.flush_persisted().await;
     let saved = saved_agents(&r);
@@ -2583,6 +2623,7 @@ async fn a_restored_park_drops_a_saved_part_its_kind_does_not_take() {
         serde_json::Value,
     )> = r
         .reregister()
+        .await
         .agents
         .expect("a registration answers the session's agents")
         .into_iter()
@@ -2623,7 +2664,7 @@ async fn a_restored_park_drops_a_saved_part_its_kind_does_not_take() {
 async fn a_loads_settlement_reaches_the_ledger_only_once_the_registry_holds_the_cleared_agent() {
     let mut r = rig(on_disk()).await;
     r.observe("main").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     r.engine.flush_persisted().await;
     assert_eq!(saved_unanswered(&r, "session", "main"), 1);
@@ -2682,7 +2723,7 @@ async fn a_loads_settlement_reaches_the_ledger_only_once_the_registry_holds_the_
 async fn a_loads_settlement_waits_out_a_failed_save_and_goes_out_with_the_save_that_lands() {
     let mut r = rig(on_disk()).await;
     r.observe("main").await;
-    r.advance_attended(270_000);
+    r.advance_attended(270_000).await;
     r.step().await;
     r.engine.flush_persisted().await;
     assert_eq!(saved_unanswered(&r, "session", "main"), 1);

@@ -15,13 +15,13 @@ use crate::engine::{
 };
 use crate::facts::{AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts};
 
-pub const PROTOCOL: u64 = 1;
+pub(crate) const PROTOCOL: u64 = 1;
 
 /// An optional member takes one field here and one row of `members()`. The body's own keys say which members it
 /// names, so no second list repeats them.
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Event {
+pub(crate) struct Event {
     pub agent_id: Option<String>,
     pub agent_type: Option<String>,
     pub branch: Option<String>,
@@ -37,7 +37,6 @@ pub struct Event {
     pub park_kind: Option<String>,
     pub previous_instance_id: Option<String>,
     pub project: Option<String>,
-    pub protocol: Option<u64>,
     pub repository: Option<String>,
     pub repository_root: Option<String>,
     pub request_generation: Option<u64>,
@@ -51,8 +50,8 @@ pub struct Event {
 
 /// A parked agent's entry carries its park as well as its state, so the mod can see that a router restored from an
 /// older save holds an older park.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct AckAgent {
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct AckAgent {
     pub agent_id: String,
     #[serde(flatten)]
     pub park: Option<Park>,
@@ -60,8 +59,8 @@ pub struct AckAgent {
     pub state: AgentState,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct Ack {
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct Ack {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,9 +72,9 @@ pub struct Ack {
     pub session_id: String,
 }
 
-#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, thiserror::Error, serde::Serialize)]
 #[error("{code}")]
-pub struct EventError {
+pub(crate) struct EventError {
     pub code: &'static str,
     /// The holder an `instance_conflict` names when it ended or went silent, so the mod can retry the start as
     /// a takeover of that instance.
@@ -244,8 +243,8 @@ impl Named {
 
 /// A report the protocol takes, with its event and the event's own members typed, so the state machine reads no
 /// word the conversion from `Event` did not check.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EventReport {
+#[derive(Debug)]
+pub(crate) struct EventReport {
     pub session_id: String,
     pub instance_id: String,
     pub sequence: u64,
@@ -253,8 +252,8 @@ pub struct EventReport {
 }
 
 /// One event with the members it takes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Reported {
+#[derive(Debug, PartialEq)]
+pub(crate) enum Reported {
     /// A prompt, or the person's presence at the terminal, which moves the idle clock alone.
     Activity {
         agent_id: String,
@@ -446,9 +445,9 @@ impl EventReport {
 
 /// One report as the mod sends it. The body bound is the route's, the protocol is checked here, and the conversion
 /// refuses everything else the protocol does not take, before the state machine sees it.
-pub fn decode_json_event(body: &[u8]) -> Result<EventReport, EventError> {
+pub(crate) fn decode_json_event(body: &[u8]) -> Result<EventReport, EventError> {
     let Ok(Body {
-        object,
+        mut object,
         protocol_repeated,
         member_repeated,
     }) = serde_json::from_slice(body)
@@ -461,7 +460,11 @@ pub fn decode_json_event(body: &[u8]) -> Result<EventReport, EventError> {
     }
     // A newer protocol's body may carry members this one does not know, so the protocol is read ahead of every member:
     // the mod has to learn that the protocol is what the router refuses rather than its report.
-    match object.get("protocol").and_then(serde_json::Value::as_u64) {
+    match object
+        .remove("protocol")
+        .as_ref()
+        .and_then(serde_json::Value::as_u64)
+    {
         Some(PROTOCOL) => {}
         Some(_) => return Err(err("unsupported_protocol", 400)),
         None => return Err(err("invalid_event", 400)),
@@ -526,7 +529,7 @@ fn acknowledge(
 impl Engine {
     /// `key_id` and `key_generation` are the authenticated key's, never fields of the event: a session is
     /// scoped to the holder that reports it, and no member of the body can name another.
-    pub fn apply_event(
+    pub(crate) fn apply_event(
         &self,
         key_id: &str,
         key_generation: i64,
