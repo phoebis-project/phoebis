@@ -491,17 +491,61 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const withWindow = facts.filter((r) => has5h.get(r.accountId) === true);
     assert.ok(without.length > 0 && withWindow.length > 0, 'the story holds account facts on both sides');
     assert.deepEqual(without.filter((r) => r.peak['5h'] !== null || r.cooldownSeconds !== 0).map((r) => `${r.accountId} ${r.hour} ${r.peak['5h']} ${r.cooldownSeconds}`), []);
-    assert.deepEqual(withWindow.filter((r) => typeof r.peak['5h'] !== 'number').map((r) => `${r.accountId} ${r.hour}`), [], 'an account with the window reads its 5-hour peak');
+    // A peak is no lower than the hour's samples, so an hour whose last 5-hour sample holds a figure holds a peak.
+    const sampled = withWindow.filter((r) => typeof r.windows.five_hour?.utilization === 'number');
+    assert.ok(sampled.length > 0, 'the story holds hours with a 5-hour sample');
+    assert.deepEqual(sampled.filter((r) => typeof r.peak['5h'] !== 'number').map((r) => `${r.accountId} ${r.hour}`), [], 'an account with the window reads its 5-hour peak where the hour holds a sample');
+  });
+
+  test(`each account hour's peak is the larger of the hour's quota samples and its attempts' heads, null where it holds neither, and each sampled hour lists its row, at ${at}`, async () => {
+    const s = await story;
+    const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now + DAY));
+    // The two sources the router reads a peak from, each by the hour it falls in: the quota history's samples, and the
+    // heads of the attempts on the account by the attempt's start. The route also lists an hour where a sample of the
+    // account stands, whatever the other figures and the row's state.
+    const peaks = ['5h', '7d', '7d_fable'];
+    const highest = new Map();
+    const raise = (accountId, ms, windowId, utilization) => {
+      if (utilization === null || !peaks.includes(windowId)) return;
+      const key = `${accountId} ${startOfHour(ms)} ${windowId}`;
+      highest.set(key, Math.max(highest.get(key) ?? 0, utilization));
+    };
+    const sampled = new Set();
+    for (const a of s.accounts) {
+      // The mock's reading of an ended plan holds no window, so the account hours state no hour for it, where the
+      // router lists the hours of its samples.
+      // TODO: remove this skip when the account hours list the sampled hours of an account whose plan ended.
+      const listsSamples = a.planEndedAt === null;
+      for (const h of await s.api.getQuotaHistory(a.id)) {
+        for (const x of h.samples) {
+          if (listsSamples) sampled.add(`${a.id} ${startOfHour(Date.parse(x.at))}`);
+          raise(a.id, Date.parse(x.at), h.windowId, x.utilization);
+        }
+      }
+    }
+    for (const r of s.requests) for (const t of r.attempts) for (const w of t.windows) raise(t.accountId, Date.parse(t.startedAt), w.id, w.utilization);
+    const read = facts.flatMap((r) => peaks.map((w) => ({ at: `${r.accountId} ${r.hour} ${w}`, peak: r.peak[w], sources: highest.get(`${r.accountId} ${Date.parse(r.hour)} ${w}`) ?? null })));
+    const drawn = read.filter((x) => x.sources === null && x.peak !== null);
+    const lifted = read.filter((x) => x.sources !== null && x.peak !== null && x.peak > x.sources);
+    const short = read.filter((x) => x.sources !== null && (x.peak === null || x.peak < x.sources));
+    const named = (list) => list.slice(0, 3).map((x) => `${x.at} reads ${x.peak}, its sources ${x.sources}`);
+    const listed = new Set(facts.map((r) => `${r.accountId} ${Date.parse(r.hour)}`));
+    const unlisted = [...sampled].filter((k) => !listed.has(k)).map((k) => `${k.split(' ')[0]} ${iso(Number(k.split(' ')[1]))}`);
+    assert.deepEqual(
+      { drawn: named(drawn), lifted: named(lifted), short: named(short), unlisted: unlisted.slice(0, 3) },
+      { drawn: [], lifted: [], short: [], unlisted: [] },
+      `${drawn.length} peaks where the hour holds neither source, ${lifted.length} over them, ${short.length} under one, and ${unlisted.length} sampled hours with no row`,
+    );
   });
 
   test(`the accounts answer ends at the current hour and cuts an open cooldown at the read, at ${at}`, async () => {
     const s = await story;
-    // Secondary's model row (mock/accounts.ts) and the story attempts' rows on it (mock/requests.ts), each counted from
-    // the later of its start and the hour's start to the earlier of its end and the read: the model row's 1,800 s at
-    // 14:30, where it started at 13:56, and 2,040 s at 03:40, the 5-hour row's 1,329 s from the 429 of
-    // `req_b8c3e9d4-e61` at 14:07:50.9, which the account's own row of 14:09:31 repeats under its scope and end, and
-    // the 20 s each of the two 20 s retry-afters at 14:02:11 and 14:06:31.
-    const want = { '2026-09-16T14:30:00Z': 3_169, '2026-09-20T03:40:00Z': 3_409 }[at];
+    // Secondary's model row (mock/accounts.ts) and the story attempts' rows on it (mock/requests.ts), counted once
+    // where they overlap, from the hour's start to the read. The model row runs from 34 minutes before the read to 26
+    // minutes after it, 13:56 to 14:56 at 14:30, so it covers the hour's elapsed part: 1,800 s at 14:30 and 2,040 s
+    // at 03:40, where it started at 03:06. The 5-hour row from the 429 of `req_b8c3e9d4-e61` at 14:07:50.9, the
+    // account's own row of 14:09:31 and the two 20 s retry-afters at 14:02:11 and 14:06:31 stand inside it.
+    const want = { '2026-09-16T14:30:00Z': 1_800, '2026-09-20T03:40:00Z': 2_040 }[at];
     const rows = (await s.api.listAccountRollups(iso(s.now - DAY), iso(s.now + DAY))).filter((r) => r.accountId === 'secondary');
     const newest = rows.map((r) => r.hour).sort().at(-1);
     assert.deepEqual([newest, rows.find((r) => r.hour === newest)?.cooldownSeconds], [iso(startOfHour(s.now)), want]);
@@ -791,6 +835,19 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const [all] = await s.api.getAnalyticsBreakdown({ from: iso(from), groupBy: 'all', to: iso(to) });
     const kept = s.asked(s.requests.filter((r) => r.kind !== 'probe' && inHours(Date.parse(r.at), from, to)));
     assert.equal(all.requests, kept.length, `the range leaves out the ${current.length} requests from ${iso(to)} on`);
+  });
+
+  test(`an hour's duration samples count each request an account was asked for that holds a duration, a failed one and a token count among them, at ${at}`, async () => {
+    const s = await story;
+    // `req_5e2f7a19-b03` (mock/requests.ts) answered 502 after one attempt of 1,900 ms, beside the hour's token count.
+    const failed = s.requests.find((r) => r.id === 'req_5e2f7a19-b03');
+    const from = startOfHour(Date.parse(failed.at));
+    const hour = s.requests.filter((r) => startOfHour(Date.parse(r.at)) === from);
+    assert.ok(failed.status === 502 && failed.durationMs === 1_900 && hour.some((r) => r.kind === 'count_tokens' && r.durationMs !== null), 'the hour holds a failed request and a token count, each with a duration');
+    // The rollups sample a probe as they sample any request, so both sides read the probes.
+    const [all] = await s.api.getAnalyticsBreakdown({ from: iso(from), groupBy: 'all', includeProbes: true, to: iso(s.now) });
+    const timed = s.asked(hour).filter((r) => r.durationMs !== null);
+    assert.equal(all.histograms.durationMs.reduce((a, b) => a + b, 0), timed.length, `the hour's ${timed.length} requests with a duration`);
   });
 
   test(`the account facts of a range keep the hour holding its start and leave out the hour its end starts on, at ${at}`, async () => {

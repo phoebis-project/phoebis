@@ -3136,11 +3136,13 @@ export const ATTEMPT_COOLDOWNS: (CooldownRow & { model: string; requestId: strin
   r.attempts.flatMap((a) => (a.cooldownSet ? [{ accountId: a.accountId, ...cooldownOf(a.cooldownSet.reason, r.canonicalModel), setAt: attemptEnd(a), until: Date.parse(a.cooldownSet.until), model: r.canonicalModel, requestId: r.id }] : [])),
 );
 
+/** The ledger files each figure a counted request holds, whatever its status or kind, and a row leaves out a figure it
+ *  lacks as null. */
 function histogramsOf(rows: RequestLog[]): LatencyHistograms {
-  const samples = rows.filter((r) => r.status === 200).map((r) => ({ kind: r.kind, ...latencySamples(r) }));
-  const pick = (f: (s: (typeof samples)[number]) => number | null) => histogramOf(samples.map(f).filter((v): v is number => v !== null && v > 0));
+  const samples = rows.map(latencySamples);
+  const pick = (f: (s: (typeof samples)[number]) => number | null) => histogramOf(samples.map(f).filter((v): v is number => v !== null));
   return {
-    durationMs: pick((s) => (s.kind === 'count_tokens' ? null : s.durationMs)),
+    durationMs: pick((s) => s.durationMs),
     outputTps: pick((s) => s.outputTps),
     ttfbMs: pick((s) => s.ttfbMs),
     ttftMs: pick((s) => s.ttftMs),
@@ -3868,9 +3870,10 @@ function deriveFigures() {
 
 deriveFigures();
 
-// Hourly account facts: peak utilization per window, time spent ineligible, and
-// pin churn. The last seven days follow the sampled quota history; older hours
-// are synthesized with the same shape.
+/**
+ * Hourly account facts: each window's peak as the router reads it off the quota history's samples and the attempts'
+ * heads, and the time under a cooldown or in overage and the pin churn, drawn for each hour of the month.
+ */
 function accountRollups(): AccountRollup[] {
   const h = createRng(7_777);
   const out: AccountRollup[] = [];
@@ -3911,82 +3914,110 @@ function accountRollups(): AccountRollup[] {
     }
     return windows;
   };
+  // Each hour's highest head of each window over the attempts on an account, filed by the attempt's start, as the
+  // ledger folds a head into the account hour its attempt started in.
+  const headIndex = new Map<string, Map<number, number>>();
+  for (const r of REQUESTS) {
+    for (const a of r.attempts) {
+      const hour = startOfHour(Date.parse(a.startedAt));
+      for (const w of a.windows) {
+        if (w.utilization === null) continue;
+        const byHour = headIndex.get(`${a.accountId}|${w.id}`) ?? new Map<number, number>();
+        byHour.set(hour, Math.max(byHour.get(hour) ?? 0, w.utilization));
+        headIndex.set(`${a.accountId}|${w.id}`, byHour);
+      }
+    }
+  }
+  const peakOf = (accountId: string, id: WindowId, t: number): number | null => {
+    const figures = [sampleIndex.get(`${accountId}|${id}`)?.get(t), headIndex.get(`${accountId}|${id}`)?.get(t)].filter((v): v is number => v !== undefined);
+    return figures.length === 0 ? null : Math.max(...figures);
+  };
+  const peaksOf = (accountId: string, t: number): AccountRollup['peak'] => ({ '5h': peakOf(accountId, '5h', t), '7d': peakOf(accountId, '7d', t), '7d_fable': peakOf(accountId, '7d_fable', t) });
+  // The ledger stores no account hour that holds no figure, and the route lists an hour beyond the stored ones only
+  // where a sample of the account stands.
+  const holdsFigure = (r: AccountRollup): boolean =>
+    Object.values(r.peak).some((p) => p !== null) || r.cooldownSeconds > 0 || r.overageSeconds > 0 || r.pins.created + r.pins.migratedIn + r.pins.migratedOut > 0 || Object.keys(r.windows).length > 0;
+  const noPins = (): AccountRollup['pins'] => ({ created: 0, migratedIn: 0, migratedOut: 0 });
+  // The router writes a pin only under a pool with an affinity window, so an account no such pool holds counts none.
+  const pinnedAccounts = new Set([...poolById.values()].filter((p) => p.affinityTtlSeconds > 0).flatMap((p) => p.members.map((m) => m.accountId)));
   for (const account of ACCOUNTS) {
-    // An account never paired has never been sampled, so it has no hours to report.
-    if (account.kind !== 'oauth' || account.status === 'unpaired') continue;
+    if (account.kind !== 'oauth') continue;
+    // A row that is not paired draws nothing, since its polls stopped with its credential. The ledger keeps the samples
+    // the polls wrote before, so the route lists each hour they stand in, with their peaks and no count.
+    if (account.status === 'unpaired') {
+      for (let t = start; t <= end; t += HOUR) {
+        const row: AccountRollup = { ...ACCOUNT_ROLLUP_SAMPLE, accountId: account.id, hour: iso(t), peak: peaksOf(account.id, t), cooldownSeconds: 0, overageSeconds: 0, pins: noPins(), windows: sampledWindows(account, t) };
+        if (holdsFigure(row)) out.push(row);
+      }
+      continue;
+    }
     let drift5 = h.float(0.2, 0.7);
-    let drift7 = h.float(0.3, 0.8);
-    let driftF = h.float(0.05, 0.4);
-    // An hour holds facts from the one the plan started in to the one of the newest window reading, since a peak needs
-    // a reading behind it. Every hour is still drawn, so cutting one account's hours moves no other account's values.
-    // The ledger keeps the readings of a row whose windows the answer withholds, so its last reading stands in. With no
-    // reading `Math.max` answers -Infinity, so such an account holds no hour.
+    // The stream was seeded while a drawn walk stood for each window's peak, so the 7-day and Fable walks are
+    // still drawn, and dropped, which keeps every later draw in its place. The 5-hour walk keys the cooldown and
+    // overage draws.
+    h.float(0.3, 0.8);
+    h.float(0.05, 0.4);
+    // An hour holds drawn facts from the one the plan started in to the one of the newest window reading, the span in
+    // which the router read the account. Every hour is still drawn, so cutting one account's hours moves no other
+    // account's values. The ledger keeps the readings of a row whose windows the answer withholds, so its last reading
+    // stands in. With no reading `Math.max` answers -Infinity, so such an account holds no hour.
     const since = account.subscription?.since;
     const from = since ? startOfHour(Date.parse(since)) : start;
     const last = lastReadingOf(account);
     const readings = readWindows(last).map((w) => Date.parse(w.observedAt));
     const until = Math.max(...readings);
-    // The ledger reads the 5-hour peak off the heads' 5-hour readings, which an account whose set lacks the window
-    // never sends. Its drift is still drawn, so every account after it keeps its stream.
+    // The cooldown and overage draws stand for an account whose heads send the 5-hour window, so an account whose set
+    // lacks it draws neither. Its walk is still drawn, so every account after it keeps its stream.
     const fiveHour = last.windows.some((w) => w.id === '5h');
+    const pinned = pinnedAccounts.has(account.id);
     for (let t = start; t < end; t += HOUR) {
       const sampled5 = sampleIndex.get(`${account.id}|5h`)?.get(t);
-      const sampled7 = sampleIndex.get(`${account.id}|7d`)?.get(t);
-      const sampledF = sampleIndex.get(`${account.id}|7d_fable`)?.get(t);
       drift5 = Math.max(0, Math.min(1, drift5 + h.float(-0.12, 0.12)));
-      drift7 = Math.max(0, Math.min(1, drift7 + h.float(-0.03, 0.03)));
-      driftF = Math.max(0, Math.min(1, driftF + h.float(-0.03, 0.03)));
-      // The drawn figure stands for the heads' readings, so an hour's peak is the larger of it and the hour's highest
-      // sample, as the ledger takes both. The cooldown and overage draws key off the sampled figure where one stands,
-      // so a peak the drawn figure lifts moves no draw of the stream and no later account's hours.
+      h.float(-0.03, 0.03);
+      h.float(-0.03, 0.03);
+      // The cooldown and overage draws key off the hour's highest 5-hour sample where one stands, else the walk, as the
+      // stream was seeded, so each draw keeps its place.
       const keyed5 = fiveHour ? (sampled5 ?? drift5) : null;
-      const peak5 = fiveHour ? Math.max(drift5, sampled5 ?? 0) : null;
-      const peak7 = Math.max(drift7, sampled7 ?? 0);
-      const peakF = last.fableWindow ? Math.max(driftF, sampledF ?? 0) : null;
       const cooldown = keyed5 !== null && keyed5 >= 0.97 ? h.int(600, 3_600) : 0;
       const overage = account.extraUsage?.enabled && keyed5 !== null && keyed5 >= 0.9 ? h.int(300, 3_600) : 0;
       const busy = new Date(t).getHours() >= 8 && new Date(t).getHours() <= 19;
+      const pins = { created: busy ? h.int(0, 3) : h.chance(0.2) ? 1 : 0, migratedIn: busy && h.chance(0.25) ? 1 : 0, migratedOut: cooldown > 0 ? h.int(1, 3) : 0 };
       const row: AccountRollup = {
         ...ACCOUNT_ROLLUP_SAMPLE,
         accountId: account.id,
         hour: iso(t),
-        peak: { '5h': peak5 === null ? null : round(peak5, 3), '7d': round(peak7, 3), '7d_fable': peakF === null ? null : round(peakF, 3) },
+        peak: peaksOf(account.id, t),
         cooldownSeconds: cooldown,
         overageSeconds: overage,
-        pins: { created: busy ? h.int(0, 3) : h.chance(0.2) ? 1 : 0, migratedIn: busy && h.chance(0.25) ? 1 : 0, migratedOut: cooldown > 0 ? h.int(1, 3) : 0 },
+        pins: pinned ? pins : noPins(),
         windows: sampledWindows(account, t),
       };
-      if (t >= from && t <= until) out.push(row);
+      if (t >= from && t <= until && holdsFigure(row)) out.push(row);
     }
-    // The current hour holds no attempt, so the route lists it with zero counts and its samples' peaks. Its cooldown
-    // counts each row the account holds, its own and each one a story attempt's answer set, in the order they were
-    // set, from the latest of its start, the end its scope already counted and the hour's start to the earlier of its
-    // end and the read. The ledger books a scope's later row only past the end that scope counted, and the route cuts
-    // the part it booked past the clock. It draws nothing, so the stream of the hours before it stays.
+    // The current hour draws nothing, so the stream of the hours before it stays, and it reads no pin count. Its
+    // cooldown is the time the account stood under at least one of its rows, its own and each one a story attempt's
+    // answer set: taken in the order they were set, each counts from the latest of its start, the hour's start and the
+    // latest end of the rows before it, to the earlier of its end and the read. The ledger books a row only past the
+    // latest end that the account's scopes are accounted to, and the route cuts the part it booked past the clock.
     if (end >= from && end <= until) {
-      const hourPeak = (id: WindowId): number | null => {
-        const peak = sampleIndex.get(`${account.id}|${id}`)?.get(end);
-        return peak === undefined ? null : round(peak, 3);
-      };
-      const own = account.cooldowns.map((c) => ({ scope: c.scope, setAt: Date.parse(c.setAt), until: Date.parse(c.until) }));
-      const counted = new Map<string, number>();
-      const cooledMs = [...own, ...ATTEMPT_COOLDOWNS.filter((c) => c.accountId === account.id)]
-        .sort((a, b) => a.setAt - b.setAt)
-        .reduce((n, c) => {
-          const countedFrom = Math.max(c.setAt, counted.get(c.scope) ?? c.setAt, end);
-          counted.set(c.scope, Math.max(counted.get(c.scope) ?? c.until, c.until));
-          return n + Math.max(0, Math.min(c.until, NOW) - countedFrom);
-        }, 0);
-      out.push({
+      const own = account.cooldowns.map((c) => ({ setAt: Date.parse(c.setAt), until: Date.parse(c.until) }));
+      let latest = -Infinity;
+      let cooledMs = 0;
+      for (const c of [...own, ...ATTEMPT_COOLDOWNS.filter((x) => x.accountId === account.id)].sort((a, b) => a.setAt - b.setAt)) {
+        cooledMs += Math.max(0, Math.min(c.until, NOW) - Math.max(c.setAt, latest, end));
+        latest = Math.max(latest, c.until);
+      }
+      const row: AccountRollup = {
         ...ACCOUNT_ROLLUP_SAMPLE,
         accountId: account.id,
         hour: iso(end),
-        peak: { '5h': fiveHour ? hourPeak('5h') : null, '7d': hourPeak('7d'), '7d_fable': last.fableWindow ? hourPeak('7d_fable') : null },
+        peak: peaksOf(account.id, end),
         cooldownSeconds: Math.round(cooledMs / 1_000),
         overageSeconds: 0,
-        pins: { created: 0, migratedIn: 0, migratedOut: 0 },
+        pins: noPins(),
         windows: sampledWindows(account, end),
-      });
+      };
+      if (holdsFigure(row)) out.push(row);
     }
   }
   return out;
