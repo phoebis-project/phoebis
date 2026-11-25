@@ -466,7 +466,8 @@ cannot read rather than dropping it:
   listener with the table under [Refusal codes](client.md#refusal-codes) on The client.
 - `example` compares the installation page's quoted example with `deploy/config.example.yaml`.
 - `hrefs` compares each documentation link that the console builds, and the address in `deploy/phoebis.service`, with
-  the pages: the page stands in `docs/nav.toml`, and an anchor is the id of a heading on that page.
+  the pages: the page stands in `docs/nav.toml` and its file under `docs/site/`, and an anchor is the id of a heading on
+  that page.
 - `schema` compares the schema versions the operations page states with the last step of the registry's and the ledger's
   migration tables.
 - `unit` compares the installation page's quoted unit with `deploy/phoebis.service`.

@@ -809,9 +809,9 @@ def heading_ids(page_md):
 
 def check_hrefs(web_src, docs_ts, unit_file, nav_toml, site_dir):
     """Every `docsHref` call under the console's source and the unit's `Documentation` address against the pages: the
-    page stands in the nav, and an anchor is the id of a heading on that page. A call the check cannot read is a
-    finding, never a silent pass, and so is each other place that spells the name outside its declaration and an import
-    list."""
+    page stands in the nav and its file under the site, and an anchor is the id of a heading on that page. A call the
+    check cannot read is a finding, never a silent pass, and so is each other place that spells the name outside its
+    declaration and an import list."""
     absent = missing([docs_ts, unit_file, nav_toml])
     if not web_src.is_dir():
         print(f"{web_src} is missing")
@@ -869,14 +869,12 @@ def check_hrefs(web_src, docs_ts, unit_file, nav_toml, site_dir):
             print(f"{lead} names the page {page}, which {nav_shown} does not hold")
             findings += 1
             continue
-        if anchor is None:
-            continue
         page_md = site_dir / f"{page}.md"
         if page_md not in ids:
             ids[page_md] = None if missing([page_md]) else heading_ids(page_md)
         if ids[page_md] is None:
             findings += 1
-        elif anchor not in ids[page_md]:
+        elif anchor is not None and anchor not in ids[page_md]:
             print(f"{lead} names #{anchor}, which no heading of {page}.md carries")
             findings += 1
     return 1 if findings else 0

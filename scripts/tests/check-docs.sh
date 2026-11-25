@@ -524,9 +524,9 @@ out=$(python3 "$tmp/schema-unreadable/scripts/check-docs.py" schema 2>&1) \
 # The hrefs check has to fail on a link to a page that the nav does not hold though the page's file stands, on a call
 # whose arguments it cannot read, on a use of docsHref as a value, on an import of docsHref under another name, on a
 # unit address that names a page outside the nav, on a unit with no Documentation line, on a unit address outside the
-# documentation site, and on an anchor that only a line inside a fenced block spells. Each copy of the shared tree adds
-# one of them to a valid site, so each case's exit comes from that case alone. The check's run on the real tree is the
-# passing side.
+# documentation site, on an anchor that only a line inside a fenced block spells, and on a link with no anchor to a page
+# that the nav holds and whose file is gone. Each copy of the shared tree adds one of them to a valid site, so each
+# case's exit comes from that case alone. The check's run on the real tree is the passing side.
 tree hrefs
 echo "const DOCS_SITE = 'https://docs.example/router/';" > "$tmp/hrefs/web/src/lib/docs.ts"
 echo 'nav = [ { "Guide" = "guide.md" } ]' > "$tmp/hrefs/docs/nav.toml"
@@ -582,6 +582,13 @@ out=$(python3 "$tmp/hrefs-fence/scripts/check-docs.py" hrefs 2>&1) \
   && fail "a link to an anchor that only a line inside a fenced block spells passed"
 echo "$out" | grep -qF "web/src/Page.tsx:1: docsHref names #gone, which no heading of guide.md carries" \
   || fail "the anchor that only a fenced line spells did not report: $out"
+cp -R "$tmp/hrefs" "$tmp/hrefs-file"
+echo 'nav = [ { "Guide" = "guide.md" }, { "Gone" = "gone.md" } ]' > "$tmp/hrefs-file/docs/nav.toml"
+echo "const href = docsHref('gone');" > "$tmp/hrefs-file/web/src/Page.tsx"
+out=$(python3 "$tmp/hrefs-file/scripts/check-docs.py" hrefs 2>&1) \
+  && fail "a link with no anchor to a page whose file is gone passed"
+echo "$out" | grep -qF "docs/site/gone.md is missing" \
+  || fail "the page whose file is gone did not report: $out"
 
 # Unlike the cases above this reads the real tree: the site's favicon is a copy of the console's, and nothing else
 # keeps the two equal.
