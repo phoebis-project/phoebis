@@ -3277,6 +3277,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(forced.map((r) => [`${r.requestId}/${r.seq}`, r.outcome.pinWritten?.action]), [['req_c7e41d93-a26/1', 'created'], ['req_d71c5a3e-f48/1', 'created']], 'the forced moves and the pin each writes');
   });
 
+  // Catches a source arm that reads the account a request came from with no test of the outcome: the probe's answered
+  // attempt came from secondary and left no account, so secondary keeps its obstacle's verdict.
+  test(`a record whose outcome names no account it left words no member source, at ${at}`, async () => {
+    const s = await story;
+    const r = await s.api.getDecision('req_c41d0311-200', 2);
+    assert.deepEqual([r.outcome.fromAccountId, r.candidates.find((c) => c.accountId === 'secondary')?.verdict], [null, 'out']);
+  });
+
   test(`a wall reads the newest round on its newest wall's window before it by the round's trigger, at ${at}`, async () => {
     const s = await story;
     const events = (await logOf(s)).filter((row) => row.type === 'event').sort((x, y) => Date.parse(x.at) - Date.parse(y.at));

@@ -231,7 +231,7 @@ test("the story's records give their stations, states, host and termini", async 
   assert.deepEqual(read(overage), [...FRESH_LINE('match', 'match'), 'content: none (taken)', 'with main: none (taken)', 'static: none (taken)', 'Pick: chosen (taken)', 'Reserve: none (taken)']);
   assert.deepEqual([overage.shape, overage.decisive, overage.host, overage.branch, stationOf(overage, 'pick').second], ['fresh', 'pick', 'pick', null, ['Pace P0']]);
   assert.deepEqual(terminiOf(overage), THREE_TERMINI(['chosen', 'placed']));
-  assert.deepEqual(overage.leaves.map((l) => [l.accountId, l.chosen, l.tone]), [['primary', false, 'warning'], ['secondary', false, 'warning'], ['nightly', true, 'accent'], ['overflow', false, 'warning']]);
+  assert.deepEqual(overage.leaves.map((l) => [l.accountId, l.chosen, l.tone]), [['primary', false, 'neutral'], ['secondary', false, 'warning'], ['nightly', true, 'accent'], ['overflow', false, 'warning']]);
 
   assert.deepEqual(fresh.leaves.map((l) => [l.accountId, l.badge, l.chosen, l.tone]), [['primary', 'chosen', true, 'accent'], ['secondary', 'out', false, 'warning'], ['nightly', 'out', false, 'warning'], ['overflow', 'out', false, 'warning']]);
   assert.deepEqual([d.stationName(stationOf(fresh, 'pick')), d.stationName(stationOf(shedMove, 'move:shed')), d.stationName(stationOf(staticPlaced, 'pick'))], ['Pick, chosen, Pace P0', 'Shed, fired', 'Pick, not run']);

@@ -1916,10 +1916,14 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   const booking = reservationOf(spec, member(spec.accountId));
   if (spec.kind !== 'refused') walk.push(booking?.step ?? step('reserve', 'none', spec.accountId === null || spec.kind === 'exhausted' ? [] : [fact('account_id', spec.accountId, null, spec.accountId)]));
 
+  // The router names the account a decision left on a move or a failover's landing alone, so a placement that
+  // replaced an idle row names none. The member loop and the outcome read this one name, so the row that reads
+  // `source` is the account the outcome names.
+  const left = leftPin(spec) || spec.failover ? (spec.from ?? null) : null;
   // Each member's verdict as the router reads it once the answer is in.
   for (const c of candidates) {
     if (c.accountId === spec.accountId) c.verdict = spec.kind === 'renewed' ? 'renewed' : spec.kind === 'held' ? 'held_on' : 'chosen';
-    else if (c.accountId === spec.from && spec.kind === 'moved') c.verdict = 'source';
+    else if (c.accountId === left) c.verdict = 'source';
     else if (c.verdict === 'destination') continue;
     else if (c.obstacle !== null || c.partition !== null) c.verdict = 'out';
     else if (c.rank !== null) c.verdict = 'ranked';
@@ -1951,9 +1955,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     cohortHold: spec.heldBefore ?? null,
     completion,
     exhaustion,
-    // The router names the account a decision left on a move or a failover's landing alone, so a placement that
-    // replaced an idle row names none.
-    fromAccountId: leftPin(spec) || spec.failover ? (spec.from ?? null) : null,
+    fromAccountId: left,
     hold,
     inOverage: chosen?.inOverage ?? false,
     kind: spec.kind,
