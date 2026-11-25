@@ -2739,6 +2739,39 @@ fn a_round_walks_the_pin_of_the_portable_turn_that_clears_its_flag() {
 }
 
 #[test]
+fn a_round_that_marks_nothing_names_account_bound_ahead_of_no_burn() {
+    let s = tiered(shedding_pool(Shedding::default()));
+    // s0 holds account state and burns a tenth of the window an hour, which takes a at 0.99 over the wall at its reset.
+    // The request's own pin s1 burns nothing, so the round walks no pin and reads its reason off the left-out pins.
+    let mut st = rounding(vec![
+        PinRow {
+            account_bound: true,
+            ..burning("s0", "a", 10.0, false, T)
+        },
+        burning("s1", "a", 0.0, false, T),
+    ]);
+    over_a_fitting_b(&mut st, T - 500);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.marked, p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("s0", false, Some("account_bound")),
+            ("s1", false, Some("no_burn"))
+        ]
+    );
+    assert_eq!(
+        (round.outcome.as_str(), round.reason),
+        ("nothing_to_mark", Some("account_bound"))
+    );
+}
+
+#[test]
 fn a_portable_count_with_no_class_leaves_a_bound_pins_flag() {
     let s = snapshot(Pool::default());
     let mut st = loaded(vec![bound_pin("s1", "a", T)]);
