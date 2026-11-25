@@ -18622,6 +18622,14 @@ async fn a_lapsed_agents_return_from_a_marked_record_zeroes_its_sums_and_opens_n
         ))
         .await;
     handle.reload().await.unwrap();
+    let pins = handle.pins().await.unwrap();
+    assert_eq!(
+        pins.iter()
+            .map(|p| p.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["s2"],
+        "the purge took s1's pin, so the return reads the record and no replaced row"
+    );
     // a already tried, as the return of the lapsed agent's observation case is, so the return lands on b.
     let returned = SelectRequest {
         attempted: vec!["a".into()],
