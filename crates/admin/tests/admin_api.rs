@@ -8189,8 +8189,8 @@ async fn a_slowed_account_answers_its_slow_down_on_the_account_route_and_its_fac
     );
     assert!(
         within(slow_down["stretch_projection"].as_f64(), 1.121_666_666_67),
-        "0.93 and five points an hour over the 3 hours 50 minutes to the reset less the threshold, 0.93 + 0.05 x 23 / 6: \
-         {slow_down}"
+        "0.93 and five points an hour over the 3 hours 50 minutes to the reset less the threshold, \
+         0.93 + 0.05 x 23 / 6: {slow_down}"
     );
     let direct = json(get(&parts.app, "/admin/accounts/direct", Some(&cookie)).await).await;
     assert_eq!(

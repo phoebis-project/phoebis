@@ -172,7 +172,8 @@ pub(crate) struct Publish {
     pub bytes: u64,
     pub first_content_at: Option<i64>,
     pub saw_tool_use: bool,
-    /// The error type of an SSE `error` event seen after the head, which turns a clean end into a failure.
+    /// The code that an SSE `error` event seen after the head files (`filed_error_type`, else `error`), which turns a
+    /// clean end into a failure.
     pub stream_error: Option<String>,
     /// Whether the parser saw `message_stop`, without which a clean end of a stream is one the upstream cut short.
     pub saw_stop: bool,

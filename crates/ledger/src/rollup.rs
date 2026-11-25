@@ -2302,7 +2302,8 @@ pub fn open_cooldown_remainders(
     let mut stmt = conn.prepare_cached(
         "SELECT s.account_id, s.latest, g.seconds \
          FROM (SELECT account_id, MAX(until) AS latest FROM cooldown_spans GROUP BY account_id) s \
-         JOIN (SELECT account_id, SUM(seconds) AS seconds FROM cooldown_segments WHERE hour = ?1 GROUP BY account_id) g \
+         JOIN (SELECT account_id, SUM(seconds) AS seconds FROM cooldown_segments WHERE hour = ?1 \
+         GROUP BY account_id) g \
          ON g.account_id = s.account_id",
     )?;
     let remainders = stmt

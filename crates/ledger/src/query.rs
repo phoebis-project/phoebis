@@ -4478,7 +4478,8 @@ pub fn session_activity(
 /// The activity statement: the facts rows from the instant on through the index, and, while the fill has not ended,
 /// the scan's rows of each session with no mark.
 fn session_activity_statement(fill_ended: bool) -> String {
-    // A row whose receipt stands over no client request holds no newest request, and the scan listed no such session.
+    // A row whose receipt stands over no client request holds no newest request, and the arm over the request rows
+    // lists no such session.
     let facts = format!(
         "SELECT key_id, key_generation, session_id, last_request_at, last_request_model, last_request_account_id, \
          last_request_retired, last_request_rotation_at, last_request_user_agent, \
@@ -6173,7 +6174,8 @@ const SESSION_SPEND_COLUMNS: &str =
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session reads.
 const SESSION_SPEND_PRICED_FROM: usize = column_count(SESSION_SPEND_COLUMNS);
 
-/// How many columns a comma-separated list names: its commas plus one.
+/// How many columns a comma-separated list names: its commas plus one. A column expression of the list holds no comma,
+/// since the count reads the commas.
 const fn column_count(columns: &str) -> usize {
     let bytes = columns.as_bytes();
     let (mut count, mut i) = (1, 0);

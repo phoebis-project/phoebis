@@ -1862,7 +1862,7 @@ fn unpriced_fable_pricer() -> SharePricer {
 }
 
 #[test]
-fn a_reservation_round_marks_the_one_other_pin_beside_a_live_fable_pin_with_no_priced_burn() {
+fn a_reservation_round_marks_the_one_other_pin_beside_a_live_fable_pin_whose_burn_has_no_price() {
     let s = reserving_pool(Strategy::Pace, true);
     // s1's 4 tokens a second are the round's whole walked burn. f1's burn is unknown, not none, so f1 is the pin that
     // stays and the last-pin guard refuses nothing.
@@ -13666,9 +13666,9 @@ fn a_pin_hands_on_its_entrys_expiry_by_its_last_refresh() {
     );
 }
 
-/// The row idled out two hours before `T` and was last refreshed at its last use, under a five-minute TTL, and the
-/// request carries no release. `b` sits behind `a`, so the placement after the idle expiry lands back on the row's
-/// account.
+/// The row was last used and last refreshed two hours before `T`, past the pool's one-hour TTL and the row's
+/// five-minute cache TTL, and the request carries no release. `b` sits behind `a`, so the placement after the idle
+/// expiry lands back on the row's account.
 #[test]
 fn a_placement_back_on_an_idle_rows_account_hands_on_its_expired_entry_and_no_release() {
     let s = snapshot(Pool {
@@ -29830,9 +29830,10 @@ fn the_cold_group_orders_the_pins_that_drop_nothing_by_burn_then_the_rest_by_bur
 
 #[test]
 fn an_unpriced_cold_pin_ranks_behind_each_priced_cold_pin() {
-    // Three cold pins over a last prompt of 100,000 tokens on Sonnet's bound pair: `none` burns 0.01 of the 5-hour
-    // window an hour and holds a zero sum of a's thinking, `heavy` burns 0.03 over a's 40,000, and `guess` holds no
-    // thinking on a model the pricer does not weigh, so its burn has no price. a at 0.99 projects 1.031 at its reset.
+    // Three cold pins over a last prompt of 100,000 tokens, two of them Sonnet's on its bound pair: `none` burns 0.01
+    // of the 5-hour window an hour and holds a zero sum of a's thinking, `heavy` burns 0.03 over a's 40,000, and
+    // `guess` holds no thinking on a model the pricer does not weigh, so its burn has no price. a at 0.99 projects
+    // 1.031 at its reset.
     let round = thinking_round(
         vec![
             thinking_pin("none", 1.0, false, 100_000, 0),
@@ -29901,8 +29902,8 @@ fn a_cold_pin_whose_dropped_thinking_weighs_nothing_as_output_ranks_with_the_pin
 #[test]
 fn a_pick_whose_write_prices_nothing_names_no_rewrite_window() {
     // Two warm pins burning 0.03 of the 5-hour window an hour on Sonnet's bound pair, each covering the target of 0.028
-    // that a at 0.967 sets with the three pins' 0.061 an hour. `drained` holds a's 4,000 in its last prompt of 4,000, so
-    // its move writes no token and drops 4,000 that weigh 16,000 at an output weight of 4, which costs less than the
+    // that a at 0.967 sets with the three pins' 0.061 an hour. `drained` holds a's 4,000 in its last prompt of 4,000,
+    // so its move writes no token and drops 4,000 that weigh 16,000 at an output weight of 4, which costs less than the
     // 100,000 that `whole` rewrites. The pick marks drained, whose write prices nothing beside its priced drop.
     let round = thinking_round(
         vec![

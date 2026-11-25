@@ -300,13 +300,13 @@ pub struct CandidateFacts {
     pub score: Option<f64>,
     /// `chosen`, `renewed`, `held_on`, `source`, `destination`, `eligible`, `ranked`, `out`, `not_needed`.
     pub verdict: &'static str,
-    /// The runway on the window that `binding` names, filled where `fit` is: `None` for an unbounded one and on a
-    /// `spent` row, which states none. On a placement a `least_bad` row states the runway to 1.0.
+    /// The runway on the window that `binding` names, filled where `fit` is: `None` for an unbounded one and on an
+    /// `ending` or `spent` row, which states none. On a placement a `least_bad` row states the runway to 1.0.
     pub runway_ms: Option<i64>,
     /// The request's fit on the member, filled where a move's gate read it or, for a placement, where the `no_fit`
-    /// partition read it: `ending`, `fits`, `least_bad`, `rewrite_only` or `spent`. On a placement, `spent` for a
-    /// member that holds no allowance, which stands on the last rung and states no runway and no window. A move's gate
-    /// writes its own verdict.
+    /// partition read it: `ending`, `fits`, `least_bad`, `rewrite_only` or `spent`. On a placement, `spent` in place of
+    /// `least_bad` or `ending` for a member that holds no allowance, which stands on the last rung and states no runway
+    /// and no window. A move's gate writes its own verdict.
     pub fit: Option<&'static str>,
     /// The window that binds `runway_ms`, `None` where none binds it, as on a `spent` row.
     pub binding: Option<String>,

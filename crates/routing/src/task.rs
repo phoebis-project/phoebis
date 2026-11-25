@@ -316,8 +316,8 @@ pub enum RouterEvent {
         /// The destination's fit as the move read it: the word (`ending`, `fits`, `least_bad`, `rewrite_only` or
         /// `spent`), the runway on the binding window (`None` for an unbounded one) and that window. Where the
         /// placement's ladder read the fit, a `least_bad` destination states its runway to 1.0, which its rung ranks
-        /// by, a `spent` one, which holds no allowance, states no runway and no window, and every other fit its runway
-        /// to the ceiling.
+        /// by, an `ending` one and a `spent` one, which holds no allowance, state no runway and no window, and every
+        /// other fit its runway to the ceiling.
         fit: Option<&'static str>,
         runway_ms: Option<i64>,
         binding: Option<String>,

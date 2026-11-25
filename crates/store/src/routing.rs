@@ -385,7 +385,8 @@ pub struct RekeyWrite {
     pub upsert_cooldowns: Vec<CooldownRow>,
     /// `(model, account_a, account_b)` of each pair's fact under the spelling.
     pub delete_bindings: Vec<(String, String, String)>,
-    /// Each fact that stands under the dated id behind the merge, written under the holders that it names.
+    /// Each fact of the spelling that stands under the dated id behind the merge, written under the holders that it
+    /// names.
     pub upsert_bindings: Vec<ThinkingBindingRow>,
     pub delete_lapsed_agents: Vec<PinKey>,
     pub upsert_lapsed_agents: Vec<LapsedAgentRow>,

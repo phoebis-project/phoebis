@@ -1111,9 +1111,9 @@ fn confirms_compaction(row: &PinRow, request: &SelectRequest) -> bool {
 }
 
 /// Whether the selection sets the session's thinking sums to zero, on the row the session stood on where one stands: a
-/// compacted request's prompt holds no earlier block, and neither does the prompt of the turn that confirms a compaction
-/// with a body under half of the row's last prompt, the compaction call's. A probe replays the header of the request it
-/// keeps warm, whose answer has added its thinking since.
+/// compacted request's prompt holds no earlier block, and neither does the prompt of the turn that confirms a
+/// compaction with a body under half of the row's last prompt, the compaction call's. A probe replays the header of the
+/// request it keeps warm, whose answer has added its thinking since.
 pub(crate) fn zeroes_sums(row: Option<&PinRow>, request: &SelectRequest) -> bool {
     zeroes_on(
         request,
@@ -3264,8 +3264,8 @@ fn replace_expired(
 /// averages, the classifier copy's model and the last prompt the new row carries, so the destination's projection
 /// counts the pin from the moment it lands, the copy keeps its price and a later move prices its rewrite from a figure.
 /// `replaced` is any row of the pin the placement replaces, `moving` among them, whose thinking sums of the holders
-/// `snapshot` carries and whose compaction mark the new row takes on. `lapsed` is a returning agent's record, or the one
-/// a row idle past the TTL stands in for: with no `moving` row the new row takes its burn copies, decayed from the
+/// `snapshot` carries and whose compaction mark the new row takes on. `lapsed` is a returning agent's record, or the
+/// one a row idle past the TTL stands in for: with no `moving` row the new row takes its burn copies, decayed from the
 /// placement on, and where it replaces no row its sums and its mark. The request that reads the mark writes the new row
 /// without it. Each other request carries a marked source's mark with the source's last prompt, which the turn behind
 /// it compares its body with.
@@ -7809,8 +7809,9 @@ fn subscription_ended(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -
 /// set under the incarnation that answered the refusal, and under its in-flight cap unless the live pin is already
 /// there, since a renewal reads no cap. A count creates no pin and follows its pin, a probe warms the pin it was sent
 /// for, a request that `follows_bound` follows the pin of a session that holds account state as a count does, and the
-/// binding of a non-portable request is decided behind this read, at step 3 or at the bind past the pin's idle expiry,
-/// whether it holds or a request bound by web search results alone leaves it, so none of them reads a credit.
+/// binding of a non-portable request is decided at the bind past the pin's idle expiry ahead of this read or at step 3
+/// behind it, whether it holds or a request bound by web search results alone leaves it, so none of them reads a
+/// credit.
 fn credit_candidate<'a>(
     request: &SelectRequest,
     follows_bound: bool,
@@ -9518,8 +9519,8 @@ impl Readings<'_> {
             "renewed" => (by("none", ""), self.renewal_fact()),
             "moved" => {
                 // A move continues as a fresh placement: its By says why it left, its Fact the runway of the
-                // destination's row (the gate's on a rule's move, the runway to 1.0 on a `least_bad` landing), then
-                // where it landed, or the verdict in words when no candidate fit.
+                // destination's row, the gate's read with its runway to the ceiling, then where it landed, or the
+                // verdict in words when no candidate fit.
                 let mut facts = Vec::new();
                 if let Some(member) = outcome.account_id.as_deref().and_then(|id| self.member(id)) {
                     facts.push(match member.runway_ms {

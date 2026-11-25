@@ -457,7 +457,8 @@ pub(crate) struct DecisionRecord {
     /// `source`, `destination`, `eligible`, `ranked`, `out` or `not_needed`), `runway_ms`, `fit` (`ending`, `fits`,
     /// `least_bad`, `rewrite_only` or `spent`) and `binding` (the request's fit where a move's gate or the `no_fit`
     /// partition read it, the runway null when unbounded, on a placement a `least_bad` row's runway to 1.0 and its
-    /// window, and a `spent` row's null runway and window for a member that holds no allowance),
+    /// window, and an `ending` or `spent` row's null runway and window, where a member that holds no allowance reads
+    /// `spent` in place of `least_bad` or `ending`),
     /// `burn` (the pins' burn by plan window, share per hour), `factor` (the member's slow-down factor as the last
     /// pinned selection on it read it, null with no read or on a pool whose slow-down is off).
     #[schema(value_type = Vec<Object>)]

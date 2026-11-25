@@ -1232,9 +1232,8 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     }
 }
 
-/// The upstream's word for an answer forwarded with its `status`, `None` below 400: the `error.type` that `body`
-/// names where it passes `filed_error_type`, else `upstream_<status>`. The word becomes a map key and a filter value,
-/// so a type outside that bound files the fallback.
+/// The upstream's word for an answer forwarded with its `status`, `None` below 400: the `error.type` that
+/// `filed_error_type` reads off `body`, else `upstream_<status>`.
 pub(crate) fn upstream_code(status: u16, body: Option<&[u8]>) -> Option<String> {
     (status >= 400).then(|| {
         body.and_then(filed_error_type)

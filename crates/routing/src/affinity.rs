@@ -355,7 +355,8 @@ impl AffinityMap {
     }
 
     /// Upserts the report's boundaries and answers the rows to persist (new or moved). A response that touched the
-    /// cache also writes the account's hold of each static boundary on the report's lane, which no row carries.
+    /// cache and carries a static lifetime also writes the account's hold of each static boundary on the report's
+    /// lane, which no row carries.
     pub fn record(&mut self, report: &AffinityReport) -> Vec<AffinityRow> {
         let canonical_model = self.canonical(&report.canonical_model).to_string();
         let lane = self.canonical_lane(&report.lane);

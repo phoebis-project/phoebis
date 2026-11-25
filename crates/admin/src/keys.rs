@@ -80,8 +80,8 @@ pub(crate) struct KeyInput {
     #[schema(value_type = Option<bool>, nullable)]
     auto_mode_server: Option<Option<Value>>,
     /// The features to change, each the object of the key row: `account` with an OAuth account of the router, whatever
-    /// its pool, `inherit` for the pool's, or `none`. A feature left out keeps its stored value, and a new key starts at
-    /// `inherit` for both.
+    /// its pool, `inherit` for the pool's, or `none`. A feature left out keeps its stored value, and a new key starts
+    /// at `inherit` for both.
     #[serde(default)]
     feature_accounts: Option<KeyFeatureAccountsInput>,
     /// The key's own guardrail ids in the order it runs them after its pool's, replacing the key's list whole, on an

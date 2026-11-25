@@ -1862,7 +1862,8 @@ mod tests {
         let mut costs = SUBSCRIPTION_COSTS.to_string();
         // The second entry's `desk` block ends the file, so `booth` lands behind it and out of the sorted order.
         costs.push_str(
-            "      booth: {entrypoints: [kiosk, booth], capacity: {default_claude_ai: {five_hour: 10, seven_day: 62.5}}, \
+            "      booth: {entrypoints: [kiosk, booth], capacity: \
+             {default_claude_ai: {five_hour: 10, seven_day: 62.5}}, \
              peak: {capacity_factor: {five_hour: 1, seven_day: 1}}}\n",
         );
         let tables = phoebis_ledger::PlanTables {

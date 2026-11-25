@@ -1913,10 +1913,11 @@ async fn pairing_confirm(
         Ok(()) => {
             // The first reading is taken now rather than left to the scheduler's next pass, so the account's
             // windows show as soon as the endpoint answers. The answer does not wait on it: the endpoint can be
-            // slow and the pairing is committed either way, so a failed read records nothing and the account's slot
-            // reads it again. Tracked so a shutdown aborts a read still in flight rather than letting it
-            // record into the closing channel. A flag the confirm kept pauses the account's usage reads as it pauses
-            // the poll's schedule: a reading would land after the flag and take the term-ended row's pair with it.
+            // slow and the pairing is committed either way, so a failed read records no reading, and the account's slot
+            // tries again unless the failure sent the account to re-pair. Tracked so a shutdown aborts a read still in
+            // flight rather than letting it record into the closing channel. A flag the confirm kept pauses the
+            // account's usage reads as it pauses the poll's schedule: a reading would land after the flag and take the
+            // term-ended row's pair with it.
             let first_poll = !QuotaPoll::plan_paused(&state.store, &row.id);
             if first_poll {
                 let polled = Arc::clone(&state);

@@ -408,7 +408,7 @@ impl Facts {
     }
 
     /// Whether `request` is the one `pick` names: its id is the pick's, or its receipt the pick's instant where the
-    /// pick keeps no id.
+    /// pick keeps no id and for `LastRequest`, whose id this match does not read.
     fn held(&self, pick: Pick, request: &SessionRequest) -> bool {
         match pick {
             Pick::LastRequest | Pick::LastInference | Pick::FirstRequest => {
@@ -650,9 +650,9 @@ fn walk(conn: &Connection, from: FillCursor) -> Result<Walk, LedgerError> {
 /// fill that a shutdown cut short goes on below the stored cursor. Three resets drop the cursor, and the fill then
 /// walks from the top: the start's step for a moved threshold, a purge slice that deleted request rows while the fill
 /// had not ended, since those rows can be the older requests of a session that resumed above the cursor, and a landing
-/// into a session with no mark while the fill has ended. A session with no mark above an ended cursor waits for the
-/// walk that its next landing brings, and the reader sums it from its request rows until then. Answers whether the
-/// walk left rows below the cursor.
+/// into a session with no mark that holds another request while the fill has ended. A session with no mark above an
+/// ended cursor waits for the walk that its next landing brings, and the reader sums it from its request rows until
+/// then. Answers whether the walk left rows below the cursor.
 pub(crate) fn fill_step(db: &LedgerDb, prices: &PriceRevisions) -> Result<bool, LedgerError> {
     db.purge(|conn| {
         let (passed, summed) = {
