@@ -26448,7 +26448,10 @@ fn a_non_portable_count_on_a_slowed_account_writes_no_slow_down_entry() {
         landed(decide(&mut st, &on, &count, &mut rng()).result),
         ("a".into(), None)
     );
-    assert_eq!(slowed_since(&st), None, "the count opens no slowed span");
+    assert!(
+        st.slow_down_state("p", "a").is_none(),
+        "the count writes no slow-down entry"
+    );
     // The control: the session's bound turn at the same instant reads the account and opens the span.
     let turn = SelectRequest {
         portability: Portability::Hold,
