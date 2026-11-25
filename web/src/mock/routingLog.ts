@@ -1354,8 +1354,9 @@ const freshFitOf = (spec: Spec, c: RecordCandidate, pool: PoolSeed): FitRead => 
 /**
  * The no-fit partition's reading of a placement's members, drawn or written by hand, as the engine reads it: every
  * member the spent and cap partitions left, or the whole set the cap holds for a slot, and none of the members they
- * dropped. A drawn token count and a drawn hold read none: the request generator draws their account without
- * the fit, and neither takes a slot the cap could keep that choice by.
+ * dropped. A `least_bad` or winding-down member with no allowance left reads `spent` with no runway and no window. A
+ * drawn token count and a drawn hold read none: the request generator draws their account without the fit, and
+ * neither takes a slot the cap could keep that choice by.
  */
 function readPlacementFits(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed): void {
   const r = spec.request;
@@ -1364,12 +1365,15 @@ function readPlacementFits(spec: Spec, candidates: RecordCandidate[], pool: Pool
   const free = left.filter((c) => r.kind === 'count_tokens' || c.inFlight < c.inFlightCap);
   for (const c of free.length > 0 ? free : left) {
     const read = freshFitOf(spec, c, pool);
-    // A `least_bad` row states the runway to 1.0 and each other row the one to the ceiling, each over the windows whose
-    // runway ends by their reset, where the rung ranks by every bounded window.
+    // The ladder refuses a `least_bad` or winding-down member with no allowance its rung, so its row reads `spent` with
+    // no runway toward the rung it was refused. A `least_bad` row states the runway to 1.0 and each other row the one
+    // to the ceiling, each over the windows whose runway ends by their reset, where the rung ranks by every bounded
+    // window.
+    const spent = (read.verdict === 'least_bad' || read.verdict === 'ending') && !holdsAllowance(c, r.canonicalModel);
     const wall = read.verdict === 'least_bad';
-    c.fit = read.verdict;
-    c.runwayMs = wall ? read.wallShownRunwayMs : read.shownRunwayMs;
-    c.binding = wall ? read.wallShownBinding : read.shownBinding;
+    c.fit = spent ? 'spent' : read.verdict;
+    c.runwayMs = spent ? null : wall ? read.wallShownRunwayMs : read.shownRunwayMs;
+    c.binding = spent ? null : wall ? read.wallShownBinding : read.shownBinding;
   }
 }
 

@@ -2478,12 +2478,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     });
   }
 
+  const rowOf = (records, id, accountId) => {
+    const row = records.find((r) => `${r.requestId}/${r.seq}` === id)?.candidates.find((c) => c.accountId === accountId);
+    return [row?.fit, row?.runwayMs, row?.binding];
+  };
   test(`a candidate row states the runway over the windows whose runway ends by their reset, to the ceiling on a fitting row and to 1.0 on a least-bad one, and none where each one passes it, at ${at}`, async () => {
     const records = await decisionsOf(await story);
-    const rowOf = (id, accountId) => {
-      const row = records.find((r) => `${r.requestId}/${r.seq}` === id)?.candidates.find((c) => c.accountId === accountId);
-      return [row?.fit, row?.runwayMs, row?.binding];
-    };
     // On the shed move of 11:08:30, at the pin's burn of 0.0142 and 0.0016 an hour and its rewrite of 0.00264 and
     // 0.00031, primary's 5-hour runway, (0.75 - 0.49 - 0.00264) / (0.085 + 0.0142), 2.594 h, ends past the reset at
     // 11:44. Its 7-day runway, (0.78 - 0.70 - 0.00031) / (0.006 + 0.0016), 10.48553 h, ends past the window's horizon
@@ -2496,13 +2496,21 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // the runway to 1.0. Its 5-hour wall, (1 - 0.77 - 0.00129) / (0.019 + 0.01), 7.887 h, ends past the reset at 13:11,
     // and its 7-day wall, (1 - 0.34 - 0.00015) / 0.0012, 549.9 h, past the reset 43.5 h out, so the row states none.
     assert.deepEqual(
-      [rowOf('req_868264bc-611/1', 'primary'), rowOf('req_7a3f0c26-d81/1', 'nightly'), rowOf('req_9d4c1a73-e58/1', 'nightly')],
+      [rowOf(records, 'req_868264bc-611/1', 'primary'), rowOf(records, 'req_7a3f0c26-d81/1', 'nightly'), rowOf(records, 'req_9d4c1a73-e58/1', 'nightly')],
       [
         ['fits', 37_747_895, 'seven_day'],
         ['fits', null, null],
         ['least_bad', null, null],
       ],
     );
+  });
+
+  test(`a placement's row of a member that holds no allowance reads spent with no runway and no window, at ${at}`, async () => {
+    const records = await decisionsOf(await story);
+    // On the main turn of 14:03:00, secondary's 5-hour window has read 1 since 14:02:11, so it holds no allowance for
+    // the request. Its read over the ceiling is least bad, and the ladder refuses a member with no allowance that rung,
+    // so its row states no runway toward it and no window.
+    assert.deepEqual(rowOf(records, 'req_7a2d4c18-e95/1', 'secondary'), ['spent', null, null]);
   });
 
   test(`the member a placement, a move or a hold names is one the partitions kept, at ${at}`, async () => {
