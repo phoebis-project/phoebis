@@ -45,7 +45,7 @@ const familyWeight = (model: string) => (model.includes('fable') ? 1 : model.inc
 const round3 = (x: number) => round(x, 3);
 const round5 = (x: number) => round(x, 5);
 /** A rewrite of `tokens` per plan window the model draws, in window share. */
-export const rewriteOf = (tokens: number, model: string): Record<string, number> =>
+const rewriteOf = (tokens: number, model: string): Record<string, number> =>
   Object.fromEntries(drawnWindows(model).map((w) => [w, round5(tokens * WRITE_SHARE[w] * familyWeight(model))]));
 /**
  * The tokens a request's body carries, the relay's estimate a fresh session's rewrite is priced from. The mock reads
@@ -1362,24 +1362,27 @@ const keepsSpent = (c: RecordCandidate, pool: PoolSeed, r: RequestLog) => !r.can
 
 /**
  * The four partitions' facts in the engine's order, with the ladder's rung after the no-fit count on every landing that
- * reaches the fit with a member, and the members left after them, which the step's verdict reads.
+ * reaches the fit with a member, the members left after them, which the step's verdict reads, and each member a
+ * partition dropped with that partition's label: `spent`, `at_cap`, `no_fit` or `winding_down`. A dropped member
+ * leaves the set, so the first partition that drops it is the one that names it.
  */
-function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog, moving: boolean): { facts: WalkFact[]; left: RecordCandidate[] } {
+function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog, moving: boolean): { dropped: Map<RecordCandidate, string>; facts: WalkFact[]; left: RecordCandidate[] } {
   const facts: WalkFact[] = [];
+  const dropped = new Map<RecordCandidate, string>();
   let left = set;
+  const drop = (key: string, kept: RecordCandidate[]) => {
+    for (const c of left) if (!kept.includes(c)) dropped.set(c, key);
+    facts.push(fact(key, left.length - kept.length));
+    left = kept;
+  };
   const narrow = (key: string, keep: (c: RecordCandidate) => boolean) => {
     const kept = left.filter(keep);
-    if (kept.length > 0) {
-      facts.push(fact(key, left.length - kept.length));
-      left = kept;
-    } else facts.push(left.length > 0 ? fact(key, 'fell_through') : fact(key, 0));
+    if (kept.length > 0) drop(key, kept);
+    else facts.push(left.length > 0 ? fact(key, 'fell_through') : fact(key, 0));
   };
-  if (r.canonicalModel.includes('fable')) {
-    // A spent member is out rather than passed over, so this partition never falls through.
-    const kept = left.filter((c) => keepsSpent(c, pool, r));
-    facts.push(fact('spent', left.length - kept.length));
-    left = kept;
-  } else facts.push(fact('spent', 'off'));
+  // A spent member is out rather than passed over, so this partition never falls through.
+  if (r.canonicalModel.includes('fable')) drop('spent', left.filter((c) => keepsSpent(c, pool, r)));
+  else facts.push(fact('spent', 'off'));
   // A token count takes no slot, so no cap holds it. With every member at its cap the request is held for a slot and
   // the set stays whole for the pick to name the account it waits on.
   const underCap = left.filter((c) => r.kind === 'count_tokens' || c.inFlight < c.inFlightCap);
@@ -1401,18 +1404,7 @@ function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog, moving:
     if (reached) facts.push(fact('ladder', rung));
   }
   narrow('winding_down', (c) => !c.term?.windingDown);
-  return { facts, left };
-}
-
-/**
- * The four partition facts over `set` as the engine narrows it: each partition keeps the members that pass and counts
- * the rest. A spent member drops even when none is left. Any other partition that would empty a non-empty set keeps it
- * whole and reads `fell_through` (`held` for the cap, as the engine words it), and the spent partition reads `off`
- * for a model with no week of its own. `moving` is a move's destination set, which the no-fit partition keeps whole.
- * Any other set's no-fit partition walks the ladder and names its rung, unless no member reaches it.
- */
-export function partitionsOf(set: RecordCandidate[], pool: PoolSeed, r: RequestLog, moving = false): WalkFact[] {
-  return narrowed(set, pool, r, moving).facts;
+  return { dropped, facts, left };
 }
 
 /** A pin as the routing state holds it while the builder walks the day in order. */
@@ -1672,6 +1664,8 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
   if (placing) {
     const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
     const partitions = narrowed(set, pool, r, movedAmong !== undefined);
+    // A row carries the label of the first partition that dropped its member, from the run the step's facts record.
+    for (const [c, label] of partitions.dropped) c.partition = label;
     steps.push(step('partitions', partitions.left.length > 0 ? 'match' : 'none', partitions.facts));
     // A classifier call that follows its judged turn goes ahead of the rungs and the strategy, so every station names
     // the call as its reason and the pick ranks nobody.
@@ -1878,7 +1872,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     if (c.accountId === spec.accountId) c.verdict = spec.kind === 'renewed' ? 'renewed' : spec.kind === 'held' ? 'held_on' : 'chosen';
     else if (c.accountId === spec.from && spec.kind === 'moved') c.verdict = 'source';
     else if (c.verdict === 'destination') continue;
-    else if (c.obstacle !== null) c.verdict = 'out';
+    else if (c.obstacle !== null || c.partition !== null) c.verdict = 'out';
     else if (c.rank !== null) c.verdict = 'ranked';
     else if (tierSize > 0) c.verdict = 'eligible';
     else c.verdict = 'not_needed';

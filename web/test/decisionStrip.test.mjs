@@ -233,7 +233,7 @@ test("the story's records give their stations, states, host and termini", async 
   assert.deepEqual(terminiOf(overage), THREE_TERMINI(['chosen', 'placed']));
   assert.deepEqual(overage.leaves.map((l) => [l.accountId, l.chosen, l.tone]), [['primary', false, 'warning'], ['secondary', false, 'warning'], ['nightly', true, 'accent'], ['overflow', false, 'warning']]);
 
-  assert.deepEqual(fresh.leaves.map((l) => [l.accountId, l.badge, l.chosen, l.tone]), [['primary', 'chosen', true, 'accent'], ['secondary', 'out', false, 'warning'], ['nightly', 'eligible', false, 'neutral'], ['overflow', 'out', false, 'warning']]);
+  assert.deepEqual(fresh.leaves.map((l) => [l.accountId, l.badge, l.chosen, l.tone]), [['primary', 'chosen', true, 'accent'], ['secondary', 'out', false, 'warning'], ['nightly', 'out', false, 'warning'], ['overflow', 'out', false, 'warning']]);
   assert.deepEqual([d.stationName(stationOf(fresh, 'pick')), d.stationName(stationOf(shedMove, 'move:shed')), d.stationName(stationOf(staticPlaced, 'pick'))], ['Pick, chosen, Pace P0', 'Shed, fired', 'Pick, not run']);
   assert.deepEqual(fresh.termini.map(d.terminusName), ['Chosen, placed', 'Held for a slot, not reached', 'Refused, not reached']);
   // The chosen member read rewrite only, which its leaf names as the candidate table's verdict cell does.

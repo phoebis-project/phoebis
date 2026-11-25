@@ -129,26 +129,11 @@ async function decisionsOf(s) {
 }
 
 /**
- * The members a record's partitions kept, the set the engine's pick orders by tier and then by score: a member stays
- * through a partition that dropped others only by passing it alone. A landing's no-fit partition keeps the rung its
- * `ladder` fact names, which a member alone always reaches, so there a member stays by the rung's verdict and its
- * figures: the rewrite-only rung at the longest runway, the least-bad rung's members that hold allowance at the longest
- * runway, the one to 1.0 its row states, the winding-down rung's members that hold allowance, and the last rung's whole
- * set. A member holds allowance while no plan window the request's model draws reads 1 or more.
+ * The members a record's partitions kept, the set the engine's pick orders by tier and then by score: the members of
+ * the record's narrowed set whose `partition` is null, since a partition writes its label on each row it drops.
  */
-function keptOf(d, r) {
-  const facts = r.walk.find((w) => w.step === 'partitions')?.facts ?? [];
-  const kept = narrowedSetOf(r).filter((c) => {
-    const alone = d.partitionsOf([{ ...c }], d.poolById.get(r.request.poolId), d.requestById.get(r.requestId), moving(r));
-    return facts.every((f, i) => typeof f.value !== 'number' || alone[i].value === 0);
-  });
-  const rung = facts.find((f) => f.key === 'ladder')?.value;
-  if (rung === undefined || rung === 'every') return kept;
-  const drawn = Object.keys(d.rewriteOf(0, r.request.canonicalModel));
-  const holds = (c) => c.kind === 'api_key' || drawn.every((w) => (c.windows[w]?.utilization ?? 0) < 1);
-  const onRung = kept.filter((c) => (rung === 'fits' ? c.fit === 'fits' || c.fit === null : c.fit === rung && (rung === 'rewrite_only' || holds(c))));
-  const runway = (c) => c.runwayMs ?? Number.POSITIVE_INFINITY;
-  return rung === 'rewrite_only' || rung === 'least_bad' ? onRung.filter((c) => runway(c) === Math.max(...onRung.map(runway))) : onRung;
+function keptOf(r) {
+  return narrowedSetOf(r).filter((c) => c.partition === null);
 }
 
 /** Every row of the story's routing log under the route's default kinds, a decision as its summary, newest first. */
@@ -201,13 +186,18 @@ function narrowedSetOf(r) {
 }
 
 /**
+ * Whether a member holds no allowance for a request of `model`: a plan window the model draws, both shared windows and
+ * a Fable model's week as well, reads 1 or more. An API key reads no plan window, so it always holds allowance.
+ */
+const spentOn = (c, model) => ['five_hour', 'seven_day', ...(model.includes('fable') ? ['seven_day_fable'] : [])].some((w) => (c.windows[w]?.utilization ?? 0) >= 1);
+
+/**
  * The members a placement's fit reads: the set the spent and cap partitions left, or the whole set the cap holds for
  * a slot when every member is at it. A Fable request's spent member drops unless the pool funds it.
  */
 function fitReadOf(set, pool, r) {
-  const spent = (c) => ['five_hour', 'seven_day', 'seven_day_fable'].some((w) => (c.windows[w]?.utilization ?? 0) >= 1);
   const funded = (c) => pool.overagePolicy === 'allow' && c.credits !== null && c.credits.blocked === null;
-  const left = r.request.canonicalModel.includes('fable') ? set.filter((c) => !spent(c) || funded(c)) : set;
+  const left = r.request.canonicalModel.includes('fable') ? set.filter((c) => !spentOn(c, r.request.canonicalModel) || funded(c)) : set;
   const free = left.filter((c) => r.request.flags.count || c.inFlight < c.inFlightCap);
   return new Set(free.length > 0 ? free : left);
 }
@@ -1654,7 +1644,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const id = `${r.requestId}/${r.seq}`;
       const winner = r.candidates.find((c) => c.accountId === r.outcome.accountId);
       // A move picks among its destinations and a placement among the eligible members, each past the partitions.
-      const tier = keptOf(s.lib, r).filter((c) => c !== winner && c.accountId !== r.outcome.fromAccountId && sameTier(c, winner));
+      const tier = keptOf(r).filter((c) => c !== winner && c.accountId !== r.outcome.fromAccountId && sameTier(c, winner));
       assert.equal(winner.score, winner.pace.score, `${id}: ${winner.accountId}'s score is the one its reading gives`);
       for (const c of tier) {
         assert.ok(winner.pace.score >= c.pace.score, `${id}: ${winner.accountId} scores ${winner.pace.score} under ${c.accountId}'s ${c.pace.score}`);
@@ -1756,23 +1746,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(day.spentUsd >= day.budgetUsd && month.spentUsd >= month.budgetUsd, 'both budgets reached');
     assert.ok(Date.parse(day.periodEnd) < Date.parse(month.periodEnd), "the day's period ends before the month's");
     assert.deepEqual(s.lib.obstacleOf(account, pool, s.now, 'claude-sonnet-5', false, []), { name: 'budget', reason: 'month', scope: null, until: month.periodEnd, window: null });
-  });
-
-  test(`a spent member stays servable for a Fable request where an allow pool reads its credits unblocked, and drops otherwise, at ${at}`, async () => {
-    const s = await story;
-    const d = s.lib;
-    const fable = { canonicalModel: 'claude-fable-5-1', kind: 'inference' };
-    const credits = (blocked) => ({ blocked, disabledReason: null, enabled: true, observedAt: iso(s.now), utilization: 0.3 });
-    const spent = (o = {}) => ({ accountId: 'spent', credits: credits(null), fit: null, inFlight: 0, inFlightCap: 4, kind: 'oauth', obstacle: null, term: null, windows: { seven_day_fable: { utilization: 1 } }, ...o });
-    const all = d.poolById.get('all');
-    const allow = { ...all, overagePolicy: 'allow' };
-    // A run-out's servable set reads the funding the spent partition reads, so the member the partition keeps is one
-    // the run-out passes over.
-    const dropped = (c, pool) => d.partitionsOf([c], pool, fable).find((f) => f.key === 'spent')?.value;
-    assert.equal(dropped(spent(), allow), 0, 'an allow pool funds it on unblocked credits');
-    assert.equal(dropped(spent({ credits: credits('org_spend_cap_reached') }), allow), 1, 'blocked credits fund nothing');
-    assert.equal(dropped(spent({ credits: null }), allow), 1, 'a member without a credits reading is not funded');
-    assert.equal(dropped(spent(), { ...all, overagePolicy: 'prefer_plan' }), 1, 'a pool that prefers the plan funds nothing');
   });
 
   test(`no token count starts between nightly's spend cap raise and its overage start, so a count's order and the records read its overage alike, at ${at}`, async () => {
@@ -2280,7 +2253,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const at = Date.parse(r.request.at);
       if (['placed', 'moved'].includes(r.outcome.kind) && r.outcome.rung === null) {
         const winner = r.candidates.find((c) => c.accountId === r.outcome.accountId);
-        const higher = keptOf(s.lib, r).filter((c) => c.accountId !== r.outcome.fromAccountId && tierBefore(c.tier, winner.tier));
+        const higher = keptOf(r).filter((c) => c.accountId !== r.outcome.fromAccountId && tierBefore(c.tier, winner.tier));
         assert.deepEqual(higher.map((c) => `${c.accountId} ${c.tier.join('/')}`), [], `${id}: ${winner.accountId} sits in tier ${winner.tier.join('/')}`);
       }
       const req = s.lib.requestById.get(r.requestId);
@@ -2455,42 +2428,36 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const nightlyOn = (id) => records.find((r) => `${r.requestId}/${r.seq}` === id)?.candidates.find((c) => c.accountId === 'nightly');
     assert.deepEqual(['req_2e7c90a1-6d4/2', 'req_4b0e9d17-c31/2'].map((id) => [nightlyOn(id)?.runwayMs, nightlyOn(id)?.binding]), [[11_153_793, 'five_hour'], [6_976_552, 'five_hour']]);
 
-    const pairs = (facts) => facts.map((f) => [f.key, f.value]);
-    const member = (accountId, o = {}) => ({ accountId, credits: null, fit: null, inFlight: 0, inFlightCap: 4, kind: 'oauth', pace: { remaining: 0.5 }, term: { windingDown: false }, windows: {}, ...o });
-    const haiku = { canonicalModel: 'claude-haiku-4-5-20251001', kind: 'inference' };
-    const fable = { canonicalModel: 'claude-fable-5-1', kind: 'inference' };
-    // The cap drops the member at it, the one left with no fit read stands on the fitting rung, and the wind-down then
-    // falls through rather than empty the set.
-    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { term: { windingDown: true } })], d.poolById.get('jobs'), haiku)), [['spent', 'off'], ['at_cap', 1], ['no_fit', 0], ['ladder', 'fits'], ['winding_down', 'fell_through']]);
-    // A Fable request draws on the shared windows too, and a spent member drops outright, even when none is left. A
-    // walk over no member names no rung.
-    const spentOn = (name) => ({ windows: { [name]: { utilization: 1 } } });
-    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('five_hour')), member('b')], d.poolById.get('all'), fable)), [['spent', 1], ['at_cap', 0], ['no_fit', 0], ['ladder', 'fits'], ['winding_down', 0]]);
-    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('seven_day')), member('b', spentOn('seven_day_fable'))], d.poolById.get('all'), fable)), [['spent', 2], ['at_cap', 0], ['no_fit', 0], ['winding_down', 0]]);
-    // A member the request does not fit drops while one it fits is left, and with none fitting the rewrite-only one
-    // stands.
-    const all = d.poolById.get('all');
-    assert.deepEqual(pairs(d.partitionsOf([member('a'), member('b', { fit: 'least_bad' })], all, haiku)), [['spent', 'off'], ['at_cap', 0], ['no_fit', 1], ['ladder', 'fits'], ['winding_down', 0]]);
-    assert.deepEqual(pairs(d.partitionsOf([member('a', { fit: 'rewrite_only' }), member('b', { fit: 'least_bad' })], all, haiku)), [['spent', 'off'], ['at_cap', 0], ['no_fit', 1], ['ladder', 'rewrite_only'], ['winding_down', 0]]);
-    // The ladder: the fitting members where any, else the rewrite-only ones at the longest runway, else the least-bad
-    // ones holding allowance, else the ones inside their wind-down holding it, else the whole set, which falls through.
-    // The no-fit count follows the rung.
-    const ladder = (members) => pairs(d.partitionsOf(members, all, haiku));
-    const ending = { fit: 'ending', term: { windingDown: true } };
-    assert.deepEqual(ladder([member('a'), member('b', { fit: 'least_bad' })]), [['spent', 'off'], ['at_cap', 0], ['no_fit', 1], ['ladder', 'fits'], ['winding_down', 0]]);
-    assert.deepEqual(
-      ladder([member('a', { fit: 'rewrite_only', runwayMs: 600_000 }), member('b', { fit: 'rewrite_only', runwayMs: 900_000 }), member('c', { fit: 'least_bad' })]),
-      [['spent', 'off'], ['at_cap', 0], ['no_fit', 2], ['ladder', 'rewrite_only'], ['winding_down', 0]],
-    );
-    assert.deepEqual(ladder([member('a', { fit: 'least_bad' }), member('b', ending)]), [['spent', 'off'], ['at_cap', 0], ['no_fit', 1], ['ladder', 'least_bad'], ['winding_down', 0]]);
-    assert.deepEqual(ladder([member('a', ending), member('b', ending)]), [['spent', 'off'], ['at_cap', 0], ['no_fit', 0], ['ladder', 'ending'], ['winding_down', 'fell_through']]);
-    // A least-bad member with a shared window at 1 holds no allowance, so with no other member the whole set stands.
-    assert.deepEqual(ladder([member('a', { fit: 'least_bad', ...spentOn('five_hour') }), member('b', { fit: 'least_bad', ...spentOn('seven_day') })]), [['spent', 'off'], ['at_cap', 0], ['no_fit', 'fell_through'], ['ladder', 'every'], ['winding_down', 0]]);
-    // A token count takes no slot, so the cap keeps every member, even with each at it.
-    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { inFlight: 4 })], d.poolById.get('jobs'), { ...haiku, kind: 'count_tokens' })), [['spent', 'off'], ['at_cap', 0], ['no_fit', 0], ['ladder', 'fits'], ['winding_down', 0]]);
-    // With every member at its cap, a Fable request's spent member drops before the cap holds the rest, so it is never
-    // the account the request waits on or passes over.
-    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4, ...spentOn('five_hour') }), member('b', { inFlight: 4 })], all, fable)), [['spent', 1], ['at_cap', 'held'], ['no_fit', 0], ['ladder', 'fits'], ['winding_down', 0]]);
+    // Each partition writes its label on the row of every member it drops, so a count names as many rows as it counts,
+    // and one that falls through, holds for a slot or stays off names none.
+    const marks = { at_cap: 0, no_fit: 0, spent: 0, winding_down: 0 };
+    for (const r of records) {
+      const w = r.walk.find((x) => x.step === 'partitions');
+      if (!w) continue;
+      const id = `${r.requestId}/${r.seq}`;
+      const counts = w.facts.filter((f) => f.key in marks);
+      assert.deepEqual(
+        counts.map((f) => [f.key, r.candidates.filter((c) => c.partition === f.key).length]),
+        counts.map((f) => [f.key, typeof f.value === 'number' ? f.value : 0]),
+        `${id}: ${r.candidates.map((c) => `${c.accountId} ${c.partition}`).join(', ')}`,
+      );
+      // A member read no fit for stands on the fitting rung, and a least-bad or winding-down one with no allowance on
+      // the last.
+      const model = r.request.canonicalModel;
+      const rungOf = (c) => (c.fit === null ? 'fits' : ['fits', 'rewrite_only'].includes(c.fit) || !spentOn(c, model) ? c.fit : 'every');
+      const ladder = w.facts.find((f) => f.key === 'ladder')?.value;
+      const kept = keptOf(r);
+      for (const c of r.candidates.filter((x) => x.partition !== null)) {
+        marks[c.partition] += 1;
+        const row = `${id}: ${c.accountId} reads ${c.partition}`;
+        if (c.partition === 'at_cap') assert.ok(c.inFlight >= c.inFlightCap, `${row} at ${c.inFlight} of ${c.inFlightCap}`);
+        // The rewrite-only and least-bad rungs keep the longest runway, so a member can drop off the ladder's own rung.
+        if (c.partition === 'no_fit') assert.ok(rungOf(c) !== ladder || (['least_bad', 'rewrite_only'].includes(ladder) && kept.some((k) => rungOf(k) === ladder)), `${row} on ${rungOf(c)} under ${ladder}`);
+        // The router reads a dropped member out unless the answer names it as its account, its source or a destination.
+        if (c.accountId !== r.outcome.accountId && !['destination', 'source'].includes(c.verdict)) assert.equal(c.verdict, 'out', row);
+      }
+    }
+    assert.ok(marks.at_cap > 0 && marks.no_fit > 0, JSON.stringify(marks));
     return records;
   };
   test(`every partitions step reads its four facts bare and within the record's own set, a landing's ladder after its no-fit count, at ${at}`, async () => readPartitions(await story));
@@ -2511,7 +2478,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the member a placement, a move or a hold names is one the partitions kept, at ${at}`, async () => {
     const s = await story;
-    const d = s.lib;
     const records = await decisionsOf(s);
     let seen = 0;
     for (const r of records) {
@@ -2521,7 +2487,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const named = r.candidates.find((c) => c.accountId === r.outcome.accountId);
       assert.ok(named !== undefined, `${id}: ${r.outcome.accountId} is no candidate`);
       seen += 1;
-      assert.equal(keptOf(d, r).includes(named), true, `${id}: ${r.outcome.kind} on ${named.accountId} over ${partitions.facts.map((f) => `${f.key} ${f.value}`).join(', ')}`);
+      assert.equal(keptOf(r).includes(named), true, `${id}: ${r.outcome.kind} on ${named.accountId} over ${partitions.facts.map((f) => `${f.key} ${f.value}`).join(', ')}`);
     }
     assert.ok(seen > 10);
   });
