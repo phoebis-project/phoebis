@@ -37,7 +37,7 @@ fn observed(id: &str, key: &str, pool: &str) -> Event {
         session_id: Some("s1".into()),
         agent_id: Some("main".into()),
         parent_agent_id: None,
-        owner_id: None,
+        instance_id: None,
         model: "claude-sonnet-5".into(),
         canonical_model: "claude-sonnet-5".into(),
         wire_model: "claude-sonnet-5".into(),

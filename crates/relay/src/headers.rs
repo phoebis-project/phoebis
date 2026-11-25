@@ -462,7 +462,7 @@ mod tests {
             ("X-Custom", "kept"),
             ("Cookie", "session=1"),
             ("Expect", "100-continue"),
-            ("X-Keepalive-Owner-Id", "owner-1"),
+            ("X-Phoebis-Instance-Id", "instance-1"),
             ("X-Real-IP", "203.0.113.9"),
             ("Connection", "close"),
             ("Host", "127.0.0.1:1"),

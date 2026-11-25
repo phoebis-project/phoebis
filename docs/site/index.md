@@ -32,7 +32,7 @@ listeners](installation.md#tls-on-the-listeners)).
 
 The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST /v1/messages`,
 `POST /v1/messages/count_tokens`, `GET /v1/usage`, `GET /v1/models`, `GET /v1/models/{*id}` and
-`POST /v0/keepalive/events`, and on a router with the `features` block `GET /v0/features/ca.pem` ([What the proxy
+`POST /v0/companion/events`, and on a router with the `features` block `GET /v0/features/ca.pem` ([What the proxy
 accepts](client.md#what-the-proxy-accepts)).
 
 ## How a request travels

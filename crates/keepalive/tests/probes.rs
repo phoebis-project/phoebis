@@ -185,7 +185,13 @@ async fn a_gzip_request_observed_is_replayed_plain_by_its_probe() {
 #[tokio::test]
 async fn a_probe_preserves_routing_and_constraints() {
     let mut r = rig(RigSpec::default()).await;
-    r.observe("main").await;
+    // The holder's own instance, since a request that names another one arms no recipe to probe.
+    let mut req = r.request("main");
+    relay_common::set_header(&mut req, "x-phoebis-instance-id", &r.instance_of("session"));
+    let resp = r.h.app.clone().oneshot(req).await.unwrap();
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
     r.state("main", "idle").await;
     let lease_before = r.now() + r.lease_ms();
     r.advance_attended(270_000).await;
@@ -213,7 +219,7 @@ async fn a_probe_preserves_routing_and_constraints() {
         ),
         (Some("session"), Some("main"), Some("test-beta"))
     );
-    assert!(header("x-keepalive-owner-id").is_none());
+    assert!(header("x-phoebis-instance-id").is_none());
     let body = std::str::from_utf8(&probe.body).unwrap();
     assert!(
         body.contains(r#""max_tokens":0"#) && body.contains(r#""stream":false"#),

@@ -5,7 +5,7 @@ agent state to the router, which the router's keepalive engine reads to decide w
 warm ([Keepalive](keepalive.md)). Installing the mod, its settings, the start check, the `allowance` tool and what the
 mod reports are in the companion's part of this site, [Phoebis Companion](../companion/index.md), which starts with
 [Install and settings](../companion/install.md). This page holds the router's side: the permissions a key gives its
-companion, what the router does with a request under another owner, and where the console shows a session the mod
+companion, what the router does with a request of another instance, and where the console shows a session the mod
 reports.
 
 ## The key's permissions
@@ -24,16 +24,16 @@ and probes nothing for its sessions: no recipe is retained, and the Sessions vie
 `key <name> permits no cache warming` ([Turning it on](keepalive.md#turning-it-on)). The mod itself sends its reports
 either way, since the key's settings live on the router alone.
 
-## An owner mismatch
+## An instance mismatch
 
-On the router's side, a request whose owner header names another owner than the session's registration is foreign
-traffic while the holder's lease is live, and a session saved attended reads as live for one lease length after a router
-restart, until its registration arrives. The router leaves the session's recipes as they were, counts the mismatch, and
-at the session's first mismatch writes one WARN line, `a request named another owner than the session's registration`,
-naming the session id and never an owner id. Once the lease has lapsed, such a request takes the session over: the
-router records the request's owner as the session's, keeps it across a restart and arms the recipe as it does for the
-registered owner. The new instance's start still meets the silent holder and takes over as [The owner
-header](../companion/reports.md#the-owner-header) states, which replaces the agents those requests armed.
+On the router's side, a request whose instance header names another instance than the one that holds the session is
+foreign traffic while the holder's lease is live, and a session saved attended reads as live for one lease length after
+a router restart, until its registration arrives. The router leaves the session's recipes as they were, counts the
+mismatch, and at the session's first mismatch writes one WARN line,
+`a request named another instance than the session's registration`, naming the session id and never an instance id.
+Once the lease has lapsed, such a request meets no check and arms its recipe as the holder's does. The new instance's
+start still meets the silent holder and takes over as [The instance header](../companion/reports.md#the-owner-header)
+states, which replaces the agents those requests armed.
 
 ## The Sessions view
 

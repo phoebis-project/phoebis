@@ -250,7 +250,7 @@ mod tests {
             session_id: None,
             agent_id: Some("main".into()),
             parent_agent_id: None,
-            owner_id: None,
+            instance_id: None,
             model: "claude-sonnet-5".into(),
             canonical_model: "claude-sonnet-5".into(),
             wire_model: "claude-sonnet-5".into(),
@@ -553,7 +553,7 @@ mod tests {
             "transfer-encoding",
             "x-api-key",
             "x-forwarded-for",
-            "x-keepalive-owner-id",
+            "x-phoebis-instance-id",
         ] {
             assert!(!header_published(name), "{name}");
         }

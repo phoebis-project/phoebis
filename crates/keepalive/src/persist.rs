@@ -62,7 +62,6 @@ pub(crate) struct PersistedSession {
     pub lease: i64,
     pub attended: bool,
     pub ended: bool,
-    pub owner_id: Option<String>,
     pub last_report_at: i64,
     pub last_real_at: Option<i64>,
     /// Absent from a row an earlier build saved, which loads as `None` and takes its slot from `last_real_at`: that
@@ -437,7 +436,6 @@ impl PersistedSession {
             lease: session.lease,
             attended: session.attended,
             ended: session.ended,
-            owner_id: session.owner_id.clone(),
             last_report_at: session.last_report_at,
             last_real_at: session.last_real_at,
             slotted: Some(session.slotted),
@@ -446,9 +444,9 @@ impl PersistedSession {
     }
 
     /// Silent until the mod's next heartbeat or registration re-adopts it: the lease at zero, so the next report
-    /// answers `instance_ended` and the same instance registers again, and the sequence and the owner kept, so that
-    /// registration is the one the mod would send next. A session saved attended keeps the attended reading of the
-    /// ceilings for one lease length from `now`, so the ticks before that registration discard no park as idle.
+    /// answers `instance_ended` and the same instance registers again, and the sequence kept, so that registration is
+    /// the one the mod would send next. A session saved attended keeps the attended reading of the ceilings for one
+    /// lease length from `now`, so the ticks before that registration discard no park as idle.
     fn restore(self, now: i64) -> Session {
         Session {
             key_generation: self.key_generation,
@@ -457,12 +455,11 @@ impl PersistedSession {
             lease: 0,
             attended: false,
             ended: false,
-            owner_id: self.owner_id,
             last_report_at: self.last_report_at,
             last_real_at: self.last_real_at,
             slotted: self.slotted.unwrap_or(self.last_real_at.is_some()),
             restored_until: self.attended.then_some(now + LEASE_MS),
-            owner_mismatches: 0,
+            instance_mismatches: 0,
             facts: SessionFacts::of(self.facts),
             agents: BTreeMap::new(),
         }

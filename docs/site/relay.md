@@ -114,7 +114,7 @@ the registry, and is kept for `sessions.memory_retention_days` ([sessions](insta
 | Edit | Request kinds | Account kinds | Switch |
 | --- | --- | --- | --- |
 | The client's `authorization` or `x-api-key` slot carries the account's credential: `Authorization: Bearer {token}` for an OAuth account, `x-api-key: {secret}` for an API-key account. A request with no slot gets it right after `anthropic-version`, where the pinned client puts its key | All | Both | None |
-| Never copied: `cookie`, `expect`, `forwarded`, `keep-alive`, `proxy-authenticate`, `proxy-authorization`, `proxy-connection`, `te`, `trailer`, `transfer-encoding`, `upgrade`, `via`, `x-forwarded-for`, `x-forwarded-host`, `x-forwarded-port`, `x-forwarded-proto`, `x-forwarded-server`, `x-keepalive-owner-id`, `x-real-ip` | All | Both | None |
+| Never copied: `cookie`, `expect`, `forwarded`, `keep-alive`, `proxy-authenticate`, `proxy-authorization`, `proxy-connection`, `te`, `trailer`, `transfer-encoding`, `upgrade`, `via`, `x-forwarded-for`, `x-forwarded-host`, `x-forwarded-port`, `x-forwarded-proto`, `x-forwarded-server`, `x-phoebis-instance-id`, `x-real-ip` | All | Both | None |
 | `connection` becomes `keep-alive` | All | Both | None |
 | `content-encoding` names the router's own coding, or is dropped when the body leaves as identity, and is appended when the client sent none | All | Both | `proxy.upstream_gzip` |
 | `content-length` is the length of the body the router sends | All | Both | None |
@@ -125,9 +125,10 @@ the registry, and is kept for `sessions.memory_retention_days` ([sessions](insta
 
 The never-copied set has its reasons: the hop-by-hop headers describe the client's connection rather than the payload,
 cookies and proxy credentials are the client's own secrets, the forwarding headers would disclose the client's network,
-and `x-keepalive-owner-id` is the router's own ownership marker, which the companion mod writes and the router reads. A
-client's `Expect: 100-continue` goes for the reason [Headers and transport](#headers-and-transport) gives. `connection`
-is the router's own because its upstream connection is pooled and independent of the client's, which ends at the router.
+and `x-phoebis-instance-id` is the router's marker of the client process's instance, which the companion mod writes
+and the router reads. A client's `Expect: 100-continue` goes for the reason [Headers and
+transport](#headers-and-transport) gives. `connection` is the router's own because its upstream connection is pooled and
+independent of the client's, which ends at the router.
 
 A call of the claude.ai features, which arrives on the feature listener, takes fewer edits than a model request. Its
 head keeps each line in the client's place and spelling. The client's first `authorization` or `x-api-key` line carries
@@ -476,7 +477,7 @@ a switch.
 
 ## The keepalive protocol
 
-The companion mod reports to one route, `POST /v0/keepalive/events` on the proxy listener, with `Authorization: Bearer
+The companion mod reports to one route, `POST /v0/companion/events` on the proxy listener, with `Authorization: Bearer
 <router key>`, `Content-Type: application/json` and a JSON body of at most 16 KiB. The key is resolved exactly as
 `/v1/messages` resolves it, with the generation it was created under, so a key id created again reaches none of the
 previous holder's sessions. Every body carries five fields, `protocol` (the integer `1`), `event`, `session_id`,
@@ -489,7 +490,7 @@ id is `main`.
 
 | Event | Fields | What the router does |
 | --- | --- | --- |
-| `session_start` | `owner_id`, and `previous_instance_id` when it takes over from another instance | Registers the session under the key, or takes it back after a lapse or an end, and answers with the agents it holds |
+| `session_start` | `previous_instance_id` when it takes over from another instance | Registers the session under the key, or takes it back after a lapse or an end, and answers with the agents it holds |
 | `heartbeat` | none | Renews the lease, the one event besides a `session_start` that does |
 | `agent_start` | `agent_id`, and `request_generation` when known | Starts the agent `busy`, or restarts a released one under the generation the start names |
 | `activity` | `agent_id`, `kind` (`prompt` or `presence`), and `request_generation` when known | A prompt sets the agent `busy` and resets its idle clock. A presence moves the idle clock alone |
@@ -553,7 +554,7 @@ without a registration. The eighteen codes, by status:
 | Code | Status | When |
 | --- | --- | --- |
 | `invalid_event` | 400 | The body is not typed `application/json`, is not this protocol's JSON, names no `protocol`, carries a field its event does not take (such as a `title` on a `heartbeat`, whatever its value) or lacks one it requires, carries a park field on a state other than `parked`, reports `parked` without `park_kind` or, outside `background`, without `wake_at`, or carries a `wake_at` on a `background` park or a `deadline` on a `scheduled` park |
-| `invalid_identity` | 400 | `session_id`, `instance_id`, `agent_id`, `owner_id` or `previous_instance_id` is not a valid id, or `sequence` is 0 |
+| `invalid_identity` | 400 | `session_id`, `instance_id`, `agent_id` or `previous_instance_id` is not a valid id, or `sequence` is 0 |
 | `invalid_state` | 400 | `kind` is neither `prompt` nor `presence`, `state` is none of the five, or `park_kind` is none of the three |
 | `unknown_event` | 400 | `event` is none of the eight |
 | `unsupported_protocol` | 400 | `protocol` is not `1` |

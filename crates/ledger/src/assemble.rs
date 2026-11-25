@@ -181,7 +181,7 @@ impl Assembler {
                 let user_agent = user_agent_of(&observed.headers);
                 observed.boundaries = Arc::default();
                 observed.headers = Vec::new();
-                observed.owner_id = None;
+                observed.instance_id = None;
                 observed.static_hash = None;
                 let seq = self.next_seq;
                 self.next_seq += 1;
@@ -793,7 +793,7 @@ mod tests {
             session_id: Some("s1".into()),
             agent_id: Some("main".into()),
             parent_agent_id: None,
-            owner_id: None,
+            instance_id: None,
             model: "claude-sonnet-5[1m]".into(),
             canonical_model: "claude-sonnet-5".into(),
             wire_model: "claude-sonnet-5".into(),

@@ -372,7 +372,7 @@ async fn a_blocked_request_with_a_body_keeps_its_body_row_under_the_keys_window(
         session_id: None,
         agent_id: None,
         parent_agent_id: None,
-        owner_id: None,
+        instance_id: None,
         model: "claude-sonnet-5".into(),
         canonical_model: "claude-sonnet-5".into(),
         wire_model: "claude-sonnet-5".into(),

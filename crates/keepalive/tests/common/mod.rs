@@ -20,7 +20,7 @@ use phoebis_bus::{
     RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber, Usage,
 };
 use phoebis_keepalive::{
-    keepalive_router, AgentState, Engine, EngineParts, KeepaliveLimits, KeepalivePolicy,
+    events_router, AgentState, Engine, EngineParts, KeepaliveLimits, KeepalivePolicy,
     KeepaliveTiming, Lifecycle, Reason, RecipeView, EVENTS_PATH,
 };
 use phoebis_ledger::{
@@ -522,7 +522,7 @@ impl Rig {
             .body(Body::from(serde_json::to_vec(&body).unwrap()))
             .unwrap();
         // Built per post, since a restart test replaces the rig's engine.
-        let answer = keepalive_router(self.engine.clone())
+        let answer = events_router(self.engine.clone())
             .oneshot(request)
             .await
             .unwrap();
@@ -784,7 +784,7 @@ impl Rig {
             session_id: Some("session".into()),
             agent_id: Some(agent.into()),
             parent_agent_id: None,
-            owner_id: None,
+            instance_id: None,
             model: model.clone(),
             canonical_model: model.to_ascii_lowercase(),
             wire_model: model.to_ascii_lowercase(),
@@ -840,7 +840,7 @@ impl Rig {
             session_id: Some("session".into()),
             agent_id: Some(agent.into()),
             parent_agent_id: None,
-            owner_id: None,
+            instance_id: None,
             model: model.into(),
             canonical_model: model.to_ascii_lowercase(),
             wire_model: model.to_ascii_lowercase(),

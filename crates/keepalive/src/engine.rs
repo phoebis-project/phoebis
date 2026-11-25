@@ -255,6 +255,7 @@ reasons! {
     Horizon => "horizon",
     IdleLimit => "idle_limit",
     IneligibleCredential => "ineligible_credential",
+    InstanceMismatch => "instance_mismatch",
     InstanceReplaced => "instance_replaced",
     InvalidCacheControl => "invalid_cache_control",
     InvalidModel => "invalid_model",
@@ -270,7 +271,6 @@ reasons! {
     NoProbeCacheEvidence => "no_probe_cache_evidence",
     OptedOut => "opted_out",
     Overage => "overage",
-    OwnerMismatch => "owner_mismatch",
     ParkedLimit => "parked_limit",
     PartialCacheCoverage => "partial_cache_coverage",
     Paused => "paused",
@@ -595,7 +595,6 @@ pub(crate) struct Session {
     pub attended: bool,
     /// A `session_end` or a replacement: nothing under this instance is live any more.
     pub ended: bool,
-    pub owner_id: Option<String>,
     pub last_report_at: i64,
     /// The session's last real request, one refused its slot included, which the expiry and a silent session's idle
     /// ceiling count from. A refused session keeps no recipe, so the ceiling never reads a refused request's stamp.
@@ -609,9 +608,9 @@ pub(crate) struct Session {
     /// this instant or until the mod registers it again, whichever is first: the mod re-adopts a restored session
     /// within its lease, and a parked recipe must not be discarded as idle before it can.
     pub restored_until: Option<i64>,
-    /// The requests that named another owner than the registration while the holder's lease was live, so the
+    /// The requests that named another instance than the registration while the holder's lease was live, so the
     /// warning goes out once per session rather than once per request.
-    pub owner_mismatches: u64,
+    pub instance_mismatches: u64,
     /// What the companion reports of the session for the Sessions view. Display state that no decision of the engine
     /// reads.
     pub facts: SessionFacts,
@@ -2903,35 +2902,29 @@ impl Engine {
         {
             return;
         }
-        // The header is an optional hardening on top of the registration rule: when both sides name an owner,
-        // they must agree while the holder's lease is live. Foreign traffic proves nothing about this agent, so its
-        // status, its recipe and its schedule are left as they were, and only the mismatch itself is counted.
-        if let (Some(registered), Some(sent)) = (&session.owner_id, &observed.owner_id) {
-            if registered != sent {
-                // A restored session's window reads as live, since the mod re-adopts the session within it. Past the
-                // lease the registered owner reports nothing, and a process that reloaded under a new owner would
-                // otherwise arm nothing until the idle limit ended the session.
-                if session.attended_at(now) {
-                    *inner.reasons.entry(Reason::OwnerMismatch).or_default() += 1;
-                    let session = inner.sessions.get_mut(&key).unwrap();
-                    session.owner_mismatches += 1;
-                    if session.owner_mismatches == 1 {
-                        tracing::warn!(
-                            session = %key.1,
-                            "a request named another owner than the session's registration"
-                        );
-                    }
-                    return;
-                }
-                // A request carries no instance, so the takeover records the owner alone. The touch saves it
-                // whichever way the request leaves below.
-                let sent = sent.clone();
-                inner.sessions.get_mut(&key).unwrap().owner_id = Some(sent);
-                inner.touch_session(&key);
+        // The header is a hardening on top of the registration rule: while the holder's lease is live, a request that
+        // names an instance has to name the session's. Foreign traffic proves nothing about this agent, so its status,
+        // its recipe and its schedule are left as they were, and only the mismatch itself is counted. A restored
+        // session's window reads as live, since the mod re-adopts the session within it. Past the lease the holder
+        // reports nothing, and a process that reloaded under a new instance would otherwise arm nothing until the idle
+        // limit ended the session.
+        if observed
+            .instance_id
+            .as_ref()
+            .is_some_and(|sent| *sent != session.instance)
+            && session.attended_at(now)
+        {
+            *inner.reasons.entry(Reason::InstanceMismatch).or_default() += 1;
+            let session = inner.sessions.get_mut(&key).unwrap();
+            session.instance_mismatches += 1;
+            if session.instance_mismatches == 1 {
+                tracing::warn!(
+                    session = %key.1,
+                    "a request named another instance than the session's registration"
+                );
             }
+            return;
         }
-        // Read again past the takeover's write.
-        let agent = &inner.sessions[&key].agents[&agent_id];
         // The hijack guard: an auxiliary or foreign request must not touch the recipe, the schedule, or the
         // unanswered probes a re-arming request's credit depends on. `reason` stays the recipe's gating
         // state, since a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held
@@ -4894,12 +4887,11 @@ revisions:
                 lease: i64::MAX,
                 attended: true,
                 ended: false,
-                owner_id: None,
                 last_report_at: 0,
                 last_real_at: Some(0),
                 slotted: true,
                 restored_until: None,
-                owner_mismatches: 0,
+                instance_mismatches: 0,
                 facts: SessionFacts::default(),
                 agents: BTreeMap::from([("main".to_string(), armed)]),
             },

@@ -4269,7 +4269,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     assert_eq!(resp.status(), 200);
     let _ = resp.text().await.unwrap();
     // Registered through the keepalive route under the key, so the recipe is retained.
-    let events = format!("http://127.0.0.1:{proxy_port}/v0/keepalive/events");
+    let events = format!("http://127.0.0.1:{proxy_port}/v0/companion/events");
     let registration = serde_json::json!({
         "protocol": 1,
         "event": "session_start",
@@ -4630,7 +4630,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     assert_eq!(relayed.status(), 200);
     let _ = relayed.text().await.unwrap();
     // Registered through the keepalive route under the key, so the recipe is retained.
-    let events = format!("http://127.0.0.1:{proxy_port}/v0/keepalive/events");
+    let events = format!("http://127.0.0.1:{proxy_port}/v0/companion/events");
     assert_eq!(
         client
             .post(&events)

@@ -35,7 +35,7 @@ pub use probe::PROBE_DEADLINE;
 pub use recipe::{
     make_recipe, request_ttl_ms, valid_opaque, Recipe, MAX_HEADER_BYTES, MAX_HEADER_VALUE,
 };
-pub use routes::{keepalive_router, EVENTS_PATH, MAX_BODY_BYTES};
+pub use routes::{events_router, EVENTS_PATH, MAX_BODY_BYTES};
 pub use usage::{ProbeUsage, MAX_USAGE_BYTES};
 pub use view::{
     recipe_state, AgentCounts, CompanionState, KeepaliveSummary, Lifecycle, RecipeState,

@@ -377,7 +377,7 @@ pub struct RequestObserved {
     pub session_id: Option<String>,
     pub agent_id: Option<String>,
     pub parent_agent_id: Option<String>,
-    pub owner_id: Option<String>,
+    pub instance_id: Option<String>,
     pub model: String,
     /// The name the router records the model under: the dated id the catalog lists once the router has
     /// resolved the client's spelling, the folded spelling (the `[1m]` suffix removed, ASCII lowercased) until
@@ -627,9 +627,9 @@ impl Event {
 
 /// Caller headers the relay never repeats upstream: the hop-by-hop ones describe the caller's connection
 /// rather than the payload, cookies and proxy credentials are the caller's own secrets, forwarding headers
-/// would disclose the caller's network, and `x-keepalive-owner-id` is the router's internal ownership marker.
-/// The credential, `content-encoding`, `content-length`, and `host` are not here because the relay owns their
-/// values rather than dropping them, as the match in its `outbound_headers` shows.
+/// would disclose the caller's network, and `x-phoebis-instance-id` is the router's marker of the client process's
+/// instance. The credential, `content-encoding`, `content-length`, and `host` are not here because the relay owns
+/// their values rather than dropping them, as the match in its `outbound_headers` shows.
 pub const NEVER_COPIED: &[&str] = &[
     "cookie",
     // A caller's `Expect: 100-continue` would make the upstream wait for a continue the relay never sends, since
@@ -650,7 +650,7 @@ pub const NEVER_COPIED: &[&str] = &[
     "x-forwarded-port",
     "x-forwarded-proto",
     "x-forwarded-server",
-    "x-keepalive-owner-id",
+    "x-phoebis-instance-id",
     "x-real-ip",
 ];
 

@@ -96,12 +96,12 @@ environment block](client.md#the-environment-block). On the router's side, a reg
 session, 90 seconds long, which each heartbeat renews, and the Sessions view names the mod's state for each session:
 `reporting` while the mod reports the session's agents, their parks and the person's presence, `silent` once the lease
 lapsed, with the time the mod stopped reporting, and `none` for a session the router saw but no mod registered, which
-the router still pins and whose requests it still sees. The router reads the owner header the mod has the client send on
-every model request of its process, `X-Keepalive-Owner-Id`, to tell that process's requests from another process's on
-the same session id, leaving the session's recipes as they were and counting the mismatch when the header names another
-owner, and strips the header before a request leaves. Once the holder's lease has lapsed, a real request naming another
-owner takes the session over for that owner. A registration starts main `busy` under the cause `awaiting_request` until
-its first request.
+the router still pins and whose requests it still sees. The router reads the instance header the mod has the client send
+on every model request of its process, `X-Phoebis-Instance-Id`, to tell that process's requests from another process's
+on the same session id. While the holder's lease is live, a request that names another instance leaves the session's
+recipes as they were and is counted as a mismatch. The router strips the header before a request leaves. Once the
+holder's lease has lapsed, a real request that names another instance arms its recipe as the holder's does. A
+registration starts main `busy` under the cause `awaiting_request` until its first request.
 
 ## Turning it on
 
@@ -336,8 +336,8 @@ Each state reads these causes:
 - `paused`: `invalid_probe_usage`, `missing_account`, `no_pin`, `partial_cache_coverage`, `probe_authentication_error`,
   `probe_retry_limit`, `repeated_cold_probe`, `request_rejected`, `unexpected_output`, `unsupported_probe`.
 - `not_retained`: `agent_limit`, `awaiting_request`, `fixed_thinking`, `forced_tool`, `headers_too_large`,
-  `invalid_cache_control`, `invalid_model`, `invalid_request`, `no_cache_evidence`, `owner_mismatch`, `request_limit`,
-  `request_too_large`, `session_limit`, `storage_limit`, `structured_output`, `unsupported_shape`.
+  `instance_mismatch`, `invalid_cache_control`, `invalid_model`, `invalid_request`, `no_cache_evidence`,
+  `request_limit`, `request_too_large`, `session_limit`, `storage_limit`, `structured_output`, `unsupported_shape`.
 - `ended`: `agent_released`, `agent_unknown`, `bus_gap`, `compacted`, `evicted`, `expired`, `expired_at_restart`,
   `idle_limit`, `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `reset`, `session_ended`,
   `session_expired`.
@@ -531,6 +531,7 @@ The state's cause on the Sessions view reads a label in place of the engine's id
 | wake too far | `horizon` |
 | idle limit | `idle_limit` |
 | ineligible credential | `ineligible_credential` |
+| instance mismatch | `instance_mismatch` |
 | instance replaced | `instance_replaced` |
 | invalid cache control | `invalid_cache_control` |
 | invalid model | `invalid_model` |
@@ -546,7 +547,6 @@ The state's cause on the Sessions view reads a label in place of the engine's id
 | no probe cache evidence | `no_probe_cache_evidence` |
 | cache warming not permitted | `opted_out` |
 | overage | `overage` |
-| owner mismatch | `owner_mismatch` |
 | parked limit | `parked_limit` |
 | partial cache coverage | `partial_cache_coverage` |
 | account paused | `paused` |

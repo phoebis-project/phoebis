@@ -776,7 +776,7 @@ impl Trace {
             session_id: identity.and_then(|i| i.session_id.clone()),
             agent_id: identity.map(|i| i.agent_id.clone()),
             parent_agent_id: identity.and_then(|i| i.parent_agent_id.clone()),
-            owner_id: identity.and_then(|i| i.owner_id.clone()),
+            instance_id: identity.and_then(|i| i.instance_id.clone()),
             model: identity.map(|i| i.model.clone()).unwrap_or_default(),
             canonical_model: identity
                 .map(|i| i.canonical_model.clone())

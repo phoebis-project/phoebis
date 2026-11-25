@@ -156,7 +156,7 @@ The companion mod needs Claude Code 2.1.299 or later. With its settings unset it
 the key it finds in the client's variables, in the order [The companion mod](../companion/install.md#configure) states,
 so the block above needs no line of its own for it beyond
 [`CLAUDE_CODE_SUBSCRIPTION_TYPE`](#claude_code_subscription_type), which lets its requests leave the process. At session
-start the mod writes its owner header, `X-Keepalive-Owner-Id`, into `ANTHROPIC_CUSTOM_HEADERS` beside the variable's
+start the mod writes its instance header, `X-Phoebis-Instance-Id`, into `ANTHROPIC_CUSTOM_HEADERS` beside the variable's
 other lines, and the client sends it on every model request of the process. The router reads it to tell that process's
 requests from those of another process on the same session id, so binding a session to its process needs no wrapper
 script. Installing and configuring the mod is that page's.
@@ -222,7 +222,7 @@ figures from the proxy listener with the `curl` of [Your key's usage](#your-keys
 | GET | `/v1/usage` | router key | that key's own usage for the last 24 hours and 7 days, JSON or HTML by `Accept` |
 | GET | `/v1/models` | router key | the models the key may route to, with a `[1m]` twin per long-context model |
 | GET | `/v1/models/{*id}` | router key | one row of that listing, or `404` |
-| POST | `/v0/keepalive/events` | router key | the companion mod's event report |
+| POST | `/v0/companion/events` | router key | the companion mod's event report |
 | GET | `/v0/companion/allowance` | router key | the key's pool under pseudonyms, for the companion mod's `allowance` tool |
 | GET | `/v0/features/ca.pem` | none | the feature CA's certificate as PEM text, on a router with the `features` block |
 | any other method on a known path | | none | `405` |
@@ -241,7 +241,7 @@ the listener, the wrong-method and unknown-path answers included, carries an Ant
 ([Refusal codes](#refusal-codes)), with two exceptions. The not-ready `503` of `/api/ready` carries the readiness body
 instead, and the keepalive route answers a report it refuses with a JSON body whose `code` the mod reads, under the
 codes [The keepalive protocol](relay.md#the-keepalive-protocol) lists, while a key it refuses gets the answer
-`/v1/messages` gives. Every answer of `/v0/keepalive/events`, `/v1/models`, `/v1/models/{*id}` and `/v1/usage` carries
+`/v1/messages` gives. Every answer of `/v0/companion/events`, `/v1/models`, `/v1/models/{*id}` and `/v1/usage` carries
 `Cache-Control: no-store`, a refusal of a malformed path among them.
 
 The key is presented as exactly one of `Authorization: Bearer <secret>` or `x-api-key: <secret>`. No credential

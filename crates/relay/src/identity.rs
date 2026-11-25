@@ -1,4 +1,4 @@
-//! Who and what a request is: the session, the agent, the owner, and the model it asks for.
+//! Who and what a request is: the session, the agent, the client process's instance, and the model it asks for.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -48,7 +48,7 @@ pub struct RequestIdentity {
     pub session_id: Option<String>,
     pub agent_id: String,
     pub parent_agent_id: Option<String>,
-    pub owner_id: Option<String>,
+    pub instance_id: Option<String>,
     pub model: String,
     /// The client's spelling with the `[1m]` suffix removed and ASCII lowercased: what the body carries
     /// upstream, and the spelling the catalog's published map is keyed on.
@@ -94,7 +94,7 @@ pub fn identify(
         agent_id: header_id(headers, "x-claude-code-agent-id")
             .unwrap_or_else(|| MAIN_AGENT.to_string()),
         parent_agent_id: header_id(headers, "x-claude-code-parent-agent-id"),
-        owner_id: header_id(headers, "x-keepalive-owner-id"),
+        instance_id: header_id(headers, "x-phoebis-instance-id"),
         model,
         canonical_model: folded_model.clone(),
         folded_model,
@@ -810,7 +810,7 @@ mod tests {
             session_id: session_id.map(String::from),
             agent_id: "main".into(),
             parent_agent_id: None,
-            owner_id: None,
+            instance_id: None,
             model: "claude-sonnet-4-5".into(),
             folded_model: "claude-sonnet-4-5".into(),
             canonical_model: "claude-sonnet-4-5".into(),

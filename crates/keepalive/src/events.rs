@@ -1,7 +1,7 @@
 //! The keepalive mod's reporting protocol: eight events in JSON bodies, monotonic sequences, per-agent
 //! generations, a lease, and a registration acknowledgment that carries the session's agents so the mod
-//! reconciles from the answer. The contract is the Go engine's, plus `owner_id` on `session_start`, the park
-//! fields of a `parked` state, the `presence` activity, the key scope on every session and the two facts events.
+//! reconciles from the answer. The contract is the Go engine's, plus the park fields of a `parked` state, the
+//! `presence` activity, the key scope on every session and the two facts events.
 
 use std::collections::BTreeMap;
 
@@ -33,7 +33,6 @@ pub(crate) struct Event {
     pub instance_id: String,
     pub kind: Option<String>,
     pub name: Option<String>,
-    pub owner_id: Option<String>,
     pub park_kind: Option<String>,
     pub previous_instance_id: Option<String>,
     pub project: Option<String>,
@@ -165,10 +164,7 @@ fn members(event: &str) -> Option<(EventKind, &'static [(&'static str, bool)])> 
                 ("title", false),
             ],
         ),
-        "session_start" => (
-            EventKind::SessionStart,
-            &[("owner_id", false), ("previous_instance_id", false)],
-        ),
+        "session_start" => (EventKind::SessionStart, &[("previous_instance_id", false)]),
         "state" => (
             EventKind::State,
             &[
@@ -281,7 +277,6 @@ pub(crate) enum Reported {
         facts: SessionFacts,
     },
     SessionStart {
-        owner_id: Option<String>,
         previous_instance_id: Option<String>,
     },
     /// Any state but `parked`.
@@ -370,7 +365,6 @@ impl EventReport {
             description,
             instance_id,
             name,
-            owner_id,
             previous_instance_id,
             project,
             repository,
@@ -414,7 +408,6 @@ impl EventReport {
                 }),
             },
             EventKind::SessionStart => Reported::SessionStart {
-                owner_id,
                 previous_instance_id,
             },
             EventKind::State => {
@@ -485,7 +478,6 @@ fn validate(event: Event) -> Result<Event, EventError> {
         || !valid_id(&event.instance_id)
         || event.sequence == 0
         || !optional_ok(&event.agent_id)
-        || !optional_ok(&event.owner_id)
         || !optional_ok(&event.previous_instance_id)
     {
         return Err(err("invalid_identity", 400));
@@ -617,14 +609,12 @@ impl Inner {
         let renews_lease = report.event == Reported::Heartbeat;
         match &report.event {
             Reported::SessionStart {
-                owner_id,
                 previous_instance_id,
             } => {
                 return self.start(
                     key,
                     key_generation,
                     &report,
-                    owner_id.as_deref(),
                     previous_instance_id.as_deref(),
                     now,
                 );
@@ -847,7 +837,6 @@ impl Inner {
         key: SessionKey,
         key_generation: i64,
         report: &EventReport,
-        owner_id: Option<&str>,
         previous_instance_id: Option<&str>,
         now: i64,
     ) -> Result<Ack, EventError> {
@@ -893,9 +882,6 @@ impl Inner {
                 session.restored_until = None;
                 session.ended = false;
                 session.last_report_at = now;
-                if owner_id.is_some() {
-                    session.owner_id = owner_id.map(str::to_owned);
-                }
                 if revived {
                     // The end released every agent, and a real request arms nothing on a released one, so main
                     // starts again as a registration starts it. The subagents stay released until the mod starts
@@ -965,12 +951,11 @@ impl Inner {
                 lease: now + LEASE_MS,
                 attended: true,
                 ended: false,
-                owner_id: owner_id.map(str::to_owned),
                 last_report_at: now,
                 last_real_at,
                 slotted,
                 restored_until: None,
-                owner_mismatches: 0,
+                instance_mismatches: 0,
                 facts: SessionFacts::default(),
                 agents,
             },

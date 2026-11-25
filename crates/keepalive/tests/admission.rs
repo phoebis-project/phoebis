@@ -1,4 +1,4 @@
-//! What the engine retains from the bus, and what it refuses: the registration rule, the owner header, the
+//! What the engine retains from the bus, and what it refuses: the registration rule, the instance header, the
 //! pool and key gates, the account kinds, and the storage bounds; the Go admission cases.
 mod common;
 use std::collections::{BTreeMap, BTreeSet};
@@ -267,7 +267,7 @@ async fn an_armed_recipe_that_saw_an_auxiliary_request_still_reports_armed() {
 }
 
 #[tokio::test]
-async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
+async fn a_replaced_registration_and_a_foreign_instance_header_are_not_retained() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     assert_eq!(r.view("main").cause, Reason::Scheduled);
@@ -279,8 +279,7 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
             "session_id": "session",
             "instance_id": "second",
             "sequence": 1,
-            "previous_instance_id": "instance",
-            "owner_id": "owner-2"
+            "previous_instance_id": "instance"
         }),
     )
     .await
@@ -291,10 +290,10 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
         (r.engine.stats().retained_bytes, r.lifecycle("main")),
         (0, Some(Lifecycle::Registered))
     );
-    // Traffic with the old owner's header is ledgered and not retained; traffic without the header is admitted
-    // under the registration alone; traffic with the new owner's header is retained.
+    // Traffic that names the replaced instance is ledgered and not retained, traffic without the header is admitted
+    // under the registration alone, and traffic that names the new instance is retained.
     let mut req = r.request("main");
-    relay_common::set_header(&mut req, "x-keepalive-owner-id", "owner-1");
+    relay_common::set_header(&mut req, "x-phoebis-instance-id", "instance");
     let resp = r.h.app.clone().oneshot(req).await.unwrap();
     let id = relay_common::outcome(&resp).request_id;
     let _ = resp.into_body().collect().await.unwrap();
@@ -311,7 +310,7 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
         (Some(Lifecycle::Registered), None)
     );
     assert_eq!(
-        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        r.engine.reasons().get(&Reason::InstanceMismatch).copied(),
         Some(1)
     );
     r.observe("main").await;
@@ -321,7 +320,7 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
         "no header: the registration rule alone admits it"
     );
     let mut req = r.request("main");
-    relay_common::set_header(&mut req, "x-keepalive-owner-id", "owner-2");
+    relay_common::set_header(&mut req, "x-phoebis-instance-id", "second");
     let resp = r.h.app.clone().oneshot(req).await.unwrap();
     let id = relay_common::outcome(&resp).request_id;
     let _ = resp.into_body().collect().await.unwrap();
@@ -332,16 +331,16 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
         sent.iter().all(|s| !s
             .headers
             .iter()
-            .any(|(n, _)| n.eq_ignore_ascii_case("x-keepalive-owner-id"))),
-        "the owner header never goes upstream"
+            .any(|(n, _)| n.eq_ignore_ascii_case("x-phoebis-instance-id"))),
+        "the instance header never goes upstream"
     );
-    // A later owner-mismatched request against an armed recipe changes nothing about it either: not its
-    // reason, not its schedule, not what it retains.
+    // A later request that names the replaced instance against an armed recipe changes nothing about it either:
+    // not its reason, not its schedule, not what it retains.
     let armed = r.view("main");
     assert!(armed.next_probe_at.is_some());
     let retained = r.engine.stats().retained_bytes;
     let mut req = r.request("main");
-    relay_common::set_header(&mut req, "x-keepalive-owner-id", "owner-1");
+    relay_common::set_header(&mut req, "x-phoebis-instance-id", "instance");
     let resp = r.h.app.clone().oneshot(req).await.unwrap();
     let id = relay_common::outcome(&resp).request_id;
     let _ = resp.into_body().collect().await.unwrap();
@@ -355,43 +354,44 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
         (armed.cause, armed.next_probe_at, retained)
     );
     assert_eq!(
-        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        r.engine.reasons().get(&Reason::InstanceMismatch).copied(),
         Some(2),
         "once more than the earlier mismatch"
     );
 }
 
-/// A registration of `session` under the rig's instance whose `owner_id` names `owner`.
-fn registered_by(session: &str, owner: &str) -> serde_json::Value {
-    json!({"event": "session_start", "session_id": session, "owner_id": owner})
-}
-
-/// A request on main of `session` whose owner header names `owner`, as the relay reports it.
-fn owned(r: &Rig, id: &str, session: &str, owner: &str) -> BusEvent {
+/// A request on main of `session` whose instance header names `instance`, as the relay reports it.
+fn from_instance(r: &Rig, id: &str, session: &str, instance: &str) -> BusEvent {
     let mut event = r.observed(id, "main", BODY);
     if let BusEvent::RequestObserved(observed) = &mut event {
         observed.session_id = Some(session.into());
-        observed.owner_id = Some(owner.into());
+        observed.instance_id = Some(instance.into());
     }
     event
 }
 
-const OWNER_MISMATCH_LINE: &str = "a request named another owner than the session's registration";
+const INSTANCE_MISMATCH_LINE: &str =
+    "a request named another instance than the session's registration";
 
 #[tokio::test]
-async fn a_sessions_first_owner_mismatch_logs_one_warning_naming_the_session_and_its_second_logs_none(
+async fn a_sessions_first_instance_mismatch_logs_one_warning_naming_the_session_and_its_second_logs_none(
 ) {
     let mut r = rig(RigSpec::default()).await;
-    r.event(registered_by("session", "owner-1")).await.unwrap();
-    r.event(registered_by("other", "owner-1")).await.unwrap();
+    // The line holds the word "instance", so the holder and the requests take ids that none of its words hold.
+    r.event(session_start_as("session", "proc-a", Some("instance")))
+        .await
+        .unwrap();
+    r.event(session_start_as("other", "proc-a", None))
+        .await
+        .unwrap();
     let (captured, _sink) = capture_tracing();
     for (id, session) in [("r-1", "session"), ("r-2", "session"), ("r-3", "other")] {
-        r.engine.observe(owned(&r, id, session, "owner-2"));
+        r.engine.observe(from_instance(&r, id, session, "proc-b"));
     }
     let text = captured.lock().unwrap().join("\n");
     let lines: Vec<&str> = text
         .lines()
-        .filter(|line| line.contains(OWNER_MISMATCH_LINE))
+        .filter(|line| line.contains(INSTANCE_MISMATCH_LINE))
         .collect();
     assert_eq!(lines.len(), 2, "one line per session: {text}");
     for (line, session) in lines.iter().zip(["session", "other"]) {
@@ -401,11 +401,11 @@ async fn a_sessions_first_owner_mismatch_logs_one_warning_naming_the_session_and
         );
     }
     assert!(
-        !text.contains("owner-1") && !text.contains("owner-2"),
-        "the line names no owner id: {text}"
+        !text.contains("proc-a") && !text.contains("proc-b"),
+        "the line names no instance id: {text}"
     );
     assert_eq!(
-        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        r.engine.reasons().get(&Reason::InstanceMismatch).copied(),
         Some(3),
         "the global count takes every mismatch"
     );
@@ -421,12 +421,11 @@ async fn a_sessions_first_owner_mismatch_logs_one_warning_naming_the_session_and
 }
 
 #[tokio::test]
-async fn a_request_naming_another_owner_after_the_holders_lease_lapsed_takes_the_session_over() {
+async fn a_request_naming_another_instance_after_the_holders_lease_lapsed_arms_its_recipe() {
     let mut r = rig(RigSpec::default()).await;
-    r.event(registered_by("session", "owner-1")).await.unwrap();
     r.advance(r.lease_ms());
     let mut req = r.request("main");
-    relay_common::set_header(&mut req, "x-keepalive-owner-id", "owner-2");
+    relay_common::set_header(&mut req, "x-phoebis-instance-id", "second");
     let resp = r.h.app.clone().oneshot(req).await.unwrap();
     let id = relay_common::outcome(&resp).request_id;
     let _ = resp.into_body().collect().await.unwrap();
@@ -435,32 +434,31 @@ async fn a_request_naming_another_owner_after_the_holders_lease_lapsed_takes_the
     assert_eq!(
         (status.cause, status.next_probe_at.is_some()),
         (Reason::Scheduled, true),
-        "the request arms its recipe as the registered owner's would"
+        "the request arms its recipe as the holder's would"
     );
     assert_eq!(
-        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        r.engine.reasons().get(&Reason::InstanceMismatch).copied(),
         None,
-        "a takeover counts no mismatch"
+        "a request past the lease counts no mismatch"
     );
-    // The re-registration renews the lease and names no owner, so the owner the takeover recorded stands and is the
-    // one the fence compares against, and the first owner's request is the foreign one.
+    // The holder's next registration renews its lease and binds the session to the holder's instance, so the other
+    // instance's request is the one the check refuses.
     r.reregister().await;
     r.engine
-        .observe(owned(&r, "r-first-owner", "session", "owner-1"));
+        .observe(from_instance(&r, "r-second", "session", "second"));
     assert_eq!(
-        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        r.engine.reasons().get(&Reason::InstanceMismatch).copied(),
         Some(1)
     );
 }
 
 #[tokio::test]
-async fn a_request_naming_another_owner_within_a_restored_sessions_window_changes_nothing() {
+async fn a_request_naming_another_instance_within_a_restored_sessions_window_changes_nothing() {
     let mut r = rig(RigSpec {
         on_disk: true,
         ..RigSpec::default()
     })
     .await;
-    r.event(registered_by("session", "owner-1")).await.unwrap();
     r.observe("main").await;
     r.engine.flush_persisted().await;
     r.engine = r.restart().await;
@@ -470,14 +468,14 @@ async fn a_request_naming_another_owner_within_a_restored_sessions_window_change
     // The load restores the session silent, with the attended reading for one lease length, which counts as the
     // holder's live lease until the mod registers it again.
     r.engine
-        .observe(owned(&r, "r-foreign", "session", "owner-2"));
+        .observe(from_instance(&r, "r-foreign", "session", "second"));
     let after = (r.view("main"), r.saved("main").await["generation"].clone());
     assert_eq!(
         (after.0.cause, after.0.next_probe_at, after.1),
         (before.0.cause, before.0.next_probe_at, before.1)
     );
     assert_eq!(
-        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        r.engine.reasons().get(&Reason::InstanceMismatch).copied(),
         Some(1)
     );
 }

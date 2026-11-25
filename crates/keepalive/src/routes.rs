@@ -16,10 +16,10 @@ use phoebis_relay::{authenticated_key, is_json, new_request_id, no_store_answer}
 use crate::engine::Engine;
 use crate::events::{decode_json_event, err, EventError};
 
-pub const EVENTS_PATH: &str = "/v0/keepalive/events";
+pub const EVENTS_PATH: &str = "/v0/companion/events";
 pub const MAX_BODY_BYTES: usize = 16 << 10;
 
-pub fn keepalive_router(engine: Arc<Engine>) -> Router {
+pub fn events_router(engine: Arc<Engine>) -> Router {
     Router::new()
         .route(EVENTS_PATH, post(events))
         .layer(map_response(no_store_answer))

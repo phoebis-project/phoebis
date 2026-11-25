@@ -10,7 +10,7 @@ use common::*;
 use fake_upstream::Respond;
 use http_body_util::BodyExt;
 use phoebis_keepalive::{
-    keepalive_router, AgentState, CompanionState, Lifecycle, ParkKind, SessionView, EVENTS_PATH,
+    events_router, AgentState, CompanionState, Lifecycle, ParkKind, SessionView, EVENTS_PATH,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, RulesMode};
@@ -202,7 +202,7 @@ fn session_view(r: &Rig) -> SessionView {
 #[tokio::test]
 async fn events_need_the_key_and_a_key_cannot_read_or_alter_anothers_sessions() {
     let r = rig(RigSpec::default()).await;
-    let app = keepalive_router(r.engine.clone());
+    let app = events_router(r.engine.clone());
     let heartbeat = |sequence| report("heartbeat", "session", "instance", sequence, json!({}));
     let refused = post(&app, heartbeat(2), None).await;
     assert_eq!(
@@ -300,7 +300,7 @@ async fn events_need_the_key_and_a_key_cannot_read_or_alter_anothers_sessions() 
 #[tokio::test]
 async fn a_key_created_again_under_a_used_id_inherits_none_of_its_sessions() {
     let r = rig(RigSpec::default()).await;
-    let app = keepalive_router(r.engine.clone());
+    let app = events_router(r.engine.clone());
     let worker = report(
         "agent_start",
         "session",
@@ -365,7 +365,7 @@ async fn a_key_created_again_under_a_used_id_inherits_none_of_its_sessions() {
 #[tokio::test]
 async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
     let r = rig(RigSpec::default()).await;
-    let app = keepalive_router(r.engine.clone());
+    let app = events_router(r.engine.clone());
     let ack = post(
         &app,
         report("heartbeat", "session", "instance", 2, json!({})),
@@ -591,9 +591,15 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
             code("invalid_event"),
         ),
         (
-            "an owner off session_start",
+            "an owner on session_start",
             Some(JSON),
-            json_body(heartbeat(json!({"owner_id": "o"}))),
+            json_body(report(
+                "session_start",
+                "session",
+                "instance",
+                next,
+                json!({"owner_id": "o"}),
+            )),
             400,
             code("invalid_event"),
         ),
@@ -997,7 +1003,7 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
     bounded
         .engine
         .observe(bounded.observed("bounded", "main", BODY));
-    let small = keepalive_router(bounded.engine.clone());
+    let small = events_router(bounded.engine.clone());
     for (body, expected) in [
         (
             report("session_start", "second", "i2", 1, json!({})),
@@ -1033,11 +1039,10 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
 #[tokio::test]
 async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_else() {
     let mut r = rig(RigSpec::default()).await;
-    let app = keepalive_router(r.engine.clone());
-    let owner = json!({"owner_id": "owner-1"});
+    let app = events_router(r.engine.clone());
     let first = post(
         &app,
-        report("session_start", "fresh", "i", 1, owner.clone()),
+        report("session_start", "fresh", "i", 1, json!({})),
         Some(KEY),
     )
     .await;
@@ -1065,7 +1070,7 @@ async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_e
     );
     let again = post(
         &app,
-        report("session_start", "fresh", "i", 3, owner.clone()),
+        report("session_start", "fresh", "i", 3, json!({})),
         Some(KEY),
     )
     .await;
@@ -1100,7 +1105,7 @@ async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_e
     );
     let listed = post(
         &app,
-        report("session_start", "fresh", "i", 5, owner.clone()),
+        report("session_start", "fresh", "i", 5, json!({})),
         Some(KEY),
     )
     .await;
@@ -1112,11 +1117,11 @@ async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_e
         ]),
         "a released agent stays listed with the generation its release left"
     );
-    // A recipe on the rig's own session: its prompt, account, usage and owner stay out of the answer.
+    // A recipe on the rig's own session: its prompt, account and usage stay out of the answer.
     r.observe("main").await;
     let armed = post(
         &app,
-        report("session_start", "session", "instance", 2, owner),
+        report("session_start", "session", "instance", 2, json!({})),
         Some(KEY),
     )
     .await;
@@ -1129,7 +1134,6 @@ async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_e
             "probe",
             "next_refresh",
             "cache_ttl",
-            "owner",
             "private prompt",
         ] {
             assert!(
@@ -1144,12 +1148,11 @@ async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_e
 #[tokio::test]
 async fn a_registration_answer_carries_a_parked_agents_park() {
     let r = rig(RigSpec::default()).await;
-    let app = keepalive_router(r.engine.clone());
-    let owner = json!({"owner_id": "owner-1"});
+    let app = events_router(r.engine.clone());
     let wake = r.now() + 300_000;
     let deadline = r.now() + 600_000;
     for body in [
-        report("session_start", "fresh", "i", 1, owner.clone()),
+        report("session_start", "fresh", "i", 1, json!({})),
         report(
             "agent_start",
             "fresh",
@@ -1176,7 +1179,7 @@ async fn a_registration_answer_carries_a_parked_agents_park() {
     }
     let again = post(
         &app,
-        report("session_start", "fresh", "i", 4, owner),
+        report("session_start", "fresh", "i", 4, json!({})),
         Some(KEY),
     )
     .await;
@@ -1428,7 +1431,7 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
     r.step().await;
     let generation = r.request_generation("main");
     let base = r.sequence;
-    let app = keepalive_router(r.engine.clone());
+    let app = events_router(r.engine.clone());
     let deadline = r.now() + 600_000;
     let wake = r.now() + 300_000;
     let state = |sequence: u64, fields: Value| {
@@ -1559,7 +1562,7 @@ async fn a_scheduled_park_ends_whole_when_its_wake_passes_and_the_answer_carries
     agent_start(&mut r, "worker", None).await.unwrap();
     r.observe("worker").await;
     let base = r.sequence;
-    let app = keepalive_router(r.engine.clone());
+    let app = events_router(r.engine.clone());
     let wake = r.now() + 10 * MINUTE;
     let park = report(
         "state",
@@ -1610,7 +1613,7 @@ async fn a_both_park_whose_deadline_passes_first_narrows_to_scheduled_and_keeps_
     agent_start(&mut r, "worker", None).await.unwrap();
     r.observe("worker").await;
     let base = r.sequence;
-    let app = keepalive_router(r.engine.clone());
+    let app = events_router(r.engine.clone());
     let deadline = r.now() + 10 * MINUTE;
     let wake = r.now() + 60 * MINUTE;
     let park = report(
@@ -1676,7 +1679,7 @@ async fn a_both_park_whose_wake_passes_first_narrows_to_background_and_drops_its
     agent_start(&mut r, "worker", None).await.unwrap();
     r.observe("worker").await;
     let base = r.sequence;
-    let app = keepalive_router(r.engine.clone());
+    let app = events_router(r.engine.clone());
     let wake = r.now() + 10 * MINUTE;
     let deadline = r.now() + 60 * MINUTE;
     let park = report(
@@ -1747,7 +1750,7 @@ async fn a_park_report_with_a_part_its_kind_does_not_take_answers_invalid_event(
         .unwrap()
         .request_generation;
     let base = r.sequence;
-    let app = keepalive_router(r.engine.clone());
+    let app = events_router(r.engine.clone());
     let wake = r.now() + 10 * MINUTE;
     let deadline = r.now() + 60 * MINUTE;
     let background = report(
@@ -1795,7 +1798,7 @@ async fn a_park_report_with_a_part_its_kind_does_not_take_answers_invalid_event(
 async fn a_null_member_is_refused_off_its_event_and_reads_as_absent_on_it() {
     let r = rig(RigSpec::default()).await;
     let base = r.sequence;
-    let app = keepalive_router(r.engine.clone());
+    let app = events_router(r.engine.clone());
     let heartbeat = report(
         "heartbeat",
         "session",
@@ -1834,7 +1837,7 @@ async fn a_null_member_is_refused_off_its_event_and_reads_as_absent_on_it() {
 async fn instance_conflict_names_an_ended_or_silent_holder_and_the_generation_refusals_name_the_current_one(
 ) {
     let r = rig(RigSpec::default()).await;
-    let app = keepalive_router(r.engine.clone());
+    let app = events_router(r.engine.clone());
     let takeover = |session: &str, instance: &str, previous: Option<&str>| {
         let fields = previous.map_or(json!({}), |p| json!({ "previous_instance_id": p }));
         report("session_start", session, instance, 1, fields)
@@ -1968,7 +1971,7 @@ async fn instance_conflict_names_an_ended_or_silent_holder_and_the_generation_re
 #[tokio::test]
 async fn a_same_instance_start_revives_an_ended_session_so_a_clear_then_a_resume_never_loops() {
     let mut r = rig(RigSpec::default()).await;
-    let app = keepalive_router(r.engine.clone());
+    let app = events_router(r.engine.clone());
     // One process, one instance: session A, then a /clear to B, then a /resume back to A.
     for body in [
         report(
