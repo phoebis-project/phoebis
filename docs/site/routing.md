@@ -743,18 +743,18 @@ Fable pin stays out of it as `fable_model`, though it draws the 7-day window. Ev
 reserved room, so the round's target is `shed_cap` of their burn, and its record states that burn as the excess. The
 test fires no round on an account whose pins under the pool's keys are all Fable pins or pins that the round leaves out
 as `account_bound`, `ended`, `fast_lane` or `off_window`: such an account runs no round and stamps no dwell, so a
-window's round that fires right after still runs, and the shed rule's line then reads `fable_reservation` as
-`no_other_model`. The test reads no burn, so an account whose one pin of another model has no priced burn still fires
-the round, which leaves that pin out as `no_burn`, marks nothing and stamps its dwell. The order and the pick are the
-round's own. Its last-pin guard counts the burn of the live Fable pins that it leaves out as burn that stays on the
-account, so one pin of another model beside them can take a mark, and with no live Fable pin such a pin reads `last_pin`
-as in any round. Its destination gate leaves out a sibling whose own 7-day room reads under its reservation, where the
-round plans a mark and where the marked pin moves at its next request, so a pin with no other destination stays on its
-account with its cache and reads `no_runway`. Each mark carries the window `seven_day` and the test that fired its
-round. While the room reads short, the shed rule's line in the routing log's record of the selection names the
-reservation (`fable_reservation`), inside the wait the stamp and the wait (`over_since_fable_reservation`,
-`wait_fable_reservation`), and once the test fires `trigger` `seven_day` and `fired_by` `fable_reservation`, with no
-`excess`, which a window's trigger alone names.
+window's round that fires right after still runs, and a mark already standing on the request's pin still moves at that
+request. The shed rule's line then reads `fable_reservation` as `no_other_model`. The test reads no burn, so an account
+whose one pin of another model has no priced burn still fires the round, which leaves that pin out as `no_burn`, marks
+nothing and stamps its dwell. The order and the pick are the round's own. Its last-pin guard counts the burn of the live
+Fable pins that it leaves out as burn that stays on the account, so one pin of another model beside them can take a
+mark, and with no live Fable pin such a pin reads `last_pin` as in any round. Its destination gate leaves out a sibling
+whose own 7-day room reads under its reservation, where the round plans a mark and where the marked pin moves at its
+next request, so a pin with no other destination stays on its account with its cache and reads `no_runway`. Each mark
+carries the window `seven_day` and the test that fired its round. While the room reads short, the shed rule's line in
+the routing log's record of the selection names the reservation (`fable_reservation`), inside the wait the stamp and the
+wait (`over_since_fable_reservation`, `wait_fable_reservation`), and once the test fires `trigger` `seven_day` and
+`fired_by` `fable_reservation`, with no `excess`, which a window's trigger alone names.
 
 The round orders the pool's pins on the account, cold ones first, those whose move drops no thinking by burn and then
 the others by burn over the thinking they drop at the weight of output, then warm ones by burn over their move's size. A

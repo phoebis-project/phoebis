@@ -5271,7 +5271,8 @@ fn move_of<'a>(
     };
     // A reservation's round walks the account's pins of another model alone. Where it would walk none it marks
     // nothing, and its dwell would hold back the round a window fires right after, so its test fires nothing. The
-    // wait above runs first, so its stamp and its wait still name a short room on an account of Fable pins alone.
+    // wait above runs first, so its stamp and its wait still name a short room on an account of Fable pins alone. The
+    // drop holds back the round alone, so a mark already standing on the request's pin still moves below.
     let no_other_model = trigger.as_ref().is_some_and(|trigger| {
         matches!(trigger.source, TriggerSource::FableReservation { .. }) && {
             let unit = burn_unit(state, snapshot, source, now, fallback_ms);
@@ -5380,6 +5381,7 @@ fn move_of<'a>(
         && stretch_waits.is_none()
         && young.is_none()
         && reservation_waits.is_none()
+        && !no_other_model
     {
         rule_line(rec, MigrateReason::Shed, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;

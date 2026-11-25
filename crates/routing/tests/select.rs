@@ -1675,6 +1675,95 @@ fn a_reservation_fires_no_round_over_fable_pins_alone_and_stamps_no_dwell() {
 }
 
 #[test]
+fn a_reservation_test_that_fires_nothing_over_fable_pins_alone_still_moves_a_standing_mark() {
+    let s = tiered(slowing(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 1)],
+        shedding: Shedding {
+            fable_reservation_shedding: true,
+            burn_average_seconds: 600,
+            ..Shedding::default()
+        },
+        ..Pool::default()
+    }));
+    let mut st = reserving(
+        0.76,
+        vec![
+            PinRow {
+                mark: Some(PinMark {
+                    at: RESERVED_AT - HOUR,
+                    on: "a".into(),
+                    window: FIVE_HOUR.into(),
+                    source: None,
+                }),
+                ..fable_burning("f1", "a", 1.0, RESERVATION_WAITED)
+            },
+            fable_burning("f2", "a", 1.0, RESERVATION_WAITED),
+        ],
+    );
+    // a's 5-hour window reads 0.96, over the ceiling of 0.95, and resets 20 minutes past the reservation's wait, under
+    // the half-hour stretch threshold: the stretch reads over the threshold, which keeps f1's mark, while its test
+    // projects to an instant already past and fires nothing.
+    st.record_sample(
+        "a",
+        reserved_read(0.76, RESERVED_AT).with(
+            FIVE_HOUR,
+            WindowReading {
+                utilization: 0.96,
+                reset: Some(RESERVATION_WAITED + 20 * MINUTE),
+                observed_at: RESERVED_AT,
+                source: WindowSource::Poll,
+                plan: None,
+                tier: None,
+            },
+        ),
+        0,
+    );
+    // b's Fable week at a tenth beside `reserving`'s two windows, so b fits a Fable pin's move.
+    st.record_sample(
+        "b",
+        refreshing(
+            0.1,
+            RESERVED_AT + HOUR,
+            RESERVED_AT + 24 * HOUR,
+            RESERVED_AT,
+        )
+        .with(
+            SEVEN_DAY_FABLE,
+            WindowReading {
+                utilization: 0.1,
+                reset: Some(RESERVED_AT + 24 * HOUR),
+                observed_at: RESERVED_AT,
+                source: WindowSource::Poll,
+                plan: None,
+                tier: None,
+            },
+        ),
+        0,
+    );
+    // f2's turn stamps the short room and the stretch over its threshold, so at f1's turn a wait later neither the
+    // reservation's wait nor the slow-down's safety wait holds anything back.
+    decide(
+        &mut st,
+        &s,
+        &fable_auxiliary(&s, "f2", RESERVED_AT),
+        &mut rng(),
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &fable_auxiliary(&s, "f1", RESERVATION_WAITED),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "{:?}",
+        line(&d.record, "move:shed").facts
+    );
+}
+
+#[test]
 fn a_reservation_round_marks_the_one_other_pin_beside_fable_pins_that_keep_burning() {
     let s = reserving_pool(Strategy::Pace, true);
     // s1's 4 tokens a second are the round's whole walked burn, and the Fable pins' 1 and 1 stay on the account, more
