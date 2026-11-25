@@ -76,6 +76,12 @@ const longestTtlOf = (s, r) => {
  */
 const REFUSED_IDS = ['req_0c4e7a91-b5d', 'req_2d8e5b13-f40', 'req_5d1b8e2f-c64', 'req_6c3a9e27-5b1', 'req_9b4f1c62-a07', 'req_a8f3c6d0-e17', 'req_e0a4c6f2-118', 'req_f1c8e3a5-29d'];
 
+/**
+ * Whether the accounts answer withholds a row's windows, as the route does for a subscription row that is not paired,
+ * needs re-auth or whose plan ended, while the ledger keeps the samples of its polls.
+ */
+const withholdsWindows = (a) => a.kind === 'oauth' && (a.status === 'unpaired' || a.status === 'reauth_required' || a.planEndedAt !== null);
+
 /** The names the mock's story used before it read as one operator's, and the admin harness's own. */
 const RETIRED = ['business', 'codex', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'team'];
 
@@ -467,13 +473,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
     // A fact's peaks are readings, so an hour that starts after the account's newest window reading has none behind it.
-    // The answer withholds the windows of a row that is not paired or needs re-auth, whose usage block keeps the
-    // instant of its last reading.
+    // The answer withholds the windows of a row whose state reads none, whose usage block keeps the instant of its last
+    // reading. An account that holds no window reading takes its facts from the routing log's events alone.
     for (const a of s.accounts) {
-      const withheld = a.status === 'unpaired' || a.status === 'reauth_required';
-      const readings = withheld ? (a.usage?.fetchedAt ? [Date.parse(a.usage.fetchedAt)] : []) : [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
+      const readings = withholdsWindows(a) ? (a.usage?.fetchedAt ? [Date.parse(a.usage.fetchedAt)] : []) : [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
+      if (readings.length === 0) continue;
       const late = facts.filter((r) => r.accountId === a.id && Date.parse(r.hour) > Math.max(...readings));
-      assert.equal(late.length, 0, `${a.id}'s newest reading is ${readings.length ? iso(Math.max(...readings)) : 'none'}, before ${late.length} of its account facts from ${late[0]?.hour}`);
+      assert.equal(late.length, 0, `${a.id}'s newest reading is ${iso(Math.max(...readings))}, before ${late.length} of its account facts from ${late[0]?.hour}`);
     }
   });
 
@@ -482,11 +488,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
     // A 5-hour peak reads the hour's 5-hour samples and the heads of its attempts, which an account without the window
     // never holds. The drawn cooldowns key off the hour's highest 5-hour sample where one stands, else the 5-hour walk,
-    // and an account without the window keys neither. The answer withholds the windows of a row that is not paired or
-    // needs re-auth, so such a row's window set reads off the windows of its quota history, which the ledger keeps.
-    const withheld = (a) => a.status === 'unpaired' || a.status === 'reauth_required';
-    const sets = await Promise.all(s.accounts.map(async (a) => [a.id, withheld(a) ? (await s.api.getQuotaHistory(a.id)).map((h) => h.windowId) : a.windows.map((w) => w.id)]));
-    const has5h = new Map(sets.map(([id, ids]) => [id, ids.includes('5h')]));
+    // and an account without the window keys neither. The answer withholds the windows of a row whose state reads none,
+    // so such a row's window set reads off the windows of its quota history, which the ledger keeps. An account with no
+    // window set takes its cooldowns from the routing log's events, which no window keys.
+    const sets = await Promise.all(s.accounts.map(async (a) => [a.id, withholdsWindows(a) ? (await s.api.getQuotaHistory(a.id)).map((h) => h.windowId) : a.windows.map((w) => w.id)]));
+    const has5h = new Map(sets.filter(([, ids]) => ids.length > 0).map(([id, ids]) => [id, ids.includes('5h')]));
     const without = facts.filter((r) => has5h.get(r.accountId) === false);
     assert.ok(without.length > 0, 'the story holds account facts of an account without the window');
     assert.deepEqual(without.filter((r) => r.peak['5h'] !== null || r.cooldownSeconds !== 0).map((r) => `${r.accountId} ${r.hour} ${r.peak['5h']} ${r.cooldownSeconds}`), []);
@@ -507,14 +513,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     };
     const sampled = new Set();
     const sampledWindows = new Set();
+    // The answer withholds a row's windows where its state reads none, so such a row's window set reads off the windows
+    // of its quota history.
+    const holds = new Map();
     for (const a of s.accounts) {
-      // The mock's reading of an ended plan holds no window, so the account hours state no hour for it, where the
-      // router lists the hours of its samples.
-      // TODO: remove this skip when the account hours list the sampled hours of an account whose plan ended.
-      const listsSamples = a.planEndedAt === null;
-      for (const h of await s.api.getQuotaHistory(a.id)) {
+      const history = await s.api.getQuotaHistory(a.id);
+      holds.set(a.id, withholdsWindows(a) ? history.map((h) => h.windowId) : [...a.windows.map((w) => w.id), ...(a.fableWindow ? ['7d_fable'] : [])]);
+      for (const h of history) {
         for (const x of h.samples) {
-          if (listsSamples) sampled.add(`${a.id} ${startOfHour(Date.parse(x.at))}`);
+          sampled.add(`${a.id} ${startOfHour(Date.parse(x.at))}`);
           sampledWindows.add(`${a.id} ${startOfHour(Date.parse(x.at))} ${h.windowId}`);
           raise(a.id, Date.parse(x.at), h.windowId, x.utilization);
         }
@@ -529,7 +536,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (let from = startOfHour(s.now - 31 * DAY); from <= s.now; from += 2 * DAY) spans.push(from);
     const points = (await Promise.all(spans.map((from) => s.api.getAnalyticsSeries({ from: iso(from), groupBy: 'account', includeProbes: true, to: iso(from + 2 * DAY) })))).flat();
     const counted = new Set(points.flatMap((p) => (logged.has(Date.parse(p.at)) ? [] : p.groups.filter((g) => g.attempts > 0).map((g) => `${g.key} ${Date.parse(p.at)}`))));
-    const holds = new Map(s.accounts.map((a) => [a.id, [...a.windows.map((w) => w.id), ...(a.fableWindow ? ['7d_fable'] : [])]]));
     const headed = (k, w) => counted.has(k) && (holds.get(k.split(' ')[0]) ?? []).includes(w) && !sampledWindows.has(`${k} ${w}`);
     const read = facts.flatMap((r) => {
       const k = `${r.accountId} ${Date.parse(r.hour)}`;
@@ -4450,6 +4456,22 @@ test("a released agent's return counts in its key's Cache row and in neither the
   const overview = await s.api.getKeepaliveOverview();
   const item = s.attention.find((i) => i.kind === 'expired_between_turns');
   assert.deepEqual([groups.find((g) => g.key === 'laptop')?.expiredBetweenTurns, overview.expiredBetweenTurns24h, item?.detail.expired], [2, 5, 5]);
+});
+
+// Catches a fold that books a move on its destination alone. The deleted retired workspace holds no window reading,
+// and its pin of 09:40:20 moved to primary at 09:47:30 (mock/routingLog.ts), so its one hour reads both.
+test('an account with no window reading lists the hour of its pin events, a move counted on the account it left', async () => {
+  const s = await pinned;
+  const rows = (await s.api.listAccountRollups(iso(s.now - DAY), iso(s.now + DAY))).filter((r) => r.accountId === 'retired');
+  assert.deepEqual(rows.map((r) => [r.hour, r.pins]), [['2026-09-16T09:00:00.000Z', { created: 1, migratedIn: 0, migratedOut: 1 }]]);
+});
+
+// Catches a fold that books no cooldown time for an account with no window reading, or books it to another hour. The
+// 429 of research at 03:38:20.093 (req_b68906d8-252) set a cooldown of 65 s, to 03:39:25.093.
+test('an account with no window reading counts the time of its cooldown in the hour it elapsed in', async () => {
+  const s = await pinned;
+  const rows = (await s.api.listAccountRollups(iso(s.now - DAY), iso(s.now + DAY))).filter((r) => r.accountId === 'research');
+  assert.deepEqual(rows.map((r) => [r.hour, r.cooldownSeconds]), [['2026-09-16T03:00:00.000Z', 65]]);
 });
 
 // An instant whose hour a full day back carries traffic.

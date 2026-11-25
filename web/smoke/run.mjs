@@ -24193,7 +24193,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       await pick(m, label, value);
       await closeBoxes(m);
     };
-    // The Account filter offers the accounts with traffic in range, which `legacy`, the first row, is not among.
+    // The Account filter offers the accounts with traffic in range, which `legacy`, a row of the table, is not among.
     const picked = 'primary';
     const subtitle = () => accountTable()?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
     const totals = 'Totals for the whole hours the range touches and the selected accounts';

@@ -728,6 +728,12 @@ export const ACCOUNTS: Account[] = SEEDS.map(({ scopes, ...a }: Seed) => {
  */
 export const lastReadingOf = (a: Account): Pick<Account, 'fableWindow' | 'windows'> => (withholdsWindows(a) ? (READINGS.get(a.id) ?? a) : a);
 
+/**
+ * The windows of the last clean poll of each row whose plan ended, which the final map empties as the route withholds
+ * them. The ledger keeps the samples of that poll and the ones before it, so the account hours read their windows.
+ */
+export const ENDED_PLAN_WINDOWS: ReadonlyMap<string, RateLimitWindow[]> = new Map(SEEDS.filter((s) => s.planEndedAt !== null).map((s) => [s.id, readWindows(s)]));
+
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 /**
  * The unit a pin's burn reads on the account it sits on: dollars on an API key or a usage-based seat, which has no plan

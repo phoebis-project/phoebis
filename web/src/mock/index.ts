@@ -5,7 +5,7 @@ import { decodeStreamCut } from '@/api/decode';
 import { clientLeft } from '@/api/fold';
 import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, FeatureAccountIds, FeatureCall, FeatureCallPage, FeatureCallQuery, FeatureWord, KeepaliveOverview, KeyFeatureAccount, KeyModels, LimitResetsRead, MemberEligibility,
+  Account, AccountCatalog, AccountInput, AccountRollup, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, FeatureAccountIds, FeatureCall, FeatureCallPage, FeatureCallQuery, FeatureWord, KeepaliveOverview, KeyFeatureAccount, KeyModels, LimitResetsRead, MemberEligibility,
   ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RateLimitWindow, RequestDetail, RequestEvent, RequestLog, RequestOrder, RequestPage, RequestQuery, ResetUse, RoutingEvent, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
@@ -21,6 +21,7 @@ import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf, readWindows } from '@/lib/quota';
 import { compareOrderKeys, compareRequests, orderKeyOf, requestOrder, type OrderKey } from '@/lib/requests';
+import { movedFrom } from '@/lib/routingLog';
 import { WINDOW_HOURS, WINDOW_KEY } from '@/lib/windows';
 import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, blankAccountRow, featureGrantsOf, lastReadingOf, usageOf, withholdsWindows } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, unusedAllowanceOf, wholeHoursOf } from './analytics';
@@ -29,14 +30,14 @@ import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, poolPinsAt, rowsOfDeletedKey, sessionsListedAt } from './operations';
 import { KEYS, POOLS, UNTIL_DRAWN, budgetUntilOf, composedFor, eligibilityOf, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, FEATURE_CALLS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, FEATURE_CALLS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, cooldownSecondsByHour, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
 import { ROUTING_LOG_KINDS, WINDOW_DROP_MARGIN, claimDetail, cursorInteger, dropDetail, getDecision, inList, listRoutingLog, routingCursorOf, subscriptionPair, wholePoints } from './routingLog';
 import { ROUTING_EVENTS, SUMMARIES } from './routingLog';
-import { INHERITED_FEATURE_ACCOUNTS, KEY_SAMPLE, NO_FEATURE_ACCOUNTS, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
+import { ACCOUNT_ROLLUP_SAMPLE, INHERITED_FEATURE_ACCOUNTS, KEY_SAMPLE, NO_FEATURE_ACCOUNTS, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, hourCeil, iso, startOfHour } from './time';
 
 // Fixed, so a pass over the mock reads the same secrets every run.
@@ -309,6 +310,43 @@ const buildMismatch = (): boolean => switchSet(BUILD_MISMATCH_KEY);
 /** A build no bundle is made from. */
 const OTHER_BUILD = '0'.repeat(40);
 
+/**
+ * The account hours the route answers. The drawn hours stand for the ledger's folds on an account that holds a window
+ * reading. An API-key account, a deleted one and a subscription row with no window reading take the folds of the
+ * routing log's events instead, each booked to its hour as the ledger books it: a pin created, a pin moved in on its
+ * destination and out on the account it left, and the time under the account's cooldowns. An ended plan's samples
+ * already stand in its hours, so its folds join those rows.
+ */
+function accountHours(): AccountRollup[] {
+  const folds = (id: string | null): id is string => {
+    if (id === null) return false;
+    const a = accountById.get(id);
+    return a === undefined || a.kind !== 'oauth' || readWindows(lastReadingOf(a)).length === 0;
+  };
+  const hours = new Map(ACCOUNT_ROLLUPS.map((r) => [`${r.accountId}|${Date.parse(r.hour)}`, r]));
+  const fold = (accountId: string | null, at: number, d: { cooldownSeconds?: number; created?: number; migratedIn?: number; migratedOut?: number }) => {
+    if (!folds(accountId)) return;
+    const hour = startOfHour(at);
+    const key = `${accountId}|${hour}`;
+    const row = hours.get(key) ?? { ...ACCOUNT_ROLLUP_SAMPLE, accountId, cooldownSeconds: 0, hour: iso(hour), overageSeconds: 0, peak: { '5h': null, '7d': null, '7d_fable': null }, pins: { created: 0, migratedIn: 0, migratedOut: 0 }, windows: {} };
+    const pins = { created: row.pins.created + (d.created ?? 0), migratedIn: row.pins.migratedIn + (d.migratedIn ?? 0), migratedOut: row.pins.migratedOut + (d.migratedOut ?? 0) };
+    hours.set(key, { ...row, cooldownSeconds: row.cooldownSeconds + (d.cooldownSeconds ?? 0), pins });
+  };
+  const spans = new Map<string, { setAt: number; until: number }[]>();
+  for (const e of ROUTING_EVENTS) {
+    const at = Date.parse(e.at);
+    if (e.kind === 'pin_created') fold(e.accountId, at, { created: 1 });
+    if (e.kind === 'pin_migrated') {
+      fold(e.accountId, at, { migratedIn: 1 });
+      fold(movedFrom(e), at, { migratedOut: 1 });
+    }
+    if (e.kind === 'cooldown_set' && folds(e.accountId) && typeof e.detail.until === 'number') spans.set(e.accountId, [...(spans.get(e.accountId) ?? []), { setAt: at, until: e.detail.until }]);
+  }
+  for (const [accountId, rows] of spans) for (const [hour, seconds] of cooldownSecondsByHour(rows)) fold(accountId, hour, { cooldownSeconds: seconds });
+  return [...hours.values()];
+}
+const ACCOUNT_HOURS = accountHours();
+
 const NO_REQUESTS = new Map<string, RequestLog>();
 /**
  * The ledger's read sets as the routes fold them: the story's, and an empty form of each for a fresh installation, so
@@ -317,6 +355,7 @@ const NO_REQUESTS = new Map<string, RequestLog>();
 const ledger = () => {
   const empty = emptyStore();
   return {
+    accountHours: empty ? [] : ACCOUNT_HOURS,
     accountRollups: empty ? [] : ACCOUNT_ROLLUPS,
     attention: empty ? [] : ATTENTION,
     catalog: empty ? [] : CATALOG,
@@ -1178,6 +1217,8 @@ export class MockApi implements Api {
   }
 
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>, filters?: Pick<AnalyticsQuery, 'accountIds' | 'poolIds'>) {
+    // The fold reads the drawn hours alone: it gives each of their moves a drawn reason, fit and cache write, which a
+    // move of the routing log holds of its own.
     const { accountRollups, requests, routingEvents } = ledger();
     return latency(rewritesOf(accountRollups, requests, routingEvents, range, filters));
   }
@@ -1371,7 +1412,7 @@ export class MockApi implements Api {
   listAccountRollups(from: string, to: string) {
     // As the route reads a range: from the hour holding the start up to the hour ceiling of the end, exclusive.
     const { fromMs, toMs } = wholeHoursOf({ from, to });
-    return latency(ledger().accountRollups.filter((r) => Date.parse(r.hour) >= fromMs && Date.parse(r.hour) < toMs));
+    return latency(ledger().accountHours.filter((r) => Date.parse(r.hour) >= fromMs && Date.parse(r.hour) < toMs));
   }
 
   listAccounts() {

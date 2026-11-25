@@ -16,7 +16,7 @@ import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { TRANSFORMATION_KEYS } from '@/lib/inputTransformations';
 import { MODEL_SCOPE_PREFIX, endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { WINDOW_KEY } from '@/lib/windows';
-import { ACCOUNTS, QUOTA_HISTORY, SHARED_WINDOWS, accountById, lastReadingOf, rankTier, sharedWindowsOf } from './accounts';
+import { ACCOUNTS, ENDED_PLAN_WINDOWS, QUOTA_HISTORY, SHARED_WINDOWS, accountById, lastReadingOf, rankTier, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor, promptOf } from './catalog';
 import { leadOf, leftPerHour, paceDeadline } from './lead';
@@ -3136,6 +3136,26 @@ export const ATTEMPT_COOLDOWNS: (CooldownRow & { model: string; requestId: strin
   r.attempts.flatMap((a) => (a.cooldownSet ? [{ accountId: a.accountId, ...cooldownOf(a.cooldownSet.reason, r.canonicalModel), setAt: attemptEnd(a), until: Date.parse(a.cooldownSet.until), model: r.canonicalModel, requestId: r.id }] : [])),
 );
 
+/**
+ * The seconds an account stood under at least one of its cooldown rows, by the hour each part elapsed in, up to the
+ * read. Taken in the order they were set, each row counts from the later of its start and the latest end of the rows
+ * before it to the earlier of its end and the read: the ledger books a row only past the latest end that the account's
+ * scopes are accounted to, and the route cuts the part it booked past the clock.
+ */
+export function cooldownSecondsByHour(rows: readonly Pick<CooldownRow, 'setAt' | 'until'>[]): Map<number, number> {
+  const ms = new Map<number, number>();
+  let latest = -Infinity;
+  for (const c of [...rows].sort((a, b) => a.setAt - b.setAt)) {
+    const to = Math.min(c.until, NOW);
+    for (let at = Math.max(c.setAt, latest); at < to; at = startOfHour(at) + HOUR) {
+      const hour = startOfHour(at);
+      ms.set(hour, (ms.get(hour) ?? 0) + Math.min(to, hour + HOUR) - at);
+    }
+    latest = Math.max(latest, c.until);
+  }
+  return new Map([...ms].map(([hour, total]) => [hour, Math.round(total / 1_000)]));
+}
+
 /** The ledger files each figure a counted request holds, whatever its status or kind, and a row leaves out a figure it
  *  lacks as null. */
 function histogramsOf(rows: RequestLog[]): LatencyHistograms {
@@ -3897,10 +3917,11 @@ function accountRollups(): AccountRollup[] {
   }
   // An hour's last sample of each window the router reads, with the reset live at the sample's instant and the lead
   // the router would read then, to the account's end where it comes first, so the Pace card draws leads on both sides
-  // of zero across the story's accounts.
+  // of zero across the story's accounts. A row whose plan ended holds no reading, while its samples stand to the last
+  // clean poll before the end, whose windows they were read from.
   const sampledWindows = (account: (typeof ACCOUNTS)[number], t: number): AccountRollup['windows'] => {
     const windows: AccountRollup['windows'] = {};
-    for (const w of readWindows(lastReadingOf(account))) {
+    for (const w of ENDED_PLAN_WINDOWS.get(account.id) ?? readWindows(lastReadingOf(account))) {
       const key = WINDOW_KEY[w.id];
       const sample = lastSample.get(`${account.id}|${w.id}`)?.get(t);
       if (key === undefined || sample === undefined) continue;
@@ -3945,16 +3966,20 @@ function accountRollups(): AccountRollup[] {
   const noPins = (): AccountRollup['pins'] => ({ created: 0, migratedIn: 0, migratedOut: 0 });
   // The router writes a pin only under a pool with an affinity window, so an account no such pool holds counts none.
   const pinnedAccounts = new Set([...poolById.values()].filter((p) => p.affinityTtlSeconds > 0).flatMap((p) => p.members.map((m) => m.accountId)));
+  // The ledger keeps the samples an account's polls wrote, and the route lists each hour they stand in with their
+  // peaks, so an account whose hours take no draw lists those.
+  const listSampled = (account: (typeof ACCOUNTS)[number]) => {
+    for (let t = start; t <= end; t += HOUR) {
+      const row: AccountRollup = { ...ACCOUNT_ROLLUP_SAMPLE, accountId: account.id, hour: iso(t), peak: peaksOf(account.id, t), cooldownSeconds: 0, overageSeconds: 0, pins: noPins(), windows: sampledWindows(account, t) };
+      if (holdsFigure(row)) out.push(row);
+    }
+  };
   for (const account of ACCOUNTS) {
     if (account.kind !== 'oauth') continue;
     // A row that is not paired takes no draw, so each later account keeps its stream, and it reads no pin count, since
-    // no pool places a pin on a row with no credential. The ledger keeps the samples its polls wrote before, so the
-    // route lists each hour they stand in, with their peaks.
+    // no pool holds the row.
     if (account.status === 'unpaired') {
-      for (let t = start; t <= end; t += HOUR) {
-        const row: AccountRollup = { ...ACCOUNT_ROLLUP_SAMPLE, accountId: account.id, hour: iso(t), peak: peaksOf(account.id, t), cooldownSeconds: 0, overageSeconds: 0, pins: noPins(), windows: sampledWindows(account, t) };
-        if (holdsFigure(row)) out.push(row);
-      }
+      listSampled(account);
       continue;
     }
     // Each window's walk stands for the heads of the attempts that an hour with no request row counts on the account.
@@ -3965,7 +3990,7 @@ function accountRollups(): AccountRollup[] {
     // An hour holds drawn facts from the one the plan started in to the one of the newest window reading, the span in
     // which the router read the account. Every hour is still drawn, so cutting one account's hours moves no other
     // account's values. The ledger keeps the readings of a row whose windows the answer withholds, so its last reading
-    // stands in. With no reading `Math.max` answers -Infinity, so such an account holds no hour.
+    // stands in. With no reading `Math.max` answers -Infinity, so such an account holds no drawn hour.
     const since = account.subscription?.since;
     const from = since ? startOfHour(Date.parse(since)) : start;
     const last = lastReadingOf(account);
@@ -3981,8 +4006,6 @@ function accountRollups(): AccountRollup[] {
       drift5 = Math.max(0, Math.min(1, drift5 + h.float(-0.12, 0.12)));
       drift7 = Math.max(0, Math.min(1, drift7 + h.float(-0.03, 0.03)));
       driftF = Math.max(0, Math.min(1, driftF + h.float(-0.03, 0.03)));
-      // An hour with no request row that counts an attempt on the account reads the walk as that attempt's head, on
-      // each window that the reading holds and that holds no sample in the hour.
       const counted = attempted.has(`${account.id}|${t}`);
       const walked = (id: WindowId, held: boolean, walk: number): number | null => (counted && held && !lastSample.get(`${account.id}|${id}`)?.has(t) ? round(walk, 3) : null);
       const read = peaksOf(account.id, t);
@@ -4007,29 +4030,23 @@ function accountRollups(): AccountRollup[] {
     }
     // The current hour draws nothing, so the stream of the hours before it stays, and it reads no pin count. Its
     // cooldown is the time the account stood under at least one of its rows, its own and each one a story attempt's
-    // answer set: taken in the order they were set, each counts from the latest of its start, the hour's start and the
-    // latest end of the rows before it, to the earlier of its end and the read. The ledger books a row only past the
-    // latest end that the account's scopes are accounted to, and the route cuts the part it booked past the clock.
+    // answer set.
     if (end >= from && end <= until) {
       const own = account.cooldowns.map((c) => ({ setAt: Date.parse(c.setAt), until: Date.parse(c.until) }));
-      let latest = -Infinity;
-      let cooledMs = 0;
-      for (const c of [...own, ...ATTEMPT_COOLDOWNS.filter((x) => x.accountId === account.id)].sort((a, b) => a.setAt - b.setAt)) {
-        cooledMs += Math.max(0, Math.min(c.until, NOW) - Math.max(c.setAt, latest, end));
-        latest = Math.max(latest, c.until);
-      }
       const row: AccountRollup = {
         ...ACCOUNT_ROLLUP_SAMPLE,
         accountId: account.id,
         hour: iso(end),
         peak: peaksOf(account.id, end),
-        cooldownSeconds: Math.round(cooledMs / 1_000),
+        cooldownSeconds: cooldownSecondsByHour([...own, ...ATTEMPT_COOLDOWNS.filter((x) => x.accountId === account.id)]).get(end) ?? 0,
         overageSeconds: 0,
         pins: noPins(),
         windows: sampledWindows(account, end),
       };
       if (holdsFigure(row)) out.push(row);
     }
+    // A row whose plan ended holds no reading, so its draws list no hour, while the ledger keeps its samples.
+    if (account.planEndedAt !== null) listSampled(account);
   }
   return out;
 }
