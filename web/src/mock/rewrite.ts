@@ -1,24 +1,35 @@
-import { equivalentIn, modelWeeks, type Usage } from '@/lib/costs';
+import { anchorTier, equivalentIn, modelWeeks, shareIn, type Usage } from '@/lib/costs';
 import { servingAttempt } from '@/lib/dimensions';
 import { SHARED_WINDOWS } from './accounts';
 import { REQUESTS, bindsThinking } from './requests';
 import { TABLES, tablesFor } from './samples';
+import { HOUR } from './time';
 
 // The session rows and the routing log's rounds both price a pin's move here, so a row's move cost and a round's pick
-// read one figure, and the rows need no import of the routing log, which imports them.
+// price one rewrite, and the rows need no import of the routing log, which imports them.
 
 /** The plan windows a model draws: both shared windows, and a Fable model its week as well. */
 export const drawnWindows = (model: string): string[] => [...SHARED_WINDOWS, ...modelWeeks(TABLES, model)];
 /** The weekly window the pick prices a pin's rewrite in: the model's week where it draws one, else the 7-day window. */
 export const rewriteWindowOf = (model: string): string => modelWeeks(TABLES, model)[0] ?? 'seven_day';
 const proWeekOf = (usage: Usage, model: string, client: string | null): number | null => equivalentIn(tablesFor(client), model, usage, false);
+/** A cache write of `tokens` at the TTL `ttlMs`, on the row the router books for that TTL. */
+const cacheWriteOf = (tokens: number, ttlMs: number): Usage => ({ cacheRead: 0, cacheWrite1h: ttlMs >= HOUR ? tokens : 0, cacheWrite5m: ttlMs >= HOUR ? 0 : tokens, input: 0, output: 0 });
 /**
- * A rewrite of `tokens` as the Pro-week figure: the prompt written to the cache again, the Pro tier's share of its
- * 7-day window under the regime the pin's client label names, which no band weighs. Null for a model without a weight
- * of its own.
+ * A rewrite of `tokens` as the Pro-week figure: the prompt written to the cache again at the pin's TTL, on the 1-hour
+ * write's row from a TTL of an hour and on the 5-minute write's under it, as the Pro tier's share of its 7-day window
+ * under the regime the pin's client label names, which no band weighs. Null for a model without a weight of its own.
  */
-export const proWeekRewriteOf = (tokens: number, model: string, client: string | null): number | null =>
-  proWeekOf({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, model, client);
+export const proWeekRewriteOf = (tokens: number, model: string, client: string | null, ttlMs: number): number | null =>
+  proWeekOf(cacheWriteOf(tokens, ttlMs), model, client);
+/**
+ * The same rewrite as the Pro share it spends of the week the pin's model draws (`rewriteWindowOf`), the Fable week for
+ * a Fable model, where the router prices a pin's move. Null for a model without a weight on that week.
+ */
+export const weekRewriteOf = (tokens: number, model: string, client: string | null, ttlMs: number): number | null => {
+  const costs = tablesFor(client);
+  return shareIn(costs, rewriteWindowOf(model), anchorTier(costs), model, cacheWriteOf(tokens, ttlMs), false);
+};
 /** The same Pro-week figure of `tokens` as output, which the session pays again for the thinking a move drops. */
 const proWeekOutputOf = (tokens: number, model: string, client: string | null): number | null =>
   proWeekOf({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: tokens }, model, client);
@@ -53,13 +64,14 @@ export const droppedThinkingOf = (pin: PinOn, at: number): number | null => {
   return sum;
 };
 /**
- * The dropped thinking at the output's weight, in tokens: the count's share as output over its share as a cache write,
- * so the cost model's rows set the weight. Null where the move drops nothing and where either share is none.
+ * The dropped thinking at the output's weight, in tokens: the count's share as output over its share as a cache write
+ * at the pin's TTL, so the cost model's rows set the weight. Null where the move drops nothing and where either share
+ * is none.
  */
-export const dropSizeOf = (dropped: number | null, model: string, client: string | null): number | null => {
+export const dropSizeOf = (dropped: number | null, model: string, client: string | null, ttlMs: number): number | null => {
   if (dropped === null || dropped <= 0) return null;
   const asOutput = proWeekOutputOf(dropped, model, client);
-  const asWrite = proWeekRewriteOf(dropped, model, client);
+  const asWrite = proWeekRewriteOf(dropped, model, client, ttlMs);
   return asOutput === null || asWrite === null || asOutput <= 0 || asWrite <= 0 ? null : (dropped * asOutput) / asWrite;
 };
 /**
@@ -71,5 +83,5 @@ export const rewriteTokensOf = (lastPrompt: number, dropped: number | null): num
  * The size a round divides a pin's burn by and a move's cost prices: the rewrite at the destination plus the dropped
  * thinking at the output's weight, never under one token. Null where the pin holds no prompt size.
  */
-export const moveSizeOf = (lastPrompt: number | null, dropped: number | null, model: string, client: string | null): number | null =>
-  lastPrompt === null || lastPrompt === 0 ? null : Math.max(rewriteTokensOf(lastPrompt, dropped) + (dropSizeOf(dropped, model, client) ?? 0), 1);
+export const moveSizeOf = (lastPrompt: number | null, dropped: number | null, model: string, client: string | null, ttlMs: number): number | null =>
+  lastPrompt === null || lastPrompt === 0 ? null : Math.max(rewriteTokensOf(lastPrompt, dropped) + (dropSizeOf(dropped, model, client, ttlMs) ?? 0), 1);

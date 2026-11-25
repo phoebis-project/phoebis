@@ -19,7 +19,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
 import { DELETED_ACCOUNTS, KEY_REVOKED_AT, RETIRED, WORST_BUCKET, keyById, poolById, storyAccountOf, type PoolSeed } from './pools';
-import { ACCOUNT_BOUND_CALL_ID, ACCOUNT_BOUND_TURN_IDS, ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, CLIMB_SESSION_ID, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, NO_PIN_DRAWS, OPENING_SESSION_IDS, OPUS_MORNING_SESSION_ID, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, RESERVATION_FABLE_SESSION_ID, RESERVATION_MARKED_SESSION_ID, REWRITE_HELD_ID, ROUTER_RESTARTED_AT, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, accountBoundAt, attemptEnd, carriesConversation, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinKeyOf, pinReadAt, pinStampOf, requestById, resentInPlace, sweepAfter, type CooldownRow } from './requests';
+import { ACCOUNT_BOUND_CALL_ID, ACCOUNT_BOUND_TURN_IDS, ATTEMPT_COOLDOWNS, BUDGET_CROSSING_ID, CLIENTS, CLIMB_SESSION_ID, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, NO_PIN_DRAWS, OPENING_SESSION_IDS, OPUS_MORNING_SESSION_ID, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, RESERVATION_FABLE_SESSION_ID, RESERVATION_MARKED_SESSION_ID, REWRITE_HELD_ID, ROUTER_RESTARTED_AT, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNAVAILABLE_TURN_ID, UNSEEDED_IDS, accountBoundAt, attemptEnd, carriesConversation, cooldownOf, failsOver, holds, migrationAt, oauthWindows, pinCacheTtlOf, pinKeyOf, pinReadAt, pinStampOf, requestById, resentInPlace, sweepAfter, type CooldownRow } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { drawnWindows, dropSizeOf, droppedThinkingOf, moveSizeOf, proWeekRewriteOf, rewriteTokensOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
@@ -2992,7 +2992,7 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
     // A pin with no prompt size reported yet is unsized, so its rewrite reads nothing, and the Pro-week figure is null
     // on a model without a weight of its own. It is the write alone, at the destination, which keeps none of the
     // thinking the move drops. The engine names the window the pick compared on beside a figure alone.
-    const figure = p.lastInputTokens === 0 ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(tokens, p.model, CLIENTS[p.keyId] ?? null);
+    const figure = p.lastInputTokens === 0 ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(tokens, p.model, CLIENTS[p.keyId] ?? null, pinCacheTtlOf(p.sessionId));
     return { planned: chosen.base.accountId, rewrite: figure, runway: chosen.fit.runwayMs, window: figure === null ? null : rewriteWindowOf(p.model) };
   };
   return {
@@ -3021,10 +3021,10 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
         const walked = p.skip === null || !LEFT_OUT_SKIPS.includes(p.skip);
         const dropped = bound !== null && walked && (figures.planned ?? read(p, bound, true).planned) !== null ? bound : null;
         // The drop that the order read for the pin, before the round booked a destination.
-        const orderDrop = dropSizeOf(dropped, p.model, CLIENTS[p.keyId] ?? null);
+        const orderDrop = dropSizeOf(dropped, p.model, CLIENTS[p.keyId] ?? null, pinCacheTtlOf(p.sessionId));
         // The burn per token of the move's size, the rewrite plus the dropped thinking at the output's weight. A pin
         // with no prompt size divides by one token, the cheapest rewrite.
-        const size = moveSizeOf(p.lastInputTokens, dropped, p.model, CLIENTS[p.keyId] ?? null) ?? 1;
+        const size = moveSizeOf(p.lastInputTokens, dropped, p.model, CLIENTS[p.keyId] ?? null, pinCacheTtlOf(p.sessionId)) ?? 1;
         return {
           agent_id: p.agentId, burn: p.burn, cold: p.cold, ...(earlier ? {} : { dropped_thinking_tokens: dropped }), key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note,
           ...(earlier ? {} : { per_drop: p.burn === null || orderDrop === null ? null : Number((p.burn / orderDrop).toPrecision(7)) }),

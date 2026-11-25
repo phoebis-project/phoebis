@@ -10,7 +10,7 @@ import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './
 import { FIXTURES } from './generated/fixtures';
 import { eligibilityOf, keyById, poolById, servedFigures } from './pools';
 import { ACCOUNT_BOUND_SESSION_ID, BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, accountBoundAt, fastTurn, pinCacheTtlOf, pinReadAt, requestById } from './requests';
-import { dropSizeOf, droppedThinkingOf, moveSizeOf, proWeekRewriteOf } from './rewrite';
+import { dropSizeOf, droppedThinkingOf, moveSizeOf, weekRewriteOf } from './rewrite';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, regimeFor, tablesFor } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead, iso, startOfHour } from './time';
@@ -406,20 +406,23 @@ const hasDestination = (accountId: string, keyId: string): boolean => {
 };
 /**
  * A pin's move as the mock's rounds read it, under the regime its key's client label names: the size the round divides
- * its burn by, the dropped thinking at the output's weight, and the Pro-week figure of each, the cost a warm move and a
- * cold one pay. The size reads null where the pin holds no prompt size and the drop where it drops nothing, each with
- * its cost, and a cost reads null for a model without a weight of its own. A prompt of 0 tokens is no size, as the
- * route answers null where nothing is priced above zero, so a pin with a drop and no size pays the drop's cost alone.
- * A pin that no round can move reads no cost and keeps its other figures: one that holds state on its account, and one
- * whose pool holds no destination for it by `hasDestination`.
+ * its burn by, the dropped thinking at the output's weight, and the cost of each that a warm move and a cold one pay,
+ * each written to the cache at the pin's TTL `ttlMs` as its lane's write and priced as the Pro share of the week the
+ * pin's model draws, the Fable week for a Fable pin. The size reads null where the pin holds no prompt size and the
+ * drop where it drops nothing, each with its cost, and a cost reads null for a model without a weight on that week. A
+ * prompt of 0 tokens is no size, as the route answers null where nothing is priced above zero, so a pin with a drop
+ * and no size pays the drop's cost alone. A pin that no round can move reads no cost and keeps its other figures: one
+ * that holds state on its account, and one whose pool holds no destination for it by `hasDestination`.
  */
-const moveFiguresOf = (tokens: number | null, dropped: number | null, model: string, accountId: string, keyId: string, bound: boolean): Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
+const moveFiguresOf = (tokens: number | null, dropped: number | null, model: string, accountId: string, keyId: string, bound: boolean, ttlMs: number): Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
   const client = CLIENTS[keyId] ?? null;
-  const size = moveSizeOf(tokens, dropped, model, client);
-  const drop = dropSizeOf(dropped, model, client);
-  const dropCost = drop === null ? null : proWeekRewriteOf(drop, model, client);
-  return { moveCost: bound || !hasDestination(accountId, keyId) ? null : size === null ? dropCost : proWeekRewriteOf(size, model, client), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
+  const size = moveSizeOf(tokens, dropped, model, client, ttlMs);
+  const drop = dropSizeOf(dropped, model, client, ttlMs);
+  const dropCost = drop === null ? null : weekRewriteOf(drop, model, client, ttlMs);
+  return { moveCost: bound || !hasDestination(accountId, keyId) ? null : size === null ? dropCost : weekRewriteOf(size, model, client, ttlMs), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
 };
+/** The TTL the router prices a write at where no pin reports one. */
+const UNREPORTED_TTL_MS = 5 * MINUTE;
 /** A row with no pin, which answers none of its move's figures. */
 const NO_MOVE: Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> = { moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null };
 /** A pin's lane by the story's rule for its key's turns on its model, which the router stores on the pin. */
@@ -500,7 +503,7 @@ const pinLine = (
     ...burnReadingOf(line.accountId, keyId, burn, unit),
     burnUsd: burnUsdOf(folded.dollars === null ? null : folded.dollars * factor, unit, line.model),
     fast: fastPin(keyId, line.model),
-    ...moveFiguresOf(line.lastInputTokens, droppedThinkingOf({ accountId: line.accountId, agentId: line.agentId, keyId, model: line.model, sessionId }, NOW), line.model, line.accountId, keyId, accountBound),
+    ...moveFiguresOf(line.lastInputTokens, droppedThinkingOf({ accountId: line.accountId, agentId: line.agentId, keyId, model: line.model, sessionId }, NOW), line.model, line.accountId, keyId, accountBound, line.cacheTtlMs ?? UNREPORTED_TTL_MS),
     warm: warmAt(warmUntil),
     warmUntil,
   };
@@ -670,7 +673,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     ended: null,
     fast: pinned ? fastPin(spec.keyId, spec.model) : null,
     accountBound: pinned ? bound : null,
-    ...(pinned ? moveFiguresOf(lastInputRoll, droppedThinkingOf({ accountId: spec.accountId, agentId: 'main', keyId: spec.keyId, model: spec.model, sessionId }, NOW), spec.model, spec.accountId, spec.keyId, bound) : NO_MOVE),
+    ...(pinned ? moveFiguresOf(lastInputRoll, droppedThinkingOf({ accountId: spec.accountId, agentId: 'main', keyId: spec.keyId, model: spec.model, sessionId }, NOW), spec.model, spec.accountId, spec.keyId, bound, pinCacheTtlOf(sessionId)) : NO_MOVE),
     ...NO_MARK,
     shed: pinWrite?.shed ?? null,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
@@ -971,6 +974,13 @@ const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) *
 /** A recipe that names its account, whose agent holds a pin there. */
 const onAccount = (r: KeepaliveRecipe): r is KeepaliveRecipe & { accountId: string } => r.accountId !== null;
 /**
+ * Whether the router holds the pin of the agent that recipe `r` at place `j` of drawn row `i` names as ended. It marks
+ * a pin ended on the mod's report that it released the agent and on a subagent's turn that stopped with `end_turn`. A
+ * session's end releases each agent's recipe and sends the router no report, so its pins keep no ended mark.
+ */
+const pinEndedOf = (i: number, r: Pick<KeepaliveRecipe, 'cause'>, j: number): boolean =>
+  r.cause === 'agent_released' || (i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT);
+/**
  * The pin of the agent that recipe `r` at place `j` of drawn row `i` names, as the sessions route draws its line and the
  * pins route answers it, so the two routes read one `ended` and one set of move figures. Main's pin reads the row's own
  * figures. A subagent's pin takes the companion's five-minute TTL, its place's effort word and its last request as its
@@ -981,11 +991,11 @@ const agentPinOf = (row: Session, i: number, r: KeepaliveRecipe & { accountId: s
   const display = { burn: fold?.burn ?? null, dollars: fold?.dollars ?? null, lastInputTokens: row.lastInputTokens };
   const moved = movedPinOf(r);
   const own = { accountId: moved?.accountId ?? r.accountId, agentId: r.agentId, model: r.model };
+  const ended = pinEndedOf(i, r, j);
   if (r.agentId === 'main') {
-    const line = { ...own, burnAt: fold?.at ?? null, cacheTtlMs: row.cacheTtlMs, effort: row.effort, ended: false, lastInputTokens: row.lastInputTokens, lastUsedAt: row.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: row.pinnedAt };
+    const line = { ...own, burnAt: fold?.at ?? null, cacheTtlMs: row.cacheTtlMs, effort: row.effort, ended, lastInputTokens: row.lastInputTokens, lastUsedAt: row.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: row.pinnedAt };
     return pinLine(line, row.keyId, row.sessionId, display, row.lastRefreshAt);
   }
-  const ended = i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT;
   const line = { ...own, cacheTtlMs: pinCacheTtlOf(row.sessionId), effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState, ...(moved === null ? {} : { pinnedAt: moved.at }) };
   return pinLine(line, row.keyId, row.sessionId, servedBeside(display, line, firstSighting.get(row) ?? null), line.lastUsedAt);
 };
@@ -1009,10 +1019,11 @@ SESSIONS.forEach((pin, i) => {
     activityOf(pin.keyId, pin.keyGeneration, pin.sessionId),
     pins.flatMap((p) => (p.listed ? [p.line] : [])),
   );
-  // The router holds a released agent's pin as ended.
+  // An unlisted pin keeps its line's ended mark: the router holds the pin of an agent that the mod released as ended,
+  // and a session's end, which releases an agent too, marks no pin.
   UNLISTED_PINS.set(
     pin,
-    pins.flatMap((p) => (p.listed ? [] : [{ ...p.line, ended: true }])),
+    pins.flatMap((p) => (p.listed ? [] : [p.line])),
   );
   // The spec names a subagent's facts by its place, so they take the id the recipes drew for that place, and the route
   // answers them in agent id order.
@@ -1027,9 +1038,9 @@ SESSIONS.forEach((pin, i) => {
   }
   pin.warm = pin.pinned ? warmAt(warmUntilOf(pin.lastRefreshAt, pin.cacheTtlMs)) : null;
   // The row's ended mark is its display pin's line's. A row the mod released whole lists no line, and the router holds
-  // a released agent's pin as ended.
+  // the pin of an agent that the mod released as ended.
   const ownLine = pin.agentContexts.find((c) => c.agentId === pin.agentId && c.model === pin.model);
-  pin.ended = !pin.pinned ? null : ownLine !== undefined ? ownLine.ended : recipes.some((r) => r.agentId === pin.agentId && r.agentState === 'released');
+  pin.ended = !pin.pinned ? null : ownLine !== undefined ? ownLine.ended : recipes.some((r, j) => r.agentId === pin.agentId && pinEndedOf(i, r, j));
   pin.lastUsedAt = newestUse(pin.lastUsedAt, pin.agentContexts);
 });
 

@@ -2819,9 +2819,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // one token takes, times the Sonnet weight of 0.25, to five places: 0.00008 and 0.00031 for the 11:00 round's
     // 22,000 and 88,000 tokens. A newer round prices the prompt written to the cache again at the destination as the
     // Pro-week figure, the last prompt less the thinking the move drops: the stretch's 29,520 tokens, 30,000 less
-    // 480, and 40,000 Sonnet 5.5 tokens at its weight 1.5 and the 5-minute write's 1.25 are 55,350 and 75,000 units,
-    // over the Pro tier's 90,000,000 on the week. The reservation round's 36,000 tokens are 67,500 units on the desktop
-    // key, whose CLI client prices under the interactive regime's Pro week of 112,500,000.
+    // 480, and 40,000 Sonnet 5.5 tokens, both pins on a 1-hour lane, at its weight 1.5 and the 1-hour write's 1.25 are
+    // 55,350 and 75,000 units, over the Pro tier's 90,000,000 on the week. The reservation round's 36,000 tokens at the
+    // 5-minute write's 1.25 are 67,500 units on the desktop key, whose CLI client prices under the interactive regime's
+    // Pro week of 112,500,000.
     const storedRewrite = { 22_000: 0.00008, 88_000: 0.00031 };
     const proWeekRewrite = { 29_520: 55_350 / 90_000_000, 36_000: 67_500 / 112_500_000, 40_000: 75_000 / 90_000_000 };
     const read = { api_key: 0, oauth: 0 };
