@@ -1,3 +1,4 @@
+import type { KeepaliveOverview } from '@/api/types';
 import { fmtCompactTick } from '@/lib/format';
 
 // Chart colors are read from the CSS custom properties so both themes stay in
@@ -86,7 +87,7 @@ export const TOKEN_SERIES = [
 const HELD_PROBE_HINT = 'The router refused the probe while its ledger caught up. It was sent again and never adds to the cold streak.';
 
 /** Ordered best outcome first rather than alphabetically, so the stack reads top to bottom as it degrades. */
-export const PROBE_SERIES: { hint?: string; key: 'failed' | 'held' | 'ok' | 'skipped'; label: string; slot: number }[] = [
+export const PROBE_SERIES: { hint?: string; key: keyof KeepaliveOverview['probes24h']; label: string; slot: number }[] = [
   { key: 'ok', label: 'OK', slot: 0 },
   { key: 'held', label: 'Held', slot: 8, hint: HELD_PROBE_HINT },
   { key: 'skipped', label: 'Skipped', slot: 3 },

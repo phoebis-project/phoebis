@@ -3629,7 +3629,8 @@ textarea.input {
 
 .cost-ref__control,
 .cost-ref__tokens,
-.cost-ref__tokens label {
+.cost-ref__tokens label,
+.pool__regime {
   display: inline-flex;
   gap: 8px;
   align-items: center;

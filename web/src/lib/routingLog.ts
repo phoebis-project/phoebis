@@ -1563,15 +1563,21 @@ const isSpendSeat = (c: RecordCandidate): boolean => c.kind === 'oauth' && c.pac
 const hasSpendEntry = (c: RecordCandidate): boolean => c.kind === 'oauth' && has(c.windows, 'spend');
 
 /**
- * The Pace column's header: the window the score read of the first subscription candidate that is no spend seat and
- * whose pace names a window, so a lapsed seat listed first leaves the header to the next one. It reads "Pace" when no
- * such candidate stands. A version 1 record read no burn, so its score was the share left per hour.
+ * The Pace column's header in its parts, which the candidate table's head draws a line each: the window the score read
+ * of the first subscription candidate that is no spend seat and whose pace names a window, so a lapsed seat listed
+ * first leaves the header to the next one. It reads "Pace" when no such candidate stands. A version 1 record read no
+ * burn, so its score was the share left per hour.
  */
-export function paceHeader(record: DecisionRecord): string {
+export function paceHeaderParts(record: DecisionRecord): string[] {
   const pace = record.candidates.find((c) => c.kind === 'oauth' && !isSpendSeat(c) && (c.pace?.window ?? null) !== null)?.pace;
   const id = pace?.window ?? null;
-  if (id === null) return 'Pace';
-  return (pace?.burn ?? null) === null ? `Pace, ${paceWindowWord(id)} left per hour` : `Spare rate, ${paceWindowWord(id)} per hour`;
+  if (id === null) return ['Pace'];
+  return (pace?.burn ?? null) === null ? ['Pace', `${paceWindowWord(id)} left per hour`] : ['Spare rate', `${paceWindowWord(id)} per hour`];
+}
+
+/** The Pace column's header whole, its parts joined behind their commas. */
+export function paceHeader(record: DecisionRecord): string {
+  return paceHeaderParts(record).join(', ');
 }
 
 /**

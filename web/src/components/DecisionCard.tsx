@@ -19,7 +19,7 @@ import {
   formatFact,
   type LogLink,
   outcomeRows,
-  paceHeader,
+  paceHeaderParts,
   pinRows,
   rankCandidates,
   requestRows,
@@ -113,11 +113,9 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                   <th>In flight</th>
                   <th className="decision-card__pace">
                     {/* Each part but the last keeps its comma and space, so the head's text stays the header whole. */}
-                    {paceHeader(record)
-                      .split(', ')
-                      .map((part, i, parts) => (
-                        <span key={i}>{i < parts.length - 1 ? `${part}, ` : part}</span>
-                      ))}
+                    {paceHeaderParts(record).map((part, i, parts) => (
+                      <span key={i}>{i < parts.length - 1 ? `${part}, ` : part}</span>
+                    ))}
                   </th>
                   <th>Prefix</th>
                   <th>Verdict</th>

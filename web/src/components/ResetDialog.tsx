@@ -123,7 +123,7 @@ export function ResetDialog({
   let pages: ReactNode;
   let foot: ReactNode = cancel;
   let refusal: ReactNode = null;
-  let clearsNothing = false;
+  let clearsNothing: string | null = null;
   if (confirming !== null && page.at === 'confirm') {
     title = `Use reset on ${label}`;
     const shown = answered !== null && answered.grant === confirming.id ? answered.answer : null;
@@ -139,7 +139,9 @@ export function ResetDialog({
         {shown.kind === 'unconfirmed' && ` ${resetHolds(label, target)}`}
       </Refusal>
     );
-    clearsNothing = resetClearsNothing(confirming.clears.map((id) => windowOf(account, id)), now);
+    if (resetClearsNothing(confirming.clears.map((id) => windowOf(account, id)), now)) {
+      clearsNothing = `${clearsWords(confirming.clears)} ${noun(confirming.clears.length, 'reads', 'read')} 100% left now, so this reset has nothing to clear yet.`;
+    }
     pages = (
       <>
         <p>{confirming.label}</p>
@@ -223,7 +225,7 @@ export function ResetDialog({
       {stale}
       {refusal}
       {/* Mounted on the pick page too, so the region stands before a reset that clears nothing fills it. */}
-      <Warning when={clearsNothing}>{confirming !== null && `${clearsWords(confirming.clears)} ${noun(confirming.clears.length, 'reads', 'read')} 100% left now, so this reset has nothing to clear yet.`}</Warning>
+      <Warning when={clearsNothing !== null}>{clearsNothing}</Warning>
       {pages}
     </Dialog>,
     document.body,

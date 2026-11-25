@@ -1149,7 +1149,7 @@
   top: calc(var(--main-top) + var(--drawer-dock, 0px) + 20px);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - var(--main-top) - var(--drawer-dock, 0px) - 20px - var(--drawer-foot, 48px));
+  max-height: calc(100vh - var(--main-top) - var(--drawer-dock, 0px) - 20px - 48px);
   overflow: auto;
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -1352,9 +1352,12 @@
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
-/* The Pools view's tile row takes the seat of a pool card's tiles (.pool__stats > div), on the rows of its own grid. A
-   tile's note takes a third row, which stands only while a tile of the row draws a note, since an empty row would still
-   add its gap to each tile. The class is that row's alone, so no other view's tiles move. */
+/* A label that takes two rows would put its figure a row under its neighbors', so each of a pool card's tiles lays its
+   label and its figure on two rows of the tiles' grid, and the labels of one row of tiles share a height. The Pools
+   view's tile row takes the same seat on the rows of its own grid. A tile's note takes a third row there, which stands
+   only while a tile of the row draws a note, since an empty row would still add its gap to each tile. The
+   `stat-grid--fit` class is that row's alone, so no other view's tiles move. */
+.pool__stats > div,
 .stat-grid--fit > .stat {
   display: grid;
   grid-row: span 2;
@@ -1517,12 +1520,7 @@
   border-bottom: 1px solid var(--hairline);
 }
 
-/* A label that takes two rows would put its figure a row under its neighbors', so each tile lays its label and its
-   figure on two rows of the tiles' grid, and the labels of one row of tiles share a height. */
 .pool__stats > div {
-  display: grid;
-  grid-row: span 2;
-  grid-template-rows: subgrid;
   padding: 10px var(--card-inset);
 }
 
@@ -1542,12 +1540,7 @@
 }
 
 .pool__regime {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
   margin-bottom: 10px;
-  font-size: 13px;
-  color: var(--ink-2);
 }
 
 .pool__prio {

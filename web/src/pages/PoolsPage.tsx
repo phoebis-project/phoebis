@@ -1532,13 +1532,12 @@ export function PoolDialog({
       refusal: budgetRefusal.text,
     };
     const memberAccounts = accounts.filter((a) => a.id in form.members);
-    const readings = memberAccounts.map((a) => {
-      const shared = (id: '5h' | '7d') => {
-        const w = windowOf(a, id);
-        return w === null ? null : { utilization: w.utilization };
-      };
-      return { fiveHour: shared('5h'), id: a.id, label: a.label, sevenDay: shared('7d') };
-    });
+    const readings = memberAccounts.map((a) => ({
+      fiveHour: windowOf(a, '5h')?.utilization ?? null,
+      id: a.id,
+      label: a.label,
+      sevenDay: windowOf(a, '7d')?.utilization ?? null,
+    }));
     // The route's verdict, Fable reservation and factor per stored member, so a member in cooldown is no destination
     // for a shed session, a member not saved yet holds no reservation, and a member whose account did not load is read
     // by its stored factor.
