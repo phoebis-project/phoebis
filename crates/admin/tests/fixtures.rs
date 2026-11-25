@@ -2247,6 +2247,75 @@ async fn every_route_is_captured_and_holds_its_shape() {
         agent_facts(refused["request_generation"].as_u64()),
     )
     .await;
+    // A session of an instance of its own reports a title and its subagent's name and ends, so `sessions.json` carries
+    // a finished session's row with its stored title and its ended agent's stored name.
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &key_secret,
+        j!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s-finished",
+            "instance_id": "i-finished",
+            "sequence": 1
+        }),
+    )
+    .await;
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &key_secret,
+        j!({
+            "protocol": 1,
+            "event": "session_facts",
+            "session_id": "s-finished",
+            "instance_id": "i-finished",
+            "sequence": 2,
+            "title": "Ferry timetable import"
+        }),
+    )
+    .await;
+    let parser_started = common::report_as_the_mod(
+        &parts.keepalive,
+        &key_secret,
+        j!({
+            "protocol": 1,
+            "event": "agent_start",
+            "session_id": "s-finished",
+            "instance_id": "i-finished",
+            "sequence": 3,
+            "agent_id": "parser-1"
+        }),
+    )
+    .await;
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &key_secret,
+        j!({
+            "protocol": 1,
+            "event": "agent_facts",
+            "session_id": "s-finished",
+            "instance_id": "i-finished",
+            "sequence": 4,
+            "agent_id": "parser-1",
+            "request_generation": parser_started["request_generation"],
+            "name": "timetable-parser"
+        }),
+    )
+    .await;
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &key_secret,
+        j!({
+            "protocol": 1,
+            "event": "session_end",
+            "session_id": "s-finished",
+            "instance_id": "i-finished",
+            "sequence": 5
+        }),
+    )
+    .await;
+    // The route reads the stored sets, so the captured rows read landed ones.
+    parts.keepalive.flush_persisted().await;
     parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, instance_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None, cache_marker: false }));
     parts
         .keepalive

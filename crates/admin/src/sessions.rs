@@ -162,15 +162,15 @@ pub(crate) struct Session {
     /// is `none` the pins used within the lesser of `sessions.non_companion_idle_seconds` and the session expiry. Empty
     /// where none draws.
     pub agent_contexts: Vec<AgentContext>,
-    /// One entry per agent of the keepalive engine's record whose companion reported a fact, ordered by agent id.
-    /// Empty where no agent holds one, on a row the keepalive engine holds no record of and on a row of an earlier
-    /// holder.
+    /// One entry per agent of the session that the registry holds a stored set of reported facts for, ordered by agent
+    /// id, an agent whose record left the engine and a released one among them. Empty where no agent's set is stored
+    /// and on a row of an earlier holder.
     pub agent_facts: Vec<SessionAgentFacts>,
     /// One entry per agent the ledger holds requests of, its requests and their spend over every model it ran, with
     /// the model, the type, the account and the instant of its newest request.
     pub agent_requests: Vec<AgentRequests>,
-    /// What the session's companion reported of it. Every member reads null where it reported none, on a row the
-    /// keepalive engine holds no record of and on a row of an earlier holder.
+    /// What the session's companion reported of it, read from the registry's stored sets, so a finished session's row
+    /// answers it too. Each member reads null where no set is stored and on a row of an earlier holder.
     pub facts: SessionFacts,
     /// Main's recipe, or the newest other agent's where main holds none.
     pub keepalive: SessionKeepalive,
@@ -605,17 +605,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         entry.companion_since = view.companion_since;
         entry.agents = view.agents as u64;
         entry.keepalive = SessionKeepalive::from(&view.keepalive);
-        entry.agent_facts = view
-            .agent_facts
-            .iter()
-            .map(|(agent_id, facts)| SessionAgentFacts {
-                agent_id: agent_id.clone(),
-                agent_type: facts.agent_type().map(str::to_owned),
-                description: facts.description().map(str::to_owned),
-                name: facts.name().map(str::to_owned),
-            })
-            .collect();
-        entry.facts = SessionFacts::from(&view.facts);
         entry.lifecycle = view
             .lifecycles
             .get(MAIN_AGENT)
@@ -642,6 +631,44 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 .max(entry.companion_since)
                 .is_none_or(|latest| latest >= idle_bound)
     });
+    // Behind the retention, so the registry is asked for the listed rows alone. A stored set belongs to the generation
+    // that reported it, so a row of an earlier holder is not asked for and reads none.
+    let stored = state
+        .keepalive
+        .stored_facts(
+            rows.keys()
+                .filter(|key| live.get(&key.key_id) == Some(&key.key_generation))
+                .map(|key| {
+                    (
+                        key.key_id.clone(),
+                        key.key_generation,
+                        key.session_id.clone(),
+                    )
+                })
+                .collect(),
+        )
+        .await;
+    for (key, entry) in rows.iter_mut() {
+        let id = (
+            key.key_id.clone(),
+            key.key_generation,
+            key.session_id.clone(),
+        );
+        let Some(facts) = stored.get(&id) else {
+            continue;
+        };
+        entry.facts = SessionFacts::from(&facts.session);
+        entry.agent_facts = facts
+            .agents
+            .iter()
+            .map(|(agent_id, agent)| SessionAgentFacts {
+                agent_id: agent_id.clone(),
+                agent_type: agent.agent_type().map(str::to_owned),
+                description: agent.description().map(str::to_owned),
+                name: agent.name().map(str::to_owned),
+            })
+            .collect();
+    }
     // A session the engine knows only from a registration carries no pin and no ledger row, so its model and
     // serving account come from its main agent's recipe instead, the first the session's agents sort to. A
     // recipe belongs to the live key alone, so it joins under that generation and never reaches a historical row.

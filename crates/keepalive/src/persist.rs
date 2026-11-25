@@ -28,7 +28,7 @@ use crate::engine::{
     ProbeCharge, Reason, SavingsUnit, Session, SessionKey, Settlement, UnansweredProbe, Wasted,
     MAIN_AGENT,
 };
-use crate::facts::{AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts};
+use crate::facts::{AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts, StoredSessionFacts};
 use crate::recipe::Recipe;
 use crate::savings::{AttemptFunding, RowClient};
 use crate::usage::ProbeUsage;
@@ -1446,6 +1446,11 @@ impl Inner {
     }
 }
 
+/// A stored value in the raw form `T`, `None` for a row that held no value to read or whose value does not parse.
+fn parsed<T: for<'de> Deserialize<'de>>(value: Option<Vec<u8>>) -> Option<T> {
+    serde_json::from_slice(&value?).ok()
+}
+
 impl Engine {
     /// Reads back what the last process saved, at start and before the scheduler ticks, bounded by the current limits.
     /// The rows the load drops or rewrites are saved before it returns, so the store and the map agree from here.
@@ -1481,6 +1486,83 @@ impl Engine {
             inner.settlements_after_save.extend(settled);
         }
         self.flush_persisted().await;
+    }
+
+    /// The stored facts of `sessions`, each `(key_id, key_generation, session_id)`, read from the registry on the
+    /// blocking pool. A session with no stored set has no entry. A row that does not open, a value that does not parse
+    /// and a row of another record version read as no fact, and so does each row where the read itself fails.
+    pub async fn stored_facts(
+        &self,
+        sessions: Vec<(String, i64, String)>,
+    ) -> BTreeMap<(String, i64, String), StoredSessionFacts> {
+        let store = self.parts.store.clone();
+        let rows = match tokio::task::spawn_blocking(move || store.load_companion_facts(&sessions))
+            .await
+        {
+            Ok(Ok(rows)) => rows,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "the stored facts could not be read, so each session reads none");
+                return BTreeMap::new();
+            }
+            Err(error) => {
+                tracing::warn!(%error, "the stored facts could not be read, so each session reads none");
+                return BTreeMap::new();
+            }
+        };
+        // The title and the project rest in two rows, so a session's own set is joined ahead of the rules.
+        let mut own: BTreeMap<PersistKey, RawSessionFacts> = BTreeMap::new();
+        let mut stored: BTreeMap<PersistKey, StoredSessionFacts> = BTreeMap::new();
+        for row in rows {
+            let FactsKey {
+                key_id,
+                key_generation,
+                session_id,
+                kind,
+                agent_id,
+            } = row.key;
+            let id = (key_id, key_generation, session_id);
+            let value = (row.record_version == FACTS_RECORD_VERSION)
+                .then_some(row.value)
+                .flatten();
+            let read = match kind {
+                FactsKind::Agents => parsed::<RawAgentFacts>(value).map(|raw| {
+                    let facts = AgentFacts::of(raw);
+                    if !facts.is_empty() {
+                        stored
+                            .entry(id.clone())
+                            .or_default()
+                            .agents
+                            .push((agent_id, facts));
+                    }
+                }),
+                FactsKind::Project => parsed::<RawSessionFacts>(value).map(|raw| {
+                    // Whole, so a member that joins the raw form takes a decision here.
+                    let RawSessionFacts {
+                        branch,
+                        cwd,
+                        project,
+                        repository,
+                        repository_root,
+                        title: _,
+                    } = raw;
+                    let joined = own.entry(id.clone()).or_default();
+                    joined.branch = branch;
+                    joined.cwd = cwd;
+                    joined.project = project;
+                    joined.repository = repository;
+                    joined.repository_root = repository_root;
+                }),
+                FactsKind::Title => parsed::<RawSessionFacts>(value)
+                    .map(|raw| own.entry(id.clone()).or_default().title = raw.title),
+            };
+            if read.is_none() {
+                tracing::warn!(key = %id.0, session = %id.2, "a stored set of reported facts could not be read, so it reads as no fact");
+            }
+        }
+        for (id, raw) in own {
+            stored.entry(id).or_default().session = SessionFacts::of(raw);
+        }
+        stored
     }
 
     /// A snapshot, its save and its acknowledgment, on the blocking pool under the flush lock whole: two flushes never

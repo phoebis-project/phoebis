@@ -27997,6 +27997,86 @@ export const FIXTURES: Record<string, Fixture> = {
           "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
+        },
+        {
+          "key_id": "desktop",
+          "key_generation": 1791721000000,
+          "session_id": "s-finished",
+          "agent_id": null,
+          "model": null,
+          "account_id": null,
+          "placements": 0,
+          "pinned_at": null,
+          "last_used_at": null,
+          "last_request_at": null,
+          "last_inference_at": null,
+          "first_request_at": null,
+          "user_agent": null,
+          "spend": null,
+          "day": {
+            "requests": {},
+            "usd": 0,
+            "billed_usd": {},
+            "equivalent": 0
+          },
+          "pinned": false,
+          "burn": null,
+          "burn_unit": null,
+          "burn_window": null,
+          "burn_equivalent": null,
+          "burn_usd": null,
+          "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
+          "factor": null,
+          "speed": null,
+          "cycle_ms": null,
+          "cache_ttl_ms": null,
+          "warm": null,
+          "last_input_tokens": null,
+          "effort": null,
+          "last_refresh_at": null,
+          "shed": null,
+          "mark": null,
+          "ended": null,
+          "fast": null,
+          "account_bound": null,
+          "move_cost": null,
+          "move_size": null,
+          "move_drop_size": null,
+          "move_drop_cost": null,
+          "historical": false,
+          "companion": "none",
+          "companion_since": 1791721000000,
+          "agents": 2,
+          "agent_contexts": [],
+          "agent_facts": [
+            {
+              "agent_id": "parser-1",
+              "agent_type": null,
+              "description": null,
+              "name": "timetable-parser"
+            }
+          ],
+          "agent_requests": [],
+          "facts": {
+            "branch": null,
+            "cwd": null,
+            "project": null,
+            "repository": null,
+            "repository_root": null,
+            "title": "Ferry timetable import"
+          },
+          "keepalive": {
+            "cause": null,
+            "last_guard": null,
+            "next_probe_at": null,
+            "state": null
+          },
+          "lifecycle": "released",
+          "presence_age_seconds": null,
+          "forked_from": null,
+          "fork_depth": null
         }
       ]
     }
@@ -28974,7 +29054,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "bus_gaps": 0,
         "retained_bytes": 232,
         "running_probes": 0,
-        "session_entries": 1,
+        "session_entries": 2,
         "sessions": 1
       }
     }

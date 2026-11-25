@@ -30,7 +30,7 @@ pub use engine::{
     EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns, Park, ParkKind,
     PrefixAnchor, Reason, SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS, MAIN_AGENT,
 };
-pub use facts::{AgentFacts, SessionFacts};
+pub use facts::{AgentFacts, SessionFacts, StoredSessionFacts};
 pub use probe::PROBE_DEADLINE;
 pub use recipe::{
     make_recipe, request_ttl_ms, valid_opaque, Recipe, MAX_HEADER_BYTES, MAX_HEADER_VALUE,

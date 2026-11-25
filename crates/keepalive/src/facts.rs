@@ -163,6 +163,14 @@ impl AgentFacts {
     }
 }
 
+/// The stored facts of one session: its own, and one entry per agent that the registry holds a set of, in agent id
+/// order. Each value passed this module's rules again on its way out of the registry.
+#[derive(Debug, Default)]
+pub struct StoredSessionFacts {
+    pub agents: Vec<(String, AgentFacts)>,
+    pub session: SessionFacts,
+}
+
 /// The text rule every value passes first: each run of line breaks and tabs folds to one space, each other control and
 /// format character goes, white space at both ends goes, and a value left empty is absent.
 fn text(value: Option<String>) -> Option<String> {

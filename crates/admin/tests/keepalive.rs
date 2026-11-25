@@ -607,7 +607,8 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes() {
     assert_eq!(system["keepalive"]["running_probes"].as_u64(), Some(0));
 }
 
-/// Each reported value differs from every other, so a member that answers another member's value fails here.
+/// Each reported value differs from every other, so a member that answers another member's value fails here. The case
+/// calls no flush behind a facts report, so each title reaches the route through a save that the handler started.
 #[tokio::test]
 async fn a_session_row_answers_the_facts_its_companion_reported() {
     let parts = common::admin_parts_full().await;
@@ -621,6 +622,15 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
     .await;
     let report =
         |body: serde_json::Value| common::report_as_the_mod(&parts.keepalive, &secret, body);
+    let titled = |title: &'static str| {
+        move |v: &serde_json::Value| {
+            v["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["session_id"] == "s1" && r["facts"]["title"] == title)
+        }
+    };
     report(serde_json::json!({
         "protocol": 1,
         "event": "session_start",
@@ -629,12 +639,31 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
         "sequence": 1
     }))
     .await;
+    parts.keepalive.flush_persisted().await;
+    // The save that the registration asked for can carry the first title, so the case reads the members behind a
+    // second one.
     report(serde_json::json!({
         "protocol": 1,
         "event": "session_facts",
         "session_id": "s1",
         "instance_id": "i1",
         "sequence": 2,
+        "title": "Survey the breakwater"
+    }))
+    .await;
+    common::wait_json(
+        &parts.app,
+        "/admin/sessions",
+        &cookie,
+        titled("Survey the breakwater"),
+    )
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 3,
         "branch": "fix/checkout-retry",
         "cwd": "/home/dev/work/storefront/web/src",
         "project": "/home/dev/work/storefront/web",
@@ -643,12 +672,21 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
         "title": "Checkout retry rework"
     }))
     .await;
+    common::wait_json(
+        &parts.app,
+        "/admin/sessions",
+        &cookie,
+        titled("Checkout retry rework"),
+    )
+    .await;
+    // The agent's reports follow both polls, so the save that they ask for lands no title in the place of a title's own
+    // save.
     let started = report(serde_json::json!({
         "protocol": 1,
         "event": "agent_start",
         "session_id": "s1",
         "instance_id": "i1",
-        "sequence": 3,
+        "sequence": 4,
         "agent_id": "a1"
     }))
     .await;
@@ -657,7 +695,7 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
         "event": "agent_facts",
         "session_id": "s1",
         "instance_id": "i1",
-        "sequence": 4,
+        "sequence": 5,
         "agent_id": "a1",
         "request_generation": started["request_generation"],
         "agent_type": "code-reviewer",
@@ -665,7 +703,12 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
         "name": "reviewer"
     }))
     .await;
-    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let listed = common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"].as_array().unwrap().iter().any(|r| {
+            r["session_id"] == "s1" && r["agent_facts"].as_array().is_some_and(|a| a.len() == 1)
+        })
+    })
+    .await;
     let row = listed["sessions"]
         .as_array()
         .unwrap()
@@ -693,6 +736,345 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
             "name": "reviewer"
         }]),
         "the agent that reported facts has an entry, and main, which reported none, has none"
+    );
+}
+
+/// The pool `main` behind the key `desktop`, as the cases of the stored facts create them, with the admin's cookie and
+/// the key's secret.
+async fn stored_facts_harness() -> (common::Full, String, String) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    let secret = common::created_key_secret(
+        &parts.app,
+        &cookie,
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+    )
+    .await;
+    (parts, cookie, secret)
+}
+
+/// The row of `session` in an answer of `GET /admin/sessions`.
+fn row_of<'a>(listed: &'a serde_json::Value, session: &str) -> &'a serde_json::Value {
+    listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == session)
+        .unwrap_or_else(|| panic!("no row for {session}: {listed}"))
+}
+
+/// The engine of the restarted router holds no record of the ended session, and a request of the session keeps its row
+/// listed, so the title and the subagent's name come from the stored sets alone.
+#[tokio::test]
+async fn a_finished_sessions_row_answers_its_stored_title_and_its_agents_name_after_a_restart() {
+    let (parts, _, secret) = stored_facts_harness().await;
+    let report =
+        |body: serde_json::Value| common::report_as_the_mod(&parts.keepalive, &secret, body);
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 1
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 2,
+        "title": "Reindex the lighthouse archive"
+    }))
+    .await;
+    let started = report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 3,
+        "agent_id": "a1"
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 4,
+        "agent_id": "a1",
+        "request_generation": started["request_generation"],
+        "name": "archive-scout"
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_end",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 5
+    }))
+    .await;
+    parts.keepalive.flush_persisted().await;
+    // The load drops the ended session and saves the removal of its rows ahead of the read.
+    let restarted =
+        common::admin_parts_full_on(parts.store.clone(), parts.clock_cell.clone()).await;
+    restarted.keepalive.load_persisted().await;
+    restarted.ledger.record(classed_request(
+        "r1",
+        "s1",
+        "main",
+        "claude-opus-5",
+        None,
+        common::NOW,
+        common::generation(&restarted.store, "desktop"),
+    ));
+    common::landed(&restarted, "r1").await;
+    let cookie = login(&restarted.app, "admin-secret").await;
+    let listed = json(get(&restarted.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = row_of(&listed, "s1");
+    assert_eq!(
+        (row["companion"].as_str(), row["facts"]["title"].as_str()),
+        (Some("none"), Some("Reindex the lighthouse archive")),
+        "the finished session's row answers its stored title: {row}"
+    );
+    assert_eq!(
+        row["agent_facts"],
+        serde_json::json!([{
+            "agent_id": "a1",
+            "agent_type": null,
+            "description": null,
+            "name": "archive-scout"
+        }]),
+        "the ended subagent keeps its stored name on the row"
+    );
+}
+
+/// The new instance's record holds main alone, so the earlier subagent's name stands in the registry alone. The case
+/// saves twice, so the registration's removal of the subagent's saved row lands behind the write of its set.
+#[tokio::test]
+async fn a_session_registered_again_by_another_instance_answers_the_earlier_agents_facts() {
+    let (parts, cookie, secret) = stored_facts_harness().await;
+    let report =
+        |body: serde_json::Value| common::report_as_the_mod(&parts.keepalive, &secret, body);
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 1
+    }))
+    .await;
+    let started = report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 2,
+        "agent_id": "a1"
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 3,
+        "agent_id": "a1",
+        "request_generation": started["request_generation"],
+        "name": "tide-table-writer"
+    }))
+    .await;
+    parts.keepalive.flush_persisted().await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "s1",
+        "instance_id": "i2",
+        "sequence": 1,
+        "previous_instance_id": "i1"
+    }))
+    .await;
+    parts.keepalive.flush_persisted().await;
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    assert_eq!(
+        row_of(&listed, "s1")["agent_facts"],
+        serde_json::json!([{
+            "agent_id": "a1",
+            "agent_type": null,
+            "description": null,
+            "name": "tide-table-writer"
+        }]),
+        "the earlier instance's subagent keeps its stored name on the row of the session registered again"
+    );
+}
+
+/// The new instance reports no title, and the earlier instance's title stays off the row while the engine holds the
+/// new record and once that record has left at the session expiry.
+#[tokio::test]
+async fn a_title_of_the_earlier_instance_is_gone_behind_the_registration_and_behind_the_records_leave(
+) {
+    let (parts, cookie, secret) = stored_facts_harness().await;
+    let report =
+        |body: serde_json::Value| common::report_as_the_mod(&parts.keepalive, &secret, body);
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 1
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 2,
+        "title": "Chart the estuary"
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "s1",
+        "instance_id": "i2",
+        "sequence": 1,
+        "previous_instance_id": "i1"
+    }))
+    .await;
+    parts.keepalive.flush_persisted().await;
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = row_of(&listed, "s1");
+    assert_eq!(
+        (row["companion"].as_str(), row["facts"]["title"].as_str()),
+        (Some("reporting"), None),
+        "the new instance's row answers no title of the earlier one: {row}"
+    );
+    common::step(&parts, std::time::Duration::from_secs(86_400));
+    let stepped = common::NOW + 86_400_000;
+    parts.ledger.record(classed_request(
+        "r1",
+        "s1",
+        "main",
+        "claude-opus-5",
+        None,
+        stepped,
+        common::generation(&parts.store, "desktop"),
+    ));
+    common::landed(&parts, "r1").await;
+    // The step outlasts the admin session's idle bound.
+    let cookie = login(&parts.app, "admin-secret").await;
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = row_of(&listed, "s1");
+    assert_eq!(
+        (row["companion"].as_str(), row["facts"]["title"].as_str()),
+        (Some("none"), None),
+        "the row of the record that left answers no title of the earlier instance: {row}"
+    );
+}
+
+/// The second reports state the title alone and no member of the subagent, so the row of the session's project and
+/// the subagent's row leave the registry.
+#[tokio::test]
+async fn a_report_that_empties_a_set_deletes_its_stored_row() {
+    let (parts, cookie, secret) = stored_facts_harness().await;
+    let report =
+        |body: serde_json::Value| common::report_as_the_mod(&parts.keepalive, &secret, body);
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 1
+    }))
+    .await;
+    let started = report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 2,
+        "agent_id": "a1"
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 3,
+        "branch": "tide-gauge",
+        "title": "Dredge the fairway"
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 4,
+        "agent_id": "a1",
+        "request_generation": started["request_generation"],
+        "name": "sounding-lead"
+    }))
+    .await;
+    parts.keepalive.flush_persisted().await;
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = row_of(&listed, "s1");
+    assert_eq!(
+        row["facts"]["branch"], "tide-gauge",
+        "the row answers the branch ahead of the report that empties the project's set"
+    );
+    assert_eq!(
+        row["agent_facts"],
+        serde_json::json!([{
+            "agent_id": "a1",
+            "agent_type": null,
+            "description": null,
+            "name": "sounding-lead"
+        }]),
+        "the row answers the subagent's name ahead of the report that empties its set"
+    );
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 5,
+        "title": "Dredge the fairway"
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 6,
+        "agent_id": "a1",
+        "request_generation": started["request_generation"]
+    }))
+    .await;
+    parts.keepalive.flush_persisted().await;
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = row_of(&listed, "s1");
+    assert_eq!(
+        row["facts"],
+        serde_json::json!({
+            "branch": null,
+            "cwd": null,
+            "project": null,
+            "repository": null,
+            "repository_root": null,
+            "title": "Dredge the fairway"
+        }),
+        "the report that names the title alone takes the branch off the row"
+    );
+    assert_eq!(
+        row["agent_facts"],
+        serde_json::json!([]),
+        "the report that names no member of the subagent takes its entry off the row"
     );
 }
 
@@ -2098,6 +2480,8 @@ async fn a_deleted_keys_session_is_historical_with_no_companion() {
     ] {
         common::report_as_the_mod(&parts.keepalive, &secret, body).await;
     }
+    // The row reads the stored sets, so both land ahead of the read.
+    parts.keepalive.flush_persisted().await;
     let listed = common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         v["sessions"]
             .as_array()
