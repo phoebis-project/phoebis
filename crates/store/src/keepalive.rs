@@ -1,10 +1,49 @@
-//! The keepalive engine's state on disk: its sessions, its agents with their retained prompts, and the idle-age
-//! counters. The engine owns the payloads' shape, and this side stores each with the version it was written under and
-//! seals the prompt, which is the user's own text, as the credentials are sealed.
+//! The keepalive engine's state on disk: its sessions, its agents with their retained prompts, the facts that a
+//! companion reports of a session and of its agents, and the idle-age counters. The engine owns the payloads' shape,
+//! and this side stores each with the version it was written under and seals the prompt and the reported facts, which
+//! are the user's own text, as the credentials are sealed.
 
 use rusqlite::params;
 
 use crate::{crypto, Store, StoreError, LOCK_POISONED};
+
+text_enum! {
+    /// The kind of one stored set of reported facts, the word of its row and of the registration's list.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum FactsKind {
+        Agents => "agents",
+        Project => "project",
+        Title => "title",
+    }
+}
+
+/// The key of one stored set. `agent_id` is empty for the two session kinds.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FactsKey {
+    pub key_id: String,
+    pub key_generation: i64,
+    pub session_id: String,
+    pub kind: FactsKind,
+    pub agent_id: String,
+}
+
+/// One stored set to write: the value in clear, which the save seals, and the instant of its session's last report.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FactsRow {
+    pub key: FactsKey,
+    pub record_version: u32,
+    pub value: Vec<u8>,
+    pub seen_at: i64,
+}
+
+/// One stored set as a read answers it. `value` is `None` for a row that does not open.
+#[derive(Debug)]
+pub struct StoredFacts {
+    pub key: FactsKey,
+    pub record_version: u32,
+    pub value: Option<Vec<u8>>,
+    pub seen_at: i64,
+}
 
 /// One session row: its identity, and the engine's versioned payload of the session's fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,7 +98,8 @@ pub struct IdleReturnsRow {
 }
 
 /// What one flush writes. A removed session takes every agent row filed under it, so a session the engine dropped
-/// leaves nothing behind for a load to restore.
+/// leaves nothing behind for a load to restore. Its stored sets of reported facts stay, since each leaves by a removal
+/// of its own.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeepaliveBatch {
     pub sessions: Vec<KeepaliveSessionRow>,
@@ -72,6 +112,8 @@ pub struct KeepaliveBatch {
     /// The counters' rows of a day before this one leave in the same transaction, `None` keeping every day. A batch
     /// that carries the purge alone is not empty, so a flush with no other row still reaches the delete.
     pub purge_counters_before: Option<i64>,
+    pub facts: Vec<FactsRow>,
+    pub removed_facts: Vec<FactsKey>,
 }
 
 impl KeepaliveBatch {
@@ -82,6 +124,8 @@ impl KeepaliveBatch {
             && self.removed_agents.is_empty()
             && self.counters.is_empty()
             && self.purge_counters_before.is_none()
+            && self.facts.is_empty()
+            && self.removed_facts.is_empty()
     }
 }
 
@@ -108,12 +152,35 @@ pub fn keepalive_aad(
     .collect()
 }
 
+/// A stored set's key as length-prefixed text, each component `<byte length>:<bytes>` as `keepalive_aad` writes
+/// them, in this order: `key_id`, `key_generation` in decimal, `session_id`, the kind's word, `agent_id`, the literal
+/// `facts`. A sealed set moved to another row of the table, or into a recipe body's column, fails to open.
+pub(crate) fn facts_aad(key: &FactsKey) -> String {
+    let generation = key.key_generation.to_string();
+    [
+        key.key_id.as_str(),
+        generation.as_str(),
+        key.session_id.as_str(),
+        key.kind.as_str(),
+        key.agent_id.as_str(),
+        "facts",
+    ]
+    .iter()
+    .map(|part| format!("{}:{part}", part.len()))
+    .collect()
+}
+
 impl Store {
-    /// One transaction of upserts and deletes, each new body sealed under the storage key with the AAD `keepalive_aad`.
-    /// The removals land first, and the engine never names one row in both halves of a batch. A row that keeps its body
-    /// leaves the stored blob and nonce as they are, and a row that clears it leaves neither.
+    /// One transaction of upserts and deletes, each new body sealed under the storage key with the AAD `keepalive_aad`
+    /// and each set of reported facts with `facts_aad`. The removals land first, and the engine never names one row in
+    /// both halves of a batch. A removed session deletes no set of reported facts. A row that keeps its body leaves the
+    /// stored blob and nonce as they are, and a row that clears it leaves neither.
     pub fn save_keepalive(&self, batch: &KeepaliveBatch) -> Result<(), StoreError> {
         // Sealed before the connection is taken, so a large batch holds no other writer behind the cipher.
+        let mut sealed_facts = Vec::with_capacity(batch.facts.len());
+        for row in &batch.facts {
+            sealed_facts.push(crypto::seal(&self.key, &facts_aad(&row.key), &row.value)?);
+        }
         let mut sealed = Vec::with_capacity(batch.agents.len());
         for row in &batch.agents {
             sealed.push(match &row.body_write {
@@ -147,6 +214,19 @@ impl Store {
                 "DELETE FROM keepalive_agents \
                  WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND agent_id = ?4",
                 params![key_id, key_generation, session_id, agent_id],
+            )?;
+        }
+        for key in &batch.removed_facts {
+            tx.execute(
+                "DELETE FROM companion_facts \
+                 WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND kind = ?4 AND agent_id = ?5",
+                params![
+                    key.key_id,
+                    key.key_generation,
+                    key.session_id,
+                    key.kind,
+                    key.agent_id
+                ],
             )?;
         }
         {
@@ -204,6 +284,30 @@ impl Store {
                     row.fast,
                     row.updated_at,
                     row.body_write == BodyWrite::Keep
+                ])?;
+            }
+        }
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO companion_facts \
+                 (key_id, key_generation, session_id, kind, agent_id, record_version, facts_sealed, facts_nonce, \
+                  seen_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+                 ON CONFLICT(key_id, key_generation, session_id, kind, agent_id) DO UPDATE SET \
+                 record_version = excluded.record_version, facts_sealed = excluded.facts_sealed, \
+                 facts_nonce = excluded.facts_nonce, seen_at = excluded.seen_at",
+            )?;
+            for (row, (nonce, blob)) in batch.facts.iter().zip(&sealed_facts) {
+                stmt.execute(params![
+                    row.key.key_id,
+                    row.key.key_generation,
+                    row.key.session_id,
+                    row.key.kind,
+                    row.key.agent_id,
+                    row.record_version,
+                    blob,
+                    nonce,
+                    row.seen_at
                 ])?;
             }
         }
@@ -324,5 +428,59 @@ impl Store {
             })
             .collect();
         Ok((sessions, agents, counters))
+    }
+
+    /// The stored sets of `sessions`, each `(key_id, key_generation, session_id)`, in the order of the table's key. A
+    /// set that does not open under its row's key answers `value: None`, and a stored kind word outside `FactsKind`
+    /// fails the read.
+    pub fn load_companion_facts(
+        &self,
+        sessions: &[(String, i64, String)],
+    ) -> Result<Vec<StoredFacts>, StoreError> {
+        let mut sessions: Vec<&(String, i64, String)> = sessions.iter().collect();
+        sessions.sort();
+        sessions.dedup();
+        type Sealed = (FactsKey, u32, Vec<u8>, Vec<u8>, i64);
+        let mut stored: Vec<Sealed> = Vec::new();
+        {
+            let conn = self.conn.lock().expect(LOCK_POISONED);
+            let mut statement = conn.prepare(
+                "SELECT kind, agent_id, record_version, facts_sealed, facts_nonce, seen_at FROM companion_facts \
+                 WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 ORDER BY kind, agent_id",
+            )?;
+            for (key_id, key_generation, session_id) in sessions {
+                let rows =
+                    statement.query_map(params![key_id, key_generation, session_id], |r| {
+                        Ok((
+                            FactsKey {
+                                key_id: key_id.clone(),
+                                key_generation: *key_generation,
+                                session_id: session_id.clone(),
+                                kind: r.get(0)?,
+                                agent_id: r.get(1)?,
+                            },
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                            r.get(5)?,
+                        ))
+                    })?;
+                for row in rows {
+                    stored.push(row?);
+                }
+            }
+        }
+        Ok(stored
+            .into_iter()
+            .map(|(key, record_version, blob, nonce, seen_at)| {
+                let value = crypto::open(&self.key, &facts_aad(&key), &nonce, &blob).ok();
+                StoredFacts {
+                    key,
+                    record_version,
+                    value,
+                    seen_at,
+                }
+            })
+            .collect())
     }
 }

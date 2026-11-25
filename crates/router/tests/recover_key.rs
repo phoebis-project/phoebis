@@ -11,9 +11,10 @@ use std::process::{Command, Output, Stdio};
 
 use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AttemptOutcome, CanaryRead, KeepaliveAgentRow,
-    KeepaliveBatch, KeepaliveSessionRow, NewBundle, OutcomeWord, Secret, StateCause, StorageKey,
-    Store, StoreError,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, AttemptOutcome, CanaryRead,
+    CompanionPermissions, FactsKey, FactsKind, FactsRow, KeepaliveAgentRow, KeepaliveBatch,
+    KeepaliveSessionRow, KeyFeatureAccounts, NewBundle, OutcomeWord, PoolRow, RulesMode, Secret,
+    StateCause, StorageKey, Store, StoreError,
 };
 
 /// The wall clock, for a case that reads no stamp.
@@ -242,6 +243,7 @@ fn seed_summary(discards: &str, marks: &str) -> Vec<String> {
         "  OAuth credential bundles: 2",
         "  API-key secrets: 1",
         "  keepalive recipe bodies: 1",
+        "  companion fact sets: 0",
         marks,
         "  oauth accounts disconnected: 2",
         "  api_key accounts unpaired: 1",
@@ -1061,4 +1063,103 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     let store = Store::open(&registry(dir.path()), &key(NEW_KEY), wall()).unwrap();
     let (_, agents, _) = store.load_keepalive().unwrap();
     assert!(agents.iter().all(|agent| agent.body.is_none()));
+}
+
+/// One stored set of reported facts, the title of the session `s-1` under the key `desktop`, which it inserts with
+/// its pool. A key's row holds a digest of its secret and no sealed value, so the set is the one sealed row it adds.
+/// Answers the session as `load_companion_facts` names it.
+fn store_a_fact_set(store: &Store) -> (String, i64, String) {
+    store.insert_pool(&PoolRow::new("main"), "test").unwrap();
+    let generation = store
+        .insert_api_key(
+            &ApiKeyRow {
+                id: "desktop".into(),
+                label: "desktop".into(),
+                notes: None,
+                pool_id: "main".into(),
+                enabled: true,
+                revoked_at: None,
+                expires_at: None,
+                model_rules: Vec::new(),
+                model_rules_mode: RulesMode::Extend,
+                long_context_twins: true,
+                companion_permissions: CompanionPermissions::default(),
+                body_capture_hours: None,
+                secret_digest: store.api_key_digest("phoebis-desktop").to_vec(),
+                prefix: phoebis_store::key_prefix("phoebis-desktop"),
+                incarnation: 1,
+                created_at: 1,
+                updated_at: 0,
+                rotated_at: None,
+                last_used_at: None,
+                retired_secret_last_used_at: None,
+                auto_mode_server: None,
+                feature_accounts: KeyFeatureAccounts::default(),
+            },
+            "test",
+        )
+        .unwrap()
+        .created_at;
+    store
+        .save_keepalive(&KeepaliveBatch {
+            facts: vec![FactsRow {
+                key: FactsKey {
+                    key_id: "desktop".into(),
+                    key_generation: generation,
+                    session_id: "s-1".into(),
+                    kind: FactsKind::Title,
+                    agent_id: String::new(),
+                },
+                record_version: 1,
+                value: br#"{"title":"Sort the lantern parts"}"#.to_vec(),
+                seen_at: 1_800_000_000_000,
+            }],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    ("desktop".into(), generation, "s-1".into())
+}
+
+// The canary leaves by the statement of the operations page's hand sequence, through a connection of the case's own.
+#[test]
+fn a_registry_whose_only_sealed_row_is_a_stored_fact_set_refuses_a_second_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = key(OLD_KEY);
+    store_a_fact_set(&Store::open(&registry(dir.path()), &old, wall()).unwrap());
+    rusqlite::Connection::open(registry(dir.path()))
+        .unwrap()
+        .execute("DELETE FROM meta WHERE key = 'storage_key_canary'", [])
+        .unwrap();
+    assert!(
+        matches!(
+            Store::open(&registry(dir.path()), &key(NEW_KEY), wall()),
+            Err(StoreError::KeyMismatch { .. })
+        ),
+        "a key the stored set does not open is refused rather than sealing a canary"
+    );
+    assert!(
+        Store::open(&registry(dir.path()), &old, wall()).is_ok(),
+        "the key the set opens under passes"
+    );
+}
+
+#[test]
+fn a_recovery_counts_a_stored_fact_set_and_leaves_no_row_of_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path());
+    let session =
+        store_a_fact_set(&Store::open(&registry(dir.path()), &key(OLD_KEY), wall()).unwrap());
+    std::fs::write(key_file(dir.path()), NEW_KEY).unwrap();
+    let out = recover_key(&config, &["--yes"], b"");
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    assert!(
+        stdout_lines(&out).contains(&"  companion fact sets: 1".to_owned()),
+        "the summary counts the set: {}",
+        printed(&out)
+    );
+    let store = Store::open(&registry(dir.path()), &key(NEW_KEY), wall()).unwrap();
+    assert!(
+        store.load_companion_facts(&[session]).unwrap().is_empty(),
+        "no row that the new key cannot open stays"
+    );
 }

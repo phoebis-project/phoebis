@@ -16,7 +16,9 @@ use phoebis_keepalive::{
     Reason, LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
-use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
+use phoebis_store::{
+    FactsKind, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow,
+};
 use serde_json::{json, Value};
 
 const DAY: i64 = 86_400_000;
@@ -1035,7 +1037,7 @@ async fn a_shutdown_while_an_earlier_save_is_held_lands_both_saves_in_order() {
     held.execute_batch("BEGIN IMMEDIATE").unwrap();
     let engine = r.engine.clone();
     let first = on_own_thread(async move { engine.flush_persisted().await });
-    r.engine.persist_reached(2, 2).await;
+    r.engine.persist_reached(4, 4).await;
     // After the held save read its batch: only a later save carries this.
     r.advance(MINUTE);
     let parked = state_of(&r, "main", "parked");
@@ -1043,7 +1045,7 @@ async fn a_shutdown_while_an_earlier_save_is_held_lands_both_saves_in_order() {
     let engine = r.engine.clone();
     let shutdown = on_own_thread(async move { engine.shutdown().await });
     // The shutdown's flush has entered and waits on the flush lock the held save holds.
-    r.engine.persist_reached(3, 2).await;
+    r.engine.persist_reached(5, 4).await;
     // Released well inside the store's own busy wait, which the case never waits out.
     held.execute_batch("COMMIT").unwrap();
     first.join().unwrap();
@@ -1092,7 +1094,7 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
     conn.execute_batch("BEGIN IMMEDIATE").unwrap();
     let engine = r.engine.clone();
     let failed = on_own_thread(async move { engine.flush_persisted().await });
-    r.engine.persist_reached(2, 2).await;
+    r.engine.persist_reached(4, 4).await;
     // Between the failed save's snapshot and its outcome.
     let parked = state_of(&r, "main", "parked");
     report(&mut r, parked).await.unwrap();
@@ -1119,7 +1121,7 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
     conn.execute_batch("BEGIN IMMEDIATE").unwrap();
     let engine = r.engine.clone();
     let next = on_own_thread(async move { engine.flush_persisted().await });
-    r.engine.persist_reached(3, 3).await;
+    r.engine.persist_reached(5, 5).await;
     r.advance(MINUTE);
     // Between this save's snapshot and its acknowledgment: a presence report moves the idle clock alone.
     let presence = json!({
@@ -1147,6 +1149,136 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
         saved_field(&r, "session", "main", "last_activity"),
         serde_json::json!(r.now()),
         "the change the acknowledgment found newer than its revision stayed dirty and lands now"
+    );
+}
+
+/// The rig's session as the registry keys its stored sets, read off its saved row.
+fn rig_session(r: &Rig) -> (String, i64, String) {
+    let row = saved_sessions(r)
+        .into_iter()
+        .find(|row| row.session_id == "session")
+        .expect("the rig's registration is saved");
+    (row.key_id, row.key_generation, row.session_id)
+}
+
+/// One stored set of `session`, read through the store and parsed as JSON, `None` where the registry holds no row of
+/// that kind and agent.
+fn stored_set(
+    r: &Rig,
+    session: &(String, i64, String),
+    kind: FactsKind,
+    agent_id: &str,
+) -> Option<Value> {
+    r.h.store
+        .load_companion_facts(std::slice::from_ref(session))
+        .unwrap()
+        .into_iter()
+        .find(|set| set.key.kind == kind && set.key.agent_id == agent_id)
+        .map(|set| serde_json::from_slice(&set.value.expect("the set opens")).unwrap())
+}
+
+fn stored_title(r: &Rig, session: &(String, i64, String)) -> Option<Value> {
+    stored_set(r, session, FactsKind::Title, "").map(|set| set["title"].clone())
+}
+
+// Apart from the workers, and waiting on the flush counts, as the held-save cases above explain. The held save keeps
+// any save from reading its batch between the two reports, so the save that carries the set runs behind the
+// registration that took the agent's record out of the map.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_set_reported_ahead_of_a_registration_by_another_instance_reaches_its_row() {
+    let mut r = rig(on_disk()).await;
+    let session = rig_session(&r);
+    let generation = r
+        .event(json!({"event": "agent_start", "agent_id": "a1"}))
+        .await
+        .unwrap()
+        .request_generation;
+    let held = registry(&r);
+    held.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let engine = r.engine.clone();
+    let first = on_own_thread(async move { engine.flush_persisted().await });
+    r.engine.persist_reached(3, 3).await;
+    r.event(json!({
+        "event": "agent_facts",
+        "agent_id": "a1",
+        "name": "reviewer",
+        "request_generation": generation
+    }))
+    .await
+    .unwrap();
+    r.event(json!({
+        "event": "session_start",
+        "instance_id": "second",
+        "previous_instance_id": "instance"
+    }))
+    .await
+    .unwrap();
+    held.execute_batch("COMMIT").unwrap();
+    first.join().unwrap();
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_set(&r, &session, FactsKind::Agents, "a1").map(|set| set["name"].clone()),
+        Some(json!("reviewer")),
+        "the save wrote the set as the report filed it, though the registration replaced the agent's record"
+    );
+}
+
+// Apart from the workers, and waiting on the flush counts, as the held-save cases above explain. The case starts no
+// save of its own until the worker's second one has read its batch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_set_filed_behind_the_snapshot_of_a_held_save_reaches_its_row_with_no_further_report() {
+    let mut r = rig(on_disk()).await;
+    let session = rig_session(&r);
+    let held = registry(&r);
+    held.execute_batch("BEGIN IMMEDIATE").unwrap();
+    r.event(json!({"event": "session_facts", "title": "Chart the estuary"}))
+        .await
+        .unwrap();
+    // The worker's save for the first title has read its batch and waits in the store.
+    r.engine.persist_reached(3, 3).await;
+    r.event(json!({"event": "session_facts", "title": "Sound the channel"}))
+        .await
+        .unwrap();
+    held.execute_batch("COMMIT").unwrap();
+    // The bound is the failure path alone: a passing run meets the worker's second save at once.
+    tokio::time::timeout(Duration::from_secs(10), r.engine.persist_reached(4, 4))
+        .await
+        .expect("the worker saves once more for the set filed while its save ran");
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_title(&r, &session),
+        Some(json!("Sound the channel")),
+        "the second set, filed under the first one's key while its save ran, reached the row"
+    );
+}
+
+#[tokio::test]
+async fn a_set_whose_save_failed_reaches_its_row_with_the_next_save() {
+    let mut r = rig(on_disk()).await;
+    let session = rig_session(&r);
+    let conn = registry(&r);
+    conn.execute_batch(
+        "CREATE TRIGGER refuse_facts BEFORE INSERT ON companion_facts \
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .unwrap();
+    r.event(json!({"event": "session_facts", "title": "Mark the shoal"}))
+        .await
+        .unwrap();
+    // The worker's save, then one behind it, both under the trigger.
+    r.engine.persist_reached(3, 3).await;
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_title(&r, &session),
+        None,
+        "the failed saves wrote no row"
+    );
+    conn.execute_batch("DROP TRIGGER refuse_facts;").unwrap();
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_title(&r, &session),
+        Some(json!("Mark the shoal")),
+        "the set the failed saves carried stayed filed for the save that lands"
     );
 }
 

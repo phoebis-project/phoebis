@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use phoebis_relay::is_valid_id as valid_id;
 use phoebis_routing::{RegistrySnapshot, Report};
+use phoebis_store::FactsKind;
 
 use crate::config::LEASE_MS;
 use crate::engine::{
@@ -69,6 +70,12 @@ pub(crate) struct Ack {
     pub request_generation: u64,
     pub sequence: u64,
     pub session_id: String,
+}
+
+/// An accepted report's answer, with whether the report filed a set of facts, which asks for a save at once.
+pub(crate) struct Applied {
+    pub ack: Ack,
+    pub filed_facts: bool,
 }
 
 #[derive(Debug, thiserror::Error, serde::Serialize)]
@@ -526,7 +533,7 @@ impl Engine {
         key_id: &str,
         key_generation: i64,
         report: EventReport,
-    ) -> Result<Ack, EventError> {
+    ) -> Result<Applied, EventError> {
         let now = self.now();
         // The pool an idle window a report opens counts under, read as the tick reads it.
         let snapshot = self.parts.router.snapshot();
@@ -578,7 +585,7 @@ impl Inner {
         report: EventReport,
         now: i64,
         snapshot: &RegistrySnapshot,
-    ) -> Result<Ack, EventError> {
+    ) -> Result<Applied, EventError> {
         let key: SessionKey = (key_id.to_string(), report.session_id.clone());
         // A start registers the session every other report is checked against, so it takes none of the checks.
         if !matches!(report.event, Reported::SessionStart { .. }) {
@@ -607,6 +614,7 @@ impl Inner {
         // lease, and among the later reports a heartbeat alone renews it, as the Go engine had it. `activity`,
         // `agent_start` and `state` report the agent, not the companion's own liveness, so they leave it alone.
         let renews_lease = report.event == Reported::Heartbeat;
+        let mut filed_facts = false;
         match &report.event {
             Reported::SessionStart {
                 previous_instance_id,
@@ -625,6 +633,10 @@ impl Inner {
                     .get_mut(&key)
                     .expect("the session just checked")
                     .facts = facts.clone();
+                let row = (key.0.clone(), key_generation, key.1.clone());
+                self.file_facts(&row, FactsKind::Project, "", facts.project_value(), now);
+                self.file_facts(&row, FactsKind::Title, "", facts.title_value(), now);
+                filed_facts = true;
             }
             Reported::SessionEnd => {
                 let agents: Vec<String> = self.sessions[&key].agents.keys().cloned().collect();
@@ -649,7 +661,10 @@ impl Inner {
                 session.sequence = report.sequence;
                 session.last_report_at = now;
                 self.touch_session(&key);
-                return Ok(acknowledge(&key, &self.sessions[&key], None, None));
+                return Ok(Applied {
+                    ack: acknowledge(&key, &self.sessions[&key], None, None),
+                    filed_facts: false,
+                });
             }
             Reported::AgentStart {
                 request_generation, ..
@@ -718,6 +733,9 @@ impl Inner {
                 // activity.
                 let agent = self.reported_agent(&key, &agent_id, *request_generation)?;
                 agent.facts = facts.clone();
+                let row = (key.0.clone(), key_generation, key.1.clone());
+                self.file_facts(&row, FactsKind::Agents, &agent_id, facts.value(), now);
+                filed_facts = true;
             }
             Reported::Parked {
                 park,
@@ -801,12 +819,10 @@ impl Inner {
                 open_idle_episode(main, snapshot);
             }
         }
-        Ok(acknowledge(
-            &key,
-            &self.sessions[&key],
-            report.event.agent_id(),
-            None,
-        ))
+        Ok(Applied {
+            ack: acknowledge(&key, &self.sessions[&key], report.event.agent_id(), None),
+            filed_facts,
+        })
     }
 
     /// The checks an `activity`, an `agent_facts` or a `state` report passes on the agent it names: a known agent, the
@@ -839,7 +855,7 @@ impl Inner {
         report: &EventReport,
         previous_instance_id: Option<&str>,
         now: i64,
-    ) -> Result<Ack, EventError> {
+    ) -> Result<Applied, EventError> {
         // What a previous holder of this key id left under the same session id is not this caller's to
         // re-adopt or to conflict with; the start below replaces it whole, as it replaces an instance.
         let mine = self
@@ -905,7 +921,10 @@ impl Inner {
                 }
                 self.touch_session(&key);
                 let session = &self.sessions[&key];
-                return Ok(acknowledge(&key, session, None, Some(agents_of(session))));
+                return Ok(Applied {
+                    ack: acknowledge(&key, session, None, Some(agents_of(session))),
+                    filed_facts: false,
+                });
             }
             if previous_instance_id != Some(session.instance.as_str()) {
                 // An ended or silent holder is named so the mod can take over from it, and a live one is not.
@@ -960,9 +979,17 @@ impl Inner {
                 agents,
             },
         );
+        // The session's own sets start over with the record, and its agents' stored sets stay for the earlier
+        // agents that no report states again.
+        let row = (key.0.clone(), key_generation, key.1.clone());
+        self.file_facts(&row, FactsKind::Project, "", None, now);
+        self.file_facts(&row, FactsKind::Title, "", None, now);
         self.touch_session(&key);
         self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
         let session = &self.sessions[&key];
-        Ok(acknowledge(&key, session, None, Some(agents_of(session))))
+        Ok(Applied {
+            ack: acknowledge(&key, session, None, Some(agents_of(session))),
+            filed_facts: true,
+        })
     }
 }

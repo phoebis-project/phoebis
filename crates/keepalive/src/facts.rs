@@ -60,6 +60,27 @@ impl SessionFacts {
         self.0.clone()
     }
 
+    /// The stored value of the kind `project`: the raw form's JSON object with no title, `None` where none of the
+    /// branch, the working directory, the project, the repository and its root stands.
+    pub(crate) fn project_value(&self) -> Option<Vec<u8>> {
+        let project = RawSessionFacts {
+            title: None,
+            ..self.0.clone()
+        };
+        (project != RawSessionFacts::default())
+            .then(|| serde_json::to_vec(&project).ok())
+            .flatten()
+    }
+
+    /// The stored value of the kind `title`: the raw form's JSON object with the title alone, `None` with no title.
+    pub(crate) fn title_value(&self) -> Option<Vec<u8>> {
+        let title = RawSessionFacts {
+            title: Some(self.0.title.clone()?),
+            ..RawSessionFacts::default()
+        };
+        serde_json::to_vec(&title).ok()
+    }
+
     pub fn branch(&self) -> Option<&str> {
         self.0.branch.as_deref()
     }
@@ -101,6 +122,13 @@ impl AgentFacts {
 
     pub(crate) fn raw(&self) -> RawAgentFacts {
         self.0.clone()
+    }
+
+    /// The stored value of the kind `agents`: the raw form's JSON object, `None` where no member stands.
+    pub(crate) fn value(&self) -> Option<Vec<u8>> {
+        (!self.is_empty())
+            .then(|| serde_json::to_vec(&self.0).ok())
+            .flatten()
     }
 
     pub fn agent_type(&self) -> Option<&str> {

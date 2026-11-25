@@ -2,7 +2,8 @@
 //! counters, written behind the map to the registry and read back once at start. The map stays the truth while the
 //! engine runs, and the store is what the next process starts from. The relay's session memory has the same shape: a
 //! dirty set under revisions, one flush at a time on the blocking pool, and an acknowledgment that retires only what
-//! the save carried.
+//! the save carried. The facts that a companion reports go to the registry the same way, each set as the report filed
+//! it, and the save that a filing asks for runs at once.
 
 use std::collections::BTreeMap;
 #[cfg(any(test, feature = "debug-hooks"))]
@@ -14,7 +15,10 @@ use bytes::Bytes;
 use phoebis_ledger::{Band, Speed};
 use phoebis_routing::{FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::keepalive::BodyWrite;
-use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
+use phoebis_store::{
+    FactsKey, FactsKind, FactsRow, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch,
+    KeepaliveSessionRow,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{KeepaliveTiming, LEASE_MS};
@@ -33,8 +37,19 @@ use crate::usage::ProbeUsage;
 /// a dollar in place of the probe's usage, tier, instant and band, so neither settles under this build's rule.
 pub(crate) const RECORD_VERSION: u32 = 3;
 
+/// The shape of a stored set's value: the raw form's JSON object, cut to the members of the row's kind.
+pub(crate) const FACTS_RECORD_VERSION: u32 = 1;
+
 /// A session row's key in the store: key id, key generation, session id.
 pub(crate) type PersistKey = (String, i64, String);
+
+/// One filed set: the value to write, or `None` where the row leaves, with the instant of the filing's report.
+#[derive(Debug)]
+pub(crate) struct FiledFacts {
+    pub value: Option<Vec<u8>>,
+    pub seen_at: i64,
+    pub revision: u64,
+}
 
 /// The rows changed since their last acknowledged save, each under the revision of its latest change, and the rows
 /// removed since, under the revision of the removal. Every key carries the key generation beside the store's
@@ -48,6 +63,10 @@ pub(crate) struct Dirty {
     pub removed_sessions: BTreeMap<PersistKey, u64>,
     pub removed_agents: BTreeMap<(PersistKey, String), u64>,
     pub pools: BTreeMap<String, u64>,
+    /// Each set of reported facts as its report filed it. The save writes the filed set and never reads one from the
+    /// records, since a registration by another instance takes an agent's record out of the map while the set it
+    /// reported still waits for its row.
+    pub facts: BTreeMap<FactsKey, FiledFacts>,
 }
 
 /// Every field of `Session` but its agents, which have rows of their own, and the restored standing, which the load
@@ -821,6 +840,7 @@ pub(crate) struct Snapshot {
     /// The engine's recorded cutoff as this snapshot read it, content of its own: a roll that dropped a day while no
     /// pool was dirty still has the registry's rows of that day to delete.
     purge_counters_before: Option<i64>,
+    facts: Vec<(FactsKey, u64)>,
 }
 
 impl Snapshot {
@@ -831,6 +851,7 @@ impl Snapshot {
             && self.removed_agents.is_empty()
             && self.pools.is_empty()
             && self.purge_counters_before.is_none()
+            && self.facts.is_empty()
     }
 }
 
@@ -944,10 +965,38 @@ impl Inner {
         self.dirty.removed_agents.insert(row, revision);
     }
 
+    /// Files one set of reported facts for the next save under the session's row key, `None` filing the row's leave.
+    /// A later filing under the same key replaces the earlier one, so the save writes the last set applied under the
+    /// lock.
+    pub(crate) fn file_facts(
+        &mut self,
+        row: &PersistKey,
+        kind: FactsKind,
+        agent_id: &str,
+        value: Option<Vec<u8>>,
+        seen_at: i64,
+    ) {
+        let revision = self.bump();
+        self.dirty.facts.insert(
+            FactsKey {
+                key_id: row.0.clone(),
+                key_generation: row.1,
+                session_id: row.2.clone(),
+                kind,
+                agent_id: agent_id.to_string(),
+            },
+            FiledFacts {
+                value,
+                seen_at,
+                revision,
+            },
+        );
+    }
+
     /// The batch the dirty sets name, read as the map stands now, each row with the revision it was read at, and the
     /// settlements the load held for a save. No dirty entry is cleared here: `acknowledge` does that once the save has
     /// landed. A dirty row whose record left the map without a removal, which only `close` does, is carried by nothing
-    /// and retired with the rest.
+    /// and retired with the rest. A filed set of reported facts goes as its report filed it, whatever the map holds.
     pub(crate) fn persist_snapshot(&mut self, now: i64) -> Snapshot {
         let mut snapshot = Snapshot {
             settled: std::mem::take(&mut self.settlements_after_save),
@@ -1012,6 +1061,18 @@ impl Inner {
                 .removed_agents
                 .push(((row.clone(), agent_id.clone()), *revision));
         }
+        for (key, filed) in &self.dirty.facts {
+            match &filed.value {
+                Some(value) => snapshot.batch.facts.push(FactsRow {
+                    key: key.clone(),
+                    record_version: FACTS_RECORD_VERSION,
+                    value: value.clone(),
+                    seen_at: filed.seen_at,
+                }),
+                None => snapshot.batch.removed_facts.push(key.clone()),
+            }
+            snapshot.facts.push((key.clone(), filed.revision));
+        }
         for (pool_id, revision) in &self.dirty.pools {
             for (day, counters) in self.idle_returns.get(pool_id).into_iter().flatten() {
                 for (bucket, counter) in counters.buckets.iter().enumerate() {
@@ -1069,6 +1130,16 @@ impl Inner {
         retire(&mut self.dirty.removed_sessions, &snapshot.removed_sessions);
         retire(&mut self.dirty.removed_agents, &snapshot.removed_agents);
         retire(&mut self.dirty.pools, &snapshot.pools);
+        for (key, revision) in &snapshot.facts {
+            if self
+                .dirty
+                .facts
+                .get(key)
+                .is_some_and(|filed| filed.revision == *revision)
+            {
+                self.dirty.facts.remove(key);
+            }
+        }
         // Cleared only while unchanged since the snapshot: a roll in between recorded a later cutoff, which the next
         // save still owes.
         if self.purge_counters_before == snapshot.purge_counters_before {
@@ -1421,6 +1492,34 @@ impl Engine {
             tracing::warn!(%error, "the keepalive's flush did not finish");
         }
         self.flush();
+    }
+
+    /// Asks the save worker for a save. The worker runs one save at a time. A call that arrives while a save runs is
+    /// kept as one stored wakeup, so the worker saves once more and no caller holds a thread while it waits. The worker
+    /// starts with the first call, inside the runtime that serves the route, and ends when the engine's token fires.
+    pub(crate) fn save_soon(self: &Arc<Self>) {
+        self.save_worker.get_or_init(|| {
+            let wanted = self.save_wanted.clone();
+            let cancel = self.cancel.clone();
+            let engine = Arc::downgrade(self);
+            tokio::spawn(async move {
+                loop {
+                    // The token first, as in the periodic flusher: a wakeup that is stored when it fires starts no
+                    // further save, so the shutdown's save stays the last one that starts.
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => return,
+                        _ = wanted.notified() => {}
+                    }
+                    // The worker holds the engine for the length of one save alone, so it keeps no engine alive.
+                    let Some(engine) = engine.upgrade() else {
+                        return;
+                    };
+                    engine.flush_persisted().await;
+                }
+            });
+        });
+        self.save_wanted.notify_one();
     }
 
     fn flush_blocking(&self) {

@@ -388,12 +388,13 @@ fn remove_dirs(dirs: &[PathBuf]) -> Result<(), (&Path, std::io::Error)> {
 /// The counts in the order the transaction runs: what goes, then how the accounts are left.
 fn summary(discards: &str, marks: &str, counts: &SealedCounts) -> String {
     format!(
-        "{discards}\n  OAuth credential bundles: {}\n  API-key secrets: {}\n  keepalive recipe bodies: {}\n\
-         {marks}\n  oauth accounts disconnected: {}\n  api_key accounts unpaired: {}\n  \
+        "{discards}\n  OAuth credential bundles: {}\n  API-key secrets: {}\n  keepalive recipe bodies: {}\n  \
+         companion fact sets: {}\n{marks}\n  oauth accounts disconnected: {}\n  api_key accounts unpaired: {}\n  \
          open refresh attempts failed: {}",
         counts.credentials,
         counts.api_key_secrets,
         counts.recipe_bodies,
+        counts.companion_facts,
         counts.oauth_accounts,
         counts.api_key_accounts,
         counts.open_refresh_attempts,

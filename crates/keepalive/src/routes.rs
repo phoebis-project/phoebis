@@ -64,10 +64,16 @@ async fn events(State(engine): State<Arc<Engine>>, request: Request<Body>) -> Re
         Err(error) => return event_error(error),
     };
     match engine.apply_event(&key_id, key_generation, event) {
-        Ok(ack) => json(
-            StatusCode::OK,
-            serde_json::to_string(&ack).unwrap_or_default(),
-        ),
+        Ok(applied) => {
+            if applied.filed_facts {
+                // Not awaited: the answer goes out at once, and the one save worker takes the request from here.
+                engine.save_soon();
+            }
+            json(
+                StatusCode::OK,
+                serde_json::to_string(&applied.ack).unwrap_or_default(),
+            )
+        }
         Err(error) => event_error(error),
     }
 }

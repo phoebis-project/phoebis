@@ -1,9 +1,10 @@
-//! The keepalive engine's rows: three tables in one transaction, and the retained prompt sealed under the storage key
-//! and bound to the row it was written for.
+//! The keepalive engine's rows: four tables in one transaction, and the retained prompt and the reported facts sealed
+//! under the storage key and bound to the row they were written for.
 
 use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{
-    keepalive_aad, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow,
+    keepalive_aad, ApiKeyRow, CompanionPermissions, FactsKey, FactsKind, FactsRow, IdleReturnsRow,
+    KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow, KeyFeatureAccounts, PoolRow, RulesMode,
     StorageKey, Store,
 };
 
@@ -178,6 +179,8 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
             },
         ],
         purge_counters_before: None,
+        facts: Vec::new(),
+        removed_facts: Vec::new(),
     };
     store.save_keepalive(&batch).unwrap();
     assert_eq!(
@@ -416,4 +419,135 @@ fn an_upsert_keeps_the_stored_body_unless_it_seals_a_new_one_and_a_clear_removes
         .unwrap();
     assert_eq!(stored, (None, None, 0), "a clear leaves no body behind");
     assert_eq!(opened(&store, 1, "s", "main"), None);
+}
+
+/// The key `k` in the pool `main`, answering the `created_at` it stamped, which is the generation of its sets.
+fn inserted_key(store: &Store) -> i64 {
+    store.insert_pool(&PoolRow::new("main"), "test").unwrap();
+    store
+        .insert_api_key(
+            &ApiKeyRow {
+                id: "k".into(),
+                label: "k".into(),
+                notes: None,
+                pool_id: "main".into(),
+                enabled: true,
+                revoked_at: None,
+                expires_at: None,
+                model_rules: Vec::new(),
+                model_rules_mode: RulesMode::Extend,
+                long_context_twins: true,
+                companion_permissions: CompanionPermissions::default(),
+                body_capture_hours: None,
+                secret_digest: store.api_key_digest("phoebis-k").to_vec(),
+                prefix: phoebis_store::key_prefix("phoebis-k"),
+                incarnation: 1,
+                created_at: 1,
+                updated_at: 0,
+                rotated_at: None,
+                last_used_at: None,
+                retired_secret_last_used_at: None,
+                auto_mode_server: None,
+                feature_accounts: KeyFeatureAccounts::default(),
+            },
+            "test",
+        )
+        .unwrap()
+        .created_at
+}
+
+/// Swaps the sealed value and its nonce between two rows of the session `s` under the key `k`, past the store.
+fn swap_sets(
+    conn: &rusqlite::Connection,
+    generation: i64,
+    (first_kind, first_agent): (&str, &str),
+    (second_kind, second_agent): (&str, &str),
+) {
+    let read = |kind: &str, agent: &str| -> (Vec<u8>, Vec<u8>) {
+        conn.query_row(
+            "SELECT facts_sealed, facts_nonce FROM companion_facts \
+             WHERE key_id = 'k' AND key_generation = ?1 AND session_id = 's' AND kind = ?2 AND agent_id = ?3",
+            rusqlite::params![generation, kind, agent],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    };
+    let write = |kind: &str, agent: &str, (sealed, nonce): &(Vec<u8>, Vec<u8>)| {
+        conn.execute(
+            "UPDATE companion_facts SET facts_sealed = ?4, facts_nonce = ?5 \
+             WHERE key_id = 'k' AND key_generation = ?1 AND session_id = 's' AND kind = ?2 AND agent_id = ?3",
+            rusqlite::params![generation, kind, agent, sealed, nonce],
+        )
+        .unwrap();
+    };
+    let (first, second) = (
+        read(first_kind, first_agent),
+        read(second_kind, second_agent),
+    );
+    write(first_kind, first_agent, &second);
+    write(second_kind, second_agent, &first);
+}
+
+/// The two agents' rows differ by their agent ids alone, and the session's project row and title row by their kinds
+/// alone, so a seal bound to less than the whole key opens one row's set under the other's.
+#[test]
+fn sealed_sets_swapped_between_two_rows_of_one_session_read_as_no_fact() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &StorageKey::generate(), wall()).unwrap();
+    let generation = inserted_key(&store);
+    let set = |kind: FactsKind, agent_id: &str, value: &[u8]| FactsRow {
+        key: FactsKey {
+            key_id: "k".into(),
+            key_generation: generation,
+            session_id: "s".into(),
+            kind,
+            agent_id: agent_id.into(),
+        },
+        record_version: 1,
+        value: value.to_vec(),
+        seen_at: 1_000,
+    };
+    let tide: &[u8] = br#"{"name":"tide-reader","type":"Explore"}"#;
+    let buoy: &[u8] = br#"{"name":"buoy-keeper","type":"Plan"}"#;
+    let project: &[u8] = br#"{"branch":"chart-room","cwd":"/work/lighthouse"}"#;
+    let title: &[u8] = br#"{"title":"Map the reef"}"#;
+    store
+        .save_keepalive(&KeepaliveBatch {
+            facts: vec![
+                set(FactsKind::Agents, "a1", tide),
+                set(FactsKind::Agents, "a2", buoy),
+                set(FactsKind::Project, "", project),
+                set(FactsKind::Title, "", title),
+            ],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let values = || -> Vec<Option<Vec<u8>>> {
+        store
+            .load_companion_facts(&[("k".into(), generation, "s".into())])
+            .unwrap()
+            .into_iter()
+            .map(|stored| stored.value)
+            .collect()
+    };
+    assert_eq!(
+        values(),
+        vec![
+            Some(tide.to_vec()),
+            Some(buoy.to_vec()),
+            Some(project.to_vec()),
+            Some(title.to_vec())
+        ],
+        "each set opens under the row it was written for"
+    );
+
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    swap_sets(&conn, generation, ("agents", "a1"), ("agents", "a2"));
+    swap_sets(&conn, generation, ("project", ""), ("title", ""));
+    assert_eq!(
+        values(),
+        vec![None, None, None, None],
+        "no swapped set opens under the other row"
+    );
 }

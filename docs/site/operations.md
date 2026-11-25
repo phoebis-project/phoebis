@@ -9,12 +9,12 @@ build and the tests are on [Development](development.md).
 
 The router's state lives in three files. `storage.path` is the registry: the accounts and their sealed credentials,
 the cooldowns, the keys, the pins, the pools, the pricing versions and the relay's session memory. The registry also
-holds what a companion mod reports, in clear text: the branches, paths, remotes and titles of a session, and the
-descriptions, names and types of its agents. Each backup of it carries them. `stats.ledger_path` is the ledger: the
-attempts, captured bodies, events, requests, rollups and samples. `storage.encryption_key_file` is the key that seals
-every credential the registry holds. `phoebis backup` takes a snapshot of both databases and names the key file, and it
-never copies the key. A router with the `features` block holds two more files in the data directory, `feature-ca.pem`
-and `feature-ca-key.pem`, the feature CA and its key, which `phoebis backup` leaves out too (step 5 of
+holds what a companion mod reports, sealed under the storage key: the branches, paths, remotes and titles of a session,
+and the descriptions, names and types of its agents. Each backup of it carries the sealed rows. `stats.ledger_path` is
+the ledger: the attempts, captured bodies, events, requests, rollups and samples. `storage.encryption_key_file` is the
+key that seals every credential the registry holds. `phoebis backup` takes a snapshot of both databases and names the
+key file, and it never copies the key. A router with the `features` block holds two more files in the data directory,
+`feature-ca.pem` and `feature-ca-key.pem`, the feature CA and its key, which `phoebis backup` leaves out too (step 5 of
 [Restore](#restore)).
 
 Both databases are SQLite in WAL mode. A plain file copy taken while the service runs can land mid-transaction and
@@ -76,9 +76,10 @@ built from one of them alone leaves the two databases at different points in the
 
 The key seals every credential in the registry, so a backup that carries the database is useless without the key, and
 dangerous with it. The registry also holds the keepalive engine's retained recipes, each prompt sealed under the same
-key, so a restored registry needs its key for them as it does for the credentials. Keep the key somewhere separate,
-such as a password manager or a secrets store, and never beside the database copy. The ledger holds captured bodies,
-which are prompts, so a ledger backup needs the same care as the registry.
+key, and the facts that a companion mod reports, sealed the same way, so a restored registry needs its key for them as
+it does for the credentials. Keep the key somewhere separate, such as a password manager or a secrets store, and never
+beside the database copy. The ledger holds captured bodies, which are prompts, so a ledger backup needs the same care as
+the registry.
 
 ## Restore
 
@@ -136,22 +137,22 @@ The registry carries a canary sealed under the key at its first open, and every 
 any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved, is
 refused at start and by `check-config` with `the storage key does not match the registry at {path}`. A registry from
 before the canary existed is proved against its sealed rows instead, the first 32 of each kind (credential bundles,
-API-key secrets and keepalive recipe bodies), passing when any of them opens, and the next start seals its canary.
-`check-config` names such a registry with `registry at {path} has no key canary yet. A sealed row opens under the key,
-and the next start seals one`. The proof's scope, the first 32 rows of each kind, leaves one shape of a registry without
-a canary refusing the right key at the start: one whose readable credential bundles, API-key secrets and recipe bodies
-all sit past the 32nd of their kind. `phoebis recover-key` is the way out: it scans every sealed row, so on such a
-registry it seals the canary under the key that opens the rows and exits 0 with `the storage key opens {readable_rows}
-sealed {rows} and the registry has no canary, so a canary was sealed under it and nothing was discarded`, keeping every
-row, and the next start passes through the canary.
+API-key secrets, keepalive recipe bodies and the facts that a companion mod reports), passing when any of them opens,
+and the next start seals its canary. `check-config` names such a registry with `registry at {path} has no key canary
+yet. A sealed row opens under the key, and the next start seals one`. The proof's scope, the first 32 rows of each kind,
+leaves one shape of a registry without a canary refusing the right key at the start: one whose readable credential
+bundles, API-key secrets, recipe bodies and reported facts all sit past the 32nd of their kind. `phoebis recover-key` is
+the way out: it scans every sealed row, so on such a registry it seals the canary under the key that opens the rows and
+exits 0 with `the storage key opens {readable_rows} sealed {rows} and the registry has no canary, so a canary was sealed
+under it and nothing was discarded`, keeping every row, and the next start passes through the canary.
 
 `init` refuses a key file that exists with `{path} already exists, and init never replaces a key, since every stored
 credential is sealed under it`, and refuses a data directory that already holds a registry, so a lost key is never
 papered over by a new one.
 
-The key seals the OAuth credential bundles, the API-key secrets and the keepalive engine's retained recipe bodies. From
-the same key the store derives the digest every downstream key authenticates against, so the secrets the admin API
-mints and hands to the clients are checked under it too.
+The key seals the OAuth credential bundles, the API-key secrets, the keepalive engine's retained recipe bodies and the
+facts that a companion mod reports. From the same key the store derives the digest every downstream key authenticates
+against, so the secrets the admin API mints and hands to the clients are checked under it too.
 
 Under a lost or replaced key no sealed row opens again and the canary refuses the start, so recovering means discarding
 what the old key sealed while keeping everything else. `phoebis recover-key` does that on a stopped registry. It is a
@@ -168,8 +169,8 @@ service layout, as root:
    file when this run creates it, and handing these to the `--owner` user needs root (`--owner needs root` refuses a
    run without it).
 4. Read its summary, which opens `the recovery discards what the old key sealed:` over the counts of OAuth credential
-   bundles, API-key secrets and keepalive recipe bodies, then `and marks the accounts:` over the counts of OAuth
-   accounts disconnected, API-key accounts unpaired and open refresh attempts failed.
+   bundles, API-key secrets, keepalive recipe bodies and companion fact sets, then `and marks the accounts:` over the
+   counts of OAuth accounts disconnected, API-key accounts unpaired and open refresh attempts failed.
 5. Answer the prompt `type yes to discard them: `. Any other answer prints `the registry was not changed` and exits 2,
    and a declined run discards nothing, writes no key file and keeps the registry's lock file. `--yes` skips the
    question for a script.
@@ -224,6 +225,7 @@ DELETE FROM meta WHERE key = 'storage_key_canary';
 DELETE FROM credentials;
 DELETE FROM api_key_secrets;
 UPDATE keepalive_agents SET body_sealed = NULL, body_nonce = NULL WHERE body_sealed IS NOT NULL;
+DELETE FROM companion_facts;
 UPDATE accounts SET state = CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END,
   state_cause = 'operator', lifecycle_generation = lifecycle_generation + 1, revision = revision + 1,
   updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
@@ -239,12 +241,12 @@ Under the container the image ships no `sqlite3`, so the sequence runs as uid 65
 `router.sqlite` on the `phoebis-data` volume or from a one-off container that carries `sqlite3` and mounts that volume.
 
 The sequence discards every secret the registry holds, and nothing else: the API-key secrets, the canary, the OAuth
-credential bundles and the keepalive's recipe bodies go, and each account rests where the Accounts view's Disconnect
-leaves it, with the cause `operator` and its open refresh attempts settled. The accounts, downstream keys, keepalive
-sessions, pins, pools and session memory stay. `-bail` stops at the first statement that fails, and the transaction it
-leaves open rolls back, so the file is either wholly changed or untouched. The subcommand seals the new canary inside
-the same transaction, and after the sequence run by hand the next start under the new key finds nothing sealed and
-seals one. The steps that remain are the same either way.
+credential bundles, the keepalive's recipe bodies and the facts that a companion mod reported go, and each account rests
+where the Accounts view's Disconnect leaves it, with the cause `operator` and its open refresh attempts settled. The
+accounts, downstream keys, keepalive sessions, pins, pools and session memory stay. `-bail` stops at the first statement
+that fails, and the transaction it leaves open rolls back, so the file is either wholly changed or untouched. The
+subcommand seals the new canary inside the same transaction, and after the sequence run by hand the next start under the
+new key finds nothing sealed and seals one. The steps that remain are the same either way.
 
 An operator who would rather start over moves the registry file aside instead, with its `-wal` and `-shm` files if
 present, and lets the next start create an empty registry, in which every account, pool and key is created again.
@@ -422,7 +424,7 @@ replacement means for each user is under [The CA over time](claude-ai-features.m
 
 Schema migrations run when the new binary opens each database, every migration above the stored version in order, each
 inside its own transaction, so a crash leaves the last version that landed. The registry's migrations may drop or
-rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 10 and the
+rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 11 and the
 ledger at schema 6. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
 {found} is newer than the {supported} this build opens: restore the backup taken before the upgrade, or recreate a
 registry a pre-release build wrote with phoebis init`, and the ledger with the same words, `ledger` in place of

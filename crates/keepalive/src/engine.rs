@@ -1533,6 +1533,10 @@ pub struct Engine {
     /// Orders the flushes: a snapshot, its save and its acknowledgment run under it whole, so two flushes never
     /// overlap and an older batch never reaches the store after a newer one.
     pub(crate) flush_lock: Mutex<()>,
+    /// Wakes the save worker. It holds at most one stored wakeup, which is what joins a burst of requests into one save.
+    pub(crate) save_wanted: Arc<tokio::sync::Notify>,
+    /// Set once the save worker runs.
+    pub(crate) save_worker: std::sync::OnceLock<()>,
     #[cfg(any(test, feature = "debug-hooks"))]
     pub(crate) hooks: DebugHooks,
     /// Events a gap left queued behind it, counted down as they are applied. What arrives inside that backlog cannot
@@ -1586,6 +1590,8 @@ impl Engine {
             cancel: CancellationToken::new(),
             workers: TaskTracker::new(),
             flush_lock: Mutex::new(()),
+            save_wanted: Arc::new(tokio::sync::Notify::new()),
+            save_worker: std::sync::OnceLock::new(),
             #[cfg(any(test, feature = "debug-hooks"))]
             hooks: DebugHooks::default(),
             gap_backlog: AtomicUsize::new(0),

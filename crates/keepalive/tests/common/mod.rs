@@ -331,6 +331,11 @@ pub async fn rig(spec: RigSpec) -> Rig {
         _scratch: scratch,
     };
     rig.event(json!({"event": "session_start"})).await.unwrap();
+    // The registration asks the save worker for a save, which would otherwise meet a case's own saves at no fixed
+    // place. The wait sees that save read its batch, and the flush behind it returns once it landed, so each case
+    // starts with two flushes counted and its registration in the registry.
+    rig.engine.persist_reached(1, 1).await;
+    rig.engine.flush_persisted().await;
     rig
 }
 

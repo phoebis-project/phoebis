@@ -163,7 +163,8 @@ pub use credentials::{
     NewBundle, OutcomeWord, PendingAttempt, RefreshHistory, ResolvedAttempt, Secret, Settled,
 };
 pub use keepalive::{
-    keepalive_aad, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow,
+    keepalive_aad, FactsKey, FactsKind, FactsRow, IdleReturnsRow, KeepaliveAgentRow,
+    KeepaliveBatch, KeepaliveSessionRow, StoredFacts,
 };
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use registry::{
@@ -360,6 +361,7 @@ pub struct PurgedHistory {
 pub struct SealedCounts {
     pub api_key_accounts: u64,
     pub api_key_secrets: u64,
+    pub companion_facts: u64,
     pub credentials: u64,
     pub oauth_accounts: u64,
     pub open_refresh_attempts: u64,
@@ -1044,10 +1046,10 @@ impl RecoveryStore {
         prepare(&mut self.conn, migrations)
     }
 
-    /// One transaction over a schema `prepare_recovery` moved: the canary, the credentials, the API-key secrets and
-    /// the recipe bodies go, every oauth account reads `disconnected` and every api_key account `unpaired` under
-    /// `cause` with its lifecycle generation and revision stepped, open and uncertain refresh attempts settle
-    /// `failed` with the detail `disconnected`, and a canary is sealed under `key`.
+    /// One transaction over a schema `prepare_recovery` moved: the canary, the credentials, the API-key secrets, the
+    /// recipe bodies and the facts that a companion reported go, every oauth account reads `disconnected` and every
+    /// api_key account `unpaired` under `cause` with its lifecycle generation and revision stepped, open and uncertain
+    /// refresh attempts settle `failed` with the detail `disconnected`, and a canary is sealed under `key`.
     ///
     /// The operations page prints these statements as the sequence an operator runs by hand, so the two change
     /// together.
@@ -1070,6 +1072,7 @@ impl RecoveryStore {
             "UPDATE keepalive_agents SET body_sealed = NULL, body_nonce = NULL WHERE body_sealed IS NOT NULL",
             [],
         )?;
+        tx.execute("DELETE FROM companion_facts", [])?;
         tx.execute(
             concat!(
                 "UPDATE accounts SET ",
@@ -1111,6 +1114,7 @@ fn sealed_counts_on(conn: &Connection) -> Result<SealedCounts, StoreError> {
     Ok(SealedCounts {
         api_key_accounts: count("accounts", " WHERE kind = 'api_key'")?,
         api_key_secrets: count("api_key_secrets", "")?,
+        companion_facts: count("companion_facts", "")?,
         credentials: count("credentials", "")?,
         oauth_accounts: count("accounts", " WHERE kind = 'oauth'")?,
         open_refresh_attempts: count("refresh_attempts", &format!(" WHERE {PENDING_WHERE}"))?,
@@ -1187,8 +1191,8 @@ struct SealedRow {
 }
 
 impl SealedRow {
-    /// The plaintext is a credential, a secret or a recipe body, so it is wiped as soon as the open has proved the
-    /// key.
+    /// The plaintext is a credential, a secret, a recipe body or a set of reported facts, so it is wiped as soon as the
+    /// open has proved the key.
     fn opens_under(&self, key: &StorageKey) -> bool {
         crypto::open(key, &self.aad, &self.nonce, &self.sealed)
             .map(Zeroizing::new)
@@ -1201,15 +1205,16 @@ impl SealedRow {
 /// bounded read rather than every row of a large registry at each start and each `check-config`.
 ///
 /// The bound leaves one shape of a registry without a canary refusing the right key at the start: one whose readable
-/// credential bundles, API-key secrets and recipe bodies all sit past the 32nd of their kind. `recover-key` scans every
-/// sealed row, so on such a registry it seals the canary under the key it opens and discards nothing, the way out.
+/// credential bundles, API-key secrets, recipe bodies and sets of reported facts all sit past the 32nd of their kind.
+/// `recover-key` scans every sealed row, so on such a registry it seals the canary under the key it opens and discards
+/// nothing, the way out.
 const PROOF_ROWS_PER_KIND: i64 = 32;
 
 /// Whether the key opens any of the first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order (credential
-/// bundles, API-key secrets and recipe bodies), or `None` when the registry holds nothing sealed. A row that does not
-/// open is no proof of a wrong key, since the runtime survives a corrupt row too, and a wrong key opens none of them.
-/// `read_canary` meets the file as it is, without `prepare`, so a table the registry does not have yet holds nothing
-/// sealed rather than failing the read.
+/// bundles, API-key secrets, recipe bodies and sets of reported facts), or `None` when the registry holds nothing
+/// sealed. A row that does not open is no proof of a wrong key, since the runtime survives a corrupt row too, and a
+/// wrong key opens none of them. `read_canary` meets the file as it is, without `prepare`, so a table the registry
+/// does not have yet holds nothing sealed rather than failing the read.
 fn sealed_rows_open_under(conn: &Connection, key: &StorageKey) -> Result<Option<bool>, StoreError> {
     let mut seen = false;
     let mut opened = false;
@@ -1230,17 +1235,17 @@ fn sealed_rows_open_under(conn: &Connection, key: &StorageKey) -> Result<Option<
 
 type RowOf = fn(&rusqlite::Row<'_>) -> rusqlite::Result<SealedRow>;
 
-/// One kind of sealed row, a credential bundle, an API-key secret or a recipe body: its table, the statement over it
-/// and the mapper to the row with its associated data.
+/// One kind of sealed row, a credential bundle, an API-key secret, a recipe body or a set of reported facts: its
+/// table, the statement over it and the mapper to the row with its associated data.
 struct SealedKind {
     table: &'static str,
     sql: &'static str,
     row_of: RowOf,
 }
 
-/// Each kind of sealed row: credential bundles, API-key secrets and recipe bodies. A recovery reads every row of each
-/// kind, and the start's sample the first `PROOF_ROWS_PER_KIND` of each.
-const SEALED_KINDS: [SealedKind; 3] = [
+/// Each kind of sealed row: credential bundles, API-key secrets, recipe bodies and sets of reported facts. A recovery
+/// reads every row of each kind, and the start's sample the first `PROOF_ROWS_PER_KIND` of each.
+const SEALED_KINDS: [SealedKind; 4] = [
     SealedKind {
         table: "credentials",
         sql: "SELECT account_id, generation, nonce, sealed FROM credentials",
@@ -1256,6 +1261,11 @@ const SEALED_KINDS: [SealedKind; 3] = [
         sql: "SELECT key_id, key_generation, session_id, agent_id, body_nonce, body_sealed FROM keepalive_agents \
               WHERE body_sealed IS NOT NULL AND body_nonce IS NOT NULL",
         row_of: recipe_row,
+    },
+    SealedKind {
+        table: "companion_facts",
+        sql: "SELECT key_id, key_generation, session_id, kind, agent_id, facts_nonce, facts_sealed FROM companion_facts",
+        row_of: facts_row,
     },
 ];
 
@@ -1288,9 +1298,26 @@ fn recipe_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
     })
 }
 
-/// How many sealed rows open under `key`, over every row of each kind: credential bundles, API-key secrets and
-/// recipe bodies. A recovery discards what this finds unreadable, so it reads the whole registry once rather than the
-/// start's sample. A table the registry does not have yet holds nothing sealed.
+/// A stored kind word outside `FactsKind` fails the row's conversion, so the proof and the scan fail rather than
+/// judge a row under a key they cannot name.
+fn facts_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
+    let key = keepalive::FactsKey {
+        key_id: row.get(0)?,
+        key_generation: row.get(1)?,
+        session_id: row.get(2)?,
+        kind: row.get(3)?,
+        agent_id: row.get(4)?,
+    };
+    Ok(SealedRow {
+        aad: keepalive::facts_aad(&key),
+        nonce: row.get(5)?,
+        sealed: row.get(6)?,
+    })
+}
+
+/// How many sealed rows open under `key`, over every row of each kind: credential bundles, API-key secrets, recipe
+/// bodies and sets of reported facts. A recovery discards what this finds unreadable, so it reads the whole registry
+/// once rather than the start's sample. A table the registry does not have yet holds nothing sealed.
 fn readable_sealed_rows(conn: &Connection, key: &StorageKey) -> Result<u64, StoreError> {
     let mut readable = 0;
     for kind in &SEALED_KINDS {

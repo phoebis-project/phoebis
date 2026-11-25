@@ -93,6 +93,12 @@ fn rename(
     })
 }
 
+/// The eleventh step taken back on a file this build wrote, which every case that takes a file back past version 11
+/// runs first, since the step refuses its table as a duplicate on reopen.
+fn eleventh_step_taken_back(conn: &rusqlite::Connection) {
+    conn.execute_batch("DROP TABLE companion_facts;").unwrap();
+}
+
 /// The tenth step taken back on a file this build wrote, which every case that takes a file back past version 10
 /// runs first, since the step refuses its columns as duplicates on reopen.
 fn tenth_step_taken_back(conn: &rusqlite::Connection) {
@@ -161,12 +167,13 @@ fn sixth_step_taken_back(conn: &rusqlite::Connection) {
 }
 
 /// A registry as a version-5 build left it: the build's own file with the steps past version 5 taken back through
-/// `tenth_step_taken_back`, `ninth_step_taken_back`, `eighth_step_taken_back`, `seventh_step_taken_back` and
-/// `sixth_step_taken_back`, the version row set to 5, then `seed`, the rows a case stands at version 5 before its
-/// reopen. Each of the sixth step's column changes keeps its take-back. Its delete needs none, since a row it removed
-/// is seeded here, after the take-back.
+/// `eleventh_step_taken_back`, `tenth_step_taken_back`, `ninth_step_taken_back`, `eighth_step_taken_back`,
+/// `seventh_step_taken_back` and `sixth_step_taken_back`, the version row set to 5, then `seed`, the rows a case stands
+/// at version 5 before its reopen. Each of the sixth step's column changes keeps its take-back. Its delete needs none,
+/// since a row it removed is seeded here, after the take-back.
 fn at_version_five(path: &std::path::Path, seed: &str) {
     let conn = rusqlite::Connection::open(path).unwrap();
+    eleventh_step_taken_back(&conn);
     tenth_step_taken_back(&conn);
     ninth_step_taken_back(&conn);
     eighth_step_taken_back(&conn);
@@ -240,6 +247,7 @@ fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_t
     // The file as a version-1 build left it: the steps' columns and tables taken back, the counters' table in the
     // baseline's shape with an all-time row, and the marker at 1.
     let conn = rusqlite::Connection::open(&path).unwrap();
+    eleventh_step_taken_back(&conn);
     tenth_step_taken_back(&conn);
     ninth_step_taken_back(&conn);
     eighth_step_taken_back(&conn);
@@ -312,6 +320,7 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
     // reset columns and the feature account columns gone and the marker at 4, as the file's other migration test takes
     // a file back to version 1.
     let conn = rusqlite::Connection::open(&path).unwrap();
+    eleventh_step_taken_back(&conn);
     tenth_step_taken_back(&conn);
     ninth_step_taken_back(&conn);
     eighth_step_taken_back(&conn);
@@ -504,9 +513,10 @@ fn a_registry_before_the_eighth_step_reads_its_pools_with_the_thinking_switch_of
             })
             .unwrap();
     }
-    // The file as a version-7 build left it: the pools and the account stored, the tenth, the ninth and the eighth
-    // steps taken back, which leaves each pool's one ceiling in `window_ceiling`, and the marker at 7.
+    // The file as a version-7 build left it: the pools and the account stored, the eleventh, the tenth, the ninth and
+    // the eighth steps taken back, which leaves each pool's one ceiling in `window_ceiling`, and the marker at 7.
     let conn = rusqlite::Connection::open(&path).unwrap();
+    eleventh_step_taken_back(&conn);
     tenth_step_taken_back(&conn);
     ninth_step_taken_back(&conn);
     eighth_step_taken_back(&conn);

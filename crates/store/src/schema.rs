@@ -6,7 +6,8 @@
 //! marker. Version 3 adds `usage_window_sets`. Version 7 adds the limit resets' three columns to `accounts`. Version 8
 //! adds `accounts.state_changed_at`, `model_week_hours`, `pins.thinking_sums`, `pools.fable_reservation_shedding`,
 //! `pools.thinking_diagnostics`, `pools.weekly_ceiling` and `thinking_bindings`, renames `pools.window_ceiling` to
-//! `five_hour_ceiling` and drops `session_first_seen`. Version 10 adds `lapsed_agents`.
+//! `five_hour_ceiling` and drops `session_first_seen`. Version 10 adds `lapsed_agents`. Version 11 adds
+//! `companion_facts`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -408,6 +409,19 @@ ALTER TABLE pins ADD COLUMN compacted INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE lapsed_agents ADD COLUMN compacted INTEGER NOT NULL DEFAULT 0;
 "#;
 
+/// The facts that a companion reports of a session and of its agents rest in `companion_facts`, one sealed row per
+/// set: a session's title, its project set and each agent's set. The table starts empty. The index serves the two cuts
+/// that end a set by the instant of its session's last report.
+const V11: &str = r#"
+CREATE TABLE companion_facts (
+  key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL, kind TEXT NOT NULL,
+  agent_id TEXT NOT NULL, record_version INTEGER NOT NULL, facts_sealed BLOB NOT NULL, facts_nonce BLOB NOT NULL,
+  seen_at INTEGER NOT NULL,
+  PRIMARY KEY (key_id, key_generation, session_id, kind, agent_id)
+);
+CREATE INDEX companion_facts_seen ON companion_facts (kind, seen_at);
+"#;
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
 /// rebuild a table, so an older build refuses a newer registry rather than misreading it.
 pub const MIGRATIONS: &[(u32, &str)] = &[
@@ -420,6 +434,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (8, V8),
     (9, V9),
     (10, V10),
+    (11, V11),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
