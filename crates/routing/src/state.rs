@@ -2076,7 +2076,7 @@ impl RoutingState {
 
     /// The one way a pin leaves the map, by a move, a fail-over, an expiry, a release or the purge. The row leaves
     /// with its mark, which the caller reads off the answer to say what cleared it, and with the key's open
-    /// observation, which the first answer with usage on the row settles.
+    /// observation, which the row's first client answer with usage settles.
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
         self.renewed.remove(key);

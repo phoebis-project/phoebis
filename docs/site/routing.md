@@ -1392,7 +1392,8 @@ do. A `429` of the seat cools it as a whole under the window and until the reset
 cooldown keeps the spend share that the router held at that refusal, 1.0 where it held none. A poll's spend reading
 taken after the refusal that names a lower share lifts the cooldown, since a spend does not fall inside its window, as
 long as the reading has room: a share under one, no reason of its own and no disabled flag. A reading at or over the
-kept share leaves it, and the hold at a share of one or more stands with or without the cooldown.
+kept share leaves it, but for a cooldown that names a plan window, which lifts on a reading with room as a subscription
+account's does, and the hold at a share of one or more stands with or without the cooldown.
 
 Under `allow`, a subscription account whose five-hour window, seven-day window or model week is spent stays a candidate
 on the overage path for every model, since extra usage funds every model: the router sends the request, and a `429`
