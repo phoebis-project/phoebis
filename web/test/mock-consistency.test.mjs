@@ -2801,7 +2801,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       for (const p of e.detail.pins) {
         const where = `${e.requestId}: ${p.session_id}`;
         if (p.rewrite === null) {
-          assert.equal(p.rewrite_window, null, where);
+          // Each mark of the story holds a prompt size, so the router's record carries its rewrite.
+          assert.deepEqual([p.marked, p.rewrite_window], [false, null], where);
           continue;
         }
         const figure = older.has(e) ? storedRewrite[p.last_input_tokens] : proWeekRewrite[p.last_input_tokens - (p.dropped_thinking_tokens ?? 0)];
