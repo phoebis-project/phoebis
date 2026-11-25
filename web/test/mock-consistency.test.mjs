@@ -77,10 +77,10 @@ const longestTtlOf = (s, r) => {
 const REFUSED_IDS = ['req_0c4e7a91-b5d', 'req_2d8e5b13-f40', 'req_5d1b8e2f-c64', 'req_6c3a9e27-5b1', 'req_9b4f1c62-a07', 'req_a8f3c6d0-e17', 'req_e0a4c6f2-118', 'req_f1c8e3a5-29d'];
 
 /**
- * Whether the accounts answer withholds a row's windows, as the route does for a subscription row that is not paired,
- * needs re-auth or whose plan ended, while the ledger keeps the samples of its polls.
+ * Whether the accounts answer withholds a row's windows, by `windows_withheld` in crates/admin/src/routes.rs: a
+ * subscription row that is not paired, needs re-auth or whose plan ended, while the ledger keeps its polls' samples.
  */
-const withholdsWindows = (a) => a.kind === 'oauth' && (a.status === 'unpaired' || a.status === 'reauth_required' || a.planEndedAt !== null);
+const answerWithholdsWindows = (a) => a.kind === 'oauth' && (a.status === 'unpaired' || a.status === 'reauth_required' || a.planEndedAt !== null);
 
 /** The names the mock's story used before it read as one operator's, and the admin harness's own. */
 const RETIRED = ['business', 'codex', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'team'];
@@ -476,7 +476,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The answer withholds the windows of a row whose state reads none, whose usage block keeps the instant of its last
     // reading. An account that holds no window reading takes its facts from the routing log's events alone.
     for (const a of s.accounts) {
-      const readings = withholdsWindows(a) ? (a.usage?.fetchedAt ? [Date.parse(a.usage.fetchedAt)] : []) : [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
+      const readings = answerWithholdsWindows(a) ? (a.usage?.fetchedAt ? [Date.parse(a.usage.fetchedAt)] : []) : [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
       if (readings.length === 0) continue;
       const late = facts.filter((r) => r.accountId === a.id && Date.parse(r.hour) > Math.max(...readings));
       assert.equal(late.length, 0, `${a.id}'s newest reading is ${iso(Math.max(...readings))}, before ${late.length} of its account facts from ${late[0]?.hour}`);
@@ -491,7 +491,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // and an account without the window keys neither. The answer withholds the windows of a row whose state reads none,
     // so such a row's window set reads off the windows of its quota history, which the ledger keeps. An account with no
     // window set takes its cooldowns from the routing log's events, which no window keys.
-    const sets = await Promise.all(s.accounts.map(async (a) => [a.id, withholdsWindows(a) ? (await s.api.getQuotaHistory(a.id)).map((h) => h.windowId) : a.windows.map((w) => w.id)]));
+    const sets = await Promise.all(s.accounts.map(async (a) => [a.id, answerWithholdsWindows(a) ? (await s.api.getQuotaHistory(a.id)).map((h) => h.windowId) : a.windows.map((w) => w.id)]));
     const has5h = new Map(sets.filter(([, ids]) => ids.length > 0).map(([id, ids]) => [id, ids.includes('5h')]));
     const without = facts.filter((r) => has5h.get(r.accountId) === false);
     assert.ok(without.length > 0, 'the story holds account facts of an account without the window');
@@ -518,7 +518,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const holds = new Map();
     for (const a of s.accounts) {
       const history = await s.api.getQuotaHistory(a.id);
-      holds.set(a.id, withholdsWindows(a) ? history.map((h) => h.windowId) : [...a.windows.map((w) => w.id), ...(a.fableWindow ? ['7d_fable'] : [])]);
+      holds.set(a.id, answerWithholdsWindows(a) ? history.map((h) => h.windowId) : [...a.windows.map((w) => w.id), ...(a.fableWindow ? ['7d_fable'] : [])]);
       for (const h of history) {
         for (const x of h.samples) {
           sampled.add(`${a.id} ${startOfHour(Date.parse(x.at))}`);
@@ -4472,6 +4472,16 @@ test('an account with no window reading counts the time of its cooldown in the h
   const s = await pinned;
   const rows = (await s.api.listAccountRollups(iso(s.now - DAY), iso(s.now + DAY))).filter((r) => r.accountId === 'research');
   assert.deepEqual(rows.map((r) => [r.hour, r.cooldownSeconds]), [['2026-09-16T03:00:00.000Z', 65]]);
+});
+
+// Catches a dropped lookup of an ended plan's windows, which leaves its sampled hours with their peaks and no window.
+// The last clean poll of sunset read its 5-hour window at 0.12 at 14:25 three days and five minutes back, resetting at
+// 16:30, two hours past the plan's saved end at 14:30 (mock/accounts.ts), so the hour states the end as the deadline.
+test("an ended plan's sampled hour states its last sample of a window, with the deadline at the account's end", async () => {
+  const s = await pinned;
+  const row = (await s.api.listAccountRollups(iso(s.now - 4 * DAY), iso(s.now))).find((r) => r.accountId === 'sunset' && r.hour === '2026-09-13T14:00:00.000Z');
+  const w = row?.windows.five_hour;
+  assert.deepEqual(w && [w.utilization, w.sampledAt, w.resetsAt, w.deadline], [0.12, '2026-09-13T14:25:00.000Z', '2026-09-13T16:30:00.000Z', '2026-09-13T14:30:00.000Z']);
 });
 
 // An instant whose hour a full day back carries traffic.

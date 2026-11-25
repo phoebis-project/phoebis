@@ -342,7 +342,8 @@ function accountHours(): AccountRollup[] {
     }
     if (e.kind === 'cooldown_set' && folds(e.accountId) && typeof e.detail.until === 'number') spans.set(e.accountId, [...(spans.get(e.accountId) ?? []), { setAt: at, until: e.detail.until }]);
   }
-  for (const [accountId, rows] of spans) for (const [hour, seconds] of cooldownSecondsByHour(rows)) fold(accountId, hour, { cooldownSeconds: seconds });
+  // The ledger stores no account hour that holds nothing.
+  for (const [accountId, rows] of spans) for (const [hour, seconds] of cooldownSecondsByHour(rows)) if (seconds > 0) fold(accountId, hour, { cooldownSeconds: seconds });
   return [...hours.values()];
 }
 const ACCOUNT_HOURS = accountHours();
