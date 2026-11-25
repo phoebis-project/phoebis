@@ -2811,12 +2811,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([round.detail.pins.filter((p) => p.marked).map((p) => p.planned), cap.inFlight === cap.inFlightCap], [['primary', 'primary'], true]);
   });
 
-  test(`every shedding round's pin whose move drops no thinking reads its burn per token of its last prompt to seven digits, and the stretch round's first marked pin per token of its weighted size, at ${at}`, async () => {
+  test(`every shedding round's pin whose move drops no thinking reads its burn per token of its last prompt to seven digits, the stretch round's first marked pin per token of its weighted size, and a pin with no prompt per its one token, at ${at}`, async () => {
     const s = await story;
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
     assert.ok(rounds.length > 0);
     for (const e of rounds) {
-      for (const p of e.detail.pins.filter((x) => x.burn !== null && (x.dropped_thinking_tokens ?? 0) === 0)) {
+      // The router sizes a pin with no prompt at one token, so that pin's figure is no quotient of a prompt.
+      for (const p of e.detail.pins.filter((x) => x.burn !== null && x.last_input_tokens > 0 && (x.dropped_thinking_tokens ?? 0) === 0)) {
         const want = p.burn / p.last_input_tokens;
         assert.ok(p.per_rewrite > 0 && Math.abs(p.per_rewrite - want) <= want * 1e-6, `${e.requestId}: ${p.session_id} reads ${p.per_rewrite}, not ${want}`);
       }
@@ -2826,6 +2827,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // 31,440 is 8.905852e-7.
     const stretch = rounds.find((e) => e.requestId === 'req_9f2e7c5a-c49')?.detail.pins.find((p) => p.marked);
     assert.deepEqual([stretch?.dropped_thinking_tokens, stretch?.per_rewrite], [480, 8.905852e-7]);
+    // The 11:00 round's subagent pin `f2c8` holds no prompt and a burn of 0, so its figure is 0 over its one token.
+    const unprompted = rounds.find((e) => e.requestId === 'req_1eaa9bc1-a18')?.detail.pins.find((p) => p.agent_id === 'f2c8');
+    assert.equal(unprompted?.per_rewrite, 0);
   });
 
   test(`no 5-hour shedding round of the story fires inside the hold of its pool, and a held shed line names the window's age and hold beside its mark, at ${at}`, async () => {
@@ -3050,9 +3054,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round').sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
     const round5 = (x) => Math.round(x * 1e5) / 1e5;
-    // Each round's burn sum, the priced burn its marks leave and whether an unpriced pin stands unmarked, off the seeds
-    // in mock/routingLog.ts, each left figure at least a tenth of its sum: the Fable session's 0.03 of
-    // `FABLE_WEEK_BURN`, the 0.0052 and 0.0071 `ROUND_PINS` leave of their 0.0299, the 0.002, 0.026, 0.0206 and 0.025
+    // Each round's burn sum, the priced burn its marks leave and whether an unpriced pin the walk ordered stands
+    // unmarked, which the router's guard reads by its missing burn, off the seeds in mock/routingLog.ts, each left
+    // figure at least a tenth of its sum: the Fable session's 0.03 of `FABLE_WEEK_BURN`, the 0.0052 and 0.0071
+    // `ROUND_PINS` leave of their 0.0299 beside the subagent's pin that burns 0, the 0.002, 0.026, 0.0206 and 0.025
     // `STRETCH_PINS` leave of their 0.1286, the 0.212 and 0.012 of the two priced pins of `NO_RUNWAY_PINS`, and the
     // 0.1165, 0.0301 and 0.0774 of the three priced pins of `MOVED_PIN_ROUND_PINS`, which unpriced pins stand beside in
     // both. The afternoon round lists the pin of the session the mod released whole under `ended` with no burn, and the
@@ -3066,7 +3071,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           e.requestId,
           e.detail.burn_sum,
           round5(e.detail.pins.filter((p) => p.burn !== null && !p.marked).reduce((n, p) => n + p.burn, 0)),
-          e.detail.pins.some((p) => p.skip === 'unpriced' && !p.marked),
+          e.detail.pins.some((p) => p.burn === null && !p.marked && (p.skip === null || p.skip === 'unpriced')),
         ]),
       },
       {

@@ -698,10 +698,11 @@ function resolvedPlan(a: Pick<Seed, 'subscription' | 'usageBased'>): PlanWord | 
 }
 
 /**
- * Whether a row's state holds no credential the router reads: not paired, or awaiting re-authentication. The route
- * withholds such a row's windows, and the poll reads no such account.
+ * Whether a subscription row's state holds no credential the router reads: not paired, or awaiting re-authentication.
+ * The route withholds such a row's windows, and the poll reads no such account. An API-key row keeps every window the
+ * ledger holds whatever its state.
  */
-export const withholdsWindows = (a: Pick<Account, 'status'>): boolean => a.status === 'unpaired' || a.status === 'reauth_required';
+export const withholdsWindows = (a: Pick<Account, 'kind' | 'status'>): boolean => a.kind === 'oauth' && (a.status === 'unpaired' || a.status === 'reauth_required');
 
 /** Each row's last reading as the final map builds it, ahead of the state's withholding. */
 const READINGS = new Map<string, Pick<Account, 'fableWindow' | 'windows'>>();

@@ -344,6 +344,8 @@ const writtenBy = (now: number): RequestLog[] => ledger().requests.filter((r) =>
  * one's, as the route does.
  */
 const cutsOf = (requestId: string) => ROUTING_EVENTS.filter((e) => e.kind === 'stream_interrupted' && e.requestId === requestId);
+/** The kinds of the events a pin writes, which a request's detail reads off the routing log. */
+const PIN_EVENT_KINDS: readonly string[] = ['pin_created', 'pin_expired', 'pin_migrated', 'pin_released'];
 
 /** The keepalive overview of a router with no session and no probe yet. */
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
@@ -397,13 +399,14 @@ const poolPins = (p: Pick<Pool, 'id'>, keys: readonly Pick<ApiKey, 'id' | 'poolI
 
 /**
  * The route's `keys=` rule: `<id>@<generation>` names one lifetime and a bare id the live key's, so an earlier
- * holder's rows answer only to their own selector.
+ * holder's rows answer only to their own selector, and the reserved id `-` reaches the requests that hold no key at
+ * any generation.
  */
 const selectsKey = (selector: string, r: RequestLog, live: Map<string, number>) =>
-  r.keyId !== null && (selector.includes('@') ? `${r.keyId}@${r.keyGeneration}` === selector : r.keyId === selector && live.get(selector) === r.keyGeneration);
+  selector === '-' ? r.keyId === null : r.keyId !== null && (selector.includes('@') ? `${r.keyId}@${r.keyGeneration}` === selector : r.keyId === selector && live.get(selector) === r.keyGeneration);
 
 function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>): boolean {
-  // A request the router never attributed to a key matches no key filter.
+  // A request the router never attributed to a key matches the reserved id alone.
   if (q.keyIds?.length && !q.keyIds.some((k) => selectsKey(k, r, live))) return false;
   // The route reaches a request filed under no pool through the `-` selector, as the rollups file it.
   if (q.poolIds?.length && !q.poolIds.includes(r.poolId ?? '-')) return false;
@@ -769,10 +772,11 @@ export class MockApi implements Api {
   }
 
   /**
-   * A list read at least `FIRST_POLL_MS` after a confirm lands that confirm's first reading on its row, where the row
-   * reads no window yet. Keyed on the clock rather than a count of reads, since the confirm's reload and the refresh
-   * the closing dialog resumes read the list at once on a live clock. A row that lost its credential since the confirm
-   * takes none, since the router's poll and its token manager read no such account.
+   * A list read at least `FIRST_POLL_MS` after a confirm lands that confirm's first poll on its row: its clean answer
+   * as the row's poll standing and its snapshot, and its reading where the row reads no window yet. Keyed on the clock
+   * rather than a count of reads, since the confirm's reload and the refresh the closing dialog resumes read the list
+   * at once on a live clock. A row that lost its credential since the confirm takes none, since the router's poll and
+   * its token manager read no such account.
    */
   private landFirstPolls() {
     const at = mockClock.now();
@@ -780,7 +784,11 @@ export class MockApi implements Api {
       if (at - confirmedAt < FIRST_POLL_MS) continue;
       this.firstPolls.delete(id);
       const a = this.accounts.find((x) => x.id === id);
-      if (a && !withholdsWindows(a) && a.windows.length === 0 && a.fableWindow === null) this.putAccount({ ...a, windows: FIRST_READING.map((w) => ({ ...w, observedAt: iso(at) })) });
+      if (a === undefined || withholdsWindows(a)) continue;
+      const read = iso(at);
+      const usage = a.usage && { ...a.usage, error: null, fetchedAt: read, heldUntil: null, poll: { backoffSince: null, lastAttemptAt: read, lastCleanAt: read, lastError: null, lastOutcome: 'clean' as const, nextAttemptAt: null, rateLimitedInARow: 0 } };
+      const windows = a.windows.length === 0 && a.fableWindow === null ? FIRST_READING.map((w) => ({ ...w, observedAt: read })) : a.windows;
+      this.putAccount({ ...a, usage, windows });
     }
   }
 
@@ -872,12 +880,15 @@ export class MockApi implements Api {
     if (held?.id === 'legacy' && held.credential.refreshTokenExpiresAt === accountById.get('legacy')?.credential.refreshTokenExpiresAt) throw new ApiError(409, `${held.label} holds a credential sealed under another storage key, so disconnect it before pairing again`, 'sealed_under_another_key');
     // The confirm stores the tokens it exchanged, so the row carries both their expiries, as the router answers it.
     const tokens = { accessTokenExpiresAt: ahead(8 * HOUR), refreshTokenExpiresAt: ahead(30 * DAY) };
+    // The router's confirm drops the usage service's entry for the account, so the row reads no poll standing until
+    // the first poll answers, while the reading it holds still answers.
+    const inFlight = (usage: Account['usage']): Account['usage'] => usage && { ...usage, heldUntil: null, poll: null };
     if (pairing.label !== undefined) {
       // The backstop for a create that landed between the start and the confirm.
       if (this.accounts.some((a) => a.id === pairing.accountId)) throw new ApiError(409, ACCOUNT_TAKEN, null);
       const row = this.newAccountRow({ id: pairing.accountId, kind: 'oauth', label: pairing.label, secret: null }, 'ready', 'operator+new@example.com');
       const credential = { ...row.credential, ...tokens };
-      this.accounts = [...this.accounts, { ...row, credential, featureGrants: featureGrantsOf({ credential, kind: row.kind }) }];
+      this.accounts = [...this.accounts, { ...row, credential, featureGrants: featureGrantsOf({ credential, kind: row.kind }), usage: inFlight(row.usage) }];
     }
     // The router's confirm clears a plan-ended flag and records the plan found again only where the confirmed profile
     // reports a plan. The mock's profile is the stored document, so a document that names a free organization keeps
@@ -890,7 +901,7 @@ export class MockApi implements Api {
       // the block, since a pairing changes nothing upstream. Its confirm sets the account's state ready, which the
       // account view folds with the enabled bit and the cooldowns.
       const credential = { ...held.credential, ...tokens };
-      this.putAccount({ ...held, credential, featureGrants: featureGrantsOf({ credential, kind: held.kind }), limitResets: null, status: statusOf(held, held.routingEnabled, null), ...(flagged !== null && !kept ? { planEndedAt: null } : {}) });
+      this.putAccount({ ...held, credential, featureGrants: featureGrantsOf({ credential, kind: held.kind }), limitResets: null, status: statusOf(held, held.routingEnabled, null), usage: inFlight(held.usage), ...(flagged !== null && !kept ? { planEndedAt: null } : {}) });
       const block = lookup(this.resetBlocks, held.id);
       if (block !== undefined) this.resetBlocks = { ...this.resetBlocks, [held.id]: { ...block, folds: block.folds + 1 } };
     }
@@ -1314,13 +1325,26 @@ export class MockApi implements Api {
     return latency(ledger().decisionOf(requestId, seq));
   }
 
+  /**
+   * The request with the events of its window, as the route reads them: from its arrival to its finish, under its
+   * session or naming the request. The pin events come off the routing log, which holds each placement's creation, and
+   * the request's own table adds its other kinds, so no event lists twice. A row the story gives no finish ended when
+   * the ledger wrote it, since the router records a finish on every request it writes.
+   */
   getRequest(id: string): Promise<RequestDetail | null> {
     const request = ledger().requestById.get(id);
-    const events = REQUEST_EVENTS.get(id) ?? [];
+    if (request === undefined) return latency(null);
+    const from = Date.parse(request.at);
+    const to = request.phases.finishedAt === null ? landedAt(request) : Date.parse(request.phases.finishedAt);
+    const pins = ROUTING_EVENTS.filter((e) => PIN_EVENT_KINDS.includes(e.kind) && Date.parse(e.at) >= from && Date.parse(e.at) <= to && ((request.sessionId !== null && e.sessionId === request.sessionId) || e.requestId === id));
+    const own = (REQUEST_EVENTS.get(id) ?? []).filter((e) => !PIN_EVENT_KINDS.includes(e.kind));
     const rows = cutsOf(id);
-    const cuts: RequestEvent[] = rows.map((e) => ({ accountId: e.accountId, at: e.at, detail: e.detail, keyId: e.keyId, kind: e.kind, model: e.model, sessionId: e.sessionId }));
+    const asEvent = (e: RoutingEvent): RequestEvent => ({ accountId: e.accountId, at: e.at, detail: e.detail, keyId: e.keyId, kind: e.kind, model: e.model, sessionId: e.sessionId });
+    // At one instant the ledger's order reads the model answers ahead of the pin events and those ahead of the cuts,
+    // which the stable sort keeps from the order the three lists join in.
+    const events = [...own, ...pins.map(asEvent), ...rows.map(asEvent)].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
     const newest = rows[rows.length - 1];
-    return latency(request ? { events: cuts.length === 0 ? events : [...events, ...cuts].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)), request, streamCut: newest ? decodeStreamCut({ ...newest.detail, at: Date.parse(newest.at) }) : null } : null);
+    return latency({ events, request, streamCut: newest ? decodeStreamCut({ ...newest.detail, at: Date.parse(newest.at) }) : null });
   }
 
   getSession(): Promise<SessionInfo | null> {
@@ -1403,9 +1427,10 @@ export class MockApi implements Api {
   }
 
   listRequests(query: RequestQuery = {}): Promise<RequestPage> {
-    // The route reads its order before the store, so a key outside its list is refused whatever the store holds.
+    // The route's query extractor refuses a key outside its list before the store is read, in the parser's words behind
+    // the parameter's name.
     const order = query.order ?? 'received_at';
-    if (!REQUEST_ORDER_VALUES.includes(order)) return Promise.reject(new ApiError(400, 'order is received_at, attempts, duration_ms, ttfb_ms, input_tokens or output_tokens', null));
+    if (!REQUEST_ORDER_VALUES.includes(order)) return Promise.reject(new ApiError(400, `order: unknown variant \`${order}\`, expected one of ${REQUEST_ORDER_VALUES.map((w) => `\`${w}\``).join(', ')}`, null));
     const dir = query.dir ?? 'desc';
     const cursor = query.cursor === undefined ? undefined : cursorKeyOf(query.cursor, order);
     if (cursor === null) return Promise.reject(new ApiError(400, 'cursor is <value>:<id>', null));

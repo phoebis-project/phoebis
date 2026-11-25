@@ -18693,8 +18693,8 @@ await forView('/routing-log', async () => {
     // Primary's Fable reservation round at 11:13:40. Pace holds back half of what primary's Fable week burn of 0.008 an
     // hour spends over the 80.9 hours to the reset, 0.32376 (`RESERVATION_FABLE_BURN` in mock/routingLog.ts), which
     // primary's 7-day seed of 0.73 (mock/accounts.ts), walked back to 0.70 at the round, leaves 0.3 of room for. The
-    // panel names the reservation as what fired the round, draws it as a whole percent, and reads the Fable pin as left
-    // out under the Fable model.
+    // panel names the reservation as what fired the round, draws it as a whole percent, reads the current pin behind
+    // the met target with no skip word, and reads the Fable pin as left out under the Fable model.
     const name = '/routing-log opens a round the Fable reservation fired';
     const id = 'req_5d1f8c3a-b27';
     if ((await api.getDecision(id, 1)) === null) results.push({ name, ok: false, missing: ['no decision of the story at 11:13:40 on primary'] });
@@ -18709,7 +18709,7 @@ await forView('/routing-log', async () => {
       const read = [pairs['Fired by'] ?? null, pairs['Fable reservation'] ?? null, marks];
       results.push({
         name,
-        ok: JSON.stringify(read) === JSON.stringify([['the Fable reservation'], ['32%'], ['marked', 'unpriced', 'Fable model']]),
+        ok: JSON.stringify(read) === JSON.stringify([['the Fable reservation'], ['32%'], ['marked', 'current', 'Fable model']]),
         missing: [JSON.stringify(read)],
       });
       page.unmount();

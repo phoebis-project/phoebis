@@ -270,6 +270,21 @@ test("the mock answers an agent id with the agent's rows on both logs, an event 
   }
 });
 
+test("a request's detail lists the routing log's pin events of its window and session once, beside its own other events", async () => {
+  const kinds = async (id) => (await api.getRequest(id)).events.map((e) => e.kind);
+  // The placement of 13:21:39 releases the expired row on nightly and creates a pin on primary, as its record's pin
+  // events read, and the routing log alone holds that creation.
+  assert.ok((await kinds('req_6f3e1b84-d29')).includes('pin_created'), "the detail lists the pin its request's placement created");
+  // The failover of 14:24:10 moves the subagent's pin from primary to nightly, which both tables hold, and answers the
+  // refused model and its permit, which the request's own table holds alone.
+  const failover = await kinds('req_2e7c90a1-6d4');
+  assert.deepEqual(
+    ['pin_migrated', 'model_rejected', 'model_permitted'].map((kind) => failover.filter((k) => k === kind).length),
+    [1, 1, 1],
+    `the move lists once and the model answers stay: ${failover.join(', ')}`,
+  );
+});
+
 test('the mock leaves out a session no mod reports once the latest of its last use, its last request and its companion\'s end is older than the non-companion timeout, as the route does', async () => {
   const now = Date.parse(AT);
   const HOUR_S = 3_600;

@@ -2287,22 +2287,23 @@ function derivedSpecs(r: RequestLog): Spec[] {
 const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWith(prefix))?.sessionId ?? prefix;
 
 /**
- * The 11:00 round's four walked pins on secondary in its order: the cold one, then the warm ones by burn over their
+ * The 11:00 round's five walked pins on secondary in its order: the cold one, then the warm ones by burn over their
  * prompt. Each holds Sonnet 4.5, the one model secondary serves, and burns its share of the 5-hour window per hour,
  * which sum to the account's burn. The first two cover the target under the cap and plan their moves to primary, where
  * they fit, and the walk stops before the current pin. The fourth is the laptop conversation's, whose renewal of
- * 10:39:30 stamped the window and whose last turn left its pin on secondary. A fifth pin, the subagent `f2c8`'s, which
+ * 10:39:30 stamped the window and whose last turn left its pin on secondary. The fifth, the subagent `f2c8`'s, which
  * its first turn placed on secondary at 10:59:40, reads warm under its fresh five-minute cache and holds no prompt size
- * and no burn while that turn runs through the round, so the walk leaves it out before the order. The round is an
- * earlier build's record, which priced Sonnet 4.5 through its fallback weight, so its burns and marks stand as it
- * stored them.
+ * and a burn of zero while that turn runs through the round. The round is an earlier build's record, which priced
+ * Sonnet 4.5 through its fallback weight, so its burns and marks stand as it stored them. That build walked a pin with
+ * a burn of zero where a later one leaves it out, and its walk stopped at the met target ahead of the fifth pin, so
+ * that pin reads no skip word. It wrote `cheapest` on the pick's mark, the second pin's.
  */
 const ROUND_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('0d588de5'), skip: null },
-  { agentId: 'e90b', burn: 0.0142, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('c64358b5'), skip: null },
+  { agentId: 'e90b', burn: 0.0142, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-5', note: 'cheapest', sessionId: sessionId('c64358b5'), skip: null },
   { agentId: 'e90b', burn: 0.0052, cold: false, keyId: 'desktop', lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-4-5', note: 'current', sessionId: sessionId('407dd39b'), skip: null },
   { agentId: 'main', burn: 0.0071, cold: false, keyId: 'laptop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: CLIMB_SESSION_ID, skip: null },
-  { agentId: 'f2c8', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 0, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('407dd39b'), skip: 'no_burn' },
+  { agentId: 'f2c8', burn: 0, cold: false, keyId: 'desktop', lastInputTokens: 0, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('407dd39b'), skip: null },
 ];
 
 /**
@@ -2381,14 +2382,15 @@ const PRIMARY_STAMP_BURN = 0.115;
 /**
  * Primary's Fable reservation round, its pins as the round lists them. The round walks the pins whose model draws no
  * Fable week on the 7-day window: a cold Sonnet 5.5 pin, whose 0.0016 an hour covers the cap's half of the walked burn,
- * and the current pin, whose Sonnet 4.5 has no weight of its own and so no priced burn, which lifts the guard. The Fable
- * pin leaves the round before the order with no figure, though its 0.008 an hour on the Fable week spends the room the
- * reservation holds. Each pin stands on a row: the cold pin on its session's one turn of 11:05:10, the current pin on
- * the move of 11:08:30 and the Fable pin on its conversation's renewal of 11:02:40.
+ * and the current pin, whose Sonnet 4.5 has no weight of its own and so no priced burn, which lifts the guard. The
+ * router's walk tests a met target ahead of a pin with no priced burn, so the current pin behind the pick reads no skip
+ * word. The Fable pin leaves the round before the order with no figure, though its 0.008 an hour on the Fable week
+ * spends the room the reservation holds. Each pin stands on a row: the cold pin on its session's one turn of 11:05:10,
+ * the current pin on the move of 11:08:30 and the Fable pin on its conversation's renewal of 11:02:40.
  */
 const RESERVATION_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.0016, cold: true, keyId: 'desktop', lastInputTokens: 36_000, marked: true, model: 'claude-sonnet-5-5', note: 'cheapest', sessionId: RESERVATION_MARKED_SESSION_ID, skip: null },
-  { agentId: 'e90b', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: false, model: 'claude-sonnet-4-5', note: 'current', sessionId: sessionId('c64358b5'), skip: 'unpriced' },
+  { agentId: 'e90b', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: false, model: 'claude-sonnet-4-5', note: 'current', sessionId: sessionId('c64358b5'), skip: null },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 52_000, marked: false, model: 'claude-fable-5-1', note: null, sessionId: RESERVATION_FABLE_SESSION_ID, skip: 'fable_model' },
 ];
 

@@ -710,14 +710,20 @@ test("a re-pair of a held account clears the row's limit resets and moves the re
   await assert.rejects(() => api.useLimitReset('nightly', 'rg-nightly-1'), (e) => e instanceof d.ApiError && e.status === 409 && e.code === 'limit_reset_not_usable', 'a use before the next read finds no stored block');
   const after = (await api.readLimitResets('nightly')).limitResets.revision;
   assert.notEqual(after, before, 'the next read answers a revision no token from before the pairing matches');
-  // Secondary's poll waits out a backoff that ends minutes past the story's clock, so the route answers the stored
-  // block, which the pairing cleared. The case holds the clock the mock reads a minute inside that backoff, so a slow
-  // run cannot carry the read past its end.
+  // The confirm ends the backoff secondary's poll waits out, as the router's usage service drops the account's entry
+  // with its hold. So the case seats the backoff that a 429 answering the first poll behind the confirm leaves, ending
+  // where the old one ended, and inside it the route answers the stored block, which the pairing cleared. The case
+  // holds the clock the mock reads a minute inside that backoff, so a slow run cannot carry the read past its end, and
+  // the mock's own first poll lands at no read of the case.
   const next = Date.parse((await storyAccount(api, 'secondary')).usage.poll.nextAttemptAt);
   const wall = Date.now;
   Date.now = () => next - 60_000;
   try {
     await repair('secondary');
+    const confirmed = api.accounts.find((a) => a.id === 'secondary');
+    const hold = new Date(next).toISOString();
+    const polled = new Date(next - 60_000).toISOString();
+    api.putAccount({ ...confirmed, usage: { ...confirmed.usage, heldUntil: hold, poll: { backoffSince: polled, lastAttemptAt: polled, lastCleanAt: null, lastError: 'the usage endpoint rate-limited the account', lastOutcome: 'rate_limited', nextAttemptAt: hold, rateLimitedInARow: 1 } } });
     const held = await api.readLimitResets('secondary');
     assert.deepEqual([held.error, held.limitResets, (await storyAccount(api, 'secondary')).limitResets], ['the account is waiting out a rate limit', null, null], "a read inside the backoff answers the backoff's error and no member, and stores none");
   } finally {
@@ -827,6 +833,32 @@ test('a first reading lands on no row that a disconnect left without a credentia
     now += 2_200;
     const spare = await storyAccount(api, 'spare');
     assert.deepEqual([spare.windows, spare.fableWindow], [[], null]);
+  } finally {
+    Date.now = wall;
+  }
+});
+
+test("a re-pair's confirm reads no poll standing until the first poll lands, and that poll's clean answer replaces the failed polls", async () => {
+  // The case holds the clock the mock reads and steps it past the first poll's few seconds instead of waiting.
+  const wall = Date.now;
+  let now = wall();
+  Date.now = () => now;
+  try {
+    const api = await signedIn();
+    // Reserve is paired again with no disconnect, and its seed holds the polls that failed on a 503 since its last
+    // clean read.
+    const started = await api.startPairing({ accountId: 'reserve' });
+    await api.completePairing(started.id, { code: 'code', state: started.state });
+    await api.confirmPairing(started.id);
+    assert.equal((await storyAccount(api, 'reserve')).usage.poll, null, 'the confirm drops the standing the old credential earned');
+    now += 2_200;
+    const landed = new Date(now).toISOString();
+    const { usage } = await storyAccount(api, 'reserve');
+    assert.deepEqual(
+      [usage.error, usage.fetchedAt, usage.heldUntil, usage.poll],
+      [null, landed, null, { backoffSince: null, lastAttemptAt: landed, lastCleanAt: landed, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 }],
+      'the first poll answers clean at the read that lands it',
+    );
   } finally {
     Date.now = wall;
   }
