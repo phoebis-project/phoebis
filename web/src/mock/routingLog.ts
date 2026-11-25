@@ -12,7 +12,7 @@ import { SHED_MARK_SHARE } from '@/lib/presets';
 import { MODEL_SCOPE_PREFIX, endOf, flagOf, isPaidSource, readWindows, windowOf } from '@/lib/quota';
 import { compareRows, movedFrom } from '@/lib/routingLog';
 import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
-import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, accountById, lastReadingOf, rankTier } from './accounts';
+import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SHARED_WINDOWS, SUNSET_WEEK_RESETS_IN, accountById, lastReadingOf, rankTier } from './accounts';
 import { promptOf } from './catalog';
 import { PRIOR_BURN, bindingOf, ceilingOn, runwaysOf, shownOf, windowFitOf, type Runway } from './fit';
 import { GUARDRAILS } from './guardrails';
@@ -1001,7 +1001,10 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const newest = newestRound(source.accountId, at);
   const fires = spec.round !== undefined || (newest !== null && at - newest < pool.shedDwellSeconds * 1_000);
   const stretch = pool.slowDown ? stretchTriggerOf(source, pool, at) : null;
-  const { fired: trigger, waits } = stretch === null ? triggerOf(source, pool.slowDown ? windows.filter((w) => w !== 'five_hour') : windows, at, pool, fires) : { fired: stretch, waits: [] };
+  // The trigger reads the account's pins, so a request of a model with no week reads a week its account's pins draw.
+  // The allowance reads above keep the request's own windows.
+  const tested = triggerWindowsOf(source.accountId, pool, at);
+  const { fired: trigger, waits } = stretch === null ? triggerOf(source, pool.slowDown ? tested.filter((w) => w !== 'five_hour') : tested, at, pool, fires) : { fired: stretch, waits: [] };
   // The stretch's safety wait is read apart, so a stretch past it fires a round the story has to write.
   if (trigger !== null && !fires) throw new Error(`the story writes no round for ${source.accountId}'s ${trigger.window} window at ${iso(at)}, outside any dwell`);
   // The stretch's round waits the safety wait, read above, so the projection's wait is read for every other round.
@@ -1031,7 +1034,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   // under the reservation, and keeps the stamp while the account holds a pin of the pool at each sweep.
   for (const [test, date] of Object.entries(OVER_CEILING_SINCE[source.accountId] ?? {})) {
     const reading = source.windows[test];
-    const over = test === FABLE_RESERVATION ? shortRead : windows.includes(test) && (reading?.projection ?? 0) > ceilingOn(pool, test);
+    const over = test === FABLE_RESERVATION ? shortRead : tested.includes(test) && (reading?.projection ?? 0) > ceilingOn(pool, test);
     if (date === at && over) readOver.add(`${source.accountId}|${test}|${date}`);
   }
   if (spec.round !== undefined && trigger !== null && !trigger.slowed) {
@@ -1045,7 +1048,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const fired: { by: string; excess: number | null; window: string } | null =
     trigger !== null ? { by: trigger.slowed ? 'slow_down' : 'projection', excess: trigger.excess, window: trigger.window } : reserved ? { by: 'fable_reservation', excess: null, window: 'seven_day' } : null;
   const facts: WalkFact[] = [];
-  for (const w of windows) {
+  for (const w of tested) {
     const x = source.windows[w];
     if (x?.projection === null || x?.projection === undefined || x.horizon === null) continue;
     facts.push(fact(`projection_${w}`, x.projection, 'percent'), fact(`horizon_${w}`, Date.parse(x.horizon), 'time'));
@@ -1145,6 +1148,18 @@ function reservationShort(source: RecordCandidate, pool: PoolSeed, at: number): 
 function fablePinsAlone(accountId: string, pool: PoolSeed, at: number): boolean {
   const held = [...pins.entries()].filter(([, p]) => p.accountId === accountId && p.poolId === pool.id && pinReadAt(p.stamp, pool.affinityTtlSeconds * 1_000, at) !== 'none');
   return held.every(([key]) => modelWeeks(TABLES, key.slice(key.lastIndexOf('|') + 1)).length > 0);
+}
+
+/**
+ * The windows a round on the account reads its trigger over at `at`, in the trigger's order: both shared windows, then
+ * the week of each model that a pin of the pool on the account draws, whatever the request's model. A pin counts where
+ * no sweep has taken it, `live` or `expired_idle` under `pinReadAt`. The router also leaves out a pin whose agent
+ * ended, which this state does not keep.
+ */
+function triggerWindowsOf(accountId: string, pool: PoolSeed, at: number): string[] {
+  const held = [...pins.entries()].filter(([, p]) => p.accountId === accountId && p.poolId === pool.id && pinReadAt(p.stamp, pool.affinityTtlSeconds * 1_000, at) !== 'none');
+  const drawn = new Set(held.flatMap(([key]) => modelWeeks(TABLES, key.slice(key.lastIndexOf('|') + 1))));
+  return [...SHARED_WINDOWS, ...Object.keys(TABLES.modelWindows).filter((w) => drawn.has(w))];
 }
 
 /** The instant a window's projected burn takes it to its wall, in whole milliseconds as the engine stores it. */
@@ -2103,7 +2118,7 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
       // The first window, in the trigger's order, whose projection at its horizon reads over the round's line names its
       // reading. The test is the round's own, strict, so the row names no window that no round fires on.
       const m = record.candidates.find((c) => c.accountId === spec.accountId);
-      const hottest = m === undefined ? undefined : drawnWindows(r.canonicalModel).find((w) => (m.windows[w]?.projection ?? -1) > triggerLineOf(m, w, pool, spec.at));
+      const hottest = m === undefined ? undefined : triggerWindowsOf(m.accountId, pool, spec.at).find((w) => (m.windows[w]?.projection ?? -1) > triggerLineOf(m, w, pool, spec.at));
       if (m !== undefined && hottest !== undefined) return { by: by('none', ''), fact: [summaryFact(hottest, m.windows[hottest].utilization, 'percent')] };
       return { by: by('none', ''), fact: [summaryFact('idle', record.pin?.idleMs ?? 0, 'ms')] };
     }
@@ -2696,6 +2711,21 @@ function storySpecs(): Spec[] {
       pin: live('continues_pin', 500_000),
       readings: nightlyAt(t(8, 30), 0.65),
       round: roundOfPins(FABLE_WEEK_PINS),
+    }),
+    // The laptop conversation's next three turns, inside the round's dwell. The first lands on nightly with its three
+    // siblings at their caps. Both renewals read nightly's Fable week and burns as the round's renewal does, so the
+    // week projects 0.80 over all's weekly ceiling of 0.78 on each row: the round's trigger reads that week at the
+    // first, while the Fable session's pin stands past its window ahead of the sweep, and leaves it out at the second.
+    at('req_5a8e3c07-d19', 1, 1, t(8, 35), 'placed', 'nightly', { inFlight: { overflow: 16, primary: 16, secondary: 16 } }),
+    at('req_b4d29e61-a73', 1, 1, t(8, 40, 20), 'renewed', 'nightly', {
+      burns: { nightly: { five_hour: 0.03, seven_day_fable: FABLE_WEEK_BURN } },
+      pin: live('continues_pin', 320_000),
+      readings: nightlyAt(t(8, 40, 20), 0.65),
+    }),
+    at('req_e61f0b48-c25', 1, 1, t(8, 41, 30), 'renewed', 'nightly', {
+      burns: { nightly: { five_hour: 0.03, seven_day_fable: FABLE_WEEK_BURN } },
+      pin: live('continues_pin', 70_000),
+      readings: nightlyAt(t(8, 41, 30), 0.65),
     }),
     // A fresh session the Overflow workspace's static prefix places there answers 429, and its failover ties primary
     // and nightly on Pace with both fitting: the runway keeps primary, so the pick leaves no draw.

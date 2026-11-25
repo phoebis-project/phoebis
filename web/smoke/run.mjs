@@ -21470,9 +21470,10 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // Laptop's Failed and the line's errors count the bare 502 of the range's first hour, `req_8f5a2d16-c47`, and the
   // line's errors the rejection beside it, `req_4c1e8b27-d93`, which counts under Rejected. The line's requests count
   // the hour's request the relay sent once more on primary after a failed connect, `req_0e5a7c3b-f92`, which answered,
-  // the failover session's subagent turn and auxiliary call (`MOVED_PIN_TURN_ID` and `MOVED_PIN_CALL_ID`), and the
-  // account-bound session's turn and auxiliary call on notebook (`ACCOUNT_BOUND_TURN_IDS` and `ACCOUNT_BOUND_CALL_ID`),
-  // each answered.
+  // the failover session's subagent turn and auxiliary call (`MOVED_PIN_TURN_ID` and `MOVED_PIN_CALL_ID`), the laptop
+  // Opus conversation's three turns inside the dwell of nightly's Fable-week round, `req_5a8e3c07-d19`,
+  // `req_b4d29e61-a73` and `req_e61f0b48-c25`, and the account-bound session's turn and auxiliary call on notebook
+  // (`ACCOUNT_BOUND_TURN_IDS` and `ACCOUNT_BOUND_CALL_ID`), each answered.
   // Ci's Failed and the line's errors leave out the stream its client closed, the drawn `req_52f62e67-839`, which counts
   // under Client canceled.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
@@ -21487,7 +21488,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '16', '3'], ['ci', '0', '3'], ['laptop', '7', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '272 requests, 14.3% errors',
+      line === '275 requests, 14.2% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -26834,13 +26835,13 @@ await forView('/keys', async () => {
   // Laptop's week holds the rejection, the bare 502 and the request sent again after a failed connect of the log's
   // first hour, `req_4c1e8b27-d93`, `req_8f5a2d16-c47` and `req_0e5a7c3b-f92`, each a request the rollups count.
   // Desktop's holds the two turns of the conversation that moved off the deleted retired workspace and the three turns
-  // of the conversation whose pin the purge takes twice. The rounds' chains and the recipes' last requests add 28 seed
-  // rows, 5 on laptop and 23 on desktop, and the moved pin's first turn `req_6d2a9f41-c37` and auxiliary call
+  // of the conversation whose pin the purge takes twice. The rounds' chains and the recipes' last requests add 31 seed
+  // rows, 8 on laptop and 23 on desktop, and the moved pin's first turn `req_6d2a9f41-c37` and auxiliary call
   // `req_9e1b4c63-a52` add 2 on desktop. Desktop's 147 are the 150 requests its key sent since it was issued at 18:00
   // on Sep 15, less the 3 that a guardrail refused before any account was asked, which the rollups do not count. The
   // account-bound session's placement and auxiliary call (`ACCOUNT_BOUND_TURN_IDS` and `ACCOUNT_BOUND_CALL_ID`) add 2
   // on notebook.
-  const weeks = ['234 requests, 7d', '147 requests, 7d', '63 requests, 7d', '20 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
+  const weeks = ['237 requests, 7d', '147 requests, 7d', '63 requests, 7d', '20 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
     lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },

@@ -1125,15 +1125,15 @@ export const STORY_IDS = new Set([
   'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3a9f5d12-b84', 'req_3b8e51f4-0a9', 'req_3c7f2e98-d16', 'req_3d7b9e2f-a41', 'req_3e2b9d47-c18', 'req_3e7a5c19-f84', 'req_3f8c1d94-b57',
   'req_4a9c3e7b-a27', 'req_4b0e9d17-c31', 'req_4b9e2c71-a35',
   'req_4d9a1e6b-c20',
-  'req_4e8b1d36-f72', 'req_4f2a8d6e-b7a', 'req_51d0e2b8-7a0', 'req_5b2e8d47-c19', 'req_5c7e2a9d-b14', 'req_5d1f8c3a-b27',
+  'req_4e8b1d36-f72', 'req_4f2a8d6e-b7a', 'req_51d0e2b8-7a0', 'req_5a8e3c07-d19', 'req_5b2e8d47-c19', 'req_5c7e2a9d-b14', 'req_5d1f8c3a-b27',
   'req_5d6f1b3a-e27', 'req_5e2f7a19-b03',
   'req_5e3c8a41-d27', 'req_5f2c8b19-d73',
   'req_63a8d2f5-b17',
   'req_69e30548-32e', 'req_6a1c9e47-b90', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6d0b3f85-a14', 'req_6d2a9f41-c37', 'req_6e1f3b98-a24', 'req_71b5f2c8-e40', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
   'req_7c4a1e86-d39', 'req_7e2b9f40-c81', 'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8c41f2d7-a93', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_8e1d5a36-c92', 'req_9a07c4e1-d55', 'req_9b4f1c62-a07', 'req_9c4a7e12-f08', 'req_9d4c1a73-e58', 'req_9e1b4c63-a52',
   'req_9f2e7c5a-c49', 'req_a1f04c2e-7b3', 'req_a2c94e7b-f15', 'req_a3d8f1b6-c25', 'req_a6c19e73-5d2', 'req_a96e3d52-b18', 'req_b1e7c4a9-a69', 'req_b2bed817-a58',
-  'req_b72e9d05-c14', 'req_b7d43a90-e26', 'req_b8c3e9d4-e61', 'req_c3a71e58-b46', 'req_c41d0311-200', 'req_c5d8e2b7-e95', 'req_c8f2a61d-b74', 'req_c90d3f61-a28', 'req_d06a4e73-c29', 'req_d27f5a83-e14', 'req_d2a8f6c1-d50',
-  'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e1b6d4f8-b38', 'req_e2c7a4f9-d13', 'req_e4a92c17-b60', 'req_e5a1c093-4d7', 'req_e83b2d65-c57',
+  'req_b4d29e61-a73', 'req_b72e9d05-c14', 'req_b7d43a90-e26', 'req_b8c3e9d4-e61', 'req_c3a71e58-b46', 'req_c41d0311-200', 'req_c5d8e2b7-e95', 'req_c8f2a61d-b74', 'req_c90d3f61-a28', 'req_d06a4e73-c29', 'req_d27f5a83-e14', 'req_d2a8f6c1-d50',
+  'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e1b6d4f8-b38', 'req_e2c7a4f9-d13', 'req_e4a92c17-b60', 'req_e5a1c093-4d7', 'req_e61f0b48-c25', 'req_e83b2d65-c57',
   'req_ef099b34-453', 'req_f15c7a28-d63',
   'req_f1c8e3a5-29d',
   'req_f3b6d218-85a', 'req_f6a1d3e8-e47', 'req_f8085653-422',
@@ -1689,14 +1689,21 @@ function storySeeds(): StorySeed[] {
     { agentId: 'main', at: t(7, 49, 10), attempts: [{ accountId: 'nightly', at: t(7, 49, 10), ms: 8_600, status: 200 }], id: 'req_6a1c9e47-b90', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: FABLE_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 76_100, cacheWrite1h: 1_900, input: 2_100, output: 1_190, thinking: 410 } },
     { agentId: 'main', at: t(7, 59), attempts: [{ accountId: 'nightly', at: t(7, 59), ms: 9_300, status: 200 }], id: 'req_e83b2d65-c57', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: FABLE_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 78_000, cacheWrite1h: 2_200, input: 2_300, output: 1_340, thinking: 460 } },
     { agentId: 'main', at: t(8, 8, 50), attempts: [{ accountId: 'nightly', at: t(8, 8, 50), ms: 9_000, status: 200 }], id: 'req_c8f2a61d-b74', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: FABLE_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 80_200, cacheWrite1h: 2_000, input: 2_200, output: 1_280, thinking: 440 } },
-    // A laptop conversation's one Opus turn on nightly, ahead of the sweep that takes the Fable conversation's pin. It
-    // runs to 08:20:20, so its pin stands there at every purge sweep to the round of 08:30 and the router keeps the
+    // A laptop conversation's first Opus turn on nightly, ahead of the sweep that takes the Fable conversation's pin.
+    // It runs to 08:20:20, so its pin stands there at every purge sweep to the round of 08:30 and the router keeps the
     // Fable week's stamp, and the round finds the pin and leaves it off that window.
     { agentId: 'main', at: t(8, 19, 5), attempts: [{ accountId: 'nightly', at: t(8, 19, 5), ms: 75_000, status: 200 }], id: 'req_f4a17c3e-d28', keyId: 'laptop', model: 'claude-opus-5', requestClass: 'main', session: OPUS_MORNING_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 58_400, input: 2_600, output: 2_900, thinking: 1_200 } },
     // Two turns of nightly's Fable session in the morning, before its overage: the first places the session, and the
     // second's renewal runs the round its 7-day Fable window fires while the 5-hour window is under the hold.
     { agentId: 'main', at: t(8, 21, 40), attempts: [{ accountId: 'nightly', at: t(8, 21, 40), ms: 11_200, status: 200 }], id: 'req_3e2b9d47-c18', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', unfiled: true, usage: { cacheWrite1h: 78_400, input: 2_600, output: 1_720, thinking: 610 } },
     { agentId: 'main', at: t(8, 30), attempts: [{ accountId: 'nightly', at: t(8, 30), ms: 9_400, status: 200 }], id: 'req_3e7a5c19-f84', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', usage: { cacheRead: 81_000, cacheWrite1h: 2_600, input: 2_400, output: 1_480, thinking: 520 } },
+    // Three more turns of the laptop conversation, inside the dwell of nightly's Fable-week round. Its pin was swept at
+    // 08:30:40, so the first places it on nightly afresh. The second renews it while the Fable session's pin stands
+    // past its window ahead of the sweep of 08:40:40, and the third renews it behind that sweep, so a round on nightly
+    // reads the Fable week at the second turn and not at the third.
+    { agentId: 'main', at: t(8, 35), attempts: [{ accountId: 'nightly', at: t(8, 35), ms: 62_000, status: 200 }], id: 'req_5a8e3c07-d19', keyId: 'laptop', model: 'claude-opus-5', requestClass: 'main', session: OPUS_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 61_000, cacheWrite1h: 3_100, input: 2_400, output: 2_600, thinking: 1_100 } },
+    { agentId: 'main', at: t(8, 40, 20), attempts: [{ accountId: 'nightly', at: t(8, 40, 20), ms: 48_000, status: 200 }], id: 'req_b4d29e61-a73', keyId: 'laptop', model: 'claude-opus-5', requestClass: 'main', session: OPUS_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 66_500, cacheWrite1h: 2_700, input: 2_200, output: 2_400, thinking: 1_000 } },
+    { agentId: 'main', at: t(8, 41, 30), attempts: [{ accountId: 'nightly', at: t(8, 41, 30), ms: 52_000, status: 200 }], id: 'req_e61f0b48-c25', keyId: 'laptop', model: 'claude-opus-5', requestClass: 'main', session: OPUS_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 71_400, cacheWrite1h: 2_500, input: 2_100, output: 2_200, thinking: 900 } },
     // A fresh session placed by the spare rate: secondary falls short of the ceiling and its burn outruns its pace.
     { agentId: 'main', at: t(13, 45), attempts: [{ accountId: 'primary', at: t(13, 45), ms: 3_800, status: 200 }], id: 'req_2c7d9f15-b63', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: 'b81e4f2a-7c3d-4a90-8e65-2d1f0c9b7a34', usage: { cacheWrite5m: 24_500, input: 2_900, output: 640 } },
     // A fresh placement whose reservation the answer's usage replaces.
@@ -3240,14 +3247,22 @@ const tally = <T>(items: readonly T[], keyOf: (item: T) => string | null, into: 
   return into;
 };
 
+/**
+ * The sets of rows the rollups read behind every other row, in the order they take the stream's draws: the moved pin's
+ * rows, then the laptop's morning Opus conversation.
+ */
+const ROLLUP_BACK: readonly ((r: Pick<RequestLog, 'id' | 'sessionId'>) => boolean)[] = [(r) => MOVED_PIN_ROWS.has(r.id), (r) => r.sessionId === OPUS_MORNING_SESSION_ID];
+
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
-  // The moved pin's rows join the story behind every drawn figure, so their lane hours take this stream's draws after
-  // every other lane hour's, and their probe takes no part in the pick of the held probe below.
-  const behind = (r: RequestLog) => MOVED_PIN_ROWS.has(r.id);
+  // The rows of the back take this stream's draws behind each drawn figure, so each lane hour ahead of them keeps its
+  // draws, and a set of the back keeps its draws while each later set stands behind it. No probe of the back takes
+  // part in the pick of the held probe below.
+  const backOf = (r: RequestLog) => ROLLUP_BACK.findIndex((inSet) => inSet(r));
+  const behind = (r: RequestLog) => backOf(r) >= 0;
   const behindRollups = new Set<HourlyRollup>();
-  for (const r of [...rows.filter((x) => !behind(x)), ...rows.filter(behind)]) {
+  for (const r of [...rows.filter((x) => !behind(x)), ...ROLLUP_BACK.flatMap((_, i) => rows.filter((x) => backOf(x) === i))]) {
     const hour = iso(startOfHour(Date.parse(r.at)));
     // A request answered at the cap before any account served it files under `-`, as the ledger files what it could
     // not attribute. The funding is part of the key, so a lane-hour on both sides of nightly's overage raise splits.
