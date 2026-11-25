@@ -357,10 +357,10 @@ test('a member at its budget is skipped with the reason the serving table names'
 
 const labelOf = (id) => accounts.find((a) => a.id === id)?.label ?? id;
 const read = (p, accs = accounts) => {
-  const s = poolStatusSentence(p, accs, NOW, null);
+  const s = poolStatusSentence(p, accs, NOW, selectionOrder(p, accs ?? [], NOW, null));
   return `${s.word}: ${s.parts.map((part) => ('text' in part ? part.text : part.label)).join('')}`;
 };
-const linked = (p, accs = accounts) => poolStatusSentence(p, accs, NOW, null).parts.filter((part) => 'accountId' in part).map((part) => part.accountId);
+const linked = (p, accs = accounts) => poolStatusSentence(p, accs, NOW, selectionOrder(p, accs ?? [], NOW, null)).parts.filter((part) => 'accountId' in part).map((part) => part.accountId);
 const at = (p, status) => ({ ...p, status });
 
 test('a member that does not fit stands behind a fitting one, whatever its score', () => {
@@ -530,7 +530,7 @@ test('while the accounts are unread the status sentence says only what the verdi
   const unread = [degraded, active, single, exhausted].map((p) => read(p, null));
   assert.deepEqual(unread, ['Degraded: 1 of 2 members takes fresh sessions.', 'Active: all 2 members take fresh sessions.', "Active: the pool's one member takes every fresh session.", 'Exhausted: no member can take a request.']);
   assert.deepEqual(
-    [degraded, active, single, exhausted].flatMap((p) => poolStatusSentence(p, null, NOW, null).parts.filter((part) => !('text' in part) || /\b(over|plan)\b/.test(part.text))),
+    [degraded, active, single, exhausted].flatMap((p) => poolStatusSentence(p, null, NOW, selectionOrder(p, [], NOW, null)).parts.filter((part) => !('text' in part) || /\b(over|plan)\b/.test(part.text))),
     [],
     'no account part and no raw account id',
   );

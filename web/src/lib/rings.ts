@@ -17,12 +17,11 @@ export interface RingLeftOut { id: string; label: string; reason: string }
 /**
  * `capacity` and `left` in weeks of the chosen week's tier: on the 7-day ring each account weighs its tier's 7-day
  * capacity over the chosen tier's, on the Fable ring its tier's 7-day capacity times the Fable week's capacity factor
- * over the chosen tier's Fable-week capacity. `rows` is empty when every account is left out, and `carried` says
- * whether a listed account carries the window, so an empty ring tells a fleet without the window from one whose tiers
- * are not sized. `unreported` says whether a listed account with a sized tier holds no share of the window, so an empty
- * ring tells missing shares from unsized tiers too.
+ * over the chosen tier's Fable-week capacity. `rows` is empty when every account is left out, and `emptyReason` says
+ * why the ring then weighs no account: `no_window` where no listed account carries the window, `unreported` where a
+ * listed account with a sized tier holds no share of it, and `unsized` where the tiers are not sized.
  */
-export interface RingFigures { capacity: number; carried: boolean; left: number; leftOut: RingLeftOut[]; rows: RingRow[]; unreported: boolean; week: WeekPosition; window: RingWindow }
+export interface RingFigures { capacity: number; emptyReason: 'no_window' | 'unreported' | 'unsized'; left: number; leftOut: RingLeftOut[]; rows: RingRow[]; week: WeekPosition; window: RingWindow }
 
 const SPAN: Record<RingWindow, string> = { '7d': '7-day', '7d_fable': 'Fable week' };
 const ABSENT: Record<RingWindow, string> = { '7d': 'no 7-day window', '7d_fable': 'no Fable week' };
@@ -86,7 +85,7 @@ export function ringFigures(accounts: Account[], windowId: RingWindow, costs: Su
   const left = rows.reduce((s, r) => s + r.weight * r.remaining, 0);
   // The ring's slices and the list beside it read one order, the most of its own window left first, so the legend reads the ring.
   rows.sort((a, b) => b.remaining - a.remaining || a.label.localeCompare(b.label));
-  return { capacity, carried, left, leftOut, rows, unreported, week, window: windowId };
+  return { capacity, emptyReason: !carried ? 'no_window' : unreported ? 'unreported' : 'unsized', left, leftOut, rows, week, window: windowId };
 }
 
 /** The weeks a ring counts in, "Ultra weeks" or "Max Fable weeks", and none on the Fable ring under the Pro week, since

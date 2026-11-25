@@ -2180,19 +2180,12 @@ export interface AgentContext extends BurnFigures, MoveFigures {
 }
 
 /** A pin under a pool's keys as a shedding round reads it, a pin the Sessions list hides among them. */
-export interface PoolPin extends MoveFigures, Pick<BurnFigures, 'burn' | 'burnAt' | 'burnUnit' | 'burnWindow'> {
+export interface PoolPin extends MoveFigures, Pick<BurnFigures, 'burn' | 'burnAt' | 'burnUnit' | 'burnWindow'>, Pick<AgentContext, 'accountId' | 'agentId' | 'ended' | 'fast' | 'model' | 'warm' | 'warmUntil'> {
   accountBound: boolean;
-  accountId: string;
-  agentId: string;
-  ended: boolean;
-  fast: boolean;
   keyId: string;
   /** The standing mark on this pin, as a session row's `mark`. */
   mark: Session['mark'];
-  model: string;
   sessionId: string;
-  warm: boolean;
-  warmUntil: string | null;
 }
 
 /** A set of a session's requests: their count, their money and their shares per account. */

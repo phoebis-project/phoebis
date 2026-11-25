@@ -1,4 +1,4 @@
-import { iso } from '@/api/decode';
+import { byDrawnNewest, drawnInstant, iso } from '@/api/decode';
 import type { Account, AllowanceAccount, AllowanceReset, AllowanceWindow, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { anchorTier, pricedWindow, tierCapacity, weekScale, weekUnpricedTitle } from '@/lib/costs';
 import { byteOrder, fmtAbsolute, fmtDated, fmtShare, plural, weekShort } from '@/lib/format';
@@ -6,6 +6,8 @@ import { planWordLabel, pricedTier, readWindows } from '@/lib/quota';
 import { DAY, MINUTE } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
 import { WINDOW_HOURS, inWindowOrder, windowHint } from '@/lib/windows';
+
+export { drawnInstant } from '@/api/decode';
 
 /** The weeks the Accounts block reads: the latest reset and the three before it. */
 const ALLOWANCE_WEEKS = 4;
@@ -174,16 +176,10 @@ const SOURCE_WORD = new Map([
   ['term_ended', "the term's end"],
 ]);
 
-/** The sources of a row that a drop wrote, whose `resetAt` is the reset of the week that the drop cut and can lie
- *  ahead. */
-const DROP_SOURCES: ReadonlySet<string> = new Set(['claim', 'plan_changed']);
-/** The instant a row draws: the drop's for a row that a drop wrote, else the reset's. */
-export const drawnInstant = (reset: AllowanceReset): string => (DROP_SOURCES.has(reset.source) ? reset.observedAt : reset.resetAt);
-
 /** The rows of a window's two lists in the order one column draws them: by the drawn instant, newest first, a reset
  *  ahead of a claim of the same instant. */
 export const drawnRows = (resets: readonly AllowanceReset[], claims: readonly AllowanceReset[]): AllowanceReset[] =>
-  [...resets, ...claims].sort((a, b) => Date.parse(drawnInstant(b)) - Date.parse(drawnInstant(a)));
+  [...resets, ...claims].sort(byDrawnNewest);
 
 /** A reset's hover: its absolute instant and where its reading came from, a word the router adds read as sent. */
 export const resetHover = (reset: AllowanceReset): string => `${fmtAbsolute(drawnInstant(reset))}, read from ${SOURCE_WORD.get(reset.source) ?? reset.source}`;
@@ -234,7 +230,7 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
       // The route answers a use whatever natural resets the span holds, so an account before its first recorded weekly
       // reset can hold a use alone, which the range's figure keeps.
       if (ended.length === 0 && used.length === 0) continue;
-      const last = ended.length === 0 ? null : ended.reduce((newest, r) => (Date.parse(drawnInstant(r)) > Date.parse(drawnInstant(newest)) ? r : newest));
+      const last = ended[0] ?? null;
       const inside = ended.filter((r) => Date.parse(drawnInstant(r)) >= range.fromMs);
       const summed = [...inside, ...used];
       const noReset: AllowanceFigure = { kind: 'none', text: '-', title: NO_RESET_IN_RANGE };

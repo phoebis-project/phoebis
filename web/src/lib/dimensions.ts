@@ -84,11 +84,9 @@ export const relayReason = (reason: CacheMissReason): boolean => EXPIRY_REASONS.
  */
 export const expiredBetweenTurns = (r: Pick<RequestLog, 'attempts' | 'cacheMarker' | 'kind' | 'storedTokens' | 'usage'>): boolean => {
   const serving = servingAttempt(r);
-  const previous = serving?.previousInputTokens ?? null;
-  if (!r.cacheMarker || serving?.entryExpired !== true) return false;
-  if (previous === null || r.kind === 'probe' || r.kind === 'count_tokens' || r.storedTokens.input === null) return false;
-  const reason = servedMissReason(r);
-  return 2 * r.usage.cacheRead < previous && (reason === null || relayReason(reason));
+  if (!r.cacheMarker || serving?.entryExpired !== true || serving.previousInputTokens === null || r.kind === 'probe' || r.kind === 'count_tokens' || r.storedTokens.input === null) return false;
+  const reason = serving.cacheMissReason;
+  return 2 * r.usage.cacheRead < serving.previousInputTokens && (reason === null || relayReason(reason));
 };
 
 /** The serving attempt's answer, where an attempt served the request. */

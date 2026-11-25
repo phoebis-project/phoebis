@@ -1,7 +1,7 @@
 import type { DecisionKind, DecisionRecord, WalkStep } from '@/api/types';
 import { lookup } from '@/lib/counts';
 import { joinPresent } from '@/lib/format';
-import { candidateVerdict, DECISION_KIND_LABEL, DECISION_KIND_TONE, formatFact, PLACE_WORD, STEP_NAME, strategyWord, tierOf, verdictTone, verdictWord, WAIT_REASON_WORD, wordOf, words } from '@/lib/routingLog';
+import { candidateVerdict, DECISION_KIND_LABEL, DECISION_KIND_TONE, formatFact, isMoveRule, PLACE_WORD, STEP_NAME, strategyWord, tierOf, verdictTone, verdictWord, WAIT_REASON_WORD, wordOf, words } from '@/lib/routingLog';
 import type { Chip, VerdictTone } from '@/lib/routingLog';
 
 export type Renderer = 'candidate' | 'chips' | 'hold' | 'list' | 'outcome' | 'rung' | 'sentence' | 'table';
@@ -171,8 +171,6 @@ const terminusOf = (outcome: DecisionRecord['outcome']): TerminusKind => {
 const MAX_LEAVES = 8;
 const UNKNOWN_KIND: StationKind = { group: null, renderer: 'chips', stub: null };
 
-const isRule = (step: string) => step.startsWith('move:');
-
 /**
  * A walk that runs the move rules is pinned, a released one among them, which writes `bound` ahead of its rules. Each
  * other walk that carries `bound` expects no placeholder: a bound request renews or exhausts on its own path, and a
@@ -181,7 +179,7 @@ const isRule = (step: string) => step.startsWith('move:');
  * them.
  */
 function shapeOf(walk: WalkStep[]): StripShape {
-  if (walk.some((s) => isRule(s.step))) return 'pinned';
+  if (walk.some((s) => isMoveRule(s.step))) return 'pinned';
   const last = walkEnd(walk);
   return walk.some((s) => s.step === 'bound') || (last !== undefined && SHORT_ENDS.has(last)) ? 'short' : 'fresh';
 }
@@ -191,8 +189,8 @@ function expectedOf(shape: StripShape, walk: WalkStep[], kind: DecisionKind): st
   // A placeholder the walk lacks stands before the Reserve the engine wrote last, never after it.
   const booked = walk.some((s) => s.step === RESERVE) ? [RESERVE] : [];
   if (shape === 'fresh') return ['pin', 'eligible', 'partitions', ...RUNGS, SLOT_OF[kind], ...booked];
-  const lastRule = walk.reduce((at, s, i) => (isRule(s.step) ? i : at), -1);
-  const fired = walk.some((s) => isRule(s.step) && s.verdict === 'fired');
+  const lastRule = walk.reduce((at, s, i) => (isMoveRule(s.step) ? i : at), -1);
+  const fired = walk.some((s) => isMoveRule(s.step) && s.verdict === 'fired');
   // A live pin that turned ineligible runs its rules and is then placed afresh, so the engine renews nothing. Every
   // walk books after it, a held one too, so Reserve says nothing of a selection.
   const selected = !fired && walk.some((s, i) => i > lastRule && s.step !== RESERVE && SELECTION_STEPS.has(s.step));
@@ -324,7 +322,7 @@ function draftsOf(walk: WalkStep[], entries: Entry[], shape: StripShape, now: nu
  * the line, Renew recorded there when the cap filter dropped every destination and the pin renewed in place.
  */
 function branchOf(walk: WalkStep[], drafts: Draft[], shape: StripShape, kind: DecisionKind, kinds: Record<string, StationKind>): Branch | null {
-  const firedAt = walk.findIndex((s) => isRule(s.step) && s.verdict === 'fired');
+  const firedAt = walk.findIndex((s) => isMoveRule(s.step) && s.verdict === 'fired');
   if (shape === 'pinned' && firedAt >= 0) {
     const fired = walk[firedAt].step;
     const cap = walk.find((s, i) => i > firedAt && s.step === 'cap_filter');
@@ -345,7 +343,7 @@ function branchOf(walk: WalkStep[], drafts: Draft[], shape: StripShape, kind: De
     let first = -1;
     drafts.forEach((d, i) => {
       const s = d.station;
-      if (s.index !== null && s.index > firedAt && !isRule(s.step) && s.step !== 'renew') {
+      if (s.index !== null && s.index > firedAt && !isMoveRule(s.step) && s.step !== 'renew') {
         s.level = 'track';
         // The track is the walk's way off the line, so its stations carry no stub of their own.
         s.stub = null;

@@ -2,8 +2,8 @@ import type { Account, MemberEligibility, Pool, PoolPin, RateLimitWindow } from 
 import { groupInto } from './counts';
 import { byteOrder, fmtDuration, instant, noun, percentText, plural } from './format';
 import { openMark, pinTtlMs } from './keepalive';
-import { endOf, minuteSpan, remainingOf, shareLeft, windowOf } from './quota';
-import { speedWord, windingDown } from './selection';
+import { endOf, largestShare, minuteSpan, remainingOf, windowOf } from './quota';
+import { reservationRoundsRun, speedWord, windingDown } from './selection';
 import { compareFigures } from './sort';
 import { HOUR } from './time';
 import { WINDOW_SHORT, windowKeyId } from './windows';
@@ -79,7 +79,7 @@ const firstCause = (read: readonly (ShedCause | null)[]): ShedCause | null => SH
  * or less.
  */
 function shedMarks(
-  ordered: { burn: number | null; cost?: number; id: string; pastCold: boolean; runway: boolean; standing?: boolean }[],
+  ordered: { burn: number | null; cost: number; id: string; pastCold: boolean; runway: boolean; standing: boolean }[],
   target: number,
   stays: { burn: number; unpriced: boolean },
 ): { marks: string[]; quiet: ShedCause | null } {
@@ -87,17 +87,17 @@ function shedMarks(
   const marks: string[] = [];
   if (Number.isNaN(target) || target <= 0) return { marks, quiet: null };
   const sum = ordered.reduce((n, pin) => n + (pin.burn ?? 0), 0);
-  const unpricedStays = stays.unpriced || ordered.some((pin) => pin.burn === null && pin.standing !== true);
+  const unpricedStays = stays.unpriced || ordered.some((pin) => pin.burn === null && !pin.standing);
   // A standing mark is a move pending, so its burn counts as removed before the walk marks anything else.
-  let removed = ordered.reduce((n, pin) => n + (pin.standing === true ? (pin.burn ?? 0) : 0), 0);
+  let removed = ordered.reduce((n, pin) => n + (pin.standing ? (pin.burn ?? 0) : 0), 0);
   // The guard sums the pins that stay, as the router does, since the round's sum less what leaves can round under a
   // floor those pins reach exactly.
-  const refused = (candidate: Pin) => !unpricedStays && ordered.filter((q) => q !== candidate && q.standing !== true && !marks.includes(q.id)).reduce((n, q) => n + (q.burn ?? 0), 0) + stays.burn < SHED_MARK_SHARE * sum;
+  const refused = (candidate: Pin) => !unpricedStays && ordered.filter((q) => q !== candidate && !q.standing && !marks.includes(q.id)).reduce((n, q) => n + (q.burn ?? 0), 0) + stays.burn < SHED_MARK_SHARE * sum;
   // By position, as the router keeps them: a later position's pick reads a covering pin again.
   const words: (ShedCause | null)[] = ordered.map(() => null);
   let met = false;
   for (const [index, pin] of ordered.entries()) {
-    if (pin.standing === true) {
+    if (pin.standing) {
       words[index] = 'standing';
       continue;
     }
@@ -112,9 +112,9 @@ function shedMarks(
     // A pin is indivisible, so once one from here on covers the rest, the cheapest such move meets the target.
     let pick: { burn: number; cost: number; id: string } | null = null;
     for (const [k, q] of ordered.entries()) {
-      if (k < index || q.burn === null || q.burn < rest || q.standing === true || q.pastCold) continue;
+      if (k < index || q.burn === null || q.burn < rest || q.standing || q.pastCold) continue;
       words[k] = refused(q) ? 'last_pin' : q.runway ? null : 'no_runway';
-      if (words[k] === null && (pick === null || (q.cost ?? 0) < pick.cost)) pick = { burn: q.burn, cost: q.cost ?? 0, id: q.id };
+      if (words[k] === null && (pick === null || q.cost < pick.cost)) pick = { burn: q.burn, cost: q.cost, id: q.id };
     }
     if (pick !== null) {
       marks.push(pick.id);
@@ -165,6 +165,7 @@ const windowStart = (w: RateLimitWindow, now: number): number | null => {
 /** A plan window the trigger reads, in the order the router's round walks them: the shared windows, then the week. */
 export type ShedWindow = '5h' | '7d' | '7d_fable';
 const TRIGGER_ORDER: ShedWindow[] = ['5h', '7d', '7d_fable'];
+const SHARED_WINDOWS: ShedWindow[] = TRIGGER_ORDER.slice(0, 2);
 /** A session's `burnWindow` under any of its spellings as the window the trigger reads, an unknown key as none. */
 const burnWindowOf = (key: string | null): ShedWindow | null => {
   const id = windowKeyId(key ?? '');
@@ -176,7 +177,7 @@ const burnWindowOf = (key: string | null): ShedWindow | null => {
  * shared windows.
  */
 const drawsFable = (model: string | null) => (model ?? '').toLowerCase().includes('fable');
-const windowsOf = (model: string | null): ShedWindow[] => (drawsFable(model) ? TRIGGER_ORDER : TRIGGER_ORDER.slice(0, 2));
+const windowsOf = (model: string | null): ShedWindow[] => (drawsFable(model) ? TRIGGER_ORDER : SHARED_WINDOWS);
 
 /** A window's ceiling by the router's arm: the 5-hour ceiling for the 5-hour window, the weekly one for the 7-day
  *  window and each model week. */
@@ -195,7 +196,7 @@ const lineOf = (pool: Pick<Pool, 'fiveHourCeiling' | 'weeklyCeiling'>, id: strin
  * router holds no reading of, so it takes no part.
  */
 const bucketRoom = (a: Account, now: number) =>
-  Math.max(0, ...a.windows.filter((w) => /^(rpm|itpm|otpm):/.test(w.id) && (w.resetsAt === null ? now - Date.parse(w.observedAt) < 60_000 : Date.parse(w.resetsAt) > now)).flatMap((w) => (w.utilization === null ? [] : [w.utilization]))) < 1;
+  (largestShare(a.windows.filter((w) => /^(rpm|itpm|otpm):/.test(w.id) && (w.resetsAt === null ? now - Date.parse(w.observedAt) < 60_000 : Date.parse(w.resetsAt) > now))) ?? 0) < 1;
 
 /** A member whose projection crosses the round's line, on the first window in the trigger's order that does. */
 export interface ShedHot {
@@ -375,7 +376,7 @@ export function shedPreview(
   let burning = 0;
   let burningWarm = 0;
   // Only Pace holds a reservation back, and the option adds a test to the round the switch runs.
-  const reserving = pool.fableReservationShedding && pool.strategy === 'pace' && pool.loadShedding;
+  const reserving = reservationRoundsRun(pool);
   const reserved: ShedPreview['reservation'] = { idle: [], labels: [], sessions: 0, warm: 0 };
   const byAccount = groupInto(
     pins.map((p): RoundPin => ({ ...p, standing: openMark(p) !== null, warm: p.warmUntil === null ? p.warm : pinTtlMs(p, now) !== null })),
@@ -397,10 +398,14 @@ export function shedPreview(
       return { burn: served === null || scale === null ? null : served * scale, served };
     };
     const left: (LeftOut | 'no_burn')[] = [];
+    // The Fable pins a reservation round leaves out stay on the account, a pin under a standing mark among them, and
+    // an ended agent's Fable pin counts nothing there, though it leaves under `fable_model` ahead of `ended`.
+    const stays: (number | null)[] = [];
     const walked = onAccount.flatMap((p) => {
       const word = leftOutAs(p, fired);
       if (word !== null) {
         left.push(word);
+        if (word === 'fable_model' && !p.ended) stays.push(burnOf(p).burn);
         return [];
       }
       const { burn, served } = burnOf(p);
@@ -426,9 +431,6 @@ export function shedPreview(
         },
       ];
     });
-    // The Fable pins a reservation round leaves out stay on the account, a pin under a standing mark among them, and
-    // an ended agent's Fable pin counts nothing there, though it leaves under `fable_model` ahead of `ended`.
-    const stays = onAccount.filter((p) => !p.ended && leftOutAs(p, fired) === 'fable_model').map((p) => burnOf(p).burn);
     type Pin = (typeof walked)[number];
     // A pin whose burn cannot be priced ranks after every priced pin of its group, as the router's round ranks it.
     const pricedFirst = (a: number | null, b: number | null) => compareFigures(a, b, 'desc');
@@ -470,29 +472,28 @@ export function shedPreview(
     const heldNow = start !== null && start < now && now - start < 2 * windowMs;
     const end = endOf(account, now);
     const lineAt = (id: ShedWindow, w: RateLimitWindow, horizon: number) => lineOf(pool, id, w.resetsAt === null ? null : Date.parse(w.resetsAt), end, horizon, now);
-    const entry = account.slowDown ?? null;
+    const readOf = (id: ShedWindow): WindowRead | null => {
+      const w = windowOf(account, id);
+      if (w === null || w.horizon === null) return null;
+      const horizon = Date.parse(w.horizon);
+      if (id === '5h' && pool.slowDown) {
+        const entry = account.slowDown;
+        // The route serves the figure the last selection stored, and the router's test reads none once the horizon less
+        // the threshold has come.
+        if (entry === null || entry.stretchProjection === null || horizon - entry.thresholdMs <= now) return null;
+        return { burn: w.burn, horizon: horizon - entry.thresholdMs, id, line: pool.fiveHourCeiling, projection: entry.stretchProjection };
+      }
+      if (w.projection === null) return null;
+      return { burn: w.burn, horizon, id, line: lineAt(id, w, horizon), projection: w.projection };
+    };
     // One 5-hour read feeds the trigger and the hold's test, so a slowed member under the hold is named by its stretch
-    // figure as well. The route serves the figure the last selection stored, and the router's test reads none once
-    // the horizon less the threshold has come.
-    const fiveRead: WindowRead | null =
-      five === null || five.horizon === null
-        ? null
-        : pool.slowDown
-          ? entry === null || entry.stretchProjection === null || Date.parse(five.horizon) - entry.thresholdMs <= now
-            ? null
-            : { burn: five.burn, horizon: Date.parse(five.horizon) - entry.thresholdMs, id: '5h', line: pool.fiveHourCeiling, projection: entry.stretchProjection }
-          : five.projection === null
-            ? null
-            : { burn: five.burn, horizon: Date.parse(five.horizon), id: '5h', line: lineAt('5h', five, Date.parse(five.horizon)), projection: five.projection };
+    // figure as well.
+    const fiveRead = readOf('5h');
     // A model week is read only where one of the pins draws it, a pin on the fast lane among them, as the router's
     // trigger reads every pin the pool keeps on the account.
-    const read = TRIGGER_ORDER.filter((id) => id !== '7d_fable' || kept.some((p) => drawsFable(p.model))).flatMap((id): WindowRead[] => {
-      if (id === '5h') return fiveRead === null || heldNow ? [] : [fiveRead];
-      const w = windowOf(account, id);
-      if (w === null || w.projection === null || w.horizon === null) return [];
-      const horizon = Date.parse(w.horizon);
-      return [{ burn: w.burn, horizon, id, line: lineAt(id, w, horizon), projection: w.projection }];
-    });
+    const read = TRIGGER_ORDER.filter((id) => id !== '7d_fable' || kept.some((p) => drawsFable(p.model)))
+      .map((id) => (id === '5h' ? (heldNow ? null : fiveRead) : readOf(id)))
+      .filter((r): r is WindowRead => r !== null);
     // A young 5-hour window under its line changes nothing in the round, so only one over it names its member: that
     // is the round the hold took away.
     if (heldNow && fiveRead !== null && fiveRead.projection > fiveRead.line) held.push({ ageMs: now - start, holdMs: 2 * windowMs, id: account.id, label: account.label });
@@ -503,7 +504,7 @@ export function shedPreview(
       // The reservation's test runs once no window fired, as the router's does, and on a 7-day window with a share
       // alone, since the router's needs the projection of a window it holds a reading of.
       const week = windowOf(account, '7d');
-      if (!reserving || reservation === null || week === null || week.utilization === null || week.projection === null || shareLeft(week.utilization) >= reservation) continue;
+      if (!reserving || week === null || week.utilization === null || week.projection === null || !shortOfReservation(account, reservation)) continue;
       // Only the Fable week's use is reserved, so the round would leave out each Fable pin. Where its predicates leave
       // out each pin the pool keeps on the account, the router cancels the round, whatever those pins burn.
       const round7d = { burn: week.burn, id: '7d' as const, reservation: true };

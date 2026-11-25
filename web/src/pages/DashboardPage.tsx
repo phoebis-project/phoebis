@@ -269,7 +269,7 @@ function RemainingCard({ title, subtitle, windowId, accounts, costs, now, week, 
         // sized account holds no share, the shares are what the ring lacks.
         <>
           <p className="muted remaining__none">
-            {figures.carried ? (unpriced !== null ? `${unpriced}.` : figures.unreported ? `No listed account with a sized tier reports a share of the ${RING_WINDOW[windowId]}.` : `No listed account's tier is sized for the ${RING_WINDOW[windowId]}.`) : `No account with a ${RING_WINDOW[windowId]}.`}
+            {figures.emptyReason === 'no_window' ? `No account with a ${RING_WINDOW[windowId]}.` : unpriced !== null ? `${unpriced}.` : figures.emptyReason === 'unreported' ? `No listed account with a sized tier reports a share of the ${RING_WINDOW[windowId]}.` : `No listed account's tier is sized for the ${RING_WINDOW[windowId]}.`}
           </p>
           <LeftOut accounts={figures.leftOut} />
         </>

@@ -11,6 +11,7 @@ import { placementHit } from '@/lib/format';
 import { SHED_MARK_SHARE } from '@/lib/presets';
 import { MODEL_SCOPE_PREFIX, endOf, flagOf, isPaidSource, readWindows, windowOf } from '@/lib/quota';
 import { compareRows, movedFrom } from '@/lib/routingLog';
+import { reservationRoundsRun } from '@/lib/selection';
 import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SHARED_WINDOWS, SUNSET_WEEK_RESETS_IN, accountById, lastReadingOf, rankTier } from './accounts';
 import { promptOf } from './catalog';
@@ -1135,7 +1136,7 @@ export function stretchTriggerOf(source: RecordCandidate, pool: PoolSeed, at: nu
  * any other pool.
  */
 function reservationShort(source: RecordCandidate, pool: PoolSeed, at: number): number | null {
-  if (pool.strategy !== 'pace' || !pool.loadShedding || !pool.fableReservationShedding) return null;
+  if (!reservationRoundsRun(pool)) return null;
   const pace = paceOf(accountOf(source.accountId), at, null, { burns: source.burn, readings: source.windows, reserve: true });
   return pace.fableReservation !== null && pace.remaining < pace.fableReservation ? pace.fableReservation : null;
 }

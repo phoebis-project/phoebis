@@ -1199,10 +1199,11 @@ function refusalChips(refusal: Refusal, version: string | null): Chip[] {
 const ROUND_REASON_WORD: Record<string, string> = { account_bound: 'each holds state on its account' };
 /** Why a move rule did not run, where the words differ from the reason's own. */
 const NOT_RUN_REASON_WORD: Record<string, string> = { account_bound: 'the session is account-bound' };
+export const isMoveRule = (step: string) => step.startsWith('move:');
 /** The chips of a move rule's `reason` fact where the rule did not run and the table words the reason: the
  *  words alone, with no label. Undefined for each other fact, which keeps its own chips. */
 export const notRunReasonChips = (step: Pick<WalkStep, 'step' | 'verdict'>, f: WalkFact): Chip[] | undefined => {
-  if (!step.step.startsWith('move:') || step.verdict !== 'not_run' || f.key !== 'reason' || typeof f.value !== 'string') return undefined;
+  if (!isMoveRule(step.step) || step.verdict !== 'not_run' || f.key !== 'reason' || typeof f.value !== 'string') return undefined;
   const word = lookup(NOT_RUN_REASON_WORD, f.value);
   return word === undefined ? undefined : [plain(word)];
 };
@@ -1288,7 +1289,7 @@ export function walkLines(record: DecisionRecord, row?: DecisionSummary): WalkLi
   const lines: WalkLine[] = [];
   let fired: string | null = null;
   for (const s of record.walk) {
-    if (fired !== null && s.step.startsWith('move:') && s.verdict === 'not_run') {
+    if (fired !== null && isMoveRule(s.step) && s.verdict === 'not_run') {
       const last = lines[lines.length - 1];
       if (last?.collapsed) {
         last.collapsed.push(s.step);
@@ -1298,7 +1299,7 @@ export function walkLines(record: DecisionRecord, row?: DecisionSummary): WalkLi
       }
       continue;
     }
-    if (s.step.startsWith('move:') && s.verdict === 'fired') fired = s.step;
+    if (isMoveRule(s.step) && s.verdict === 'fired') fired = s.step;
     const refusal = record.outcome.refusal;
     const chips =
       s.step === 'admission' && refusal !== null
@@ -1642,9 +1643,11 @@ function projectionTitle(c: RecordCandidate, now: number): string | null {
 
 /**
  * The time a pin could stay before its window that binds reaches the ceiling, unbounded where nothing binds. A spent
- * member states no runway, so its null reads as a dash.
+ * member states no runway, so it reads null.
  */
-const runwayWord = (c: RecordCandidate) => (c.fit === null || c.fit === 'spent' ? '-' : c.runwayMs === null ? 'unbounded' : c.runwayMs === 0 ? 'none' : span(c.runwayMs));
+const runwayText = (fit: string, ms: number | null): string | null => (fit === 'spent' ? null : ms === null ? 'unbounded' : ms === 0 ? 'none' : span(ms));
+/** A candidate's runway cell, a dash for a candidate with no fit and for a spent one. */
+const runwayWord = (c: RecordCandidate) => (c.fit === null ? '-' : (runwayText(c.fit, c.runwayMs) ?? '-'));
 
 /** A spend window's lines: the share over the reset, and the estimate's word where no head has named the reset yet. */
 const spendLines = (w: RecordCandidate['windows'][string], now: number): string[] => [`spend ${fmtPct(w.utilization)}`, w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), ...(w.source === 'estimated' ? ['estimated'] : [])];
@@ -1753,6 +1756,9 @@ const MINUTES: readonly SettingKey[] = ['overageMoveGraceMinutes', 'windDownMinu
 const SHARES: readonly SettingKey[] = ['fiveHourCeiling', 'shedCap', 'weeklyCeiling'];
 /** The settings a record from before carries no value for, since its pool had none of them when it was written. */
 const UNRECORDED: readonly SettingKey[] = ['fiveHourCeiling', 'loadShedding', 'returnToPlan', 'returnToPlanDwellSeconds', 'slowDown', 'slowDownHoldSeconds', 'slowDownStretchSeconds', 'weeklyCeiling'];
+/** The settings for which a record stored before the router wrote them draws no row, where `settingValue` would read
+ *  the null as off. */
+const UNWRITTEN: readonly SettingKey[] = ['fableReservationShedding'];
 
 /** One setting's value as the grid draws it: a span, a share, `on` or `off`, or the setting's word. */
 export function settingValue(key: SettingKey, settings: RecordSettings): string {
@@ -2149,9 +2155,9 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       // landing on a spent member states no runway, so its null draws no line.
       const fit = str(d.fit);
       if (fit !== null) {
-        const runway = num(d.runway_ms);
+        const runway = runwayText(fit, num(d.runway_ms));
         add('Destination fit', plain(wordOf(FIT_WORD, fit)));
-        if (fit !== 'spent') add('Runway', plain(runway === null ? 'unbounded' : runway === 0 ? 'none' : span(runway)));
+        add('Runway', runway === null ? null : plain(runway));
       }
       pin();
       break;
@@ -2574,7 +2580,7 @@ export function pinRows(record: DecisionRecord, now: number): CardRow[] {
 export function settingsRows(record: DecisionRecord): CardRow[] | null {
   const s = record.settings;
   if (s === null || record.outcome.kind === 'refused') return null;
-  const rows = SETTINGS_ROWS.filter((r) => r.key !== 'fableReservationShedding' || s.fableReservationShedding !== null).map((r) => ({ chips: [plain(UNRECORDED.includes(r.key) && s[r.key] === null ? 'not recorded' : settingValue(r.key, s))], label: r.label }));
+  const rows = SETTINGS_ROWS.filter((r) => !(UNWRITTEN.includes(r.key) && s[r.key] === null)).map((r) => ({ chips: [plain(UNRECORDED.includes(r.key) && s[r.key] === null ? 'not recorded' : settingValue(r.key, s))], label: r.label }));
   const share = (v: number | null) => (v === null ? 'off' : fmtPct(v));
   const legacy = s.legacy === null ? [] : [
     { chips: [plain(share(s.legacy.shedAheadOfPace))], label: 'Shed above (then)' },

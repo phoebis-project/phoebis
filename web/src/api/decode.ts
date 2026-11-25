@@ -850,17 +850,21 @@ const decodeAllowanceReset = (v: unknown): AllowanceReset => {
   const r = rec(v);
   return { observedAt: isoOr(r.observed_at, epoch), plan: strOrNull(r.plan), resetAt: isoOr(r.reset_at, epoch), shareLeft: num(r.share_left), source: str(r.source), tier: strOrNull(r.tier) };
 };
+/** The sources of a row that a drop wrote, whose `resetAt` is the reset of the week that the drop cut and can lie
+ *  ahead. */
+const DROP_SOURCES: ReadonlySet<string> = new Set(['claim', 'plan_changed']);
+/** The instant a row draws: the drop's for a row that a drop wrote, else the reset's. */
+export const drawnInstant = (reset: AllowanceReset): string => (DROP_SOURCES.has(reset.source) ? reset.observedAt : reset.resetAt);
+export const byDrawnNewest = (a: AllowanceReset, b: AllowanceReset) => Date.parse(drawnInstant(b)) - Date.parse(drawnInstant(a));
+
 /** A window's rows parted by the source word, each list newest first by the instant a row draws at: the drop's for a
  *  claim row and for a plan change, which stands among the resets, the reset's for each other. The sort is stable, so
- *  rows of one instant keep the route's order. The key repeats the allowance library's `drawnInstant`, which this
- *  module cannot import, since that library imports it. */
+ *  rows of one instant keep the route's order. */
 function decodeAllowanceRows(v: unknown): { claims: AllowanceReset[]; resets: AllowanceReset[] } {
   const claims: AllowanceReset[] = [];
   const resets: AllowanceReset[] = [];
   for (const row of list(v).map(decodeAllowanceReset)) (row.source === 'claim' ? claims : resets).push(row);
-  const drawn = (r: AllowanceReset) => Date.parse(r.source === 'claim' || r.source === 'plan_changed' ? r.observedAt : r.resetAt);
-  const newest = (a: AllowanceReset, b: AllowanceReset) => drawn(b) - drawn(a);
-  return { claims: claims.sort(newest), resets: resets.sort(newest) };
+  return { claims: claims.sort(byDrawnNewest), resets: resets.sort(byDrawnNewest) };
 }
 export const decodeUnusedAllowance = (v: unknown): UnusedAllowanceAnswer => ({
   accounts: list(rec(v).accounts)

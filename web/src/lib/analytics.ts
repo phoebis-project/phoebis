@@ -438,7 +438,7 @@ export function nativeCellOf(equivalent: number | null | undefined, billed: numb
  */
 export function sidesOf(g: Pick<AnalyticsGroup, 'billedUsd' | 'costEquivalent' | 'planRequests' | 'requests'>): { billed: number | undefined; equivalent: number | null | undefined } {
   const plan = g.planRequests === null ? g.costEquivalent !== 0 : g.planRequests > 0;
-  const billed = g.planRequests === null ? g.billedUsd > 0 : g.requests > g.planRequests || g.billedUsd > 0;
+  const billed = g.billedUsd > 0 || (g.planRequests !== null && g.requests > g.planRequests);
   return plan || billed ? { billed: billed ? g.billedUsd : undefined, equivalent: plan ? g.costEquivalent : undefined } : { billed: g.billedUsd, equivalent: g.costEquivalent ?? 0 };
 }
 

@@ -12,6 +12,8 @@ export const GROUP_LABEL = ['plan', 'overage', 'metered'] as const;
 
 /** Whether selection walks the kind tiers for this pool: the operator's answer alone. */
 export const kindOrdered = (pool: Pool) => pool.preferSubscription;
+/** Whether the Fable reservation's rounds run on this pool: the option on, under Pace, with load shedding on. */
+export const reservationRoundsRun = (pool: Pick<Pool, 'fableReservationShedding' | 'loadShedding' | 'strategy'>): boolean => pool.fableReservationShedding && pool.strategy === 'pace' && pool.loadShedding;
 export const RULE_NOTE = 'A request for a Fable model is placed on the Fable window instead, which this card does not draw.';
 
 /** Why the router skips a member: its own verdict, as the pool view reports it. */
@@ -186,6 +188,7 @@ const groupOf = (account: Account | undefined): 0 | 1 | 2 => (account === undefi
 export function selectionOrder(pool: Pool, accounts: Account[], now: number, regime: string | null): Tier[] {
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const memberOf = new Map(pool.members.map((m) => [m.accountId, m]));
+  const fitOf = new Map(pool.members.map((m) => [m.accountId, regimeFitOf(m, regime)]));
   const grouped = kindOrdered(pool);
   const groupFor = (accountId: string) => (grouped ? groupOf(byId.get(accountId)) : 0);
   const tiers = [...new Map(pool.members.map((m) => [`${groupFor(m.accountId)}:${m.priority}`, { group: groupFor(m.accountId), priority: m.priority }])).values()].sort(
@@ -225,7 +228,7 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number, reg
   const eligibleInPool = built.flatMap((t) => t.placements).filter((p) => p.ineligible === null);
   // The rung the router settles on is the best one any eligible member of the pool reaches.
   const settled = Math.min(...eligibleInPool.map(orderOf));
-  const runwayFor = (p: Placement) => runwayOf(p, regimeFitOf(memberOf.get(p.account.id), regime));
+  const runwayFor = (p: Placement) => runwayOf(p, fitOf.get(p.account.id) ?? null);
   // On a rung that ranks by the runway the router keeps the longest one over the whole pool before it picks a tier.
   // Every other rung reads 0, so its first tier names `next` as the tier walk finds it.
   const longest = Math.max(...eligibleInPool.filter((p) => orderOf(p) === settled).map(runwayFor));
@@ -331,9 +334,9 @@ function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Acc
  * One sentence on what the status badge means for this pool, from the verdicts and the order the card already reads.
  * `accounts` is null until the account list is read: without it the order places no member and no return or name can
  * be read, so the sentence says what the pool's own verdicts carry and names no account. The next account is the one
- * the order names under `regime`, as the serving table draws it.
+ * that `tiers` names, the order the caller's serving table draws.
  */
-export function poolStatusSentence(pool: Pool, accounts: Account[] | null, now: number, regime: string | null): PoolStatusSentence {
+export function poolStatusSentence(pool: Pool, accounts: Account[] | null, now: number, tiers: Tier[]): PoolStatusSentence {
   const { status } = pool;
   const word = STATUS_WORD[status];
   const byId = new Map((accounts ?? []).map((a) => [a.id, a]));
@@ -360,7 +363,7 @@ export function poolStatusSentence(pool: Pool, accounts: Account[] | null, now: 
   const count = eligible.length === members ? `all ${members} members take fresh sessions` : `${eligible.length} of ${members} members ${noun(eligible.length, 'takes', 'take')} fresh sessions`;
   if (accounts === null) return say([{ text: members === 1 ? "the pool's one member takes every fresh session." : `${count}.` }]);
   if (members === 1) return say([nameOf(eligible[0].accountId), { text: ' takes every fresh session.' }]);
-  const next = selectionOrder(pool, accounts, now, regime).find((tier) => tier.next.length > 0)?.next ?? [];
+  const next = tiers.find((tier) => tier.next.length > 0)?.next ?? [];
   if (next.length === 0) return say([{ text: 'no listed member takes fresh sessions.' }]);
   return say([{ text: `${count}, and the next one goes to ` }, ...listOf(next.map(nameOf)), { text: '.' }]);
 }

@@ -622,7 +622,7 @@ function PoolCard({
   const regime = chosen !== null && (chosen === '' || regimes.includes(chosen)) ? chosen : regimes.includes('interactive') ? 'interactive' : '';
   const tiers = selectionOrder(pool, accounts ?? [], now, regime || null);
   const grouped = kindOrdered(pool);
-  const sentence = poolStatusSentence(pool, accounts, now, regime || null);
+  const sentence = poolStatusSentence(pool, accounts, now, tiers);
   const features = FEATURES.filter((f) => f.on(pool));
   const caption = `${STRATEGY_LABEL[pool.strategy]}${grouped ? `${pool.strategy === 'priority' ? ', with' : ','} subscription accounts first` : ''}`;
   const memberOf = (id: string) => pool.members.find((m) => m.accountId === id);

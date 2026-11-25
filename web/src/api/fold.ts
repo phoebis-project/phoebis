@@ -290,14 +290,12 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
   const agentGroups = options.agentGroups ?? [];
   // The `user_agent` key reads the header alone, so each distinct header is folded and matched once.
   const agentKeys = new Map<string | null, string>();
-  const groups = new Map<string, { group: AnalyticsGroup; rows: RequestLog[]; sawNonProbe: boolean }>();
+  const groups = new Map<string, { group: AnalyticsGroup; rows: RequestLog[] }>();
   for (const r of funding === undefined ? rows : rows.filter((row) => onSide(row, funding))) {
     const key = by === 'user_agent' ? once(agentKeys, r.userAgent, () => keyOf(r, by, agentGroups)) : keyOf(r, by, agentGroups);
-    const entry = groups.get(key) ?? { group: emptyFolded(key, labelOf(r, key, by, latest)), rows: [], sawNonProbe: false };
+    const entry = groups.get(key) ?? { group: emptyFolded(key, labelOf(r, key, by, latest)), rows: [] };
     groups.set(key, entry);
     const g = entry.group;
-    // Set ahead of every arm, so a group of refused rows alone stays under the toggle off, as the route keeps one.
-    if (r.kind !== 'probe') entry.sawNonProbe = true;
     if (heldProbe(r)) {
       g.probes.held += 1;
       continue;
@@ -380,8 +378,9 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     if (by === 'account') foldShares(g, list);
   }
   // Under the toggle off the route leaves out a group whose rows are all probes, unless its billed probes hold dollars.
+  // A group of refused rows alone stays, as the route keeps one.
   return [...groups.values()]
-    .filter((e) => options.includeProbes !== false || e.sawNonProbe || e.group.billedUsd > 0)
+    .filter((e) => options.includeProbes !== false || e.group.requests > 0 || e.group.refused > 0 || e.group.billedUsd > 0)
     .map((e) => e.group)
     .sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
 }

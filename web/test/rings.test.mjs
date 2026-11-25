@@ -131,9 +131,9 @@ test("a ring whose listed accounts carry the window tells them from a fleet with
   // A free plan on the 7-day window weighs nothing, and its window still stands, so the ring may not say no account
   // has the window.
   const free = d.ringFigures([account('free', 'default_claude_ai', [window('7d', 0.5)], {}, 'free')], '7d', COSTS, 'ultra', NOW);
-  assert.deepEqual([free.rows, free.carried], [[], true]);
+  assert.deepEqual([free.rows, free.emptyReason], [[], 'unsized']);
   const pro = d.ringFigures([account('secondary', 'default_claude_ai', [window('7d', 0.5)])], '7d_fable', COSTS, 'ultra', NOW);
-  assert.deepEqual([pro.rows, pro.carried], [[], false]);
+  assert.deepEqual([pro.rows, pro.emptyReason], [[], 'no_window']);
 });
 
 test("the ring's rows read the account with the most of its own window left first", () => {
@@ -241,8 +241,8 @@ test('an account whose window has no share is left out of the ring and of its ca
 test('an empty ring tells missing shares from unsized tiers', () => {
   const shareless = d.ringFigures([account('primary', 'default_claude_max_20x', [window('7d', null)])], '7d', COSTS, 'ultra', NOW);
   const unsized = d.ringFigures([account('seat', 'default_claude_team', [window('7d', 0.2)])], '7d', COSTS, 'ultra', NOW);
-  assert.deepEqual([shareless.rows, shareless.carried, shareless.unreported], [[], true, true], 'a sized account with no share');
-  assert.deepEqual([unsized.rows, unsized.carried, unsized.unreported], [[], true, false], 'a tier with no 7-day capacity');
+  assert.deepEqual([shareless.rows, shareless.emptyReason], [[], 'unreported'], 'a sized account with no share');
+  assert.deepEqual([unsized.rows, unsized.emptyReason], [[], 'unsized'], 'a tier with no 7-day capacity');
 });
 
 test('a disconnected account with the windows of its last reading and no profile is on no ring and in no left-out list', () => {
