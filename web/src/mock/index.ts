@@ -86,6 +86,7 @@ const ACCOUNT_TAKEN = 'an account with this id exists';
 const KEY_STALE = 'the key changed while it was being edited, so reload and try again';
 const KEY_TAKEN = 'a key with this id exists';
 const PAIRING_NOT_FOUND = 'pairing session not found';
+const POLL_UNREAD = 'the poll has not read this account yet';
 const POOL_STALE = 'the pool changed while it was being edited, so reload and try again';
 const POOL_TAKEN = 'a pool with this id exists';
 
@@ -380,6 +381,13 @@ const statusOf = (a: Account, enabled: boolean, flag = flagOf(a.status)): Accoun
  * type but the free one, so a row with no document reports one too.
  */
 const reportsPlan = (a: Pick<Account, 'subscription'>): boolean => a.subscription?.organizationType !== 'claude_free';
+
+/**
+ * Whether the router holds a reading of the row, which the account view answers from while it holds no usage entry: a
+ * window the row reads, or a sample the story's poll wrote, since the router keeps an account's last reading past a
+ * disconnect and past an ended plan.
+ */
+const holdsReading = (a: Account): boolean => a.windows.length > 0 || a.fableWindow !== null || ledger().quotaHistory.some((h) => h.accountId === a.id && h.samples.length > 0);
 
 /**
  * A written member as the route answers it: the kind, the burn, the Pace score, the speed and the fit read off the
@@ -773,10 +781,11 @@ export class MockApi implements Api {
 
   /**
    * A list read at least `FIRST_POLL_MS` after a confirm lands that confirm's first poll on its row: its clean answer
-   * as the row's poll standing and its snapshot, and its reading where the row reads no window yet. Keyed on the clock
-   * rather than a count of reads, since the confirm's reload and the refresh the closing dialog resumes read the list
-   * at once on a live clock. A row that lost its credential since the confirm takes none, since the router's poll and
-   * its token manager read no such account.
+   * as the row's poll standing and its snapshot, and its reading, the first reading where the row reads no window yet
+   * and else the row's windows read at the landing, as the router records a clean answer's reading at its instant.
+   * Keyed on the clock rather than a count of reads, since the confirm's reload and the refresh the closing dialog
+   * resumes read the list at once on a live clock. A row that lost its credential since the confirm takes none, since
+   * the router's poll and its token manager read no such account.
    */
   private landFirstPolls() {
     const at = mockClock.now();
@@ -787,8 +796,8 @@ export class MockApi implements Api {
       if (a === undefined || withholdsWindows(a)) continue;
       const read = iso(at);
       const usage = a.usage && { ...a.usage, error: null, fetchedAt: read, heldUntil: null, poll: { backoffSince: null, lastAttemptAt: read, lastCleanAt: read, lastError: null, lastOutcome: 'clean' as const, nextAttemptAt: null, rateLimitedInARow: 0 } };
-      const windows = a.windows.length === 0 && a.fableWindow === null ? FIRST_READING.map((w) => ({ ...w, observedAt: read })) : a.windows;
-      this.putAccount({ ...a, usage, windows });
+      const windows = (a.windows.length === 0 && a.fableWindow === null ? FIRST_READING : a.windows).map((w) => ({ ...w, observedAt: read }));
+      this.putAccount({ ...a, fableWindow: a.fableWindow && { ...a.fableWindow, observedAt: read }, usage, windows });
     }
   }
 
@@ -880,15 +889,17 @@ export class MockApi implements Api {
     if (held?.id === 'legacy' && held.credential.refreshTokenExpiresAt === accountById.get('legacy')?.credential.refreshTokenExpiresAt) throw new ApiError(409, `${held.label} holds a credential sealed under another storage key, so disconnect it before pairing again`, 'sealed_under_another_key');
     // The confirm stores the tokens it exchanged, so the row carries both their expiries, as the router answers it.
     const tokens = { accessTokenExpiresAt: ahead(8 * HOUR), refreshTokenExpiresAt: ahead(30 * DAY) };
-    // The router's confirm drops the usage service's entry for the account, so the row reads no poll standing until
-    // the first poll answers, while the reading it holds still answers.
-    const inFlight = (usage: Account['usage']): Account['usage'] => usage && { ...usage, heldUntil: null, poll: null };
+    // The router's confirm drops the usage service's entry for the account, so until the first poll answers the row
+    // reads no poll standing and answers from what the router still holds: no error and the instant of a reading it
+    // holds, or the poll's unread sentence and no instant where it holds none.
+    const inFlight = (usage: Account['usage'], read: boolean): Account['usage'] => usage && { ...usage, ...(read ? { error: null } : { error: POLL_UNREAD, fetchedAt: null }), heldUntil: null, poll: null };
     if (pairing.label !== undefined) {
       // The backstop for a create that landed between the start and the confirm.
       if (this.accounts.some((a) => a.id === pairing.accountId)) throw new ApiError(409, ACCOUNT_TAKEN, null);
       const row = this.newAccountRow({ id: pairing.accountId, kind: 'oauth', label: pairing.label, secret: null }, 'ready', 'operator+new@example.com');
       const credential = { ...row.credential, ...tokens };
-      this.accounts = [...this.accounts, { ...row, credential, featureGrants: featureGrantsOf({ credential, kind: row.kind }), usage: inFlight(row.usage) }];
+      // The router holds no reading of an account the confirm creates.
+      this.accounts = [...this.accounts, { ...row, credential, featureGrants: featureGrantsOf({ credential, kind: row.kind }), usage: inFlight(row.usage, false) }];
     }
     // The router's confirm clears a plan-ended flag and records the plan found again only where the confirmed profile
     // reports a plan. The mock's profile is the stored document, so a document that names a free organization keeps
@@ -901,7 +912,7 @@ export class MockApi implements Api {
       // the block, since a pairing changes nothing upstream. Its confirm sets the account's state ready, which the
       // account view folds with the enabled bit and the cooldowns.
       const credential = { ...held.credential, ...tokens };
-      this.putAccount({ ...held, credential, featureGrants: featureGrantsOf({ credential, kind: held.kind }), limitResets: null, status: statusOf(held, held.routingEnabled, null), usage: inFlight(held.usage), ...(flagged !== null && !kept ? { planEndedAt: null } : {}) });
+      this.putAccount({ ...held, credential, featureGrants: featureGrantsOf({ credential, kind: held.kind }), limitResets: null, status: statusOf(held, held.routingEnabled, null), usage: inFlight(held.usage, holdsReading(held)), ...(flagged !== null && !kept ? { planEndedAt: null } : {}) });
       const block = lookup(this.resetBlocks, held.id);
       if (block !== undefined) this.resetBlocks = { ...this.resetBlocks, [held.id]: { ...block, folds: block.folds + 1 } };
     }
@@ -1326,10 +1337,10 @@ export class MockApi implements Api {
   }
 
   /**
-   * The request with the events of its window, as the route reads them: from its arrival to its finish, under its
-   * session or naming the request. The pin events come off the routing log, which holds each placement's creation, and
-   * the request's own table adds its other kinds, so no event lists twice. A row the story gives no finish ended when
-   * the ledger wrote it, since the router records a finish on every request it writes.
+   * The request with the events of its window, from its arrival to its finish, under its session or naming the
+   * request. Its pin events read as the route reads its pin events, off the routing log, which holds each placement's
+   * creation, and the request's own table adds its other kinds, so no event lists twice. A row the story gives no
+   * finish ended when the ledger wrote it, since the router records a finish on every request it writes.
    */
   getRequest(id: string): Promise<RequestDetail | null> {
     const request = ledger().requestById.get(id);
@@ -1340,8 +1351,8 @@ export class MockApi implements Api {
     const own = (REQUEST_EVENTS.get(id) ?? []).filter((e) => !PIN_EVENT_KINDS.includes(e.kind));
     const rows = cutsOf(id);
     const asEvent = (e: RoutingEvent): RequestEvent => ({ accountId: e.accountId, at: e.at, detail: e.detail, keyId: e.keyId, kind: e.kind, model: e.model, sessionId: e.sessionId });
-    // At one instant the ledger's order reads the model answers ahead of the pin events and those ahead of the cuts,
-    // which the stable sort keeps from the order the three lists join in.
+    // The route orders by the instant and then by the row's place in the ledger. At one instant the stable sort keeps
+    // the order the lists join in: the request's own events, then the pin events, then the cuts.
     const events = [...own, ...pins.map(asEvent), ...rows.map(asEvent)].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
     const newest = rows[rows.length - 1];
     return latency({ events, request, streamCut: newest ? decodeStreamCut({ ...newest.detail, at: Date.parse(newest.at) }) : null });

@@ -270,11 +270,13 @@ test("the mock answers an agent id with the agent's rows on both logs, an event 
   }
 });
 
-test("a request's detail lists the routing log's pin events of its window and session once, beside its own other events", async () => {
+test("a request's detail lists the routing log's pin events of its window and session once, none behind its finish, beside its own other events", async () => {
   const kinds = async (id) => (await api.getRequest(id)).events.map((e) => e.kind);
   // The placement of 13:21:39 releases the expired row on nightly and creates a pin on primary, as its record's pin
-  // events read, and the routing log alone holds that creation.
-  assert.ok((await kinds('req_6f3e1b84-d29')).includes('pin_created'), "the detail lists the pin its request's placement created");
+  // events read, and the routing log alone holds that creation. The session's next creation, at 13:52:30, lands behind
+  // the request's finish at 13:21:45.8, so this detail leaves it out.
+  const timed = (await api.getRequest('req_6f3e1b84-d29')).events.map((e) => `${e.kind} ${e.at}`);
+  assert.deepEqual(timed, ['pin_expired 2026-09-16T13:21:39.000Z', 'pin_created 2026-09-16T13:21:39.000Z'], "the detail lists the pin its request's placement created and no later event of its session");
   // The failover of 14:24:10 moves the subagent's pin from primary to nightly, which both tables hold, and answers the
   // refused model and its permit, which the request's own table holds alone.
   const failover = await kinds('req_2e7c90a1-6d4');

@@ -838,7 +838,7 @@ test('a first reading lands on no row that a disconnect left without a credentia
   }
 });
 
-test("a re-pair's confirm reads no poll standing until the first poll lands, and that poll's clean answer replaces the failed polls", async () => {
+test("a re-pair's confirm keeps the reading the router holds and reads no poll standing until the first poll lands, whose clean answer replaces the failed polls and reads the windows at its instant", async () => {
   // The case holds the clock the mock reads and steps it past the first poll's few seconds instead of waiting.
   const wall = Date.now;
   let now = wall();
@@ -846,19 +846,49 @@ test("a re-pair's confirm reads no poll standing until the first poll lands, and
   try {
     const api = await signedIn();
     // Reserve is paired again with no disconnect, and its seed holds the polls that failed on a 503 since its last
-    // clean read.
+    // clean read, whose windows the router holds.
+    const read = (await storyAccount(api, 'reserve')).usage.fetchedAt;
     const started = await api.startPairing({ accountId: 'reserve' });
     await api.completePairing(started.id, { code: 'code', state: started.state });
     await api.confirmPairing(started.id);
-    assert.equal((await storyAccount(api, 'reserve')).usage.poll, null, 'the confirm drops the standing the old credential earned');
+    const confirmed = (await storyAccount(api, 'reserve')).usage;
+    assert.deepEqual([confirmed.error, confirmed.fetchedAt, confirmed.poll], [null, read, null], 'the confirm drops the standing the old credential earned and keeps the reading');
     now += 2_200;
     const landed = new Date(now).toISOString();
-    const { usage } = await storyAccount(api, 'reserve');
+    const { usage, windows } = await storyAccount(api, 'reserve');
     assert.deepEqual(
-      [usage.error, usage.fetchedAt, usage.heldUntil, usage.poll],
-      [null, landed, null, { backoffSince: null, lastAttemptAt: landed, lastCleanAt: landed, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 }],
+      [usage.error, usage.fetchedAt, usage.heldUntil, usage.poll, windows[0].observedAt],
+      [null, landed, null, { backoffSince: null, lastAttemptAt: landed, lastCleanAt: landed, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 }, landed],
       'the first poll answers clean at the read that lands it',
     );
+  } finally {
+    Date.now = wall;
+  }
+});
+
+test("a confirm reads the poll's unread sentence and no reading time on a row the router holds no reading of, one it creates and one a disconnect left without one, until the first poll lands", async () => {
+  // The case holds the clock the mock reads, so no first poll lands at a read of the case.
+  const wall = Date.now;
+  const now = wall();
+  Date.now = () => now;
+  try {
+    const api = await signedIn();
+    const confirm = async (start) => {
+      const started = await api.startPairing(start);
+      await api.completePairing(started.id, { code: 'code', state: started.state });
+      return api.confirmPairing(started.id);
+    };
+    const block = async (id) => {
+      const { usage } = await storyAccount(api, id);
+      return [usage.error, usage.fetchedAt];
+    };
+    await confirm({ id: 'fresh', label: 'Fresh' });
+    assert.deepEqual(await block('fresh'), ['the poll has not read this account yet', null], 'a created row reads no reading time that no poll gave');
+    // The usage-based contract holds no plan window, so its disconnect leaves it the no-credential sentence and no
+    // reading, and the router reads the account as unread once it is paired again.
+    await api.disconnectAccount('contract');
+    await confirm({ accountId: 'contract' });
+    assert.deepEqual(await block('contract'), ['the poll has not read this account yet', null], 'a re-paired row with no reading leaves the no-credential sentence');
   } finally {
     Date.now = wall;
   }
