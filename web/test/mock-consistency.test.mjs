@@ -211,7 +211,7 @@ function fitReadOf(set, pool, r) {
 test("the pick line's runway keeps the longest of the ties the selection read a fit for, and names none where nothing narrows", async () => {
   const d = await import('./dist/api.js');
   const tie = (accountId, runwayMs, fit = 'fits') => ({ accountId, fit, runwayMs });
-  const ids = (ties) => d.runwayTiesOf(ties, (c) => c.fit === 'fits').map((c) => c.accountId);
+  const ids = (ties) => d.runwayTiesOf(ties, (c) => c.fit === 'fits', (c) => c.runwayMs).map((c) => c.accountId);
   // A tie the selection read no fit for keeps its place beside the longest runway, and an unbounded runway is the
   // longest of all.
   assert.deepEqual(ids([tie('a', 600_000), tie('b', 900_000), tie('c', null, null)]), ['b', 'c']);
@@ -3614,6 +3614,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // hour. One twenty minutes before leaves the demand under the ceiling at the horizon less the threshold.
     const ended = (minutes) => s.lib.stretchTriggerOf({ ...studio, windows: { ...studio.windows, five_hour: { ...x, horizon: iso(Date.parse(x.reset) - minutes * 60_000) } } }, work, when);
     assert.deepEqual([ended(10), ended(20)], [fired(0.00587), null]);
+  });
+
+  test(`the stretch round's event reads the projection its trigger fired on, at the fired window's horizon less the threshold, at ${at}`, async () => {
+    const s = await story;
+    const round = (await decisionsOf(s)).find((r) => r.requestId === 'req_9f2e7c5a-c49' && r.seq === 2);
+    const x = round.candidates.find((c) => c.accountId === 'studio').windows.five_hour;
+    const event = (await logOf(s)).find((row) => row.type === 'event' && row.kind === 'shedding_round' && row.requestId === round.requestId);
+    // The round at 14:05 reads studio's horizon at its 15:29 reset less work's 30-minute threshold, 14:59, and the 54
+    // minutes to there carry the head's 0.86 at the demand of 0.1286 an hour to 0.97574, which the event states to
+    // three digits. At the reset itself the same demand would read 1.04.
+    assert.deepEqual([event.detail.horizon, event.detail.projection], [Date.parse(x.horizon) - 30 * 60_000, 0.976]);
   });
 
   test(`the first turn's speed reads 1 where no pin of the account holds a cycle yet, on the shed line and the hold alike, at ${at}`, async () => {

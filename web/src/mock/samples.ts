@@ -42,7 +42,8 @@ const ENTRYPOINT_PREFIX = 'claude-code/';
  *  label and names the regime whose `entrypoints` hold it. */
 export const regimeFor = (client: string | null, costs: SubscriptionCosts = TABLES): string | null => {
   const token = client?.startsWith(ENTRYPOINT_PREFIX) ? client.slice(ENTRYPOINT_PREFIX.length) : null;
-  return (token === null ? undefined : Object.keys(costs.regimes).find((name) => costs.regimes[name].entrypoints.includes(token))) ?? null;
+  if (token === null) return null;
+  return Object.keys(costs.regimes).find((name) => costs.regimes[name].entrypoints.includes(token)) ?? null;
 };
 
 /** The tables a request prices under: the regime whose client list names the label over the base, as the router

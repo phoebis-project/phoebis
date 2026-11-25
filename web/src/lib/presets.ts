@@ -55,7 +55,7 @@ const BURN_DECAY_CUTOFF_AVERAGES = 30;
  * left-out pin's `off_window`, `fable_model`, `ended`, `account_bound` and `no_burn`, then a walked pin's `unpriced`,
  * `last_pin` and `standing`.
  */
-const SHED_CAUSES = ['no_runway', 'sliver', 'off_window', 'fable_model', 'ended', 'account_bound', 'no_burn', 'unpriced', 'last_pin', 'standing'] as const;
+export const SHED_CAUSES = ['no_runway', 'sliver', 'off_window', 'fable_model', 'ended', 'account_bound', 'no_burn', 'unpriced', 'last_pin', 'standing'] as const;
 type ShedCause = (typeof SHED_CAUSES)[number];
 const firstCause = (read: readonly (ShedCause | null)[]): ShedCause | null => SHED_CAUSES.find((c) => read.includes(c)) ?? null;
 

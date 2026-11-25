@@ -71,3 +71,12 @@ export function bindingOf(runways: Runway[]): Runway | undefined {
 export function shownOf(runways: Runway[]): Runway | undefined {
   return bindingOf(runways.filter((r) => !r.pastReset));
 }
+
+/**
+ * The 5-hour window's projection under the slow-down: the utilization and the demand's rise to the window's horizon
+ * moved back by the stretch threshold, and none where that instant does not lie ahead of `read.at`.
+ */
+export function stretchProjectionOf(read: { at: number; demand: number; horizon: number; utilization: number }, thresholdMs: number): number | null {
+  const until = read.horizon - thresholdMs;
+  return until <= read.at ? null : read.utilization + read.demand * ((until - read.at) / HOUR);
+}
