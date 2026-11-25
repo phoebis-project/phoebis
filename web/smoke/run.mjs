@@ -18855,8 +18855,9 @@ await forView('/routing-log', async () => {
     page.unmount();
   }
   {
-    // A request held until its bound ran out answers 429 without a dispatch, whatever the exhaustion after the hold
-    // names: the Hold row reads that it ran out, and the Answer row reads the status the request row carries.
+    // A request held at the cap until its bound ran out, with no leg dialed, answers 429 without a dispatch: the Hold
+    // row reads that it ran out, and the Answer row reads the status that the record carries, which is the request
+    // row's.
     const [id, seq] = ['req_77634945-72b', 2];
     const { card, page, record } = await story(id, seq);
     scan('exhaustion after a hold', card);

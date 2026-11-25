@@ -829,7 +829,7 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
   assert.deepEqual(rows(held), [['Hold', ['on primary', 'cohort', 'bound 10 s']]]);
   const freed = record({ outcome: { cohortHold: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'], waits: [] }, completion: completion({ completedAt: iso(NOW), freed: true, heldMs: 2_000, status: 200 }) } });
   assert.deepEqual(rows(freed).find(([label]) => label === 'Hold'), ['Hold', ['on primary', 'cohort', 'freed after 2.0 s']]);
-  const exhausted = record({ outcome: { accountId: null, exhaustion: { deadline: iso(ms(15, 42)), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' }, kind: 'exhausted', upstreamModel: null } });
+  const exhausted = record({ outcome: { accountId: null, exhaustion: { deadline: iso(ms(15, 42)), kind: 'timed', obstacle: null, reason: null, status: 429, window: 'five_hour' }, kind: 'exhausted', upstreamModel: null } });
   assert.deepEqual(rows(exhausted), [['Answer', ['status 429', 'window 5h', 'retry after 15:42']]]);
   const refused = record({ outcome: { accountId: null, kind: 'refused', refusal: { kind: 'client', reason: 'hash' }, upstreamModel: null }, request: { keyId: 'laptop' } });
   const drift = decision({ accountId: null, by: by('refusal', 'client'), fact: [fact('client', '2.1.274', 'text')], kind: 'refused', refusal: { kind: 'client', reason: 'hash' } });
@@ -849,11 +849,14 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
   assert.equal(rows(reachedBy(null)).find(([label]) => label === 'Spend'), undefined, 'an obstacle that names no period draws no budget detail');
 });
 
-test("a probe's pinned answer reads the relay's status: 429 where a wait clears the obstacle, 503 elsewhere", () => {
-  const answer = (obstacle) =>
-    texts(d.outcomeRows(record({ outcome: { accountId: null, exhaustion: { deadline: null, kind: 'pinned', obstacle, reason: null, window: null }, kind: 'exhausted', upstreamModel: null } }), NOW).find((line) => line.label === 'Answer').chips)[0];
-  assert.equal(answer('credits'), 'status 429', 'a wait that names no deadline');
-  assert.equal(answer('no_pin'), 'status 503', 'an answer no wait clears');
+test("an exhausted record's Answer row draws the status that the record carries", () => {
+  const exhausted = record({ outcome: { accountId: null, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, status: 429, window: null }, kind: 'exhausted', upstreamModel: null } });
+  assert.deepEqual(d.outcomeRows(exhausted, NOW).map((line) => [line.label, texts(line.chips)]), [['Answer', ['status 429', 'retry none']]]);
+});
+
+test('a record stored before the status draws its Answer row with no status chip', () => {
+  const exhausted = record({ outcome: { accountId: null, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, status: null, window: null }, kind: 'exhausted', upstreamModel: null } });
+  assert.deepEqual(d.outcomeRows(exhausted, NOW).map((line) => [line.label, texts(line.chips)]), [['Answer', ['retry none']]]);
 });
 
 test("the Probe line words the pinned member's obstacle as the row's By cell does", () => {
@@ -934,19 +937,19 @@ test('a_contract_refusal_reads_client_contract_with_the_items_word', () => {
   assert.deepEqual(d.outcomeRows(record({ outcome: { accountId: null, kind: 'refused', refusal: drift, upstreamModel: null }, request: { keyId: 'laptop' } }), NOW, drifted).map((line) => [line.label, texts(line.chips)]), [['Answer', ['client drift', 'client 2.1.271', 'key laptop']]]);
 });
 
-test('an exhausted record after a run-out draws ran out on its hold and 429 on its answer', () => {
+test('an exhausted record after a run-out draws ran out on its hold', () => {
   const rows = (r) => d.outcomeRows(r, NOW).map((line) => [line.label, texts(line.chips)]);
   const exhausted = (holds) =>
-    record({ outcome: { accountId: null, exhaustion: { deadline: null, kind: 'model_rejected', obstacle: null, reason: null, window: null }, kind: 'exhausted', upstreamModel: null }, request: { holds } });
+    record({ outcome: { accountId: null, exhaustion: { deadline: null, kind: 'model_rejected', obstacle: null, reason: null, status: 404, window: null }, kind: 'exhausted', upstreamModel: null }, request: { holds } });
   const hold = (accountId, ranOut, cohort = null) => ({ accountId, attempt: 1, cohort, heldMs: 60_000, ranOut });
   assert.deepEqual(rows(exhausted([hold('primary', false), hold('secondary', true)])), [
     ['Hold', ['on secondary', 'strategy pick', 'held 1 min', 'ran out']],
-    ['Answer', ['status 429', 'retry none']],
+    ['Answer', ['status 404', 'retry none']],
   ]);
   assert.deepEqual(rows(exhausted([hold('primary', false), hold('secondary', false)])), [
     ['Hold', ['on secondary', 'strategy pick', 'held 1 min']],
     ['Answer', ['status 404', 'retry none']],
-  ], 'a hold that did not run out leaves the status the kind names');
+  ], 'a hold that did not run out draws no ran out chip');
   assert.deepEqual(rows(exhausted([hold('primary', true, 'primary')]))[0], ['Hold', ['on primary', 'cohort', 'held 1 min', 'ran out']], "a cohort's hold reads its place as the cohort row does");
   assert.deepEqual(rows(exhausted([])), [['Answer', ['status 404', 'retry none']]], 'a record that held nowhere draws no hold');
 });
@@ -954,7 +957,7 @@ test('an exhausted record after a run-out draws ran out on its hold and 429 on i
 test('an exhausted record draws no hold an earlier attempt waited through', () => {
   const rows = (r) => d.outcomeRows(r, NOW).map((line) => [line.label, texts(line.chips)]);
   const exhausted = (attempt, holds) =>
-    record({ outcome: { accountId: null, exhaustion: { deadline: null, kind: 'model_rejected', obstacle: null, reason: null, window: null }, kind: 'exhausted', upstreamModel: null }, request: { attempt, holds } });
+    record({ outcome: { accountId: null, exhaustion: { deadline: null, kind: 'model_rejected', obstacle: null, reason: null, status: 404, window: null }, kind: 'exhausted', upstreamModel: null }, request: { attempt, holds } });
   const hold = (attempt) => ({ accountId: 'primary', attempt, cohort: null, heldMs: 60_000, ranOut: false });
   // Held and freed on attempt 1, then failed over: the relay keeps attempt 1's hold on the request that attempt 2 exhausts.
   assert.deepEqual(rows(exhausted(2, [hold(1)])), [['Answer', ['status 404', 'retry none']]]);

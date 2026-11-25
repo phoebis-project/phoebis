@@ -277,8 +277,6 @@ const OBSTACLE_WORD: Record<string, string> = {
 };
 /** The hover of a pinned obstacle on the By chip, for an obstacle whose word does not say why the probe stayed. */
 const PINNED_OBSTACLE_HINT: Record<string, string> = { pin_moved: "The pin stands on another account than the recipe's, so the probe was not sent." };
-/** The pinned obstacles a wait clears, which the relay answers with a 429 as it answers a dated exhaustion. */
-const PINNED_WAITS = new Set(['cooldown', 'credits', 'overage', 'spent']);
 /**
  * A key refusal's words by the structured code the record carries. A code outside the map reads through the fallback.
  */
@@ -1775,11 +1773,6 @@ export function settingValue(key: SettingKey, settings: RecordSettings): string 
   return words(v);
 }
 
-/**
- * The relay's status for an exhaustion: a dated one and a pinned wait a 429, a model no member serves a 404, the rest a
- * 503.
- */
-const EXHAUSTION_STATUS: Record<string, number> = { fast_credits: 429, fast_lane: 429, model_rejected: 404, timed: 429 };
 export const PLACE_WORD: Record<string, string> = { strategy_pick: 'strategy pick' };
 /** A wait's reason as a held row's hover and the Hold row read it: `cap` waited for a slot the in-flight cap freed. */
 export const WAIT_REASON_WORD: Record<string, string> = { cap: 'for a slot', reset: 'for the reset', rewrite: 'for the rewrite in flight', slow_down: 'for the slow-down' };
@@ -1840,7 +1833,6 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
       rows.push({ chips: [plain('pending')], label: 'Cache read' });
     }
   }
-  // The relay answers a hold whose bound ran out with a 429, whatever the exhaustion the selection after it names.
   const last = record.request.holds[record.request.holds.length - 1];
   const ranOut = last?.ranOut === true;
   const ranOutChip = ranOut ? [plain('ran out')] : [];
@@ -1891,10 +1883,9 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
   }
   if (o.exhaustion !== null) {
     const x = o.exhaustion;
-    const waits = x.kind === 'pinned' && x.obstacle !== null && PINNED_WAITS.has(x.obstacle);
     rows.push({
       chips: [
-        plain(String(ranOut || waits ? 429 : (lookup(EXHAUSTION_STATUS, x.kind) ?? 503)), 'status'),
+        ...(x.status !== null ? [plain(String(x.status), 'status')] : []),
         ...(x.window !== null ? [plain(windowTagWord(storedFableKey(x.window)), 'window')] : []),
         ...(x.reason !== null ? [plain(wordOf(CREDITS_WORD, x.reason), 'cause')] : []),
         plain(x.deadline === null ? 'none' : formatFact(x.deadline, 'time', at), x.deadline === null ? 'retry' : 'retry after'),

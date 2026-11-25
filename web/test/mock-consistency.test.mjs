@@ -1797,6 +1797,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const from = iso(Math.min(...s.requests.map((r) => Date.parse(r.at))) - HOUR);
     const runOuts = s.requests.filter((r) => r.errorCode === 'accounts_at_cap');
     assert.ok(runOuts.length > 0, 'the story holds a run-out');
+    // Behind a dialed attempt the router answers a run-out by its exhaustion's kind, each at the clock that draws it: a
+    // model no member serves 404, and an untimed exhaustion 503, which it reads as the cap only with no leg dialed.
+    const DIALED = { 'req_05945d59-178': 503, 'req_48db1b37-495': 404 };
+    assert.ok(runOuts.some((r) => r.id in DIALED), `the story's run-outs: ${runOuts.map((r) => r.id).join(', ')}`);
     for (const req of runOuts) {
       const own = records.filter((r) => r.requestId === req.id).sort((x, y) => x.seq - y.seq);
       const summaries = (await s.api.listRoutingLog({ from, limit: 200, request: req.id, to: iso(s.now + DAY) })).rows.filter((x) => x.type === 'decision');
@@ -1810,7 +1814,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.deepEqual(holds.map((h) => h.ranOut), holds.map((_, i) => i === holds.length - 1), `${req.id}/${exhausted.seq}: the last hold ran out`);
       const bound = exhausted.settings.retryInPlaceSeconds * 1_000;
       const facts = summary(exhausted)?.fact.map((f) => [f.key, f.value, f.unit]);
-      assert.deepEqual(facts, [['held', bound, 'ms'], ['answer', 429, 'count']], `${req.id}/${exhausted.seq}'s facts`);
+      // The router writes the row's answer from the function that gives the record its status.
+      assert.deepEqual(facts, [['held', bound, 'ms'], ['answer', exhausted.outcome.exhaustion?.status, 'count']], `${req.id}/${exhausted.seq}'s facts`);
+      if (req.id in DIALED) assert.deepEqual([exhausted.outcome.exhaustion?.status, facts[1][1]], [DIALED[req.id], DIALED[req.id]], `${req.id}/${exhausted.seq}'s status and answer`);
     }
   });
 

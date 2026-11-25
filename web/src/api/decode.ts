@@ -558,7 +558,7 @@ const holdOf = (v: unknown): RecordHold | null =>
   }));
 /** Both shapes the router writes read through one object, the other shape's members null. */
 const causeOf = (v: unknown): MoveCause | null => orNull(v, (c) => ({ cause: strOrNull(c.cause), reason: strOrNull(c.reason), scope: strOrNull(c.scope), state: strOrNull(c.state), window: strOrNull(c.window) }));
-const exhaustionOf = (v: unknown): Exhaustion | null => orNull(v, (x) => ({ deadline: isoOrNull(x.deadline), kind: str(x.kind), obstacle: strOrNull(x.obstacle), reason: strOrNull(x.reason), window: strOrNull(x.window) }));
+const exhaustionOf = (v: unknown): Exhaustion | null => orNull(v, (x) => ({ deadline: isoOrNull(x.deadline), kind: str(x.kind), obstacle: strOrNull(x.obstacle), reason: strOrNull(x.reason), status: numOrNull(x.status), window: strOrNull(x.window) }));
 const refusalOf = (v: unknown): Refusal | null => orNull(v, (x) => ({ code: str(x.code), kind: str(x.kind), reason: str(x.reason) }));
 /** A value the console cannot draw as a number or a word drops its pair rather than drawing a guess. */
 const factOf = (v: unknown): SummaryFact[] => {

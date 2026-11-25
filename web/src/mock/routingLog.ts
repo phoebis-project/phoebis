@@ -96,7 +96,8 @@ interface Spec {
   cacheMap?: { messages: number; staticSizes: number[] };
   /** The selections a drawn probe that sent nothing drew, whose in-flight draws its one answer takes. */
   drawnSelections?: number;
-  exhaustion?: Exhaustion | null;
+  /** An exhaustion the story names, which the builder gives the status the router answers it with. */
+  exhaustion?: Omit<Exhaustion, 'status'> | null;
   /** A summary fact the story names where the router's own reading is not what the row tells. */
   fact?: SummaryFact[];
   /** The pin event reason of a failover placement, which moves the pin from the task rather than by a rule. */
@@ -276,6 +277,9 @@ const pinnedAnswerOf = (spec: Spec) => spec.exhaustion?.kind === 'pinned';
 
 /** Whether the decision walks the placement: a placement, a move, a hold or an exhaustion, none in place or pinned. */
 const walksPlacement = (spec: Spec) => (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && inPlaceOf(spec) === null && !pinnedAnswerOf(spec);
+
+/** Whether the router held the request out at the cap, which the story does only where a hold ran out. */
+const heldOut = (spec: Spec) => (spec.holds ?? []).some((h) => h.ranOut);
 
 /**
  * The windows a decision read on a member: the attempt's own reading on the account it went to, so the card and the
@@ -1859,7 +1863,8 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   if (spec.kind === 'held' && spec.hold && inPlace === null) {
     walk.push(step('hold', 'held', [fact('place', spec.hold.place), fact('account_id', spec.accountId, null, spec.accountId), fact('bound_ms', pool.retryInPlaceSeconds * 1_000, 'ms')]));
   }
-  const exhaustion = spec.kind === 'exhausted' ? (spec.exhaustion ?? exhaustionOf(candidates)) : null;
+  const named = spec.kind === 'exhausted' ? (spec.exhaustion ?? exhaustionOf(candidates)) : null;
+  const exhaustion = named && { ...named, status: exhaustionStatus(spec, named) };
   if (exhaustion && walksPlacement(spec)) {
     walk.push(step('exhausted', 'exhausted', [fact('kind', exhaustion.kind), fact('deadline', exhaustion.deadline === null ? null : Date.parse(exhaustion.deadline), 'time'), fact('window', exhaustion.window), fact('obstacles', candidates.map((c) => c.obstacle?.name ?? 'eligible'))]));
   }
@@ -1955,7 +1960,9 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     by,
     cache: hit === null ? null : { hit, inputTokens: usage.input, promisedTokens: promised, readTokens: usage.cacheRead },
     exhaustion: outcome.exhaustion,
-    fact: spec.fact ?? facts,
+    // The router adds the status it answered with where it held the request out, from the function that gives the
+    // record its status.
+    fact: [...(spec.fact ?? facts), ...(exhaustion !== null && heldOut(spec) ? [summaryFact('answer', exhaustion.status, 'count')] : [])],
     fast,
     fromAccountId: outcome.fromAccountId,
     hold,
@@ -1987,7 +1994,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
  * lane's soonest reset, the usage credits where every obstacle is theirs, the soonest dated cooldown or budget, a model
  * refusal alone, or nothing dated.
  */
-function exhaustionOf(candidates: RecordCandidate[]): Exhaustion {
+function exhaustionOf(candidates: RecordCandidate[]): Omit<Exhaustion, 'status'> {
   const answer = (kind: string, o: Partial<Exhaustion> = {}) => ({ deadline: null, kind, obstacle: null, reason: null, window: null, ...o });
   const obstacles = candidates.flatMap((c) => (c.obstacle ? [c.obstacle] : []));
   const untilOf = (until: string | null) => (until === null ? Number.POSITIVE_INFINITY : Date.parse(until));
@@ -1999,6 +2006,20 @@ function exhaustionOf(candidates: RecordCandidate[]): Exhaustion {
   const timed = dated.filter((d) => d.reason !== 'model_rejected').sort((x, y) => x.until - y.until)[0];
   if (timed) return answer('timed', { deadline: iso(timed.until), window: timed.window });
   return answer(dated.length ? 'model_rejected' : 'untimed');
+}
+
+const CLEARED_BY_WAIT = new Set(['cooldown', 'credits', 'overage', 'spent']);
+
+/**
+ * The status the relay answers an exhaustion with, by the router's rule. The router reads an untimed exhaustion as the
+ * cap, which frees on its own, only where it held the request at the cap with no leg dialed. The relay dials a leg for
+ * each attempt, so a decision past attempt 1 has one behind it.
+ */
+function exhaustionStatus(spec: Spec, x: Omit<Exhaustion, 'status'>): number {
+  if (x.kind === 'untimed') return heldOut(spec) && spec.attempt === 1 ? 429 : 503;
+  if (x.kind === 'model_rejected') return 404;
+  if (x.kind === 'pinned') return x.obstacle !== null && CLEARED_BY_WAIT.has(x.obstacle) ? 429 : 503;
+  return 429;
 }
 
 /** The pin events the routing task emits after the decision, in its order. */
@@ -2117,7 +2138,8 @@ function derivedSpecs(r: RequestLog): Spec[] {
   const allAtCap = () => Object.fromEntries((pool?.members ?? []).map((m) => [m.accountId, pool?.inFlightCap ?? 0]));
   const holds: RecordRequest['holds'] = [];
   let waitsRecorded = 0;
-  // Every member was at its cap until the bound ran out, so the router answered the request without a dispatch.
+  // Every member was at its cap until the bound ran out, so the router answered the request with no dispatch behind the
+  // hold.
   const ranOut = (seq: number, attempt: number, onAt: number, attempted: string[]) => {
     // The row's hold sums every wait, and a wait before the first attempt already has its one record, however many
     // accounts it named.
@@ -2140,7 +2162,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
     const servable = pool === undefined ? [] : pool.members.map((m) => m.accountId).filter((id) => obstacleOf(accountById.get(id)!, pool, answeredAt, r.canonicalModel, fast, []) === null && (!spent(id) || funded(id)));
     const passedOver = [...new Set([...attempted, ...waitedOn, ...servable])];
     // The builder names the exhaustion off the members' obstacles, which a block among them dates or explains.
-    specs.push({ ...base, accountId: null, at: answeredAt, attempt, attempted: passedOver, fact: [summaryFact('held', bound, 'ms'), summaryFact('answer', 429, 'count')], holds: [...holds], inFlight: allAtCap(), kind: 'exhausted', pin: noPin, seq: seq + waitedOn.length });
+    specs.push({ ...base, accountId: null, at: answeredAt, attempt, attempted: passedOver, fact: [summaryFact('held', bound, 'ms')], holds: [...holds], inFlight: allAtCap(), kind: 'exhausted', pin: noPin, seq: seq + waitedOn.length });
   };
   // A probe that found no live pin sent nothing: the selector answers the pinned obstacle `no_pin` at its selection.
   const noPinDraws = NO_PIN_DRAWS.get(r.id);

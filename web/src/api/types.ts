@@ -1269,7 +1269,7 @@ export interface Score {
   unit: string;
 }
 
-export interface Exhaustion { deadline: string | null; kind: string; obstacle: string | null; reason: string | null; window: string | null }
+export interface Exhaustion { deadline: string | null; kind: string; obstacle: string | null; reason: string | null; status: number | null; window: string | null }
 /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift` or `contract`) beside its
  *  sentence. */
 export interface Refusal { code: string; kind: string; reason: string }

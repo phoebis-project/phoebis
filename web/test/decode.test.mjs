@@ -1862,7 +1862,7 @@ test('the routing log page decodes both row shapes from the fixture', () => {
   const exhausted = page.rows.find((r) => r.type === 'decision' && r.kind === 'exhausted');
   assert.deepEqual(exhausted.by, { kind: 'exhaustion', tier: null, value: 'timed' });
   const wireDeadline = body.rows.find((r) => r.type === 'decision' && r.kind === 'exhausted').exhaustion.deadline;
-  assert.deepEqual(exhausted.exhaustion, { deadline: new Date(wireDeadline).toISOString(), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' });
+  assert.deepEqual(exhausted.exhaustion, { deadline: new Date(wireDeadline).toISOString(), kind: 'timed', obstacle: null, reason: null, status: 429, window: 'five_hour' });
   const declined = d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'exhausted'), exhaustion: { deadline: null, kind: 'credits', obstacle: 'credits', reason: 'declined', window: null } });
   assert.equal(declined.exhaustion.reason, 'declined', "an exhaustion's reason is kept, the Fact a credits exhaustion draws");
   const held = page.rows.find((r) => r.type === 'decision' && r.kind === 'held');
