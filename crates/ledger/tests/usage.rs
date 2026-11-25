@@ -72,7 +72,7 @@ fn request(
 }
 
 #[test]
-fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
+fn a_window_sums_one_keys_rollups_and_leaves_the_plans_probes_and_other_keys_out() {
     let (db, _dir) = common::temp_ledger();
     db.insert_request(
         &request(
@@ -180,9 +180,9 @@ fn a_window_sums_one_keys_rollups_and_leaves_probes_and_other_keys_out() {
 fn a_window_counts_a_request_its_client_canceled_apart_from_a_failed_one() {
     let (db, _dir) = common::temp_ledger();
     let sonnet = "claude-sonnet-5-5";
-    let canceled = RequestRecord {
+    let canceled = |id: &str| RequestRecord {
         error_code: Some(phoebis_relay::CLIENT_GONE_CODE.into()),
-        ..request("r5", "k1", sonnet, "inference", "canceled", 200)
+        ..request(id, "k1", sonnet, "inference", "canceled", 200)
     };
     for (request, attempt) in [
         (
@@ -201,7 +201,9 @@ fn a_window_counts_a_request_its_client_canceled_apart_from_a_failed_one() {
             request("r4", "k1", sonnet, "inference", "incomplete", 200),
             used("r4"),
         ),
-        (canceled, unused("r5")),
+        (canceled("r5"), unused("r5")),
+        // A second cancel, so the canceled count differs from the failed and the incomplete one.
+        (canceled("r6"), unused("r6")),
     ] {
         db.insert_request(&request, &[attempt], None).unwrap();
     }
@@ -216,7 +218,7 @@ fn a_window_counts_a_request_its_client_canceled_apart_from_a_failed_one() {
             day.incomplete,
             day.canceled
         ),
-        (5, 2, 1, 1, 1)
+        (6, 2, 1, 1, 2)
     );
 }
 
