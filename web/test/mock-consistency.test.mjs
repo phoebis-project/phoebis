@@ -695,7 +695,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(oauth.filter(({ c }) => shaped(c.pace) && c.windows.spend === undefined).map(named), ['req_c94d1e07-b35/1 contract'], 'the one paid candidate without the spend window');
   });
 
-  test(`the story's usage-based seat knows its allowance as an API key does, and its plan windows are absent, so holdsAllowance reads true for it at the walk's two sites, at ${at}`, async () => {
+  test(`the story's usage-based seat knows its allowance as an API key does, and its spend reads under its cap or not at all, so holdsAllowance reads true for it at the walk's two sites, at ${at}`, async () => {
     const all = await decisionsOf(await story);
     const records = all.filter((r) => r.candidates.some((c) => c.accountId === 'contract'));
     assert.ok(records.length > 0, 'a record names the seat');
@@ -704,7 +704,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       // The engine's paid-source arm knows the allowance of a source read by its spend or its worst bucket, never by a
       // plan window.
       assert.equal(seat.allowanceKnown, true, `${r.requestId}/${r.seq}'s seat`);
-      // The spent rule's holds_allowance counts a plan window the seat lacks as untouched, so the seat holds allowance.
+      // The spent rule's holds_allowance reads the seat's spend alone, and a spend under its cap or a row with no spend
+      // entry holds allowance. The engine lists no plan window on a seat's row.
       assert.ok(['five_hour', 'seven_day', 'seven_day_fable'].every((w) => seat.windows[w] === undefined), `${r.requestId}/${r.seq}'s windows ${Object.keys(seat.windows).join(', ')}`);
     }
     const keys = all.flatMap((r) => r.candidates.filter((c) => c.kind === 'api_key'));

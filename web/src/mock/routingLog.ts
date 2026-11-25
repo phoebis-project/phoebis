@@ -802,10 +802,17 @@ const newestRound = (accountId: string, at: number): number | null =>
 const pinText = (p: { agentId: string; keyId: string; model: string; sessionId: string }) => `${p.keyId}/${p.sessionId}/${p.agentId}/${p.model}`;
 
 /**
- * Whether a member holds allowance for a request of `model`: no plan window the model draws, its own week where it has
- * one and both shared windows, reads 1 or more. An API key reads no plan window, so it always holds it.
+ * Whether a member holds allowance for a request of `model`. An API key reads no plan window, so it always holds it. A
+ * usage-based seat answers by its spend alone, since the spend funds every model: it holds none where its row's spend
+ * entry reads 1 or more, and holds it below that or with no entry, whatever a plan window on its row reads. Any other
+ * member holds it where no plan window the model draws, its own week where it has one and both shared windows, reads 1
+ * or more.
  */
-const holdsAllowance = (c: RecordCandidate, model: string) => c.kind === 'api_key' || drawnWindows(model).every((w) => (c.windows[w]?.utilization ?? 0) < 1);
+const holdsAllowance = (c: RecordCandidate, model: string) => {
+  if (c.kind === 'api_key') return true;
+  if (accountOf(c.accountId).usageBased) return (c.windows.spend?.utilization ?? 0) < 1;
+  return drawnWindows(model).every((w) => (c.windows[w]?.utilization ?? 0) < 1);
+};
 
 /** The ladder's rungs from the best: the words of a landing's `ladder` fact. */
 const LADDER = ['fits', 'rewrite_only', 'least_bad', 'ending', 'every'];
