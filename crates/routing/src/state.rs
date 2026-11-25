@@ -4838,6 +4838,7 @@ mod tests {
             static_boundaries: std::sync::Arc::from([]),
             message_boundaries: std::sync::Arc::from(["b1".to_string()]),
             static_sizes: Vec::new(),
+            static_marked: None,
             static_ttl_ms: None,
             message_ttl_ms: None,
             cache_touched: false,

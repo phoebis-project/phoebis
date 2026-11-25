@@ -34,6 +34,11 @@ pub struct Chains {
     /// boundary, the canonical bytes the chain hashed over four; 0 at the empty-tools boundary of a request
     /// without tools.
     pub static_sizes: Vec<u64>,
+    /// The index in `static_boundaries` of the deepest boundary that a cache marker on a tool or on a system block
+    /// covers, the tools boundary for a tool's: the upstream writes a cache entry at a marker alone, so a boundary past
+    /// it names a prefix that no cache holds. `None` where no tool and no system block carries a marker, so a body
+    /// whose one marker is top-level names none, since that marker's entry ends inside `messages`.
+    pub static_marked: Option<usize>,
 }
 
 impl Chains {
@@ -49,10 +54,14 @@ impl Chains {
         let mut running_bytes: u64 = 0;
         let mut scratch = Vec::new();
         let mut previous = Sha256::digest(STATIC_SEED);
+        let mut static_marked = None;
         for block in std::iter::once(tools).chain(system_blocks(root.get("system"))) {
             let (next, len) = boundary(&previous, block, &mut scratch);
             previous = next;
             running_bytes += len;
+            if carries_marker(block) {
+                static_marked = Some(static_boundaries.len());
+            }
             static_boundaries.push(format!("{previous:x}"));
             static_sizes.push(running_bytes / 4);
         }
@@ -76,6 +85,7 @@ impl Chains {
             message_boundaries: message_boundaries.into(),
             marked: marked.into(),
             static_sizes,
+            static_marked,
         })
     }
 
@@ -221,6 +231,15 @@ fn system_blocks(system: Option<&Value>) -> Vec<&Value> {
     }
 }
 
+/// Whether a unit of the static chain carries a marker where the upstream reads one: on an entry of the tools array,
+/// or on the system block itself.
+fn carries_marker(unit: &Value) -> bool {
+    match unit {
+        Value::Array(tools) => tools.iter().any(|tool| tool.get("cache_control").is_some()),
+        block => block.get("cache_control").is_some(),
+    }
+}
+
 fn is_attribution_line(block: &Value) -> bool {
     block
         .get("text")
@@ -249,6 +268,11 @@ mod tests {
             "tools": [{"name": "a", "input_schema": {"type": "object", "cache_control": {"type": "ephemeral"}}}],
             "messages": [{"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}}],
         }));
+        // The one member that reads where the markers stand.
+        let marked = Chains {
+            static_marked: None,
+            ..marked
+        };
         assert_eq!(plain, marked);
     }
 
@@ -553,6 +577,27 @@ mod tests {
         assert_eq!(Chains::read(&json!("just a string")), None);
         assert_eq!(Chains::read(&json!(42)), None);
         assert_eq!(Chains::read(&json!(null)), None);
+    }
+
+    #[test]
+    fn the_deepest_marker_on_a_system_block_names_that_blocks_boundary_and_a_top_level_one_names_none(
+    ) {
+        let system = |first: Value, second: Value| json!([first, second]);
+        let on_first = read(json!({"system": system(marked("a"), unmarked("b"))}));
+        let on_second = read(json!({"system": system(unmarked("a"), marked("b"))}));
+        let top_level = read(json!({
+            "system": system(unmarked("a"), unmarked("b")),
+            "cache_control": {"type": "ephemeral"},
+        }));
+        assert_eq!(
+            (
+                on_first.static_marked,
+                on_second.static_marked,
+                top_level.static_marked
+            ),
+            (Some(1), Some(2), None),
+            "the tools boundary stands at 0 ahead of the two system blocks"
+        );
     }
 
     #[test]

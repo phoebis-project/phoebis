@@ -20919,7 +20919,7 @@ fn a_spent_move_books_the_pins_last_prompt_as_its_rewrite_and_its_own_decayed_bu
 }
 
 /// An answer of `account` to another session that read the static prefix from the cache on `lane` at `at`: the chain
-/// of `boundaries`, each with the estimated size of the blocks up to it, under a one-hour marker.
+/// of `boundaries`, each with the estimated size of the blocks up to it, under a one-hour marker on its last boundary.
 fn static_report(account: &str, boundaries: &[(&str, u64)], lane: &str, at: i64) -> AffinityReport {
     AffinityReport {
         account_id: account.into(),
@@ -20935,6 +20935,7 @@ fn static_report(account: &str, boundaries: &[(&str, u64)], lane: &str, at: i64)
             .collect(),
         message_boundaries: Arc::from([]),
         static_sizes: boundaries.iter().map(|(_, size)| *size).collect(),
+        static_marked: boundaries.len().checked_sub(1),
         static_ttl_ms: Some(HOUR),
         message_ttl_ms: None,
         cache_touched: true,
@@ -21069,6 +21070,35 @@ fn the_deepest_boundary_that_the_destination_holds_sets_the_size() {
     assert!(
         close(first[FIVE_HOUR], 0.0099),
         "less the first boundary's 1,000: {first:?}"
+    );
+}
+
+#[test]
+fn a_destination_holds_the_static_boundaries_up_to_the_deepest_marker_of_its_answer_alone() {
+    let s = spent_pool();
+    // b's answer reported both boundaries, and the cache wrote an entry at a marked one alone.
+    let booked = |static_marked: Option<usize>| {
+        let mut st = spent_on_a(100_000);
+        st.affinity().write().unwrap().record(&AffinityReport {
+            static_marked,
+            ..static_report(
+                "b",
+                &[("s1", 1_000), ("s2", 5_000)],
+                &standard_lane(),
+                T - 10 * MINUTE,
+            )
+        });
+        spent_move_rewrite(&mut st, &s, &["s1", "s2"])
+    };
+    let on_first = booked(Some(0));
+    let unmarked = booked(None);
+    assert!(
+        close(on_first[FIVE_HOUR], 0.0099),
+        "less the marked first boundary's 1,000 alone: {on_first:?}"
+    );
+    assert!(
+        close(unmarked[FIVE_HOUR], 0.01),
+        "the whole prompt where no boundary was marked: {unmarked:?}"
     );
 }
 

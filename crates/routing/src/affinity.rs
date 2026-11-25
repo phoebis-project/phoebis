@@ -98,6 +98,10 @@ pub struct AffinityReport {
     /// relay computed it at chain time (canonical bytes over four), or 0 for the empty-tools boundary of a request
     /// without tools.
     pub static_sizes: Vec<u64>,
+    /// The index in `static_boundaries` of the deepest boundary that a cache marker on a tool or on a system block
+    /// covered, `None` where none did: the upstream writes a cache entry at a marker alone, so the boundaries past it
+    /// name a prefix that no cache holds.
+    pub static_marked: Option<usize>,
     /// The lifetime of the marker on each tier as sent upstream after the rewrite: the deepest marker inside
     /// `tools[]` or `system[]` for the static tier, the deepest inside `messages[]` for the message tier, a
     /// top-level member for both, and `None` for a tier without a marker, which gets no warmth.
@@ -355,8 +359,8 @@ impl AffinityMap {
     }
 
     /// Upserts the report's boundaries and answers the rows to persist (new or moved). A response that touched the
-    /// cache and carries a static lifetime also writes the account's hold of each static boundary on the report's
-    /// lane, which no row carries.
+    /// cache and carries a static lifetime also writes, on the report's lane, the account's hold of each static
+    /// boundary up to the deepest one that a marker covered, which no row carries.
     pub fn record(&mut self, report: &AffinityReport) -> Vec<AffinityRow> {
         let canonical_model = self.canonical(&report.canonical_model).to_string();
         let lane = self.canonical_lane(&report.lane);
@@ -424,8 +428,12 @@ impl AffinityMap {
                 }
             }
             // A second pass, since `upsert` borrows the whole map. The lane's map is resolved once per report, and a
-            // stored hold is overwritten in place, so only a new hold allocates its keys.
-            if let Some(ttl_ms) = static_ttl_ms.filter(|_| !report.static_boundaries.is_empty()) {
+            // stored hold is overwritten in place, so only a new hold allocates its keys. The map's own entries above
+            // keep each boundary for the rungs, while a hold prices a move, so it stops where the cache wrote.
+            let marked = report
+                .static_marked
+                .filter(|_| !report.static_boundaries.is_empty());
+            if let (Some(ttl_ms), Some(deepest)) = (static_ttl_ms, marked) {
                 let accounts = match self.static_holds.get_mut(&canonical_model) {
                     Some(accounts) => accounts,
                     None => self.static_holds.entry(canonical_model).or_default(),
@@ -438,7 +446,12 @@ impl AffinityMap {
                     Some(holds) => holds,
                     None => lanes.entry(lane).or_default(),
                 };
-                for (index, boundary) in report.static_boundaries.iter().enumerate() {
+                for (index, boundary) in report
+                    .static_boundaries
+                    .iter()
+                    .enumerate()
+                    .take(deepest + 1)
+                {
                     let hold = StaticHold {
                         incarnation: report.incarnation,
                         written_at: report.now,
@@ -713,6 +726,7 @@ mod tests {
             static_boundaries: Arc::from([]),
             message_boundaries: Arc::from(["b1".to_string(), "b2".to_string()]),
             static_sizes: Vec::new(),
+            static_marked: None,
             static_ttl_ms: None,
             message_ttl_ms: None,
             cache_touched: false,

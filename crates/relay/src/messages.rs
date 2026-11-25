@@ -3774,6 +3774,7 @@ impl Relay {
                 .chains
                 .map(|c| c.static_sizes.clone())
                 .unwrap_or_default(),
+            static_marked: ctx.admitted.chains.and_then(|c| c.static_marked),
             message_boundaries: ctx
                 .admitted
                 .chains

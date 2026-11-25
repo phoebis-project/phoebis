@@ -331,6 +331,8 @@ pub(crate) struct AffinityFacts {
     pub root: String,
     pub static_boundaries: Arc<[String]>,
     pub static_sizes: Vec<u64>,
+    /// `Chains::static_marked` of the request's body.
+    pub static_marked: Option<usize>,
     pub message_boundaries: Arc<[String]>,
     /// `MarkerTtls::tiers` of the body as this pass sent it upstream.
     pub static_ttl_ms: Option<i64>,
@@ -408,6 +410,7 @@ impl AffinityFacts {
             static_boundaries: self.static_boundaries,
             message_boundaries: self.message_boundaries,
             static_sizes: self.static_sizes,
+            static_marked: self.static_marked,
             static_ttl_ms: self.static_ttl_ms,
             message_ttl_ms: self.message_ttl_ms,
             cache_touched: prefix_tokens > 0,

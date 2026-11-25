@@ -31,6 +31,7 @@ fn report(
         static_boundaries: Arc::from([]),
         message_boundaries: Arc::from(boundaries(message_boundaries)),
         static_sizes: Vec::new(),
+        static_marked: None,
         static_ttl_ms: None,
         message_ttl_ms: None,
         cache_touched: false,
