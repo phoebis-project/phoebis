@@ -565,6 +565,19 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
             code("invalid_event"),
         ),
         (
+            "an activity with a null kind",
+            Some(JSON),
+            json_body(report(
+                "activity",
+                "session",
+                "instance",
+                next,
+                json!({"agent_id": "main", "kind": null, "request_generation": 0}),
+            )),
+            400,
+            code("invalid_event"),
+        ),
+        (
             "an agent event without its agent",
             Some(JSON),
             json_body(report(
