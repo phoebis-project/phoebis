@@ -11,6 +11,10 @@ import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, I
 
 const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
 
+/** The probe outcomes a group counts, which a sum of groups or of buckets adds one by one. */
+export const PROBE_COUNTERS = ['failed', 'held', 'ok', 'planOk', 'skipped'] as const satisfies readonly (keyof AnalyticsGroup['probes'])[];
+export const emptyProbes = (): AnalyticsGroup['probes'] => ({ failed: 0, held: 0, ok: 0, planOk: 0, skipped: 0 });
+
 /**
  * A group as the routes answer one, every figure present and the shares null. `foldGroups` fills `costShares` under
  * the account grouping alone, where one account's windows add, since a group of any other dimension spans accounts
@@ -52,7 +56,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   planRequests: null,
   probeCostUsd: 0,
   probeEquivalent: { cost: 0, wasted: 0 },
-  probes: { failed: 0, held: 0, ok: 0, planOk: 0, skipped: 0 },
+  probes: emptyProbes(),
   rateLimited: 0,
   refusals: emptyCounts(),
   refused: 0,
@@ -470,7 +474,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     for (const k of ['cacheMissReasonHits', 'cacheMissReasons', 'errors', 'inputTransformations', 'refusals'] as const) addCounts(out[k], g[k]);
     if (g.fromRequests) out.fromRequests = true;
     out.keptWarm = plusBoth(out.keptWarm, g.keptWarm);
-    for (const k of ['failed', 'held', 'ok', 'planOk', 'skipped'] as const) out.probes[k] += g.probes[k];
+    for (const k of PROBE_COUNTERS) out.probes[k] += g.probes[k];
     for (const reason of WASTED_PROBE_REASONS) out.wastedProbeReasons[reason] += g.wastedProbeReasons[reason];
   }
   for (const m of METRICS) {

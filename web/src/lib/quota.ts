@@ -122,10 +122,14 @@ const NO_RESET_TITLE: Readonly<Record<'not open' | 'not reported', string>> = {
 };
 /** The hover of "not reported" on a window whose share the router does not hold. */
 const NO_WINDOW_SHARE_TITLE = "the router holds no reading of this window's share";
-/** The hover of a window's state word: the missing share's where the router holds none, with the reset where the
- *  window carries one, else the missing reset's by its word. */
-export const stateWordTitle = (w: Pick<RateLimitWindow, 'resetsAt' | 'utilization'>, word: 'not open' | 'not reported'): string =>
-  w.utilization !== null ? NO_RESET_TITLE[word] : w.resetsAt === null ? NO_WINDOW_SHARE_TITLE : `${NO_WINDOW_SHARE_TITLE}, resets ${fmtAbsolute(w.resetsAt)}`;
+/** The hover of a window's state: the missing share's where the router holds none, with the reset where the window
+ *  carries one, the missing reset's by the window's state word where it has a share and no reset, and the reset's
+ *  instant where it has both. */
+export const stateWordTitle = (w: Pick<RateLimitWindow, 'resetsAt' | 'utilization'>): string => {
+  if (w.utilization === null) return w.resetsAt === null ? NO_WINDOW_SHARE_TITLE : `${NO_WINDOW_SHARE_TITLE}, resets ${fmtAbsolute(w.resetsAt)}`;
+  const word = noResetWord(w);
+  return word === null ? `resets ${fmtAbsolute(w.resetsAt)}` : NO_RESET_TITLE[word];
+};
 
 /** A slow-down entry inside its span, as `slowedOf` answers it. */
 export type SlowedDown = AccountSlowDown & { since: string };
@@ -229,9 +233,10 @@ export function projectionParts(w: Pick<RateLimitWindow, 'burn' | 'horizon' | 'p
   return [left, atReset ? (compact ? 'at reset' : 'at the reset') : `in ${minuteSpan(horizon - now)}`];
 }
 
-/** The burn behind a projection, `the sessions on this account burn 7.3% an hour`. Null without a burn. */
-export function burnWords(w: Pick<RateLimitWindow, 'burn'>): string | null {
-  return w.burn === null ? null : `the sessions on this account burn ${fmtPct(w.burn, 1)} an hour`;
+/** The burn behind a projection, `the sessions on this account burn 7.3% an hour`. Null without a burn, and for a
+ *  window that has not opened, which has nothing to project. */
+export function burnWords(w: Pick<RateLimitWindow, 'burn' | 'resetsAt' | 'utilization'>): string | null {
+  return w.burn === null || noResetWord(w) === 'not open' ? null : `the sessions on this account burn ${fmtPct(w.burn, 1)} an hour`;
 }
 
 export const isSubscription = (account: Pick<Account, 'kind'>) => account.kind === 'oauth';

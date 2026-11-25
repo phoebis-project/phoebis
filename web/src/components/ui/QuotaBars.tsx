@@ -1,5 +1,5 @@
 import type { Account, RateLimitWindow, Spend } from '@/api/types';
-import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
+import { fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
 import { burnWords, hasSpendReading, meterTone, noResetWord, noWindowSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, stateWordTitle, windowOf, type SlowedDown } from '@/lib/quota';
 import { slowDownChip } from '@/lib/selection';
 import { WINDOW_ORDER, windowTag, windowWord } from '@/lib/windows';
@@ -31,7 +31,7 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
           a third of a card holds one of the two, and breaks it between its
           share and its horizon where even that is too wide. A whole bar keeps
           both and breaks between them where it is too narrow. */}
-      <div className={`wbar__reset ${projection !== null ? 'wbar__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={word === null ? `resets ${fmtAbsolute(w.resetsAt)}` : word === 'not open' ? stateWordTitle(w, word) : `${stateWordTitle(w, word)}${burn ? `, ${burn}` : ''}`}>
+      <div className={`wbar__reset ${projection !== null ? 'wbar__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={word === null || burn === null ? stateWordTitle(w) : `${stateWordTitle(w)}, ${burn}`}>
         {projection === null ? (
           word === null ? (
             reset

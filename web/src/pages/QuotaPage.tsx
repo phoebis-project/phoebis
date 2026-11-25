@@ -16,7 +16,7 @@ import { Badge, Button, EmptyState, ErrorState, Meter, MeterAbsent, Pill, Segmen
 import { QUOTA_CODEC, QUOTA_SORT_KEYS, sortDirOf, type QuotaAddress } from '@/lib/address';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, messageOf, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useQueryFilters, useResizeObserver } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, leadOf, meterTone, noResetWord, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, resetOf, slowedOf, soonestResetAt, spendLeftOf, spendResetTitle, stateWordTitle, timelineLanes, windowOf, type ExtraUsageState, type SlowedDown } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, leadOf, meterTone, noResetWord, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, resetOf, shareLeft, slowedOf, soonestResetAt, spendLeftOf, spendResetTitle, stateWordTitle, timelineLanes, windowOf, type ExtraUsageState, type SlowedDown } from '@/lib/quota';
 import { clearsWords, readsFull, resetChip, resetMarks } from '@/lib/resets';
 import { slowDownChip } from '@/lib/selection';
 import { orderRows, type SortFigure } from '@/lib/sort';
@@ -335,21 +335,14 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
  *  chip's title. A `resettable` live window closes its share with the reset mark. */
 function WindowChip({ id, window: w, className, now, resettable }: { className: string; id: WindowId; now: number; resettable: boolean; window: RateLimitWindow | null }) {
   const name = windowTag(id);
-  if (!w || isExpired(w, now)) {
-    return (
-      <span className={`${className} qchip qchip--absent`} title={w ? `${w.label}: expired, no reading since the reset` : `no ${windowWord(id)} window`}>
-        <span className="qchip__name">{name}</span>
-      </span>
-    );
-  }
+  const absent = (title: string) => (
+    <span className={`${className} qchip qchip--absent`} title={title}>
+      <span className="qchip__name">{name}</span>
+    </span>
+  );
+  if (!w || isExpired(w, now)) return absent(w ? `${w.label}: expired, no reading since the reset` : `no ${windowWord(id)} window`);
   const remaining = remainingOf(w);
-  if (remaining === null) {
-    return (
-      <span className={`${className} qchip qchip--absent`} title={`${w.label}: ${stateWordTitle(w, 'not reported')}`}>
-        <span className="qchip__name">{name}</span>
-      </span>
-    );
-  }
+  if (remaining === null) return absent(`${w.label}: ${stateWordTitle(w)}`);
   // A window that prints as full has nothing a reset gives back, so it carries no mark.
   const marked = resettable && !readsFull(w, now);
   return (
@@ -394,7 +387,7 @@ function QuotaWindow({ end, id, window: w, now, resettable, slowDown = null, soo
       {live ? (
         <span
           className={`qwin__reset ${projection ? 'qwin__reset--split' : ''} ${soon ? 'is-soon' : ''}`}
-          title={word === 'not open' ? stateWordTitle(live, word) : `${word === null ? fmtAbsolute(live.resetsAt) : stateWordTitle(live, word)}${soon ? ', the first of this account to recover' : ''}${burn ? `, ${burn}` : ''}`}
+          title={`${word === null ? fmtAbsolute(live.resetsAt) : stateWordTitle(live)}${soon ? ', the first of this account to recover' : ''}${burn ? `, ${burn}` : ''}`}
         >
           {projection ? (
             <>
@@ -503,36 +496,17 @@ interface LaneFrame {
  *  it sits on the grey surface, and a window that has not opened or whose share the router does not hold names that
  *  state in the share's place. */
 function LaneChip({ label, window: w, now }: { label: string; now: number; window: RateLimitWindow | null }) {
-  if (!w) {
-    return (
-      <span className="tl-chip" title={`This plan reports no ${label.toLowerCase()}`}>
-        {label} <b className="tl-chip__pct muted">n/a</b>
-      </span>
-    );
-  }
-  if (isExpired(w, now)) {
-    return (
-      <span className="tl-chip" title={`reset ${fmtAbsolute(w.resetsAt)}, no reading since`}>
-        {label} <b className="tl-chip__pct muted">reset</b>
-      </span>
-    );
-  }
+  const muted = (word: string, title: string) => (
+    <span className="tl-chip" title={title}>
+      {label} <b className="tl-chip__pct muted">{word}</b>
+    </span>
+  );
+  if (!w) return muted('n/a', `This plan reports no ${label.toLowerCase()}`);
+  if (isExpired(w, now)) return muted('reset', `reset ${fmtAbsolute(w.resetsAt)}, no reading since`);
   const word = noResetWord(w);
-  if (word === 'not open') {
-    return (
-      <span className="tl-chip" title={`the ${label.toLowerCase()} has not opened, so it has no reset yet`}>
-        {label} <b className="tl-chip__pct muted">not open</b>
-      </span>
-    );
-  }
+  if (word === 'not open') return muted('not open', `the ${label.toLowerCase()} has not opened, so it has no reset yet`);
   const remaining = remainingOf(w);
-  if (remaining === null) {
-    return (
-      <span className="tl-chip" title={stateWordTitle(w, 'not reported')}>
-        {label} <b className="tl-chip__pct muted">not reported</b>
-      </span>
-    );
-  }
+  if (remaining === null) return muted('not reported', stateWordTitle(w));
   return (
     <span className={`tl-chip tl-chip--${meterTone(remaining)}`} title={`${fmtPct(remaining)} of the ${label.toLowerCase()} left, ${word === null ? `resets ${fmtAbsolute(w.resetsAt)}` : 'no reset reported'}`}>
       {label} <b className="tl-chip__pct num">{fmtPct(remaining)} left</b>
@@ -606,21 +580,21 @@ function Lane({ account, children, chips, color, end, frame, period }: { account
 
 /**
  * One window's bar from `start`, drawn to `stop` inside the span and titled to `end`, its reset. A live bar with a
- * `share` is filled by the window's used share, placed from the window's start up to `usedEnd` and cut to the drawn
- * part, so a fill past the now line reads as ahead of pace and one short of it as behind, the now line being the
- * elapsed mark. A bar without a share draws no fill. `extra` closes the title.
+ * `fill` is filled by the window's used share, placed from the window's start up to the fill's `usedEnd` and cut to the
+ * drawn part, so a fill past the now line reads as ahead of pace and one short of it as behind, the now line being the
+ * elapsed mark, and is labeled by the fill's `share`. A bar without a fill draws none. `extra` closes the title.
  */
-function LaneBar({ account, end, extra = '', frame, share, start, stop, usedEnd }: { account: Account; end: number; extra?: string; frame: LaneFrame; share: string | null; start: number; stop: number; usedEnd: number }) {
+function LaneBar({ account, end, extra = '', fill, frame, start, stop }: { account: Account; end: number; extra?: string; fill: { share: string; usedEnd: number } | null; frame: LaneFrame; start: number; stop: number }) {
   const { now, span, stamp, steps, width } = frame;
   const barKey = `${account.id} ${start}`;
   const step = steps.get(barKey) ?? 0;
   const state = now >= start && now < stop ? 'live' : stop <= now ? 'past' : 'next';
   const from = Math.max(start, span.startMs);
   const to = Math.min(stop, span.endMs);
-  const filled = state === 'live' && share !== null;
-  const used = filled ? Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 : 0;
+  const filled = state === 'live' && fill !== null;
+  const used = filled ? Math.max(0, (Math.min(fill.usedEnd, to) - from) / (to - from)) * 100 : 0;
   return (
-    <div className={`lane__bar lane__bar--${state}`} style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${((to - from) / width) * 100}%` }} title={`${account.label}\n${fmtAbsolute(start)} to ${fmtAbsolute(end)}${filled ? `\n${share}` : ''}${extra}`}>
+    <div className={`lane__bar lane__bar--${state}`} style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${((to - from) / width) * 100}%` }} title={`${account.label}\n${fmtAbsolute(start)} to ${fmtAbsolute(end)}${filled ? `\n${fill.share}` : ''}${extra}`}>
       {filled && (
         <span className="lane__clip">
           <span className="lane__used" style={{ width: `${used}%` }} />
@@ -629,7 +603,7 @@ function LaneBar({ account, end, extra = '', frame, share, start, stop, usedEnd 
       {/* A live bar's label falls back to its share alone, and a reset stamp alone straight to the title. */}
       {filled ? (
         <span className="lane__label ellipsis" data-bar={barKey} hidden={step === 2}>
-          {share}
+          {fill.share}
           <span className="lane__label-reset" hidden={step !== 0}> · {stamp(end)}</span>
         </span>
       ) : (
@@ -652,7 +626,6 @@ function SpendLane({ account, color, frame, spend }: { account: Account; color: 
   const reset = spend.resetsAt === null ? Number.NaN : Date.parse(spend.resetsAt);
   const unlimited = spend.amounts !== null && spend.amounts.limitMinor === null;
   const left = spendLeftOf(spend);
-  const share = left === null ? null : `${fmtPct(left)} left`;
   // The reading's own window ends at its reset. Its share says nothing of any other, so only that one is filled.
   const bars: { current: boolean; end: number; start: number }[] = [];
   if (Number.isFinite(reset)) {
@@ -671,11 +644,10 @@ function SpendLane({ account, color, frame, spend }: { account: Account; color: 
           key={b.start}
           account={account}
           end={b.end}
+          fill={b.current && left !== null && spend.utilization !== null ? { share: `${fmtPct(left)} left`, usedEnd: b.start + Math.min(1, Math.max(0, spend.utilization)) * (b.end - b.start) } : null}
           frame={frame}
-          share={b.current ? share : null}
           start={b.start}
           stop={b.end}
-          usedEnd={b.start + Math.min(1, Math.max(0, spend.utilization ?? 0)) * (b.end - b.start)}
         />
       ))}
     </Lane>
@@ -692,8 +664,7 @@ function PlanLane({ account, color, frame, period, window: w }: { account: Accou
   // The bars project the period on from the last reset, but an expired window's share is of the period before it, so
   // the current bar names no share: the previous window's use would fill a window the sample never read. A window
   // whose share the router does not hold has none to name either.
-  const left = remainingOf(w);
-  const share = isExpired(w, now) || left === null ? null : `${fmtPct(left)} left`;
+  const used = isExpired(w, now) ? null : w.utilization;
   const windowMs = w.periodHours * HOUR;
   // A canceled account's saved end: no window opens after it, and the one that spans it stops there.
   const endsAt = canceledEndOf(account);
@@ -702,7 +673,7 @@ function PlanLane({ account, color, frame, period, window: w }: { account: Accou
   const bars: { end: number; start: number; stop: number }[] = [];
   // A window with no reset has no period to project, so its lane keeps its chips over an empty track.
   if (w.resetsAt !== null) {
-    let start = Date.parse(w.resetsAt ?? '') - windowMs;
+    let start = Date.parse(w.resetsAt) - windowMs;
     while (start > span.startMs) start -= windowMs;
     for (; start < span.endMs; start += windowMs) {
       const end = start + windowMs;
@@ -735,11 +706,10 @@ function PlanLane({ account, color, frame, period, window: w }: { account: Accou
           account={account}
           end={b.end}
           extra={b.stop < b.end ? `\nends ${fmtAbsolute(endsAt)}` : ''}
+          fill={used === null ? null : { share: `${fmtPct(shareLeft(used))} left`, usedEnd: b.start + Math.min(1, used) * windowMs }}
           frame={frame}
-          share={share}
           start={b.start}
           stop={b.stop}
-          usedEnd={b.start + Math.min(1, w.utilization ?? 0) * windowMs}
         />
       ))}
     </Lane>

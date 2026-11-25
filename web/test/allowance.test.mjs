@@ -74,14 +74,14 @@ test("the resets' key moves at a use", () => {
 test("the newest four resets total the answer's figures where it lists four or fewer, and the console's own sum and count over more", () => {
   // Three shares whose sum in floating point is 0.6000000000000001, beside the route's 0.6.
   const three = windowOf('seven_day', [0.1, 0.2, 0.3], { total: 0.6 });
-  assert.deepEqual(d.newestResets(three), { claims: [], counted: 3, resets: three.resets, total: 0.6, used: 0 });
+  assert.deepEqual(d.newestResets(three), { counted: 3, rows: three.resets, total: 0.6, used: 0 });
   const six = windowOf('seven_day', [0.5, 0.25, 0.125, 0.25, 0.75, 1], { total: 2.875 });
   const newest = d.newestResets(six);
-  assert.deepEqual([newest.counted, newest.resets, newest.total], [4, six.resets.slice(0, 4), 1.125]);
+  assert.deepEqual([newest.counted, newest.rows, newest.total], [4, six.resets.slice(0, 4), 1.125]);
   assert.equal(d.newestResets(six, 2).total, 0.75, 'a narrower read sums its own newest');
   // A week the term ended inside is a reset of that week, so its share counts in the total as any other.
   const ended = windowOf('seven_day', [0.5, 0.25, 0.25, 0.125, 0.75], { sources: ['term_ended'] });
-  assert.deepEqual([d.newestResets(ended).counted, d.newestResets(ended).total, d.newestResets(ended).resets[0].source], [4, 1.125, 'term_ended']);
+  assert.deepEqual([d.newestResets(ended).counted, d.newestResets(ended).total, d.newestResets(ended).rows[0].source], [4, 1.125, 'term_ended']);
 });
 
 test('the four weeks keep four natural resets and the used resets among them', () => {
@@ -90,7 +90,7 @@ test('the four weeks keep four natural resets and the used resets among them', (
   const [first, second, third, fourth] = windowOf('seven_day', [0.5, 0.25, 0.25, 0.125]).resets;
   const claim = { observedAt: iso(NOW - DAY - WEEK - 3 * DAY), plan: null, resetAt: second.resetAt, shareLeft: 0.375, source: 'claim', tier: null };
   // The route's total over the five rows: 0.5, 0.25, 0.375, 0.25 and 0.125.
-  assert.deepEqual(d.newestResets({ claims: [claim], resets: [first, second, third, fourth], totalShareLeft: 1.5, window: 'seven_day' }), { claims: [claim], counted: 4, resets: [first, second, third, fourth], total: 1.5, used: 1 });
+  assert.deepEqual(d.newestResets({ claims: [claim], resets: [first, second, third, fourth], totalShareLeft: 1.5, window: 'seven_day' }), { counted: 4, rows: [first, second, third, fourth, claim], total: 1.5, used: 1 });
 });
 
 test("a column draws a use under the term's end that cut its week, by its drop and not by its week's reset", () => {
@@ -98,14 +98,14 @@ test("a column draws a use under the term's end that cut its week, by its drop a
   // ahead. The use's week ends after the end's instant, so the route lists the use first.
   const ended = { observedAt: iso(NOW - DAY), plan: null, resetAt: iso(NOW - DAY), shareLeft: 0.5, source: 'term_ended', tier: null };
   const claim = { observedAt: iso(NOW - 2 * DAY), plan: null, resetAt: iso(NOW + 5 * DAY), shareLeft: 0.4, source: 'claim', tier: null };
-  assert.deepEqual(d.drawnRows([ended], [claim]), [ended, claim]);
+  assert.deepEqual(d.drawnRows([ended, claim]), [ended, claim]);
 });
 
 test('the four weeks keep a use newer than a plan change that is their oldest row', () => {
   const change = { observedAt: iso(NOW - 3 * DAY), plan: null, resetAt: iso(NOW + 4 * DAY), shareLeft: 0.5, source: 'plan_changed', tier: null };
   const claim = { observedAt: iso(NOW - DAY), plan: null, resetAt: iso(NOW + 4 * DAY), shareLeft: 0.4, source: 'claim', tier: null };
   const kept = d.newestResets({ claims: [claim], resets: [change], totalShareLeft: 0.9, window: 'seven_day' });
-  assert.deepEqual([kept.resets, kept.claims], [[change], [claim]]);
+  assert.deepEqual(kept.rows, [change, claim]);
 });
 
 test("a figure is the account's own share priced in the chosen week, a Fable-week reset at half its 7-day figure", () => {

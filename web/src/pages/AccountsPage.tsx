@@ -96,6 +96,7 @@ export function AccountsPage() {
   }, [accounts.data, dir, filters, now]);
 
   const selected = accounts.data?.find((a) => a.id === accountId) ?? null;
+  const listedIds = useMemo(() => new Set((accounts.data ?? []).map((a) => a.id)), [accounts.data]);
   // The row a confirmed pairing created: the read that lists it lands after the URL names it, so the redirect below
   // leaves that URL alone for the span of that read. The phase follows the read's loading flag rather than the list
   // changing, since a failed read keeps the old list and would otherwise hold the guard until the next refresh. A read
@@ -105,7 +106,7 @@ export function AccountsPage() {
   // that navigation still on its way.
   const [created, setCreated] = useState<CreatedRow | null>(null);
   if (created !== null) {
-    const next = nextCreatedRow(created, { accountId, listed: accounts.data?.some((a) => a.id === created.id) === true, loading: accounts.loading });
+    const next = nextCreatedRow(created, { accountId, listed: listedIds.has(created.id), loading: accounts.loading });
     if (next !== created) setCreated(next);
   }
   // The account whose first usage poll a confirm started, whether the pairing created its row or filled a slot, until
@@ -135,7 +136,7 @@ export function AccountsPage() {
   // The row this page's delete removed, until a loaded list no longer holds it, since the delete's move reads the list
   // from before the delete.
   const [deleted, setDeleted] = useState<string | null>(null);
-  if (deleted !== null && accounts.data !== null && !accounts.data.some((a) => a.id === deleted)) setDeleted(null);
+  if (deleted !== null && accounts.data !== null && !listedIds.has(deleted)) setDeleted(null);
   // A bare /accounts leads to the router's first account the list shows, so the detail never opens on a row the filters
   // hide. Where they hide every row it is the router's first. A row that this page just deleted is passed by, since the
   // list holds it until the reload lands. The row of a confirmed pairing whose read failed lands there too, since the
@@ -226,7 +227,7 @@ export function AccountsPage() {
         </section>
         <AddAccountDialog
           open={addOpen}
-          existingIds={new Set((accounts.data ?? []).map((a) => a.id))}
+          existingIds={listedIds}
           onClose={() => setAddOpen(false)}
           onDone={(done) => {
             setAddOpen(false);
@@ -944,9 +945,22 @@ function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; a
   );
 }
 
+// A term's end, a used reset and a plan change fall inside a week, so their line names their own instant rather than
+// a reset.
+const SOURCE_BADGE = new Map([
+  ['claim', 'reset used'],
+  ['plan_changed', 'plan changed'],
+  ['term_ended', 'term ended'],
+]);
+const sourceWord = (reset: AllowanceReset): string | null => SOURCE_BADGE.get(reset.source) ?? null;
+
 function AllowanceColumn({ account, costs, holder, week, window: w }: { account: AllowanceAccount; costs: SubscriptionCosts | null; holder: Pick<Account, 'subscription'>; week: WeekPosition; window: AllowanceWindow }) {
-  const { claims, counted, resets, used } = newestResets(w);
-  const [latest, ...before] = drawnRows(resets, claims);
+  const { counted, drawn, used } = useMemo(() => {
+    const kept = newestResets(w);
+    return { counted: kept.counted, drawn: drawnRows(kept.rows), used: kept.used };
+  }, [w]);
+  const [latest, ...before] = drawn;
+  const total = useMemo(() => weeksFigure(w, account, costs, week), [account, costs, w, week]);
   const figure = (reset: AllowanceReset | undefined) => allowanceFigure(reset?.shareLeft ?? null, w.window, account, costs, week, reset);
   // The figure reads the chosen week, so the hover adds the reset's own share of the account's window under the plan
   // the figure prices at: the reset's pair, named by its word where the router prices no tier for it (a free plan, a
@@ -956,10 +970,6 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
     const plan = pair.plan === 'free' || pair.plan === 'usage_based' ? planWordLabel(pair.plan) : hintPlan(holder, pair.tier);
     return plan === null ? resetHover(reset) : `${resetHover(reset)}\n${ownShareHover(plan, w.window, reset.shareLeft)}`;
   };
-  // A term's end, a used reset and a plan change fall inside a week, so their line names their own instant rather than
-  // a reset.
-  const sourceWord = (reset: AllowanceReset): string | null =>
-    reset.source === 'term_ended' ? 'term ended' : reset.source === 'claim' ? 'reset used' : reset.source === 'plan_changed' ? 'plan changed' : null;
   const latestWord = latest === undefined ? null : sourceWord(latest);
   return (
     <div className="allowance__col">
@@ -988,7 +998,7 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
       })}
       <div className="allowance__row allowance__total">
         <span>{`Total, ${plural(counted, 'week')}${used === 0 ? '' : ` and ${plural(used, 'used reset')}`}`}</span>
-        <AllowanceText className="num" figure={weeksFigure(w, account, costs, week)} />
+        <AllowanceText className="num" figure={total} />
       </div>
     </div>
   );

@@ -331,10 +331,10 @@ export const hitRatioOf = (g: Pick<AnalyticsGroup, 'cacheHits' | 'cacheMisses' |
   return base > 0 ? g.cacheHits / base : null;
 };
 /** A cache hit ratio's text: a dash for a group in which no request could hit, since a ratio over no base has no
- *  value, and `print`'s percent otherwise, 0% for a base with no hit. */
-export const hitRatioText = (g: Pick<AnalyticsGroup, 'cacheHits' | 'cacheMisses' | 'uncacheable' | 'uncached'>, print: (ratio: number) => string = fmtPct): string => {
+ *  value, and `fmtPct`'s percent otherwise, 0% for a base with no hit. */
+export const hitRatioText = (g: Pick<AnalyticsGroup, 'cacheHits' | 'cacheMisses' | 'uncacheable' | 'uncached'>): string => {
   const ratio = hitRatioOf(g);
-  return ratio === null ? '-' : print(ratio);
+  return ratio === null ? '-' : fmtPct(ratio);
 };
 /**
  * Whether the reported count covers the range: no bucket holds a dropped-block count (a key, the moved count or the

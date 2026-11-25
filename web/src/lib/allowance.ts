@@ -46,18 +46,19 @@ export const weeklyResetsKey = (accounts: readonly Account[]): string =>
  *  minute of `observedAt`, are one use. */
 const usesOf = (claims: readonly AllowanceReset[]): number => new Set(claims.map((r) => Math.floor(Date.parse(r.observedAt) / MINUTE))).size;
 
-/** The rows the four weeks keep: the newest `weeks` rows of the window's `resets` and every row of its `claims` newer
- *  than the oldest of them. `counted` counts the kept resets, `used` the uses among the kept claims, and `total` sums
- *  the kept rows of both lists: the answer's own total where it keeps both lists whole. */
-export function newestResets(window: AllowanceWindow, weeks = ALLOWANCE_WEEKS): { claims: AllowanceReset[]; counted: number; resets: AllowanceReset[]; total: number; used: number } {
+/** The rows the four weeks keep, `rows`: the newest `weeks` rows of the window's `resets` and then every row of its
+ *  `claims` newer than the oldest of them. `counted` counts the kept resets, `used` the uses among the kept claims, and
+ *  `total` sums the kept rows: the answer's own total where it keeps both lists whole. */
+export function newestResets(window: AllowanceWindow, weeks = ALLOWANCE_WEEKS): { counted: number; rows: AllowanceReset[]; total: number; used: number } {
   const resets = window.resets.slice(0, weeks);
   const oldest = resets.at(-1);
   // A claim row is dated by its drop, and so is a plan change that is the oldest kept row, since the `resetAt` of each
   // is the reset of the week that its drop fell in.
   const claims = window.claims.filter((r) => oldest === undefined || Date.parse(r.observedAt) > Date.parse(drawnInstant(oldest)));
   const whole = resets.length === window.resets.length && claims.length === window.claims.length;
-  const total = whole ? window.totalShareLeft : [...resets, ...claims].reduce((sum, r) => sum + r.shareLeft, 0);
-  return { claims, counted: resets.length, resets, total, used: usesOf(claims) };
+  const rows = [...resets, ...claims];
+  const total = whole ? window.totalShareLeft : rows.reduce((sum, r) => sum + r.shareLeft, 0);
+  return { counted: resets.length, rows, total, used: usesOf(claims) };
 }
 
 /** A figure in the chosen week: the share of the account's own window priced through the tier's 7-day capacity over
@@ -103,8 +104,7 @@ export const pairOf = (account: Pick<AllowanceAccount, 'plan' | 'tier'>, reset?:
 export const drawsFreeNote = (account: AllowanceAccount): boolean =>
   account.plan === 'free' &&
   allowanceWindows(account).some((w) => {
-    const { claims, resets } = newestResets(w);
-    const rows = [...resets, ...claims];
+    const { rows } = newestResets(w);
     return rows.length === 0 || rows.some((r) => pairOf(account, r).plan === 'free');
   });
 
@@ -144,8 +144,7 @@ function summedFigure(resets: readonly AllowanceReset[], window: string, account
  * count fewer weeks than its label names.
  */
 export function weeksFigure(window: AllowanceWindow, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, week: WeekPosition): AllowanceFigure {
-  const { claims, resets, total } = newestResets(window);
-  const rows = [...resets, ...claims];
+  const { rows, total } = newestResets(window);
   if (rows.length === 0) return allowanceFigure(total, window.window, account, costs, week);
   return summedFigure(rows, window.window, account, costs, week);
 }
@@ -176,10 +175,9 @@ const SOURCE_WORD = new Map([
   ['term_ended', "the term's end"],
 ]);
 
-/** The rows of a window's two lists in the order one column draws them: by the drawn instant, newest first, a reset
- *  ahead of a claim of the same instant. */
-export const drawnRows = (resets: readonly AllowanceReset[], claims: readonly AllowanceReset[]): AllowanceReset[] =>
-  [...resets, ...claims].sort(byDrawnNewest);
+/** A window's kept rows (`newestResets`' `rows`) in the order one column draws them: by the drawn instant, newest
+ *  first. The sort is stable, so a reset stays ahead of a claim of the same instant. */
+export const drawnRows = (rows: readonly AllowanceReset[]): AllowanceReset[] => [...rows].sort(byDrawnNewest);
 
 /** A reset's hover: its absolute instant and where its reading came from, a word the router adds read as sent. */
 export const resetHover = (reset: AllowanceReset): string => `${fmtAbsolute(drawnInstant(reset))}, read from ${SOURCE_WORD.get(reset.source) ?? reset.source}`;

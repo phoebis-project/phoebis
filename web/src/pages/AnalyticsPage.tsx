@@ -4,7 +4,7 @@ import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, Re
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import { foldGroups, foldRequests, keptRows, latestGenerations, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
+import { PROBE_COUNTERS, emptyProbes, foldGroups, foldRequests, keptRows, latestGenerations, loadSessionRequests, sumGroups, type FoldOptions, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, Settings, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { TIME_BAR } from '@/components/charts/bars';
@@ -212,7 +212,6 @@ const totalsOf = (groups: AnalyticsGroup[]) => {
   return { ...summed, tokens: withPlainOutput(summed.tokens) };
 };
 const bucketsOf = (points: AnalyticsPoint[]): Bucket[] => points.map((p) => ({ at: Date.parse(p.at), ...totalsOf(p.groups) }));
-const PROBE_COUNTERS = ['failed', 'held', 'ok', 'planOk', 'skipped'] as const;
 /** Whether a group counts a request. A group of refused requests alone counts none, and only the Traffic table's
  *  Refused column has a figure for it. */
 const countsRequest = (g: { requests: number }): boolean => g.requests > 0;
@@ -347,6 +346,7 @@ export function AnalyticsPage() {
   // may be wider than the patterns, and the user agent matches its folded token, as the unscoped page's rollups do,
   // where the route matches the raw header.
   const patternOptions = useMemo(() => ({ agentPatterns: a.userAgents, clientPatterns: a.clients }), [a.clients, a.userAgents]);
+  const foldOptions = useMemo<FoldOptions>(() => ({ agentGroups, includeProbes }), [agentGroups, includeProbes]);
   // A custom span holds its end, so no dependency moves at the interval: its window's reads poll at it instead, and the
   // figures stay drawn until the new answer lands, where a request that finished late shows, in the session log when it
   // falls on the first page. A preset's end moves to now at a boundary, and that change reads again.
@@ -557,11 +557,11 @@ export function AnalyticsPage() {
   // rows alone would label an earlier key holder as the live key.
   const kept = useMemo(() => keptRows(rows, patternOptions), [rows, patternOptions]);
   const latest = useMemo(() => latestGenerations(rows), [rows]);
-  const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups, includeProbes }, latest)), [stale, sessionId, series.data, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, includeProbes, latest]);
+  const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, foldOptions, latest)), [stale, sessionId, series.data, kept, rangeBucketMs, fromIso, toIso, groupBy, foldOptions, latest]);
   const buckets = useMemo(() => bucketsOf(points), [points]);
   // The Dropped thinking blocks card's totals come from the breakdown, and whether its base covers the range from the
   // buckets of this answer.
-  const reportedCovered = useMemo(() => reportedCovers(points), [points]);
+  const reportedCovered = useMemo(() => tab === 'cache' && reportedCovers(points), [points, tab]);
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
@@ -585,18 +585,18 @@ export function AnalyticsPage() {
     const ends = all.length <= 3 ? all : [all[0], all[1], all[all.length - 1]];
     return partialEndsOf(ends.map((p) => ({ at: Date.parse(p.at) })), { fromMs: read.fromMs, toMs: read.endMs }, read.readAt, true);
   };
-  const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, { agentGroups, includeProbes }, latest)), [stale, sessionId, breakdown.data, kept, groupBy, agentGroups, includeProbes, latest]);
+  const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, foldOptions, latest)), [stale, sessionId, breakdown.data, kept, groupBy, foldOptions, latest]);
   // Every group table but Traffic leaves out a group of refused requests alone.
   const requestGroups = useMemo(() => groups.filter(countsRequest), [groups]);
   const byPoolAnswer = byPool.current;
-  const poolGroups = useMemo(() => (sessionId === null ? (byPoolAnswer ?? []) : tab === 'cache-warming' ? foldGroups(kept, 'pool', { agentGroups, includeProbes }, latest) : []), [sessionId, byPoolAnswer, tab, kept, agentGroups, includeProbes, latest]);
+  const poolGroups = useMemo(() => (sessionId === null ? (byPoolAnswer ?? []) : tab === 'cache-warming' ? foldGroups(kept, 'pool', foldOptions, latest) : []), [sessionId, byPoolAnswer, tab, kept, foldOptions, latest]);
   const bySpeedAnswer = bySpeed.current?.answer;
   const speedPoints = useMemo(
-    () => (sessionId === null ? (bySpeedAnswer ?? []) : tab === 'traffic' || tab === 'cost' ? foldRequests(kept, rangeBucketMs, fromIso, toIso, 'speed', { agentGroups, includeProbes }, latest) : []),
-    [sessionId, bySpeedAnswer, tab, kept, rangeBucketMs, fromIso, toIso, agentGroups, includeProbes, latest],
+    () => (sessionId === null ? (bySpeedAnswer ?? []) : tab === 'traffic' || tab === 'cost' ? foldRequests(kept, rangeBucketMs, fromIso, toIso, 'speed', foldOptions, latest) : []),
+    [sessionId, bySpeedAnswer, tab, kept, rangeBucketMs, fromIso, toIso, foldOptions, latest],
   );
   const byEffortAnswer = byEffort.current;
-  const effortGroups = useMemo(() => (sessionId === null ? (byEffortAnswer ?? []) : tab === 'traffic' ? foldGroups(kept, 'effort', { agentGroups, includeProbes }, latest) : []), [sessionId, byEffortAnswer, tab, kept, agentGroups, includeProbes, latest]);
+  const effortGroups = useMemo(() => (sessionId === null ? (byEffortAnswer ?? []) : tab === 'traffic' ? foldGroups(kept, 'effort', foldOptions, latest) : []), [sessionId, byEffortAnswer, tab, kept, foldOptions, latest]);
   const totals = useMemo(() => totalsOf(groups), [groups]);
   // A session fold has no warming facts, so those figures read unavailable rather than zero.
   const { keptWarm } = totals;
@@ -605,14 +605,14 @@ export function AnalyticsPage() {
   // the whole, and in a session view the rows folded by who paid for them.
   const costSeriesAnswer = costSeries.current?.answer;
   const costPoints = useMemo(() => {
-    if (sessionId !== null) return funding === undefined ? points : stale || !fundedTab ? [] : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups, funding, includeProbes }, latest);
+    if (sessionId !== null) return funding === undefined ? points : stale || !fundedTab ? [] : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { ...foldOptions, funding }, latest);
     return funded ? (costSeriesAnswer ?? []) : points;
-  }, [sessionId, funding, funded, points, stale, fundedTab, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, includeProbes, latest, costSeriesAnswer]);
+  }, [sessionId, funding, funded, points, stale, fundedTab, kept, rangeBucketMs, fromIso, toIso, groupBy, foldOptions, latest, costSeriesAnswer]);
   const costBreakdownAnswer = costBreakdown.current;
   const costGroups = useMemo(() => {
-    if (sessionId !== null) return funding === undefined ? groups : stale || !fundedTab ? [] : foldGroups(kept, groupBy, { agentGroups, funding, includeProbes }, latest);
+    if (sessionId !== null) return funding === undefined ? groups : stale || !fundedTab ? [] : foldGroups(kept, groupBy, { ...foldOptions, funding }, latest);
     return funded || warming ? (costBreakdownAnswer ?? []) : groups;
-  }, [sessionId, funding, funded, warming, groups, stale, fundedTab, kept, groupBy, agentGroups, includeProbes, latest, costBreakdownAnswer]);
+  }, [sessionId, funding, funded, warming, groups, stale, fundedTab, kept, groupBy, foldOptions, latest, costBreakdownAnswer]);
   // With Include probes off the route answers a group of billed probes alone for its dollars beside no request, so each
   // Cost table keeps a group whose dollars it draws are above zero, as the total and the Cost by chart keep them: the
   // native table's billed dollars and the dollar table's cost.
@@ -696,7 +696,7 @@ export function AnalyticsPage() {
   const { probeBuckets, probeTotals } = useMemo(() => {
     const raw = sessionId !== null ? buckets : funded ? bucketsOf(probeAnswer ?? NO_POINTS) : warmingBuckets;
     // The counters are whole numbers, so the buckets sum to the answer's whole.
-    const summed = { failed: 0, held: 0, ok: 0, planOk: 0, skipped: 0 };
+    const summed = emptyProbes();
     if (funded) for (const b of raw) for (const k of PROBE_COUNTERS) summed[k] += b.probes[k];
     return { probeBuckets: raw, probeTotals: sessionId !== null ? totals.probes : funded ? summed : costTotals.probes };
   }, [sessionId, funded, probeAnswer, warmingBuckets, buckets, totals.probes, costTotals.probes]);
@@ -951,7 +951,7 @@ export function AnalyticsPage() {
                   <Tooltip
                     cursor={{ stroke: ink.axis }}
                     content={timeTip<Bucket>((p) => [
-                      { color: ink.series[0], label: 'cache hit ratio', value: hitRatioText(p, (r) => pct(r * 100)) },
+                      { color: ink.series[0], label: 'cache hit ratio', value: pct(pct100(hitRatioOf(p))) },
                       { color: ink.series[2], label: 'cached share of input', value: pct(pct100(cachedShareOf(p))) },
                     ])}
                   />
@@ -1510,7 +1510,7 @@ function HBarRow({ color, count, fill, label, labelClass, rowClass, second, shar
       </div>
       <span className="num">
         {count}
-        {share !== null && <> <span className="muted">{share}</span></>}
+        <ShareNote share={share} />
       </span>
     </li>
   );
@@ -1584,6 +1584,7 @@ function CountLink({ children, target }: { children: ReactNode; target: Requests
 const MISS_SHARE_BASE = 'Share of the requests that the card counts';
 const DROPPED_SHARE_BASE = 'Share of the requests whose answer reported its dropped blocks';
 const shareOf = (count: number, base: number): string | null => (base > 0 ? fmtPct(count / base, 1) : null);
+const ShareNote = ({ share }: { share: string | null }) => (share === null ? null : <> <span className="muted">{share}</span></>);
 
 /** A count of the reasons panel or the dropped thinking blocks card, linking its requests under `narrow`, and in its
  *  group where a table's row holds it. */
@@ -1597,8 +1598,8 @@ function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks
     .map((reason) => ({ count: countOf(totals.cacheMissReasons, reason), hits: faultHits(totals, reason), reason }))
     .sort((a, b) => b.count - a.count);
   const max = Math.max(1, ...rows.map((r) => r.count));
-  if (rows.every((r) => r.count === 0)) return <p className="muted">No diagnostics in range.</p>;
   const base = rows.reduce((s, r) => s + r.count, 0);
+  if (base === 0) return <p className="muted">No diagnostics in range.</p>;
   return (
     <ul className="plain-list hbars hbars--reasons">
       {rows.map((r) => (
@@ -1656,7 +1657,7 @@ function DroppedThinkingBars({ covered, link, plainLinks, totals }: { covered: b
         <li>Moved to another account: {fmtInt(moved)}</li>
         <li>
           Nothing dropped: {fmtInt(none)}
-          {noneShare !== null && <> <span className="muted">{noneShare}</span></>}
+          <ShareNote share={noneShare} />
         </li>
       </ul>
     </div>
