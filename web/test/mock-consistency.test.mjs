@@ -2423,8 +2423,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         ['match', [['no_fit', 1], ['ladder', 'rewrite_only']]],
       ],
     );
-    // On the two least-bad landings nightly's row states the runway to 1.0 that its rung ranks by, at its burn of 0.019
-    // an hour and the prior's 0.01: (1 - 0.91 - 0.00015) / 0.029 is 3.09828 h, and (1 - 0.94 - 0.0038) / 0.029 is
+    // On the two least-bad landings nightly's row states the runway to 1.0 over the windows whose runway ends by their
+    // reset: the 5-hour one, which ends ahead of the reset at 18:11, where the 7-day one passes its reset. At its burn of
+    // 0.019 an hour and the prior's 0.01, (1 - 0.91 - 0.00015) / 0.029 is 3.09828 h, and (1 - 0.94 - 0.0038) / 0.029 is
     // 1.93793 h.
     const nightlyOn = (id) => records.find((r) => `${r.requestId}/${r.seq}` === id)?.candidates.find((c) => c.accountId === 'nightly');
     assert.deepEqual(['req_2e7c90a1-6d4/2', 'req_4b0e9d17-c31/2'].map((id) => [nightlyOn(id)?.runwayMs, nightlyOn(id)?.binding]), [[11_153_793, 'five_hour'], [6_976_552, 'five_hour']]);
@@ -2476,6 +2477,33 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.deepEqual(facts.filter((f) => ['at_cap', 'no_fit', 'ladder'].includes(f.key)).map((f) => [f.key, f.value]), [['at_cap', 3], ['no_fit', 0], ['ladder', 'least_bad']]);
     });
   }
+
+  test(`a candidate row states the runway over the windows whose runway ends by their reset, to the ceiling on a fitting row and to 1.0 on a least-bad one, and none where each one passes it, at ${at}`, async () => {
+    const records = await decisionsOf(await story);
+    const rowOf = (id, accountId) => {
+      const row = records.find((r) => `${r.requestId}/${r.seq}` === id)?.candidates.find((c) => c.accountId === accountId);
+      return [row?.fit, row?.runwayMs, row?.binding];
+    };
+    // On the shed move of 11:08:30, at the pin's burn of 0.0142 and 0.0016 an hour and its rewrite of 0.00264 and
+    // 0.00031, primary's 5-hour runway, (0.75 - 0.49 - 0.00264) / (0.085 + 0.0142), 2.594 h, ends past the reset at
+    // 11:44. Its 7-day runway, (0.78 - 0.70 - 0.00031) / (0.006 + 0.0016), 10.48553 h, ends past the window's horizon
+    // five hours out and ahead of its reset 81 h out, so the row states that one.
+    // On the placement of 13:41:15, a fresh session's 41,000 tokens rewrite 0.00123 and 0.00014. Nightly's 5-hour
+    // runway, (0.75 - 0.40 - 0.00123) / (0.019 + 0.01), 12.03 h, ends past the reset at 18:11, and its 7-day runway,
+    // (0.78 - 0.34 - 0.00014) / 0.0012, 366.6 h, past the reset 43 h out, so the row states none.
+    // On the least-bad landing of 13:10:20, with primary and secondary at their cap, a fresh session's 43,000 tokens
+    // rewrite 0.00129 and 0.00015. Nightly's 0.77 on its 5-hour window stands over the 0.75 ceiling, so its row states
+    // the runway to 1.0. Its 5-hour wall, (1 - 0.77 - 0.00129) / (0.019 + 0.01), 7.887 h, ends past the reset at 13:11,
+    // and its 7-day wall, (1 - 0.34 - 0.00015) / 0.0012, 549.9 h, past the reset 43.5 h out, so the row states none.
+    assert.deepEqual(
+      [rowOf('req_868264bc-611/1', 'primary'), rowOf('req_7a3f0c26-d81/1', 'nightly'), rowOf('req_9d4c1a73-e58/1', 'nightly')],
+      [
+        ['fits', 37_747_895, 'seven_day'],
+        ['fits', null, null],
+        ['least_bad', null, null],
+      ],
+    );
+  });
 
   test(`the member a placement, a move or a hold names is one the partitions kept, at ${at}`, async () => {
     const s = await story;
@@ -2834,6 +2862,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         [iso(s.now - 25 * 60_000), '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65', 'main'],
       ],
     );
+  });
+
+  test(`a round's pin row states the runway its destination reads over the windows whose runway ends by their reset, at ${at}`, async () => {
+    const round = (await logOf(await story)).find((row) => row.type === 'event' && row.kind === 'shedding_round' && row.requestId === 'req_1eaa9bc1-a18');
+    // The 11:00 round's first mark, 22,000 Sonnet tokens at 0.0034 an hour, reads primary with no move booked yet. Its
+    // rewrite of 0.00066 and 0.00008 leaves a 5-hour runway of (0.75 - 0.49 - 0.00066) / (0.085 + 0.0034), 2.934 h,
+    // which ends past the reset at 11:44, and a 7-day runway of (0.78 - 0.70 - 0.00008) / 0.006, 13.32 h, which ends
+    // ahead of its reset 81 h out, so the row states that one.
+    const first = round?.detail.pins.find((p) => p.last_input_tokens === 22_000);
+    assert.deepEqual([first?.marked, first?.planned, first?.runway_ms], [true, 'primary', 47_952_000]);
   });
 
   test(`the Fable-week round walks its Fable pin alone, where it is the last pin, leaves its Opus pin off the window and marks nothing for the last pin, at ${at}`, async () => {

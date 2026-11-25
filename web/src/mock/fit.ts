@@ -19,6 +19,8 @@ export const ceilingOn = (pool: Pick<Pool, 'fiveHourCeiling' | 'weeklyCeiling'>,
 
 /** A bounded runway on a window, and whether it ends short of the window's horizon. */
 export interface Runway {
+  /** Whether the runway ends past its window's reset, which takes the line away first. False with no reset. */
+  pastReset: boolean;
   runway: number;
   short: boolean;
   window: string | null;
@@ -45,12 +47,13 @@ export function windowFitOf(reading: { reserved: number | null; utilization: num
 
 /**
  * A window's two runways off its fit, to the ceiling and to 1.0, each short where it ends before `span`, the time to
- * the window's horizon, and none where it is unbounded.
+ * the window's horizon, past its reset where it ends after `resetSpan`, the time to the window's reset, as the
+ * router's `passes_reset` reads it, and none where it is unbounded.
  */
-export function runwaysOf(read: WindowFit, span: number, window: string): { ceiling: Runway | null; wall: Runway | null } {
+export function runwaysOf(read: WindowFit, span: number, window: string, resetSpan: number | null): { ceiling: Runway | null; wall: Runway | null } {
   return {
-    ceiling: read.runwayMs === null ? null : { runway: read.runwayMs, short: read.runwayMs < span, window },
-    wall: read.wallRunwayMs === null ? null : { runway: read.wallRunwayMs, short: read.wallRunwayMs < span, window },
+    ceiling: read.runwayMs === null ? null : { pastReset: resetSpan !== null && read.runwayMs > resetSpan, runway: read.runwayMs, short: read.runwayMs < span, window },
+    wall: read.wallRunwayMs === null ? null : { pastReset: resetSpan !== null && read.wallRunwayMs > resetSpan, runway: read.wallRunwayMs, short: read.wallRunwayMs < span, window },
   };
 }
 
@@ -61,4 +64,10 @@ export function runwaysOf(read: WindowFit, span: number, window: string): { ceil
 export function bindingOf(runways: Runway[]): Runway | undefined {
   const shortest = (list: Runway[]) => [...list].sort((a, b) => a.runway - b.runway)[0];
   return shortest(runways.filter((b) => b.short)) ?? shortest(runways);
+}
+
+/** The pair a row states among `runways`: `bindingOf` over those that do not pass their window's reset, and none
+ *  where every one of them does. */
+export function shownOf(runways: Runway[]): Runway | undefined {
+  return bindingOf(runways.filter((r) => !r.pastReset));
 }

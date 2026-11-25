@@ -66,7 +66,7 @@ function memberFitOf(account: Account, now: number, pool: Pick<Pool, 'fiveHourCe
   const walls: Runway[] = [];
   for (const { key, read, window } of shared) {
     if (window.projection === null || window.horizon === null) continue;
-    const { ceiling, wall } = runwaysOf(read, Date.parse(window.horizon) - now, key);
+    const { ceiling, wall } = runwaysOf(read, Date.parse(window.horizon) - now, key, window.resetsAt === null ? null : Date.parse(window.resetsAt) - now);
     words.push(!read.lands ? 'least_bad' : ceiling?.short ? 'rewrite_only' : 'fits');
     if (ceiling !== null) bounded.push(ceiling);
     if (wall !== null) walls.push(wall);

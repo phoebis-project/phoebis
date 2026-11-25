@@ -14,7 +14,7 @@ import { compareRows, movedFrom } from '@/lib/routingLog';
 import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SUNSET_WEEK_RESETS_IN, accountById, lastReadingOf, rankTier } from './accounts';
 import { promptOf } from './catalog';
-import { PRIOR_BURN, bindingOf, ceilingOn, runwaysOf, windowFitOf, type Runway } from './fit';
+import { PRIOR_BURN, bindingOf, ceilingOn, runwaysOf, shownOf, windowFitOf, type Runway } from './fit';
 import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceOf } from './lead';
 import { SESSIONS } from './operations';
@@ -704,16 +704,21 @@ const MOVED_PIN_ROUND = { accountId: 'primary', at: Date.parse(requestById.get(M
 const ROUNDS = [SHED_ROUND, NO_RUNWAY_ROUND, STRETCH_ROUND, FABLE_WEEK_ROUND, RESERVATION_ROUND, MOVED_PIN_ROUND];
 
 /**
- * What the gate read of one candidate for a pin: the verdict, the runway to the ceiling and its window, the runway to
- * 1.0 and its window, which the ladder's third rung ranks a `least_bad` member by, and the fit table's row.
+ * What the gate read of one candidate for a pin: the verdict, the runways to the ceiling and to 1.0 that the ranks
+ * read, each over every bounded window, one past its reset included, the ladder's third rung ranking a `least_bad`
+ * member by the one to 1.0, the pair of each that a row states, and the fit table's row.
  */
 interface FitRead {
-  binding: string | null;
   facts: WalkFact[];
   runwayMs: number | null;
+  /** The runway to the ceiling and its window as a row states them: `shownOf` over the windows' runways. */
+  shownBinding: string | null;
+  shownRunwayMs: number | null;
   verdict: string;
-  wallBinding: string | null;
   wallRunwayMs: number | null;
+  /** The runway to 1.0 and its window as a placement's `least_bad` row states them, read the same way. */
+  wallShownBinding: string | null;
+  wallShownRunwayMs: number | null;
 }
 
 const runwayOf = (c: Pick<RecordCandidate, 'runwayMs'>) => c.runwayMs ?? Number.POSITIVE_INFINITY;
@@ -745,21 +750,29 @@ export function runwayTiesOf<T extends Pick<RecordCandidate, 'runwayMs'>>(ties: 
  * the horizon on every window, `rewrite_only` lands the rewrite but falls short on one, and `least_bad` is the rest, as
  * is a window a move cannot read. An account inside the pool's wind-down before its end reads `ending`, and an API-key
  * account fits while its worst bucket has room. The runway to 1.0 reads every window with a projection, whether the
- * rewrite lands there or not, and both runways bind on the shortest window short of its horizon, else the shortest of
- * all. An API key whose full bucket refuses the request at this instant reads zero to 1.0 on no window.
+ * rewrite lands there or not. Each runway the ranks read binds on the shortest window short of its horizon, else the
+ * shortest of all, a window past its reset included, and a row and the fit table state the same pick over the windows
+ * whose runway ends by their reset, none where each one passes it. An API key whose full bucket refuses the request at
+ * this instant reads zero to 1.0 on no window, the pair its row states too.
  */
 function fitOf(c: RecordCandidate, at: number, pool: Pick<PoolSeed, 'fiveHourCeiling' | 'weeklyCeiling' | 'windDownMinutes'>, model: string, tokens: number, pinBurn: Record<string, number>, move: boolean): FitRead {
-  const read = (facts: WalkFact[], verdict: string, runway: Runway | undefined = undefined, wall: Runway | undefined = undefined): FitRead => ({
-    binding: runway?.window ?? null,
-    facts: [...facts, fact('verdict', verdict)].map((f) => ({ ...f, accountId: c.accountId })),
-    runwayMs: runway?.runway ?? null,
-    verdict,
-    wallBinding: wall?.window ?? null,
-    wallRunwayMs: wall?.runway ?? null,
-  });
+  const read = (facts: WalkFact[], verdict: string, bounded: Runway[] = [], walls: Runway[] = []): FitRead => {
+    const shown = shownOf(bounded);
+    const wallShown = shownOf(walls);
+    return {
+      facts: [...facts, fact('verdict', verdict)].map((f) => ({ ...f, accountId: c.accountId })),
+      runwayMs: bindingOf(bounded)?.runway ?? null,
+      shownBinding: shown?.window ?? null,
+      shownRunwayMs: shown?.runway ?? null,
+      verdict,
+      wallRunwayMs: bindingOf(walls)?.runway ?? null,
+      wallShownBinding: wallShown?.window ?? null,
+      wallShownRunwayMs: wallShown?.runway ?? null,
+    };
+  };
   const endsAt = c.term?.endsAt ? Date.parse(c.term.endsAt) : null;
   if (endsAt !== null && endsAt - at <= pool.windDownMinutes * MINUTE) return read([fact('end', endsAt, 'time')], 'ending');
-  if (c.kind === 'api_key') return (c.windows.worst_bucket?.utilization ?? 0) < 1 ? read([], 'fits') : read([], 'least_bad', undefined, { runway: 0, short: false, window: null });
+  if (c.kind === 'api_key') return (c.windows.worst_bucket?.utilization ?? 0) < 1 ? read([], 'fits') : read([], 'least_bad', [], [{ pastReset: false, runway: 0, short: false, window: null }]);
   const rewrite = rewriteOf(tokens, model);
   const projections: WalkFact[] = [];
   const rewrites: WalkFact[] = [];
@@ -783,15 +796,15 @@ function fitOf(c: RecordCandidate, at: number, pool: Pick<PoolSeed, 'fiveHourCei
     const burn = (w === 'five_hour' && x.demand !== null ? x.demand : (c.burn[w] ?? 0)) + (pinBurn[w] ?? 0);
     const window = windowFitOf(x, ceilingOn(pool, w), rewrite[w] ?? 0, burn);
     lands = lands && window.lands;
-    const { ceiling, wall } = runwaysOf(window, Date.parse(x.horizon) - at, w);
+    const { ceiling, wall } = runwaysOf(window, Date.parse(x.horizon) - at, w, x.reset === null ? null : Date.parse(x.reset) - at);
     if (wall !== null) walls.push(wall);
     if (ceiling === null) continue;
     every = every && !ceiling.short;
     bounded.push(ceiling);
   }
-  const binding = bindingOf(bounded);
+  const shown = shownOf(bounded);
   const verdict = unread ? 'least_bad' : every ? 'fits' : lands ? 'rewrite_only' : 'least_bad';
-  return read([...projections, ...(binding ? [fact('runway_ms', binding.runway, 'ms')] : []), ...rewrites, ...reserved, ...(binding ? [fact('binding', binding.window)] : [])], verdict, binding, bindingOf(walls));
+  return read([...projections, ...(shown ? [fact('runway_ms', shown.runway, 'ms')] : []), ...rewrites, ...reserved, ...(shown ? [fact('binding', shown.window)] : [])], verdict, bounded, walls);
 }
 
 /** The newest round any pool ran on the account by `at`. */
@@ -818,9 +831,8 @@ const holdsAllowance = (c: RecordCandidate, model: string) => {
 const LADDER = ['fits', 'rewrite_only', 'least_bad', 'ending', 'every'];
 /** Whether a rung narrows its members to the longest runway. */
 const narrowsByRunway = (rung: string) => rung === 'rewrite_only' || rung === 'least_bad';
-/** The runway a read ranks by and its window: the one to 1.0 under `least_bad`, the one to the ceiling otherwise. */
-const rankedRunwayOf = (read: FitRead): Pick<FitRead, 'binding' | 'runwayMs'> =>
-  read.verdict === 'least_bad' ? { binding: read.wallBinding, runwayMs: read.wallRunwayMs } : { binding: read.binding, runwayMs: read.runwayMs };
+/** The runway a read ranks by: the one to 1.0 under `least_bad`, the one to the ceiling otherwise. */
+const rankedRunwayOf = (read: FitRead): number | null => (read.verdict === 'least_bad' ? read.wallRunwayMs : read.runwayMs);
 
 /**
  * The rung a member's verdict stands on, a member read no fit for among the fitting ones. A `least_bad` or winding-down
@@ -837,6 +849,10 @@ interface Move {
   lines: WalkStep[];
   reached: RecordCandidate[];
 }
+
+// A row states the runway over the windows whose runway ends by their reset, so a move's tie reads the gate's last
+// read of each destination for the runway it ranks by.
+const GATE_FITS = new WeakMap<RecordCandidate, FitRead>();
 
 /**
  * Step 4 as the engine walks it for a live pin, each rule on the facts the record holds: `no` with the fact that kept
@@ -866,8 +882,9 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
     const reads = reached.map((c) => {
       const read = fitOf(c, at, pool, r.canonicalModel, tokens, pinBurn, true);
       c.fit = read.verdict;
-      c.runwayMs = read.runwayMs;
-      c.binding = read.binding;
+      c.runwayMs = read.shownRunwayMs;
+      c.binding = read.shownBinding;
+      GATE_FITS.set(c, read);
       return read;
     });
     // A drawn move lands where its draw put it, so a rival the gate would answer ahead of it reads full, as the cap
@@ -884,7 +901,8 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
     // too, since the strategy ranks it and the runway only breaks its tie. The rewrite-only order narrows to the
     // longest runway, ties kept.
     const fits = reached.filter((c) => c.fit === 'fits' && open(c));
-    const rewriteOnly = longestOf(reached.filter((c) => c.fit === 'rewrite_only' && open(c)));
+    const ranked = reached.map((c, i) => ({ c, runwayMs: reads[i].runwayMs }));
+    const rewriteOnly = longestOf(ranked.filter(({ c }) => c.fit === 'rewrite_only' && open(c))).map(({ c }) => c);
     const left = reached.filter((c) => c.fit !== 'ending');
     const [verdict, answered] = fits.length ? ['fits', fits] : fitsOnly ? ['none', []] : rewriteOnly.length ? ['rewrite_only', rewriteOnly] : left.length ? ['least_bad', left] : ['none', []];
     return { answered, step: step('fit', verdict, reads.flatMap((x) => x.facts)) };
@@ -1308,7 +1326,7 @@ function fillDrawnRivals(spec: Spec, candidates: RecordCandidate[], pool: PoolSe
   const stepOf = (c: RecordCandidate) => {
     const read = freshFitOf(spec, c, pool);
     const rung = rungOf(read.verdict, holdsAllowance(c, spec.request.canonicalModel));
-    return { index: LADDER.indexOf(rung), runwayMs: rankedRunwayOf(read).runwayMs };
+    return { index: LADDER.indexOf(rung), runwayMs: rankedRunwayOf(read) };
   };
   const placed = spec.kind === 'placed' ? stepOf(winner) : null;
   const ahead = (c: RecordCandidate) => placed !== null && outranks(stepOf(c), placed, narrowsByRunway(LADDER[placed.index]));
@@ -1346,11 +1364,12 @@ function readPlacementFits(spec: Spec, candidates: RecordCandidate[], pool: Pool
   const free = left.filter((c) => r.kind === 'count_tokens' || c.inFlight < c.inFlightCap);
   for (const c of free.length > 0 ? free : left) {
     const read = freshFitOf(spec, c, pool);
-    // A `least_bad` row states the runway to 1.0, the one its rung ranks by.
-    const ranked = rankedRunwayOf(read);
+    // A `least_bad` row states the runway to 1.0 and each other row the one to the ceiling, each over the windows whose
+    // runway ends by their reset, where the rung ranks by every bounded window.
+    const wall = read.verdict === 'least_bad';
     c.fit = read.verdict;
-    c.runwayMs = ranked.runwayMs;
-    c.binding = ranked.binding;
+    c.runwayMs = wall ? read.wallShownRunwayMs : read.shownRunwayMs;
+    c.binding = wall ? read.wallShownBinding : read.shownBinding;
   }
 }
 
@@ -1397,16 +1416,18 @@ function narrowed(set: RecordCandidate[], pool: PoolSeed, r: RequestLog, moving:
   else narrow('at_cap', (c) => underCap.includes(c));
   // A move's destinations are the set its gate ordered, read with the moving pin already, so they stay as it left
   // them. Every other landing walks the ladder: the fitting members, else the rewrite-only ones at the longest runway,
-  // else the least-bad ones holding allowance at the longest runway to 1.0, which their rows state, else the ones
-  // inside their wind-down holding allowance, else none, which falls through to the whole set. A walk over no member
-  // takes no rung.
+  // else the least-bad ones holding allowance at the longest runway to 1.0, else the ones inside their wind-down
+  // holding allowance, else none, which falls through to the whole set. Each rung ranks by the runway over every
+  // bounded window that the member's fit read, which a row leaves out where the window passes its reset. A walk over
+  // no member takes no rung.
   if (moving) narrow('no_fit', () => true);
   else {
     const reached = left.length > 0;
     const rungs = new Map(left.map((c) => [c, rungOf(c.fit, holdsAllowance(c, r.canonicalModel))]));
     const rung = LADDER.find((x) => [...rungs.values()].includes(x)) ?? 'every';
     const onRung = left.filter((c) => rungs.get(c) === rung);
-    const kept = rung === 'every' ? [] : narrowsByRunway(rung) ? longestOf(onRung) : onRung;
+    const longest = () => longestOf(onRung.map((c) => ({ c, runwayMs: rankedRunwayOf(FRESH_FITS.get(c)!) }))).map(({ c }) => c);
+    const kept = rung === 'every' ? [] : narrowsByRunway(rung) ? longest() : onRung;
     narrow('no_fit', (c) => kept.includes(c));
     if (reached) facts.push(fact('ladder', rung));
   }
@@ -1718,10 +1739,12 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
         });
       // The strategy's ties are the ranked tier's best scores under Pace and the whole tier under Priority. The runway
       // breaks them for a move whose gate answered the fitting order and for a failover by its fitting members' reads,
-      // and round robin's cursor picks alone.
+      // and round robin's cursor picks alone. Each tie ranks by its read's runway to the ceiling over every bounded
+      // window, the gate's on a move and the placement's on a failover.
       const ranks = candidates.filter((c) => c.rank !== null);
       const ties = pool.strategy === 'pace' ? ranks.filter((c) => c.score === Math.max(...ranks.map((x) => x.score ?? 0))) : ranks;
-      const byRunway = pool.strategy === 'round_robin' ? [] : runwayTiesOf(ties, (c) => (movedAmong ? gateFits : spec.failover !== undefined && c.fit === 'fits'));
+      const rankedTies = ties.map((c) => ({ c, runwayMs: (movedAmong ? GATE_FITS : FRESH_FITS).get(c)?.runwayMs ?? null }));
+      const byRunway = pool.strategy === 'round_robin' ? [] : runwayTiesOf(rankedTies, ({ c }) => (movedAmong ? gateFits : spec.failover !== undefined && c.fit === 'fits')).map(({ c }) => c);
       // The draw is left to the runway's ties where they narrowed the strategy's, else to the strategy's own. Round
       // robin's cursor names the chosen member's turn among the ranked tier, so it leaves no draw.
       const draw =
@@ -2995,7 +3018,7 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
       chosen.base.burn = { ...chosen.base.burn, [window]: (chosen.base.burn[window] ?? 0) + (p.burn ?? 0) };
       planned.set(chosen.base.accountId, chosen.base);
     };
-    return { book, figures: { destination: chosen.base.accountId, rewrite: figure, runway: chosen.fit.runwayMs, window: figure === null ? null : rewriteWindowOf(p.model) } };
+    return { book, figures: { destination: chosen.base.accountId, rewrite: figure, runway: chosen.fit.shownRunwayMs, window: figure === null ? null : rewriteWindowOf(p.model) } };
   };
   // An earlier build read no dropped thinking.
   const boundOf = (p: RoundPin) => (earlier ? null : droppedThinkingOf({ accountId, agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId }, at));

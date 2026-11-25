@@ -426,7 +426,7 @@ test("the Fit station's table reads a row per candidate the gate read with its c
   assert.deepEqual(table.columns.map((c) => c.label), ['projection 5h', 'projection 7d', 'rewrite 5h', 'rewrite 7d', 'reserved 5h', 'reserved 7d', 'runway', 'binding', 'verdict']);
   assert.deepEqual(table.rows.map((r) => r.account.value), ['primary', 'nightly', 'overflow']);
   const cells = (id) => table.columns.map((c) => table.rows.find((r) => r.account.value === id).cells[c.key]?.text ?? '');
-  assert.deepEqual(cells('primary'), ['54%', '73%', '0.264%', '0.031%', '0%', '0%', '2 h 35 min', '5h', 'fits']);
+  assert.deepEqual(cells('primary'), ['54%', '73%', '0.264%', '0.031%', '0%', '0%', '10 h 29 min', '7d', 'fits']);
   assert.deepEqual(cells('nightly').slice(6), ['none', '5h', 'least bad']);
   // An API key has no plan window to project, so its row is its verdict alone.
   assert.deepEqual(cells('overflow'), ['', '', '', '', '', '', '', '', 'fits']);
