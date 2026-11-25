@@ -11,10 +11,10 @@ use phoebis_bus::{
     ResponseChunk, ResponseHead, Usage,
 };
 use phoebis_keepalive::{
-    Ack, Event, Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary, Lifecycle, Reason,
-    RecipeState,
+    Ack, Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary, Lifecycle, Reason, RecipeState,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
+use serde_json::json;
 
 /// The ledger row for a request, once the writer has landed it.
 async fn landed(r: &Rig, id: &str) {
@@ -276,16 +276,14 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
         .apply_event(
             "desktop",
             r.generation("desktop"),
-            Event {
-                event: "session_start".into(),
-                session_id: "session".into(),
-                instance_id: "second".into(),
-                sequence: 1,
-                previous_instance_id: Some("instance".into()),
-                owner_id: Some("owner-2".into()),
-                ..Default::default()
-            }
-            .try_into()
+            decoded(json!({
+                "event": "session_start",
+                "session_id": "session",
+                "instance_id": "second",
+                "sequence": 1,
+                "previous_instance_id": "instance",
+                "owner_id": "owner-2"
+            }))
             .unwrap(),
         )
         .unwrap();
@@ -366,13 +364,8 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
 }
 
 /// A registration of `session` under the rig's instance whose `owner_id` names `owner`.
-fn registered_by(session: &str, owner: &str) -> Event {
-    Event {
-        event: "session_start".into(),
-        session_id: session.into(),
-        owner_id: Some(owner.into()),
-        ..Default::default()
-    }
+fn registered_by(session: &str, owner: &str) -> serde_json::Value {
+    json!({"event": "session_start", "session_id": session, "owner_id": owner})
 }
 
 /// A request on main of `session` whose owner header names `owner`, as the relay reports it.
@@ -419,11 +412,7 @@ async fn a_sessions_first_owner_mismatch_logs_one_warning_naming_the_session_and
         "the global count takes every mismatch"
     );
     let refused = r
-        .event(Event {
-            event: "session_start".into(),
-            instance_id: "second".into(),
-            ..Default::default()
-        })
+        .event(json!({"event": "session_start", "instance_id": "second"}))
         .unwrap_err();
     assert_eq!(
         (refused.code, refused.instance_id),
@@ -499,27 +488,21 @@ async fn a_stale_lifecycle_report_cannot_override_a_new_request() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     // A session-level answer carries main's generation as it stands before the new request.
-    r.event(Event {
-        event: "heartbeat".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "heartbeat"})).unwrap();
     let old = r.request_generation("main");
     r.engine.observe(r.observed("new", "main", BODY));
     let _ = r.engine.apply_event(
         "desktop",
         r.generation("desktop"),
-        Event {
-            event: "state".into(),
-            session_id: "session".into(),
-            instance_id: "instance".into(),
-            sequence: r.sequence + 1,
-            agent_id: Some("main".into()),
-            state: Some("released".into()),
-            request_generation: Some(old),
-            ..Default::default()
-        }
-        .try_into()
+        decoded(json!({
+            "event": "state",
+            "session_id": "session",
+            "instance_id": "instance",
+            "sequence": r.sequence + 1,
+            "agent_id": "main",
+            "state": "released",
+            "request_generation": old
+        }))
         .unwrap(),
     );
     assert_eq!(r.view("main").agent_state, Lifecycle::Busy);
@@ -638,13 +621,9 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
             && !encoded.contains("test-beta")
     );
     assert_eq!(
-        r.event(Event {
-            event: "agent_start".into(),
-            agent_id: Some("worker".into()),
-            ..Default::default()
-        })
-        .unwrap_err()
-        .code,
+        r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+            .unwrap_err()
+            .code,
         "agent_limit",
         "the agent limit holds"
     );
@@ -669,12 +648,8 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
         ..RigSpec::default()
     })
     .await;
-    r2.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r2.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .unwrap();
     // Two recipes over 16 MiB each pass the 32 MiB budget together.
     let mid = format!(
         r#"{{"model":"m","max_tokens":10,"messages":[{{"role":"user","content":"{}"}}]}}"#,
@@ -708,12 +683,8 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     })
     .await;
     for agent in ["active", "newest"] {
-        r3.event(Event {
-            event: "agent_start".into(),
-            agent_id: Some(agent.into()),
-            ..Default::default()
-        })
-        .unwrap();
+        r3.event(json!({"event": "agent_start", "agent_id": agent}))
+            .unwrap();
     }
     r3.observe("main").await;
     r3.state("main", "idle");
@@ -764,12 +735,8 @@ fn arm(r: &Rig, id: &str, session: &str, agent: &str, bytes: usize) {
 }
 
 fn start_agent(r: &mut Rig, agent: &str) {
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some(agent.into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": agent}))
+        .unwrap();
 }
 
 /// A session holds a slot of `max_sessions` from its first real request, so under a cap of one a second session
@@ -1018,12 +985,8 @@ async fn an_oversized_request_invalidates_only_its_own_agent() {
     })
     .await;
     r.observe("main").await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .unwrap();
     r.observe("worker").await;
     // A same-instance registration of the live session answers each agent's generation and touches no agent.
     let before = r.reregister();
@@ -1104,21 +1067,14 @@ async fn unknown_ownership_needs_a_state_report_and_a_restart_rearms() {
         r.view("main").next_probe_at.is_some(),
         "the state report restored observation"
     );
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .unwrap();
     r.observe("worker").await;
     r.state("worker", "released");
     let generation = r.request_generation("worker");
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        request_generation: Some(generation),
-        ..Default::default()
-    })
+    r.event(
+        json!({"event": "agent_start", "agent_id": "worker", "request_generation": generation}),
+    )
     .unwrap();
     r.observe("worker").await;
     assert!(
@@ -1130,12 +1086,8 @@ async fn unknown_ownership_needs_a_state_report_and_a_restart_rearms() {
 #[tokio::test]
 async fn a_bus_gap_discards_the_pending_observation_and_keeps_an_armed_recipe() {
     let mut r = rig(RigSpec::default()).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .unwrap();
     r.observe("worker").await;
     assert_eq!(r.view("worker").cause, Reason::Scheduled);
     // The main agent's request is observed and selected but not completed when the queue overflows.
@@ -1817,12 +1769,9 @@ async fn a_subagent_registered_again_after_its_release_holds_no_open_compaction(
     r.engine.observe(message_start("compaction", 2_000, 0));
     r.state("worker", "released");
     let generation = r.request_generation("worker");
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        request_generation: Some(generation),
-        ..Default::default()
-    })
+    r.event(
+        json!({"event": "agent_start", "agent_id": "worker", "request_generation": generation}),
+    )
     .unwrap();
     r.engine.observe(completed(&r, "compaction", 2_000));
     let status = r.view("worker");

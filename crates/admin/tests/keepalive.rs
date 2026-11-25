@@ -358,8 +358,6 @@ async fn a_pool_answers_its_resolved_ceilings_and_a_pool_with_no_member_answers_
     );
 }
 
-use phoebis_keepalive::Event;
-
 #[tokio::test]
 async fn the_sessions_view_carries_the_companion_and_the_recipes() {
     let parts = common::admin_parts_full().await;
@@ -378,14 +376,17 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes() {
         .apply_event(
             "desktop",
             common::generation(&parts.store, "desktop"),
-            Event {
-                event: "session_start".into(),
-                session_id: "s1".into(),
-                instance_id: "i1".into(),
-                sequence: 1,
-                ..Default::default()
-            }
-            .try_into()
+            phoebis_keepalive::decode_json_event(
+                serde_json::json!({
+                    "protocol": 1,
+                    "event": "session_start",
+                    "session_id": "s1",
+                    "instance_id": "i1",
+                    "sequence": 1
+                })
+                .to_string()
+                .as_bytes(),
+            )
             .unwrap(),
         )
         .unwrap();
@@ -628,52 +629,56 @@ async fn a_session_row_answers_the_facts_its_companion_reported() {
     )
     .await;
     let generation = common::generation(&parts.store, "desktop");
-    let report = |event: Event| {
+    let report = |body: serde_json::Value| {
         parts
             .keepalive
-            .apply_event("desktop", generation, event.try_into().unwrap())
+            .apply_event(
+                "desktop",
+                generation,
+                phoebis_keepalive::decode_json_event(body.to_string().as_bytes()).unwrap(),
+            )
             .unwrap()
     };
-    report(Event {
-        event: "session_start".into(),
-        session_id: "s1".into(),
-        instance_id: "i1".into(),
-        sequence: 1,
-        ..Default::default()
-    });
-    report(Event {
-        event: "session_facts".into(),
-        session_id: "s1".into(),
-        instance_id: "i1".into(),
-        sequence: 2,
-        branch: Some(Some("fix/checkout-retry".into())),
-        cwd: Some(Some("/home/dev/work/storefront/web/src".into())),
-        project: Some(Some("/home/dev/work/storefront/web".into())),
-        repository: Some(Some("https://git.example/acme/storefront.git".into())),
-        repository_root: Some(Some("/home/dev/work/storefront".into())),
-        title: Some(Some("Checkout retry rework".into())),
-        ..Default::default()
-    });
-    let started = report(Event {
-        event: "agent_start".into(),
-        session_id: "s1".into(),
-        instance_id: "i1".into(),
-        sequence: 3,
-        agent_id: Some("a1".into()),
-        ..Default::default()
-    });
-    report(Event {
-        event: "agent_facts".into(),
-        session_id: "s1".into(),
-        instance_id: "i1".into(),
-        sequence: 4,
-        agent_id: Some("a1".into()),
-        request_generation: Some(started.request_generation),
-        agent_type: Some(Some("code-reviewer".into())),
-        description: Some(Some("Review the retry loop".into())),
-        name: Some(Some("reviewer".into())),
-        ..Default::default()
-    });
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 1
+    }));
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 2,
+        "branch": "fix/checkout-retry",
+        "cwd": "/home/dev/work/storefront/web/src",
+        "project": "/home/dev/work/storefront/web",
+        "repository": "https://git.example/acme/storefront.git",
+        "repository_root": "/home/dev/work/storefront",
+        "title": "Checkout retry rework"
+    }));
+    let started = report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 3,
+        "agent_id": "a1"
+    }));
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 4,
+        "agent_id": "a1",
+        "request_generation": started.request_generation,
+        "agent_type": "code-reviewer",
+        "description": "Review the retry loop",
+        "name": "reviewer"
+    }));
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = listed["sessions"]
         .as_array()
@@ -769,14 +774,17 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
         .apply_event(
             "desktop",
             generation,
-            Event {
-                event: "session_start".into(),
-                session_id: "s1".into(),
-                instance_id: "i1".into(),
-                sequence: 1,
-                ..Default::default()
-            }
-            .try_into()
+            phoebis_keepalive::decode_json_event(
+                serde_json::json!({
+                    "protocol": 1,
+                    "event": "session_start",
+                    "session_id": "s1",
+                    "instance_id": "i1",
+                    "sequence": 1
+                })
+                .to_string()
+                .as_bytes(),
+            )
             .unwrap(),
         )
         .unwrap();
@@ -838,16 +846,15 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     common::report_as_the_mod(
         &parts.keepalive,
         generation,
-        Event {
-            event: "state".into(),
-            session_id: "s1".into(),
-            instance_id: "i1".into(),
-            sequence: 2,
-            agent_id: Some("main".into()),
-            state: Some("idle".into()),
-            request_generation: Some(started.request_generation),
-            ..Default::default()
-        },
+        serde_json::json!({
+            "event": "state",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 2,
+            "agent_id": "main",
+            "state": "idle",
+            "request_generation": started.request_generation
+        }),
     );
     parts.keepalive.step().await;
     let retained = parts.keepalive.stats().retained_bytes;
@@ -995,14 +1002,17 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
             .apply_event(
                 "desktop",
                 generation,
-                Event {
-                    event: event.into(),
-                    session_id: "s2".into(),
-                    instance_id: "i2".into(),
-                    sequence,
-                    ..Default::default()
-                }
-                .try_into()
+                phoebis_keepalive::decode_json_event(
+                    serde_json::json!({
+                        "protocol": 1,
+                        "event": event,
+                        "session_id": "s2",
+                        "instance_id": "i2",
+                        "sequence": sequence
+                    })
+                    .to_string()
+                    .as_bytes(),
+                )
                 .unwrap(),
             )
             .unwrap();
@@ -1128,20 +1138,18 @@ impl<'a> Companion<'a> {
 
     fn report(&mut self, event: &str, state: Option<&str>) {
         self.sequence += 1;
-        let ack = common::report_as_the_mod(
-            &self.parts.keepalive,
-            self.generation,
-            Event {
-                event: event.into(),
-                session_id: self.session.into(),
-                instance_id: self.session.into(),
-                sequence: self.sequence,
-                agent_id: state.map(|_| "main".into()),
-                state: state.map(String::from),
-                request_generation: state.map(|_| self.main_generation),
-                ..Default::default()
-            },
-        );
+        let mut body = serde_json::json!({
+            "event": event,
+            "session_id": self.session,
+            "instance_id": self.session,
+            "sequence": self.sequence
+        });
+        if let Some(state) = state {
+            body["agent_id"] = "main".into();
+            body["state"] = state.into();
+            body["request_generation"] = self.main_generation.into();
+        }
+        let ack = common::report_as_the_mod(&self.parts.keepalive, self.generation, body);
         self.main_generation = ack.request_generation;
     }
 
@@ -1494,14 +1502,17 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
         .apply_event(
             "desktop",
             g,
-            Event {
-                event: "session_start".into(),
-                session_id: "s1".into(),
-                instance_id: "i1".into(),
-                sequence: 1,
-                ..Default::default()
-            }
-            .try_into()
+            phoebis_keepalive::decode_json_event(
+                serde_json::json!({
+                    "protocol": 1,
+                    "event": "session_start",
+                    "session_id": "s1",
+                    "instance_id": "i1",
+                    "sequence": 1
+                })
+                .to_string()
+                .as_bytes(),
+            )
             .unwrap(),
         )
         .unwrap();
@@ -1748,21 +1759,22 @@ fn register_with_the_engine(parts: &common::Full, session: &str, agents: &[&str]
     let mut sequence = 0;
     let mut report = |event: &str, agent: Option<&str>| {
         sequence += 1;
+        let mut body = serde_json::json!({
+            "protocol": 1,
+            "event": event,
+            "session_id": session,
+            "instance_id": "i1",
+            "sequence": sequence
+        });
+        if let Some(agent) = agent {
+            body["agent_id"] = agent.into();
+        }
         parts
             .keepalive
             .apply_event(
                 "desktop",
                 generation,
-                Event {
-                    event: event.into(),
-                    session_id: session.into(),
-                    instance_id: "i1".into(),
-                    sequence,
-                    agent_id: agent.map(String::from),
-                    ..Default::default()
-                }
-                .try_into()
-                .unwrap(),
+                phoebis_keepalive::decode_json_event(body.to_string().as_bytes()).unwrap(),
             )
             .unwrap();
     };
@@ -2026,14 +2038,17 @@ async fn a_main_registered_again_after_its_sessions_end_reads_registered_on_its_
             .apply_event(
                 "desktop",
                 generation,
-                Event {
-                    event: event.into(),
-                    session_id: "s1".into(),
-                    instance_id: "i1".into(),
-                    sequence,
-                    ..Default::default()
-                }
-                .try_into()
+                phoebis_keepalive::decode_json_event(
+                    serde_json::json!({
+                        "protocol": 1,
+                        "event": event,
+                        "session_id": "s1",
+                        "instance_id": "i1",
+                        "sequence": sequence
+                    })
+                    .to_string()
+                    .as_bytes(),
+                )
                 .unwrap(),
             )
             .unwrap();
@@ -2089,41 +2104,48 @@ async fn a_deleted_keys_session_is_historical_with_no_companion() {
         .apply_event(
             "desktop",
             g,
-            Event {
-                event: "session_start".into(),
-                session_id: "s1".into(),
-                instance_id: "i1".into(),
-                sequence: 1,
-                ..Default::default()
-            }
-            .try_into()
+            phoebis_keepalive::decode_json_event(
+                serde_json::json!({
+                    "protocol": 1,
+                    "event": "session_start",
+                    "session_id": "s1",
+                    "instance_id": "i1",
+                    "sequence": 1
+                })
+                .to_string()
+                .as_bytes(),
+            )
             .unwrap(),
         )
         .unwrap();
     // The session and its live agent each report a fact, so the row behind the deletion has one of each to leave out.
-    for event in [
-        Event {
-            event: "session_facts".into(),
-            session_id: "s1".into(),
-            instance_id: "i1".into(),
-            sequence: 2,
-            title: Some(Some("Checkout retry".into())),
-            ..Default::default()
-        },
-        Event {
-            event: "agent_facts".into(),
-            session_id: "s1".into(),
-            instance_id: "i1".into(),
-            sequence: 3,
-            agent_id: Some("main".into()),
-            request_generation: Some(registered.request_generation),
-            name: Some(Some("lead".into())),
-            ..Default::default()
-        },
+    for body in [
+        serde_json::json!({
+            "protocol": 1,
+            "event": "session_facts",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 2,
+            "title": "Checkout retry"
+        }),
+        serde_json::json!({
+            "protocol": 1,
+            "event": "agent_facts",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 3,
+            "agent_id": "main",
+            "request_generation": registered.request_generation,
+            "name": "lead"
+        }),
     ] {
         parts
             .keepalive
-            .apply_event("desktop", g, event.try_into().unwrap())
+            .apply_event(
+                "desktop",
+                g,
+                phoebis_keepalive::decode_json_event(body.to_string().as_bytes()).unwrap(),
+            )
             .unwrap();
     }
     let listed = common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
@@ -2246,19 +2268,22 @@ async fn an_ended_session_is_listed_without_a_companion() {
         Some(&cookie),
     )
     .await;
-    let start = |sequence, event: &str| Event {
-        event: event.into(),
-        session_id: "s1".into(),
-        instance_id: "i1".into(),
-        sequence,
-        ..Default::default()
+    let start = |sequence: u64, event: &str| {
+        serde_json::json!({
+            "protocol": 1,
+            "event": event,
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": sequence
+        })
     };
     parts
         .keepalive
         .apply_event(
             "desktop",
             common::generation(&parts.store, "desktop"),
-            start(1, "session_start").try_into().unwrap(),
+            phoebis_keepalive::decode_json_event(start(1, "session_start").to_string().as_bytes())
+                .unwrap(),
         )
         .unwrap();
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
@@ -2282,7 +2307,8 @@ async fn an_ended_session_is_listed_without_a_companion() {
         .apply_event(
             "desktop",
             common::generation(&parts.store, "desktop"),
-            start(2, "session_end").try_into().unwrap(),
+            phoebis_keepalive::decode_json_event(start(2, "session_end").to_string().as_bytes())
+                .unwrap(),
         )
         .unwrap();
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
@@ -2340,14 +2366,17 @@ async fn a_probe_leaves_the_keys_last_used_at_alone() {
         .apply_event(
             "desktop",
             generation,
-            Event {
-                event: "session_start".into(),
-                session_id: "s1".into(),
-                instance_id: "i1".into(),
-                sequence: 1,
-                ..Default::default()
-            }
-            .try_into()
+            phoebis_keepalive::decode_json_event(
+                serde_json::json!({
+                    "protocol": 1,
+                    "event": "session_start",
+                    "session_id": "s1",
+                    "instance_id": "i1",
+                    "sequence": 1
+                })
+                .to_string()
+                .as_bytes(),
+            )
             .unwrap(),
         )
         .unwrap();

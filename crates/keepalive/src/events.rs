@@ -17,51 +17,36 @@ use crate::facts::{AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts};
 
 pub const PROTOCOL: u64 = 1;
 
-/// An optional member added here is checked by hand twice, in `members()` and in the `present` list of the
-/// conversion to `EventReport`, and both have to name it.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+/// An optional member takes one field here and one row of `members()`. The body's own keys say which members it
+/// names, so no second list repeats them.
+#[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Event {
     pub agent_id: Option<String>,
-    #[serde(default, deserialize_with = "named")]
-    pub agent_type: Option<Option<String>>,
-    #[serde(default, deserialize_with = "named")]
-    pub branch: Option<Option<String>>,
-    #[serde(default, deserialize_with = "named")]
-    pub cwd: Option<Option<String>>,
+    pub agent_type: Option<String>,
+    pub branch: Option<String>,
+    pub cwd: Option<String>,
     /// Epoch milliseconds: the latest deadline across the background commands a park waits on.
     pub deadline: Option<i64>,
-    #[serde(default, deserialize_with = "named")]
-    pub description: Option<Option<String>>,
+    pub description: Option<String>,
     pub event: String,
     pub instance_id: String,
     pub kind: Option<String>,
-    #[serde(default, deserialize_with = "named")]
-    pub name: Option<Option<String>>,
+    pub name: Option<String>,
     pub owner_id: Option<String>,
     pub park_kind: Option<String>,
     pub previous_instance_id: Option<String>,
-    #[serde(default, deserialize_with = "named")]
-    pub project: Option<Option<String>>,
+    pub project: Option<String>,
     pub protocol: Option<u64>,
-    #[serde(default, deserialize_with = "named")]
-    pub repository: Option<Option<String>>,
-    #[serde(default, deserialize_with = "named")]
-    pub repository_root: Option<Option<String>>,
+    pub repository: Option<String>,
+    pub repository_root: Option<String>,
     pub request_generation: Option<u64>,
     pub sequence: u64,
     pub session_id: String,
     pub state: Option<String>,
-    #[serde(default, deserialize_with = "named")]
-    pub title: Option<Option<String>>,
+    pub title: Option<String>,
     /// Epoch milliseconds: the earliest scheduled wakeup a park waits on.
     pub wake_at: Option<i64>,
-}
-
-/// `Some` for a key the body names, a null one too, so the member check reads the key's presence and can refuse a
-/// null fact on an event that does not take it. A null reads as an absent fact behind that check.
-fn named<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
-    <Option<String> as serde::Deserialize>::deserialize(d).map(Some)
 }
 
 /// A parked agent's entry carries its park as well as its state, so the mod can see that a router restored from an
@@ -138,6 +123,9 @@ enum EventKind {
     State,
 }
 
+/// The members every report carries. Each other key of a body, a null one too, is a member that the body names.
+const COMMON_MEMBERS: [&str; 5] = ["event", "instance_id", "protocol", "sequence", "session_id"];
+
 /// The members each event takes beyond the five every report carries, each with whether it is required. A
 /// member on an event that does not take it is refused rather than ignored, so a report the mod got wrong never
 /// reads as one it got right.
@@ -198,9 +186,60 @@ fn members(event: &str) -> Option<(EventKind, &'static [(&'static str, bool)])> 
     Some(members)
 }
 
-#[derive(serde::Deserialize)]
-struct ProtocolOnly {
-    protocol: Option<u64>,
+/// A report's body as one JSON object, with what the read saw of a key that the body names twice. An object keeps the
+/// last value of such a key, so the read records the repeat for the checks that follow.
+struct Body {
+    object: serde_json::Map<String, serde_json::Value>,
+    /// `protocol` stands twice in the body.
+    protocol_repeated: bool,
+    /// A key other than `protocol` stands twice in the body.
+    member_repeated: bool,
+}
+
+impl<'de> serde::Deserialize<'de> for Body {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Read;
+        impl<'de> serde::de::Visitor<'de> for Read {
+            type Value = Body;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Body, A::Error> {
+                let mut body = Body {
+                    object: serde_json::Map::new(),
+                    protocol_repeated: false,
+                    member_repeated: false,
+                };
+                while let Some((key, value)) = map.next_entry::<String, serde_json::Value>()? {
+                    if body.object.contains_key(&key) {
+                        if key == "protocol" {
+                            body.protocol_repeated = true;
+                        } else {
+                            body.member_repeated = true;
+                        }
+                    }
+                    body.object.insert(key, value);
+                }
+                Ok(body)
+            }
+        }
+        deserializer.deserialize_map(Read)
+    }
+}
+
+/// The members a body names: each key beyond `COMMON_MEMBERS`, with whether its value is null.
+struct Named(BTreeMap<String, bool>);
+
+impl Named {
+    fn of(object: &serde_json::Map<String, serde_json::Value>) -> Named {
+        Named(
+            object
+                .iter()
+                .filter(|(key, _)| !COMMON_MEMBERS.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), value.is_null()))
+                .collect(),
+        )
+    }
 }
 
 /// A report the protocol takes, with its event and the event's own members typed, so the state machine reads no
@@ -271,44 +310,22 @@ impl Reported {
     }
 }
 
-/// The one conversion a report takes on its way to the state machine: everything the protocol does not take is
-/// refused here, the body's own decoding aside.
-impl TryFrom<Event> for EventReport {
-    type Error = EventError;
-
-    fn try_from(event: Event) -> Result<EventReport, EventError> {
+impl EventReport {
+    /// The one conversion a report takes on its way to the state machine: everything the protocol does not take is
+    /// refused here, the body's own decoding aside. `named` is what the body names, read off its keys.
+    fn of(event: Event, named: &Named) -> Result<EventReport, EventError> {
         let Some((event_kind, members)) = members(&event.event) else {
             return Err(err("unknown_event", 400));
         };
-        let present: Vec<&str> = [
-            ("agent_id", event.agent_id.is_some()),
-            ("agent_type", event.agent_type.is_some()),
-            ("branch", event.branch.is_some()),
-            ("cwd", event.cwd.is_some()),
-            ("deadline", event.deadline.is_some()),
-            ("description", event.description.is_some()),
-            ("kind", event.kind.is_some()),
-            ("name", event.name.is_some()),
-            ("owner_id", event.owner_id.is_some()),
-            ("park_kind", event.park_kind.is_some()),
-            ("previous_instance_id", event.previous_instance_id.is_some()),
-            ("project", event.project.is_some()),
-            ("repository", event.repository.is_some()),
-            ("repository_root", event.repository_root.is_some()),
-            ("request_generation", event.request_generation.is_some()),
-            ("state", event.state.is_some()),
-            ("title", event.title.is_some()),
-            ("wake_at", event.wake_at.is_some()),
-        ]
-        .into_iter()
-        .filter_map(|(name, there)| there.then_some(name))
-        .collect();
-        if present
-            .iter()
+        // A null names its member as a value does, so it is refused off its event, and a required member needs a
+        // value.
+        if named
+            .0
+            .keys()
             .any(|name| !members.iter().any(|(member, _)| member == name))
             || members
                 .iter()
-                .any(|(member, required)| *required && !present.contains(member))
+                .any(|(member, required)| *required && named.0.get(*member) != Some(&false))
         {
             return Err(err("invalid_event", 400));
         }
@@ -375,9 +392,9 @@ impl TryFrom<Event> for EventReport {
             EventKind::AgentFacts => Reported::AgentFacts {
                 agent_id: agent_id.ok_or_else(required)?,
                 facts: AgentFacts::of(RawAgentFacts {
-                    agent_type: agent_type.flatten(),
-                    description: description.flatten(),
-                    name: name.flatten(),
+                    agent_type,
+                    description,
+                    name,
                 }),
                 request_generation,
             },
@@ -389,12 +406,12 @@ impl TryFrom<Event> for EventReport {
             EventKind::SessionEnd => Reported::SessionEnd,
             EventKind::SessionFacts => Reported::SessionFacts {
                 facts: SessionFacts::of(RawSessionFacts {
-                    branch: branch.flatten(),
-                    cwd: cwd.flatten(),
-                    project: project.flatten(),
-                    repository: repository.flatten(),
-                    repository_root: repository_root.flatten(),
-                    title: title.flatten(),
+                    branch,
+                    cwd,
+                    project,
+                    repository,
+                    repository_root,
+                    title,
                 }),
             },
             EventKind::SessionStart => Reported::SessionStart {
@@ -430,25 +447,33 @@ impl TryFrom<Event> for EventReport {
 /// One report as the mod sends it. The body bound is the route's, the protocol is checked here, and the conversion
 /// refuses everything else the protocol does not take, before the state machine sees it.
 pub fn decode_json_event(body: &[u8]) -> Result<EventReport, EventError> {
-    let event: Event = match serde_json::from_slice(body) {
-        Ok(event) => event,
-        // A newer protocol's body may carry members this one does not know, and the mod has to learn that the
-        // protocol is what the router refuses rather than its report.
-        Err(_) => {
-            return Err(match serde_json::from_slice::<ProtocolOnly>(body) {
-                Ok(ProtocolOnly {
-                    protocol: Some(protocol),
-                }) if protocol != PROTOCOL => err("unsupported_protocol", 400),
-                _ => err("invalid_event", 400),
-            })
-        }
+    let Ok(Body {
+        object,
+        protocol_repeated,
+        member_repeated,
+    }) = serde_json::from_slice(body)
+    else {
+        return Err(err("invalid_event", 400));
     };
-    match event.protocol {
-        None => return Err(err("invalid_event", 400)),
+    // Two `protocol` members leave no one protocol to refuse.
+    if protocol_repeated {
+        return Err(err("invalid_event", 400));
+    }
+    // A newer protocol's body may carry members this one does not know, so the protocol is read ahead of every member:
+    // the mod has to learn that the protocol is what the router refuses rather than its report.
+    match object.get("protocol").and_then(serde_json::Value::as_u64) {
         Some(PROTOCOL) => {}
         Some(_) => return Err(err("unsupported_protocol", 400)),
+        None => return Err(err("invalid_event", 400)),
     }
-    EventReport::try_from(event)
+    // The object holds the last value of a repeated member, so the typed read below cannot see the repeat.
+    if member_repeated {
+        return Err(err("invalid_event", 400));
+    }
+    let named = Named::of(&object);
+    let event: Event = serde_json::from_value(serde_json::Value::Object(object))
+        .map_err(|_| err("invalid_event", 400))?;
+    EventReport::of(event, &named)
 }
 
 fn validate(event: Event) -> Result<Event, EventError> {

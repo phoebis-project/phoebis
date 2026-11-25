@@ -669,22 +669,29 @@ pub fn generation(store: &Store, key_id: &str) -> i64 {
     store.api_key(key_id).unwrap().unwrap().created_at
 }
 
-/// Applies one companion report under the `desktop` key as the mod sends it: under the request generation the event
+/// Applies one companion report under the `desktop` key as the mod sends it: under the request generation the body
 /// carries, which the caller takes from the agent's last answer, and once more under the generation that a
 /// `stale_request_generation` refusal names, under the same sequence, which the refusal did not take. The engine moves
-/// an agent's generation at its real request with no answer in between.
+/// an agent's generation at its real request with no answer in between. `body` is a JSON object, decoded as the route
+/// decodes one, and `protocol` is filled with 1 where the body names none.
 pub fn report_as_the_mod(
     engine: &Engine,
     key_generation: i64,
-    mut event: phoebis_keepalive::Event,
+    mut body: serde_json::Value,
 ) -> phoebis_keepalive::Ack {
-    let send = |event: phoebis_keepalive::Event| {
-        engine.apply_event("desktop", key_generation, event.try_into().unwrap())
+    body.as_object_mut()
+        .expect("a report's body is a JSON object")
+        .entry("protocol")
+        .or_insert(1.into());
+    let send = |body: &serde_json::Value| {
+        let report =
+            phoebis_keepalive::decode_json_event(&serde_json::to_vec(body).unwrap()).unwrap();
+        engine.apply_event("desktop", key_generation, report)
     };
-    match send(event.clone()) {
+    match send(&body) {
         Err(refused) if refused.code == "stale_request_generation" => {
-            event.request_generation = refused.request_generation;
-            send(event).unwrap()
+            body["request_generation"] = refused.request_generation.into();
+            send(&body).unwrap()
         }
         answered => answered.unwrap(),
     }

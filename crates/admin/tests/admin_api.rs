@@ -9684,20 +9684,22 @@ fn register_companion(parts: &common::Full, session: &str, agents: &[&str], rele
         sequence += 1;
         let request_generation =
             state.map(|_| answered.get(agent.unwrap()).copied().unwrap_or_default());
-        let ack = common::report_as_the_mod(
-            &parts.keepalive,
-            generation,
-            phoebis_keepalive::Event {
-                event: event.into(),
-                session_id: session.into(),
-                instance_id: "i1".into(),
-                sequence,
-                agent_id: agent.map(String::from),
-                state: state.map(String::from),
-                request_generation,
-                ..Default::default()
-            },
-        );
+        let mut body = serde_json::json!({
+            "event": event,
+            "session_id": session,
+            "instance_id": "i1",
+            "sequence": sequence
+        });
+        if let Some(agent) = agent {
+            body["agent_id"] = agent.into();
+        }
+        if let Some(state) = state {
+            body["state"] = state.into();
+        }
+        if let Some(request_generation) = request_generation {
+            body["request_generation"] = request_generation.into();
+        }
+        let ack = common::report_as_the_mod(&parts.keepalive, generation, body);
         if let Some(agent) = ack.agent_id {
             answered.insert(agent, ack.request_generation);
         }
@@ -10855,14 +10857,17 @@ async fn an_ended_session_with_no_pin_and_no_request_leaves_once_its_end_is_olde
                 .apply_event(
                     "desktop",
                     generation,
-                    phoebis_keepalive::Event {
-                        event: event.into(),
-                        session_id: session.into(),
-                        instance_id: "i1".into(),
-                        sequence,
-                        ..Default::default()
-                    }
-                    .try_into()
+                    phoebis_keepalive::decode_json_event(
+                        serde_json::json!({
+                            "protocol": 1,
+                            "event": event,
+                            "session_id": session,
+                            "instance_id": "i1",
+                            "sequence": sequence
+                        })
+                        .to_string()
+                        .as_bytes(),
+                    )
                     .unwrap(),
                 )
                 .unwrap();

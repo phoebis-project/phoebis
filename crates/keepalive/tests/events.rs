@@ -2,9 +2,10 @@
 mod common;
 use common::*;
 use phoebis_keepalive::{
-    decode_json_event, AgentState, CompanionState, Event, EventError, KeepaliveLimits, Lifecycle,
-    Reason, RecipeState, Reported, SessionFacts,
+    decode_json_event, AgentState, CompanionState, EventError, KeepaliveLimits, Lifecycle, Reason,
+    RecipeState, Reported, SessionFacts,
 };
+use serde_json::json;
 
 /// A real request on main of `session` under `key_id`, the first of which gives the session its slot.
 fn first_request(r: &Rig, key_id: &str, session: &str) {
@@ -112,20 +113,11 @@ fn refusal(code: &'static str, status: u16) -> EventError {
 async fn registration_sequences_and_generations_follow_the_protocol() {
     let mut r = rig(RigSpec::default()).await;
     // A same-instance re-registration with a higher sequence renews the lease and keeps agent state.
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .unwrap();
     r.state("worker", "parked");
     r.advance(1_000);
-    let renewed = r
-        .event(Event {
-            event: "session_start".into(),
-            ..Default::default()
-        })
-        .unwrap();
+    let renewed = r.event(json!({"event": "session_start"})).unwrap();
     assert_eq!(renewed.lease_expires_ms, r.now() + r.lease_ms());
     let worker = renewed
         .agents
@@ -153,41 +145,26 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     // leaves the companion's own lease alone.
     r.advance(1_000);
     let untouched = r
-        .report(Event {
-            event: "activity".into(),
-            agent_id: Some("worker".into()),
-            kind: Some("prompt".into()),
-            ..Default::default()
-        })
+        .report(json!({"event": "activity", "agent_id": "worker", "kind": "prompt"}))
         .unwrap();
     assert_eq!(untouched.lease_expires_ms, renewed.lease_expires_ms);
-    let reheartbeat = r
-        .event(Event {
-            event: "heartbeat".into(),
-            ..Default::default()
-        })
-        .unwrap();
+    let reheartbeat = r.event(json!({"event": "heartbeat"})).unwrap();
     assert_eq!(reheartbeat.lease_expires_ms, r.now() + r.lease_ms());
     // Agents: a restart of a released agent needs the generation its release named.
     r.state("worker", "released");
     let generation = r.request_generation("worker");
     assert_eq!(
-        r.event(Event {
-            event: "agent_start".into(),
-            agent_id: Some("worker".into()),
-            ..Default::default()
-        })
-        .unwrap_err(),
+        r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+            .unwrap_err(),
         refusal("agent_exists", 409),
         "a restart without the generation"
     );
     let restarted = r
-        .event(Event {
-            event: "agent_start".into(),
-            agent_id: Some("worker".into()),
-            request_generation: Some(generation),
-            ..Default::default()
-        })
+        .event(json!({
+            "event": "agent_start",
+            "agent_id": "worker",
+            "request_generation": generation
+        }))
         .unwrap();
     // Busy under `AwaitingRequest`, which the session view words `registered`.
     assert_eq!(
@@ -197,11 +174,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
     // The failed start did not advance the sequence: the next accepted one is one past the last accepted.
     assert_eq!(restarted.sequence, r.sequence);
     // session_end releases every agent and ends the instance; anything after it is refused.
-    r.event(Event {
-        event: "session_end".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_end"})).unwrap();
     assert_eq!(
         (
             r.engine.sessions()[0].companion,
@@ -213,11 +186,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         .iter()
         .all(|id| r.lifecycle(id) == Some(Lifecycle::Released)));
     assert_eq!(
-        r.event(Event {
-            event: "heartbeat".into(),
-            ..Default::default()
-        })
-        .unwrap_err(),
+        r.event(json!({"event": "heartbeat"})).unwrap_err(),
         refusal("instance_ended", 409)
     );
     // A replacement that names the ended instance takes over with a fresh main agent.
@@ -226,15 +195,13 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         .apply_event(
             "desktop",
             r.generation("desktop"),
-            Event {
-                event: "session_start".into(),
-                session_id: "session".into(),
-                instance_id: "next".into(),
-                sequence: 1,
-                previous_instance_id: Some("instance".into()),
-                ..Default::default()
-            }
-            .try_into()
+            decoded(json!({
+                "event": "session_start",
+                "session_id": "session",
+                "instance_id": "next",
+                "sequence": 1,
+                "previous_instance_id": "instance"
+            }))
             .unwrap(),
         )
         .unwrap();
@@ -265,14 +232,12 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
         .apply_event(
             "laptop",
             r.generation("laptop"),
-            Event {
-                event: "session_start".into(),
-                session_id: "session".into(),
-                instance_id: "elsewhere".into(),
-                sequence: 1,
-                ..Default::default()
-            }
-            .try_into()
+            decoded(json!({
+                "event": "session_start",
+                "session_id": "session",
+                "instance_id": "elsewhere",
+                "sequence": 1
+            }))
             .unwrap(),
         )
         .unwrap();
@@ -292,32 +257,22 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
             .apply_event(
                 "desktop",
                 r.generation("desktop"),
-                Event {
-                    event: "session_start".into(),
-                    session_id: "third".into(),
-                    instance_id: "i3".into(),
-                    sequence: 1,
-                    ..Default::default()
-                }
-                .try_into()
+                decoded(json!({
+                    "event": "session_start",
+                    "session_id": "third",
+                    "instance_id": "i3",
+                    "sequence": 1
+                }))
                 .unwrap()
             )
             .unwrap_err(),
         refusal("session_limit", 429)
     );
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("w1".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "w1"}))
+        .unwrap();
     assert_eq!(
-        r.event(Event {
-            event: "agent_start".into(),
-            agent_id: Some("w2".into()),
-            ..Default::default()
-        })
-        .unwrap_err(),
+        r.event(json!({"event": "agent_start", "agent_id": "w2"}))
+            .unwrap_err(),
         refusal("agent_limit", 429),
         "three agents across two sessions"
     );
@@ -369,19 +324,10 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
     assert_eq!(r.view("main").cause, reason);
     assert_eq!(r.engine.recipes(), armed);
     assert_eq!(
-        r.event(Event {
-            event: "heartbeat".into(),
-            ..Default::default()
-        })
-        .unwrap_err(),
+        r.event(json!({"event": "heartbeat"})).unwrap_err(),
         refusal("instance_ended", 409)
     );
-    let again = r
-        .event(Event {
-            event: "session_start".into(),
-            ..Default::default()
-        })
-        .unwrap();
+    let again = r.event(json!({"event": "session_start"})).unwrap();
     assert_eq!(again.instance_id, "instance");
     assert_eq!(
         r.engine.sessions()[0].companion,
@@ -413,12 +359,8 @@ async fn a_released_subagent_reaches_the_router_so_its_pin_leaves_the_next_round
     // Two burn averages on, so the window's stamp below stands past the trigger's wait at the round.
     let since = r.now();
     r.advance_attended(2 * burn_average_ms(&pool));
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .unwrap();
     r.observe("main").await;
     r.observe("sub").await;
     r.state("sub", "released");

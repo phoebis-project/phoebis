@@ -7,9 +7,10 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::Respond;
 use phoebis_bus::OTHER_CLIENT;
-use phoebis_keepalive::{Event, KeepalivePolicy, Reason, RecipeState};
+use phoebis_keepalive::{KeepalivePolicy, Reason, RecipeState};
 use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect, UNATTRIBUTED};
 use phoebis_routing::PinUsage;
+use serde_json::json;
 
 /// The five counts summed.
 fn tokens(usage: PinUsage) -> u64 {
@@ -481,11 +482,7 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     r.observe("main").await;
     r.advance_attended(270_000);
     r.step().await;
-    r.event(Event {
-        event: "session_end".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_end"})).unwrap();
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
     assert_eq!(
         probe_rows(&rows)
@@ -615,11 +612,7 @@ async fn a_probe_sent_while_a_request_is_open_waits_for_the_request_after_it() {
         // The second request's completion leaves the probe alone: the session's end below settles it, so a credit or
         // a cold return at the completion fails the read of its label.
         r.engine.observe(completed(&r, "second", read));
-        r.event(Event {
-            event: "session_end".into(),
-            ..Default::default()
-        })
-        .unwrap();
+        r.event(json!({"event": "session_end"})).unwrap();
         let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes > 0).await;
         assert_eq!(
             probe_rows(&rows).wasted_probe_reasons,
@@ -1086,12 +1079,8 @@ async fn a_recipe_a_failed_request_left_armed_lapses_and_is_evicted_as_any_armed
     })
     .await;
     for agent in ["worker", "third"] {
-        r.event(Event {
-            event: "agent_start".into(),
-            agent_id: Some(agent.into()),
-            ..Default::default()
-        })
-        .unwrap();
+        r.event(json!({"event": "agent_start", "agent_id": agent}))
+            .unwrap();
     }
     r.observe("main").await;
     r.advance_attended(10_000);
@@ -1152,12 +1141,8 @@ async fn an_aside_recipe_counts_against_the_memory_bound_and_yields_first_to_its
         ..RigSpec::default()
     })
     .await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("side".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "side"}))
+        .unwrap();
     let retained = |r: &Rig| {
         let bytes = r.engine.stats().retained_bytes;
         assert!(
@@ -1227,11 +1212,7 @@ async fn a_probe_sent_while_a_request_is_open_outlives_that_request_failing_past
     // The probe waits for the request after the failed one: the session's end below settles it, so a failure that
     // dropped it or settled it fails the read of its label.
     r.engine.observe(failed(&r, "second", Some(40)));
-    r.event(Event {
-        event: "session_end".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_end"})).unwrap();
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes > 0).await;
     assert_eq!(
         probe_rows(&rows).wasted_probe_reasons,
@@ -1389,11 +1370,7 @@ async fn the_probes_a_bus_gap_leaves_keep_their_recipes_speed() {
     // below, which the rows read as nothing wasted.
     open_request_with(&r, "third", &fast, 2_000, 0).await;
     r.engine.observe(completed(&r, "third", 2_000));
-    r.event(Event {
-        event: "session_end".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_end"})).unwrap();
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
         r.db.read_blocking(|c| {
@@ -1464,11 +1441,7 @@ async fn a_warm_return_without_the_credit_answers_the_probes_it_kept() {
     // rows read as nothing wasted.
     open_request_as(&r, "second", OTHER_CLIENT, 2_000, 0).await;
     r.engine.observe(completed(&r, "second", 2_000));
-    r.event(Event {
-        event: "session_end".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_end"})).unwrap();
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
         r.db.read_blocking(|c| {
@@ -2102,11 +2075,7 @@ async fn a_plan_probe_and_an_overage_probe_both_wasted_file_one_row_per_funding_
     }
     // The session's end settles both: the rows below read one wasted probe per funding.
     assert_eq!(r.view("main").probes_today, 2, "two probes nobody answered");
-    r.event(Event {
-        event: "session_end".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_end"})).unwrap();
     let rows = final_rollups(&r).await;
     let mut by_funding: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
     for row in rows.iter().filter(|row| row.kind == "probe") {
@@ -2151,11 +2120,7 @@ async fn a_settlement_after_its_account_is_deleted_files_under_the_kind_the_prob
     r.step().await;
     r.h.store.delete_account("a", "test").unwrap();
     r.h.router.reload().await.unwrap();
-    r.event(Event {
-        event: "session_end".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_end"})).unwrap();
     let rows = final_rollups(&r).await;
     let settled: Vec<(&str, &str, u64)> = rows
         .iter()
@@ -2659,12 +2624,8 @@ async fn a_tick_follows_a_resolution_for_a_compaction_open_on_an_ended_recipe() 
         ..RigSpec::default()
     })
     .await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .unwrap();
     open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
     r.advance(270_000);
@@ -3526,11 +3487,7 @@ async fn a_probe_of_a_recipe_a_failed_turn_rearmed_keys_the_client_of_the_turn_t
         1,
         "the re-armed recipe's probe went out"
     );
-    r.event(Event {
-        event: "session_end".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_end"})).unwrap();
     let rows = final_rollups(&r).await;
     assert_eq!(
         rows.iter()
@@ -3745,10 +3702,7 @@ async fn an_expiry_swept_by_a_reader_settles_from_that_call() {
             "expire" => r.engine.expire(),
             _ => {
                 // The sweep ends the session the report names, so the report itself is refused after it.
-                let refused = r.event(Event {
-                    event: "heartbeat".into(),
-                    ..Default::default()
-                });
+                let refused = r.event(json!({"event": "heartbeat"}));
                 assert!(refused.is_err(), "{refused:?}");
             }
         }
@@ -3855,15 +3809,13 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
         .apply_event(
             "desktop",
             r.generation("desktop"),
-            Event {
-                event: "session_start".into(),
-                session_id: "session".into(),
-                instance_id: "second".into(),
-                sequence: 1,
-                previous_instance_id: Some("instance".into()),
-                ..Default::default()
-            }
-            .try_into()
+            decoded(json!({
+                "event": "session_start",
+                "session_id": "session",
+                "instance_id": "second",
+                "sequence": 1,
+                "previous_instance_id": "instance"
+            }))
             .unwrap(),
         )
         .unwrap();
@@ -4480,11 +4432,7 @@ async fn a_credit_keys_its_requests_tier_and_band() {
     })
     .await;
     r.advance(phoebis_ledger::test_tables::JANUARY_2026 - r.now());
-    r.event(Event {
-        event: "session_start".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_start"})).unwrap();
     let body = body_on(HAIKU);
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -4571,11 +4519,7 @@ async fn a_credit_answered_across_a_revision_boundary_files_at_its_requests_arri
     // The first request at 23:53 on January 31, its probe at 23:57:30 and the credited request at 23:58:30, the
     // session started again past the jump.
     r.advance(february - 420_000 - r.now());
-    r.event(Event {
-        event: "session_start".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_start"})).unwrap();
     let body = body_on(HAIKU);
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -4732,11 +4676,7 @@ async fn a_long_context_probe_settled_wasted_the_next_day_files_under_its_own_ho
     // 2026-01-31 at 23:50 UTC, the session started again past the jump.
     let late_january = 1_769_903_400_000;
     r.advance(late_january - r.now());
-    r.event(Event {
-        event: "session_start".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_start"})).unwrap();
     let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-5-5");
     r.up.push_credential_rule(OAUTH, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -4797,11 +4737,7 @@ async fn a_probe_answered_across_a_revision_boundary_files_its_cost_and_its_wast
     );
     // A request at 23:54:30 UTC on January 31, so its probe is due at 23:59, the session started again past the jump.
     r.advance(february - 330_000 - r.now());
-    r.event(Event {
-        event: "session_start".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_start"})).unwrap();
     let body = BODY.replace("claude-sonnet-4-5", HAIKU);
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;

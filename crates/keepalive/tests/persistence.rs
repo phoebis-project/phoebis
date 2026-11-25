@@ -12,11 +12,12 @@ use common::*;
 use fake_upstream::{install_at, Captured, Respond};
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
-    Ack, CompanionState, Engine, Event, EventError, EventReport, KeepaliveLimits, KeepalivePolicy,
-    KeepaliveTiming, Lifecycle, ParkKind, Reason, LEASE_MS,
+    Ack, CompanionState, Engine, EventError, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming,
+    Lifecycle, ParkKind, Reason, LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
+use serde_json::{json, Value};
 
 const DAY: i64 = 86_400_000;
 
@@ -74,24 +75,20 @@ fn stored_body(r: &Rig, agent: &str) -> (Option<Vec<u8>>, Option<Vec<u8>>, i64) 
         .unwrap()
 }
 
-fn heartbeat() -> Event {
-    Event {
-        event: "heartbeat".into(),
-        ..Default::default()
-    }
+fn heartbeat() -> Value {
+    json!({"event": "heartbeat"})
 }
 
 /// A `parked` report of kind `background` with the command's deadline, for `Rig::report` to send under main's
 /// generation.
-fn parked_until(deadline: i64) -> Event {
-    Event {
-        event: "state".into(),
-        agent_id: Some("main".into()),
-        state: Some("parked".into()),
-        park_kind: Some("background".into()),
-        deadline: Some(deadline),
-        ..Default::default()
-    }
+fn parked_until(deadline: i64) -> Value {
+    json!({
+        "event": "state",
+        "agent_id": "main",
+        "state": "parked",
+        "park_kind": "background",
+        "deadline": deadline
+    })
 }
 
 /// One real request on `session` rather than the rig's own.
@@ -107,30 +104,37 @@ async fn observe_on(r: &mut Rig, session: &str, agent: &str) {
 
 /// `Rig::event` under a key generation read beforehand. The rig reads it from the store, whose connection a save
 /// waiting on the registry's write lock holds, so a report sent while the test holds that lock goes through here.
-fn report(r: &mut Rig, key_generation: i64, mut event: Event) -> Result<Ack, EventError> {
+fn report(r: &mut Rig, key_generation: i64, mut body: Value) -> Result<Ack, EventError> {
     r.sequence += 1;
-    event.sequence = r.sequence;
-    if event.session_id.is_empty() {
-        event.session_id = "session".into();
+    let fields = body
+        .as_object_mut()
+        .expect("a report's body is a JSON object");
+    fields.insert("sequence".into(), r.sequence.into());
+    let session_id = fields
+        .entry("session_id")
+        .or_insert("session".into())
+        .as_str()
+        .expect("a session id is a string")
+        .to_string();
+    if !fields.contains_key("instance_id") {
+        fields.insert("instance_id".into(), r.instance_of(&session_id).into());
     }
-    if event.instance_id.is_empty() {
-        event.instance_id = r.instance_of(&event.session_id);
-    }
-    EventReport::try_from(event)
-        .and_then(|report| r.engine.apply_event("desktop", key_generation, report))
+    decoded(body).and_then(|report| r.engine.apply_event("desktop", key_generation, report))
 }
 
 /// A `state` report for `agent` under the generation of the agent's last answer, which the caller holds current, so no
 /// refused send runs beside the flushes it counts.
-fn state_of(r: &Rig, agent: &str, state: &str) -> Event {
-    Event {
-        event: "state".into(),
-        agent_id: Some(agent.into()),
-        state: Some(state.into()),
-        request_generation: Some(r.request_generation(agent)),
-        park_kind: (state == "parked").then(|| "background".into()),
-        ..Default::default()
+fn state_of(r: &Rig, agent: &str, state: &str) -> Value {
+    let mut body = json!({
+        "event": "state",
+        "agent_id": agent,
+        "state": state,
+        "request_generation": r.request_generation(agent)
+    });
+    if state == "parked" {
+        body["park_kind"] = "background".into();
     }
+    body
 }
 
 /// Runs `work` to its end on a thread of its own. A save held in the store's busy wait keeps the store's connection,
@@ -160,12 +164,7 @@ async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_lo
     r.advance_attended(40_000);
     r.observe("main").await;
     r.advance_attended(120_000);
-    let presence = Event {
-        event: "activity".into(),
-        agent_id: Some("main".into()),
-        kind: Some("presence".into()),
-        ..Default::default()
-    };
+    let presence = json!({"event": "activity", "agent_id": "main", "kind": "presence"});
     r.report(presence).unwrap();
     let seen = r.now();
     let deadline = r.now() + 2 * 3_600_000;
@@ -253,14 +252,12 @@ async fn a_heartbeat_after_the_restart_answers_instance_ended_and_the_same_insta
     let stale = r.engine.apply_event(
         "desktop",
         generation,
-        Event {
-            event: "heartbeat".into(),
-            session_id: "session".into(),
-            instance_id: "instance".into(),
-            sequence,
-            ..Default::default()
-        }
-        .try_into()
+        decoded(json!({
+            "event": "heartbeat",
+            "session_id": "session",
+            "instance_id": "instance",
+            "sequence": sequence
+        }))
         .unwrap(),
     );
     assert_eq!(
@@ -280,22 +277,17 @@ async fn a_heartbeat_after_the_restart_answers_instance_ended_and_the_same_insta
 async fn an_agents_facts_survive_a_save_and_a_load() {
     let mut r = rig(on_disk()).await;
     let generation = r
-        .event(Event {
-            event: "agent_start".into(),
-            agent_id: Some("a1".into()),
-            ..Default::default()
-        })
+        .event(json!({"event": "agent_start", "agent_id": "a1"}))
         .unwrap()
         .request_generation;
-    r.event(Event {
-        event: "agent_facts".into(),
-        agent_id: Some("a1".into()),
-        agent_type: Some(Some("code-reviewer".into())),
-        description: Some(Some("Review the retry loop".into())),
-        name: Some(Some("reviewer".into())),
-        request_generation: Some(generation),
-        ..Default::default()
-    })
+    r.event(json!({
+        "event": "agent_facts",
+        "agent_id": "a1",
+        "agent_type": "code-reviewer",
+        "description": "Review the retry loop",
+        "name": "reviewer",
+        "request_generation": generation
+    }))
     .unwrap();
     r.engine.flush_persisted().await;
     r.engine = r.restart().await;
@@ -341,12 +333,8 @@ fn owned_request(r: &Rig, id: &str, request_class: Option<&str>, owner: &str) ->
 #[tokio::test]
 async fn an_auxiliary_requests_takeover_of_a_lapsed_session_saves_its_owner_across_the_restart() {
     let mut r = rig(on_disk()).await;
-    r.event(Event {
-        event: "session_start".into(),
-        owner_id: Some("owner-1".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_start", "owner_id": "owner-1"}))
+        .unwrap();
     r.advance(LEASE_MS);
     // The lapse is swept and saved first, so the one session write the takeover's flush can carry is the takeover's.
     r.engine.expire();
@@ -376,12 +364,8 @@ async fn an_auxiliary_requests_takeover_of_a_lapsed_session_saves_its_owner_acro
 #[tokio::test]
 async fn the_generations_survive_so_the_next_state_report_is_not_a_409() {
     let mut r = rig(on_disk()).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .unwrap();
     r.observe("main").await;
     r.observe("main").await;
     r.observe("sub").await;
@@ -417,13 +401,12 @@ async fn the_generations_survive_so_the_next_state_report_is_not_a_409() {
         ]
     );
     for (agent, generation) in [("main", generations.0), ("sub", generations.1)] {
-        r.event(Event {
-            event: "state".into(),
-            agent_id: Some(agent.into()),
-            state: Some("idle".into()),
-            request_generation: Some(generation),
-            ..Default::default()
-        })
+        r.event(json!({
+            "event": "state",
+            "agent_id": agent,
+            "state": "idle",
+            "request_generation": generation
+        }))
         .unwrap_or_else(|e| panic!("{agent} under its saved generation: {e:?}"));
     }
 }
@@ -956,12 +939,11 @@ async fn a_flush_after_the_recipe_ends_clears_its_sealed_body() {
     r.observe("main").await;
     r.engine.flush_persisted().await;
     assert!(stored_body(&r, "main").0.is_some());
-    r.event(Event {
-        event: "session_start".into(),
-        instance_id: "second".into(),
-        previous_instance_id: Some("instance".into()),
-        ..Default::default()
-    })
+    r.event(json!({
+        "event": "session_start",
+        "instance_id": "second",
+        "previous_instance_id": "instance"
+    }))
     .unwrap();
     r.engine.flush_persisted().await;
     assert_eq!(
@@ -992,12 +974,8 @@ async fn a_flush_after_the_recipe_ends_clears_its_sealed_body() {
 #[tokio::test]
 async fn the_shutdown_quiesces_drains_saves_and_then_clears() {
     let mut r = rig(on_disk()).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .unwrap();
     r.observe("main").await;
     r.observe("sub").await;
     r.state("main", "idle");
@@ -1084,12 +1062,8 @@ async fn a_request_that_completes_during_shutdown_is_refused_and_counted_and_the
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_shutdown_while_an_earlier_save_is_held_lands_both_saves_in_order() {
     let mut r = rig(on_disk()).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .unwrap();
     r.observe("main").await;
     r.engine.flush_persisted().await;
     r.state("main", "idle");
@@ -1141,12 +1115,8 @@ async fn a_shutdown_while_an_earlier_save_is_held_lands_both_saves_in_order() {
 async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_flush_writes_them()
 {
     let mut r = rig(on_disk()).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .unwrap();
     r.observe("main").await;
     r.engine.flush_persisted().await;
     assert_eq!(saved_field(&r, "session", "main", "state"), "busy");
@@ -1191,13 +1161,12 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
     r.engine.persist_reached(3, 3).await;
     r.advance(MINUTE);
     // Between this save's snapshot and its acknowledgment: a presence report moves the idle clock alone.
-    let presence = Event {
-        event: "activity".into(),
-        agent_id: Some("main".into()),
-        kind: Some("presence".into()),
-        request_generation: Some(r.request_generation("main")),
-        ..Default::default()
-    };
+    let presence = json!({
+        "event": "activity",
+        "agent_id": "main",
+        "kind": "presence",
+        "request_generation": r.request_generation("main")
+    });
     report(&mut r, generation, presence).unwrap();
     conn.execute_batch("COMMIT").unwrap();
     next.join().unwrap();
@@ -1252,13 +1221,8 @@ async fn two_sessions() -> (Rig, usize, usize) {
     r.engine.flush_persisted().await;
     r.advance(MINUTE);
     r.event(session_start("newer")).unwrap();
-    r.event(Event {
-        event: "agent_start".into(),
-        session_id: "newer".into(),
-        agent_id: Some("sub".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "session_id": "newer", "agent_id": "sub"}))
+        .unwrap();
     observe_on(&mut r, "newer", "main").await;
     let newer = r.engine.stats().retained_bytes - older;
     r.engine.flush_persisted().await;
@@ -1480,12 +1444,8 @@ async fn a_refused_session_restored_by_a_restart_leaves_one_expiry_after_its_new
 #[tokio::test]
 async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_probe_settles() {
     let mut r = rig(on_disk()).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .unwrap();
     r.observe("main").await;
     r.observe("sub").await;
     r.advance_attended(270_000);
@@ -1539,13 +1499,9 @@ async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_pr
 
 /// An `agent_start` for `agent` on the rig's own session, with the refusal's code and status.
 fn agent_start(r: &mut Rig, agent: &str) -> Result<(), (&'static str, u16)> {
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some(agent.into()),
-        ..Default::default()
-    })
-    .map(|_| ())
-    .map_err(|refused| (refused.code, refused.status))
+    r.event(json!({"event": "agent_start", "agent_id": agent}))
+        .map(|_| ())
+        .map_err(|refused| (refused.code, refused.status))
 }
 
 /// A released record holds its slot of the agent cap until it leaves one cache TTL after its release, so a session at
@@ -2253,14 +2209,12 @@ async fn a_start_under_a_new_key_generation_leaves_one_saved_row_for_the_session
         .apply_event(
             "desktop",
             old + 1,
-            Event {
-                event: "session_start".into(),
-                session_id: "session".into(),
-                instance_id: "later".into(),
-                sequence: 1,
-                ..Default::default()
-            }
-            .try_into()
+            decoded(json!({
+                "event": "session_start",
+                "session_id": "session",
+                "instance_id": "later",
+                "sequence": 1
+            }))
             .unwrap(),
         )
         .unwrap();
@@ -2322,12 +2276,8 @@ async fn a_second_load_leaves_the_sessions_the_engine_holds_and_their_rows() {
 #[tokio::test]
 async fn a_session_whose_main_agent_cannot_be_read_is_dropped_whole() {
     let mut r = rig(on_disk()).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .unwrap();
     r.observe("main").await;
     r.observe("sub").await;
     r.engine.flush_persisted().await;
@@ -2539,15 +2489,14 @@ async fn a_restored_both_park_keeps_its_deadline_and_its_wake() {
     r.observe("main").await;
     let deadline = r.now() + 10 * MINUTE;
     let wake = r.now() + 60 * MINUTE;
-    r.report(Event {
-        event: "state".into(),
-        agent_id: Some("main".into()),
-        state: Some("parked".into()),
-        park_kind: Some("both".into()),
-        deadline: Some(deadline),
-        wake_at: Some(wake),
-        ..Default::default()
-    })
+    r.report(json!({
+        "event": "state",
+        "agent_id": "main",
+        "state": "parked",
+        "park_kind": "both",
+        "deadline": deadline,
+        "wake_at": wake
+    }))
     .unwrap();
     r.engine.flush_persisted().await;
 
@@ -2578,35 +2527,29 @@ async fn a_restored_both_park_keeps_its_deadline_and_its_wake() {
 async fn a_restored_park_drops_a_saved_part_its_kind_does_not_take() {
     let mut r = rig(on_disk()).await;
     let worker = r
-        .event(Event {
-            event: "agent_start".into(),
-            agent_id: Some("worker".into()),
-            ..Default::default()
-        })
+        .event(json!({"event": "agent_start", "agent_id": "worker"}))
         .unwrap()
         .request_generation;
     let main = r.event(heartbeat()).unwrap().request_generation;
     let wake = r.now() + 10 * MINUTE;
     let deadline = r.now() + 60 * MINUTE;
-    r.event(Event {
-        event: "state".into(),
-        agent_id: Some("main".into()),
-        state: Some("parked".into()),
-        park_kind: Some("background".into()),
-        deadline: Some(deadline),
-        request_generation: Some(main),
-        ..Default::default()
-    })
+    r.event(json!({
+        "event": "state",
+        "agent_id": "main",
+        "state": "parked",
+        "park_kind": "background",
+        "deadline": deadline,
+        "request_generation": main
+    }))
     .unwrap();
-    r.event(Event {
-        event: "state".into(),
-        agent_id: Some("worker".into()),
-        state: Some("parked".into()),
-        park_kind: Some("scheduled".into()),
-        wake_at: Some(wake),
-        request_generation: Some(worker),
-        ..Default::default()
-    })
+    r.event(json!({
+        "event": "state",
+        "agent_id": "worker",
+        "state": "parked",
+        "park_kind": "scheduled",
+        "wake_at": wake,
+        "request_generation": worker
+    }))
     .unwrap();
     r.engine.flush_persisted().await;
     let saved = saved_agents(&r);

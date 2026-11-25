@@ -10,8 +10,8 @@ use common::*;
 use fake_upstream::Respond;
 use http_body_util::BodyExt;
 use phoebis_keepalive::{
-    keepalive_router, AgentState, CompanionState, Event, EventError, Lifecycle, ParkKind,
-    SessionView, EVENTS_PATH,
+    keepalive_router, AgentState, CompanionState, EventError, Lifecycle, ParkKind, SessionView,
+    EVENTS_PATH,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, RulesMode};
@@ -160,25 +160,22 @@ fn other_key_row(r: &Rig, id: &str) -> ApiKeyRow {
 
 /// An `agent_start` for `agent` on the rig's own session, under `generation` where the mod names one.
 fn agent_start(r: &mut Rig, agent: &str, generation: Option<u64>) -> Result<(), EventError> {
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some(agent.into()),
-        request_generation: generation,
-        ..Default::default()
-    })
-    .map(|_| ())
+    let mut body = json!({"event": "agent_start", "agent_id": agent});
+    if let Some(generation) = generation {
+        body["request_generation"] = generation.into();
+    }
+    r.event(body).map(|_| ())
 }
 
 /// An `idle` report for `agent` on the rig's own session under `generation`: the refusal's code and generation, or
 /// `None` where the engine took the report.
 fn idle_report(r: &mut Rig, agent: &str, generation: u64) -> Option<(&'static str, Option<u64>)> {
-    r.event(Event {
-        event: "state".into(),
-        agent_id: Some(agent.into()),
-        state: Some("idle".into()),
-        request_generation: Some(generation),
-        ..Default::default()
-    })
+    r.event(json!({
+        "event": "state",
+        "agent_id": agent,
+        "state": "idle",
+        "request_generation": generation
+    }))
     .err()
     .map(|refused| (refused.code, refused.request_generation))
 }
@@ -781,6 +778,13 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
             "protocol 2 with a member this protocol lacks",
             Some(JSON),
             json_body(heartbeat(json!({"protocol": 2, "surprise": 1}))),
+            400,
+            code("unsupported_protocol"),
+        ),
+        (
+            "protocol 2 with a repeated member",
+            Some(JSON),
+            br#"{"protocol":2,"event":"heartbeat","session_id":"session","instance_id":"instance","sequence":6,"sequence":7}"#.to_vec(),
             400,
             code("unsupported_protocol"),
         ),
@@ -1721,11 +1725,7 @@ async fn a_park_report_with_a_part_its_kind_does_not_take_answers_invalid_event(
     // No turn runs between the start and the reports, since a completed turn moves the worker's generation, so each
     // report carries the generation the start answered and its stray part is its one fault.
     let generation = r
-        .event(Event {
-            event: "agent_start".into(),
-            agent_id: Some("worker".into()),
-            ..Default::default()
-        })
+        .event(json!({"event": "agent_start", "agent_id": "worker"}))
         .unwrap()
         .request_generation;
     let base = r.sequence;
@@ -1770,6 +1770,45 @@ async fn a_park_report_with_a_part_its_kind_does_not_take_answers_invalid_event(
         (answer.status, answer.body),
         (400, json!({"code": "invalid_event"})),
         "a scheduled park takes no deadline"
+    );
+}
+
+#[tokio::test]
+async fn a_null_member_is_refused_off_its_event_and_reads_as_absent_on_it() {
+    let r = rig(RigSpec::default()).await;
+    let base = r.sequence;
+    let app = keepalive_router(r.engine.clone());
+    let heartbeat = report(
+        "heartbeat",
+        "session",
+        "instance",
+        base + 1,
+        json!({"deadline": null}),
+    );
+    let answer = post(&app, heartbeat, Some(KEY)).await;
+    assert_eq!(
+        (answer.status, answer.body),
+        (400, json!({"code": "invalid_event"})),
+        "a heartbeat takes no deadline, whatever its value"
+    );
+    let parked = report(
+        "state",
+        "session",
+        "instance",
+        base + 2,
+        json!({
+            "agent_id": "main",
+            "state": "parked",
+            "park_kind": "background",
+            "deadline": null,
+            "request_generation": r.request_generation("main")
+        }),
+    );
+    let answer = post(&app, parked, Some(KEY)).await;
+    assert_eq!(
+        answer.status, 200,
+        "a background park reads a null deadline as none: {}",
+        answer.text
     );
 }
 
@@ -2076,12 +2115,7 @@ async fn a_revival_that_would_register_main_past_the_agent_cap_answers_agent_lim
         "the refused revival registered no main"
     );
     assert_eq!(
-        r.event(Event {
-            event: "heartbeat".into(),
-            ..Default::default()
-        })
-        .unwrap_err()
-        .code,
+        r.event(json!({"event": "heartbeat"})).unwrap_err().code,
         "instance_ended",
         "and left the session ended"
     );
@@ -2119,12 +2153,13 @@ async fn an_ended_sessions_released_records_hold_their_agent_slots_until_they_le
 #[tokio::test]
 async fn a_facts_report_replaces_the_whole_set() {
     let mut r = rig(RigSpec::default()).await;
-    let session_facts = |title: Option<&str>| Event {
-        event: "session_facts".into(),
-        branch: Some(Some("main".into())),
+    let session_facts = |title: Option<&str>| {
+        let mut body = json!({"event": "session_facts", "branch": "main"});
         // The key is left out where the case clears the title.
-        title: title.map(|title| Some(title.to_owned())),
-        ..Default::default()
+        if let Some(title) = title {
+            body["title"] = title.into();
+        }
+        body
     };
     r.event(session_facts(Some("Checkout retry"))).unwrap();
     r.event(session_facts(None)).unwrap();
@@ -2135,21 +2170,18 @@ async fn a_facts_report_replaces_the_whole_set() {
         "a member the later report leaves out is cleared"
     );
     let generation = r
-        .event(Event {
-            event: "agent_start".into(),
-            agent_id: Some("a1".into()),
-            ..Default::default()
-        })
+        .event(json!({"event": "agent_start", "agent_id": "a1"}))
         .unwrap()
         .request_generation;
-    let agent_facts = |name: Option<&str>| Event {
-        event: "agent_facts".into(),
-        agent_id: Some("a1".into()),
-        description: Some(Some("Review the retry loop".into())),
-        // The key is named with null where the case clears the name.
-        name: Some(name.map(str::to_owned)),
-        request_generation: Some(generation),
-        ..Default::default()
+    let agent_facts = |name: Option<&str>| {
+        json!({
+            "event": "agent_facts",
+            "agent_id": "a1",
+            "description": "Review the retry loop",
+            // The key is named with null where the case clears the name.
+            "name": name,
+            "request_generation": generation
+        })
     };
     r.event(agent_facts(Some("reviewer"))).unwrap();
     r.event(agent_facts(None)).unwrap();
@@ -2165,12 +2197,7 @@ async fn agent_facts_for_an_unheld_agent_is_refused_and_adds_no_record() {
     let mut r = rig(RigSpec::default()).await;
     let agents = session_agents(&r);
     let refused = r
-        .event(Event {
-            event: "agent_facts".into(),
-            agent_id: Some("ghost".into()),
-            name: Some(Some("reviewer".into())),
-            ..Default::default()
-        })
+        .event(json!({"event": "agent_facts", "agent_id": "ghost", "name": "reviewer"}))
         .unwrap_err();
     assert_eq!((refused.code, refused.status), ("unknown_agent", 409));
     assert_eq!(
@@ -2184,31 +2211,25 @@ async fn agent_facts_for_an_unheld_agent_is_refused_and_adds_no_record() {
 async fn agent_facts_leaves_a_parked_agent_parked() {
     let mut r = rig(RigSpec::default()).await;
     let generation = r
-        .event(Event {
-            event: "agent_start".into(),
-            agent_id: Some("a1".into()),
-            ..Default::default()
-        })
+        .event(json!({"event": "agent_start", "agent_id": "a1"}))
         .unwrap()
         .request_generation;
     let deadline = r.now() + 60_000;
-    r.event(Event {
-        event: "state".into(),
-        agent_id: Some("a1".into()),
-        state: Some("parked".into()),
-        park_kind: Some("background".into()),
-        deadline: Some(deadline),
-        request_generation: Some(generation),
-        ..Default::default()
-    })
+    r.event(json!({
+        "event": "state",
+        "agent_id": "a1",
+        "state": "parked",
+        "park_kind": "background",
+        "deadline": deadline,
+        "request_generation": generation
+    }))
     .unwrap();
-    r.event(Event {
-        event: "agent_facts".into(),
-        agent_id: Some("a1".into()),
-        name: Some(Some("reviewer".into())),
-        request_generation: Some(generation),
-        ..Default::default()
-    })
+    r.event(json!({
+        "event": "agent_facts",
+        "agent_id": "a1",
+        "name": "reviewer",
+        "request_generation": generation
+    }))
     .unwrap();
     let agents = r
         .reregister()
@@ -2241,12 +2262,7 @@ async fn session_facts_renews_no_lease() {
     let mut r = rig(RigSpec::default()).await;
     let lease = r.reregister().lease_expires_ms;
     r.advance(30_000);
-    let ack = r
-        .event(Event {
-            event: "session_facts".into(),
-            ..Default::default()
-        })
-        .unwrap();
+    let ack = r.event(json!({"event": "session_facts"})).unwrap();
     assert_eq!(
         ack.lease_expires_ms, lease,
         "a facts report says nothing of the companion's liveness"

@@ -1820,14 +1820,17 @@ async fn a_companion_sessions_last_request_reads_its_newest_request_past_the_ses
         .apply_event(
             "desktop",
             generation,
-            phoebis_keepalive::Event {
-                event: "session_start".into(),
-                session_id: "s-companion".into(),
-                instance_id: "i1".into(),
-                sequence: 1,
-                ..Default::default()
-            }
-            .try_into()
+            phoebis_keepalive::decode_json_event(
+                serde_json::json!({
+                    "protocol": 1,
+                    "event": "session_start",
+                    "session_id": "s-companion",
+                    "instance_id": "i1",
+                    "sequence": 1
+                })
+                .to_string()
+                .as_bytes(),
+            )
             .unwrap(),
         )
         .unwrap();
@@ -6342,14 +6345,17 @@ async fn one_held_probe() -> (common::Full, String) {
         .apply_event(
             "desktop",
             generation,
-            phoebis_keepalive::Event {
-                event: "session_start".into(),
-                session_id: "s1".into(),
-                instance_id: "i1".into(),
-                sequence: 1,
-                ..Default::default()
-            }
-            .try_into()
+            phoebis_keepalive::decode_json_event(
+                serde_json::json!({
+                    "protocol": 1,
+                    "event": "session_start",
+                    "session_id": "s1",
+                    "instance_id": "i1",
+                    "sequence": 1
+                })
+                .to_string()
+                .as_bytes(),
+            )
             .unwrap(),
         )
         .unwrap();

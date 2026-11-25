@@ -11,9 +11,10 @@ use common::*;
 use fake_upstream::{install, Captured};
 use phoebis_bus::{ClientFacts, Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
-    continues_prefix, idle_age_bucket, Engine, Event, Guard, KeepalivePolicy, KeepaliveTiming,
-    Lifecycle, PrefixAnchor, Reason,
+    continues_prefix, idle_age_bucket, Engine, Guard, KeepalivePolicy, KeepaliveTiming, Lifecycle,
+    PrefixAnchor, Reason,
 };
+use serde_json::{json, Value};
 
 const LAPTOP_SECRET: &str = "phoebis-laptop-key";
 const DAY: i64 = 86_400_000;
@@ -193,13 +194,8 @@ async fn tick_silent_to(r: &mut Rig, start: i64, minutes: i64) {
 }
 
 fn activity(r: &mut Rig, kind: &str) {
-    r.report(Event {
-        event: "activity".into(),
-        agent_id: Some("main".into()),
-        kind: Some(kind.into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.report(json!({"event": "activity", "agent_id": "main", "kind": kind}))
+        .unwrap();
 }
 
 /// A prompt a local command answered: the mod reports the prompt, then idle, and no request is sent.
@@ -649,11 +645,7 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
         "session end"
     );
     // The same instance registers the session again, and its window starts at the revival, never at the old start.
-    r.event(Event {
-        event: "session_start".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_start"})).unwrap();
     r.state("main", "idle");
     tick_to(&mut r, start, 41).await;
     assert_eq!(
@@ -670,11 +662,7 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
     local_command(&mut r);
     tick_to(&mut r, start, 12).await;
     tick_silent_to(&mut r, start, 40).await;
-    r.event(Event {
-        event: "session_start".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_start"})).unwrap();
     tick_to(&mut r, start, 45).await;
     assert_eq!((reached(&r), returned(&r)), (counted, [0; 10]), "lapse");
     activity(&mut r, "prompt");
@@ -694,13 +682,8 @@ async fn a_released_main_closes_its_window() {
     tick_to(&mut r, start, 12).await;
     r.state("main", "released");
     let generation = r.request_generation("main");
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("main".into()),
-        request_generation: Some(generation),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "main", "request_generation": generation}))
+        .unwrap();
     r.state("main", "idle");
     tick_to(&mut r, start, 20).await;
     assert_eq!(
@@ -1318,14 +1301,13 @@ async fn the_end_of_a_park_without_a_request_starts_a_new_window() {
         let mut r = rig(RigSpec::default()).await;
         r.observe("main").await;
         let start = r.now();
-        r.report(Event {
-            event: "state".into(),
-            agent_id: Some("main".into()),
-            state: Some("parked".into()),
-            park_kind: Some("background".into()),
-            deadline: Some(start + 10 * MINUTE),
-            ..Default::default()
-        })
+        r.report(json!({
+            "event": "state",
+            "agent_id": "main",
+            "state": "parked",
+            "park_kind": "background",
+            "deadline": start + 10 * MINUTE
+        }))
         .unwrap();
         if mod_first {
             // The mod's heartbeat closes the command at its deadline and reports idle before the router ticks.
@@ -1343,21 +1325,13 @@ async fn the_end_of_a_park_without_a_request_starts_a_new_window() {
 }
 
 /// One report of the second key's session, under its own instance and sequence.
-fn laptop(r: &Rig, sequence: &mut u64, event: Event) {
+fn laptop(r: &Rig, sequence: &mut u64, mut body: Value) {
     *sequence += 1;
+    body["sequence"] = (*sequence).into();
+    body["session_id"] = "laptop".into();
+    body["instance_id"] = "laptop".into();
     r.engine
-        .apply_event(
-            "laptop",
-            r.generation("laptop"),
-            Event {
-                sequence: *sequence,
-                session_id: "laptop".into(),
-                instance_id: "laptop".into(),
-                ..event
-            }
-            .try_into()
-            .unwrap(),
-        )
+        .apply_event("laptop", r.generation("laptop"), decoded(body).unwrap())
         .unwrap();
 }
 
@@ -1385,40 +1359,16 @@ async fn the_counters_are_per_pool() {
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 8).await;
     let mut sequence = 0;
+    laptop(&r, &mut sequence, json!({"event": "session_start"}));
     laptop(
         &r,
         &mut sequence,
-        Event {
-            event: "session_start".into(),
-            ..Default::default()
-        },
-    );
-    laptop(
-        &r,
-        &mut sequence,
-        Event {
-            event: "state".into(),
-            agent_id: Some("main".into()),
-            state: Some("idle".into()),
-            request_generation: Some(0),
-            ..Default::default()
-        },
+        json!({"event": "state", "agent_id": "main", "state": "idle", "request_generation": 0}),
     );
     for _ in 0..8 {
         r.advance(MINUTE / 2);
-        r.event(Event {
-            event: "heartbeat".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        laptop(
-            &r,
-            &mut sequence,
-            Event {
-                event: "heartbeat".into(),
-                ..Default::default()
-            },
-        );
+        r.event(json!({"event": "heartbeat"})).unwrap();
+        laptop(&r, &mut sequence, json!({"event": "heartbeat"}));
         r.step().await;
     }
     r.observe_with("main", &next_turn()).await;
@@ -1456,12 +1406,8 @@ async fn a_busy_main_a_subagent_and_a_silent_session_count_nothing() {
     // A subagent's park opens no window, and main never left busy.
     let mut r = rig(RigSpec::default()).await;
     let start = r.now();
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .unwrap();
     r.state("worker", "parked");
     tick_to(&mut r, start, 20).await;
     assert!(
@@ -1544,14 +1490,13 @@ async fn a_park_report_and_a_prompt_inside_the_same_second_count_the_first_bucke
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     let start = r.now();
-    r.report(Event {
-        event: "state".into(),
-        agent_id: Some("main".into()),
-        state: Some("parked".into()),
-        park_kind: Some("background".into()),
-        deadline: Some(start + 60 * MINUTE),
-        ..Default::default()
-    })
+    r.report(json!({
+        "event": "state",
+        "agent_id": "main",
+        "state": "parked",
+        "park_kind": "background",
+        "deadline": start + 60 * MINUTE
+    }))
     .unwrap();
     activity(&mut r, "prompt");
     r.observe_with("main", &next_turn()).await;
@@ -1576,11 +1521,7 @@ async fn a_presence_report_after_a_backward_clock_step_opens_a_window_that_count
     // The lease lapses at 7 minutes 30 seconds, and the tick at 8 minutes closes the window with the floor at its
     // start. A lapsed session answers a report as an ended instance, so the same instance registers it again.
     tick_silent_to(&mut r, start, 8).await;
-    r.event(Event {
-        event: "session_start".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "session_start"})).unwrap();
     // The wall clock steps back to a second before the window began, and the person types.
     r.advance(start - 1_000 - r.now());
     activity(&mut r, "presence");

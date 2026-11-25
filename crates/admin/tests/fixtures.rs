@@ -1742,14 +1742,17 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .apply_event(
             "desktop",
             key_generation,
-            phoebis_keepalive::Event {
-                event: "session_start".into(),
-                session_id: "s1".into(),
-                instance_id: "i1".into(),
-                sequence: 1,
-                ..Default::default()
-            }
-            .try_into()
+            phoebis_keepalive::decode_json_event(
+                j!({
+                    "protocol": 1,
+                    "event": "session_start",
+                    "session_id": "s1",
+                    "instance_id": "i1",
+                    "sequence": 1
+                })
+                .to_string()
+                .as_bytes(),
+            )
             .unwrap(),
         )
         .unwrap();
@@ -2095,15 +2098,18 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .apply_event(
                 "desktop",
                 key_generation,
-                phoebis_keepalive::Event {
-                    event: "agent_start".into(),
-                    session_id: "s1".into(),
-                    instance_id: "i1".into(),
-                    sequence,
-                    agent_id: Some(agent.into()),
-                    ..Default::default()
-                }
-                .try_into()
+                phoebis_keepalive::decode_json_event(
+                    j!({
+                        "protocol": 1,
+                        "event": "agent_start",
+                        "session_id": "s1",
+                        "instance_id": "i1",
+                        "sequence": sequence,
+                        "agent_id": agent
+                    })
+                    .to_string()
+                    .as_bytes(),
+                )
                 .unwrap(),
             )
             .unwrap();
@@ -2170,22 +2176,27 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // so its recipe and its line read `registered` while its earlier request stays on record, and its pin reads ended
     // until that request. The agent's generation moved with its request, so the release learns it from the refusal, as
     // the mod does, and the start takes the one the release answered.
-    let released = |request_generation: Option<u64>| phoebis_keepalive::Event {
-        event: "state".into(),
-        session_id: "s1".into(),
-        instance_id: "i1".into(),
-        sequence: 4,
-        agent_id: Some("worker-2".into()),
-        state: Some("released".into()),
-        request_generation,
-        ..Default::default()
+    let released = |request_generation: Option<u64>| {
+        let mut body = j!({
+            "protocol": 1,
+            "event": "state",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 4,
+            "agent_id": "worker-2",
+            "state": "released"
+        });
+        if let Some(request_generation) = request_generation {
+            body["request_generation"] = request_generation.into();
+        }
+        body
     };
     let refused = parts
         .keepalive
         .apply_event(
             "desktop",
             key_generation,
-            released(None).try_into().unwrap(),
+            phoebis_keepalive::decode_json_event(released(None).to_string().as_bytes()).unwrap(),
         )
         .expect_err("a report under no generation is stale");
     let release = parts
@@ -2193,7 +2204,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .apply_event(
             "desktop",
             key_generation,
-            released(refused.request_generation).try_into().unwrap(),
+            phoebis_keepalive::decode_json_event(
+                released(refused.request_generation).to_string().as_bytes(),
+            )
+            .unwrap(),
         )
         .unwrap();
     parts
@@ -2201,16 +2215,19 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .apply_event(
             "desktop",
             key_generation,
-            phoebis_keepalive::Event {
-                event: "agent_start".into(),
-                session_id: "s1".into(),
-                instance_id: "i1".into(),
-                sequence: 5,
-                agent_id: Some("worker-2".into()),
-                request_generation: Some(release.request_generation),
-                ..Default::default()
-            }
-            .try_into()
+            phoebis_keepalive::decode_json_event(
+                j!({
+                    "protocol": 1,
+                    "event": "agent_start",
+                    "session_id": "s1",
+                    "instance_id": "i1",
+                    "sequence": 5,
+                    "agent_id": "worker-2",
+                    "request_generation": release.request_generation
+                })
+                .to_string()
+                .as_bytes(),
+            )
             .unwrap(),
         )
         .unwrap();
@@ -2221,34 +2238,42 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .apply_event(
             "desktop",
             key_generation,
-            phoebis_keepalive::Event {
-                event: "session_facts".into(),
-                session_id: "s1".into(),
-                instance_id: "i1".into(),
-                sequence: 6,
-                branch: Some(Some("fix/checkout-retry".into())),
-                cwd: Some(Some("/home/dev/work/storefront/api".into())),
-                project: Some(Some("/home/dev/work/storefront".into())),
-                repository: Some(Some("https://git.example/acme/storefront.git".into())),
-                repository_root: Some(Some("/home/dev/work/storefront".into())),
-                title: Some(Some("Checkout retry rework".into())),
-                ..Default::default()
-            }
-            .try_into()
+            phoebis_keepalive::decode_json_event(
+                j!({
+                    "protocol": 1,
+                    "event": "session_facts",
+                    "session_id": "s1",
+                    "instance_id": "i1",
+                    "sequence": 6,
+                    "branch": "fix/checkout-retry",
+                    "cwd": "/home/dev/work/storefront/api",
+                    "project": "/home/dev/work/storefront",
+                    "repository": "https://git.example/acme/storefront.git",
+                    "repository_root": "/home/dev/work/storefront",
+                    "title": "Checkout retry rework"
+                })
+                .to_string()
+                .as_bytes(),
+            )
             .unwrap(),
         )
         .unwrap();
-    let agent_facts = |request_generation: Option<u64>| phoebis_keepalive::Event {
-        event: "agent_facts".into(),
-        session_id: "s1".into(),
-        instance_id: "i1".into(),
-        sequence: 7,
-        agent_id: Some("worker-1".into()),
-        request_generation,
-        agent_type: Some(Some("code-reviewer".into())),
-        description: Some(Some("Review the retry loop".into())),
-        name: Some(Some("reviewer".into())),
-        ..Default::default()
+    let agent_facts = |request_generation: Option<u64>| {
+        let mut body = j!({
+            "protocol": 1,
+            "event": "agent_facts",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 7,
+            "agent_id": "worker-1",
+            "agent_type": "code-reviewer",
+            "description": "Review the retry loop",
+            "name": "reviewer"
+        });
+        if let Some(request_generation) = request_generation {
+            body["request_generation"] = request_generation.into();
+        }
+        body
     };
     // The agent's generation moved with its request, so the report learns it from the refusal, as the mod does.
     let refused = parts
@@ -2256,7 +2281,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .apply_event(
             "desktop",
             key_generation,
-            agent_facts(None).try_into().unwrap(),
+            phoebis_keepalive::decode_json_event(agent_facts(None).to_string().as_bytes()).unwrap(),
         )
         .expect_err("a report under no generation is stale");
     parts
@@ -2264,7 +2289,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .apply_event(
             "desktop",
             key_generation,
-            agent_facts(refused.request_generation).try_into().unwrap(),
+            phoebis_keepalive::decode_json_event(
+                agent_facts(refused.request_generation)
+                    .to_string()
+                    .as_bytes(),
+            )
+            .unwrap(),
         )
         .unwrap();
     parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None, cache_marker: false }));
@@ -3084,26 +3114,38 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // Main goes idle and a tick opens its idle window, so the overview carries a pool's row with its ten buckets for
     // the console to decode. It is read after the others, which show main busy. Main's generation moved with its
     // request, so the report learns it from the refusal, as the mod does.
-    let idle = |request_generation: Option<u64>| phoebis_keepalive::Event {
-        event: "state".into(),
-        session_id: "s1".into(),
-        instance_id: "i1".into(),
-        sequence: 8,
-        agent_id: Some("main".into()),
-        state: Some("idle".into()),
-        request_generation,
-        ..Default::default()
+    let idle = |request_generation: Option<u64>| {
+        let mut body = j!({
+            "protocol": 1,
+            "event": "state",
+            "session_id": "s1",
+            "instance_id": "i1",
+            "sequence": 8,
+            "agent_id": "main",
+            "state": "idle"
+        });
+        if let Some(request_generation) = request_generation {
+            body["request_generation"] = request_generation.into();
+        }
+        body
     };
     let refused = parts
         .keepalive
-        .apply_event("desktop", key_generation, idle(None).try_into().unwrap())
+        .apply_event(
+            "desktop",
+            key_generation,
+            phoebis_keepalive::decode_json_event(idle(None).to_string().as_bytes()).unwrap(),
+        )
         .expect_err("a report under no generation is stale");
     parts
         .keepalive
         .apply_event(
             "desktop",
             key_generation,
-            idle(refused.request_generation).try_into().unwrap(),
+            phoebis_keepalive::decode_json_event(
+                idle(refused.request_generation).to_string().as_bytes(),
+            )
+            .unwrap(),
         )
         .unwrap();
     parts.keepalive.step().await;

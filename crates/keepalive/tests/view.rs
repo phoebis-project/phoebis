@@ -4,7 +4,8 @@
 mod common;
 
 use common::*;
-use phoebis_keepalive::{AgentState, Event, Lifecycle, ParkKind, Reason, RecipeState, RecipeView};
+use phoebis_keepalive::{AgentState, Lifecycle, ParkKind, Reason, RecipeState, RecipeView};
+use serde_json::{json, Value};
 
 const DAY: i64 = 86_400_000;
 
@@ -17,12 +18,9 @@ fn row(r: &Rig, agent: &str) -> RecipeView {
         .unwrap_or_else(|| panic!("no row for {agent}: {:?}", r.engine.recipes()))
 }
 
-fn report(r: &mut Rig, agent: &str, fields: Event) {
-    r.report(Event {
-        agent_id: Some(agent.into()),
-        ..fields
-    })
-    .unwrap();
+fn report(r: &mut Rig, agent: &str, mut fields: Value) {
+    fields["agent_id"] = agent.into();
+    r.report(fields).unwrap();
 }
 
 async fn edit_pool(r: &Rig, edit: impl FnOnce(&mut phoebis_store::PoolRow)) {
@@ -61,13 +59,12 @@ async fn a_recipe_row_carries_the_state_the_cause_the_park_and_the_counts() {
     report(
         &mut r,
         "main",
-        Event {
-            event: "state".into(),
-            state: Some("parked".into()),
-            park_kind: Some("background".into()),
-            deadline: Some(deadline),
-            ..Default::default()
-        },
+        json!({
+            "event": "state",
+            "state": "parked",
+            "park_kind": "background",
+            "deadline": deadline
+        }),
     );
     let parked = row(&r, "main");
     assert_eq!(
@@ -220,12 +217,8 @@ async fn the_retained_not_retained_held_and_paused_states_follow_the_table() {
         (v.state, v.cause)
     };
     assert_eq!(read(&r, "main"), (RecipeState::Retained, Reason::Scheduled));
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .unwrap();
     r.observe_with(
         "worker",
         &BODY.replace(
@@ -359,11 +352,7 @@ async fn the_session_row_carries_the_presence_age() {
     report(
         &mut r,
         "main",
-        Event {
-            event: "activity".into(),
-            kind: Some("presence".into()),
-            ..Default::default()
-        },
+        json!({"event": "activity", "kind": "presence"}),
     );
     r.advance(12_000);
     assert_eq!(r.engine.sessions()[0].presence_age_seconds, Some(12));
@@ -376,12 +365,8 @@ async fn the_session_row_carries_the_presence_age() {
 async fn a_session_whose_main_holds_no_recipe_reads_the_newest_other_agents_recipe() {
     let mut r = rig(RigSpec::default()).await;
     for agent in ["worker-1", "worker-2"] {
-        r.event(Event {
-            event: "agent_start".into(),
-            agent_id: Some(agent.into()),
-            ..Default::default()
-        })
-        .unwrap();
+        r.event(json!({"event": "agent_start", "agent_id": agent}))
+            .unwrap();
         r.observe(agent).await;
         r.advance_attended(1_000);
     }

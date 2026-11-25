@@ -20,8 +20,8 @@ use phoebis_bus::{
     RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber, Usage,
 };
 use phoebis_keepalive::{
-    Ack, Engine, EngineParts, Event, EventError, EventReport, KeepaliveLimits, KeepalivePolicy,
-    KeepaliveTiming, Lifecycle, Reason, RecipeView,
+    decode_json_event, Ack, Engine, EngineParts, EventError, EventReport, KeepaliveLimits,
+    KeepalivePolicy, KeepaliveTiming, Lifecycle, Reason, RecipeView,
 };
 use phoebis_ledger::{
     spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
@@ -31,6 +31,7 @@ use phoebis_oauth::Clock;
 use phoebis_relay::AccountingSource;
 use phoebis_routing::RouterConfig;
 use phoebis_store::{AccountKind, StorageKey, Store};
+use serde_json::{json, Value};
 // Re-exported for every test binary that shares this rig; only some of them, this one included, reach for all
 // of `oauth`, `wait_for`, and `NOW` themselves.
 #[allow(unused_imports)]
@@ -295,11 +296,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         _ledger_dir: ledger_dir,
         _scratch: scratch,
     };
-    rig.event(Event {
-        event: "session_start".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    rig.event(json!({"event": "session_start"})).unwrap();
     rig
 }
 
@@ -330,21 +327,13 @@ pub fn name_the_tier(store: &phoebis_store::Store, account: &str, tier: &str) {
 
 /// A `session_start` for `session_id`, under the rig's one instance: a multi-session test names its own
 /// session while sharing the instance a single-session test gets by default.
-pub fn session_start(session_id: &str) -> Event {
-    Event {
-        event: "session_start".into(),
-        session_id: session_id.into(),
-        ..Default::default()
-    }
+pub fn session_start(session_id: &str) -> Value {
+    json!({"event": "session_start", "session_id": session_id})
 }
 
 /// A `session_end` for `session_id`.
-pub fn session_end(session_id: &str) -> Event {
-    Event {
-        event: "session_end".into(),
-        session_id: session_id.into(),
-        ..Default::default()
-    }
+pub fn session_end(session_id: &str) -> Value {
+    json!({"event": "session_end", "session_id": session_id})
 }
 
 /// A `session_start` naming its own instance and, when replacing one, the instance it replaces.
@@ -352,14 +341,26 @@ pub fn session_start_as(
     session_id: &str,
     instance_id: &str,
     previous_instance: Option<&str>,
-) -> Event {
-    Event {
-        event: "session_start".into(),
-        session_id: session_id.into(),
-        instance_id: instance_id.into(),
-        previous_instance_id: previous_instance.map(String::from),
-        ..Default::default()
+) -> Value {
+    let mut body = json!({
+        "event": "session_start",
+        "session_id": session_id,
+        "instance_id": instance_id
+    });
+    if let Some(previous_instance) = previous_instance {
+        body["previous_instance_id"] = previous_instance.into();
     }
+    body
+}
+
+/// A body through the decoder, for a case that hands the engine a report under a key or a generation of its own. It
+/// fills `protocol` with 1 where the body names none, as `Rig::event` does.
+pub fn decoded(mut body: Value) -> Result<EventReport, EventError> {
+    body.as_object_mut()
+        .expect("a report's body is a JSON object")
+        .entry("protocol")
+        .or_insert(1.into());
+    decode_json_event(&serde_json::to_vec(&body).unwrap())
 }
 
 impl Rig {
@@ -410,11 +411,7 @@ impl Rig {
             let step = left.min(phoebis_keepalive::LEASE_MS / 2);
             self.advance(step);
             left -= step;
-            self.event(Event {
-                event: "heartbeat".into(),
-                ..Default::default()
-            })
-            .unwrap();
+            self.event(json!({"event": "heartbeat"})).unwrap();
         }
     }
 
@@ -440,23 +437,30 @@ impl Rig {
             .unwrap_or_default()
     }
 
-    /// A report under the harness key, with the next sequence, handed to `Engine::apply_event` as the route hands
-    /// it a decoded body. A caller that leaves `session_id` unset gets the rig's one session, and one that leaves
-    /// `instance_id` unset gets `instance_of` that session, so `session_end` and `session_start` need only the
-    /// session id a multi-session test is driving.
-    pub fn event(&mut self, mut event: Event) -> Result<Ack, EventError> {
+    /// A report under the harness key, with the next sequence, decoded as the route decodes a body and handed to
+    /// `Engine::apply_event`. `body` is a JSON object. The rig fills `protocol` and `sequence`, and `session_id` and
+    /// `instance_id` each where the body does not name it: the rig's one session, and `instance_of` that session, so
+    /// `session_end` and `session_start` need only the session id a multi-session test is driving.
+    pub fn event(&mut self, mut body: Value) -> Result<Ack, EventError> {
         self.sequence += 1;
-        event.sequence = self.sequence;
-        if event.session_id.is_empty() {
-            event.session_id = "session".into();
+        let fields = body
+            .as_object_mut()
+            .expect("a report's body is a JSON object");
+        fields.entry("protocol").or_insert(1.into());
+        fields.insert("sequence".into(), self.sequence.into());
+        let session_id = fields
+            .entry("session_id")
+            .or_insert("session".into())
+            .as_str()
+            .expect("a session id is a string")
+            .to_string();
+        if !fields.contains_key("instance_id") {
+            fields.insert("instance_id".into(), self.instance_of(&session_id).into());
         }
-        if event.instance_id.is_empty() {
-            event.instance_id = self.instance_of(&event.session_id);
-        }
-        let registers = event.event == "session_start";
-        let (session_id, agent_id) = (event.session_id.clone(), event.agent_id.clone());
+        let registers = body["event"] == "session_start";
+        let agent_id = body["agent_id"].as_str().map(String::from);
         let generation = self.generation("desktop");
-        let acked = EventReport::try_from(event)
+        let acked = decode_json_event(&serde_json::to_vec(&body).unwrap())
             .and_then(|report| self.engine.apply_event("desktop", generation, report));
         // A refused start registered nothing, so the session keeps the instance the engine still holds.
         if let (true, Ok(ack)) = (registers, &acked) {
@@ -515,21 +519,17 @@ impl Rig {
     /// An agent report through `event` under the generation the agent's last answer carried. Where the engine moved
     /// the generation with no answer in between, the refusal names the current one, and the report goes once more
     /// under it, as the mod sends it. A case that sends a stale generation on purpose builds its report itself.
-    pub fn report(&mut self, mut event: Event) -> Result<Ack, EventError> {
-        let session_id = if event.session_id.is_empty() {
-            "session".to_string()
-        } else {
-            event.session_id.clone()
-        };
-        let agent = event
-            .agent_id
-            .clone()
-            .expect("an agent report names its agent");
-        event.request_generation = Some(self.request_generation_on(&session_id, &agent));
-        match self.event(event.clone()) {
+    pub fn report(&mut self, mut body: Value) -> Result<Ack, EventError> {
+        let session_id = body["session_id"].as_str().unwrap_or("session").to_string();
+        let agent = body["agent_id"]
+            .as_str()
+            .expect("an agent report names its agent")
+            .to_string();
+        body["request_generation"] = self.request_generation_on(&session_id, &agent).into();
+        match self.event(body.clone()) {
             Err(refusal) if refusal.code == "stale_request_generation" => {
-                event.request_generation = refusal.request_generation;
-                self.event(event)
+                body["request_generation"] = refusal.request_generation.into();
+                self.event(body)
             }
             acked => acked,
         }
@@ -549,12 +549,11 @@ impl Rig {
     /// The acknowledgment of a same-instance re-registration of the rig's session, the mod's view of the session.
     pub fn reregister(&mut self) -> Ack {
         let instance_id = self.instance_of("session");
-        self.event(Event {
-            event: "session_start".into(),
-            session_id: "session".into(),
-            instance_id,
-            ..Default::default()
-        })
+        self.event(json!({
+            "event": "session_start",
+            "session_id": "session",
+            "instance_id": instance_id
+        }))
         .expect("a same-instance re-registration of the rig's session")
     }
 
@@ -566,14 +565,11 @@ impl Rig {
     /// A `parked` word goes out as a background park, the shape the mod sends, since the route refuses a park
     /// without its kind.
     pub fn state(&mut self, agent: &str, state: &str) {
-        self.report(Event {
-            event: "state".into(),
-            agent_id: Some(agent.into()),
-            state: Some(state.into()),
-            park_kind: (state == "parked").then(|| "background".into()),
-            ..Default::default()
-        })
-        .unwrap();
+        let mut body = json!({"event": "state", "agent_id": agent, "state": state});
+        if state == "parked" {
+            body["park_kind"] = "background".into();
+        }
+        self.report(body).unwrap();
     }
 
     /// The recipe view's row of one agent of the rig's session, through `Engine::recipes`, which lists an agent once

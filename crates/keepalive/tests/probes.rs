@@ -9,11 +9,12 @@ use common::*;
 use fake_upstream::{install_at, Captured, Respond};
 use phoebis_bus::Outcome;
 use phoebis_keepalive::{
-    CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, MAIN_AGENT,
-    MAX_WORKERS, ONE_HOUR_MS,
+    CompanionState, KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, MAIN_AGENT, MAX_WORKERS,
+    ONE_HOUR_MS,
 };
 use phoebis_relay::Accounting;
 use phoebis_store::{AccountState, Cancellation};
+use serde_json::json;
 
 fn json(status: u16, body: &str) -> Respond {
     Respond::Json {
@@ -240,12 +241,7 @@ async fn a_probe_preserves_routing_and_constraints() {
         "a probe does not renew activity"
     );
     assert_eq!(r.engine.sessions()[0].companion, CompanionState::Reporting);
-    let ack = r
-        .event(Event {
-            event: "heartbeat".into(),
-            ..Default::default()
-        })
-        .unwrap();
+    let ack = r.event(json!({"event": "heartbeat"})).unwrap();
     assert_eq!(ack.lease_expires_ms, r.now() + r.lease_ms());
     assert!(
         ack.lease_expires_ms > lease_before,
@@ -381,11 +377,7 @@ async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     let original = r.saved("main").await["last_activity"].clone();
     r.advance_attended(270_000);
     r.step().await;
-    r.event(Event {
-        event: "heartbeat".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "heartbeat"})).unwrap();
     r.advance_attended(270_000);
     r.step().await;
     let status = r.view("main");
@@ -491,14 +483,12 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
             .apply_event(
                 "desktop",
                 r.generation("desktop"),
-                Event {
-                    event: "heartbeat".into(),
-                    session_id: "session".into(),
-                    instance_id: "instance".into(),
-                    sequence: 99,
-                    ..Default::default()
-                }
-                .try_into()
+                decoded(json!({
+                    "event": "heartbeat",
+                    "session_id": "session",
+                    "instance_id": "instance",
+                    "sequence": 99
+                }))
                 .unwrap()
             )
             .unwrap_err()
@@ -576,13 +566,8 @@ async fn probes_again(r: &mut Rig, agent: &str) {
 /// arm the record.
 fn start_main_again(r: &mut Rig) {
     let generation = r.request_generation("main");
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("main".into()),
-        request_generation: Some(generation),
-        ..Default::default()
-    })
-    .expect("a released agent starts again under the generation its release named");
+    r.event(json!({"event": "agent_start", "agent_id": "main", "request_generation": generation}))
+        .expect("a released agent starts again under the generation its release named");
 }
 
 /// A rig whose first probe of main the upstream has received and holds until `release`.
@@ -873,13 +858,8 @@ async fn a_probe_orphaned_by_a_release_and_then_a_revival_settles_under_the_rele
     .await;
     r.state("main", "released");
     let generation = r.request_generation("main");
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("main".into()),
-        request_generation: Some(generation),
-        ..Default::default()
-    })
-    .expect("a released agent starts again under the generation its release named");
+    r.event(json!({"event": "agent_start", "agent_id": "main", "request_generation": generation}))
+        .expect("a released agent starts again under the generation its release named");
     r.up.release();
     no_probe_running(&r.engine).await;
     r.pump(None).await;
@@ -936,15 +916,13 @@ async fn a_replacement_registration_during_a_probe_keeps_the_new_agents_in_fligh
         .apply_event(
             "desktop",
             r.generation("desktop"),
-            Event {
-                event: "session_start".into(),
-                session_id: "session".into(),
-                instance_id: "second".into(),
-                sequence: 1,
-                previous_instance_id: Some("instance".into()),
-                ..Default::default()
-            }
-            .try_into()
+            decoded(json!({
+                "event": "session_start",
+                "session_id": "session",
+                "instance_id": "second",
+                "sequence": 1,
+                "previous_instance_id": "instance"
+            }))
             .unwrap(),
         )
         .unwrap();
@@ -1074,12 +1052,8 @@ async fn concurrency_is_bounded_by_max_workers_alone() {
     let mut agents = vec![MAIN_AGENT.to_string()];
     for n in 1..=MAX_WORKERS {
         let agent = format!("worker-{n}");
-        r.event(Event {
-            event: "agent_start".into(),
-            agent_id: Some(agent.clone()),
-            ..Default::default()
-        })
-        .unwrap();
+        r.event(json!({"event": "agent_start", "agent_id": agent.clone()}))
+            .unwrap();
         agents.push(agent);
     }
     for agent in &agents {

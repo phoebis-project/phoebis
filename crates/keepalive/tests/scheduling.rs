@@ -2,7 +2,7 @@
 //! clears. The due time follows the entry's expiry, and the idle limits follow the pool's policy.
 mod common;
 use common::*;
-use phoebis_keepalive::{Event, KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, LEASE_MS};
+use phoebis_keepalive::{KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, LEASE_MS};
 use phoebis_ledger::{
     hour_of, member_spends, read_rollups, BudgetedMember, PriceRevisions, RollupSelect,
 };
@@ -15,6 +15,7 @@ use phoebis_store::{
     AccountState, BudgetPeriod, Cancellation, CooldownRow, CooldownScope, MemberWrite,
     OveragePolicy, StateCause,
 };
+use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -1112,12 +1113,8 @@ async fn a_one_hour_recipe_holds_under_affinity_too_short_on_a_thirty_minute_pin
         .update_pool(&pool, pool.updated_at, "test")
         .unwrap();
     r.h.router.reload().await.unwrap();
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "sub"}))
+        .unwrap();
     let hour = BODY.replace(
         r#""cache_control":{"type":"ephemeral"}"#,
         r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
@@ -1238,12 +1235,8 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.observe("main").await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .unwrap();
     // Round robin lands the session's second fresh placement on the pool's other account, so main and its
     // subagent hold two pins on two accounts rather than sharing one.
     r.observe("worker").await;

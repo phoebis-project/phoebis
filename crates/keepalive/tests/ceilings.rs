@@ -8,10 +8,11 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use common::*;
-use phoebis_keepalive::{Event, KeepalivePolicy, KeepaliveTiming, Lifecycle, Reason};
+use phoebis_keepalive::{KeepalivePolicy, KeepaliveTiming, Lifecycle, Reason};
 use phoebis_ledger::{
     hour_of, read_rollups, CostRevisions, PlanTables, PriceRevisions, RollupSelect,
 };
+use serde_json::{json, Value};
 
 const HOUR: i64 = 3_600_000;
 const OAUTH: &str = "sk-ant-oat01-OOOO";
@@ -203,39 +204,24 @@ async fn wasted(r: &Rig, probes: u64) -> BTreeMap<String, u64> {
     .await
 }
 
-fn report(r: &mut Rig, agent: &str, fields: Event) {
-    r.report(Event {
-        agent_id: Some(agent.into()),
-        ..fields
-    })
-    .unwrap();
+fn report(r: &mut Rig, agent: &str, mut fields: Value) {
+    fields["agent_id"] = agent.into();
+    r.report(fields).unwrap();
 }
 
 fn park(r: &mut Rig, agent: &str, kind: &str, deadline: Option<i64>, wake_at: Option<i64>) {
-    report(
-        r,
-        agent,
-        Event {
-            event: "state".into(),
-            state: Some("parked".into()),
-            park_kind: Some(kind.into()),
-            deadline,
-            wake_at,
-            ..Default::default()
-        },
-    );
+    let mut fields = json!({"event": "state", "state": "parked", "park_kind": kind});
+    if let Some(deadline) = deadline {
+        fields["deadline"] = deadline.into();
+    }
+    if let Some(wake_at) = wake_at {
+        fields["wake_at"] = wake_at.into();
+    }
+    report(r, agent, fields);
 }
 
 fn presence(r: &mut Rig) {
-    report(
-        r,
-        "main",
-        Event {
-            event: "activity".into(),
-            kind: Some("presence".into()),
-            ..Default::default()
-        },
-    );
+    report(r, "main", json!({"event": "activity", "kind": "presence"}));
 }
 
 /// The end of the newest entry the agent's pending probes wrote, read off the payload a save wrote.
@@ -881,12 +867,8 @@ async fn a_repeated_park_of_the_same_kind_keeps_the_parked_ceilings_start() {
 #[tokio::test]
 async fn a_subagents_park_follows_the_park_rules_and_no_idle_window_applies_to_it() {
     let mut r = rig(plan(policy(|_| {}))).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .unwrap();
     r.observe("worker").await;
     let start = r.now();
     park(
@@ -909,12 +891,8 @@ async fn a_subagents_park_follows_the_park_rules_and_no_idle_window_applies_to_i
     );
     // A busy subagent has no ceiling of its own.
     let mut r = rig(dollars(policy(|_| {}))).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
+    r.event(json!({"event": "agent_start", "agent_id": "worker"}))
+        .unwrap();
     r.observe_with("worker", &hour_body()).await;
     let start = r.now();
     tick_to(&mut r, start + 24 * HOUR).await;
