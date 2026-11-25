@@ -5,11 +5,12 @@ import { expiredBetweenTurns, servingAttempt } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
 import { pinTtlMs } from '@/lib/keepalive';
 import { compareRequests } from '@/lib/requests';
+import { regimeFitOf } from '@/lib/selection';
 import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { affinityTtlMsOf, eligibilityOf, keyById, poolById, servedFigures } from './pools';
-import { ACCOUNT_BOUND_SESSION_ID, BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, accountBoundAt, fastTurn, pinCacheTtlOf, pinReadAt, pinStampOf, requestById } from './requests';
+import { ACCOUNT_BOUND_SESSION_ID, BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, accountBoundAt, attemptEnd, fastTurn, pinCacheTtlOf, pinKeyFor, pinReadAt, pinStampOf, requestById } from './requests';
 import { dropSizeOf, droppedThinkingOf, moveSizeOf, weekRewriteOf } from './rewrite';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, regimeFor, tablesFor } from './samples';
@@ -387,6 +388,11 @@ const decayToNow = (foldAt: string | null, keyId: string): number => {
 /** The instant the route answers beside a decayed burn: its read, or a fold that lies past it. */
 const servedBurnAt = (foldAt: string | null): string | null => (foldAt === null ? null : iso(Math.max(NOW, Date.parse(foldAt))));
 /**
+ * Each answer of `hasDestination` by account and key. Only the module's build asks, while the seed pools, the seed
+ * accounts, the story's clock and the keys' client labels stand fixed, so an answer holds for every later ask.
+ */
+const DESTINATIONS = new Map<string, boolean>();
+/**
  * Whether a pin on `accountId` under `keyId` has a destination: a sibling of the pin's pool, its own account apart,
  * with room for the pin. A sibling counts where the pools route reads it as eligible, and it has room where its entry
  * of `regimeFits` under the regime of the key's client label, the base entry for a key with no label, reads `fits`.
@@ -394,15 +400,21 @@ const servedBurnAt = (foldAt: string | null): string | null => (foldAt === null 
  * session's fit stands in for it.
  */
 const hasDestination = (accountId: string, keyId: string): boolean => {
+  const memo = `${accountId}|${keyId}`;
+  const known = DESTINATIONS.get(memo);
+  if (known !== undefined) return known;
   const pool = poolById.get(keyById.get(keyId)?.poolId ?? '');
-  if (pool === undefined) return false;
   const regime = regimeFor(CLIENTS[keyId] ?? null);
-  return pool.members.some(
-    (m) =>
-      m.accountId !== accountId &&
-      eligibilityOf(accountById.get(m.accountId), pool.overagePolicy, m, NOW) === 'eligible' &&
-      servedFigures(m.accountId, NOW, pool).regimeFits?.find((f) => f.regime === regime)?.fit === 'fits',
-  );
+  const found =
+    pool !== undefined &&
+    pool.members.some(
+      (m) =>
+        m.accountId !== accountId &&
+        eligibilityOf(accountById.get(m.accountId), pool.overagePolicy, m, NOW) === 'eligible' &&
+        regimeFitOf(servedFigures(m.accountId, NOW, pool), regime)?.fit === 'fits',
+    );
+  DESTINATIONS.set(memo, found);
+  return found;
 };
 /**
  * A pin's move as the mock's rounds read it, under the regime its key's client label names: the size the round divides
@@ -412,19 +424,20 @@ const hasDestination = (accountId: string, keyId: string): boolean => {
  * drop where it drops nothing, each with its cost, and a cost reads null for a model without a weight on that week. A
  * prompt of 0 tokens is no size, as the route answers null where nothing is priced above zero, so a pin with a drop
  * and no size pays the drop's cost alone. A pin that no round can move reads no cost and keeps its other figures: one
- * that holds state on its account, and one whose pool holds no destination for it by `hasDestination`.
+ * that holds state on its account, whose flag the figures carry, and one whose pool holds no destination for it by
+ * `hasDestination`.
  */
-const moveFiguresOf = (tokens: number | null, dropped: number | null, model: string, accountId: string, keyId: string, bound: boolean, ttlMs: number): Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
-  const client = CLIENTS[keyId] ?? null;
-  const drop = dropSizeOf(dropped, model, client, ttlMs);
+const moveFiguresOf = (pin: Parameters<typeof droppedThinkingOf>[0], tokens: number | null, ttlMs: number): Pick<Session, 'accountBound' | 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
+  const accountBound = accountBoundAt(pinKeyFor(pin.keyId, pin.sessionId, pin.agentId, pin.model), NOW);
+  const dropped = droppedThinkingOf(pin, NOW);
+  const client = CLIENTS[pin.keyId] ?? null;
+  const drop = dropSizeOf(dropped, pin.model, client, ttlMs);
   const size = moveSizeOf(tokens, dropped, drop);
-  const dropCost = drop === null ? null : weekRewriteOf(drop, model, client, ttlMs);
-  return { moveCost: bound || !hasDestination(accountId, keyId) ? null : size === null ? dropCost : weekRewriteOf(size, model, client, ttlMs), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
+  const dropCost = drop === null ? null : weekRewriteOf(drop, pin.model, client, ttlMs);
+  return { accountBound, moveCost: accountBound || !hasDestination(pin.accountId, pin.keyId) ? null : size === null ? dropCost : weekRewriteOf(size, pin.model, client, ttlMs), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
 };
-/** The TTL the router prices a write at where no pin reports one. */
-const UNREPORTED_TTL_MS = 5 * MINUTE;
-/** A row with no pin, which answers none of its move's figures. */
-const NO_MOVE: Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> = { moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null };
+/** A row with no pin, which answers no flag of held account state and none of its move's figures. */
+const NO_MOVE: Pick<Session, 'accountBound' | 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> = { accountBound: null, moveCost: null, moveDropCost: null, moveDropSize: null, moveSize: null };
 /** A pin's lane by the story's rule for its key's turns on its model, which the router stores on the pin. */
 const fastPin = (keyId: string, model: string): boolean => fastTurn(keyId, model, 'inference');
 /**
@@ -476,34 +489,35 @@ const warmAt = (warmUntil: string | null): boolean => pinTtlMs({ warmUntil }, NO
 /** A line before `datedLines` dates it, with its pin's own instant where its caller writes one. */
 type UndatedLine = Omit<AgentContext, 'pinnedAt'> & Partial<Pick<AgentContext, 'pinnedAt'>>;
 /**
- * A pin's line as the route answers it: warm until its last refresh plus its cache TTL, the refresh its caller names,
- * its burn and dollars as folded priced on the pin's own account and model, in that account's unit and window, as the
- * row's are for the display pin, and its lane, its flag of held account state and its move's figures as the row's are.
- * Its burn folded at its last use unless its caller names the instant, as the display pin's line takes its row's, since
- * the route keeps one fold per pin, and the line serves it decayed to the story's clock with that instant beside it.
+ * A pin's line as the route answers it: warm until its last refresh plus its cache TTL, the refresh its caller names
+ * and the TTL its session's entries live for (`pinCacheTtlOf`), its burn and dollars as folded priced on the pin's own
+ * account and model, in that account's unit and window, as the row's are for the display pin, and its lane, its flag of
+ * held account state and its move's figures as the row's are. Its burn folded at its last use unless its caller names
+ * the instant, as the display pin's line takes its row's, since the route keeps one fold per pin, and the line serves it
+ * decayed to the story's clock with that instant beside it.
  */
 const pinLine = (
-  line: Omit<UndatedLine, 'accountBound' | keyof BurnFigures | 'fast' | keyof MoveFigures | 'warm' | 'warmUntil'> & Partial<Pick<AgentContext, 'burnAt'>>,
+  line: Omit<UndatedLine, 'accountBound' | keyof BurnFigures | 'cacheTtlMs' | 'fast' | keyof MoveFigures | 'warm' | 'warmUntil'> & Partial<Pick<AgentContext, 'burnAt'>>,
   keyId: string,
   sessionId: string,
   folded: { burn: number | null; dollars: number | null },
   lastRefreshAt: string | null,
 ): UndatedLine => {
+  const cacheTtlMs = pinCacheTtlOf(sessionId);
   const unit = burnUnitOf(line.accountId);
   const foldAt = line.burnAt === undefined ? line.lastUsedAt : line.burnAt;
   const factor = decayToNow(foldAt, keyId);
   const burn = unit === null || folded.burn === null ? null : folded.burn * factor;
-  const warmUntil = warmUntilOf(lastRefreshAt, line.cacheTtlMs);
-  const accountBound = accountBoundAt(`${keyId}|${sessionId}|${line.agentId}|${line.model}`, NOW);
+  const warmUntil = warmUntilOf(lastRefreshAt, cacheTtlMs);
   return {
     ...line,
-    accountBound,
     burn,
     burnAt: servedBurnAt(foldAt),
     ...burnReadingOf(line.accountId, keyId, burn, unit),
     burnUsd: burnUsdOf(folded.dollars === null ? null : folded.dollars * factor, unit, line.model),
+    cacheTtlMs,
     fast: fastPin(keyId, line.model),
-    ...moveFiguresOf(line.lastInputTokens, droppedThinkingOf({ accountId: line.accountId, agentId: line.agentId, keyId, model: line.model, sessionId }, NOW), line.model, line.accountId, keyId, accountBound, line.cacheTtlMs ?? UNREPORTED_TTL_MS),
+    ...moveFiguresOf({ accountId: line.accountId, agentId: line.agentId, keyId, model: line.model, sessionId }, line.lastInputTokens, cacheTtlMs),
     warm: warmAt(warmUntil),
     warmUntil,
   };
@@ -565,12 +579,14 @@ function storyPinWrite(requestId: string, accountId: string, sessionId: string, 
  * own. A request the story does not hold fails the mock as it loads rather than reading a default.
  */
 function storyPinPlaced(placedBy: { renewedBy: string; requestId: string }): { at: string; usedAt: string } {
-  const atOf = (id: string) => {
-    const r = requestById.get(id);
-    if (r === undefined) throw new Error(`the story holds no request ${id}`);
-    return r.at;
-  };
-  return { at: atOf(placedBy.requestId), usedAt: atOf(placedBy.renewedBy) };
+  return { at: storyRequest(placedBy.requestId).at, usedAt: storyRequest(placedBy.renewedBy).at };
+}
+
+/** A request the story holds. One it does not hold fails the mock as it loads rather than reading a default. */
+function storyRequest(id: string): RequestLog {
+  const r = requestById.get(id);
+  if (r === undefined) throw new Error(`the story holds no request ${id}`);
+  return r;
 }
 
 /**
@@ -579,9 +595,9 @@ function storyPinPlaced(placedBy: { renewedBy: string; requestId: string }): { a
  */
 function newestAnswerOn(keyId: string, sessionId: string, accountId: string): string | null {
   const ends = REQUESTS.flatMap((r) => {
-    const last = r.attempts[r.attempts.length - 1];
+    const last = servingAttempt(r);
     const answered = r.kind !== 'probe' && r.keyId === keyId && r.sessionId === sessionId && r.agentId === 'main' && last?.accountId === accountId && last.upstreamStatus === 200;
-    return answered ? [Date.parse(last.startedAt) + (last.durationMs ?? 0)] : [];
+    return answered ? [attemptEnd(last)] : [];
   });
   return ends.length === 0 ? null : iso(Math.max(...ends));
 }
@@ -641,7 +657,6 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
   // A drawn row's pin was written at its first sighting, unless a move or a placement of the story wrote it later.
   const firstSeen = pinned ? ago(createdAgo) : null;
-  const bound = pinned && accountBoundAt(`${spec.keyId}|${sessionId}|main|${spec.model}`, NOW);
   const row: Session = {
     ...SESSION_SAMPLE,
     sessionId,
@@ -672,8 +687,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     // Read off the display pin's line once the lines are written.
     ended: null,
     fast: pinned ? fastPin(spec.keyId, spec.model) : null,
-    accountBound: pinned ? bound : null,
-    ...(pinned ? moveFiguresOf(lastInputRoll, droppedThinkingOf({ accountId: spec.accountId, agentId: 'main', keyId: spec.keyId, model: spec.model, sessionId }, NOW), spec.model, spec.accountId, spec.keyId, bound, pinCacheTtlOf(sessionId)) : NO_MOVE),
+    ...(pinned ? moveFiguresOf({ accountId: spec.accountId, agentId: 'main', keyId: spec.keyId, model: spec.model, sessionId }, lastInputRoll, pinCacheTtlOf(sessionId)) : NO_MOVE),
     ...NO_MARK,
     shed: pinWrite?.shed ?? null,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
@@ -711,7 +725,6 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
 // and no activity of its own. Its id is written out rather than drawn, which would shift every later roll in this file.
 SESSIONS.push({
   ...SESSION_SAMPLE,
-  accountBound: null,
   accountId: null,
   agentContexts: [],
   agentFacts: [],
@@ -895,13 +908,8 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
  * the probe the move overtook went out at. Written behind the rolls, so every drawn row and recipe keeps its own.
  */
 {
-  const of = (id: string) => {
-    const r = requestById.get(id);
-    if (r === undefined) throw new Error(`the story holds no request ${id}`);
-    return r;
-  };
-  const turn = of(MOVED_PIN_TURN_ID);
-  const call = of(MOVED_PIN_CALL_ID);
+  const turn = storyRequest(MOVED_PIN_TURN_ID);
+  const call = storyRequest(MOVED_PIN_CALL_ID);
   RECIPES.push({
     ...RECIPE_SAMPLE,
     accountId: servingAttempt(turn)!.accountId,
@@ -912,7 +920,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     deadline: null,
     keyId: call.keyId!,
     lastGuard: 'auxiliary',
-    lastProbeAt: of(MOVED_PIN_PROBE_ID).at,
+    lastProbeAt: storyRequest(MOVED_PIN_PROBE_ID).at,
     lastRequestAt: call.at,
     model: call.canonicalModel,
     nextProbeAt: iso(MOVED_PIN_PROBE_DUE),
@@ -963,7 +971,7 @@ SESSIONS.forEach((pin) => {
   if (!pin.pinned || pin.lastUsedAt === null) return;
   const main = RECIPES.find((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId && r.agentId === 'main');
   if (!main?.lastProbeAt || LADDER_CAUSES.has(main.cause) || main.accountId !== pin.accountId) return;
-  if (Date.parse(main.lastProbeAt) > Date.parse(pin.lastUsedAt)) pin.lastUsedAt = main.lastProbeAt;
+  pin.lastUsedAt = laterOf(pin.lastUsedAt, main.lastProbeAt);
 });
 
 /**
@@ -993,10 +1001,10 @@ const agentPinOf = (row: Session, i: number, r: KeepaliveRecipe & { accountId: s
   const own = { accountId: moved?.accountId ?? r.accountId, agentId: r.agentId, model: r.model };
   const ended = pinEndedOf(i, r, j);
   if (r.agentId === 'main') {
-    const line = { ...own, burnAt: fold?.at ?? null, cacheTtlMs: row.cacheTtlMs, effort: row.effort, ended, lastInputTokens: row.lastInputTokens, lastUsedAt: row.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: row.pinnedAt };
+    const line = { ...own, burnAt: fold?.at ?? null, effort: row.effort, ended, lastInputTokens: row.lastInputTokens, lastUsedAt: row.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: row.pinnedAt };
     return pinLine(line, row.keyId, row.sessionId, display, row.lastRefreshAt);
   }
-  const line = { ...own, cacheTtlMs: pinCacheTtlOf(row.sessionId), effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState, ...(moved === null ? {} : { pinnedAt: moved.at }) };
+  const line = { ...own, effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState, ...(moved === null ? {} : { pinnedAt: moved.at }) };
   return pinLine(line, row.keyId, row.sessionId, servedBeside(display, line, firstSighting.get(row) ?? null), line.lastUsedAt);
 };
 /**
@@ -1120,7 +1128,6 @@ const writtenRow = (
  */
 const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGeneration' | 'keyId' | 'lastRequestAt' | 'model' | 'sessionId'>): Session => ({
   ...SESSION_SAMPLE,
-  accountBound: null,
   agentContexts: [],
   agentFacts: [],
   agentId: null,
@@ -1154,6 +1161,15 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   warm: null,
   ...fields,
 });
+/**
+ * A session's ledger-only row off `rows`, its account, its model and its last request those of its newest request that
+ * is no probe under its key, generation and session, and none where `rows` hold no such request.
+ */
+const ledgerRowOf = (rows: readonly RequestLog[], s: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, historical: boolean): Session | null => {
+  // The seed runs newest first, and the written rows keep its order.
+  const newest = rows.find((r) => r.kind !== 'probe' && r.keyId === s.keyId && r.keyGeneration === s.keyGeneration && r.sessionId === s.sessionId);
+  return newest === undefined ? null : ledgerOnlyRow({ accountId: newest.accountId, historical, keyGeneration: s.keyGeneration, keyId: s.keyId, lastRequestAt: newest.at, model: newest.canonicalModel, sessionId: s.sessionId });
+};
 
 /**
  * A session's row once the operator deleted its key, read off `written`, the requests the ledger had written by the
@@ -1165,12 +1181,9 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
  * the delete, so for that second it leaves those rows out.
  */
 export const rowsOfDeletedKey = (s: Session, written: readonly RequestLog[]): Session[] => {
-  // The seed runs newest first, and the written rows keep its order.
-  const newest = written.find((r) => r.kind !== 'probe' && r.keyId === s.keyId && r.keyGeneration === s.keyGeneration && r.sessionId === s.sessionId);
-  if (newest === undefined) return [];
-  const row = ledgerOnlyRow({ accountId: newest.accountId, historical: true, keyGeneration: s.keyGeneration, keyId: s.keyId, lastRequestAt: newest.at, model: newest.canonicalModel, sessionId: s.sessionId });
+  const row = ledgerRowOf(written, s, true);
   // The ledger names the fork off the session's requests, which outlive the key.
-  return [{ ...row, forkDepth: s.forkDepth, forkedFrom: s.forkedFrom }];
+  return row === null ? [] : [{ ...row, forkDepth: s.forkDepth, forkedFrom: s.forkedFrom }];
 };
 
 /**
@@ -1209,7 +1222,6 @@ SLOWED_PINS.forEach((pin, k) => {
     return {
       accountId: 'studio',
       agentId,
-      cacheTtlMs: pinCacheTtlOf(pin.sessionId),
       effort: agentId === 'main' ? effort : effortAt(k + j),
       ended: false,
       lastInputTokens: promptOf(newest.usage),
@@ -1266,7 +1278,7 @@ if (FLEET_PINS.length > 0) {
   const lines = FLEET_PINS.map((pin, j) => {
     const attempt = servingAttempt(pin)!;
     const pinnedAt = runStart(fleetRows.filter((r) => r.canonicalModel === pin.canonicalModel)).at;
-    return { accountId: attempt.accountId, agentId: 'main', cacheTtlMs: pinCacheTtlOf(FLEET_SESSION_ID), effort: effortAt(j + 1), ended: false, lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel, pinnedAt };
+    return { accountId: attempt.accountId, agentId: 'main', effort: effortAt(j + 1), ended: false, lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel, pinnedAt };
   });
   SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', burn: FLEET_BURN, firstSeen: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
 }
@@ -1286,7 +1298,7 @@ const WORKSHOP_BURN_USD = 0.19;
   const firstSeen = workshopRows[workshopRows.length - 1].at;
   // A pin holds one model, so the line's pin was written at the session's oldest turn on that model.
   const pinnedAt = workshopRows.filter((r) => r.canonicalModel === WORKSHOP_PIN.canonicalModel).at(-1)!.at;
-  const line = { accountId: 'workshop', agentId: 'main', cacheTtlMs: pinCacheTtlOf(WORKSHOP_SESSION_ID), effort: effortAt(1), ended: false, lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel, pinnedAt };
+  const line = { accountId: 'workshop', agentId: 'main', effort: effortAt(1), ended: false, lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel, pinnedAt };
   SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', burn: WORKSHOP_BURN, dollars: WORKSHOP_BURN_USD, firstSeen, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
 }
 
@@ -1295,11 +1307,8 @@ const WORKSHOP_BURN_USD = 0.19;
 // the session expiry and the non-companion timeout, with that holder's own requests and no pin or recipe. The holder's
 // last request ran on the session the live key holds now, so the row carries that id, and it joins the list after the
 // probe times are filled in, which would otherwise hand it that session's next probe.
-const holderRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
-const holderLast = holderRows[0];
-if (holderLast && insideSessionExpiry(holderLast.at, NOW)) {
-  SESSIONS.push(ledgerOnlyRow({ accountId: holderLast.accountId, historical: true, keyGeneration: DELETED_HOLDER_GENERATION, keyId: 'desktop', lastRequestAt: holderLast.at, model: holderLast.canonicalModel, sessionId: SESSION_IDS[0] }));
-}
+const holderRow = ledgerRowOf(REQUESTS, { keyGeneration: DELETED_HOLDER_GENERATION, keyId: 'desktop', sessionId: SESSION_IDS[0] }, true);
+if (holderRow?.lastRequestAt && insideSessionExpiry(holderRow.lastRequestAt, NOW)) SESSIONS.push(holderRow);
 
 // The desktop session whose every request the key's own guardrail refused before any account was asked. The router
 // lists it off the ledger's rows with no pin and no recipe, so a drifting or blocked client stays visible, and the
@@ -1354,7 +1363,6 @@ const AUXILIARY_ONLY_BURN = 0.05;
 const auxiliaryOnlyLine = {
   accountId: 'overflow',
   agentId: auxiliaryOnlyRecipe.agentId,
-  cacheTtlMs: pinCacheTtlOf(AUXILIARY_ONLY_SESSION_ID),
   effort: 'high',
   ended: false,
   lastInputTokens: 23_400,
@@ -1364,8 +1372,8 @@ const auxiliaryOnlyLine = {
 };
 const NO_MOD_CREATED_AT = ago(47 * MINUTE);
 const NO_MOD_BURN = 0.22;
-const noModMain = { accountId: 'contract', agentId: 'main', cacheTtlMs: pinCacheTtlOf(NO_MOD_SESSION_ID), effort: 'max', ended: false, lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), lifecycle: null, model: 'claude-sonnet-5-5' };
-const noModSubagent = { accountId: 'contract', agentId: '5c8e', cacheTtlMs: pinCacheTtlOf(NO_MOD_SESSION_ID), effort: 'low', ended: false, lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), lifecycle: null, model: HAIKU };
+const noModMain = { accountId: 'contract', agentId: 'main', effort: 'max', ended: false, lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), lifecycle: null, model: 'claude-sonnet-5-5' };
+const noModSubagent = { accountId: 'contract', agentId: '5c8e', effort: 'low', ended: false, lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), lifecycle: null, model: HAIKU };
 const auxiliaryOnlyRow = writtenRow(
   {
     accountId: 'overflow',
@@ -1381,7 +1389,7 @@ const auxiliaryOnlyRow = writtenRow(
 );
 // Main's auxiliary calls ride beside its subagent's turns, so its pin was last used at the subagent's last request. An
 // auxiliary call reports no prompt size, so the pin's burn and its move's size read none.
-const auxiliaryMain = { accountId: 'overflow', agentId: 'main', cacheTtlMs: pinCacheTtlOf(AUXILIARY_ONLY_SESSION_ID), effort: null, ended: false, lastInputTokens: null, lastUsedAt: auxiliaryOnlyRecipe.lastRequestAt, lifecycle: null, model: HAIKU };
+const auxiliaryMain = { accountId: 'overflow', agentId: 'main', effort: null, ended: false, lastInputTokens: null, lastUsedAt: auxiliaryOnlyRecipe.lastRequestAt, lifecycle: null, model: HAIKU };
 UNLISTED_PINS.set(auxiliaryOnlyRow, [pinLine(auxiliaryMain, 'laptop', AUXILIARY_ONLY_SESSION_ID, { burn: null, dollars: null }, auxiliaryMain.lastUsedAt)]);
 const WRITTEN_SESSIONS = [
   auxiliaryOnlyRow,
@@ -1404,21 +1412,18 @@ const FAILOVER_PIN_BURN = 0.012;
 const FAILOVER_PIN_BURN_USD = 0.03;
 {
   const of = (id: string) => {
-    const r = requestById.get(id);
-    if (r === undefined || r.keyId === null || r.sessionId === null) throw new Error(`the story holds no session request ${id}`);
+    const r = storyRequest(id);
+    if (r.keyId === null || r.sessionId === null) throw new Error(`the story holds no session request ${id}`);
     return { ...r, keyId: r.keyId, sessionId: r.sessionId };
   };
   const turn = of(LEDGER_TURN_ID);
-  // The seed runs newest first.
-  const newest = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === turn.keyId && r.keyGeneration === turn.keyGeneration && r.sessionId === turn.sessionId)!;
-  SESSIONS.push(ledgerOnlyRow({ accountId: newest.accountId, historical: false, keyGeneration: turn.keyGeneration, keyId: turn.keyId, lastRequestAt: newest.at, model: newest.canonicalModel, sessionId: turn.sessionId }));
+  SESSIONS.push(ledgerRowOf(REQUESTS, turn, false)!);
   const failover = of(FAILOVER_TURN_ID);
   const landing = servingAttempt(failover)!;
   const write = storyPinWrite(failover.id, landing.accountId, failover.sessionId, true);
   const line = {
     accountId: landing.accountId,
     agentId: failover.agentId!,
-    cacheTtlMs: pinCacheTtlOf(failover.sessionId),
     effort: failover.shape.effort,
     ended: true,
     lastInputTokens: promptOf(failover.usage),
@@ -1563,6 +1568,7 @@ type PinEvent = Pick<RoutingEvent, 'agentId' | 'at' | 'keyId' | 'kind' | 'sessio
  * router's ledger holds it. The added placement follows the seed rather than the listed row's pin, because the ledger
  * keeps the event when a write takes the pin, as a key's delete does.
  */
+const SEEDED_PINS: ReadonlySet<string> = new Set(SESSIONS.filter((x) => x.pinned).map((x) => activityOf(x.keyId, x.keyGeneration, x.sessionId)));
 const placementsOf = (s: Session, events: readonly PinEvent[]): number => {
   const live = keyById.get(s.keyId);
   // The story's key map keeps a key the operator deleted, whose own rows no live key bounds, so only a later
@@ -1571,7 +1577,7 @@ const placementsOf = (s: Session, events: readonly PinEvent[]): number => {
   const own = events.filter((e) => Date.parse(e.at) >= s.keyGeneration && Date.parse(e.at) < until);
   // An earlier holder's row can carry the key id and the session of a live key's pinned row, so the generation tells
   // the two apart.
-  const seeded = SESSIONS.some((x) => x.pinned && x.keyId === s.keyId && x.keyGeneration === s.keyGeneration && x.sessionId === s.sessionId);
+  const seeded = SEEDED_PINS.has(activityOf(s.keyId, s.keyGeneration, s.sessionId));
   return own.length + (seeded && !own.some((e) => e.kind === 'pin_created') ? 1 : 0);
 };
 
@@ -1600,8 +1606,14 @@ export const sessionsListedAt = (now: number, sessions: readonly Session[], seco
 // inside its pool's affinity window, whether or not the ledger holds the request that wrote it. The pool view reads
 // every pin under the pool's keys as its figure and each member's own on the member, so a pin on an account that left
 // the pool counts in the figure and the dashboard's sum alone.
-const recipeLastUse = (r: Pick<KeepaliveRecipe, 'lastProbeAt' | 'lastRequestAt'>): number => Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((at) => (at === null ? [] : [Date.parse(at)])));
-const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => NOW - recipeLastUse(r) <= affinityTtlMsOf(poolId);
+const recipeLastUse = (r: Pick<KeepaliveRecipe, 'lastProbeAt' | 'lastRequestAt'>): number | null => {
+  const at = laterOf(r.lastRequestAt, r.lastProbeAt);
+  return at === null ? null : Date.parse(at);
+};
+const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => {
+  const last = recipeLastUse(r);
+  return last !== null && NOW - last <= affinityTtlMsOf(poolId);
+};
 
 /**
  * The pins under a pool's keys as `GET /admin/pools/{id}/pins` answers them at `now`, in the order of their keys,
@@ -1612,13 +1624,12 @@ const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => NOW - recipeLas
  * where no recipe names the pin.
  */
 export const poolPinsAt = (now: number, sessions: readonly Session[], keyIds: ReadonlySet<string>, ttlMs: number): PoolPin[] => {
-  const keyOf = (keyId: string, sessionId: string, agentId: string, model: string) => `${keyId}|${sessionId}|${agentId}|${model}`;
-  const recipes = new Map(RECIPES.map((r) => [keyOf(r.keyId, r.sessionId, r.agentId, r.model), r]));
+  const recipes = new Map(RECIPES.map((r) => [pinKeyFor(r.keyId, r.sessionId, r.agentId, r.model), r]));
   return sessions
     .filter((s) => keyIds.has(s.keyId))
     .flatMap((s) =>
       [...s.agentContexts, ...(UNLISTED_PINS.get(s) ?? [])].flatMap((line): PoolPin[] => {
-        const recipe = recipes.get(keyOf(s.keyId, s.sessionId, line.agentId, line.model));
+        const recipe = recipes.get(pinKeyFor(s.keyId, s.sessionId, line.agentId, line.model));
         const lastUse = recipe !== undefined ? recipeLastUse(recipe) : line.lastUsedAt === null ? null : Date.parse(line.lastUsedAt);
         if (lastUse === null || pinReadAt(lastUse, ttlMs, now) === 'none') return [];
         const mark = line.agentId === s.agentId && line.model === s.model ? s.mark : null;
@@ -1653,7 +1664,7 @@ type Pin = { agentId: string; keyId: string; sessionId: string };
 /** The pins by their account, keyed `key|session|agent|model` so a pin a recipe and a line name counts once. */
 const PINS = new Map<string | null, Map<string, Pin>>();
 const pinOn = (accountId: string | null, keyId: string, sessionId: string, agentId: string, model: string) =>
-  PINS.set(accountId, (PINS.get(accountId) ?? new Map<string, Pin>()).set(`${keyId}|${sessionId}|${agentId}|${model}`, { agentId, keyId, sessionId }));
+  PINS.set(accountId, (PINS.get(accountId) ?? new Map<string, Pin>()).set(pinKeyFor(keyId, sessionId, agentId, model), { agentId, keyId, sessionId }));
 for (const r of RECIPES) {
   const poolId = keyById.get(r.keyId)?.poolId;
   if (poolId === undefined || (r.agentState === 'released' && !pinKept(r, poolId))) continue;
@@ -1663,7 +1674,7 @@ for (const r of RECIPES) {
 // no line.
 for (const s of SESSIONS) for (const line of s.agentContexts) pinOn(line.accountId, s.keyId, s.sessionId, line.agentId, line.model);
 // Main's auxiliary pin draws no line, but the router holds it, so the pools count it as they count every pin.
-pinOn('overflow', 'laptop', AUXILIARY_ONLY_SESSION_ID, 'main', HAIKU);
+for (const line of UNLISTED_PINS.get(auxiliaryOnlyRow) ?? []) pinOn(line.accountId, auxiliaryOnlyRow.keyId, auxiliaryOnlyRow.sessionId, line.agentId, line.model);
 const underKeys = (pins: ReadonlyMap<string, Pin>, keyIds: ReadonlySet<string>) => [...pins.values()].filter((pin) => keyIds.has(pin.keyId));
 const pinsUnder = (keyIds: ReadonlySet<string>) => [...PINS.values()].flatMap((pins) => underKeys(pins, keyIds));
 /**

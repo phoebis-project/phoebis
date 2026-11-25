@@ -161,7 +161,7 @@ function runwayOf(placement: Placement, entry: RegimeFit | null): number {
 
 /** A member's entry under `regime`: the entry of that name, the base entry where the list lacks it, and none where
  *  the router answers no list. */
-function regimeFitOf(member: Pick<PoolMember, 'regimeFits'> | undefined, regime: string | null): RegimeFit | null {
+export function regimeFitOf(member: Pick<PoolMember, 'regimeFits'> | undefined, regime: string | null): RegimeFit | null {
   const fits = member?.regimeFits ?? null;
   if (fits === null) return null;
   return fits.find((f) => f.regime === regime) ?? fits.find((f) => f.regime === null) ?? null;

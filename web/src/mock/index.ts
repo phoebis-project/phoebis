@@ -15,15 +15,15 @@ import { keyFeaturesNaming, poolFeaturesNaming } from '@/lib/accountUses';
 import { type Clock, wallClock } from '@/lib/clock';
 import { has, lookup } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
-import { tokensTotal } from '@/lib/format';
+import { keyLifetime, tokensTotal } from '@/lib/format';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
-import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf, readWindows } from '@/lib/quota';
+import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf, readWindows, withholdsWindows } from '@/lib/quota';
 import { compareOrderKeys, compareRequests, orderKeyOf, requestOrder, type OrderKey } from '@/lib/requests';
 import { movedFrom } from '@/lib/routingLog';
 import { WINDOW_HOURS, WINDOW_KEY } from '@/lib/windows';
-import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, blankAccountRow, featureGrantsOf, lastReadingOf, usageOf, withholdsWindows } from './accounts';
+import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, blankAccountRow, cleanPollAt, featureGrantsOf, lastReadingOf, usageOf } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, unusedAllowanceOf, wholeHoursOf } from './analytics';
 import { ATTENTION, byKindThenSince, featureAccountUnavailableOf, pairingExpiringOf } from './attention';
 import { CATALOG } from './catalog';
@@ -427,7 +427,7 @@ const reportsPlan = (a: Pick<Account, 'subscription'>): boolean => a.subscriptio
  * window the row reads, or a sample the story's poll wrote, since the router keeps an account's last reading past a
  * disconnect and past an ended plan.
  */
-const holdsReading = (a: Account): boolean => a.windows.length > 0 || a.fableWindow !== null || ledger().quotaHistory.some((h) => h.accountId === a.id && h.samples.length > 0);
+const holdsReading = (a: Account): boolean => readWindows(a).length > 0 || ledger().quotaHistory.some((h) => h.accountId === a.id && h.samples.length > 0);
 
 /**
  * A written member as the route answers it: the kind, the burn, the Pace score, the speed and the fit read off the
@@ -439,11 +439,13 @@ const writtenMember = (m: PoolInput['members'][number], account: Account | undef
   return { ...member, eligible: eligible(member) };
 };
 
+const keyIdsOf = (keys: readonly Pick<ApiKey, 'id' | 'poolId'>[], poolId: string): Set<string> => new Set(keys.filter((k) => k.poolId === poolId).map((k) => k.id));
+
 /**
  * A pool's pins are every pin under the keys it holds at the read, so a pool created again under a deleted one's id
  * reads none of the old keys' pins. A pin on a member that left the pool counts here and in no member's cell.
  */
-const poolPins = (p: Pick<Pool, 'id'>, keys: readonly Pick<ApiKey, 'id' | 'poolId'>[]): number => pinsUnderPool(new Set(keys.filter((k) => k.poolId === p.id).map((k) => k.id)));
+const poolPins = (p: Pick<Pool, 'id'>, keys: readonly Pick<ApiKey, 'id' | 'poolId'>[]): number => pinsUnderPool(keyIdsOf(keys, p.id));
 
 /**
  * The route's `keys=` rule: `<id>@<generation>` names one lifetime and a bare id the live key's, so an earlier
@@ -451,7 +453,7 @@ const poolPins = (p: Pick<Pool, 'id'>, keys: readonly Pick<ApiKey, 'id' | 'poolI
  * any generation.
  */
 const selectsKey = (selector: string, r: RequestLog, live: Map<string, number>) =>
-  selector === '-' ? r.keyId === null : r.keyId !== null && (selector.includes('@') ? `${r.keyId}@${r.keyGeneration}` === selector : r.keyId === selector && live.get(selector) === r.keyGeneration);
+  selector === '-' ? r.keyId === null : r.keyId !== null && (selector.includes('@') ? keyLifetime(r.keyId, r.keyGeneration) === selector : r.keyId === selector && live.get(selector) === r.keyGeneration);
 
 function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>): boolean {
   // A request the router never attributed to a key matches the reserved id alone.
@@ -683,13 +685,13 @@ export class MockApi implements Api {
    */
   private poolView(p: StoredPool): Pool {
     const keys = this.keys.filter((k) => k.poolId === p.id).map((k) => ({ enabled: k.enabled, id: k.id, label: k.name, prefix: k.prefix }));
-    const ids = new Set(keys.map((k) => k.id));
+    const ids = keyIdsOf(this.keys, p.id);
     const cohort = largestCohort(ids);
     // A member's pins are read under the keys the pool holds at the read, as its figure is, so a key that moved here
     // counts its pins on the member cells too.
     const members = p.members.map((m) => ({ ...m, activePins: memberPins(ids, m.accountId) }));
     // The route answers `exhausted` for an enabled pool with no member, whatever status the pool was saved with.
-    return { ...p, activePins: poolPins(p, this.keys), guardrails: this.guardrailRefs('pools', p.id), keys, members, status: p.status !== 'disabled' && p.members.length === 0 ? 'exhausted' : p.status, warnings: poolWarnings(p, cohort) };
+    return { ...p, activePins: pinsUnderPool(ids), guardrails: this.guardrailRefs('pools', p.id), keys, members, status: p.status !== 'disabled' && p.members.length === 0 ? 'exhausted' : p.status, warnings: poolWarnings(p, cohort) };
   }
 
   /**
@@ -835,8 +837,8 @@ export class MockApi implements Api {
       const a = this.accounts.find((x) => x.id === id);
       if (a === undefined || withholdsWindows(a)) continue;
       const read = iso(at);
-      const usage = a.usage && { ...a.usage, error: null, fetchedAt: read, heldUntil: null, poll: { backoffSince: null, lastAttemptAt: read, lastCleanAt: read, lastError: null, lastOutcome: 'clean' as const, nextAttemptAt: null, rateLimitedInARow: 0 } };
-      const windows = (a.windows.length === 0 && a.fableWindow === null ? FIRST_READING : a.windows).map((w) => ({ ...w, observedAt: read }));
+      const usage = a.usage && { ...a.usage, error: null, fetchedAt: read, heldUntil: null, poll: cleanPollAt(read) };
+      const windows = (readWindows(a).length === 0 ? FIRST_READING : a.windows).map((w) => ({ ...w, observedAt: read }));
       this.putAccount({ ...a, fableWindow: a.fableWindow && { ...a.fableWindow, observedAt: read }, usage, windows });
     }
   }
@@ -1413,7 +1415,12 @@ export class MockApi implements Api {
   listAccountRollups(from: string, to: string) {
     // As the route reads a range: from the hour holding the start up to the hour ceiling of the end, exclusive.
     const { fromMs, toMs } = wholeHoursOf({ from, to });
-    return latency(ledger().accountHours.filter((r) => Date.parse(r.hour) >= fromMs && Date.parse(r.hour) < toMs));
+    return latency(
+      ledger().accountHours.filter((r) => {
+        const at = Date.parse(r.hour);
+        return at >= fromMs && at < toMs;
+      }),
+    );
   }
 
   listAccounts() {
@@ -1472,8 +1479,7 @@ export class MockApi implements Api {
     const { keys, pools, sessions } = this.registry();
     const pool = pools.find((p) => p.id === poolId);
     if (pool === undefined) return Promise.reject(new ApiError(404, 'pool not found', null));
-    const keyIds = new Set(keys.filter((k) => k.poolId === poolId).map((k) => k.id));
-    return latency(poolPinsAt(NOW, sessions, keyIds, pool.affinityTtlSeconds * 1_000));
+    return latency(poolPinsAt(NOW, sessions, keyIdsOf(keys, poolId), pool.affinityTtlSeconds * 1_000));
   }
 
   listPools() {

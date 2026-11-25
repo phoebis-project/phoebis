@@ -1,16 +1,16 @@
+import { partAllowanceRows } from '@/api/decode';
 import { agentTokenOf, plus } from '@/api/fold';
 import type {
   Account, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, QuotaHistory, Reconciliation, ReconciliationsAnswer,
   RefusalCategoriesAnswer, RefusalCategoryRow, RequestKind, RequestLog, RewritePoint, RewritesAnswer, RoutingEvent, SubscriptionCosts, UnusedAllowanceAnswer, WastedProbeReason,
 } from '@/api/types';
-import { drawnInstant } from '@/lib/allowance';
 import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { anchorTier, equivalentIn, modelWeeks, pricedWindow, shareIn, tableAt, tierCapacity, type CostWindow, type Usage } from '@/lib/costs';
 import { addCounts, emptyCounts, groupInto } from '@/lib/counts';
 import { foldRequestClass, servingResponse } from '@/lib/dimensions';
-import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
+import { byteOrder, earlierHolderLabel, keyLifetime, placementHit } from '@/lib/format';
 import { mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { endOf } from '@/lib/quota';
@@ -137,7 +137,7 @@ const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
     // What the router never attributed is one group whatever the generation column says.
     if (r.keyId === '-') return r.keyId;
     const live = keyById.get(r.keyId);
-    return live && Date.parse(live.createdAt) === r.keyGeneration ? r.keyId : `${r.keyId}@${r.keyGeneration}`;
+    return live && Date.parse(live.createdAt) === r.keyGeneration ? r.keyId : keyLifetime(r.keyId, r.keyGeneration);
   },
   kind: (r) => r.kind,
   model: (r) => r.model,
@@ -153,7 +153,7 @@ const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
  */
 function selectsKey(selector: string, r: Pick<HourlyRollup, 'keyGeneration' | 'keyId'>): boolean {
   if (selector === '-') return r.keyId === '-';
-  if (selector.includes('@')) return `${r.keyId}@${r.keyGeneration}` === selector;
+  if (selector.includes('@')) return keyLifetime(r.keyId, r.keyGeneration) === selector;
   const live = keyById.get(selector);
   return live !== undefined && r.keyId === selector && Date.parse(live.createdAt) === r.keyGeneration;
 }
@@ -395,7 +395,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     planOutputTokens: sumOf(countedPlan, (r) => r.tokens.output),
     planRequests: sumOf(countedPlan, requestsIn),
     probeCostUsd: sumOf(probeRows, (r) => r.probeCostUsd),
-    probes: { failed: probes.failed, held: probes.held, ok: probes.ok, planOk: sumOf(probePlan, (r) => r.probes.ok), skipped: probes.skipped },
+    probes: { ...probes, planOk: sumOf(probePlan, (r) => r.probes.ok) },
     rateLimited: outcomes.rate_limited,
     refusals,
     refused: Object.values(refusals).reduce((n, c) => n + c, 0),
@@ -1115,9 +1115,7 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
         .sort(([x], [y]) => byteOrder(x, y))
         .map(([window, listedResets]) => {
           const ordered = [...listedResets].sort((x, y) => Date.parse(y.resetAt) - Date.parse(x.resetAt) || Date.parse(y.observedAt) - Date.parse(x.observedAt));
-          const newest = (x: AllowanceReset, y: AllowanceReset) => Date.parse(drawnInstant(y)) - Date.parse(drawnInstant(x));
-          const claims = ordered.filter((r) => r.source === 'claim').sort(newest);
-          const resets = ordered.filter((r) => r.source !== 'claim').sort(newest);
+          const { claims, resets } = partAllowanceRows(ordered);
           return { claims, resets, totalShareLeft: ordered.reduce((sum, r) => sum + r.shareLeft, 0), window };
         });
       return windows.length === 0 ? [] : [{ accountId: a.id, ...subscriptionPair(a.subscription), windows }];

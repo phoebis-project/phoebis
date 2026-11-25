@@ -860,12 +860,13 @@ export const byDrawnNewest = (a: AllowanceReset, b: AllowanceReset) => Date.pars
 /** A window's rows parted by the source word, each list newest first by the instant a row draws at: the drop's for a
  *  claim row and for a plan change, which stands among the resets, the reset's for each other. The sort is stable, so
  *  rows of one instant keep the route's order. */
-function decodeAllowanceRows(v: unknown): { claims: AllowanceReset[]; resets: AllowanceReset[] } {
+export function partAllowanceRows(rows: AllowanceReset[]): { claims: AllowanceReset[]; resets: AllowanceReset[] } {
   const claims: AllowanceReset[] = [];
   const resets: AllowanceReset[] = [];
-  for (const row of list(v).map(decodeAllowanceReset)) (row.source === 'claim' ? claims : resets).push(row);
+  for (const row of rows) (row.source === 'claim' ? claims : resets).push(row);
   return { claims: claims.sort(byDrawnNewest), resets: resets.sort(byDrawnNewest) };
 }
+const decodeAllowanceRows = (v: unknown): { claims: AllowanceReset[]; resets: AllowanceReset[] } => partAllowanceRows(list(v).map(decodeAllowanceReset));
 export const decodeUnusedAllowance = (v: unknown): UnusedAllowanceAnswer => ({
   accounts: list(rec(v).accounts)
     .map(rec)

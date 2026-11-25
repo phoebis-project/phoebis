@@ -238,12 +238,17 @@ export const isSubscription = (account: Pick<Account, 'kind'>) => account.kind =
 /** A paid source, as the engine reads one: an API-key account or a usage-based seat, neither with plan capacity. */
 export const isPaidSource = (a: Pick<Account, 'kind' | 'usageBased'>): boolean => a.kind === 'api_key' || a.usageBased;
 /**
+ * Whether a subscription row's state holds no credential the router reads: not paired, or awaiting re-authentication.
+ * The route withholds such a row's windows, and the poll reads no such account. An API-key row keeps every window the
+ * ledger holds whatever its state.
+ */
+export const withholdsWindows = (a: Pick<Account, 'kind' | 'status'>): boolean => isSubscription(a) && (a.status === 'unpaired' || a.status === 'reauth_required');
+/**
  * Whether the Quota page lists the account. It lists a subscription account that is paired, not awaiting
  * re-authentication and whose plan has not ended. The flag alone decides the third: a saved end that has passed counts
  * for nothing on its own, since the router sets the flag once a profile read finds no plan.
  */
-export const isQuotaListed = (account: Pick<Account, 'kind' | 'planEndedAt' | 'status'>): boolean =>
-  isSubscription(account) && account.status !== 'reauth_required' && account.status !== 'unpaired' && account.planEndedAt === null;
+export const isQuotaListed = (account: Pick<Account, 'kind' | 'planEndedAt' | 'status'>): boolean => isSubscription(account) && !withholdsWindows(account) && account.planEndedAt === null;
 
 /** The no-window sentence of an account whose plan ended: the long form, or the compact one the account cards and the
  *  Accounts list's rows draw in their window bars' place. */
@@ -259,7 +264,7 @@ const planEndedSentence = (planEndedAt: string, now: number, compact = false): s
  */
 export const noWindowSentence = (account: Account, now: number, compact = false): string => {
   if (account.planEndedAt !== null) return planEndedSentence(account.planEndedAt, now, compact);
-  if (isSubscription(account) && (account.status === 'unpaired' || account.status === 'reauth_required')) {
+  if (withholdsWindows(account)) {
     const end = canceledEndOf(account);
     if (end !== null && Date.parse(end) <= now) return planEndedSentence(end, now, compact);
     return compact ? `${STATUS_LABEL[account.status]}, no window` : `${STATUS_LABEL[account.status]}, so no quota window is read.`;

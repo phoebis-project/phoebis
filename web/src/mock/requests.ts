@@ -16,7 +16,7 @@ import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { TRANSFORMATION_KEYS } from '@/lib/inputTransformations';
 import { MODEL_SCOPE_PREFIX, endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { WINDOW_KEY } from '@/lib/windows';
-import { ACCOUNTS, ENDED_PLAN_WINDOWS, QUOTA_HISTORY, SHARED_WINDOWS, accountById, lastReadingOf, rankTier, sharedWindowsOf } from './accounts';
+import { ACCOUNTS, QUOTA_HISTORY, SAMPLED_WINDOWS, SHARED_WINDOWS, accountById, lastReadingOf, rankTier, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor, promptOf } from './catalog';
 import { leadOf, leftPerHour, paceDeadline } from './lead';
@@ -2009,8 +2009,10 @@ export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
 // A drawn row can give the story its slot, so the story's own estimates land after the drawn rows' and stand.
 for (const s of STORY_SEEDS) if (s.bodyTokens !== undefined) COUNTED_BODY_TOKENS.set(s.id, s.bodyTokens);
 
-/** The router's pin key: the request's key, session, agent and canonical model. */
-export const pinKeyOf = (r: RequestLog) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+/** The router's pin key: a pin's key, session, agent and model. */
+export const pinKeyFor = (keyId: string | null, sessionId: string | null, agentId: string | null, model: string): string => `${keyId}|${sessionId}|${agentId}|${model}`;
+/** The pin key of a request, under its canonical model. */
+export const pinKeyOf = (r: RequestLog) => pinKeyFor(r.keyId, r.sessionId, r.agentId, r.canonicalModel);
 /**
  * Whether a request carries its session's conversation, as the router's `carries_conversation` reads it: an inference
  * of a conversation class or of none. A token count and a probe never do, whatever class they name.
@@ -3890,7 +3892,7 @@ function accountRollups(): AccountRollup[] {
   // clean poll before the end, whose windows they were read from.
   const sampledWindows = (account: (typeof ACCOUNTS)[number], t: number): AccountRollup['windows'] => {
     const windows: AccountRollup['windows'] = {};
-    for (const w of ENDED_PLAN_WINDOWS.get(account.id) ?? readWindows(lastReadingOf(account))) {
+    for (const w of SAMPLED_WINDOWS.get(account.id) ?? []) {
       const key = WINDOW_KEY[w.id];
       const sample = lastSample.get(`${account.id}|${w.id}`)?.get(t);
       if (key === undefined || sample === undefined) continue;

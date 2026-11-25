@@ -795,7 +795,7 @@ function fitOf(c: RecordCandidate, at: number, pool: Pick<PoolSeed, 'fiveHourCei
     const burn = (w === 'five_hour' && x.demand !== null ? x.demand : (c.burn[w] ?? 0)) + (pinBurn[w] ?? 0);
     const window = windowFitOf(x, ceilingOn(pool, w), rewrite[w] ?? 0, burn);
     lands = lands && window.lands;
-    const { ceiling, wall } = runwaysOf(window, Date.parse(x.horizon) - at, w, x.reset === null ? null : Date.parse(x.reset) - at);
+    const { ceiling, wall } = runwaysOf(window, w, x.horizon, x.reset, at);
     if (wall !== null) walls.push(wall);
     if (ceiling === null) continue;
     every = every && !ceiling.short;

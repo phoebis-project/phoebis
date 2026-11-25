@@ -26,16 +26,19 @@ export const WORST_BUCKET: Readonly<Record<string, number>> = { annex: 0.02, ove
 /** The worst of `words` by the order the router lands a fresh session by, `fits` where there is none. */
 const worstOf = (words: MemberFit[]): MemberFit => words.reduce<MemberFit>((worst, word) => (MEMBER_FIT_VALUES.indexOf(word) > MEMBER_FIT_VALUES.indexOf(worst) ? word : worst), 'fits');
 
-/** A fresh session's prior burn on `key` for `account` under `regime`: the base prior times the base capacity of the
- *  account's tier on that window over the regime's, each with its own table's peak factor where `now` lies inside
- *  the band. The base prior for the base regime, and for a tier that the base table does not size. */
-const priorBurnOf = (key: CostWindow, account: Account, regime: string | null, now: number): number => {
+/** The regimes a member's fits are listed under: the base first, then the named ones by name. */
+const REGIME_ORDER: readonly (string | null)[] = [null, ...regimeNames(TABLES).sort()];
+
+/** A fresh session's prior burn on `key` for `account` under `regime`, whose tables are `priced`: the base prior times
+ *  the base capacity of the account's tier on that window over the regime's, each with its own table's peak factor
+ *  where the read lies inside the band (`inside`). The base prior for the base regime, and for a tier that the base
+ *  table does not size. */
+const priorBurnOf = (key: CostWindow, account: Account, regime: string | null, priced: SubscriptionCosts, inside: boolean): number => {
   const tier = account.subscription?.rateLimitTier ?? null;
-  const priced = withRegime(TABLES, regime);
-  const base = tier === null ? null : tierCapacity(TABLES, tier, key);
-  const own = tier === null ? null : tierCapacity(priced, tier, key);
-  if (regime === null || base === null || own === null) return PRIOR_BURN[key];
-  const inside = inBand(TABLES, now) === true;
+  if (regime === null || tier === null) return PRIOR_BURN[key];
+  const base = tierCapacity(TABLES, tier, key);
+  const own = tierCapacity(priced, tier, key);
+  if (base === null || own === null) return PRIOR_BURN[key];
   const factor = (costs: SubscriptionCosts) => (inside ? costs.peak.capacityFactor[key === 'five_hour' ? 'fiveHour' : 'sevenDay'] : 1);
   return (PRIOR_BURN[key] * base * factor(TABLES)) / (own * factor(priced));
 };
@@ -44,29 +47,30 @@ const priorBurnOf = (key: CostWindow, account: Account, regime: string | null, n
  * A member's entry of `regimeFits` under `regime` as the pools route answers it, for a fresh session whose request
  * prices no rewrite. An API key fits while its worst bucket holds room and reads `least_bad` with a runway of 0 on a
  * full one, under every regime. Any other account reads `spent` where a shared window stands at 1 or more, whatever
- * its end, then `ending` inside the pool's wind-down, else the worst word of its shared windows, `fits` where it holds
- * none (a usage-based seat among them) and on a window with no projection. Each window reads the account's burn, its
- * demand on the 5-hour window, with a fresh session's prior under the regime on it. The runway is the binding window's,
- * to the ceiling under `fits` and `rewrite_only` and to 1.0 under `least_bad`, and none under `ending` and `spent`.
+ * its end, then `ending` inside the pool's wind-down, which `ending` answers, else the worst word of its shared
+ * windows, `fits` where it holds none (a usage-based seat among them) and on a window with no projection. Each window
+ * reads the account's burn, its demand on the 5-hour window, with a fresh session's prior under the regime on it,
+ * priced on the regime's tables `priced` with the band that `inside` reads. The runway is the binding window's, to the
+ * ceiling under `fits` and `rewrite_only` and to 1.0 under `least_bad`, and none under `ending` and `spent`.
  */
-function memberFitOf(account: Account, now: number, pool: Pick<Pool, 'fiveHourCeiling' | 'weeklyCeiling' | 'windDownMinutes'>, regime: string | null): RegimeFit {
+function memberFitOf(account: Account, now: number, pool: Pick<Pool, 'fiveHourCeiling' | 'weeklyCeiling'>, regime: string | null, priced: SubscriptionCosts, inside: boolean, ending: boolean): RegimeFit {
   if (account.kind === 'api_key') return (lookup(WORST_BUCKET, account.id) ?? 0) < 1 ? { fit: 'fits', regime, runwayMs: null } : { fit: 'least_bad', regime, runwayMs: 0 };
   const shared = SHARED_WINDOWS.flatMap((key) => {
     const window = account.windows.find((w) => w.id === windowKeyId(key));
     // A window with no share is one the router holds no reading of, which its fit does not read.
     if (window === undefined || window.utilization === null) return [];
-    const burn = (key === 'five_hour' && window.demand !== null ? window.demand : (window.burn ?? 0)) + priorBurnOf(key, account, regime, now);
+    const burn = (key === 'five_hour' && window.demand !== null ? window.demand : (window.burn ?? 0)) + priorBurnOf(key, account, regime, priced, inside);
     // The account route answers no booking on a window, so the prediction is the reading alone.
     return [{ key, read: windowFitOf({ reserved: null, utilization: window.utilization }, ceilingOn(pool, key), 0, burn), window }];
   });
   if (shared.some(({ read }) => read.spent)) return { fit: 'spent', regime, runwayMs: null };
-  if (windingDown(pool, endOf(account, now), now)) return { fit: 'ending', regime, runwayMs: null };
+  if (ending) return { fit: 'ending', regime, runwayMs: null };
   const words: MemberFit[] = [];
   const bounded: Runway[] = [];
   const walls: Runway[] = [];
   for (const { key, read, window } of shared) {
     if (window.projection === null || window.horizon === null) continue;
-    const { ceiling, wall } = runwaysOf(read, Date.parse(window.horizon) - now, key, window.resetsAt === null ? null : Date.parse(window.resetsAt) - now);
+    const { ceiling, wall } = runwaysOf(read, key, window.horizon, window.resetsAt, now);
     words.push(!read.lands ? 'least_bad' : ceiling?.short ? 'rewrite_only' : 'fits');
     if (ceiling !== null) bounded.push(ceiling);
     if (wall !== null) walls.push(wall);
@@ -92,7 +96,9 @@ export function servedFigures(accountId: string, now: number, pool: Pick<Pool, '
   const account = accountById.get(accountId);
   // The route answers every member the router has loaded a score, a paid source and an untouched one among them.
   if (account === undefined || UNLOADED_MEMBERS.has(accountId)) return NO_FIGURES;
-  const regimeFits = [null, ...regimeNames(TABLES).sort()].map((regime) => memberFitOf(account, now, pool, regime));
+  const inside = inBand(TABLES, now) === true;
+  const ending = windingDown(pool, endOf(account, now), now);
+  const regimeFits = REGIME_ORDER.map((regime) => memberFitOf(account, now, pool, regime, withRegime(TABLES, regime), inside, ending));
   // The router reads the readings it holds, which the answer withholds on a row that needs its pairing or a re-auth.
   const held = lastReadingOf(account);
   const week = held.windows.find((w) => w.id === '7d');

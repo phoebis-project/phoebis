@@ -46,15 +46,15 @@ export function windowFitOf(reading: { reserved: number | null; utilization: num
 }
 
 /**
- * A window's two runways off its fit, to the ceiling and to 1.0, each short where it ends before `span`, the time to
- * the window's horizon, past its reset where it ends after `resetSpan`, the time to the window's reset, as the
- * router's `passes_reset` reads it, and none where it is unbounded.
+ * A window's two runways off its fit read at `at`, to the ceiling and to 1.0, each short where it ends before the
+ * window's `horizon`, past its reset where it ends after the window's `reset`, as the router's `passes_reset` reads it,
+ * and none where it is unbounded.
  */
-export function runwaysOf(read: WindowFit, span: number, window: string, resetSpan: number | null): { ceiling: Runway | null; wall: Runway | null } {
-  return {
-    ceiling: read.runwayMs === null ? null : { pastReset: resetSpan !== null && read.runwayMs > resetSpan, runway: read.runwayMs, short: read.runwayMs < span, window },
-    wall: read.wallRunwayMs === null ? null : { pastReset: resetSpan !== null && read.wallRunwayMs > resetSpan, runway: read.wallRunwayMs, short: read.wallRunwayMs < span, window },
-  };
+export function runwaysOf(read: WindowFit, window: string, horizon: string, reset: string | null, at: number): { ceiling: Runway | null; wall: Runway | null } {
+  const span = Date.parse(horizon) - at;
+  const resetSpan = reset === null ? null : Date.parse(reset) - at;
+  const of = (ms: number | null): Runway | null => (ms === null ? null : { pastReset: resetSpan !== null && ms > resetSpan, runway: ms, short: ms < span, window });
+  return { ceiling: of(read.runwayMs), wall: of(read.wallRunwayMs) };
 }
 
 /**

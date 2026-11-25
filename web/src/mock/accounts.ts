@@ -2,7 +2,7 @@ import { decodeLimitResets, planName } from '@/api/decode';
 import type { Account, BurnUnit, FeatureWord, PlanWord, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
 import { FEATURE_WORD_VALUES } from '@/api/types';
 import { lookup } from '@/lib/counts';
-import { endOf, isPaidSource, readWindows } from '@/lib/quota';
+import { endOf, isPaidSource, readWindows, withholdsWindows } from '@/lib/quota';
 import { kindGroup } from '@/lib/selection';
 import { periodHoursOf, windowKeyId, windowLabelOf } from '@/lib/windows';
 import { leadOf } from './lead';
@@ -171,16 +171,6 @@ export const blankAccountRow = (input: Pick<Account, 'id' | 'kind' | 'label'>, s
 
 const CONTRACT_SUBSCRIPTION: Omit<Subscription, 'plan'> = { billingType: 'stripe_subscription_contracted', organizationType: 'claude_enterprise', planDisplayName: null, rateLimitTier: 'default_claude_zero', since: ago(45 * DAY), trialEndsAt: null, endsAt: null };
 
-/**
- * The stretch test's figure as the router stores it on the slow-down entry that a read writes, at that read's instant
- * `at`: the 5-hour utilization the read held plus its demand's increase until the window's horizon less the threshold,
- * null where that instant lies at or before the read.
- */
-const stretchProjectionOf = (read: { at: number; demand: number; horizon: number; utilization: number }, thresholdMs: number): number | null => {
-  const until = read.horizon - thresholdMs;
-  return until <= read.at ? null : read.utilization + (read.demand * (until - read.at)) / HOUR;
-};
-
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
 // `requests.ts`; a lifetime reaches past both, so it is the story's own, raised there to what the rollups hold. The
@@ -344,7 +334,7 @@ const SEEDS = [
       speed: 0.5,
       stretchMs: 2_520_000,
       // The read of 14:05 above: 0.86 plus 54 minutes of the demand to 14:59, the reset less the threshold.
-      stretchProjection: stretchProjectionOf({ at: clock(14, 5), demand: 0.1286, horizon: clock(15, 29), utilization: 0.86 }, 1_800_000),
+      stretchProjection: 0.86 + (0.1286 * (clock(15, 29) - 1_800_000 - clock(14, 5))) / HOUR,
       thresholdMs: 1_800_000,
     },
   },
@@ -697,13 +687,6 @@ function resolvedPlan(a: Pick<Seed, 'subscription' | 'usageBased'>): PlanWord | 
   return PLAN_OF_TYPE.get(sub.organizationType) ?? PLAN_OF_TIER.get(sub.rateLimitTier) ?? null;
 }
 
-/**
- * Whether a subscription row's state holds no credential the router reads: not paired, or awaiting re-authentication.
- * The route withholds such a row's windows, and the poll reads no such account. An API-key row keeps every window the
- * ledger holds whatever its state.
- */
-export const withholdsWindows = (a: Pick<Account, 'kind' | 'status'>): boolean => a.kind === 'oauth' && (a.status === 'unpaired' || a.status === 'reauth_required');
-
 /** Each row's last reading as the final map builds it, ahead of the state's withholding. */
 const READINGS = new Map<string, Pick<Account, 'fableWindow' | 'windows'>>();
 
@@ -729,10 +712,11 @@ export const ACCOUNTS: Account[] = SEEDS.map(({ scopes, ...a }: Seed) => {
 export const lastReadingOf = (a: Account): Pick<Account, 'fableWindow' | 'windows'> => (withholdsWindows(a) ? (READINGS.get(a.id) ?? a) : a);
 
 /**
- * The windows of the last clean poll of each row whose plan ended, which the final map empties as the route withholds
- * them. The ledger keeps the samples of that poll and the ones before it, so the account hours read their windows.
+ * The windows of each row's last clean poll by its id, as the seed writes them, ahead of the leads the final map adds
+ * and of its emptying a row whose plan ended or whose windows the route withholds. The ledger keeps the samples of that
+ * poll and the ones before it, so the quota history and the account hours read these windows.
  */
-export const ENDED_PLAN_WINDOWS: ReadonlyMap<string, RateLimitWindow[]> = new Map(SEEDS.filter((s) => s.planEndedAt !== null).map((s) => [s.id, readWindows(s)]));
+export const SAMPLED_WINDOWS: ReadonlyMap<string, RateLimitWindow[]> = new Map(SEEDS.map((s) => [s.id, readWindows(s)]));
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 /**
@@ -791,8 +775,15 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status' | 'windows'>):
   }
   const own = lookup(SNAPSHOT_OF, a.id);
   if (own !== undefined) return own(a);
-  const poll = QUOTA_SNAPSHOT_SAMPLE.poll && { ...QUOTA_SNAPSHOT_SAMPLE.poll, lastAttemptAt: ago(40_000), lastCleanAt: ago(40_000) };
-  return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(40_000), heldUntil: null, poll };
+  return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(40_000), heldUntil: null, poll: cleanPollAt(ago(40_000)) };
+}
+
+/**
+ * The poll standing a clean answer at `at` leaves: its attempt and its clean read at that instant, no backoff, no
+ * error and no 429 in a row. A declaration, since the account list above reads the snapshots while the module loads.
+ */
+export function cleanPollAt(at: string): QuotaSnapshot['poll'] {
+  return { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 };
 }
 
 const SAMPLE_STEP = 5 * MINUTE;
@@ -861,7 +852,7 @@ function carryLegacyEdges(account: (typeof ACCOUNTS)[number], w: RateLimitWindow
 // each polled window whatever its reset, and a window with no reset has no period to place earlier samples in, so it
 // answers the one its last poll wrote, at the reading.
 export const QUOTA_HISTORY: QuotaHistory[] = SEEDS.flatMap((seed, i) =>
-  readWindows(seed).map((w) => ({
+  (SAMPLED_WINDOWS.get(seed.id) ?? []).map((w) => ({
     accountId: seed.id,
     windowId: w.id,
     samples:
