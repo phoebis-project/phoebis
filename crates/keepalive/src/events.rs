@@ -629,10 +629,6 @@ impl Inner {
             }
             Reported::Heartbeat => {}
             Reported::SessionFacts { facts } => {
-                self.sessions
-                    .get_mut(&key)
-                    .expect("the session just checked")
-                    .facts = facts.clone();
                 let row = (key.0.clone(), key_generation, key.1.clone());
                 self.file_facts(&row, FactsKind::Project, "", facts.project_value(), now);
                 self.file_facts(&row, FactsKind::Title, "", facts.title_value(), now);
@@ -731,8 +727,7 @@ impl Inner {
             } => {
                 // Display state alone: no state, no park and no idle clock moves, so a facts report never reads as
                 // activity.
-                let agent = self.reported_agent(&key, &agent_id, *request_generation)?;
-                agent.facts = facts.clone();
+                self.reported_agent(&key, &agent_id, *request_generation)?;
                 let row = (key.0.clone(), key_generation, key.1.clone());
                 self.file_facts(&row, FactsKind::Agents, &agent_id, facts.value(), now);
                 filed_facts = true;
@@ -804,8 +799,10 @@ impl Inner {
         session.attended = true;
         session.last_report_at = now;
         self.touch_session(&key);
-        // A session-level report moves the session alone, so it rewrites no agent's sealed prompt.
-        if report.event.agent_id().is_some() {
+        // A session-level report moves the session alone, and a facts report moves no member of an agent's row, so
+        // neither writes an agent's sealed prompt again.
+        if report.event.agent_id().is_some() && !matches!(report.event, Reported::AgentFacts { .. })
+        {
             self.touch_agent(&key, &agent_id);
         }
         // The window opens with the report that moves main to idle or parked, so a prompt inside the same second
@@ -975,7 +972,6 @@ impl Inner {
                 slotted,
                 restored_until: None,
                 instance_mismatches: 0,
-                facts: SessionFacts::default(),
                 agents,
             },
         );

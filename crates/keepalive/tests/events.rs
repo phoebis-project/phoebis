@@ -418,7 +418,8 @@ async fn a_released_subagent_reaches_the_router_so_its_pin_leaves_the_next_round
 }
 
 /// The session's facts as a `session_facts` report through the events route leaves them on a rig of their own, read
-/// from the Sessions read, since the route's answer carries no fact.
+/// from the stored rows behind an awaited save, since the route's answer carries no fact. A set whose every member is
+/// absent leaves no stored row, so it reads as the default set.
 async fn kept(fields: serde_json::Value) -> SessionFacts {
     let mut r = rig(RigSpec::default()).await;
     let mut body = serde_json::json!({"event": "session_facts"});
@@ -428,12 +429,18 @@ async fn kept(fields: serde_json::Value) -> SessionFacts {
     if let Err(refused) = r.event(body).await {
         panic!("the report is taken, not refused as {}", refused.code);
     }
+    r.engine.flush_persisted().await;
+    let session = (
+        "desktop".to_string(),
+        r.generation("desktop"),
+        "session".to_string(),
+    );
     r.engine
-        .sessions()
-        .into_iter()
-        .find(|s| s.key_id == "desktop" && s.session_id == "session")
-        .expect("the rig's session")
-        .facts
+        .stored_facts(vec![session.clone()])
+        .await
+        .remove(&session)
+        .unwrap_or_default()
+        .session
 }
 
 #[tokio::test]

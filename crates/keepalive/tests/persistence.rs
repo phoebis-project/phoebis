@@ -298,15 +298,17 @@ async fn an_agents_facts_survive_a_save_and_a_load() {
     r.engine = r.restart().await;
     r.engine.load_persisted().await;
 
-    let view = r
+    let session = rig_session(&r);
+    let stored = r
         .engine
-        .sessions()
-        .into_iter()
-        .find(|s| s.session_id == "session")
-        .expect("the rig's session after the load");
-    let facts = view
-        .agent_facts
-        .get("a1")
+        .stored_facts(vec![session.clone()])
+        .await
+        .remove(&session)
+        .expect("the rig's stored sets after the load");
+    let (_, facts) = stored
+        .agents
+        .iter()
+        .find(|(agent_id, _)| agent_id == "a1")
         .expect("a1's facts after the load");
     assert_eq!(
         (facts.agent_type(), facts.description(), facts.name()),
@@ -315,6 +317,36 @@ async fn an_agents_facts_survive_a_save_and_a_load() {
             Some("Review the retry loop"),
             Some("reviewer")
         )
+    );
+}
+
+#[tokio::test]
+async fn an_agents_facts_report_leaves_its_saved_rows_instant_where_it_was() {
+    let mut r = rig(RigSpec::default()).await;
+    let generation = r
+        .event(json!({"event": "agent_start", "agent_id": "a1"}))
+        .await
+        .unwrap()
+        .request_generation;
+    r.engine.flush_persisted().await;
+    let started_at = r.now();
+    r.advance(MINUTE);
+    r.event(json!({
+        "event": "agent_facts",
+        "agent_id": "a1",
+        "name": "quay-inspector",
+        "request_generation": generation
+    }))
+    .await
+    .unwrap();
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_agents(&r)
+            .into_iter()
+            .find(|row| row.agent_id == "a1")
+            .map(|row| row.updated_at),
+        Some(started_at),
+        "a facts report moves no member of the agent's row, so the instant that ranks the agents at a load stays"
     );
 }
 

@@ -10,7 +10,7 @@ use common::*;
 use fake_upstream::Respond;
 use http_body_util::BodyExt;
 use phoebis_keepalive::{
-    events_router, AgentState, CompanionState, Lifecycle, ParkKind, SessionView, EVENTS_PATH,
+    events_router, AgentState, CompanionState, Lifecycle, ParkKind, EVENTS_PATH,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, RulesMode};
@@ -188,15 +188,6 @@ fn session_agents(r: &Rig) -> usize {
         .find(|s| s.session_id == "session")
         .expect("the rig's session")
         .agents
-}
-
-/// The rig's session as the Sessions read shows it.
-fn session_view(r: &Rig) -> SessionView {
-    r.engine
-        .sessions()
-        .into_iter()
-        .find(|s| s.session_id == "session")
-        .expect("the rig's session")
 }
 
 #[tokio::test]
@@ -2194,9 +2185,20 @@ async fn a_facts_report_replaces_the_whole_set() {
         .await
         .unwrap();
     r.event(session_facts(None)).await.unwrap();
-    let view = session_view(&r);
+    let session = (
+        "desktop".to_string(),
+        r.generation("desktop"),
+        "session".to_string(),
+    );
+    r.engine.flush_persisted().await;
+    let stored = r
+        .engine
+        .stored_facts(vec![session.clone()])
+        .await
+        .remove(&session)
+        .expect("the rig's stored sets");
     assert_eq!(
-        (view.facts.branch(), view.facts.title()),
+        (stored.session.branch(), stored.session.title()),
         (Some("main"), None),
         "a member the later report leaves out is cleared"
     );
@@ -2217,7 +2219,18 @@ async fn a_facts_report_replaces_the_whole_set() {
     };
     r.event(agent_facts(Some("reviewer"))).await.unwrap();
     r.event(agent_facts(None)).await.unwrap();
-    let facts = &session_view(&r).agent_facts["a1"];
+    r.engine.flush_persisted().await;
+    let stored = r
+        .engine
+        .stored_facts(vec![session.clone()])
+        .await
+        .remove(&session)
+        .expect("the rig's stored sets");
+    let (_, facts) = stored
+        .agents
+        .iter()
+        .find(|(agent_id, _)| agent_id == "a1")
+        .expect("a1's stored set");
     assert_eq!(
         (facts.description(), facts.name()),
         (Some("Review the retry loop"), None)

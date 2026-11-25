@@ -847,7 +847,6 @@ mod tests {
 
     use crate::config::{KeepaliveLimits, KeepaliveTiming};
     use crate::engine::{Agent, Session};
-    use crate::facts::SessionFacts;
     use phoebis_ledger::PriceRevisions;
 
     use super::*;
@@ -892,7 +891,6 @@ mod tests {
                 slotted: true,
                 restored_until: None,
                 instance_mismatches: 0,
-                facts: SessionFacts::default(),
                 agents,
             },
         );

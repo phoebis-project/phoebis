@@ -33,10 +33,8 @@ pub(crate) struct RawAgentFacts {
 
 /// The facts a companion reports of its session. Display state alone. It wraps the raw form, and each value in it
 /// passed this module's rules in `of`.
-/// A value enters through `of` alone, a saved one too, so the type takes no `Deserialize`. It serializes because
-/// `SessionView` does.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
-#[serde(transparent)]
+/// A value enters through `of` alone, a saved one too, so the type takes no `Deserialize`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionFacts(RawSessionFacts);
 
 impl SessionFacts {
@@ -53,11 +51,6 @@ impl SessionFacts {
             repository_root: whole(raw.repository_root, LONG_CAP),
             title: cut(raw.title, SHORT_CAP),
         })
-    }
-
-    /// The set as a saved row carries it.
-    pub(crate) fn raw(&self) -> RawSessionFacts {
-        self.0.clone()
     }
 
     /// The stored value of the kind `project`: a JSON object of the branch, the working directory, the project, the
@@ -121,8 +114,7 @@ impl SessionFacts {
 }
 
 /// The facts a companion reports of one agent, kept as `SessionFacts` keeps a session's.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AgentFacts(RawAgentFacts);
 
 impl AgentFacts {
@@ -132,10 +124,6 @@ impl AgentFacts {
             description: cut(raw.description, SHORT_CAP),
             name: cut(raw.name, SHORT_CAP),
         })
-    }
-
-    pub(crate) fn raw(&self) -> RawAgentFacts {
-        self.0.clone()
     }
 
     /// The stored value of the kind `agents`: the raw form's JSON object, `None` where no member stands.
