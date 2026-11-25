@@ -580,22 +580,29 @@ mod tests {
     }
 
     #[test]
-    fn the_deepest_marker_on_a_system_block_names_that_blocks_boundary_and_a_top_level_one_names_none(
+    fn the_deepest_marker_on_a_tool_or_a_system_block_names_its_boundary_and_a_top_level_one_names_none(
     ) {
         let system = |first: Value, second: Value| json!([first, second]);
+        let on_tool = read(json!({
+            "tools": [{"name": "a", "cache_control": {"type": "ephemeral"}}],
+            "system": system(unmarked("a"), unmarked("b")),
+        }));
         let on_first = read(json!({"system": system(marked("a"), unmarked("b"))}));
         let on_second = read(json!({"system": system(unmarked("a"), marked("b"))}));
+        let on_both = read(json!({"system": system(marked("a"), marked("b"))}));
         let top_level = read(json!({
             "system": system(unmarked("a"), unmarked("b")),
             "cache_control": {"type": "ephemeral"},
         }));
         assert_eq!(
             (
+                on_tool.static_marked,
                 on_first.static_marked,
                 on_second.static_marked,
+                on_both.static_marked,
                 top_level.static_marked
             ),
-            (Some(1), Some(2), None),
+            (Some(0), Some(1), Some(2), Some(2), None),
             "the tools boundary stands at 0 ahead of the two system blocks"
         );
     }
