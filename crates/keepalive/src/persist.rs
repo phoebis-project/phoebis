@@ -37,7 +37,8 @@ use crate::usage::ProbeUsage;
 /// a dollar in place of the probe's usage, tier, instant and band, so neither settles under this build's rule.
 pub(crate) const RECORD_VERSION: u32 = 3;
 
-/// The shape of a stored set's value: the raw form's JSON object, cut to the members of the row's kind.
+/// The shape of a stored set's value: a JSON object of the members of the row's kind under the raw form's names, an
+/// absent one as `null`.
 pub(crate) const FACTS_RECORD_VERSION: u32 = 1;
 
 /// A session row's key in the store: key id, key generation, session id.

@@ -3,12 +3,12 @@ use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, AccountUpdate,
     Affinity, AffinityChain, AffinityMode, ApiKeyRow, AttachmentSubject, BudgetPeriod, CanaryRead,
-    Cancellation, CompanionPermissions, Failover, FeatureOverride, GuardrailAttachment,
-    GuardrailRow, Identity, KeepaliveAgentRow, KeepaliveBatch, KeyFeatureAccounts, MarkSource,
-    MemberWrite, MemoryKey, MemoryRecord, MemoryStore, ModelRule, NewBundle, OveragePolicy,
-    PinBurn, PinMark, PinRow, PoolFeatureAccounts, PoolRow, PresetStamp, ReturnToPlan, RulesMode,
-    Secret, SessionPlacement, ShedStamp, SlowDown, StateCause, StorageKey, Store, StoreError,
-    Strategy, SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
+    Cancellation, CompanionPermissions, FactsKey, FactsKind, FactsRow, Failover, FeatureOverride,
+    GuardrailAttachment, GuardrailRow, Identity, KeepaliveAgentRow, KeepaliveBatch,
+    KeyFeatureAccounts, MarkSource, MemberWrite, MemoryKey, MemoryRecord, MemoryStore, ModelRule,
+    NewBundle, OveragePolicy, PinBurn, PinMark, PinRow, PoolFeatureAccounts, PoolRow, PresetStamp,
+    ReturnToPlan, RulesMode, Secret, SessionPlacement, ShedStamp, SlowDown, StateCause, StorageKey,
+    Store, StoreError, Strategy, SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
 };
 
 /// The wall clock, for a case that reads no stamp.
@@ -4271,7 +4271,25 @@ fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_an
         .set_pool_members("main", &[member("claude", 1), member("vendor", 2)], "test")
         .unwrap();
     let desktop = key(&store, "desktop", "main", "phoebis-0123456789abcdef");
-    store.insert_api_key(&desktop, "test").unwrap();
+    let generation = store.insert_api_key(&desktop, "test").unwrap().created_at;
+    // A stored set of reported facts, so a sequence that keeps its row leaves a sealed row the new key cannot open.
+    store
+        .save_keepalive(&KeepaliveBatch {
+            facts: vec![FactsRow {
+                key: FactsKey {
+                    key_id: "desktop".into(),
+                    key_generation: generation,
+                    session_id: "s-1".into(),
+                    kind: FactsKind::Title,
+                    agent_id: String::new(),
+                },
+                record_version: 1,
+                value: br#"{"title":"Coil the anchor rope"}"#.to_vec(),
+                seen_at: 1_800_000_000_000,
+            }],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
     drop(store);
 
     let new = StorageKey::generate();

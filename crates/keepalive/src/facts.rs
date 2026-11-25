@@ -60,25 +60,39 @@ impl SessionFacts {
         self.0.clone()
     }
 
-    /// The stored value of the kind `project`: the raw form's JSON object with no title, `None` where none of the
-    /// branch, the working directory, the project, the repository and its root stands.
+    /// The stored value of the kind `project`: a JSON object of the branch, the working directory, the project, the
+    /// repository and its root under the raw form's names, an absent one as `null`, and `None` where none of the five
+    /// stands. The title stays out, since it has a row of its own.
     pub(crate) fn project_value(&self) -> Option<Vec<u8>> {
-        let project = RawSessionFacts {
-            title: None,
-            ..self.0.clone()
-        };
-        (project != RawSessionFacts::default())
-            .then(|| serde_json::to_vec(&project).ok())
-            .flatten()
+        // Whole, so a member that joins the raw form takes a decision here.
+        let RawSessionFacts {
+            branch,
+            cwd,
+            project,
+            repository,
+            repository_root,
+            title: _,
+        } = &self.0;
+        if [branch, cwd, project, repository, repository_root]
+            .iter()
+            .all(|member| member.is_none())
+        {
+            return None;
+        }
+        serde_json::to_vec(&serde_json::json!({
+            "branch": branch,
+            "cwd": cwd,
+            "project": project,
+            "repository": repository,
+            "repository_root": repository_root,
+        }))
+        .ok()
     }
 
-    /// The stored value of the kind `title`: the raw form's JSON object with the title alone, `None` with no title.
+    /// The stored value of the kind `title`: a JSON object with the one member `title`, `None` with no title.
     pub(crate) fn title_value(&self) -> Option<Vec<u8>> {
-        let title = RawSessionFacts {
-            title: Some(self.0.title.clone()?),
-            ..RawSessionFacts::default()
-        };
-        serde_json::to_vec(&title).ok()
+        let title = self.0.title.as_ref()?;
+        serde_json::to_vec(&serde_json::json!({ "title": title })).ok()
     }
 
     pub fn branch(&self) -> Option<&str> {

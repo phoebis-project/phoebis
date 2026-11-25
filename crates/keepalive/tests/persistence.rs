@@ -1282,6 +1282,37 @@ async fn a_set_whose_save_failed_reaches_its_row_with_the_next_save() {
     );
 }
 
+#[tokio::test]
+async fn a_sessions_title_and_its_project_set_rest_in_two_rows_each_with_its_own_members() {
+    let mut r = rig(on_disk()).await;
+    let session = rig_session(&r);
+    r.event(json!({
+        "event": "session_facts",
+        "title": "Trim the mainsail",
+        "branch": "harbor-survey"
+    }))
+    .await
+    .unwrap();
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        (
+            stored_set(&r, &session, FactsKind::Title, ""),
+            stored_set(&r, &session, FactsKind::Project, "")
+        ),
+        (
+            Some(json!({"title": "Trim the mainsail"})),
+            Some(json!({
+                "branch": "harbor-survey",
+                "cwd": null,
+                "project": null,
+                "repository": null,
+                "repository_root": null
+            }))
+        ),
+        "each row holds the members of its own kind and no other"
+    );
+}
+
 /// The wasted probes the ledger has settled, by reason, once `probes` of them have landed.
 async fn wasted(r: &Rig, probes: u64) -> BTreeMap<String, u64> {
     wait_for(Duration::from_secs(30), || {

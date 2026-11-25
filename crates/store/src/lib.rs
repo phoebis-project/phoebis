@@ -1264,7 +1264,8 @@ const SEALED_KINDS: [SealedKind; 4] = [
     },
     SealedKind {
         table: "companion_facts",
-        sql: "SELECT key_id, key_generation, session_id, kind, agent_id, facts_nonce, facts_sealed FROM companion_facts",
+        sql: "SELECT key_id, key_generation, session_id, kind, agent_id, facts_nonce, facts_sealed \
+              FROM companion_facts",
         row_of: facts_row,
     },
 ];

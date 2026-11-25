@@ -1533,7 +1533,8 @@ pub struct Engine {
     /// Orders the flushes: a snapshot, its save and its acknowledgment run under it whole, so two flushes never
     /// overlap and an older batch never reaches the store after a newer one.
     pub(crate) flush_lock: Mutex<()>,
-    /// Wakes the save worker. It holds at most one stored wakeup, which is what joins a burst of requests into one save.
+    /// Wakes the save worker. It holds at most one stored wakeup, which is what joins a burst of requests into one
+    /// save.
     pub(crate) save_wanted: Arc<tokio::sync::Notify>,
     /// Set once the save worker runs.
     pub(crate) save_worker: std::sync::OnceLock<()>,
