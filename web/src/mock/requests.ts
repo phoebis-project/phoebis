@@ -3872,7 +3872,8 @@ deriveFigures();
 
 /**
  * Hourly account facts: each window's peak as the router reads it off the quota history's samples and the attempts'
- * heads, and the time under a cooldown or in overage and the pin churn, drawn for each hour of the month.
+ * heads, with a drawn walk for the heads of the attempts that an hour with no request row counts, and the time under a
+ * cooldown or in overage and the pin churn, drawn for each hour of the month.
  */
 function accountRollups(): AccountRollup[] {
   const h = createRng(7_777);
@@ -3933,6 +3934,10 @@ function accountRollups(): AccountRollup[] {
     return figures.length === 0 ? null : Math.max(...figures);
   };
   const peaksOf = (accountId: string, t: number): AccountRollup['peak'] => ({ '5h': peakOf(accountId, '5h', t), '7d': peakOf(accountId, '7d', t), '7d_fable': peakOf(accountId, '7d_fable', t) });
+  // The hours that hold no request row and whose hourly rollups count an attempt on an account. The router folds the
+  // head of each such attempt into the account's hour, and the rollups keep no attempt's figure.
+  const logged = new Set(REQUESTS.map((r) => startOfHour(Date.parse(r.at))));
+  const attempted = new Set(ALL_ROLLUPS.filter((r) => r.attempts > 0 && !logged.has(Date.parse(r.hour))).map((r) => `${r.accountId}|${Date.parse(r.hour)}`));
   // The ledger stores no account hour that holds no figure, and the route lists an hour beyond the stored ones only
   // where a sample of the account stands.
   const holdsFigure = (r: AccountRollup): boolean =>
@@ -3942,8 +3947,9 @@ function accountRollups(): AccountRollup[] {
   const pinnedAccounts = new Set([...poolById.values()].filter((p) => p.affinityTtlSeconds > 0).flatMap((p) => p.members.map((m) => m.accountId)));
   for (const account of ACCOUNTS) {
     if (account.kind !== 'oauth') continue;
-    // A row that is not paired draws nothing, since its polls stopped with its credential. The ledger keeps the samples
-    // the polls wrote before, so the route lists each hour they stand in, with their peaks and no count.
+    // A row that is not paired takes no draw, so each later account keeps its stream, and it reads no pin count, since
+    // no pool places a pin on a row with no credential. The ledger keeps the samples its polls wrote before, so the
+    // route lists each hour they stand in, with their peaks.
     if (account.status === 'unpaired') {
       for (let t = start; t <= end; t += HOUR) {
         const row: AccountRollup = { ...ACCOUNT_ROLLUP_SAMPLE, accountId: account.id, hour: iso(t), peak: peaksOf(account.id, t), cooldownSeconds: 0, overageSeconds: 0, pins: noPins(), windows: sampledWindows(account, t) };
@@ -3951,12 +3957,11 @@ function accountRollups(): AccountRollup[] {
       }
       continue;
     }
+    // Each window's walk stands for the heads of the attempts that an hour with no request row counts on the account.
+    // The 5-hour walk also keys the cooldown and overage draws.
     let drift5 = h.float(0.2, 0.7);
-    // The stream was seeded while a drawn walk stood for each window's peak, so the 7-day and Fable walks are
-    // still drawn, and dropped, which keeps every later draw in its place. The 5-hour walk keys the cooldown and
-    // overage draws.
-    h.float(0.3, 0.8);
-    h.float(0.05, 0.4);
+    let drift7 = h.float(0.3, 0.8);
+    let driftF = h.float(0.05, 0.4);
     // An hour holds drawn facts from the one the plan started in to the one of the newest window reading, the span in
     // which the router read the account. Every hour is still drawn, so cutting one account's hours moves no other
     // account's values. The ledger keeps the readings of a row whose windows the answer withholds, so its last reading
@@ -3969,12 +3974,18 @@ function accountRollups(): AccountRollup[] {
     // The cooldown and overage draws stand for an account whose heads send the 5-hour window, so an account whose set
     // lacks it draws neither. Its walk is still drawn, so every account after it keeps its stream.
     const fiveHour = last.windows.some((w) => w.id === '5h');
+    const sevenDay = last.windows.some((w) => w.id === '7d');
     const pinned = pinnedAccounts.has(account.id);
     for (let t = start; t < end; t += HOUR) {
       const sampled5 = sampleIndex.get(`${account.id}|5h`)?.get(t);
       drift5 = Math.max(0, Math.min(1, drift5 + h.float(-0.12, 0.12)));
-      h.float(-0.03, 0.03);
-      h.float(-0.03, 0.03);
+      drift7 = Math.max(0, Math.min(1, drift7 + h.float(-0.03, 0.03)));
+      driftF = Math.max(0, Math.min(1, driftF + h.float(-0.03, 0.03)));
+      // An hour with no request row that counts an attempt on the account reads the walk as that attempt's head, on
+      // each window that the reading holds and that holds no sample in the hour.
+      const counted = attempted.has(`${account.id}|${t}`);
+      const walked = (id: WindowId, held: boolean, walk: number): number | null => (counted && held && !lastSample.get(`${account.id}|${id}`)?.has(t) ? round(walk, 3) : null);
+      const read = peaksOf(account.id, t);
       // The cooldown and overage draws key off the hour's highest 5-hour sample where one stands, else the walk, as the
       // stream was seeded, so each draw keeps its place.
       const keyed5 = fiveHour ? (sampled5 ?? drift5) : null;
@@ -3986,7 +3997,7 @@ function accountRollups(): AccountRollup[] {
         ...ACCOUNT_ROLLUP_SAMPLE,
         accountId: account.id,
         hour: iso(t),
-        peak: peaksOf(account.id, t),
+        peak: { '5h': read['5h'] ?? walked('5h', fiveHour, drift5), '7d': read['7d'] ?? walked('7d', sevenDay, drift7), '7d_fable': read['7d_fable'] ?? walked('7d_fable', last.fableWindow !== null, driftF) },
         cooldownSeconds: cooldown,
         overageSeconds: overage,
         pins: pinned ? pins : noPins(),

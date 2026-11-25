@@ -477,27 +477,22 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`an account whose window set lacks the 5-hour window reads no 5-hour peak and no cooldown in its account facts, while one with the window reads its peak, at ${at}`, async () => {
+  test(`an account whose window set lacks the 5-hour window reads no 5-hour peak and no cooldown in its account facts, at ${at}`, async () => {
     const s = await story;
     const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
-    // The ledger reads the 5-hour peak off the heads' 5-hour readings, which an account without the window never sends,
-    // and the story's cooldowns come from that peak alone. The answer withholds the windows of a row that is not paired
-    // or needs re-auth, so such a row's window set reads off the windows of its quota history, the reading the ledger
-    // keeps.
+    // A 5-hour peak reads the hour's 5-hour samples and the heads of its attempts, which an account without the window
+    // never holds. The drawn cooldowns key off the hour's highest 5-hour sample where one stands, else the 5-hour walk,
+    // and an account without the window keys neither. The answer withholds the windows of a row that is not paired or
+    // needs re-auth, so such a row's window set reads off the windows of its quota history, which the ledger keeps.
     const withheld = (a) => a.status === 'unpaired' || a.status === 'reauth_required';
     const sets = await Promise.all(s.accounts.map(async (a) => [a.id, withheld(a) ? (await s.api.getQuotaHistory(a.id)).map((h) => h.windowId) : a.windows.map((w) => w.id)]));
     const has5h = new Map(sets.map(([id, ids]) => [id, ids.includes('5h')]));
     const without = facts.filter((r) => has5h.get(r.accountId) === false);
-    const withWindow = facts.filter((r) => has5h.get(r.accountId) === true);
-    assert.ok(without.length > 0 && withWindow.length > 0, 'the story holds account facts on both sides');
+    assert.ok(without.length > 0, 'the story holds account facts of an account without the window');
     assert.deepEqual(without.filter((r) => r.peak['5h'] !== null || r.cooldownSeconds !== 0).map((r) => `${r.accountId} ${r.hour} ${r.peak['5h']} ${r.cooldownSeconds}`), []);
-    // A peak is no lower than the hour's samples, so an hour whose last 5-hour sample holds a figure holds a peak.
-    const sampled = withWindow.filter((r) => typeof r.windows.five_hour?.utilization === 'number');
-    assert.ok(sampled.length > 0, 'the story holds hours with a 5-hour sample');
-    assert.deepEqual(sampled.filter((r) => typeof r.peak['5h'] !== 'number').map((r) => `${r.accountId} ${r.hour}`), [], 'an account with the window reads its 5-hour peak where the hour holds a sample');
   });
 
-  test(`each account hour's peak is the larger of the hour's quota samples and its attempts' heads, null where it holds neither, and each sampled hour lists its row, at ${at}`, async () => {
+  test(`each account hour's peak is the larger of the hour's quota samples and its attempts' heads, an hour with no request row reads one where its rollups count an attempt, and each sampled hour lists its row, at ${at}`, async () => {
     const s = await story;
     const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now + DAY));
     // The two sources the router reads a peak from, each by the hour it falls in: the quota history's samples, and the
@@ -511,6 +506,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       highest.set(key, Math.max(highest.get(key) ?? 0, utilization));
     };
     const sampled = new Set();
+    const sampledWindows = new Set();
     for (const a of s.accounts) {
       // The mock's reading of an ended plan holds no window, so the account hours state no hour for it, where the
       // router lists the hours of its samples.
@@ -519,23 +515,59 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       for (const h of await s.api.getQuotaHistory(a.id)) {
         for (const x of h.samples) {
           if (listsSamples) sampled.add(`${a.id} ${startOfHour(Date.parse(x.at))}`);
+          sampledWindows.add(`${a.id} ${startOfHour(Date.parse(x.at))} ${h.windowId}`);
           raise(a.id, Date.parse(x.at), h.windowId, x.utilization);
         }
       }
     }
     for (const r of s.requests) for (const t of r.attempts) for (const w of t.windows) raise(t.accountId, Date.parse(t.startedAt), w.id, w.utilization);
-    const read = facts.flatMap((r) => peaks.map((w) => ({ at: `${r.accountId} ${r.hour} ${w}`, peak: r.peak[w], sources: highest.get(`${r.accountId} ${Date.parse(r.hour)} ${w}`) ?? null })));
-    const drawn = read.filter((x) => x.sources === null && x.peak !== null);
+    // An hour with no request row holds no attempt of its own, while its rollups count the attempts on an account,
+    // whose heads the router folds. So such an hour reads a peak on each window that the account holds and that holds
+    // no sample in the hour, and its figure is the story's own. The series answers hourly buckets for a two-day range.
+    const logged = new Set(s.requests.map((r) => startOfHour(Date.parse(r.at))));
+    const spans = [];
+    for (let from = startOfHour(s.now - 31 * DAY); from <= s.now; from += 2 * DAY) spans.push(from);
+    const points = (await Promise.all(spans.map((from) => s.api.getAnalyticsSeries({ from: iso(from), groupBy: 'account', includeProbes: true, to: iso(from + 2 * DAY) })))).flat();
+    const counted = new Set(points.flatMap((p) => (logged.has(Date.parse(p.at)) ? [] : p.groups.filter((g) => g.attempts > 0).map((g) => `${g.key} ${Date.parse(p.at)}`))));
+    const holds = new Map(s.accounts.map((a) => [a.id, [...a.windows.map((w) => w.id), ...(a.fableWindow ? ['7d_fable'] : [])]]));
+    const headed = (k, w) => counted.has(k) && (holds.get(k.split(' ')[0]) ?? []).includes(w) && !sampledWindows.has(`${k} ${w}`);
+    const read = facts.flatMap((r) => {
+      const k = `${r.accountId} ${Date.parse(r.hour)}`;
+      return peaks.map((w) => ({ at: `${r.accountId} ${r.hour} ${w}`, headed: headed(k, w), peak: r.peak[w], sources: highest.get(`${k} ${w}`) ?? null }));
+    });
+    const drawn = read.filter((x) => !x.headed && x.sources === null && x.peak !== null);
     const lifted = read.filter((x) => x.sources !== null && x.peak !== null && x.peak > x.sources);
     const short = read.filter((x) => x.sources !== null && (x.peak === null || x.peak < x.sources));
     const named = (list) => list.slice(0, 3).map((x) => `${x.at} reads ${x.peak}, its sources ${x.sources}`);
-    const listed = new Set(facts.map((r) => `${r.accountId} ${Date.parse(r.hour)}`));
-    const unlisted = [...sampled].filter((k) => !listed.has(k)).map((k) => `${k.split(' ')[0]} ${iso(Number(k.split(' ')[1]))}`);
+    const rowOf = new Map(facts.map((r) => [`${r.accountId} ${Date.parse(r.hour)}`, r]));
+    const hourOf = (k) => `${k.split(' ')[0]} ${iso(Number(k.split(' ')[1]))}`;
+    const unheaded = [...counted].flatMap((k) => peaks.filter((w) => headed(k, w) && typeof rowOf.get(k)?.peak[w] !== 'number').map((w) => `${hourOf(k)} ${w}`));
+    const unlisted = [...sampled].filter((k) => !rowOf.has(k)).map(hourOf);
     assert.deepEqual(
-      { drawn: named(drawn), lifted: named(lifted), short: named(short), unlisted: unlisted.slice(0, 3) },
-      { drawn: [], lifted: [], short: [], unlisted: [] },
-      `${drawn.length} peaks where the hour holds neither source, ${lifted.length} over them, ${short.length} under one, and ${unlisted.length} sampled hours with no row`,
+      { drawn: named(drawn), lifted: named(lifted), short: named(short), unheaded: unheaded.slice(0, 3), unlisted: unlisted.slice(0, 3) },
+      { drawn: [], lifted: [], short: [], unheaded: [], unlisted: [] },
+      `${drawn.length} peaks where the hour holds no source, ${lifted.length} over them, ${short.length} under one, ${unheaded.length} counted attempts' windows with no peak, and ${unlisted.length} sampled hours with no row`,
     );
+  });
+
+  test(`a login that no pool with an affinity window holds reads no pin count in its account facts, at ${at}`, async () => {
+    const s = await story;
+    // legacy, reserve and zephyr stand in no pool (mock/pools.ts), and the router writes a pin only under a pool with
+    // an affinity window.
+    const logins = ['legacy', 'reserve', 'zephyr'];
+    assert.deepEqual(s.pools.filter((p) => p.affinityTtlSeconds > 0 && p.members.some((m) => logins.includes(m.accountId))).map((p) => p.id), [], 'no pool with an affinity window holds the three');
+    const facts = (await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now + DAY))).filter((r) => logins.includes(r.accountId));
+    assert.deepEqual([...new Set(facts.map((r) => r.accountId))].sort(), logins, 'each of the three lists account facts');
+    assert.deepEqual(facts.filter((r) => r.pins.created + r.pins.migratedIn + r.pins.migratedOut > 0).map((r) => `${r.accountId} ${r.hour}`).slice(0, 3), []);
+  });
+
+  test(`each account hour holds a figure: a peak, a time under a cooldown or in overage, a pin count or a sampled window, at ${at}`, async () => {
+    const s = await story;
+    // The ledger stores no account hour that holds nothing, and the route lists an hour beyond the stored ones only
+    // where a sample of the account stands.
+    const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now + DAY));
+    const empty = facts.filter((r) => Object.values(r.peak).every((p) => p === null) && r.cooldownSeconds === 0 && r.overageSeconds === 0 && r.pins.created + r.pins.migratedIn + r.pins.migratedOut === 0 && Object.keys(r.windows).length === 0);
+    assert.deepEqual(empty.slice(0, 3).map((r) => `${r.accountId} ${r.hour}`), [], `${empty.length} account hours hold nothing`);
   });
 
   test(`the accounts answer ends at the current hour and cuts an open cooldown at the read, at ${at}`, async () => {
