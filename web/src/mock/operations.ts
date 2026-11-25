@@ -9,7 +9,7 @@ import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { eligibilityOf, keyById, poolById, servedFigures } from './pools';
-import { ACCOUNT_BOUND_SESSION_ID, BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, accountBoundAt, fastTurn, pinCacheTtlOf, pinReadAt, requestById } from './requests';
+import { ACCOUNT_BOUND_SESSION_ID, BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, accountBoundAt, fastTurn, pinCacheTtlOf, pinReadAt, pinStampOf, requestById } from './requests';
 import { dropSizeOf, droppedThinkingOf, moveSizeOf, weekRewriteOf } from './rewrite';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, regimeFor, tablesFor } from './samples';
@@ -1049,18 +1049,18 @@ SESSIONS.forEach((pin, i) => {
  * prices a display pin's, the line its caller lists first at the row's burn and its dollar burn per hour as folded at
  * its last use, the burn itself on a dollar-billed account and `dollars` on a plan, and the others beside it, and dated
  * from its first sighting, its figures, its served burn and reading and its pin's instant off that first line, warm
- * off it and last used at the newest of its lines, each line refreshed at its last use, its summary off its session's
- * recipes, and its last request off the activity fold. The engine holds no record of its main, so it reads no
- * lifecycle word. A row passes a companion or a presence only where a mod reports.
+ * off it and last used at the newest of its lines, each line refreshed at its last use unless it names its refresh in
+ * `refreshedAt`, its summary off its session's recipes, and its last request off the activity fold. The engine holds no
+ * record of its main, so it reads no lifecycle word. A row passes a companion or a presence only where a mod reports.
  */
 const writtenRow = (
   { dollars, firstSeen, ...row }: Pick<Session, 'agentId' | 'burn' | 'keyId' | 'sessionId'> & Partial<Pick<Session, 'companion' | 'presenceAgeSeconds'>> & { accountId: string; dollars?: number; firstSeen: string },
-  lines: Parameters<typeof pinLine>[0][],
+  lines: (Parameters<typeof pinLine>[0] & { refreshedAt?: string })[],
 ): Session => {
   const keyGeneration = Date.parse(keyById.get(row.keyId)!.createdAt);
   const key = activityOf(row.keyId, keyGeneration, row.sessionId);
   const display = { burn: row.burn, dollars: burnUnitOf(row.accountId) === 'usd' ? row.burn : (dollars ?? null), lastInputTokens: lines[0].lastInputTokens };
-  const priced = lines.map((l, j) => pinLine(l, row.keyId, row.sessionId, j === 0 ? display : servedBeside(display, l, firstSeen), l.lastUsedAt));
+  const priced = lines.map(({ refreshedAt, ...l }, j) => pinLine(l, row.keyId, row.sessionId, j === 0 ? display : servedBeside(display, l, firstSeen), refreshedAt ?? l.lastUsedAt));
   const line = priced[0];
   const agentContexts = datedLines(firstSeen, key, priced);
   const seen = ledgered.get(key);
@@ -1091,7 +1091,7 @@ const writtenRow = (
     keepalive: summaryOf(row.sessionId),
     keyGeneration,
     lastInputTokens: line.lastInputTokens,
-    lastRefreshAt: line.lastUsedAt,
+    lastRefreshAt: lines[0].refreshedAt ?? line.lastUsedAt,
     lastRequestAt: seen ?? null,
     lastUsedAt: newestUse(null, priced),
     lifecycle: null,
@@ -1156,13 +1156,17 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
 });
 
 /**
- * A session's row once the operator deleted its key: the store deletes the key's pins with the key and the engine's
- * next tick ends its sessions, so the route lists the row off the ledger alone, its account and model those of its
- * newest request, and a session the ledger holds no request of leaves the list.
+ * A session's row once the operator deleted its key, read off `written`, the requests the ledger had written by the
+ * delete: the store deletes the key's pins with the key, so the route lists the row off the ledger alone, its account
+ * and model those of its newest request, and a session the ledger holds no request of leaves the list. A deleted key
+ * writes no request behind its delete, so these are the requests the list reads at each later instant. The engine
+ * holds the key's sessions until its next tick, up to a second behind the delete, and for that second the route also
+ * lists each of them that the ledger holds no request of, as a historical row with no account. The mock ends them at
+ * the delete, so for that second it leaves those rows out.
  */
-export const rowsOfDeletedKey = (s: Session): Session[] => {
-  // The seed runs newest first.
-  const newest = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === s.keyId && r.keyGeneration === s.keyGeneration && r.sessionId === s.sessionId);
+export const rowsOfDeletedKey = (s: Session, written: readonly RequestLog[]): Session[] => {
+  // The seed runs newest first, and the written rows keep its order.
+  const newest = written.find((r) => r.kind !== 'probe' && r.keyId === s.keyId && r.keyGeneration === s.keyGeneration && r.sessionId === s.sessionId);
   if (newest === undefined) return [];
   const row = ledgerOnlyRow({ accountId: newest.accountId, historical: true, keyGeneration: s.keyGeneration, keyId: s.keyId, lastRequestAt: newest.at, model: newest.canonicalModel, sessionId: s.sessionId });
   // The ledger names the fork off the session's requests, which outlive the key.
@@ -1384,6 +1388,49 @@ const WRITTEN_SESSIONS = [
   writtenRow({ accountId: 'contract', agentId: 'main', burn: NO_MOD_BURN, firstSeen: NO_MOD_CREATED_AT, keyId: 'fleet', sessionId: NO_MOD_SESSION_ID }, [noModMain, noModSubagent]),
 ];
 SESSIONS.push(...WRITTEN_SESSIONS);
+
+/**
+ * Two laptop sessions the route lists off the ledger and the pins alone, written after the recipes rather than rolled,
+ * so every drawn row and recipe keeps its rolls. No mod reports either, and the engine holds a session from a mod's
+ * start report alone, so neither holds a recipe. The compacted conversation's pin was swept once all's affinity window
+ * passed its last turn, so its row is the ledger's. The failover's subagent holds the pin its landing wrote on nightly,
+ * live inside that window, and main's pins were swept hours before, so that pin is the row's. The landing stamps the
+ * pin with its source, the turn's end renews it with no refresh, and the turn stopped with `end_turn`, so the router
+ * holds the pin as ended. Its burn and its dollars are written figures, since the mock holds no fold of the pin.
+ */
+const LEDGER_TURN_ID = 'req_31f0b7c2-6e1';
+const FAILOVER_TURN_ID = 'req_2e7c90a1-6d4';
+const FAILOVER_PIN_BURN = 0.012;
+const FAILOVER_PIN_BURN_USD = 0.03;
+{
+  const of = (id: string) => {
+    const r = requestById.get(id);
+    if (r === undefined || r.keyId === null || r.sessionId === null) throw new Error(`the story holds no session request ${id}`);
+    return { ...r, keyId: r.keyId, sessionId: r.sessionId };
+  };
+  const turn = of(LEDGER_TURN_ID);
+  // The seed runs newest first.
+  const newest = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === turn.keyId && r.keyGeneration === turn.keyGeneration && r.sessionId === turn.sessionId)!;
+  SESSIONS.push(ledgerOnlyRow({ accountId: newest.accountId, historical: false, keyGeneration: turn.keyGeneration, keyId: turn.keyId, lastRequestAt: newest.at, model: newest.canonicalModel, sessionId: turn.sessionId }));
+  const failover = of(FAILOVER_TURN_ID);
+  const landing = servingAttempt(failover)!;
+  const write = storyPinWrite(failover.id, landing.accountId, failover.sessionId, true);
+  const line = {
+    accountId: landing.accountId,
+    agentId: failover.agentId!,
+    cacheTtlMs: pinCacheTtlOf(failover.sessionId),
+    effort: failover.shape.effort,
+    ended: true,
+    lastInputTokens: promptOf(failover.usage),
+    lastUsedAt: iso(pinStampOf(failover, false)),
+    lifecycle: null,
+    model: failover.canonicalModel,
+    pinnedAt: write.at,
+    refreshedAt: write.at,
+  };
+  const row = writtenRow({ accountId: landing.accountId, agentId: line.agentId, burn: FAILOVER_PIN_BURN, dollars: FAILOVER_PIN_BURN_USD, firstSeen: failover.at, keyId: failover.keyId, sessionId: failover.sessionId }, [line]);
+  SESSIONS.push({ ...row, shed: write.shed });
+}
 // Each row carries its own fold of the request seed at the story's clock, the spend its count lives in among it, so a
 // read of the seed past the route's list finds what the route answers for the row.
 for (const s of SESSIONS) Object.assign(s, foldSessionSpend(REQUESTS, s, NOW));

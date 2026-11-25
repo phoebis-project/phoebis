@@ -1095,7 +1095,8 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (key) this.buriedKeys.set(id, Math.floor(key.revision / INCARNATION_STAMP));
     this.keys = this.keys.filter((k) => k.id !== id);
-    this.sessions = this.sessions.flatMap((s) => (s.keyId === id ? rowsOfDeletedKey(s) : [s]));
+    const written = writtenBy(mockClock.now());
+    this.sessions = this.sessions.flatMap((s) => (s.keyId === id ? rowsOfDeletedKey(s, written) : [s]));
     // The key's attachments go in the delete's own transaction, since one subject column cannot cascade from two
     // tables.
     this.setSubjectGuardrails('keys', id, [], false);
