@@ -2913,33 +2913,35 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([value('age_five_hour'), value('hold_five_hour')].map((f) => [f?.value, f?.unit]), [[1_140_000, 'ms'], [3_600_000, 'ms']]);
   });
 
-  test(`a renewal's summary names a week that a pin of the pool on the account draws, whatever the request's model, until the sweep takes that pin, at ${at}`, async () => {
+  test(`a renewal's summary names a week that a pin of the pool on the account draws, whatever the request's model, while that pin stands ahead of its sweep, at ${at}`, async () => {
     const s = await story;
     const rows = (await logOf(s)).filter((row) => row.type === 'decision' && row.seq === 1);
     const first = rows.find((row) => row.requestId === 'req_b4d29e61-a73');
-    const second = rows.find((row) => row.requestId === 'req_e61f0b48-c25');
-    // Two Opus renewals of the laptop conversation on nightly inside the dwell of the 08:30 round. Each writes
-    // nightly's Fable week at 0.65 with the Fable session's burn of 0.03 an hour, which projects 0.80 over all's weekly
-    // ceiling of 0.78, and Opus draws no week. The Fable session's pin was last used at 08:30:09.400, so it stands past
-    // its 600 s window from 08:40:09.400, 20,990.6 s before the load, until the sweep of 08:40:40, 20,960 s before it.
-    // The first renewal stands inside that span, so its round's trigger reads the Fable week, and the second stands
-    // behind the sweep.
+    // An Opus renewal of the laptop conversation on nightly inside the dwell of the 08:30 round. It writes nightly's
+    // Fable week at 0.65 with the Fable session's burn of 0.03 an hour, which projects 0.80 over all's weekly ceiling
+    // of 0.78, and Opus draws no week. The Fable session's pin was last used at 08:30:09.400, so it stands past its
+    // 600 s window from 08:40:09.400, 20,990.6 s before the load, until the sweep of 08:40:40, 20,960 s before it, and
+    // the renewal stands inside that span.
     const offset = (row) => Date.parse(row?.at) - s.now;
-    assert.ok(offset(first) > -20_990_600 && offset(first) < -20_960_000, `the first renewal at ${offset(first)} ms`);
-    assert.ok(offset(second) > -20_960_000, `the second renewal at ${offset(second)} ms`);
+    assert.ok(offset(first) > -20_990_600 && offset(first) < -20_960_000, `the renewal at ${offset(first)} ms`);
     assert.deepEqual(first.fact, [{ entity: null, key: 'seven_day_fable', unit: 'percent', value: 0.65 }]);
-    assert.deepEqual(second.fact.map((f) => f.key), ['idle']);
   });
 
-  test(`a renewal's shed line inside a round's dwell names a week that a pin of the pool on the account draws as its trigger, whatever the request's model, at ${at}`, async () => {
-    const records = await decisionsOf(await story);
-    const r = records.find((x) => x.requestId === 'req_b4d29e61-a73' && x.seq === 1);
-    const line = r?.walk.find((w) => w.step === 'move:shed');
-    const value = (key) => line?.facts.find((f) => f.key === key)?.value;
+  test(`a renewal's shed line inside a round's dwell reads a week that a pin of the pool on the account draws, whatever the request's model, until the sweep takes that pin, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    const recordOf = (id) => records.find((x) => x.requestId === id && x.seq === 1);
+    const first = recordOf('req_b4d29e61-a73');
+    const second = recordOf('req_e61f0b48-c25');
+    const lineOf = (r) => r?.walk.find((w) => w.step === 'move:shed');
+    const value = (r, key) => lineOf(r)?.facts.find((f) => f.key === key)?.value;
     // The Opus renewal of 08:40:20 on nightly, inside the 900 s dwell of the 08:30 round, while the Fable session's pin
-    // stands ahead of its sweep: nightly's Fable week projects 0.80 over all's weekly ceiling of 0.78, and the shared
-    // windows read under their lines.
-    assert.deepEqual([value('trigger'), value('round')], ['seven_day_fable', 'within_dwell']);
+    // stands ahead of its sweep: nightly's Fable week projects 0.65 + 0.03 x 5 = 0.80 over all's weekly ceiling of
+    // 0.78, and the shared windows read under their lines. The renewal of 08:41:30 stands behind the sweep of 08:40:40,
+    // 20,960 s before the load, which takes the one pin that draws the week.
+    assert.deepEqual([value(first, 'trigger'), value(first, 'round'), value(first, 'projection_seven_day_fable')], ['seven_day_fable', 'within_dwell', 0.8]);
+    assert.ok(Date.parse(second?.request.at) - s.now > -20_960_000, `the second renewal at ${Date.parse(second?.request.at) - s.now} ms`);
+    assert.deepEqual(lineOf(second)?.facts.filter((f) => f.key.includes('seven_day_fable')).map((f) => f.key), []);
   });
 
   test(`a round reads off the window exactly where it walked no pin and left one out off the window that fired, at ${at}`, async () => {

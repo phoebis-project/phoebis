@@ -3247,22 +3247,14 @@ const tally = <T>(items: readonly T[], keyOf: (item: T) => string | null, into: 
   return into;
 };
 
-/**
- * The sets of rows the rollups read behind every other row, in the order they take the stream's draws: the moved pin's
- * rows, then the laptop's morning Opus conversation.
- */
-const ROLLUP_BACK: readonly ((r: Pick<RequestLog, 'id' | 'sessionId'>) => boolean)[] = [(r) => MOVED_PIN_ROWS.has(r.id), (r) => r.sessionId === OPUS_MORNING_SESSION_ID];
-
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
-  // The rows of the back take this stream's draws behind each drawn figure, so each lane hour ahead of them keeps its
-  // draws, and a set of the back keeps its draws while each later set stands behind it. No probe of the back takes
-  // part in the pick of the held probe below.
-  const backOf = (r: RequestLog) => ROLLUP_BACK.findIndex((inSet) => inSet(r));
-  const behind = (r: RequestLog) => backOf(r) >= 0;
+  // The moved pin's rows join the story behind every drawn figure, so their lane hours take this stream's draws after
+  // every other lane hour's, and their probe takes no part in the pick of the held probe below.
+  const behind = (r: RequestLog) => MOVED_PIN_ROWS.has(r.id);
   const behindRollups = new Set<HourlyRollup>();
-  for (const r of [...rows.filter((x) => !behind(x)), ...ROLLUP_BACK.flatMap((_, i) => rows.filter((x) => backOf(x) === i))]) {
+  for (const r of [...rows.filter((x) => !behind(x)), ...rows.filter(behind)]) {
     const hour = iso(startOfHour(Date.parse(r.at)));
     // A request answered at the cap before any account served it files under `-`, as the ledger files what it could
     // not attribute. The funding is part of the key, so a lane-hour on both sides of nightly's overage raise splits.
@@ -3282,7 +3274,10 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
     // below moves no drawn figure.
     // Roughly a third of warm reads on the desktop and laptop keys follow a probe
     // closely enough to credit the probe with the hit.
-    const kept = new Set(isProbe || !warmsCaches(keyId, poolId) ? [] : okRows.filter((r) => r.usage.cacheRead > 0 && h.chance(0.35)));
+    // The router credits a read only behind a probe that covered the session, to a turn that arrives after the entry of
+    // the turn before it lapsed. The laptop's morning Opus conversation holds no probe and turns inside its entry's
+    // hour, so its rows take no draw.
+    const kept = new Set(isProbe || !warmsCaches(keyId, poolId) ? [] : okRows.filter((r) => r.usage.cacheRead > 0 && r.sessionId !== OPUS_MORNING_SESSION_ID && h.chance(0.35)));
     const moved = list.filter((r) => failoversOf(r) > 0 && r.status === 200);
     // The stream was seeded while a retry on the same account counted as a failover, so a lane hour whose answered
     // request retried there still draws the chance, and drops it, which keeps every later draw in its place.

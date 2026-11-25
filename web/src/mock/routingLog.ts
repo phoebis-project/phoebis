@@ -1154,7 +1154,7 @@ function fablePinsAlone(accountId: string, pool: PoolSeed, at: number): boolean 
  * The windows a round on the account reads its trigger over at `at`, in the trigger's order: both shared windows, then
  * the week of each model that a pin of the pool on the account draws, whatever the request's model. A pin counts where
  * no sweep has taken it, `live` or `expired_idle` under `pinReadAt`. The router also leaves out a pin whose agent
- * ended, which this state does not keep.
+ * ended and drops a pin that a release took, and this state records neither the end nor the release.
  */
 function triggerWindowsOf(accountId: string, pool: PoolSeed, at: number): string[] {
   const held = [...pins.entries()].filter(([, p]) => p.accountId === accountId && p.poolId === pool.id && pinReadAt(p.stamp, pool.affinityTtlSeconds * 1_000, at) !== 'none');
@@ -2715,9 +2715,10 @@ function storySpecs(): Spec[] {
       round: roundOfPins(FABLE_WEEK_PINS),
     }),
     // The laptop conversation's next three turns, inside the round's dwell. The first lands on nightly with its three
-    // siblings at their caps. Both renewals read nightly's Fable week and burns as the round's renewal does, so the
-    // week projects 0.80 over all's weekly ceiling of 0.78 on each row: the round's trigger reads that week at the
-    // first, while the Fable session's pin stands past its window ahead of the sweep, and leaves it out at the second.
+    // siblings at their caps. Both renewals read nightly's Fable week at 0.65. At the first the Fable session's pin
+    // stands past its window ahead of the sweep and burns the week as at the round's renewal, so the week projects 0.80
+    // over all's weekly ceiling of 0.78 and the round's trigger reads it. The sweep takes that pin ahead of the second,
+    // so nothing burns the week there.
     at('req_5a8e3c07-d19', 1, 1, t(8, 35), 'placed', 'nightly', { inFlight: { overflow: 16, primary: 16, secondary: 16 } }),
     at('req_b4d29e61-a73', 1, 1, t(8, 40, 20), 'renewed', 'nightly', {
       burns: { nightly: { five_hour: 0.03, seven_day_fable: FABLE_WEEK_BURN } },
@@ -2725,7 +2726,7 @@ function storySpecs(): Spec[] {
       readings: nightlyAt(t(8, 40, 20), 0.65),
     }),
     at('req_e61f0b48-c25', 1, 1, t(8, 41, 30), 'renewed', 'nightly', {
-      burns: { nightly: { five_hour: 0.03, seven_day_fable: FABLE_WEEK_BURN } },
+      burns: { nightly: { five_hour: 0.03 } },
       pin: live('continues_pin', 70_000),
       readings: nightlyAt(t(8, 41, 30), 0.65),
     }),
