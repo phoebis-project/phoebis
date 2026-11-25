@@ -530,6 +530,8 @@ const POOL_ROWS: PoolSeed[] = [
 export const POOLS: PoolSeed[] = POOL_ROWS.map(({ guardrails: _g, warnings: _w, ...seed }: PoolSeed & { guardrails?: unknown; warnings?: unknown }) => seed);
 
 export const poolById = new Map(POOLS.map((p) => [p.id, p]));
+/** A pool's affinity window in milliseconds: 0 for a pool that pins no session and for a request with no pool. */
+export const affinityTtlMsOf = (poolId: string | null): number => (poolById.get(poolId ?? '')?.affinityTtlSeconds ?? 0) * 1_000;
 
 /** A key as the story seeds it and the mock stores it. Its guardrails and its pool's are the attachments', which the
  *  key view reads. */

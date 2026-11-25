@@ -81,7 +81,8 @@ export const dropSizeOf = (dropped: number | null, model: string, client: string
 export const rewriteTokensOf = (lastPrompt: number, dropped: number | null): number => Math.max(lastPrompt - (dropped ?? 0), 0);
 /**
  * The size a round divides a pin's burn by and a move's cost prices: the rewrite at the destination plus the dropped
- * thinking at the output's weight, never under one token. Null where the pin holds no prompt size.
+ * thinking at the output's weight (`dropSize`, as `dropSizeOf` answers it), never under one token. Null where the pin
+ * holds no prompt size.
  */
-export const moveSizeOf = (lastPrompt: number | null, dropped: number | null, model: string, client: string | null, ttlMs: number): number | null =>
-  lastPrompt === null || lastPrompt === 0 ? null : Math.max(rewriteTokensOf(lastPrompt, dropped) + (dropSizeOf(dropped, model, client, ttlMs) ?? 0), 1);
+export const moveSizeOf = (lastPrompt: number | null, dropped: number | null, dropSize: number | null): number | null =>
+  lastPrompt === null || lastPrompt === 0 ? null : Math.max(rewriteTokensOf(lastPrompt, dropped) + (dropSize ?? 0), 1);

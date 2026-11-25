@@ -7,7 +7,7 @@ import { emptyHistogram, histogramOf, mergeHistograms, quartet } from '@/lib/his
 import { accountBound } from '@/lib/inputTransformations';
 import { matchesPattern } from '@/lib/pattern';
 import { iso } from './decode';
-import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, InputTransformations, RequestLog, RequestPage } from './types';
+import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, FundingFilter, InputTransformations, LatencyHistograms, RequestLog, RequestPage } from './types';
 
 const METRICS = ['durationMs', 'outputTps', 'ttfbMs', 'ttftMs'] as const;
 
@@ -281,6 +281,17 @@ export function countDropped(into: Pick<AnalyticsGroup, 'inputTransformations' |
 }
 
 /**
+ * The latency histograms of request rows: the ledger files each figure a counted request holds, whatever its status or
+ * kind, and a row leaves out a figure it lacks as null.
+ */
+export function latencyHistogramsOf(rows: readonly RequestLog[]): LatencyHistograms {
+  const samples = rows.map(latencySamples);
+  const histograms: LatencyHistograms = { durationMs: [], outputTps: [], ttfbMs: [], ttftMs: [] };
+  for (const m of METRICS) histograms[m] = histogramOf(samples.map((s) => s[m]).filter((v): v is number => v !== null));
+  return histograms;
+}
+
+/**
  * Request rows summed the way the rollups sum them, for the one filter the rollups cannot answer: a session.
  * `latest` is taken over every row of the range, so a bucket holding an earlier key holder alone still labels it
  * deleted.
@@ -369,11 +380,8 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     countDropped(g, served?.response.inputTransformations ?? null, (served?.selection?.moved ?? null) !== null);
   }
   for (const { group: g, rows: list } of groups.values()) {
-    const samples = list.map(latencySamples);
-    for (const m of METRICS) {
-      g.histograms[m] = histogramOf(samples.map((s) => s[m]).filter((v): v is number => v !== null));
-      g.percentiles[m] = quartet(g.histograms[m]);
-    }
+    g.histograms = latencyHistogramsOf(list);
+    for (const m of METRICS) g.percentiles[m] = quartet(g.histograms[m]);
     // Shares of one account's windows add, and a group of any other dimension spans accounts, whose windows do not.
     if (by === 'account') foldShares(g, list);
   }

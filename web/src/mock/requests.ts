@@ -1,15 +1,15 @@
-import { agentTokenOf, clientLeft, couldNotCache, countDropped, plus } from '@/api/fold';
+import { agentTokenOf, clientLeft, couldNotCache, countDropped, latencyHistogramsOf, plus } from '@/api/fold';
 import type {
-  AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, FeatureCall, InputTransformations, LatencyHistograms, PinMigrationReason, Placement,
+  AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, FeatureCall, InputTransformations, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import type { GuardrailMatch } from '@/api/types';
-import { CONVERSATION_CLASSES, keptWarmTokens } from '@/lib/analytics';
+import { classLegendOf, keptWarmTokens } from '@/lib/analytics';
 import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { equivalentIn, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
 import { addCount, emptyCounts } from '@/lib/counts';
-import { NO_CLASS, NO_EFFORT, expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, hitUnderReason, latencySamples, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
+import { NO_CLASS, NO_EFFORT, expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, hitUnderReason, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
 import { fnv1a } from '@/lib/hash';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
@@ -20,7 +20,7 @@ import { ACCOUNTS, ENDED_PLAN_WINDOWS, QUOTA_HISTORY, SHARED_WINDOWS, accountByI
 import type { HourlyRollup } from './analytics';
 import { cellsFor, promptOf } from './catalog';
 import { leadOf, leftPerHour, paceDeadline } from './lead';
-import { RETIRED, keyById, poolById, storyAccountOf } from './pools';
+import { RETIRED, affinityTtlMsOf, keyById, poolById, storyAccountOf } from './pools';
 import { createRng, type Rng } from './rng';
 import { round } from './round';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES, tablesFor } from './samples';
@@ -322,8 +322,11 @@ const MEMBER_CLIENT_KEYS: ReadonlySet<string> = new Set(['ci', 'desktop']);
  */
 function ownMarkerOf(r: Pick<RequestLog, 'classifier' | 'kind' | 'poolId' | 'sessionId'>): boolean {
   if (r.kind === 'probe') return true;
-  return r.kind === 'inference' && (r.classifier !== null || ((poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) > 0 && r.sessionId !== null));
+  return r.kind === 'inference' && (r.classifier !== null || (affinityTtlMsOf(r.poolId) > 0 && r.sessionId !== null));
 }
+
+/** Whether a request's class refreshes its pin's entry: a conversation class, or none sent. */
+const refreshingClass = (c: string | null): boolean => c === null || classLegendOf(c) === 'conversation';
 
 /**
  * The one marker fact the relay keeps for its selection and for the request's row: the body's own marker, or the one
@@ -332,7 +335,7 @@ function ownMarkerOf(r: Pick<RequestLog, 'classifier' | 'kind' | 'poolId' | 'ses
  */
 function markerOf(r: Pick<RequestLog, 'kind' | 'poolId' | 'requestClass'>, own: boolean): boolean {
   const policy = poolById.get(r.poolId ?? '')?.cacheTtl;
-  const auxiliary = r.requestClass !== null && !CONVERSATION_CLASSES.some((c) => c === r.requestClass);
+  const auxiliary = !refreshingClass(r.requestClass);
   return own || ((r.kind === 'inference' || r.kind === 'probe') && policy?.enabled === true && policy.injectWhenAbsent && !auxiliary);
 }
 
@@ -445,6 +448,18 @@ export const STORY_HOUR_FROM = NOW - HOUR;
 export const HAIKU = 'claude-haiku-4-5-20251001';
 
 /**
+ * The story's timed account gates, by the word a pin's release names for each. `servable` keeps an attempt off an
+ * account a gate holds and `releaseReasonsOf` names the gate, so both read one set of instants.
+ */
+const STORY_GATES: Record<'budget' | 'fast_credits' | 'funding_required' | 'paused', { accountId: string; holds: (at: number, fast: boolean) => boolean }> = {
+  budget: { accountId: 'research', holds: (at) => at >= RESEARCH_BUDGET_AT },
+  fast_credits: { accountId: 'nightly', holds: (at, fast) => fast && at < NIGHTLY_CAP_RAISED },
+  funding_required: { accountId: 'overflow', holds: (at) => at >= OVERFLOW_LAPSED_AT },
+  paused: { accountId: 'overflow', holds: (at) => at >= OVERFLOW_PAUSED_AT },
+};
+const gated = (word: keyof typeof STORY_GATES, accountId: string, at: number, fast: boolean): boolean => STORY_GATES[word].accountId === accountId && STORY_GATES[word].holds(at, fast);
+
+/**
  * Whether an account could take a request at `atMs` by the story's own account facts, so no attempt lands where the
  * decision card would show the account out: secondary, which serves Sonnet 4.5 alone, reads its 5-hour window spent
  * from 14:02:11 and cools on it from 14:07:51 to 14:55. Primary's fast lane cools from 14:27:00 to 14:42 and it
@@ -456,10 +471,7 @@ export function servable(accountId: string, atMs: number, model: string, fast: b
   if (accountId === 'secondary') return !within(clock(14, 2, 11), clock(14, 55));
   // Primary's two spans are its seed's cooldowns: a fast scope holds a fast request, a model scope that model.
   if (accountId === 'primary') return !accountById.get('primary')!.cooldowns.some((c) => (c.scope === 'fast' ? fast : c.scope === `${MODEL_SCOPE_PREFIX}${model}`) && within(Date.parse(c.setAt), Date.parse(c.until)));
-  if (accountId === 'nightly') return !fast || atMs >= NIGHTLY_CAP_RAISED;
-  if (accountId === 'overflow') return atMs < OVERFLOW_LAPSED_AT;
-  if (accountId === 'research') return atMs < RESEARCH_BUDGET_AT;
-  return true;
+  return !(Object.keys(STORY_GATES) as (keyof typeof STORY_GATES)[]).some((w) => gated(w, accountId, atMs, fast));
 }
 
 /** An account a request is handed to, or a story attempt's, walks its windows back at a fixed factor, not a draw. */
@@ -1072,11 +1084,6 @@ interface StorySeed {
   id: string;
   keyId: string;
   kind?: RequestKind;
-  /**
-   * A first placement after the session's row expired, on an account that never saw the conversation, which the cache
-   * diagnostics read as a failover's landing reads.
-   */
-  landsAfresh?: true;
   model: string;
   outcome?: RequestOutcome;
   /** The stream ended before the answer reported its output count, so the serving attempt stores none. */
@@ -1317,9 +1324,8 @@ function storyRow(seed: StorySeed): RequestLog {
     return {
       accountId: a.accountId,
       accountKind: kindOf(a.accountId),
-      // A failover's leg and a placement after the session's row expired wait for `walkSessionTurns`, which reads where
-      // they landed.
-      cacheMissReason: !answer || kind === 'count_tokens' || index > 0 || seed.landsAfresh || seed.unfiled ? null : !oauth ? null : seed.pending ? 'pending' : 'none',
+      // A failover's leg waits for `walkSessionTurns`, which reads where it landed.
+      cacheMissReason: !answer || kind === 'count_tokens' || index > 0 || seed.unfiled ? null : !oauth ? null : seed.pending ? 'pending' : 'none',
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       // Read off the day's rows with the previous size (`walkSessionTurns`).
@@ -1419,18 +1425,18 @@ function storySeeds(): StorySeed[] {
   const rateLimited = (until: number) => ({ reason: '429 on 5h window', until });
   // A 429 whose head rejects no plan window cools its account for the retry-after alone.
   const retryAfter = (answeredAt: number) => ({ reason: '429, retry after 20 s', until: answeredAt + 20_000 });
-  const finishedTurn = (agentId: string, minutes: number, ms: number, id: string, usage: Partial<Usage>): StorySeed => ({
-    agentId,
-    at: NOW - minutes * MINUTE,
-    attempts: [{ accountId: 'nightly', at: NOW - minutes * MINUTE, ms, status: 200 }],
-    id,
-    keyId: 'desktop',
-    model: 'claude-opus-5',
-    requestClass: agentId === 'main' ? 'main' : 'subagent',
-    session: FINISHED_SESSION_ID,
-    unseeded: true,
-    usage,
-  });
+  // A request whose one attempt starts at its arrival and answers 200. A held request's attempt starts after its
+  // arrival, so its seed is written out.
+  const answered = (accountId: string, at: number, ms: number, seed: Omit<StorySeed, 'at' | 'attempts'>, attempt: Partial<StoryAttempt> = {}): StorySeed => ({ ...seed, at, attempts: [{ accountId, at, ms, status: 200, ...attempt }] });
+  const finishedTurn = (agentId: string, minutes: number, ms: number, id: string, usage: Partial<Usage>): StorySeed =>
+    answered('nightly', NOW - minutes * MINUTE, ms, { agentId, id, keyId: 'desktop', model: 'claude-opus-5', requestClass: agentId === 'main' ? 'main' : 'subagent', session: FINISHED_SESSION_ID, unseeded: true, usage });
+  // The main agent's turns of three morning conversations, each of which keeps its key, model and account.
+  const fableMorning = (at: number, ms: number, id: string, usage: Partial<Usage>): StorySeed =>
+    answered('nightly', at, ms, { agentId: 'main', id, keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: FABLE_MORNING_SESSION_ID, unseeded: true, usage });
+  const opusMorning = (at: number, ms: number, id: string, usage: Partial<Usage>): StorySeed =>
+    answered('nightly', at, ms, { agentId: 'main', id, keyId: 'laptop', model: 'claude-opus-5', requestClass: 'main', session: OPUS_MORNING_SESSION_ID, unseeded: true, usage });
+  const reservationFable = (at: number, ms: number, id: string, usage: Partial<Usage>): StorySeed =>
+    answered('primary', at, ms, { agentId: 'main', id, keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: RESERVATION_FABLE_SESSION_ID, unseeded: true, usage });
   // The job's earlier runner, a raw Messages client the gate refuses before reading its body: the row carries
   // the code, the user agent and the label, no model and no session, as the relay lands one.
   const BATCH_AGENT = 'phoebis-batch/0.9 (external, ci)';
@@ -1439,7 +1445,7 @@ function storySeeds(): StorySeed[] {
     // body and so reads the pin, fails over to nightly and writes its prefix cold there: the pin moves and the recipe
     // stays on primary. The probe due at `MOVED_PIN_PROBE_DUE` passed the gate on primary, and its selection meets the
     // moved pin and sends nothing.
-    { agentId: MOVED_PIN_AGENT_ID, at: t(14, 25), attempts: [{ accountId: 'primary', at: t(14, 25), ms: 4_000, status: 200 }], id: MOVED_PIN_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: 'bcc805b6', unseeded: true, usage: { cacheWrite5m: 18_400, input: 1_200, output: 640 } },
+    answered('primary', t(14, 25), 4_000, { agentId: MOVED_PIN_AGENT_ID, id: MOVED_PIN_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: 'bcc805b6', unseeded: true, usage: { cacheWrite5m: 18_400, input: 1_200, output: 640 } }),
     {
       agentId: MOVED_PIN_AGENT_ID,
       at: t(14, 29),
@@ -1459,7 +1465,7 @@ function storySeeds(): StorySeed[] {
     },
     { agentId: MOVED_PIN_AGENT_ID, at: MOVED_PIN_PROBE_DUE + 400, attempts: [], errorCode: 'accounts_unavailable', id: MOVED_PIN_PROBE_ID, keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-5', outcome: 'rejected', requestClass: 'subagent', session: 'bcc805b6', status: 503, unseeded: true },
     // An answer the upstream ran on its priority tier.
-    { agentId: 'main', at: t(14, 27, 28), attempts: [{ accountId: 'primary', at: t(14, 27, 28), ms: 6_400, status: 200 }], id: 'req_f8085653-422', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', tier: 'priority', usage: { cacheRead: 48_100, cacheWrite1h: 2_100, input: 3_900, output: 1_250 } },
+    answered('primary', t(14, 27, 28), 6_400, { agentId: 'main', id: 'req_f8085653-422', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', tier: 'priority', usage: { cacheRead: 48_100, cacheWrite1h: 2_100, input: 3_900, output: 1_250 } }),
     {
       agentId: 'main',
       at: t(14, 26, 58),
@@ -1502,35 +1508,24 @@ function storySeeds(): StorySeed[] {
       session: '89cd1c92',
       usage: { input: 19_600, output: 820 },
     },
-    { agentId: 'main', at: t(14, 19, 2), attempts: [{ accountId: 'primary', at: t(14, 19, 2), ms: 7_100, status: 200 }], errorCode: 'overloaded_error', id: 'req_9a07c4e1-d55', outcome: 'failed', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 44_900, cacheWrite1h: 1_800, input: 2_600, output: 960 } },
+    answered('primary', t(14, 19, 2), 7_100, { agentId: 'main', errorCode: 'overloaded_error', id: 'req_9a07c4e1-d55', outcome: 'failed', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 44_900, cacheWrite1h: 1_800, input: 2_600, output: 960 } }),
     // The runner sends again on its key after its revocation at 14:17:30, which the selection refuses. Refused before
     // it resolved a model, the request carries no model, as the router records it.
     { agentId: 'main', at: t(14, 18, 5), attempts: [], errorCode: 'auth_unknown', id: 'req_6c3a9e27-5b1', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: 'main', session: 'cd9a5904', status: 401 },
     // A compacted conversation renews its pin cold and writes its prefix afresh.
-    { agentId: 'main', at: t(14, 17, 52), attempts: [{ accountId: 'primary', at: t(14, 17, 52), ms: 3_300, status: 200 }], contextCompacted: 'auto', errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 22_900, input: 1_100, output: 410 } },
+    answered('primary', t(14, 17, 52), 3_300, { agentId: 'main', contextCompacted: 'auto', errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 22_900, input: 1_100, output: 410 } }),
     { agentId: 'main', at: t(14, 16, 40), attempts: [], cacheMarker: false, errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
     { agentId: null, at: t(14, 15, 48), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_9b4f1c62-a07', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
     { agentId: null, at: t(14, 15, 12), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_2d8e5b13-f40', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
     { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-5', outcome: 'rejected', refused: true, requestClass: 'main', session: '5eeed6ce', status: 403, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     // The same client's next request carried no class header, so the contract refused it before any account was chosen.
     { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-5', outcome: 'rejected', refused: true, requestClass: null, session: '5eeed6ce', status: 403, userAgent: 'claude-cli/2.1.271 (external, cli)' },
-    { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
+    answered('primary', t(14, 11, 44), 8_300, { agentId: 'main', id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } }),
     // The model takes no inference geography parameter, so its answer reports the geography as not available.
-    { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
+    answered('primary', t(14, 9, 41), 4_800, { agentId: 'main', geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } }),
     // A token count follows its subagent's pin to secondary before its window is spent, so it never meets the cooldown
     // the 429 at 14:07:50 starts.
-    {
-      agentId: 'e90b',
-      at: t(14, 1, 50),
-      attempts: [{ accountId: 'secondary', at: t(14, 1, 50), ms: 300, status: 200 }],
-      bodyTokens: 41_000,
-      id: 'req_3b8e51f4-0a9',
-      keyId: 'desktop',
-      kind: 'count_tokens',
-      model: 'claude-sonnet-4-5',
-      requestClass: 'subagent',
-      session: '407dd39b',
-    },
+    answered('secondary', t(14, 1, 50), 300, { agentId: 'e90b', bodyTokens: 41_000, id: 'req_3b8e51f4-0a9', keyId: 'desktop', kind: 'count_tokens', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b' }),
     // The keepalive's probe follows its pin to secondary, whose 429 cools the account, and the router then answers the
     // probe its pinned member's cooldown.
     {
@@ -1547,7 +1542,7 @@ function storySeeds(): StorySeed[] {
       session: '229bf72c',
       status: 429,
     },
-    { agentId: 'main', at: t(14, 5, 12), attempts: [{ accountId: 'primary', at: t(14, 5, 12), ms: 7_900, status: 200 }], id: 'req_da52d141-a5a', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: '0d588de5', usage: { cacheRead: 30_100, cacheWrite1h: 14_800, input: 2_200, output: 1_120 } },
+    answered('primary', t(14, 5, 12), 7_900, { agentId: 'main', id: 'req_da52d141-a5a', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: '0d588de5', usage: { cacheRead: 30_100, cacheWrite1h: 14_800, input: 2_200, output: 1_120 } }),
     // Secondary answers a 429 that rejects no plan window while its head reads the 5-hour window spent: the account
     // cools for the retry-after alone and the turn fails over.
     {
@@ -1565,29 +1560,29 @@ function storySeeds(): StorySeed[] {
       usage: { cacheWrite1h: 58_900, input: 4_100, output: 1_310 },
     },
     // The turns that place the hour's sessions on secondary before its spent edge: the pins the beats after them read.
-    { agentId: 'main', at: t(14, 1, 40), attempts: [{ accountId: 'secondary', at: t(14, 1, 40), ms: 6_000, status: 200 }], id: 'req_d4e8a7b2-916', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: '229bf72c', usage: { cacheWrite1h: 46_000, input: 1_200, output: 520 } },
-    { agentId: 'main', at: t(14, 1, 35), attempts: [{ accountId: 'secondary', at: t(14, 1, 35), ms: 12_000, status: 200 }], id: 'req_c90d3f61-a28', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: '0d588de5', usage: { cacheWrite1h: 44_600, input: 1_800, output: 870 } },
-    { agentId: 'e90b', at: t(14, 1, 30), attempts: [{ accountId: 'secondary', at: t(14, 1, 30), ms: 4_000, status: 200 }], id: 'req_b72e9d05-c14', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheWrite5m: 39_500, input: 1_400, output: 610 } },
-    { agentId: 'main', at: t(14, 0, 10), attempts: [{ accountId: 'secondary', at: t(14, 0, 10), ms: 14_000, status: 200 }], id: 'req_a1f04c2e-7b3', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: 'bcc805b6', usage: { cacheWrite1h: 58_900, input: 2_300, output: 1_040 } },
-    { agentId: 'e90b', at: t(11, 0), attempts: [{ accountId: 'secondary', at: t(11, 0), ms: 6_200, status: 200 }], id: 'req_1eaa9bc1-a18', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheRead: 40_800, cacheWrite5m: 1_200, input: 1_700, output: 900 } },
-    { agentId: 'e90b', at: t(11, 8, 30), attempts: [{ accountId: 'primary', at: t(11, 8, 30), ms: 9_400, status: 200 }], id: 'req_868264bc-611', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 3_000, output: 1_600 } },
+    answered('secondary', t(14, 1, 40), 6_000, { agentId: 'main', id: 'req_d4e8a7b2-916', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: '229bf72c', usage: { cacheWrite1h: 46_000, input: 1_200, output: 520 } }),
+    answered('secondary', t(14, 1, 35), 12_000, { agentId: 'main', id: 'req_c90d3f61-a28', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: '0d588de5', usage: { cacheWrite1h: 44_600, input: 1_800, output: 870 } }),
+    answered('secondary', t(14, 1, 30), 4_000, { agentId: 'e90b', id: 'req_b72e9d05-c14', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheWrite5m: 39_500, input: 1_400, output: 610 } }),
+    answered('secondary', t(14, 0, 10), 14_000, { agentId: 'main', id: 'req_a1f04c2e-7b3', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: 'bcc805b6', usage: { cacheWrite1h: 58_900, input: 2_300, output: 1_040 } }),
+    answered('secondary', t(11, 0), 6_200, { agentId: 'e90b', id: 'req_1eaa9bc1-a18', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheRead: 40_800, cacheWrite5m: 1_200, input: 1_700, output: 900 } }),
+    answered('primary', t(11, 8, 30), 9_400, { agentId: 'e90b', id: 'req_868264bc-611', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 3_000, output: 1_600 } }),
     // A laptop conversation's three turns on secondary, each inside all's affinity window of the one ahead. The second
     // is the first selection that reads secondary's 5-hour window over all's ceiling, which stamps it a wait ahead of
     // the 11:00 round. The third runs to 10:50:08, so the conversation's pin stands on secondary at every purge sweep
     // from the stamp to the round, which walks it.
-    { agentId: 'main', at: t(10, 29, 40), attempts: [{ accountId: 'secondary', at: t(10, 29, 40), ms: 9_200, status: 200 }], id: 'req_9e6b3d07-a52', keyId: 'laptop', model: 'claude-sonnet-4-5', requestClass: 'main', session: CLIMB_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 58_900, input: 1_900, output: 880 } },
-    { agentId: 'main', at: t(10, 39, 30), attempts: [{ accountId: 'secondary', at: t(10, 39, 30), ms: 8_600, status: 200 }], id: 'req_5f2c8b19-d73', keyId: 'laptop', model: 'claude-sonnet-4-5', requestClass: 'main', session: CLIMB_SESSION_ID, unseeded: true, usage: { cacheRead: 60_800, cacheWrite1h: 900, input: 700, output: 720 } },
-    { agentId: 'main', at: t(10, 49, 10), attempts: [{ accountId: 'secondary', at: t(10, 49, 10), ms: 58_000, status: 200 }], id: 'req_b7d43a90-e26', keyId: 'laptop', model: 'claude-sonnet-4-5', requestClass: 'main', session: CLIMB_SESSION_ID, unseeded: true, usage: { cacheRead: 62_400, cacheWrite1h: 900, input: 700, output: 3_100 } },
+    answered('secondary', t(10, 29, 40), 9_200, { agentId: 'main', id: 'req_9e6b3d07-a52', keyId: 'laptop', model: 'claude-sonnet-4-5', requestClass: 'main', session: CLIMB_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 58_900, input: 1_900, output: 880 } }),
+    answered('secondary', t(10, 39, 30), 8_600, { agentId: 'main', id: 'req_5f2c8b19-d73', keyId: 'laptop', model: 'claude-sonnet-4-5', requestClass: 'main', session: CLIMB_SESSION_ID, unseeded: true, usage: { cacheRead: 60_800, cacheWrite1h: 900, input: 700, output: 720 } }),
+    answered('secondary', t(10, 49, 10), 58_000, { agentId: 'main', id: 'req_b7d43a90-e26', keyId: 'laptop', model: 'claude-sonnet-4-5', requestClass: 'main', session: CLIMB_SESSION_ID, unseeded: true, usage: { cacheRead: 62_400, cacheWrite1h: 900, input: 700, output: 3_100 } }),
     // The subagent turns that place two of the round's sessions on secondary just before it, and the keepalive's probe
     // of the first, which renews its pin without walking past a rule.
-    { agentId: 'e90b', at: t(10, 59, 30), attempts: [{ accountId: 'secondary', at: t(10, 59, 30), ms: 900, status: 200 }], id: 'req_0b7c2d94-e61', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheRead: 40_800, output: 1 } },
-    { agentId: 'e90b', at: t(10, 59, 10), attempts: [{ accountId: 'secondary', at: t(10, 59, 10), ms: 7_000, status: 200 }], id: 'req_f3b6d218-85a', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 2_600, output: 1_300 } },
-    { agentId: 'e90b', at: t(10, 58, 59), attempts: [{ accountId: 'secondary', at: t(10, 58, 59), ms: 3_000, status: 200 }], id: 'req_e5a1c093-4d7', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheWrite5m: 40_800, input: 1_500, output: 700 } },
+    answered('secondary', t(10, 59, 30), 900, { agentId: 'e90b', id: 'req_0b7c2d94-e61', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheRead: 40_800, output: 1 } }),
+    answered('secondary', t(10, 59, 10), 7_000, { agentId: 'e90b', id: 'req_f3b6d218-85a', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 2_600, output: 1_300 } }),
+    answered('secondary', t(10, 58, 59), 3_000, { agentId: 'e90b', id: 'req_e5a1c093-4d7', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheWrite5m: 40_800, input: 1_500, output: 700 } }),
     // The first turn of the session's subagent f2c8, placed on secondary in the minute before the 11:00 round and still
     // running through it, so the round reads its pin with no prompt size and no burn. It reads no cache, so the rollups'
     // draws for the hour stay where they were.
-    { agentId: 'f2c8', at: t(10, 59, 40), attempts: [{ accountId: 'secondary', at: t(10, 59, 40), ms: 30_000, status: 200 }], id: 'req_f2c8d417-a60', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', unseeded: true, usage: { cacheWrite5m: 24_300, input: 1_900, output: 1_150 } },
-    { agentId: 'main', at: t(12, 40, 58), attempts: [{ accountId: 'research', at: t(12, 40, 58), ms: 9_000, status: 200 }], id: BUDGET_CROSSING_ID, keyId: 'ci', model: HAIKU, requestClass: 'main', session: 'cd9a5904', usage: { input: 6_200, output: 2_900 } },
+    answered('secondary', t(10, 59, 40), 30_000, { agentId: 'f2c8', id: 'req_f2c8d417-a60', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', unseeded: true, usage: { cacheWrite5m: 24_300, input: 1_900, output: 1_150 } }),
+    answered('research', t(12, 40, 58), 9_000, { agentId: 'main', id: BUDGET_CROSSING_ID, keyId: 'ci', model: HAIKU, requestClass: 'main', session: 'cd9a5904', usage: { input: 6_200, output: 2_900 } }),
     {
       agentId: 'main',
       at: t(10, 58, 40),
@@ -1606,46 +1601,21 @@ function storySeeds(): StorySeed[] {
       usage: { cacheRead: 21_400, cacheWrite5m: 3_100, input: 1_500, output: 880 },
     },
     // Primary's head arrived and the relay could not decode the stream after it, so it forwarded none and answered 502.
-    {
-      agentId: 'main',
-      at: t(14, 22, 48),
-      attempts: [{ accountId: 'primary', at: t(14, 22, 48), ms: 1_900, status: 200 }],
-      errorCode: 'stream_undecodable',
-      id: 'req_5e2f7a19-b03',
-      keyId: 'laptop',
-      model: 'claude-sonnet-4-5',
-      outcome: 'failed',
-      requestClass: 'main',
-      session: CLIENT_SESSION_ID,
-      status: 502,
-    },
+    answered('primary', t(14, 22, 48), 1_900, { agentId: 'main', errorCode: 'stream_undecodable', id: 'req_5e2f7a19-b03', keyId: 'laptop', model: 'claude-sonnet-4-5', outcome: 'failed', requestClass: 'main', session: CLIENT_SESSION_ID, status: 502 }),
     // The client's retry of that turn: primary's head arrived and went out under its 200, and the body ended short
     // where the relay could not decode the stream past what it had forwarded, so the request is incomplete.
-    {
-      agentId: 'main',
-      at: t(14, 22, 53),
-      attempts: [{ accountId: 'primary', at: t(14, 22, 53), ms: 2_400, status: 200 }],
-      errorCode: 'stream_undecodable',
-      id: 'req_5e3c8a41-d27',
-      keyId: 'laptop',
-      model: 'claude-sonnet-4-5',
-      outcome: 'incomplete',
-      outputUnreported: true,
-      requestClass: 'main',
-      session: CLIENT_SESSION_ID,
-      usage: { input: 3_200 },
-    },
+    answered('primary', t(14, 22, 53), 2_400, { agentId: 'main', errorCode: 'stream_undecodable', id: 'req_5e3c8a41-d27', keyId: 'laptop', model: 'claude-sonnet-4-5', outcome: 'incomplete', outputUnreported: true, requestClass: 'main', session: CLIENT_SESSION_ID, usage: { input: 3_200 } }),
     // A Fable turn on primary's plan whose bodies were captured, so the drawer reads a plan-funded answer of the model.
-    { agentId: 'main', at: t(14, 23, 30), attempts: [{ accountId: 'primary', at: t(14, 23, 30), ms: 8_200, status: 200 }], capturedBodies: true, id: 'req_a6c19e73-5d2', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 52_300, cacheWrite1h: 3_400, input: 2_100, output: 1_650, thinking: 640 } },
+    answered('primary', t(14, 23, 30), 8_200, { agentId: 'main', capturedBodies: true, id: 'req_a6c19e73-5d2', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 52_300, cacheWrite1h: 3_400, input: 2_100, output: 1_650, thinking: 640 } }),
     // The main agent's one turn in the session the mod released whole later. The release ends the keepalive record
     // alone, so the pin this turn wrote stays.
-    { agentId: 'main', at: t(14, 3), attempts: [{ accountId: 'primary', at: t(14, 3), ms: 5_600, status: 200 }], id: 'req_7a2d4c18-e95', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'main', session: RELEASED_SESSION_ID, usage: { cacheWrite1h: 15_800, input: 2_300, output: 960 } },
+    answered('primary', t(14, 3), 5_600, { agentId: 'main', id: 'req_7a2d4c18-e95', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'main', session: RELEASED_SESSION_ID, usage: { cacheWrite1h: 15_800, input: 2_300, output: 960 } }),
     // A long conversation's turn the Overflow workspace answers, and its next turn once the cache there has gone cold,
     // which returns it to a plan: primary fits but is full and the rest fall short of the ceiling with its 640k-token
     // rewrite, so the move lands on the least bad one, and nightly's window is spent within the hour. The first turn
     // thinks, so the move has a block to drop.
-    { agentId: 'main', at: t(10, 52, 30), attempts: [{ accountId: 'overflow', at: t(10, 52, 30), ms: 14_000, status: 200 }], id: 'req_4e8b1d36-f72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: FORCED_SESSION_ID, usage: { cacheRead: 612_000, cacheWrite5m: 24_000, input: 2_800, output: 1_900, thinking: 700 } },
-    { agentId: 'main', at: t(11, 1, 50), attempts: [{ accountId: 'nightly', at: t(11, 1, 50), ms: 21_000, status: 200 }], id: FORCED_MOVE_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: FORCED_SESSION_ID, usage: { cacheWrite1h: 640_000, input: 3_100, output: 2_400 } },
+    answered('overflow', t(10, 52, 30), 14_000, { agentId: 'main', id: 'req_4e8b1d36-f72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: FORCED_SESSION_ID, usage: { cacheRead: 612_000, cacheWrite5m: 24_000, input: 2_800, output: 1_900, thinking: 700 } }),
+    answered('nightly', t(11, 1, 50), 21_000, { agentId: 'main', id: FORCED_MOVE_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: FORCED_SESSION_ID, usage: { cacheWrite1h: 640_000, input: 3_100, output: 2_400 } }),
     // The conversation's next request a second later waits on nightly for the move's head, which comes a second on,
     // and then reads the prefix the move wrote.
     {
@@ -1683,38 +1653,38 @@ function storySeeds(): StorySeed[] {
     // 7-day Fable window over all's weekly ceiling, which stamps the window, and each turn after it comes inside all's
     // affinity window, so its pin stands on nightly at every purge sweep until the Opus conversation below lands
     // there.
-    { agentId: 'main', at: t(7, 20), attempts: [{ accountId: 'nightly', at: t(7, 20), ms: 10_400, status: 200 }], id: 'req_9c4a7e12-f08', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: FABLE_MORNING_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 69_200, input: 2_500, output: 1_540, thinking: 480 } },
-    { agentId: 'main', at: t(7, 29, 30), attempts: [{ accountId: 'nightly', at: t(7, 29, 30), ms: 8_800, status: 200 }], id: 'req_4b9e2c71-a35', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: FABLE_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 71_700, cacheWrite1h: 2_300, input: 2_200, output: 1_310, thinking: 450 } },
-    { agentId: 'main', at: t(7, 39, 20), attempts: [{ accountId: 'nightly', at: t(7, 39, 20), ms: 9_100, status: 200 }], id: 'req_d27f5a83-e14', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: FABLE_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 74_000, cacheWrite1h: 2_100, input: 2_000, output: 1_260, thinking: 430 } },
-    { agentId: 'main', at: t(7, 49, 10), attempts: [{ accountId: 'nightly', at: t(7, 49, 10), ms: 8_600, status: 200 }], id: 'req_6a1c9e47-b90', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: FABLE_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 76_100, cacheWrite1h: 1_900, input: 2_100, output: 1_190, thinking: 410 } },
-    { agentId: 'main', at: t(7, 59), attempts: [{ accountId: 'nightly', at: t(7, 59), ms: 9_300, status: 200 }], id: 'req_e83b2d65-c57', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: FABLE_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 78_000, cacheWrite1h: 2_200, input: 2_300, output: 1_340, thinking: 460 } },
-    { agentId: 'main', at: t(8, 8, 50), attempts: [{ accountId: 'nightly', at: t(8, 8, 50), ms: 9_000, status: 200 }], id: 'req_c8f2a61d-b74', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: FABLE_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 80_200, cacheWrite1h: 2_000, input: 2_200, output: 1_280, thinking: 440 } },
+    fableMorning(t(7, 20), 10_400, 'req_9c4a7e12-f08', { cacheWrite1h: 69_200, input: 2_500, output: 1_540, thinking: 480 }),
+    fableMorning(t(7, 29, 30), 8_800, 'req_4b9e2c71-a35', { cacheRead: 71_700, cacheWrite1h: 2_300, input: 2_200, output: 1_310, thinking: 450 }),
+    fableMorning(t(7, 39, 20), 9_100, 'req_d27f5a83-e14', { cacheRead: 74_000, cacheWrite1h: 2_100, input: 2_000, output: 1_260, thinking: 430 }),
+    fableMorning(t(7, 49, 10), 8_600, 'req_6a1c9e47-b90', { cacheRead: 76_100, cacheWrite1h: 1_900, input: 2_100, output: 1_190, thinking: 410 }),
+    fableMorning(t(7, 59), 9_300, 'req_e83b2d65-c57', { cacheRead: 78_000, cacheWrite1h: 2_200, input: 2_300, output: 1_340, thinking: 460 }),
+    fableMorning(t(8, 8, 50), 9_000, 'req_c8f2a61d-b74', { cacheRead: 80_200, cacheWrite1h: 2_000, input: 2_200, output: 1_280, thinking: 440 }),
     // A laptop conversation's first Opus turn on nightly, ahead of the sweep that takes the Fable conversation's pin.
     // It runs to 08:20:20, so its pin stands there at every purge sweep to the round of 08:30 and the router keeps the
     // Fable week's stamp, and the round finds the pin and leaves it off that window.
-    { agentId: 'main', at: t(8, 19, 5), attempts: [{ accountId: 'nightly', at: t(8, 19, 5), ms: 75_000, status: 200 }], id: 'req_f4a17c3e-d28', keyId: 'laptop', model: 'claude-opus-5', requestClass: 'main', session: OPUS_MORNING_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 58_400, input: 2_600, output: 2_900, thinking: 1_200 } },
+    opusMorning(t(8, 19, 5), 75_000, 'req_f4a17c3e-d28', { cacheWrite1h: 58_400, input: 2_600, output: 2_900, thinking: 1_200 }),
     // Two turns of nightly's Fable session in the morning, before its overage: the first places the session, and the
     // second's renewal runs the round its 7-day Fable window fires while the 5-hour window is under the hold.
-    { agentId: 'main', at: t(8, 21, 40), attempts: [{ accountId: 'nightly', at: t(8, 21, 40), ms: 11_200, status: 200 }], id: 'req_3e2b9d47-c18', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', unfiled: true, usage: { cacheWrite1h: 78_400, input: 2_600, output: 1_720, thinking: 610 } },
-    { agentId: 'main', at: t(8, 30), attempts: [{ accountId: 'nightly', at: t(8, 30), ms: 9_400, status: 200 }], id: 'req_3e7a5c19-f84', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', usage: { cacheRead: 81_000, cacheWrite1h: 2_600, input: 2_400, output: 1_480, thinking: 520 } },
+    answered('nightly', t(8, 21, 40), 11_200, { agentId: 'main', id: 'req_3e2b9d47-c18', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', unfiled: true, usage: { cacheWrite1h: 78_400, input: 2_600, output: 1_720, thinking: 610 } }),
+    answered('nightly', t(8, 30), 9_400, { agentId: 'main', id: 'req_3e7a5c19-f84', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', usage: { cacheRead: 81_000, cacheWrite1h: 2_600, input: 2_400, output: 1_480, thinking: 520 } }),
     // Three more turns of the laptop conversation, inside the dwell of nightly's Fable-week round. Its pin was swept at
     // 08:30:40, so the first places it on nightly afresh. The second renews it while the Fable session's pin stands
     // past its window ahead of the sweep of 08:40:40, and the third renews it behind that sweep, so a round on nightly
     // reads the Fable week at the second turn and not at the third.
-    { agentId: 'main', at: t(8, 35), attempts: [{ accountId: 'nightly', at: t(8, 35), ms: 62_000, status: 200 }], id: 'req_5a8e3c07-d19', keyId: 'laptop', model: 'claude-opus-5', requestClass: 'main', session: OPUS_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 61_000, cacheWrite1h: 3_100, input: 2_400, output: 2_600, thinking: 1_100 } },
-    { agentId: 'main', at: t(8, 40, 20), attempts: [{ accountId: 'nightly', at: t(8, 40, 20), ms: 48_000, status: 200 }], id: 'req_b4d29e61-a73', keyId: 'laptop', model: 'claude-opus-5', requestClass: 'main', session: OPUS_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 66_500, cacheWrite1h: 2_700, input: 2_200, output: 2_400, thinking: 1_000 } },
-    { agentId: 'main', at: t(8, 41, 30), attempts: [{ accountId: 'nightly', at: t(8, 41, 30), ms: 52_000, status: 200 }], id: 'req_e61f0b48-c25', keyId: 'laptop', model: 'claude-opus-5', requestClass: 'main', session: OPUS_MORNING_SESSION_ID, unseeded: true, usage: { cacheRead: 71_400, cacheWrite1h: 2_500, input: 2_100, output: 2_200, thinking: 900 } },
+    opusMorning(t(8, 35), 62_000, 'req_5a8e3c07-d19', { cacheRead: 61_000, cacheWrite1h: 3_100, input: 2_400, output: 2_600, thinking: 1_100 }),
+    opusMorning(t(8, 40, 20), 48_000, 'req_b4d29e61-a73', { cacheRead: 66_500, cacheWrite1h: 2_700, input: 2_200, output: 2_400, thinking: 1_000 }),
+    opusMorning(t(8, 41, 30), 52_000, 'req_e61f0b48-c25', { cacheRead: 71_400, cacheWrite1h: 2_500, input: 2_100, output: 2_200, thinking: 900 }),
     // A fresh session placed by the spare rate: secondary falls short of the ceiling and its burn outruns its pace.
-    { agentId: 'main', at: t(13, 45), attempts: [{ accountId: 'primary', at: t(13, 45), ms: 3_800, status: 200 }], id: 'req_2c7d9f15-b63', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: 'b81e4f2a-7c3d-4a90-8e65-2d1f0c9b7a34', usage: { cacheWrite5m: 24_500, input: 2_900, output: 640 } },
+    answered('primary', t(13, 45), 3_800, { agentId: 'main', id: 'req_2c7d9f15-b63', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: 'b81e4f2a-7c3d-4a90-8e65-2d1f0c9b7a34', usage: { cacheWrite5m: 24_500, input: 2_900, output: 640 } }),
     // A fresh placement whose reservation the answer's usage replaces.
-    { agentId: 'main', at: t(13, 41, 15), attempts: [{ accountId: 'primary', at: t(13, 41, 15), ms: 7_200, status: 200 }], id: 'req_7a3f0c26-d81', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'c5d2e8a1-4f6b-4b17-a9c3-6e0d2f8b1a57', usage: { cacheWrite1h: 38_400, input: 2_600, output: 1_150 } },
+    answered('primary', t(13, 41, 15), 7_200, { agentId: 'main', id: 'req_7a3f0c26-d81', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'c5d2e8a1-4f6b-4b17-a9c3-6e0d2f8b1a57', usage: { cacheWrite1h: 38_400, input: 2_600, output: 1_150 } }),
     // A renewal on primary whose round finds no sibling with runway for either pin. It follows the placement of
     // 14:11:44 on the same account, so its member names a message primary holds, and the upstream's comparison was
     // still running when its answer went out.
-    { agentId: 'main', at: t(14, 12, 30), attempts: [{ accountId: 'primary', at: t(14, 12, 30), ms: 5_600, status: 200 }], id: 'req_6e1f3b98-a24', keyId: 'desktop', model: 'claude-sonnet-5-5', pending: true, requestClass: 'main', session: 'd7167642', usage: { cacheRead: 52_300, cacheWrite1h: 900, input: 2_100, output: 870 } },
+    answered('primary', t(14, 12, 30), 5_600, { agentId: 'main', id: 'req_6e1f3b98-a24', keyId: 'desktop', model: 'claude-sonnet-5-5', pending: true, requestClass: 'main', session: 'd7167642', usage: { cacheRead: 52_300, cacheWrite1h: 900, input: 2_100, output: 870 } }),
     // A desktop session placed on secondary before its spent edge, whose next turn secondary answers with a 429 on the
     // spent 5-hour window while primary is full, so the turn fails over to primary.
-    { agentId: 'main', at: t(14, 1, 45), attempts: [{ accountId: 'secondary', at: t(14, 1, 45), ms: 5_000, status: 200 }], id: 'req_d2a8f6c1-d50', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheWrite1h: 52_000, input: 1_600, output: 700 } },
+    answered('secondary', t(14, 1, 45), 5_000, { agentId: 'main', id: 'req_d2a8f6c1-d50', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheWrite1h: 52_000, input: 1_600, output: 700 } }),
     {
       agentId: 'main',
       at: t(14, 7, 50),
@@ -1732,13 +1702,13 @@ function storySeeds(): StorySeed[] {
     // Studio's sessions in work, each 5-hour reading the story's own. The closed span: a session placed at 09:11:24
     // whose first turn after the placement reads the account and opens the span in the last 77 minutes of the window
     // that resets at 10:29.
-    { agentId: 'main', at: t(9, 11, 24), attempts: [{ accountId: 'studio', at: t(9, 11, 24), head5h: 0.7987, ms: 6_000, status: 200 }], id: 'req_5c7e2a9d-b14', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[0], unfiled: true, usage: { cacheWrite1h: 33_000, input: 1_900, output: 820 } },
-    { agentId: 'main', at: t(9, 12), attempts: [{ accountId: 'studio', at: t(9, 12), head5h: 0.8, ms: 5_800, status: 200 }], id: 'req_a3d8f1b6-c25', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[0], usage: { cacheRead: 34_900, cacheWrite1h: 1_600, input: 1_500, output: 640 } },
+    answered('studio', t(9, 11, 24), 6_000, { agentId: 'main', id: 'req_5c7e2a9d-b14', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[0], unfiled: true, usage: { cacheWrite1h: 33_000, input: 1_900, output: 820 } }, { head5h: 0.7987 }),
+    answered('studio', t(9, 12), 5_800, { agentId: 'main', id: 'req_a3d8f1b6-c25', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[0], usage: { cacheRead: 34_900, cacheWrite1h: 1_600, input: 1_500, output: 640 } }, { head5h: 0.8 }),
     // The morning session: its placement's head reads room for a fresh session to the 10:29 reset, so the engine
     // keeps it on studio over the annex. Its second turn after the placement waits 36 s for the slow-down and then
     // renews on its pin, and its turns after the reset read the account at full speed again.
-    { agentId: 'main', at: t(10, 11), attempts: [{ accountId: 'studio', at: t(10, 11), head5h: 0.905, ms: 6_200, status: 200 }], id: 'req_3d7b9e2f-a41', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheWrite1h: 31_000, input: 1_800, output: 760 } },
-    { agentId: 'main', at: t(10, 11, 36), attempts: [{ accountId: 'studio', at: t(10, 11, 36), head5h: 0.9345, ms: 4_900, status: 200 }], id: 'req_2b9e4c7f-d36', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 32_800, cacheWrite1h: 700, input: 1_100, output: 520 } },
+    answered('studio', t(10, 11), 6_200, { agentId: 'main', id: 'req_3d7b9e2f-a41', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheWrite1h: 31_000, input: 1_800, output: 760 } }, { head5h: 0.905 }),
+    answered('studio', t(10, 11, 36), 4_900, { agentId: 'main', id: 'req_2b9e4c7f-d36', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 32_800, cacheWrite1h: 700, input: 1_100, output: 520 } }, { head5h: 0.9345 }),
     {
       agentId: 'main',
       at: t(10, 12),
@@ -1751,20 +1721,20 @@ function storySeeds(): StorySeed[] {
       session: SLOWED_MORNING_SESSION_ID,
       usage: { cacheRead: 34_600, cacheWrite1h: 1_200, input: 1_400, output: 690 },
     },
-    { agentId: 'main', at: t(10, 38, 20), attempts: [{ accountId: 'studio', at: t(10, 38, 20), head5h: 0.01, ms: 5_600, status: 200 }], id: 'req_f6a1d3e8-e47', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 37_200, cacheWrite1h: 1_300, input: 1_500, output: 710 } },
-    { agentId: 'main', at: t(10, 40, 36), attempts: [{ accountId: 'studio', at: t(10, 40, 36), head5h: 0.02, ms: 5_000, status: 200 }], id: 'req_8d4b7f2c-f58', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 40_000, cacheWrite1h: 900, input: 1_200, output: 560 } },
+    answered('studio', t(10, 38, 20), 5_600, { agentId: 'main', id: 'req_f6a1d3e8-e47', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 37_200, cacheWrite1h: 1_300, input: 1_500, output: 710 } }, { head5h: 0.01 }),
+    answered('studio', t(10, 40, 36), 5_000, { agentId: 'main', id: 'req_8d4b7f2c-f58', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 40_000, cacheWrite1h: 900, input: 1_200, output: 560 } }, { head5h: 0.02 }),
     // The open span: a session placed at 13:47:24, whose head reads room for it to the 15:29 reset and whose first turn
     // after the placement reads the account and opens the span, then the two the round marks, then the slowed one's
     // main and subagent turns.
-    { agentId: 'main', at: t(13, 47, 24), attempts: [{ accountId: 'studio', at: t(13, 47, 24), head5h: 0.822, ms: 6_900, status: 200 }], id: 'req_b1e7c4a9-a69', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[1], usage: { cacheWrite1h: 48_600, input: 2_200, output: 930 } },
-    { agentId: 'main', at: t(13, 48), attempts: [{ accountId: 'studio', at: t(13, 48), head5h: 0.8267, ms: 5_200, status: 200 }], id: 'req_4f2a8d6e-b7a', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[1], usage: { cacheRead: 50_800, input: 1_200, output: 610 } },
-    { agentId: 'main', at: t(13, 50, 30), attempts: [{ accountId: 'studio', at: t(13, 50, 30), head5h: 0.832, ms: 6_800, status: 200 }], id: 'req_6b3e8d1a-c73', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[0], usage: { cacheWrite1h: 36_000, input: 2_000, output: 820 } },
-    { agentId: 'main', at: t(13, 53, 10), attempts: [{ accountId: 'studio', at: t(13, 53, 10), head5h: 0.8376, ms: 5_900, status: 200 }], id: 'req_2f9a6c4e-d84', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[1], usage: { cacheWrite1h: 28_000, input: 2_000, output: 640, thinking: 480 } },
-    { agentId: 'main', at: t(13, 58, 40), attempts: [{ accountId: 'studio', at: t(13, 58, 40), head5h: 0.8491, ms: 7_300, status: 200 }], id: 'req_c5d8e2b7-e95', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_SESSION_ID, usage: { cacheWrite1h: 64_000, input: 2_400, output: 910 } },
-    { agentId: '7b2e', at: t(13, 59, 5), attempts: [{ accountId: 'studio', at: t(13, 59, 5), head5h: 0.85, ms: 3_100, status: 200 }], canonical: HAIKU, id: 'req_7e4f1a9c-f16', keyId: 'notebook', model: 'claude-haiku-4-5', requestClass: 'subagent', session: SLOWED_SESSION_ID, usage: { cacheWrite1h: 58_600, input: 2_400, output: 380 } },
+    answered('studio', t(13, 47, 24), 6_900, { agentId: 'main', id: 'req_b1e7c4a9-a69', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[1], usage: { cacheWrite1h: 48_600, input: 2_200, output: 930 } }, { head5h: 0.822 }),
+    answered('studio', t(13, 48), 5_200, { agentId: 'main', id: 'req_4f2a8d6e-b7a', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[1], usage: { cacheRead: 50_800, input: 1_200, output: 610 } }, { head5h: 0.8267 }),
+    answered('studio', t(13, 50, 30), 6_800, { agentId: 'main', id: 'req_6b3e8d1a-c73', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[0], usage: { cacheWrite1h: 36_000, input: 2_000, output: 820 } }, { head5h: 0.832 }),
+    answered('studio', t(13, 53, 10), 5_900, { agentId: 'main', id: 'req_2f9a6c4e-d84', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[1], usage: { cacheWrite1h: 28_000, input: 2_000, output: 640, thinking: 480 } }, { head5h: 0.8376 }),
+    answered('studio', t(13, 58, 40), 7_300, { agentId: 'main', id: 'req_c5d8e2b7-e95', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_SESSION_ID, usage: { cacheWrite1h: 64_000, input: 2_400, output: 910 } }, { head5h: 0.8491 }),
+    answered('studio', t(13, 59, 5), 3_100, { agentId: '7b2e', canonical: HAIKU, id: 'req_7e4f1a9c-f16', keyId: 'notebook', model: 'claude-haiku-4-5', requestClass: 'subagent', session: SLOWED_SESSION_ID, usage: { cacheWrite1h: 58_600, input: 2_400, output: 380 } }, { head5h: 0.85 }),
     // The first marked session's next turn reads the stretch past the threshold, which starts the safety wait.
-    { agentId: 'main', at: t(14, 2, 30), attempts: [{ accountId: 'studio', at: t(14, 2, 30), head5h: 0.8572, ms: 6_100, status: 200 }], id: 'req_4a9c3e7b-a27', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[0], usage: { cacheRead: 36_000, cacheWrite1h: 2_500, input: 1_500, output: 700 } },
-    { agentId: 'main', at: t(14, 3, 36), attempts: [{ accountId: 'studio', at: t(14, 3, 36), head5h: 0.8584, ms: 6_600, status: 200 }], id: 'req_e1b6d4f8-b38', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_SESSION_ID, usage: { cacheRead: 64_000, cacheWrite1h: 3_200, input: 1_800, output: 880 } },
+    answered('studio', t(14, 2, 30), 6_100, { agentId: 'main', id: 'req_4a9c3e7b-a27', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[0], usage: { cacheRead: 36_000, cacheWrite1h: 2_500, input: 1_500, output: 700 } }, { head5h: 0.8572 }),
+    answered('studio', t(14, 3, 36), 6_600, { agentId: 'main', id: 'req_e1b6d4f8-b38', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_SESSION_ID, usage: { cacheRead: 64_000, cacheWrite1h: 3_200, input: 1_800, output: 880 } }, { head5h: 0.8584 }),
     // The slowed request: its pin's cycle is 42 s, so at half speed it waits 42 s before it is forwarded, and its
     // renewal runs the round the stretch fires once the safety wait has passed.
     {
@@ -1781,54 +1751,44 @@ function storySeeds(): StorySeed[] {
     },
     // The account-bound session, placed after the round inside its dwell: its placement names state that studio
     // holds, and its auxiliary call follows the bound pin there, so the call runs no rule and reads no slow-down.
-    { agentId: 'main', at: t(14, 8), attempts: [{ accountId: 'studio', at: t(14, 8), head5h: 0.8632, ms: 6_000, status: 200 }], id: 'req_7c4a1e86-d39', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: ACCOUNT_BOUND_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 30_000, input: 1_800, output: 700 } },
-    { agentId: 'main', at: t(14, 12), attempts: [{ accountId: 'studio', at: t(14, 12), head5h: 0.8675, ms: 1_000, status: 200 }], id: ACCOUNT_BOUND_CALL_ID, keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'auxiliary', session: ACCOUNT_BOUND_SESSION_ID, unseeded: true, usage: { input: 1_200, output: 90 } },
+    answered('studio', t(14, 8), 6_000, { agentId: 'main', id: 'req_7c4a1e86-d39', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: ACCOUNT_BOUND_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 30_000, input: 1_800, output: 700 } }, { head5h: 0.8632 }),
+    answered('studio', t(14, 12), 1_000, { agentId: 'main', id: ACCOUNT_BOUND_CALL_ID, keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'auxiliary', session: ACCOUNT_BOUND_SESSION_ID, unseeded: true, usage: { input: 1_200, output: 90 } }, { head5h: 0.8675 }),
     // A long-context notebook session early in the day, whose one turn writes its prefix on the hour and which never
     // comes back: the turn `idleWarming` probes after.
-    {
-      agentId: 'main',
-      at: NOW - 20 * HOUR,
-      attempts: [{ accountId: 'studio', at: NOW - 20 * HOUR, ms: 21_000, status: 200 }],
-      id: IDLE_NOTEBOOK_REQUEST_ID,
-      keyId: 'notebook',
-      model: 'claude-opus-5-5',
-      requestClass: 'main',
-      session: IDLE_NOTEBOOK_SESSION_ID,
-      usage: { cacheWrite1h: 150_000, input: 3_100, output: 1_700 },
-    },
+    answered('studio', NOW - 20 * HOUR, 21_000, { agentId: 'main', id: IDLE_NOTEBOOK_REQUEST_ID, keyId: 'notebook', model: 'claude-opus-5-5', requestClass: 'main', session: IDLE_NOTEBOOK_SESSION_ID, usage: { cacheWrite1h: 150_000, input: 3_100, output: 1_700 } }),
     // A desktop Fable conversation's morning on primary, and the pins the reservation round of 11:13:40 lists beside
     // its current one. The conversation's renewal of 10:13:30 is the first selection that reads primary's 7-day room
     // under its Fable reservation, which stamps the test an hour ahead of the round. Each turn after it comes inside
     // all's affinity window and the last runs to 11:04:10, so the conversation's Fable pin stands on primary at every
     // purge sweep from the stamp to the round, which finds it there. The one turn of the session whose Sonnet 5.5 pin
     // the round marks comes 8 min 30 s ahead of it, past the cache's five minutes and inside all's affinity window.
-    { agentId: 'main', at: t(10, 4), attempts: [{ accountId: 'primary', at: t(10, 4), ms: 11_800, status: 200 }], id: 'req_2d8f6b14-a79', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: RESERVATION_FABLE_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 40_100, input: 2_300, output: 1_420, thinking: 520 } },
-    { agentId: 'main', at: t(10, 13, 30), attempts: [{ accountId: 'primary', at: t(10, 13, 30), ms: 9_600, status: 200 }], id: 'req_8e1d5a36-c92', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: RESERVATION_FABLE_SESSION_ID, unseeded: true, usage: { cacheRead: 42_400, cacheWrite1h: 900, input: 700, output: 1_180, thinking: 440 } },
-    { agentId: 'main', at: t(10, 23, 20), attempts: [{ accountId: 'primary', at: t(10, 23, 20), ms: 8_900, status: 200 }], id: 'req_3f8c1d94-b57', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: RESERVATION_FABLE_SESSION_ID, unseeded: true, usage: { cacheRead: 44_000, cacheWrite1h: 900, input: 700, output: 1_090, thinking: 410 } },
-    { agentId: 'main', at: t(10, 33, 10), attempts: [{ accountId: 'primary', at: t(10, 33, 10), ms: 9_400, status: 200 }], id: 'req_a2c94e7b-f15', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: RESERVATION_FABLE_SESSION_ID, unseeded: true, usage: { cacheRead: 45_600, cacheWrite1h: 900, input: 700, output: 1_210, thinking: 450 } },
-    { agentId: 'main', at: t(10, 43), attempts: [{ accountId: 'primary', at: t(10, 43), ms: 10_200, status: 200 }], id: 'req_d06a4e73-c29', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: RESERVATION_FABLE_SESSION_ID, unseeded: true, usage: { cacheRead: 47_200, cacheWrite1h: 900, input: 700, output: 1_230, thinking: 460 } },
-    { agentId: 'main', at: t(10, 52, 50), attempts: [{ accountId: 'primary', at: t(10, 52, 50), ms: 9_000, status: 200 }], id: 'req_71b5f2c8-e40', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: RESERVATION_FABLE_SESSION_ID, unseeded: true, usage: { cacheRead: 48_800, cacheWrite1h: 900, input: 700, output: 1_150, thinking: 430 } },
-    { agentId: 'main', at: t(11, 2, 40), attempts: [{ accountId: 'primary', at: t(11, 2, 40), ms: 90_000, status: 200 }], id: 'req_f15c7a28-d63', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: RESERVATION_FABLE_SESSION_ID, unseeded: true, usage: { cacheRead: 50_400, cacheWrite1h: 900, input: 700, output: 6_800, thinking: 5_200 } },
-    { agentId: 'main', at: t(11, 5, 10), attempts: [{ accountId: 'primary', at: t(11, 5, 10), ms: 7_400, status: 200 }], id: 'req_a96e3d52-b18', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: RESERVATION_MARKED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 34_000, input: 2_000, output: 980 } },
+    reservationFable(t(10, 4), 11_800, 'req_2d8f6b14-a79', { cacheWrite1h: 40_100, input: 2_300, output: 1_420, thinking: 520 }),
+    reservationFable(t(10, 13, 30), 9_600, 'req_8e1d5a36-c92', { cacheRead: 42_400, cacheWrite1h: 900, input: 700, output: 1_180, thinking: 440 }),
+    reservationFable(t(10, 23, 20), 8_900, 'req_3f8c1d94-b57', { cacheRead: 44_000, cacheWrite1h: 900, input: 700, output: 1_090, thinking: 410 }),
+    reservationFable(t(10, 33, 10), 9_400, 'req_a2c94e7b-f15', { cacheRead: 45_600, cacheWrite1h: 900, input: 700, output: 1_210, thinking: 450 }),
+    reservationFable(t(10, 43), 10_200, 'req_d06a4e73-c29', { cacheRead: 47_200, cacheWrite1h: 900, input: 700, output: 1_230, thinking: 460 }),
+    reservationFable(t(10, 52, 50), 9_000, 'req_71b5f2c8-e40', { cacheRead: 48_800, cacheWrite1h: 900, input: 700, output: 1_150, thinking: 430 }),
+    reservationFable(t(11, 2, 40), 90_000, 'req_f15c7a28-d63', { cacheRead: 50_400, cacheWrite1h: 900, input: 700, output: 6_800, thinking: 5_200 }),
+    answered('primary', t(11, 5, 10), 7_400, { agentId: 'main', id: 'req_a96e3d52-b18', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: RESERVATION_MARKED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 34_000, input: 2_000, output: 980 } }),
     // The shed session's next turn inside all's affinity window, which renews the pin the round's move wrote on primary
     // and reads the source the move left on it.
-    { agentId: 'e90b', at: t(11, 13, 40), attempts: [{ accountId: 'primary', at: t(11, 13, 40), ms: 5_600, status: 200 }], id: 'req_5d1f8c3a-b27', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheRead: 75_000, cacheWrite5m: 1_900, input: 1_400, output: 820 } },
+    answered('primary', t(11, 13, 40), 5_600, { agentId: 'e90b', id: 'req_5d1f8c3a-b27', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheRead: 75_000, cacheWrite5m: 1_900, input: 1_400, output: 820 } }),
     // The failed-over session's next turn inside the window, which renews the pin the failover landed on primary and
     // reads the source the landing left on it.
-    { agentId: 'main', at: t(14, 13, 5), attempts: [{ accountId: 'primary', at: t(14, 13, 5), ms: 6_100, status: 200 }], id: 'req_e2c7a4f9-d13', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheRead: 56_700, cacheWrite1h: 1_300, input: 1_500, output: 760 } },
+    answered('primary', t(14, 13, 5), 6_100, { agentId: 'main', id: 'req_e2c7a4f9-d13', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheRead: 56_700, cacheWrite1h: 1_300, input: 1_500, output: 760 } }),
     // The two subagent turns the classifier calls below judge, on primary, each ending before its call: a5e1's before
     // 12:41:08 and d8f3's between that call and its own at 12:41:10, so each call's last ended turn is its own agent's.
     // They read no cache, so the rollups' draws for the hour stay where they were.
-    { agentId: 'a5e1', at: t(12, 40, 52), attempts: [{ accountId: 'primary', at: t(12, 40, 52), ms: 15_000, status: 200 }], id: JUDGED_TURN_IDS[0], keyId: 'laptop', model: HAIKU, requestClass: 'subagent', session: FORK_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 18_400, input: 2_100, output: 640 } },
-    { agentId: 'd8f3', at: t(12, 40, 56), attempts: [{ accountId: 'primary', at: t(12, 40, 56), ms: 13_000, status: 200 }], id: JUDGED_TURN_IDS[1], keyId: 'laptop', model: HAIKU, requestClass: 'subagent', session: FORK_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 16_900, input: 1_800, output: 520 } },
+    answered('primary', t(12, 40, 52), 15_000, { agentId: 'a5e1', id: JUDGED_TURN_IDS[0], keyId: 'laptop', model: HAIKU, requestClass: 'subagent', session: FORK_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 18_400, input: 2_100, output: 640 } }),
+    answered('primary', t(12, 40, 56), 13_000, { agentId: 'd8f3', id: JUDGED_TURN_IDS[1], keyId: 'laptop', model: HAIKU, requestClass: 'subagent', session: FORK_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 16_900, input: 1_800, output: 520 } }),
     // Two auto-mode classifier calls of the laptop session the summary forks run in, each judging a subagent's tool
     // call on primary's plan. They read no cache, so the rollups' draws for the hour stay where they were.
-    { agentId: 'a5e1', at: t(12, 41, 8), attempts: [{ accountId: 'primary', at: t(12, 41, 8), ms: 1_100, status: 200 }], classifier: 'client', id: 'req_4d9a1e6b-c20', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: FORK_SESSION_ID, usage: { input: 3_400, output: 14 } },
-    { agentId: 'd8f3', at: t(12, 41, 10), attempts: [{ accountId: 'primary', at: t(12, 41, 10), ms: 2_300, status: 200 }], classifier: 'client', id: 'req_63a8d2f5-b17', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: FORK_SESSION_ID, usage: { input: 3_900, output: 260 } },
+    answered('primary', t(12, 41, 8), 1_100, { agentId: 'a5e1', classifier: 'client', id: 'req_4d9a1e6b-c20', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: FORK_SESSION_ID, usage: { input: 3_400, output: 14 } }),
+    answered('primary', t(12, 41, 10), 2_300, { agentId: 'd8f3', classifier: 'client', id: 'req_63a8d2f5-b17', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: FORK_SESSION_ID, usage: { input: 3_900, output: 260 } }),
     ...guardrailSeeds(),
     // The router's one stop of the day cut two laptop requests as its drain window closed, before it went down at
     // 06:11:58: a stream whose head had gone out, and a request no head had reached yet.
-    { agentId: 'main', at: t(6, 11, 55), attempts: [{ accountId: 'primary', at: t(6, 11, 55), ms: 2_900, status: 200 }], errorCode: 'router_shutdown', id: 'req_7a2c4e91-d03', keyId: 'laptop', model: HAIKU, outcome: 'canceled', requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 18_200, input: 900, output: 140 } },
+    answered('primary', t(6, 11, 55), 2_900, { agentId: 'main', errorCode: 'router_shutdown', id: 'req_7a2c4e91-d03', keyId: 'laptop', model: HAIKU, outcome: 'canceled', requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 18_200, input: 900, output: 140 } }),
     { agentId: 'main', at: t(6, 11, 57), attempts: [{ accountId: 'primary', at: t(6, 11, 57), headless: true, ms: 400, status: 200 }], capturedBodies: false, errorCode: 'router_shutdown', id: 'req_c58d1f3a-e67', keyId: 'laptop', model: HAIKU, outcome: 'canceled', requestClass: 'main', session: '4ef130f1' },
     // A fresh desktop session the Overflow workspace's static prefix places there, whose 429 fails it over to primary
     // on a tie with nightly the runway breaks.
@@ -1848,13 +1808,13 @@ function storySeeds(): StorySeed[] {
     },
     // The contract seat's batch workers on fleet, billed in dollars at API rates. The first reads the workers' shared
     // prefix, so no row of the seat counts as a miss between turns.
-    { agentId: 'main', at: t(14, 8, 20), attempts: [{ accountId: 'contract', at: t(14, 8, 20), ms: 7_400, status: 200 }], id: 'req_c94d1e07-b35', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 12_400, cacheWrite5m: 6_200, input: 2_900, output: 1_120 } },
-    { agentId: 'main', at: t(14, 19, 30), attempts: [{ accountId: 'contract', at: t(14, 19, 30), ms: 5_900, status: 200 }], id: 'req_7b2e5d93-a16', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 18_600, cacheWrite5m: 1_400, input: 1_700, output: 860 } },
-    { agentId: 'main', at: t(14, 25, 30), attempts: [{ accountId: 'contract', at: t(14, 25, 30), ms: 11_200, status: 200 }], id: 'req_3f6a9c21-d48', keyId: 'fleet', model: 'claude-opus-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 20_000, cacheWrite5m: 2_200, input: 2_400, output: 1_540 } },
+    answered('contract', t(14, 8, 20), 7_400, { agentId: 'main', id: 'req_c94d1e07-b35', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 12_400, cacheWrite5m: 6_200, input: 2_900, output: 1_120 } }),
+    answered('contract', t(14, 19, 30), 5_900, { agentId: 'main', id: 'req_7b2e5d93-a16', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 18_600, cacheWrite5m: 1_400, input: 1_700, output: 860 } }),
+    answered('contract', t(14, 25, 30), 11_200, { agentId: 'main', id: 'req_3f6a9c21-d48', keyId: 'fleet', model: 'claude-opus-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 20_000, cacheWrite5m: 2_200, input: 2_400, output: 1_540 } }),
     // The approved Ultra's session on bench, a Fable turn and a Sonnet one, priced on its 7-day window and the Fable
     // week alone, since its poll names no 5-hour window.
-    { agentId: 'main', at: t(14, 16, 30), attempts: [{ accountId: 'workshop', at: t(14, 16, 30), ms: 9_800, status: 200 }], id: 'req_1c7e4a9d-f52', keyId: 'bench', model: 'claude-fable-5-1', requestClass: 'main', session: WORKSHOP_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 2_100, output: 1_380 } },
-    { agentId: 'main', at: t(14, 24, 10), attempts: [{ accountId: 'workshop', at: t(14, 24, 10), ms: 6_300, status: 200 }], id: 'req_9d3b6f2a-c81', keyId: 'bench', model: 'claude-sonnet-5-5', requestClass: 'main', session: WORKSHOP_SESSION_ID, unseeded: true, usage: { cacheRead: 44_000, cacheWrite1h: 1_900, input: 1_600, output: 720 } },
+    answered('workshop', t(14, 16, 30), 9_800, { agentId: 'main', id: 'req_1c7e4a9d-f52', keyId: 'bench', model: 'claude-fable-5-1', requestClass: 'main', session: WORKSHOP_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 2_100, output: 1_380 } }),
+    answered('workshop', t(14, 24, 10), 6_300, { agentId: 'main', id: 'req_9d3b6f2a-c81', keyId: 'bench', model: 'claude-sonnet-5-5', requestClass: 'main', session: WORKSHOP_SESSION_ID, unseeded: true, usage: { cacheRead: 44_000, cacheWrite1h: 1_900, input: 1_600, output: 720 } }),
     // The last turns of the desktop session the mod ended, on nightly at the minutes its written figures date main's
     // and its subagents' last requests, and the one turn of a subagent the mod never pinned there, before the others.
     // Each reads a cached prefix, so none counts as a miss between turns.
@@ -1866,62 +1826,62 @@ function storySeeds(): StorySeed[] {
     // all's affinity window and is the first selection that reads primary's 5-hour window over all's ceiling, which
     // stamps it a wait ahead of the afternoon round. The second comes behind the sweep that takes that pin and lands
     // on primary again, so a pin of all stands there at every purge sweep until the failover of 14:02:11.
-    { agentId: 'main', at: t(13, 31, 30), attempts: [{ accountId: 'primary', at: t(13, 31, 30), ms: 6_400, status: 200 }], id: 'req_c3a71e58-b46', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheRead: 44_100, cacheWrite1h: 1_300, input: 1_400, output: 800 } },
-    { agentId: 'main', at: t(13, 52, 30), attempts: [{ accountId: 'primary', at: t(13, 52, 30), ms: 5_900, status: 200 }], id: 'req_7e2b9f40-c81', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheRead: 45_400, cacheWrite1h: 1_100, input: 1_200, output: 760 } },
+    answered('primary', t(13, 31, 30), 6_400, { agentId: 'main', id: 'req_c3a71e58-b46', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheRead: 44_100, cacheWrite1h: 1_300, input: 1_400, output: 800 } }),
+    answered('primary', t(13, 52, 30), 5_900, { agentId: 'main', id: 'req_7e2b9f40-c81', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheRead: 45_400, cacheWrite1h: 1_100, input: 1_200, output: 760 } }),
     // The keepalive's two answered probes of the session that failed over to primary at 14:02:11, each inside all's
     // affinity window of the use ahead of it, so the session's pin still stands where its recipe has a third probe in
     // flight at the mock's instant.
-    { agentId: 'main', at: t(14, 11, 40), attempts: [{ accountId: 'primary', at: t(14, 11, 40), ms: 900, status: 200 }], id: 'req_6d0b3f85-a14', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-5', requestClass: 'main', session: 'bcc805b6', unseeded: true, usage: { cacheRead: 63_000, output: 1 } },
-    { agentId: 'main', at: t(14, 20, 40), attempts: [{ accountId: 'primary', at: t(14, 20, 40), ms: 900, status: 200 }], id: 'req_e4a92c17-b60', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-5', requestClass: 'main', session: 'bcc805b6', unseeded: true, usage: { cacheRead: 63_000, output: 1 } },
+    answered('primary', t(14, 11, 40), 900, { agentId: 'main', id: 'req_6d0b3f85-a14', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-5', requestClass: 'main', session: 'bcc805b6', unseeded: true, usage: { cacheRead: 63_000, output: 1 } }),
+    answered('primary', t(14, 20, 40), 900, { agentId: 'main', id: 'req_e4a92c17-b60', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-5', requestClass: 'main', session: 'bcc805b6', unseeded: true, usage: { cacheRead: 63_000, output: 1 } }),
     // The parked desktop session's Opus turn on primary, which fast mode serves, 6 min 30 s ahead of the afternoon
     // round, so the round finds the session's fast-lane pin there.
-    { agentId: 'main', at: t(14, 6), attempts: [{ accountId: 'primary', at: t(14, 6), ms: 4_300, status: 200 }], id: 'req_b4d92e06-a17', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'main', session: 'd7167642', unseeded: true, usage: { cacheRead: 9_400, input: 1_257, output: 420 } },
+    answered('primary', t(14, 6), 4_300, { agentId: 'main', id: 'req_b4d92e06-a17', keyId: 'desktop', model: 'claude-opus-5', requestClass: 'main', session: 'd7167642', unseeded: true, usage: { cacheRead: 9_400, input: 1_257, output: 420 } }),
     // The last request of each drawn subagent recipe that no row stood for, at the instant its recipe rolled and on
     // the account its line names, so the recipe, the line and the Requests list name one turn. Each is the first row
     // under its pin key inside all's affinity window, so the selection finds no pin and places it.
-    { agentId: 'c21e', at: NOW - 34 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 34 * MINUTE, ms: 3_900, status: 200 }], id: 'req_1a8d4f63-e27', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: 'fa23a6da', unseeded: true, usage: { cacheWrite5m: 14_200, input: 800, output: 230 } },
-    { agentId: 'e4b7', at: NOW - 7 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 7 * MINUTE, ms: 3_400, status: 200 }], id: 'req_c62e9b05-a41', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: 'fa23a6da', unseeded: true, usage: { cacheWrite5m: 12_600, input: 700, output: 210 } },
-    { agentId: 'a7f3', at: NOW - 30 * MINUTE, attempts: [{ accountId: 'secondary', at: NOW - 30 * MINUTE, ms: 4_200, status: 200 }], id: 'req_48f1d7a9-b36', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '229bf72c', unseeded: true, usage: { cacheWrite5m: 16_800, input: 900, output: 260 } },
-    { agentId: 'e90b', at: NOW - 3 * MINUTE - 30_000, attempts: [{ accountId: 'nightly', at: NOW - 3 * MINUTE - 30_000, ms: 2_800, status: 200 }], id: 'req_e07b3c82-d95', keyId: 'laptop', model: HAIKU, requestClass: 'subagent', session: 'c64358b5', unseeded: true, usage: { cacheWrite5m: 9_400, input: 600, output: 170 } },
-    { agentId: '4d1a', at: NOW - 31 * MINUTE, attempts: [{ accountId: 'primary', at: NOW - 31 * MINUTE, ms: 8_200, status: 200 }], id: 'req_93a5e6f1-c04', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'subagent', session: '7bea4514', unseeded: true, usage: { cacheWrite5m: 21_400, input: 1_100, output: 540 } },
-    { agentId: '2f9d', at: NOW - 2 * MINUTE, attempts: [{ accountId: 'primary', at: NOW - 2 * MINUTE, ms: 3_100, status: 200 }], id: 'req_5b0d8e27-f63', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: RELEASED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 11_900, input: 700, output: 200 } },
-    { agentId: '8c1a', at: NOW - 6 * MINUTE, attempts: [{ accountId: 'primary', at: NOW - 6 * MINUTE, ms: 3_600, status: 200 }], id: 'req_d74c1a96-e58', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: RELEASED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 13_300, input: 800, output: 240 } },
+    answered('nightly', NOW - 34 * MINUTE, 3_900, { agentId: 'c21e', id: 'req_1a8d4f63-e27', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: 'fa23a6da', unseeded: true, usage: { cacheWrite5m: 14_200, input: 800, output: 230 } }),
+    answered('nightly', NOW - 7 * MINUTE, 3_400, { agentId: 'e4b7', id: 'req_c62e9b05-a41', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: 'fa23a6da', unseeded: true, usage: { cacheWrite5m: 12_600, input: 700, output: 210 } }),
+    answered('secondary', NOW - 30 * MINUTE, 4_200, { agentId: 'a7f3', id: 'req_48f1d7a9-b36', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '229bf72c', unseeded: true, usage: { cacheWrite5m: 16_800, input: 900, output: 260 } }),
+    answered('nightly', NOW - 3 * MINUTE - 30_000, 2_800, { agentId: 'e90b', id: 'req_e07b3c82-d95', keyId: 'laptop', model: HAIKU, requestClass: 'subagent', session: 'c64358b5', unseeded: true, usage: { cacheWrite5m: 9_400, input: 600, output: 170 } }),
+    answered('primary', NOW - 31 * MINUTE, 8_200, { agentId: '4d1a', id: 'req_93a5e6f1-c04', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'subagent', session: '7bea4514', unseeded: true, usage: { cacheWrite5m: 21_400, input: 1_100, output: 540 } }),
+    answered('primary', NOW - 2 * MINUTE, 3_100, { agentId: '2f9d', id: 'req_5b0d8e27-f63', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: RELEASED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 11_900, input: 700, output: 200 } }),
+    answered('primary', NOW - 6 * MINUTE, 3_600, { agentId: '8c1a', id: 'req_d74c1a96-e58', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: RELEASED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 13_300, input: 800, output: 240 } }),
     // A turn of story 4's Explore subagent on its desktop row, a subagent its recipes never pin, so the row lists it
     // as an earlier agent. It reads a cached prefix, so it counts as no miss between turns.
-    { agentId: '0b7f', at: NOW - 40 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 40 * MINUTE, ms: 3_600, status: 200 }], id: 'req_0b7f2c58-e43', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: '89cd1c92', unseeded: true, usage: { cacheRead: 11_800, input: 600, output: 190 } },
+    answered('nightly', NOW - 40 * MINUTE, 3_600, { agentId: '0b7f', id: 'req_0b7f2c58-e43', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: '89cd1c92', unseeded: true, usage: { cacheRead: 11_800, input: 600, output: 190 } }),
     // A classifier call judging a tool call of the desktop turn that ended on secondary at 14:01:47, sent 53 s later,
     // after secondary's head at 14:02:11 read its 5-hour window spent. The judged account holds no allowance and the
     // judged turn's pin still stands there, so the router places the call by the strategy, on primary's plan tier, off
     // the judged account. It prices from its usage on primary's plan.
-    { agentId: 'main', at: t(14, 2, 40), attempts: [{ accountId: 'primary', at: t(14, 2, 40), ms: 1_400, status: 200 }], classifier: 'client_off', id: 'req_7c2e9f41-d03', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: '0d588de5', unseeded: true, usage: { input: 3_600, output: 22 } },
+    answered('primary', t(14, 2, 40), 1_400, { agentId: 'main', classifier: 'client_off', id: 'req_7c2e9f41-d03', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: '0d588de5', unseeded: true, usage: { input: 3_600, output: 22 } }),
     // The held conversation's next turn, 630 s after its turn on nightly ended at 13:11:09 and so the row's last use,
     // inside the purge's minute past all's 600 s: the placement finds the row expired, releases it for that and for
     // nightly's overage under all's preference for a plan, and lands on primary, which holds its plan tier, writing the
     // conversation's prefix there afresh.
-    { agentId: 'main', at: t(13, 21, 39), attempts: [{ accountId: 'primary', at: t(13, 21, 39), ms: 6_800, status: 200 }], id: REPLACED_PIN_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 1_500, output: 900 } },
+    answered('primary', t(13, 21, 39), 6_800, { agentId: 'main', id: REPLACED_PIN_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 1_500, output: 900 } }),
     // The conversation the purge takes twice. Its first turn ends at 13:11:09, the held conversation's end. Its second
     // comes behind the sweep at 13:21:40 that takes that pin and ahead of the wall clock's next minute, finds no row
     // and lands on primary, while its member names the message nightly holds. Its third comes behind the sweep at
     // 13:32:40 that takes the second's pin and lands on primary again, where the cache the second wrote for an hour
     // still stands. The first turn thought on nightly, so both answers on primary drop that block with no move event.
-    { agentId: 'main', at: t(13, 11), attempts: [{ accountId: 'nightly', at: t(13, 11), ms: 9_000, status: 200 }], id: 'req_3a9d6e14-b72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 39_800, input: 1_700, output: 1_020, thinking: 480 } },
-    { agentId: 'main', at: t(13, 21, 50), attempts: [{ accountId: 'primary', at: t(13, 21, 50), ms: 6_000, status: 200 }], id: 'req_8b2f4c71-e05', keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 41_300, input: 1_500, output: 880 } },
-    { agentId: 'main', at: t(13, 33, 10), attempts: [{ accountId: 'primary', at: t(13, 33, 10), ms: 5_000, status: 200 }], id: 'req_d5e17a39-c48', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheRead: 41_300, cacheWrite1h: 1_200, input: 1_300, output: 760 } },
+    answered('nightly', t(13, 11), 9_000, { agentId: 'main', id: 'req_3a9d6e14-b72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 39_800, input: 1_700, output: 1_020, thinking: 480 } }),
+    answered('primary', t(13, 21, 50), 6_000, { agentId: 'main', id: 'req_8b2f4c71-e05', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 41_300, input: 1_500, output: 880 } }),
+    answered('primary', t(13, 33, 10), 5_000, { agentId: 'main', id: 'req_d5e17a39-c48', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: PURGED_SESSION_ID, unseeded: true, usage: { cacheRead: 41_300, cacheWrite1h: 1_200, input: 1_300, output: 760 } }),
     // A new conversation's first turn, which primary's upstream answered 400.
     { agentId: 'main', at: t(12, 58, 14), attempts: [{ accountId: 'primary', at: t(12, 58, 14), ms: 640, status: 400 }], errorCode: 'invalid_request_error', id: CLIENT_ERROR_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: CLIENT_ERROR_SESSION_ID, unseeded: true },
     // A new conversation the Overflow workspace takes with the plan accounts full, while its balance still holds.
-    { agentId: 'main', at: t(11, 27, 40), attempts: [{ accountId: 'overflow', at: t(11, 27, 40), ms: 9_200, status: 200 }], id: LAPSED_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: LAPSED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 36_400, input: 1_900, output: 1_100 } },
+    answered('overflow', t(11, 27, 40), 9_200, { agentId: 'main', id: LAPSED_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: LAPSED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 36_400, input: 1_900, output: 1_100 } }),
     // Its next turn 210 s on, after the balance ran out at 11:30:12 and before the workspace's funding retry falls due
     // five minutes after it. The pin is live and younger than all's return dwell, so no rule moves it. The workspace
     // is out of the eligible set, so the placement moves the pin to primary and writes the conversation's prefix there.
-    { agentId: 'main', at: t(11, 31, 10), attempts: [{ accountId: 'primary', at: t(11, 31, 10), ms: 8_600, status: 200 }], id: CAUSED_MOVE_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: LAPSED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 38_200, input: 1_600, output: 940 } },
+    answered('primary', t(11, 31, 10), 8_600, { agentId: 'main', id: CAUSED_MOVE_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: LAPSED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 38_200, input: 1_600, output: 940 } }),
     // A new conversation the retired workspace takes in the morning with the plan accounts full, inside the span the
     // account stood in all (`RETIRED`).
-    { agentId: 'main', at: t(9, 40, 20), attempts: [{ accountId: RETIRED.account.id, at: t(9, 40, 20), ms: 7_800, status: 200 }], id: RETIRED_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'main', session: RETIRED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 33_600, input: 2_100, output: 1_050 } },
+    answered(RETIRED.account.id, t(9, 40, 20), 7_800, { agentId: 'main', id: RETIRED_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'main', session: RETIRED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 33_600, input: 2_100, output: 1_050 } }),
     // Its next turn 430 s on, inside all's affinity window and after the delete. The reload's purge took the pin and
     // kept its trace, so the placement lands the session on primary as a move off the deleted account and writes the
     // conversation's prefix there afresh.
-    { agentId: 'main', at: t(9, 47, 30), attempts: [{ accountId: 'primary', at: t(9, 47, 30), ms: 8_100, status: 200 }], id: DELETED_MOVE_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5', requestClass: 'main', session: RETIRED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 41_800, input: 1_700, output: 980 } },
+    answered('primary', t(9, 47, 30), 8_100, { agentId: 'main', id: DELETED_MOVE_ID, keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'main', session: RETIRED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 41_800, input: 1_700, output: 980 } }),
     // Two laptop turns in the request log's first hour, which the Dashboard's day leaves out. The relay answers the
     // rejection with the 503 it raises on the chosen account's body, and the router files the bare 502 under its
     // status, since the body names no error type.
@@ -2055,7 +2015,7 @@ export const pinKeyOf = (r: RequestLog) => `${r.keyId}|${r.sessionId}|${r.agentI
  * Whether a request carries its session's conversation, as the router's `carries_conversation` reads it: an inference
  * of a conversation class or of none. A token count and a probe never do, whatever class they name.
  */
-export const carriesConversation = (r: Pick<RequestLog, 'kind' | 'requestClass'>): boolean => r.kind === 'inference' && (r.requestClass === null || CONVERSATION_CLASSES.some((c) => c === r.requestClass));
+export const carriesConversation = (r: Pick<RequestLog, 'kind' | 'requestClass'>): boolean => r.kind === 'inference' && refreshingClass(r.requestClass);
 /** The pin keys of the turns that name account state, the only keys whose pin can hold the flag. */
 const BOUND_PIN_KEYS: ReadonlySet<string> = new Set([...ACCOUNT_BOUND_TURN_IDS].map((id) => pinKeyOf(requestById.get(id)!)));
 /**
@@ -2104,6 +2064,23 @@ export const pinStampOf = (r: Pick<RequestLog, 'attempts' | 'kind'>, renews: boo
   const last = r.attempts[r.attempts.length - 1];
   return reportsRenewal(r, renews) ? attemptEnd(last) : Date.parse(last.startedAt);
 };
+/** The row under `key` as a selection at `at` reads it (`pinReadAt`), where a row the read finds swept is gone. */
+function readPinRow<T extends { at: number }>(rows: Map<string, T>, key: string, ttlMs: number, at: number): { read: PinRead; row: T | undefined } {
+  const held = rows.get(key);
+  const read = held === undefined ? 'none' : pinReadAt(held.at, ttlMs, at);
+  if (read === 'none') rows.delete(key);
+  return { read, row: read === 'none' ? undefined : held };
+}
+/**
+ * What a request's end does to its pin's row, where `renews` says its last attempt landed on the live pin's account:
+ * a failover releases the row, and so does a releasing client error on a pin the request placed. A renewal keeps the
+ * row, any other request but a token count places one, and a token count off its pin leaves the row as it stands.
+ */
+const pinEndOf = (r: Pick<RequestLog, 'kind'>, last: Attempt, renews: boolean): 'keep' | 'place' | 'release' | 'renew' => {
+  if (failsOver(last) || (!renews && r.kind !== 'count_tokens' && RELEASING_STATUSES.includes(last.upstreamStatus))) return 'release';
+  if (renews) return 'renew';
+  return r.kind === 'count_tokens' ? 'keep' : 'place';
+};
 
 /**
  * The shortest lifetime of a cache entry, the router's and the upstream's: no entry ends inside it, so a turn that
@@ -2126,7 +2103,7 @@ const SEATED = new Set<string>();
   const reports = new Map<string, { accountId: string; at: number; generation: number; size: number }>();
   for (const r of byArrival()) {
     const key = pinKeyOf(r);
-    const ttl = (poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) * 1_000;
+    const ttl = affinityTtlMsOf(r.poolId);
     const report = reports.get(key);
     const head = r.attempts[0] as Attempt | undefined;
     if (drawnRow(r) && head !== undefined && report !== undefined && report.generation === r.keyGeneration && ttl > SHORTEST_CACHE_LIFETIME && r.sessionId !== null && r.kind === 'inference' && r.status === 200 && r.attempts.length === 1 && r.contextCompacted === null && head.accountId === report.accountId && 2 * r.usage.cacheRead < report.size) {
@@ -2200,22 +2177,21 @@ interface LivePin {
 function walkLivePins(visit: (r: RequestLog, live: LivePin | undefined, read: PinRead, rowOn: string | undefined) => void) {
   const pins = new Map<string, LivePin & { at: number }>();
   for (const r of byArrival()) {
-    const ttl = (poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) * 1_000;
+    const ttl = affinityTtlMsOf(r.poolId);
     const first = r.attempts[0] as Attempt | undefined;
     if (ttl === 0 || r.sessionId === null || first === undefined) continue;
     const key = pinKeyOf(r);
-    const held = pins.get(key);
-    const read = held === undefined ? 'none' : pinReadAt(held.at, ttl, Date.parse(first.startedAt));
-    if (read === 'none') pins.delete(key);
+    const { read, row: held } = readPinRow(pins, key, ttl, Date.parse(first.startedAt));
     const live = read === 'live' ? held : undefined;
-    visit(r, live && { accountId: live.accountId, createdAt: live.createdAt }, read, read === 'none' ? undefined : held?.accountId);
+    visit(r, live && { accountId: live.accountId, createdAt: live.createdAt }, read, held?.accountId);
     const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
     if (last === undefined) continue;
-    const at = pinStampOf(r, live?.accountId === last.accountId);
-    const placed = live?.accountId !== last.accountId && r.kind !== 'count_tokens';
-    if (failsOver(last) || (placed && RELEASING_STATUSES.includes(last.upstreamStatus))) pins.delete(key);
-    else if (live?.accountId === last.accountId) pins.set(key, { ...live, at: Math.max(live.at, at) });
-    else if (placed) pins.set(key, { accountId: last.accountId, at, createdAt: Date.parse(last.startedAt) });
+    const renews = live?.accountId === last.accountId;
+    const at = pinStampOf(r, renews);
+    const end = pinEndOf(r, last, renews);
+    if (end === 'release') pins.delete(key);
+    else if (end === 'renew' && live !== undefined) pins.set(key, { ...live, at: Math.max(live.at, at) });
+    else if (end === 'place') pins.set(key, { accountId: last.accountId, at, createdAt: Date.parse(last.startedAt) });
   }
 }
 
@@ -2225,17 +2201,24 @@ function walkLivePins(visit: (r: RequestLog, live: LivePin | undefined, read: Pi
  * where the pool prefers the plan, and an API key's pin returns once it has sat the pool's dwell there. The overage
  * reads the instant the drawn heads give, since the renewal pass runs ahead of nightly's own.
  */
-function stepFourMoves(r: RequestLog, live: LivePin, at: number, overageFrom: number): boolean {
+function stepFourMoves(r: RequestLog, live: LivePin, at: number, overageFrom: number): 'overage' | 'return_to_plan' | null {
   const pool = poolById.get(r.poolId ?? '');
   const head = r.attempts[0];
-  if (!pool || r.kind === 'count_tokens' || r.shape.requestedSpeed === 'fast') return false;
+  if (!pool || r.kind === 'count_tokens' || r.shape.requestedSpeed === 'fast') return null;
   const kind = (id: string) => accountById.get(id)?.kind;
   const inOverage = (id: string) => id === 'nightly' && at >= overageFrom;
   const known = head.windows.some((w) => w.id === '5h' && w.utilization !== null) && head.windows.some((w) => w.id === '7d' && w.utilization !== null);
   const toPlan = kind(head.accountId) === 'oauth' && !inOverage(head.accountId) && known && spentWindows(head.windows).length === 0;
-  if (pool.overagePolicy === 'prefer_plan' && kind(live.accountId) === 'oauth' && inOverage(live.accountId)) return toPlan;
-  return kind(live.accountId) === 'api_key' && toPlan && at - live.createdAt >= pool.shedDwellSeconds * 1_000;
+  if (pool.overagePolicy === 'prefer_plan' && kind(live.accountId) === 'oauth' && inOverage(live.accountId)) return toPlan ? 'overage' : null;
+  return kind(live.accountId) === 'api_key' && toPlan && at - live.createdAt >= pool.shedDwellSeconds * 1_000 ? 'return_to_plan' : null;
 }
+
+/**
+ * Why the router takes a request off the live pin its first selection found on another account: the pin's account
+ * cannot serve or hold the request (`obstacle`), or the rule step 4 moves the pin under. Null where neither holds.
+ */
+const declineOf = (r: RequestLog, live: LivePin, at: number, overageFrom: number): 'obstacle' | 'overage' | 'return_to_plan' | null =>
+  !serves(live.accountId, r.canonicalModel) || !holdableAt(r, live.accountId, at) ? 'obstacle' : stepFourMoves(r, live, at, overageFrom);
 
 /**
  * The attempts each drawn probe drew that found no live pin and so sent none, by request id: its trace and its record
@@ -2281,7 +2264,7 @@ export const RENEWED_ON_PIN: ReadonlyMap<string, string> = (() => {
     if (!drawnRow(r) || live === undefined || live.accountId === head.accountId || r.attempts.length > 1 || head.cooldownSet !== null) return;
     const to = live.accountId;
     const at = Date.parse(head.startedAt);
-    if (!serves(to, r.canonicalModel) || !holdableAt(r, to, at) || stepFourMoves(r, live, at, overageFrom)) return;
+    if (declineOf(r, live, at, overageFrom) !== null) return;
     const moved = onAccount(head, to, at);
     r.accountId = to;
     // The cache comparison follows the account's kind, since an API key answers without the beta.
@@ -2303,6 +2286,8 @@ export const OVERAGE_FROM = ((): number => {
   const after = REQUESTS.flatMap((r) => r.attempts).map((a) => (a.accountId === 'nightly' ? Date.parse(a.startedAt) : Number.NaN)).filter((at) => at >= NIGHTLY_CAP_RAISED);
   return after.length ? Math.min(...after) : NIGHTLY_CAP_RAISED + MINUTE;
 })();
+/** Whether an account reads in plan overage at `at`: nightly alone, from `OVERAGE_FROM` on. */
+export const inOverageAt = (accountId: string, at: number): boolean => accountId === 'nightly' && at >= OVERAGE_FROM;
 const nightly = accountById.get('nightly');
 if (nightly?.overage) nightly.overage.since = iso(OVERAGE_FROM);
 // The attempt literals run before the instant exists, so nightly's heads from it on read their overage flag here.
@@ -2318,17 +2303,16 @@ const EXPIRED_ROW = new Map<string, string>();
 /**
  * Each drawn request whose first attempt stands off the live pin its first selection found, by id, with the pin's
  * account and the router's cause for taking the request off it: the pin's account cannot serve or hold the request
- * (`obstacle`), step 4 moves the pin (`move`), or no cause the router holds (`none`).
+ * (`obstacle`), or the rule step 4 moves the pin under. A request with no cause the router holds has no entry.
  */
-const DECLINED = new Map<string, { kind: 'move' | 'none' | 'obstacle'; pinOn: string }>();
+const DECLINED = new Map<string, { kind: 'obstacle' | 'overage' | 'return_to_plan'; pinOn: string }>();
 walkLivePins((r, live, read, rowOn) => {
   if (live) LIVE_PIN.set(r.id, live);
   if (read === 'expired_idle' && rowOn !== undefined) EXPIRED_ROW.set(r.id, rowOn);
   const head = r.attempts[0];
   if (!drawnRow(r) || r.kind === 'probe' || live === undefined || live.accountId === head.accountId) return;
-  const at = Date.parse(head.startedAt);
-  const kind = !serves(live.accountId, r.canonicalModel) || !holdableAt(r, live.accountId, at) ? 'obstacle' : stepFourMoves(r, live, at, OVERAGE_FROM) ? 'move' : 'none';
-  DECLINED.set(r.id, { kind, pinOn: live.accountId });
+  const kind = declineOf(r, live, Date.parse(head.startedAt), OVERAGE_FROM);
+  if (kind !== null) DECLINED.set(r.id, { kind, pinOn: live.accountId });
 });
 
 /**
@@ -2347,15 +2331,14 @@ function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   const at = Date.parse(head.startedAt);
   const fast = r.shape.requestedSpeed === 'fast';
   const registryKind = (id: string) => accountById.get(id)?.kind;
-  const inOverage = (id: string) => id === 'nightly' && at >= OVERAGE_FROM;
   const spent = (windows: AttemptWindow[]) => spentWindows(windows).length > 0;
   const known = head.windows.some((w) => w.id === '5h' && w.utilization !== null) && head.windows.some((w) => w.id === '7d' && w.utilization !== null);
   const headHolds = registryKind(head.accountId) === 'api_key' || (known && !spent(head.windows));
   // The gate answers a destination that does not fit where no sibling at room fits, so any sibling the rule keeps can
   // take the move, and the record reads its fitting rivals full.
-  const toPlan = registryKind(head.accountId) === 'oauth' && !inOverage(head.accountId) && headHolds;
-  if (!fast && pool.migrateWhenSpent && spent(oauthWindows(from, at, () => SERVED_FACTOR))) return headHolds && !(pool.overagePolicy === 'prefer_plan' && inOverage(head.accountId)) ? 'spent' : null;
-  if (!fast && pool.overagePolicy === 'prefer_plan' && registryKind(from) === 'oauth' && inOverage(from)) return toPlan ? 'overage' : null;
+  const toPlan = registryKind(head.accountId) === 'oauth' && !inOverageAt(head.accountId, at) && headHolds;
+  if (!fast && pool.migrateWhenSpent && spent(oauthWindows(from, at, () => SERVED_FACTOR))) return headHolds && !(pool.overagePolicy === 'prefer_plan' && inOverageAt(head.accountId, at)) ? 'spent' : null;
+  if (!fast && pool.overagePolicy === 'prefer_plan' && registryKind(from) === 'oauth' && inOverageAt(from, at)) return toPlan ? 'overage' : null;
   if (registryKind(from) === 'api_key') return toPlan && at - pinned.createdAt >= pool.shedDwellSeconds * 1_000 ? 'return_to_plan' : null;
   return null;
 }
@@ -2372,27 +2355,25 @@ const MIGRATION_REASONS: { value: PinMigrationReason; weight: number }[] = [
 
 /**
  * The reasons the router's release names for the row on `accountId` a request's first selection read, in the router's
- * order, as the story's account facts give them: the row idle past its pool's window, an account that does not serve
- * the model, the operator's pause, the account's state, a cooldown that holds the request, the usage credits a fast
- * request lacks, a reached budget, plan overage under a pool that does not allow it, and a spent plan window. A row
- * that none of them holds is `released`.
+ * order, as the story's account facts give them: an account that does not serve the model, the operator's pause, the
+ * account's state, a cooldown that holds the request, the usage credits a fast request lacks, a reached budget, plan
+ * overage under a pool that does not allow it, and a spent plan window. The row idle past its pool's window leads with
+ * `expired`, and a row that none of them holds is `released`, each as its caller writes it.
  */
-function releaseReasonsOf(r: RequestLog, accountId: string, idle: boolean): string[] {
+function releaseReasonsOf(r: RequestLog, accountId: string): string[] {
   const at = Date.parse(r.attempts[0].startedAt);
   const fast = r.shape.requestedSpeed === 'fast';
-  const overage = accountId === 'nightly' && at >= OVERAGE_FROM && poolById.get(r.poolId ?? '')?.overagePolicy !== 'allow';
-  const reasons = [
-    ...(idle ? ['expired'] : []),
+  const overage = inOverageAt(accountId, at) && poolById.get(r.poolId ?? '')?.overagePolicy !== 'allow';
+  return [
     ...(serves(accountId, r.canonicalModel) ? [] : ['unserved']),
-    ...(accountId === 'overflow' && at >= OVERFLOW_PAUSED_AT ? ['paused'] : []),
-    ...(accountId === 'overflow' && at >= OVERFLOW_LAPSED_AT ? ['funding_required'] : []),
+    ...(gated('paused', accountId, at, fast) ? ['paused'] : []),
+    ...(gated('funding_required', accountId, at, fast) ? ['funding_required'] : []),
     ...(coolingAt(accountId, at, r.canonicalModel, fast) ? ['cooldown'] : []),
-    ...(fast && accountId === 'nightly' && at < NIGHTLY_CAP_RAISED ? ['fast_credits'] : []),
-    ...(accountId === 'research' && at >= RESEARCH_BUDGET_AT ? ['budget'] : []),
+    ...(gated('fast_credits', accountId, at, fast) ? ['fast_credits'] : []),
+    ...(gated('budget', accountId, at, fast) ? ['budget'] : []),
     ...(!fast && overage ? ['overage'] : []),
     ...(!fast && spentWindows(oauthWindows(accountId, at, () => SERVED_FACTOR)).length > 0 ? ['spent'] : []),
   ];
-  return reasons.length > 0 ? reasons : ['released'];
 }
 
 /** The order that picks the one word a live pin's forced move carries out of its release's reasons, as the router's. */
@@ -2437,14 +2418,15 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
     // no pin, so it releases none. The release and the moves below join after the draws above, which read the events a
     // drawn row holds.
     const expiredOn = EXPIRED_ROW.get(r.id);
-    if (expiredOn !== undefined && r.kind !== 'count_tokens') events.unshift({ ...pin, accountId: expiredOn, at: r.at, detail: { agent_id: r.agentId, reasons: releaseReasonsOf(r, expiredOn, true) }, kind: 'pin_expired' });
+    if (expiredOn !== undefined && r.kind !== 'count_tokens') events.unshift({ ...pin, accountId: expiredOn, at: r.at, detail: { agent_id: r.agentId, reasons: ['expired', ...releaseReasonsOf(r, expiredOn)] }, kind: 'pin_expired' });
     // A row off its live pin takes the router's cause where one holds: the pin's account standing against the request
     // forces the move with the release's whole list, and step 4 moves it under the rule it reads.
     const declined = DECLINED.get(r.id);
     const head = r.attempts[0];
-    if (declined !== undefined && declined.kind !== 'none' && !events.some((e) => e.kind === 'pin_migrated' && e.at === head.startedAt)) {
-      const reasons = releaseReasonsOf(r, declined.pinOn, false);
-      const word = declined.kind === 'obstacle' ? (MOVE_CAUSE_ORDER.find((w) => reasons.includes(w)) ?? 'released') : declined.pinOn === 'nightly' ? 'overage' : 'return_to_plan';
+    if (declined !== undefined && !events.some((e) => e.kind === 'pin_migrated' && e.at === head.startedAt)) {
+      const held = releaseReasonsOf(r, declined.pinOn);
+      const reasons = held.length > 0 ? held : ['released'];
+      const word = declined.kind === 'obstacle' ? (MOVE_CAUSE_ORDER.find((w) => reasons.includes(w)) ?? 'released') : declined.kind;
       const detail = { agent_id: r.agentId, epoch: 0, from_account: declined.pinOn, reason: word, ...(declined.kind === 'obstacle' ? { reasons } : {}) };
       events.unshift({ ...pin, accountId: head.accountId, at: head.startedAt, detail, kind: 'pin_migrated' });
     }
@@ -2921,12 +2903,11 @@ function phaseRequests() {
  * A body's member names the message its agent's last answer carried, a fork's its parent's while it has none of its
  * own, so an agent's first answered turn that is no fork names none. The relay detaches the member's message on an
  * attempt that lands off the account it leaves and on every probe. An answered attempt whose body carried a member and
- * named no message files `not_returned`. One the build left unfiled (a leg, a placement after the session's row
- * expired) that named one draws the comparison a turn that stayed draws, `none` on a story row, which draws nothing. A
- * turn behind a sweep leaves no account, so its member travels as sent, and where it lands off the account that
- * answered its agent's last turn, that account alone holds the message it names: it files `previous_message_not_found`,
- * the comparison drawn and set aside so every later draw keeps its place. A row stored before the relay filed its words
- * keeps its null.
+ * named no message files `not_returned`. One the build left unfiled (a leg) that named one draws the comparison a turn
+ * that stayed draws, `none` on a story row, which draws nothing. A turn behind a sweep leaves no account, so its member
+ * travels as sent, and where it lands off the account that answered its agent's last turn, that account alone holds the
+ * message it names: it files `previous_message_not_found`, the comparison drawn and set aside so every later draw keeps
+ * its place. A row stored before the relay filed its words keeps its null.
  */
 function walkSessionTurns() {
   const rows = new Map<string, { accountId: string; at: number; auxiliaryOnly: boolean; ended: boolean; refreshedAt: number; size: number | null }>();
@@ -2934,13 +2915,10 @@ function walkSessionTurns() {
   const answered = new Map<string, string>();
   for (const r of byArrival()) {
     const pin = pinKeyOf(r);
-    const ttl = r.sessionId === null ? 0 : (poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) * 1_000;
+    const ttl = r.sessionId === null ? 0 : affinityTtlMsOf(r.poolId);
     const first = r.attempts[0] as Attempt | undefined;
     const selectedAt = Date.parse(first?.startedAt ?? r.at);
-    const held = rows.get(pin);
-    const read = held === undefined ? 'none' : pinReadAt(held.at, ttl, selectedAt);
-    if (read === 'none') rows.delete(pin);
-    const row = read === 'none' ? undefined : held;
+    const { read, row } = readPinRow(rows, pin, ttl, selectedAt);
     const landing = `${r.keyId}|${r.sessionId}|${r.agentId}`;
     const auxiliary = r.requestClass === 'auxiliary';
     const agent = `${r.sessionId}|${r.agentId}`;
@@ -2957,24 +2935,24 @@ function walkSessionTurns() {
     // classifier call are no return.
     const ended = row?.ended === true;
     if (row !== undefined && r.kind !== 'probe' && r.classifier === null) row.ended = false;
-    const agentReleased: (boolean | null)[] = r.attempts.map(() => null);
+    let releasedHere = false;
     let left: string | undefined;
     r.attempts.forEach((a, i) => {
       if (resentInPlace(r, i)) {
         if (r.sessionId !== null) {
           a.previousInputTokens = r.attempts[i - 1].previousInputTokens;
           a.entryExpired = r.attempts[i - 1].entryExpired;
-          agentReleased[i] = agentReleased[i - 1];
         }
       } else if (i > 0) {
         if (r.sessionId !== null) left = r.attempts[i - 1].accountId;
         a.previousInputTokens = null;
         a.entryExpired = null;
+        releasedHere = false;
       } else if (r.sessionId !== null) {
         left = auxiliary ? row?.accountId : prior !== undefined && pinReadAt(prior.at, ttl, selectedAt) !== 'none' ? prior.accountId : undefined;
         a.previousInputTokens = row !== undefined && r.contextCompacted === null && (row.size ?? 0) > 0 && a.accountId === row.accountId ? row.size : null;
         a.entryExpired = a.previousInputTokens === null || warmUntil === null ? null : selectedAt >= warmUntil;
-        agentReleased[i] = a.previousInputTokens === null ? null : ended;
+        releasedHere = a.previousInputTokens !== null && ended;
       }
       if (a.upstreamStatus !== 200 || r.kind === 'count_tokens' || UNFILED_IDS.has(r.id)) return;
       const named = !firstTurn && r.kind !== 'probe' && (left === undefined || left === a.accountId);
@@ -2989,16 +2967,15 @@ function walkSessionTurns() {
         if (i === 0 && read === 'none' && lastAnswer !== undefined && lastAnswer !== a.accountId) a.cacheMissReason = 'previous_message_not_found';
       }
     });
-    if (agentReleased[agentReleased.length - 1] === true) releasedAtRequest.add(r.id);
+    if (releasedHere) releasedAtRequest.add(r.id);
     const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
     if (r.sessionId !== null && last !== undefined) {
       const renews = row !== undefined && read === 'live' && row.accountId === last.accountId;
       const stamp = pinStampOf(r, renews);
-      const released = RELEASING_STATUSES.includes(last.upstreamStatus);
-      const places = !renews && r.kind !== 'count_tokens' && !released;
-      const refreshing = r.requestClass === null || CONVERSATION_CLASSES.some((c) => c === r.requestClass);
-      if (failsOver(last) || (!renews && r.kind !== 'count_tokens' && released)) rows.delete(pin);
-      else if (renews) {
+      const end = pinEndOf(r, last, renews);
+      const refreshing = refreshingClass(r.requestClass);
+      if (end === 'release') rows.delete(pin);
+      else if (end === 'renew' && row !== undefined) {
         row.at = Math.max(row.at, stamp);
         // A refresh keeps the later of its stamp and the one before it, as the last use does, since a turn and a probe
         // that overlap land their stamps out of arrival order. A compacted turn's zero alone moves it back.
@@ -3006,7 +2983,7 @@ function walkSessionTurns() {
           if (reportsRenewal(r, renews)) row.refreshedAt = Math.max(row.refreshedAt, stamp);
         } else if (r.kind !== 'count_tokens' && r.contextCompacted !== null) row.refreshedAt = 0;
         else if (r.kind !== 'count_tokens' && refreshing) Object.assign(row, { auxiliaryOnly: false, refreshedAt: Math.max(row.refreshedAt, selectedAt) });
-      } else if (places) {
+      } else if (end === 'place') {
         // The selection that placed the pin is the one the last attempt went out under.
         let decided = r.attempts.length - 1;
         while (resentInPlace(r, decided)) decided -= 1;
@@ -3016,7 +2993,7 @@ function walkSessionTurns() {
       // nothing.
       const marked = rows.get(pin);
       if (marked !== undefined && r.kind !== 'probe' && r.requestClass === 'subagent' && reportsRenewal(r, renews) && servingAttempt(r)?.response.stopReason === 'end_turn') marked.ended = true;
-      if (!auxiliary && (renews || places)) newest.set(landing, { accountId: last.accountId, at: renews ? row.at : stamp });
+      if (!auxiliary && (renews || (r.kind !== 'count_tokens' && !RELEASING_STATUSES.includes(last.upstreamStatus)))) newest.set(landing, { accountId: last.accountId, at: renews ? row.at : stamp });
     }
     const serving = servingAttempt(r);
     if (turn && serving?.upstreamStatus === 200) answered.set(agent, serving.accountId);
@@ -3156,19 +3133,6 @@ export function cooldownSecondsByHour(rows: readonly Pick<CooldownRow, 'setAt' |
   return new Map([...ms].map(([hour, total]) => [hour, Math.round(total / 1_000)]));
 }
 
-/** The ledger files each figure a counted request holds, whatever its status or kind, and a row leaves out a figure it
- *  lacks as null. */
-function histogramsOf(rows: RequestLog[]): LatencyHistograms {
-  const samples = rows.map(latencySamples);
-  const pick = (f: (s: (typeof samples)[number]) => number | null) => histogramOf(samples.map(f).filter((v): v is number => v !== null));
-  return {
-    durationMs: pick((s) => s.durationMs),
-    outputTps: pick((s) => s.outputTps),
-    ttfbMs: pick((s) => s.ttfbMs),
-    ttftMs: pick((s) => s.ttftMs),
-  };
-}
-
 /**
  * Probes an hour paid for that no real turn ever used. Idle limits dominate on
  * purpose: that is the share the analytics panel tells the operator to act on.
@@ -3269,6 +3233,10 @@ const tally = <T>(items: readonly T[], keyOf: (item: T) => string | null, into: 
   return into;
 };
 
+/** An hour's dropped thinking-block counts. */
+type DroppedFigures = Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone' | 'inputTransformationsReported'>;
+const emptyDropped = (): DroppedFigures => ({ inputTransformations: emptyCounts(), inputTransformationsMoved: 0, inputTransformationsNone: 0, inputTransformationsReported: 0 });
+
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
@@ -3337,7 +3305,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
       const cacheMissReasons = tally(partRows.flatMap((r) => r.attempts), (a) => a.cacheMissReason, emptyCacheMissReasons());
       // A hit counts under the serving attempt's reason, the one the route counts a request's reason on.
       const cacheMissReasonHits = tally(partRows, (r) => (hitUnderReason(r) ? servedMissReason(r) : null));
-      const dropped: Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone' | 'inputTransformationsReported'> = { inputTransformations: emptyCounts(), inputTransformationsMoved: 0, inputTransformationsNone: 0, inputTransformationsReported: 0 };
+      const dropped = emptyDropped();
       for (const r of partRows) {
         const serving = servingAttempt(r);
         // The routing log writes the story's traces after these rows, so a move reads off the event a trace names.
@@ -3414,7 +3382,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         // nothing and reads zero.
         ...hourShares(accountId, partRows[0].canonicalModel, client, freed ? [] : partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
         tier: accountTier(accountId),
-        histograms: histogramsOf(served),
+        histograms: latencyHistogramsOf(served),
         keptWarm: { requests: keptHere.length, tokens1h: sumOf(keptHere, (r) => keptOf(r).tokens1h), tokens5m: sumOf(keptHere, (r) => keptOf(r).tokens5m) },
         // The ledger prices a freed call's kept tokens under the row's own key, which reads zero, as its cost does.
         savingUsd: freed ? 0 : sumOf(keptHere, (r) => savingUsdOf(r.model, keptOf(r), promptOf(r.usage), servingResponse(r)?.speed === 'fast', r.at)),
@@ -3446,10 +3414,9 @@ function sampled(h: Rng, n: number, median: number, spread: number): number[] {
  * client's or the router's, so an hour whose answers draw no comparison (`compares` false) files each under
  * `not_returned`, as the day's rows do: an hour on an API-key account, which answers without the beta, and a probe
  * hour, whose member the relay detaches. Such an hour still `draws` its split and keeps its expiries, so every later
- * draw keeps its place, but on the `ci` lane, whose hours never drew one. A probe hour holds no turn, and the ledger
- * counts an expiry between turns for a turn alone, so it answers none and still takes the draw.
+ * draw keeps its place, but on the `ci` lane, whose hours never drew one.
  */
-function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean, draws = true, turns = true): { cacheMissReasons: Record<CacheMissReason, number>; expiredBetweenTurns: number } {
+function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean, draws = true): { cacheMissReasons: Record<CacheMissReason, number>; expiredBetweenTurns: number } {
   const uncompared = () => Object.assign(emptyCacheMissReasons(), { not_returned: ok });
   if (!draws) return { cacheMissReasons: uncompared(), expiredBetweenTurns: 0 };
   const cacheMissReasons = emptyCacheMissReasons();
@@ -3467,7 +3434,7 @@ function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean, draws = t
   cacheMissReasons.unavailable = take(hm.chance(0.1) ? 1 : 0);
   cacheMissReasons.none = left;
   const expired = Math.min(cacheMissReasons.none, hm.chance(0.35) ? hm.int(1, 2) : 0);
-  return { cacheMissReasons: compares ? cacheMissReasons : uncompared(), expiredBetweenTurns: turns ? expired : 0 };
+  return { cacheMissReasons: compares ? cacheMissReasons : uncompared(), expiredBetweenTurns: expired };
 }
 
 /**
@@ -3476,7 +3443,7 @@ function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean, draws = t
  * key sent no token reports nothing. No history row of a model that binds its thinking holds a thinking figure in its
  * usage, so no hour lists the account key or counts a move.
  */
-function synthesizeDropped(hd: Rng, lane: Lane, kind: RequestKind, answered: number): Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone' | 'inputTransformationsReported'> {
+function synthesizeDropped(hd: Rng, lane: Lane, kind: RequestKind, answered: number): DroppedFigures {
   const inputTransformations = emptyCounts();
   const reported = thinkingSourceOf(lane.keyId, lane.poolId, kind) === null ? 0 : answered;
   const prefix = reported > 0 && hd.chance(0.2) ? hd.int(1, Math.min(2, reported)) : 0;
@@ -3677,7 +3644,10 @@ function historicalRollups(): HourlyRollup[] {
           tokens: { uncachedInput: 0, cacheRead: probeUsage.cacheRead, cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS },
           cacheHits: probes,
           cacheMisses: 0,
-          ...synthesizeMissReasons(hm, probes, false, true, false),
+          // A probe hour holds no turn, and the ledger counts an expiry between turns for a turn alone, so it answers
+          // none and still takes the draw.
+          ...synthesizeMissReasons(hm, probes, false),
+          expiredBetweenTurns: 0,
           ...synthesizeDropped(hd, lane, 'probe', probes),
           cacheMissReasonHits: emptyCounts(),
           uncacheable: 0,
@@ -3750,8 +3720,7 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       cacheMissReasonHits: emptyCounts(),
       cacheMissReasons: emptyCacheMissReasons(),
       expiredBetweenTurns: 0,
-      inputTransformations: emptyCounts(),
-      inputTransformationsMoved: 0,
+      ...emptyDropped(),
       inputTransformationsNone: reported,
       inputTransformationsReported: reported,
       uncacheable: 0,
@@ -3966,13 +3935,25 @@ function accountRollups(): AccountRollup[] {
   const noPins = (): AccountRollup['pins'] => ({ created: 0, migratedIn: 0, migratedOut: 0 });
   // The router writes a pin only under a pool with an affinity window, so an account no such pool holds counts none.
   const pinnedAccounts = new Set([...poolById.values()].filter((p) => p.affinityTtlSeconds > 0).flatMap((p) => p.members.map((m) => m.accountId)));
+  /** Lists an account's hour where it holds a figure, each fact the caller leaves out read as none and its peaks off
+   *  the samples and heads. */
+  const listHour = (account: (typeof ACCOUNTS)[number], t: number, facts: Partial<Pick<AccountRollup, 'cooldownSeconds' | 'overageSeconds' | 'peak' | 'pins'>> = {}) => {
+    const row: AccountRollup = {
+      ...ACCOUNT_ROLLUP_SAMPLE,
+      accountId: account.id,
+      hour: iso(t),
+      peak: facts.peak ?? peaksOf(account.id, t),
+      cooldownSeconds: facts.cooldownSeconds ?? 0,
+      overageSeconds: facts.overageSeconds ?? 0,
+      pins: facts.pins ?? noPins(),
+      windows: sampledWindows(account, t),
+    };
+    if (holdsFigure(row)) out.push(row);
+  };
   // The ledger keeps the samples an account's polls wrote, and the route lists each hour they stand in with their
   // peaks, so an account whose hours take no draw lists those.
   const listSampled = (account: (typeof ACCOUNTS)[number]) => {
-    for (let t = start; t <= end; t += HOUR) {
-      const row: AccountRollup = { ...ACCOUNT_ROLLUP_SAMPLE, accountId: account.id, hour: iso(t), peak: peaksOf(account.id, t), cooldownSeconds: 0, overageSeconds: 0, pins: noPins(), windows: sampledWindows(account, t) };
-      if (holdsFigure(row)) out.push(row);
-    }
+    for (let t = start; t <= end; t += HOUR) listHour(account, t);
   };
   for (const account of ACCOUNTS) {
     if (account.kind !== 'oauth') continue;
@@ -4006,9 +3987,6 @@ function accountRollups(): AccountRollup[] {
       drift5 = Math.max(0, Math.min(1, drift5 + h.float(-0.12, 0.12)));
       drift7 = Math.max(0, Math.min(1, drift7 + h.float(-0.03, 0.03)));
       driftF = Math.max(0, Math.min(1, driftF + h.float(-0.03, 0.03)));
-      const counted = attempted.has(`${account.id}|${t}`);
-      const walked = (id: WindowId, held: boolean, walk: number): number | null => (counted && held && !lastSample.get(`${account.id}|${id}`)?.has(t) ? round(walk, 3) : null);
-      const read = peaksOf(account.id, t);
       // The cooldown and overage draws key off the hour's highest 5-hour sample where one stands, else the walk, as the
       // stream was seeded, so each draw keeps its place.
       const keyed5 = fiveHour ? (sampled5 ?? drift5) : null;
@@ -4016,34 +3994,23 @@ function accountRollups(): AccountRollup[] {
       const overage = account.extraUsage?.enabled && keyed5 !== null && keyed5 >= 0.9 ? h.int(300, 3_600) : 0;
       const busy = new Date(t).getHours() >= 8 && new Date(t).getHours() <= 19;
       const pins = { created: busy ? h.int(0, 3) : h.chance(0.2) ? 1 : 0, migratedIn: busy && h.chance(0.25) ? 1 : 0, migratedOut: cooldown > 0 ? h.int(1, 3) : 0 };
-      const row: AccountRollup = {
-        ...ACCOUNT_ROLLUP_SAMPLE,
-        accountId: account.id,
-        hour: iso(t),
-        peak: { '5h': read['5h'] ?? walked('5h', fiveHour, drift5), '7d': read['7d'] ?? walked('7d', sevenDay, drift7), '7d_fable': read['7d_fable'] ?? walked('7d_fable', last.fableWindow !== null, driftF) },
+      if (t < from || t > until) continue;
+      const counted = attempted.has(`${account.id}|${t}`);
+      const walked = (id: WindowId, held: boolean, walk: number): number | null => (counted && held && !lastSample.get(`${account.id}|${id}`)?.has(t) ? round(walk, 3) : null);
+      const read = peaksOf(account.id, t);
+      listHour(account, t, {
         cooldownSeconds: cooldown,
         overageSeconds: overage,
+        peak: { '5h': read['5h'] ?? walked('5h', fiveHour, drift5), '7d': read['7d'] ?? walked('7d', sevenDay, drift7), '7d_fable': read['7d_fable'] ?? walked('7d_fable', last.fableWindow !== null, driftF) },
         pins: pinned ? pins : noPins(),
-        windows: sampledWindows(account, t),
-      };
-      if (t >= from && t <= until && holdsFigure(row)) out.push(row);
+      });
     }
     // The current hour draws nothing, so the stream of the hours before it stays, and it reads no pin count. Its
     // cooldown is the time the account stood under at least one of its rows, its own and each one a story attempt's
     // answer set.
     if (end >= from && end <= until) {
       const own = account.cooldowns.map((c) => ({ setAt: Date.parse(c.setAt), until: Date.parse(c.until) }));
-      const row: AccountRollup = {
-        ...ACCOUNT_ROLLUP_SAMPLE,
-        accountId: account.id,
-        hour: iso(end),
-        peak: peaksOf(account.id, end),
-        cooldownSeconds: cooldownSecondsByHour([...own, ...ATTEMPT_COOLDOWNS.filter((x) => x.accountId === account.id)]).get(end) ?? 0,
-        overageSeconds: 0,
-        pins: noPins(),
-        windows: sampledWindows(account, end),
-      };
-      if (holdsFigure(row)) out.push(row);
+      listHour(account, end, { cooldownSeconds: cooldownSecondsByHour([...own, ...ATTEMPT_COOLDOWNS.filter((x) => x.accountId === account.id)]).get(end) ?? 0 });
     }
     // A row whose plan ended holds no reading, so its draws list no hour, while the ledger keeps its samples.
     if (account.planEndedAt !== null) listSampled(account);

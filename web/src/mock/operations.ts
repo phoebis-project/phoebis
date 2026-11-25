@@ -8,7 +8,7 @@ import { compareRequests } from '@/lib/requests';
 import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
-import { eligibilityOf, keyById, poolById, servedFigures } from './pools';
+import { affinityTtlMsOf, eligibilityOf, keyById, poolById, servedFigures } from './pools';
 import { ACCOUNT_BOUND_SESSION_ID, BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, MOVED_PIN_CALL_ID, MOVED_PIN_PROBE_DUE, MOVED_PIN_PROBE_ID, MOVED_PIN_TURN_ID, OPENING_SESSION_IDS, RELEASED_AT_REQUEST, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, accountBoundAt, fastTurn, pinCacheTtlOf, pinReadAt, pinStampOf, requestById } from './requests';
 import { dropSizeOf, droppedThinkingOf, moveSizeOf, weekRewriteOf } from './rewrite';
 import { createRng } from './rng';
@@ -416,8 +416,8 @@ const hasDestination = (accountId: string, keyId: string): boolean => {
  */
 const moveFiguresOf = (tokens: number | null, dropped: number | null, model: string, accountId: string, keyId: string, bound: boolean, ttlMs: number): Pick<Session, 'moveCost' | 'moveDropCost' | 'moveDropSize' | 'moveSize'> => {
   const client = CLIENTS[keyId] ?? null;
-  const size = moveSizeOf(tokens, dropped, model, client, ttlMs);
   const drop = dropSizeOf(dropped, model, client, ttlMs);
+  const size = moveSizeOf(tokens, dropped, drop);
   const dropCost = drop === null ? null : weekRewriteOf(drop, model, client, ttlMs);
   return { moveCost: bound || !hasDestination(accountId, keyId) ? null : size === null ? dropCost : weekRewriteOf(size, model, client, ttlMs), moveDropCost: dropCost, moveDropSize: drop, moveSize: size };
 };
@@ -1239,7 +1239,7 @@ SLOWED_PINS.forEach((pin, k) => {
  */
 const fleetRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'fleet' && r.sessionId === FLEET_SESSION_ID);
 const fleetPool = keyById.get('fleet')!.poolId;
-const fleetTtlMs = (poolById.get(fleetPool)?.affinityTtlSeconds ?? 0) * 1_000;
+const fleetTtlMs = affinityTtlMsOf(fleetPool);
 // The rows run newest first, so each model's first row is its pin's last turn.
 const FLEET_PINS = [...new Set(fleetRows.map((r) => r.canonicalModel))]
   .map((model) => fleetRows.find((r) => r.canonicalModel === model)!)
@@ -1601,7 +1601,7 @@ export const sessionsListedAt = (now: number, sessions: readonly Session[], seco
 // every pin under the pool's keys as its figure and each member's own on the member, so a pin on an account that left
 // the pool counts in the figure and the dashboard's sum alone.
 const recipeLastUse = (r: Pick<KeepaliveRecipe, 'lastProbeAt' | 'lastRequestAt'>): number => Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((at) => (at === null ? [] : [Date.parse(at)])));
-const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => NOW - recipeLastUse(r) <= (poolById.get(poolId)?.affinityTtlSeconds ?? 0) * 1_000;
+const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => NOW - recipeLastUse(r) <= affinityTtlMsOf(poolId);
 
 /**
  * The pins under a pool's keys as `GET /admin/pools/{id}/pins` answers them at `now`, in the order of their keys,
