@@ -1052,6 +1052,100 @@ async fn a_request_that_completes_during_shutdown_is_refused_and_counted_and_the
     assert_eq!(r.engine.stats().late_updates, 3);
 }
 
+#[tokio::test]
+async fn a_head_and_a_chunk_that_land_during_shutdown_are_refused_and_counted_and_the_save_holds_the_quiesced_state(
+) {
+    let r = rig(RigSpec::default()).await;
+    r.engine.observe(r.observed("late", "main", BODY));
+    r.engine.observe(r.selected("late", "a"));
+    r.engine.quiesce();
+    // Each would write the saved agent if it landed: the head moves the attempt into overage, and the stream's first
+    // event arms the schedule.
+    r.engine
+        .observe(BusEvent::ResponseHead(phoebis_bus::ResponseHead {
+            request_id: "late".into(),
+            attempt: 1,
+            status: 200,
+            headers: vec![(
+                "anthropic-ratelimit-unified-overage-in-use".into(),
+                "true".into(),
+            )],
+            first_event: None,
+            outcome: phoebis_bus::AttemptOutcome::Succeeded,
+            cooldown: None,
+            written_at: r.now(),
+            observed_at: r.now(),
+        }));
+    r.engine
+        .observe(BusEvent::ResponseChunk(phoebis_bus::ResponseChunk {
+            request_id: "late".into(),
+            attempt: 1,
+            index: 0,
+            body: Default::default(),
+            phase: Some(phoebis_bus::Phase::MessageStart {
+                usage: Usage {
+                    cache_read_tokens: Some(2_000),
+                    ..Default::default()
+                },
+            }),
+        }));
+    r.engine.flush_persisted().await;
+    r.engine.close();
+
+    assert_eq!(
+        r.engine.stats().late_updates,
+        2,
+        "the head and the chunk are both refused and counted"
+    );
+    let current = saved_field(&r, "session", "main", "current");
+    assert_eq!(
+        (
+            current["in_overage"].clone(),
+            current["expected"].clone(),
+            saved_field(&r, "session", "main", "expires"),
+            saved_field(&r, "session", "main", "reason")
+        ),
+        (
+            json!(false),
+            json!(0),
+            Value::Null,
+            json!("awaiting_cache_evidence")
+        ),
+        "the saved agent is the quiesced one: the head moved no funding, and the chunk armed nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_probe_result_that_lands_during_shutdown_leaves_the_save_as_the_quiesce_left_it() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    // The upstream holds the probe, so the shutdown's cancel ends its exchange and the result lands behind the quiesce.
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance(270_000);
+    r.engine.step().await;
+    wait_for(Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    r.engine.shutdown().await;
+
+    assert_eq!(
+        (
+            saved_field(&r, "session", "main", "reason"),
+            saved_field(&r, "session", "main", "failures"),
+            saved_field(&r, "session", "main", "paused"),
+            saved_field(&r, "session", "main", "retry_at")
+        ),
+        (json!("probing"), json!(0), json!(false), Value::Null),
+        "the canceled probe's result put no retry and no cause into the last save"
+    );
+    r.up.release();
+}
+
 // The test's body runs on a thread apart from the workers, which a held save can leave blocked behind the store's
 // connection (see `on_own_thread`), and it waits on the engine's flush counts, which need no timer the workers drive.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
