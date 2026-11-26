@@ -2,7 +2,7 @@ import { Fragment, type ReactNode, useId, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import type { Account, ApiKey, BurnFigures, CompanionState, KeepaliveRecipe, ModelTiers, Pool, RecipeState, Session, SessionSpend } from '@/api/types';
+import type { Account, ApiKey, BurnFigures, CompanionState, KeepaliveRecipe, ModelTiers, Pool, RecipeState, Session, SessionAgentFacts, SessionSpend } from '@/api/types';
 import { LIFECYCLE_VALUES } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { FilterBar } from '@/components/FilterBar';
@@ -23,7 +23,7 @@ import { tierOrder } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
-import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, agentLabel, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, groupSessions, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, projectOf, recipeFiler, repositoryOf, requestCount, requestsSpan, sessionLabel, sessionLines, type SessionLine, shortPlace, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, agentLabel, CAUSE_HINT, CAUSE_LABEL, contextCell, type EarlierAgent, earlierAgents, expiryOf, figuresOf, groupSessions, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, projectOf, recipeFiler, repositoryOf, requestCount, requestsSpan, sessionLabel, sessionLines, type SessionLine, shortPlace, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
@@ -902,11 +902,12 @@ function SessionRows({
   const mark = open ? openMark(session) : null;
   const moved = open ? movedWord(session) : null;
   const speed = memberSpeed(session, account, now);
-  const agentRow = (agentId: string, line: SessionLine | null, figures: AgentFigures | null) => (
+  const agentRow = (agentId: string, line: SessionLine | null, figures: AgentFigures | null, facts: SessionAgentFacts | null) => (
     <AgentRow
       key={line === null ? `earlier|${agentId}` : `${agentId}|${line.model}`}
       agentId={agentId}
       cost={cost}
+      facts={facts}
       figures={figures}
       line={line}
       now={now}
@@ -1216,8 +1217,8 @@ function SessionRows({
                     </tr>
                   </thead>
                   <tbody>
-                    {[...shownLines, ...(unfolded ? hiddenHere : [])].map((line) => agentRow(line.agentId, line, agentFigures(session, line.agentId)))}
-                    {(fold === null ? earlierOpen : unfolded) && earlier.map((agent) => agentRow(agent.agentId, null, agent))}
+                    {[...shownLines, ...(unfolded ? hiddenHere : [])].map((line) => agentRow(line.agentId, line, agentFigures(session, line.agentId), line.facts))}
+                    {(fold === null ? earlierOpen : unfolded) && earlier.map((agent) => agentRow(agent.agentId, null, agent, agent.facts))}
                   </tbody>
                 </table>
               </div>
@@ -1270,10 +1271,10 @@ function SessionRows({
 
 /**
  * The earlier agents line: how many agents the ledger holds rows of with no line, their requests and their spend as the
- * Cost cell reads it, `+$` where dollars were billed beside a plan figure, and their ids on its title. Opened, each
- * joins the Agents table the line controls.
+ * Cost cell reads it, `+$` where dollars were billed beside a plan figure, and on its title each agent's label with its
+ * id, or the id alone where it has no label. Opened, each joins the Agents table the line controls.
  */
-function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agents: (AgentFigures & { agentId: string })[]; controls: string; cost: CostContext; onToggle: () => void; open: boolean; session: Session }) {
+function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agents: EarlierAgent[]; controls: string; cost: CostContext; onToggle: () => void; open: boolean; session: Session }) {
   const { spend } = figuresOf(agents);
   const reading = spendUnitOf(spend, cost.unit, session.accountId, null);
   const cell = costCellOf(reading.unit, cost.week, cost.scale);
@@ -1295,7 +1296,7 @@ function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agen
       label={plural(agents.length, 'earlier agent')}
       onToggle={onToggle}
       open={open}
-      title={agents.map((a) => a.agentId).join(', ')}
+      title={agents.map((a) => agentNamed(a.agentId, a.facts)).join(', ')}
     />
   );
 }
@@ -1463,14 +1464,23 @@ function LineAccount({ account, bound, children, className = 'agents__account', 
   );
 }
 
+/** An agent as its label with its id behind it, or its id alone where no label stands. Two agents of one session
+ *  can report one name or one description, so the id stays behind a label. */
+const agentNamed = (agentId: string, facts: Pick<SessionAgentFacts, 'description' | 'name'> | null): string => {
+  const label = agentLabel(agentId, facts);
+  return label === null ? agentId : `${label} (${agentId})`;
+};
+
 /**
  * One row of the Agents table: a line's agent, read off its pin and its recipe, or an earlier agent, which holds no
- * line and reads its ledger entry, dashes for a pin's figures and `no pin`. Requests and Cost read the agent's entry,
- * its sums over every model it ran, and the menu opens the session's views narrowed to the agent.
+ * line and reads its ledger entry with its reported facts and type, dashes for a pin's figures and `no pin`. Requests
+ * and Cost read the agent's entry, its sums over every model it ran, and the menu opens the session's views narrowed to
+ * the agent.
  */
 function AgentRow({
   agentId,
   cost,
+  facts,
   figures,
   line,
   now,
@@ -1478,6 +1488,8 @@ function AgentRow({
 }: {
   agentId: string;
   cost: CostContext;
+  /** What the companion reports of the agent, null where it reports none. */
+  facts: SessionAgentFacts | null;
   /** The agent's entry, null for an agent the ledger holds no row of. */
   figures: AgentFigures | null;
   /** The line the agent draws, null for an earlier agent. */
@@ -1506,10 +1518,10 @@ function AgentRow({
   const word = line === null ? null : lineWordOf(line);
   const park = word === 'parked' && recipe !== null ? parkDetail(recipe, now) : '';
   const hint = LIFECYCLE_HINT[word ?? 'unreported'];
-  const label = agentLabel(agentId, line?.facts ?? null);
+  const label = agentLabel(agentId, facts);
   return (
     <tr>
-      <td title={joinPresent([line?.facts?.name, line?.facts?.description, agentId, title], '\n')}>
+      <td title={joinPresent([facts?.name, facts?.description, agentId, title], '\n')}>
         <span className={label === null ? 'mono agent-cell__label ellipsis' : 'agent-cell__label ellipsis'}>
           {hasTraffic ? <Link to={requestsHref(session, linked)}>{label ?? agentId}</Link> : (label ?? agentId)}
         </span>
@@ -1554,8 +1566,7 @@ function AgentRow({
       </td>
       <td>
         <Menu
-          // Two agents of one session can report one name or one description, so the id stays behind a label.
-          label={`Actions for agent ${label === null ? agentId : `${label} (${agentId})`}`}
+          label={`Actions for agent ${agentNamed(agentId, facts)}`}
           items={[
             ...ledgerItems(session, navigate, linked),
             // An hour either side of the agent's last request, read when the item is chosen.

@@ -316,11 +316,19 @@ test("presenceOf reads a silent companion's span from when it fell silent and a 
 
 test('earlierAgents lists the agents with ledgered requests that no line names, in id order, main never among them', () => {
   // No line names main, so a list that took main's entry for an earlier agent's reads it.
-  const session = { agentRequests: [ledgerEntry('main', 'claude-sonnet-5', ms(14, 0)), ledgerEntry('e9', 'claude-haiku-4-5', ms(13, 0)), ledgerEntry('a1', 'claude-sonnet-5', ms(14, 5)), ledgerEntry('c3', 'claude-haiku-4-5', ms(13, 30))] };
+  const session = { agentFacts: [], agentRequests: [ledgerEntry('main', 'claude-sonnet-5', ms(14, 0)), ledgerEntry('e9', 'claude-haiku-4-5', ms(13, 0)), ledgerEntry('a1', 'claude-sonnet-5', ms(14, 5)), ledgerEntry('c3', 'claude-haiku-4-5', ms(13, 30))] };
   assert.deepEqual(
     d.earlierAgents(session, [{ agentId: 'a1' }]).map((a) => a.agentId),
     ['c3', 'e9'],
   );
+});
+
+test("earlierAgents reads an earlier agent's reported name, and its reported type ahead of its ledger entry's", () => {
+  const session = {
+    agentFacts: [{ agentId: 'a1', agentType: 'code-reviewer', description: null, name: 'reviewer' }],
+    agentRequests: [ledgerEntry('main', 'claude-sonnet-5', ms(14, 0)), ledgerEntry('a1', 'claude-sonnet-5', ms(14, 5), { agentType: 'general-purpose' })],
+  };
+  assert.deepEqual(d.earlierAgents(session, []).map((a) => [a.agentId, a.facts?.name ?? null, a.agentType]), [['a1', 'reviewer', 'code-reviewer']]);
 });
 
 /** Every filter off, as the address reads with none set. */

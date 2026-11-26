@@ -439,6 +439,17 @@ export interface SessionLine {
 export const lineAccountOf = (line: Pick<SessionLine, 'pin' | 'recipe'>): string | null => (line.pin !== null ? line.pin.accountId : (line.recipe?.accountId ?? null));
 
 /**
+ * The reader of what a session's companion reports of an agent, by the agent's id: its facts, null where it reports
+ * none, and its type, the reported one ahead of its ledger entry's. Main reads no reported fact: its label is fixed
+ * and its type is the ledger's.
+ */
+function reportedReader(s: Pick<Session, 'agentFacts' | 'agentRequests'>): (agentId: string) => { agentType: string | null; facts: SessionAgentFacts | null } {
+  const ledger = new Map(s.agentRequests.map((entry) => [entry.agentId, entry]));
+  const reported = new Map(s.agentFacts.filter((entry) => entry.agentId !== MAIN_AGENT).map((entry) => [entry.agentId, entry]));
+  return (agentId) => ({ agentType: reported.get(agentId)?.agentType ?? ledger.get(agentId)?.agentType ?? null, facts: reported.get(agentId) ?? null });
+}
+
+/**
  * The union of a session's entries and its recipes, keyed by agent id and pin model: main's line drawn from the row
  * where no line names main, then the recipes in the order handed, then the pins no recipe claims in the route's order,
  * which `orderLines` sorts into the view's.
@@ -447,13 +458,8 @@ export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentFacts' | '
   // The route answers one entry per agent, which carries its newest client request's type and model and its first
   // request.
   const newest = new Map(s.agentRequests.map((entry) => [entry.agentId, entry]));
-  // Main reads no reported fact: its label is fixed and its type is the ledger's.
-  const reported = new Map(s.agentFacts.filter((entry) => entry.agentId !== MAIN_AGENT).map((entry) => [entry.agentId, entry]));
-  const entryOf = (agentId: string) => ({
-    agentType: reported.get(agentId)?.agentType ?? newest.get(agentId)?.agentType ?? null,
-    facts: reported.get(agentId) ?? null,
-    firstRequestAt: newest.get(agentId)?.firstRequestAt ?? null,
-  });
+  const read = reportedReader(s);
+  const entryOf = (agentId: string) => ({ ...read(agentId), firstRequestAt: newest.get(agentId)?.firstRequestAt ?? null });
   const claimed = new Set<AgentContext>();
   const lines: SessionLine[] = recipes.map((recipe) => {
     const pin = lineFigures(s, recipe.agentId, recipe.model);
@@ -524,9 +530,17 @@ function earlierEntries(session: Pick<Session, 'agentRequests'>, lines: readonly
   return session.agentRequests.filter((entry) => entry.agentId !== MAIN_AGENT && !named.has(entry.agentId));
 }
 
-/** Every agent with ledgered requests and no line, main never among them, in id order, each with its figures. */
-export function earlierAgents(session: Pick<Session, 'agentRequests'>, lines: readonly Pick<SessionLine, 'agentId'>[]): AgentRequests[] {
-  return earlierEntries(session, lines).sort((a, b) => (a.agentId < b.agentId ? -1 : 1));
+/** An earlier agent: its ledger entry, its type the one its companion reports ahead of the entry's, and what the
+ *  companion reports of it, null where it reports none. */
+export type EarlierAgent = AgentRequests & { facts: SessionAgentFacts | null };
+
+/** Every agent with ledgered requests and no line, main never among them, in id order, each with its figures and
+ *  with its reported facts and its type as a line reads them. */
+export function earlierAgents(session: Pick<Session, 'agentFacts' | 'agentRequests'>, lines: readonly Pick<SessionLine, 'agentId'>[]): EarlierAgent[] {
+  const read = reportedReader(session);
+  return earlierEntries(session, lines)
+    .map((entry) => ({ ...entry, ...read(entry.agentId) }))
+    .sort((a, b) => (a.agentId < b.agentId ? -1 : 1));
 }
 
 /** The filters the Sessions view matches a row against, the address's values less its sort and its grouping. */

@@ -1662,23 +1662,23 @@ matching lines alone, and the earlier agents line gives way to a line under the 
 filters`, which counts the row's other lines and its earlier agents and opens them under the matching lines.
 
 The earlier agents, the ones the ledger holds requests of that draw no line, such as a subagent whose pin and recipe are
-gone, share one line under the table, `{n} earlier agents · {k} requests · {cost}`, with a `+$` badge where they
-billed dollars beside a plan figure and their ids on hover, since the view draws an agent's reported facts on that
-agent's line alone. The line opens to one row per earlier agent in the table: its type, the model and account of its
-newest request, its requests and its cost, `no pin` in Status and dashes for a pin's figures, with the same menu. The
-Cache warming details end the open row, shut by default with the recipes' states on their line (`1 retained, 1 paused, 1
-ended`) or `no recipe`. Open, they read one line per agent as Agent, TTL, Last request, Last probe, Next probe ("on
-first stream event" or "not scheduled"), Probes / credited and State, Agent reading the agent's label as the Agents
-table names it, with its id on hover. A pin no recipe stands on reads its TTL as the time left on its cache, counted
-from the pin's last refresh, its last use as Last request, dashes in the probe cells and a State of `warm` or `cold` by
-its cache TTL from that refresh, the word carrying its own sentence on hover. On a recipe's line State reads the
-recipe's state word (`ended`, `held`, `not retained`, `paused` or `retained`) with the cause beside it, the state word
-and the cause each carrying the cause's sentence on hover, and the line under them reads the mod's lifecycle word for
-the agent with a parked agent's park kind and its deadline or wake time (`parked · background · deadline in 1h 12m`),
-then the state's sentence with the cause's. A finished session, listed under Finished sessions, keeps its lines in their
-ended state with the TTL, Last request, Last probe, Next probe and Probes / credited the engine last read, and its
-Status reads `finished`. A session without a recipe reads "no recipe" and `Nothing is scheduled because {reason}.`
-inside the details.
+gone, share one line under the table, `{n} earlier agents · {k} requests · {cost}`, with a `+$` badge where they billed
+dollars beside a plan figure and, on hover, each one's label with its id, `reviewer (a1b2)`, or the id alone where its
+companion reported no name and no description. The line opens to one row per earlier agent in the table: its label, its
+type, the one its companion reported ahead of the ledger's, the model and account of its newest request, its requests
+and its cost, `no pin` in Status and dashes for a pin's figures, with the same menu. The Cache warming details end the
+open row, shut by default with the recipes' states on their line (`1 retained, 1 paused, 1 ended`) or `no recipe`. Open,
+they read one line per agent as Agent, TTL, Last request, Last probe, Next probe ("on first stream event" or "not
+scheduled"), Probes / credited and State, Agent reading the agent's label as the Agents table names it, with its id on
+hover. A pin no recipe stands on reads its TTL as the time left on its cache, counted from the pin's last refresh, its
+last use as Last request, dashes in the probe cells and a State of `warm` or `cold` by its cache TTL from that refresh,
+the word carrying its own sentence on hover. On a recipe's line State reads the recipe's state word (`ended`, `held`,
+`not retained`, `paused` or `retained`) with the cause beside it, the state word and the cause each carrying the cause's
+sentence on hover, and the line under them reads the mod's lifecycle word for the agent with a parked agent's park kind
+and its deadline or wake time (`parked · background · deadline in 1h 12m`), then the state's sentence with the cause's.
+A finished session, listed under Finished sessions, keeps its lines in their ended state with the TTL, Last request,
+Last probe, Next probe and Probes / credited the engine last read, and its Status reads `finished`. A session without a
+recipe reads "no recipe" and `Nothing is scheduled because {reason}.` inside the details.
 
 At a phone's width, under 600 px, the session table scrolls sideways inside its card. An open row's detail stays as wide
 as the card's visible part, its content 12 px in from each side, and keeps to the card's left edge while the table
