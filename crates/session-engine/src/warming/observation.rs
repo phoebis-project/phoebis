@@ -553,8 +553,9 @@ impl WarmingState {
         changes
     }
 
-    /// Drops the agent's recipe and everything following it, and moves the agent to a new generation so no
-    /// late result about the old one lands. `wasted` labels the probes the recipe leaves unanswered.
+    /// Drops the agent's recipe and everything following it, and answers the observation's end for the caller to move
+    /// the agent to a new generation, so no late result about the old one lands. `wasted` labels the probes the recipe
+    /// leaves unanswered.
     pub(crate) fn discard(
         &mut self,
         sessions: &SessionsState,

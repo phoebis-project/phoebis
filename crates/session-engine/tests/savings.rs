@@ -3685,7 +3685,7 @@ async fn an_expiry_swept_by_an_observation_settles_from_that_observation() {
 }
 
 /// A sweep run outside a tick settles from that call: `expire`, which every reader runs first, and a report, which
-/// sweeps before it applies, reach `Inner::expire` without a tick behind them, and what they queue has to land while
+/// sweeps before it applies, reach `Inner::sweep` without a tick behind them, and what they queue has to land while
 /// the ledger is still up rather than wait for a `step` that a shutdown may never run.
 #[tokio::test]
 async fn an_expiry_swept_by_a_reader_settles_from_that_call() {

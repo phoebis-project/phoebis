@@ -448,7 +448,6 @@ impl WarmingState {
     }
 
     /// A selection of the turn the agent's observation follows.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn on_selected(
         &mut self,
         sessions: &SessionsState,
