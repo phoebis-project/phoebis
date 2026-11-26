@@ -1958,7 +1958,7 @@ async fn pairing_confirm(
 }
 
 /// The process's standing: the version, the readiness, the ledger's and the router's counters, the bus, the
-/// pricing sources, the recent gaps and the keepalive engine.
+/// pricing sources, the recent gaps, the cache warming and the session engine.
 #[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct System {
@@ -1982,6 +1982,7 @@ pub(crate) struct System {
     /// Recent `ledger_gap` events.
     pub gaps: Vec<crate::requests::Event>,
     pub keepalive: KeepaliveStats,
+    pub sessions: SessionsStats,
 }
 
 #[derive(serde::Serialize, ToSchema)]
@@ -2083,14 +2084,22 @@ pub(crate) struct PricingSource {
 #[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeepaliveStats {
-    pub agents: usize,
     pub bus_gaps: u64,
     pub retained_bytes: usize,
     pub running_probes: usize,
-    /// Every session entry the engine holds, an ended session's among them until its expiry.
-    pub session_entries: usize,
-    /// The sessions that hold a slot under `max_sessions`, the count the keepalive overview answers beside the cap.
-    pub sessions: usize,
+}
+
+/// The session engine's counts.
+#[derive(serde::Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionsStats {
+    /// The agent records that hold a slot under `sessions.max_agents`.
+    pub agents: usize,
+    /// Every session entry the session engine holds, an ended session's among them until its expiry.
+    pub entries: usize,
+    /// The sessions that hold a slot under `sessions.max_sessions`, the count the keepalive overview answers beside
+    /// the cap.
+    pub live: usize,
 }
 
 /// Read the process's standing.
@@ -2214,12 +2223,14 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         },
         gaps: gaps.iter().map(crate::requests::event_json).collect(),
         keepalive: KeepaliveStats {
-            agents: keepalive_stats.sessions.agents,
             bus_gaps: keepalive_stats.warming.bus_gaps,
             retained_bytes: keepalive_stats.warming.retained_bytes,
             running_probes: keepalive_stats.warming.running_probes,
-            session_entries: keepalive_stats.sessions.entries,
-            sessions: keepalive_stats.sessions.live,
+        },
+        sessions: SessionsStats {
+            agents: keepalive_stats.sessions.agents,
+            entries: keepalive_stats.sessions.entries,
+            live: keepalive_stats.sessions.live,
         },
     })
     .into_response()

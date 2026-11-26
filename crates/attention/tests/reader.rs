@@ -1,4 +1,4 @@
-//! The twenty-two conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the
+//! The twenty-three conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the
 //! clear, the router's own components among them, a deleted subject's series gone unless a parked record still names
 //! it, a refresh run read back by a second reader, a listener's pair read on the read's clock, an unpriced model the
 //! ledger's landing saw, the keepalive engine's standing, and the gauge the metrics listener scrapes from the same
@@ -2536,6 +2536,14 @@ fn the_certificate_kinds_rank_among_the_others() {
     );
 }
 
+#[test]
+fn a_session_cap_ranks_behind_the_routing_kinds_and_directly_ahead_of_the_byte_cap() {
+    assert!(
+        Kind::SlowedLong < Kind::SessionCap && Kind::SessionCap < Kind::KeepaliveCap,
+        "a session cap stops no traffic, so it ranks after every routing condition, and the byte cap follows it"
+    );
+}
+
 /// A grant in the upstream's field names: one reset of one, usable now, that clears the Fable week from 2023-10-01 to
 /// `ends_at`.
 fn grant(id: &str, ends_at: &str) -> serde_json::Value {
@@ -3099,12 +3107,12 @@ async fn a_revision_that_weights_the_model_clears_its_item_at_the_next_landing_a
 }
 
 #[tokio::test]
-async fn a_keepalive_cap_holds_its_item_from_ninety_percent_of_its_max() {
+async fn a_session_cap_holds_its_item_from_ninety_percent_of_its_max() {
     let rig = rig().await;
     let standing = Arc::new(Standing::idle());
     let (attention, _arm) = rig.attention_with_keepalive(standing.clone());
     let fill = |count| {
-        standing.0.lock().unwrap().caps = vec![KeepaliveCap {
+        standing.0.lock().unwrap().session_caps = vec![KeepaliveCap {
             name: "sessions",
             count,
             max: 100,
@@ -3114,8 +3122,8 @@ async fn a_keepalive_cap_holds_its_item_from_ninety_percent_of_its_max() {
     assert!(
         !find(
             &read(&attention, NOW).await,
-            Kind::KeepaliveCap,
-            "keepalive.sessions"
+            Kind::SessionCap,
+            "sessions.max_sessions"
         )
         .unwrap()
         .holds,
@@ -3123,7 +3131,7 @@ async fn a_keepalive_cap_holds_its_item_from_ninety_percent_of_its_max() {
     );
     fill(90);
     let conditions = read(&attention, NOW + MINUTE).await;
-    let cap = find(&conditions, Kind::KeepaliveCap, "keepalive.sessions").unwrap();
+    let cap = find(&conditions, Kind::SessionCap, "sessions.max_sessions").unwrap();
     assert_eq!(
         (
             cap.holds,
@@ -3138,14 +3146,87 @@ async fn a_keepalive_cap_holds_its_item_from_ninety_percent_of_its_max() {
             Some(NOW + MINUTE),
             &Subject {
                 kind: SubjectKind::Router,
-                id: "keepalive.sessions".into(),
-                label: "Keepalive".into(),
+                id: "sessions.max_sessions".into(),
+                label: "Sessions".into(),
             },
             true,
             &None,
             &json!({ "cap": "sessions", "count": 90, "max": 100, "pct": 0.9 })
         ),
         "90 of 100 raises the item, dated by the read that first saw it"
+    );
+}
+
+/// One read of the session engine's two caps and the byte cap files each under its own kind and the subject of the key
+/// that sets its max, which breaks when the reader files the three caps under one kind or names a cap by anything but
+/// its config key.
+#[tokio::test]
+async fn each_cap_reads_under_its_own_kind_with_the_subject_of_its_config_key() {
+    let rig = rig().await;
+    let standing = Arc::new(Standing::idle());
+    {
+        let mut set = standing.0.lock().unwrap();
+        set.session_caps = vec![
+            KeepaliveCap {
+                name: "sessions",
+                count: 4,
+                max: 4,
+            },
+            KeepaliveCap {
+                name: "agents",
+                count: 5,
+                max: 10,
+            },
+        ];
+        set.caps = vec![KeepaliveCap {
+            name: "retained",
+            count: 89,
+            max: 100,
+        }];
+    }
+    let (attention, _arm) = rig.attention_with_keepalive(standing);
+    let caps: Vec<_> = read(&attention, NOW)
+        .await
+        .into_iter()
+        .filter(|c| matches!(c.kind, Kind::SessionCap | Kind::KeepaliveCap))
+        .map(|c| (c.kind, c.subject, c.holds, c.detail["cap"].clone()))
+        .collect();
+    assert_eq!(
+        caps,
+        [
+            (
+                Kind::SessionCap,
+                Subject {
+                    kind: SubjectKind::Router,
+                    id: "sessions.max_sessions".into(),
+                    label: "Sessions".into(),
+                },
+                true,
+                json!("sessions"),
+            ),
+            (
+                Kind::SessionCap,
+                Subject {
+                    kind: SubjectKind::Router,
+                    id: "sessions.max_agents".into(),
+                    label: "Sessions".into(),
+                },
+                false,
+                json!("agents"),
+            ),
+            (
+                Kind::KeepaliveCap,
+                Subject {
+                    kind: SubjectKind::Router,
+                    id: "keepalive.retained".into(),
+                    label: "Keepalive".into(),
+                },
+                false,
+                json!("retained"),
+            ),
+        ],
+        "4 of 4 sessions holds its own kind under its key, and 5 of 10 agents and 89 of 100 retained bytes sit \
+         under the bar"
     );
 }
 

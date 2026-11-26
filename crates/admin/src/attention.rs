@@ -46,8 +46,8 @@ pub(crate) struct AttentionItem {
     /// for `slowed_long`, which can predate the day for a span open from before it, for the two account states the
     /// instant the registry recorded for the change to that state, for `feature_account_unavailable` that instant
     /// where the account is not ready and the earliest of its subscription's ends where it is past one, so the item
-    /// never dates ahead of the read, or for a degraded writer, `keepalive_bus_gaps`, `keepalive_cap` and
-    /// `expired_between_turns` the first read of this process that saw the state.
+    /// never dates ahead of the read, or for a degraded writer, `keepalive_bus_gaps`, `session_cap`, `keepalive_cap`
+    /// and `expired_between_turns` the first read of this process that saw the state.
     pub since: Option<i64>,
     /// `account` and `label`, or `account`, `failures`, `last_error` and `outcome`, or `account`, `backoff_since`,
     /// `next_attempt_at` and `rate_limited_in_a_row`, or `pool` and `key`, or `client_version`, `trigger` and `key`, or
@@ -86,15 +86,15 @@ pub(crate) struct AttentionItem {
     /// pool the registry still holds). `wall_reached` and `destination_spent` add it with the values of the pool the
     /// account sits in at the read, present only where the account sits in exactly one pool that the registry holds.
     /// `keepalive_bus_gaps` carries `gaps` (the engine's gaps since the start) and `last_at` (the last gap's instant),
-    /// `keepalive_cap` carries `cap` (`sessions`, `agents` or `retained`), `count`, `max` and `pct` (`count` over `max`
-    /// as a fraction, 0 where `max` is 0), and `expired_between_turns` carries `expired` (the cache entries that
-    /// expired between turns in the trailing 24 hours while the keepalive still held their agent, on a pool whose
-    /// keepalive policy is on, under a key that holds the `keepalive` permission). `feature_account_unavailable`
-    /// carries `account`, `label`, `obstacle` (`ended` for an account past its subscription's end, `unready` for a
-    /// stored state other than ready) and `selections`, one entry per selection that names the account with `feature`
-    /// (`artifacts` or `connectors`), `key` (the key whose own selection it is, null for a pool's) and `pool` (the
-    /// selecting pool, or the key's pool), ordered by pool, a pool's own ahead of its keys', then by key and by
-    /// feature.
+    /// `session_cap` carries `cap` (`sessions` or `agents`), `count`, `max` and `pct` (`count` over `max` as a
+    /// fraction, 0 where `max` is 0), `keepalive_cap` carries the same four with the cap `retained`, and
+    /// `expired_between_turns` carries `expired` (the cache entries that expired between turns in the trailing 24 hours
+    /// while the keepalive still held their agent, on a pool whose keepalive policy is on, under a key that holds the
+    /// `keepalive` permission). `feature_account_unavailable` carries `account`, `label`, `obstacle` (`ended` for an
+    /// account past its subscription's end, `unready` for a stored state other than ready) and `selections`, one entry
+    /// per selection that names the account with `feature` (`artifacts` or `connectors`), `key` (the key whose own
+    /// selection it is, null for a pool's) and `pool` (the selecting pool, or the key's pool), ordered by pool, a
+    /// pool's own ahead of its keys', then by key and by feature.
     #[schema(value_type = Object)]
     pub detail: Value,
 }
@@ -109,8 +109,8 @@ pub(crate) struct AttentionSubject {
     pub id: String,
     /// The account's or the pool's label, a deleted pool's id, the client version, the router's component
     /// (`ledger`, `routing`, a listener's pair as `proxy.tls` or `admin.tls`, the feature CA as `features.ca`,
-    /// `Keepalive` for the keepalive engine and its caps, or `-` for a parked record without a pool), or a model's
-    /// undated id.
+    /// `Keepalive` for the cache warming and its byte cap, `Sessions` for the session engine's two caps, or `-` for a
+    /// parked record without a pool), or a model's undated id.
     pub label: String,
 }
 
@@ -130,12 +130,12 @@ pub(crate) struct AttentionLink {
 /// `certificate_reload_failed`, `reauth_required`, `funding_required`, `feature_account_unavailable`, `refresh_failed`,
 /// `pairing_expiring`, `certificate_expiring`, `limit_reset_ending`, `ledger_record_parked`, `keepalive_bus_gaps`,
 /// `poll_backoff`, `model_unpriced`, `meter_drift`, `wall_reached`, `destination_spent`, `shed_no_runway`,
-/// `slowed_long`, `keepalive_cap`, `expired_between_turns`) and the oldest first within a kind. `meter_drift`,
-/// `wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long` read the ledger: the reconciliation rows the
-/// hourly fold writes and the routing log of the trailing 24 hours. `expired_between_turns` reads the ledger's rollups
-/// of the trailing 24 hours. `limit_reset_ending` reads the registry's stored limit resets, and the `reset` member of
-/// `wall_reached` reads them with the poll's snapshot. The same reader feeds the `phoebis_attention` gauge on the
-/// metrics listener, so a scrape and this answer never disagree.
+/// `slowed_long`, `session_cap`, `keepalive_cap`, `expired_between_turns`) and the oldest first within a kind.
+/// `meter_drift`, `wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long` read the ledger: the
+/// reconciliation rows the hourly fold writes and the routing log of the trailing 24 hours. `expired_between_turns`
+/// reads the ledger's rollups of the trailing 24 hours. `limit_reset_ending` reads the registry's stored limit resets,
+/// and the `reset` member of `wall_reached` reads them with the poll's snapshot. The same reader feeds the
+/// `phoebis_attention` gauge on the metrics listener, so a scrape and this answer never disagree.
 #[utoipa::path(
     get,
     path = "/admin/attention",

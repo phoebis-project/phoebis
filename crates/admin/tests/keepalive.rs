@@ -1590,11 +1590,70 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
     let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
     assert_eq!(
         (
-            system["keepalive"]["sessions"].as_u64(),
-            system["keepalive"]["session_entries"].as_u64()
+            system["sessions"]["live"].as_u64(),
+            system["sessions"]["entries"].as_u64()
         ),
         (Some(1), Some(2)),
         "the system document's session count is the overview's, and its entries keep the ended one: {system}"
+    );
+}
+
+/// A session that fills the running engine's session cap raises an item of the session caps' kind under the cap's
+/// config key and none of the byte cap's, which breaks when the admin hands the reader the session caps as the byte
+/// cap's list and the byte cap as the session caps'.
+#[tokio::test]
+async fn a_full_session_cap_of_the_running_engine_raises_a_session_cap_item_and_no_keepalive_cap_item(
+) {
+    let parts = common::admin_parts_full_with_session_caps(phoebis_session_engine::SessionCaps {
+        max_agents: 8,
+        max_sessions: 1,
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    let secret = common::created_key_secret(
+        &parts.app,
+        &cookie,
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+    )
+    .await;
+    let generation = common::generation(&parts.store, "desktop");
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &secret,
+        serde_json::json!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s-capped",
+            "instance_id": "i-capped",
+            "sequence": 1
+        }),
+    )
+    .await;
+    // The session takes the one slot at its first request, which the registration alone does not.
+    parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r-capped".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some("s-capped".into()), agent_id: Some("main".into()), parent_agent_id: None, instance_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: common::NOW, fallback_digest: None, cache_marker: false }));
+    let body = json(get(&parts.app, "/admin/attention", Some(&cookie)).await).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["session_cap"],
+        "the full session cap raises its own kind, and the byte cap under its max raises nothing: {body}"
+    );
+    assert_eq!(
+        (
+            &items[0]["subject"]["id"],
+            &items[0]["subject"]["label"],
+            &items[0]["detail"]
+        ),
+        (
+            &serde_json::json!("sessions.max_sessions"),
+            &serde_json::json!("Sessions"),
+            &serde_json::json!({ "cap": "sessions", "count": 1, "max": 1, "pct": 1.0 })
+        ),
+        "the item names the config key that sets the cap, and its detail reads the one session against the max of 1"
     );
 }
 

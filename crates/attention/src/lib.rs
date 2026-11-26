@@ -65,8 +65,10 @@ pub trait TlsPairs: Send + Sync {
 pub struct KeepaliveStanding {
     pub bus_gaps: u64,
     pub last_bus_gap_at: Option<i64>,
-    /// `sessions`, `agents`, `retained`, in that order, each its count against its max.
+    /// The cache warming's cap, `retained`, its count against its max.
     pub caps: Vec<KeepaliveCap>,
+    /// The session engine's two caps, `sessions` then `agents`, each its count against its max.
+    pub session_caps: Vec<KeepaliveCap>,
     /// The ids of the pools whose keepalive policy is on.
     pub warming: BTreeSet<String>,
 }

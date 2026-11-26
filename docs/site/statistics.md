@@ -539,9 +539,10 @@ its cost. While a batch is under retry the ledger is degraded: the system page s
 the spend is read again. On `GET /admin/system`, `ledger.write_retries` counts one per try the file refused, and
 `ledger.write_failures` counts the batches a panicking write lost, whose records also count in `ledger.dropped`.
 `ledger.last_gap_at` reads the instant of the writer's newest `ledger_gap` of dropped records, or null while the writer
-has recorded none since the start. The same answer's `keepalive.sessions` counts the sessions that hold a slot under
-`max_sessions`, the count `GET /admin/keepalive/overview` answers beside the cap, and `keepalive.session_entries` counts
-every session entry the keepalive engine holds, an ended session's among them until its expiry.
+has recorded none since the start. The same answer's `sessions.agents` counts the agent records that hold a slot under
+`sessions.max_agents`, `sessions.entries` counts every session entry the session engine holds, an ended session's among
+them until its expiry, and `sessions.live` counts the sessions that hold a slot under `sessions.max_sessions`, the
+count `GET /admin/keepalive/overview` answers beside the cap.
 
 The routing state writer is bounded the same way: a stalled registry file leaves its writes in memory, coalesced per
 row, and the system page's `router.writer` reads `degraded` until they drain. A batch the registry file as a whole
@@ -755,11 +756,11 @@ run is thirty minutes old. The conditions read from the registry, `limit_reset_e
 `wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`, read a table the ledger folds from its events
 of the trailing 24 hours once an hour and at start, `slowed_long` also from the hourly rollups' held sums, so a restart
 holds them again at the first fold. `meter_drift` lands in the same table by the same fold, from the reconciled windows
-rather than the events, so a restart holds it again at the first fold too. Of the keepalive engine's three conditions,
-`keepalive_bus_gaps` starts over, since the engine keeps its gaps in memory alone, `keepalive_cap` holds again once the
-engine has read its saved sessions, agents and recipes back from the registry at start, and only where those still reach
-90 percent of a cap ([A router restart](keepalive.md#a-router-restart)), and `expired_between_turns`, read from the
-ledger's hourly rollups, holds again at the first read.
+rather than the events, so a restart holds it again at the first fold too. Of the engine's four conditions,
+`keepalive_bus_gaps` starts over, since the engine keeps its gaps in memory alone, `session_cap` and `keepalive_cap`
+hold again once the engine has read its saved sessions, agents and recipes back from the registry at start, and only
+where those still reach 90 percent of a cap ([A router restart](keepalive.md#a-router-restart)), and
+`expired_between_turns`, read from the ledger's hourly rollups, holds again at the first read.
 
 | Kind | Tone | Subject | Clears when |
 | --- | --- | --- | --- |
@@ -784,7 +785,8 @@ ledger's hourly rollups, holds again at the first read.
 | `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours, or a `window_cleared` on the same window followed each such spent window |
 | `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours, or an event on its account that refunds its window followed each such round |
 | `slowed_long` | warning | the account | the slow-down's held time of the last 24 hours comes to at most twice the pool's `slow_down_stretch_seconds`, at least an hour |
-| `keepalive_cap` | warning | the crossed cap | the count falls under 90 percent of its max |
+| `session_cap` | warning | the crossed cap | the count falls under 90 percent of its max |
+| `keepalive_cap` | warning | the retained bytes' cap | the count falls under 90 percent of its max |
 | `expired_between_turns` | warning | the keepalive engine | no expiry between turns of an agent that the keepalive still held stands in the last 24 hours on a warming pool under a key with the `keepalive` permission |
 
 Of the tones, critical, serious, warning and info, `info` is the mildest, a condition that holds while nothing is
@@ -988,14 +990,20 @@ held, the bar, whether a span is open and the count of spans, and names the sett
 pool's value, which the dashboard's line words under the condition's label. The item opens the routing log on the
 account's slow-down starts and ends since the condition began ([Slow-down](routing.md#slow-down)).
 
-**`keepalive_cap`** holds while one of the keepalive engine's caps, its live sessions, its agent records or its retained
-prompts' bytes, stands at 90 percent of its max or more, each cap a series of its own. At a max the engine refuses what
-would pass it, a new session, agent record or recipe, a recipe at the retained bytes' max only once its evictions cannot
-make room ([Holds and lapses](keepalive.md#holds-and-lapses)), and the maxes are the bootstrap file's `keepalive` block
-([keepalive](installation.md#keepalive)). The subject is the cap, `keepalive.sessions`, `keepalive.agents` or
-`keepalive.retained`, and the item dates from the first read of this process that saw it. The detail names the cap with
-its count, its max and the share, which the dashboard's line reads as `Keepalive cap at {pct}: {cap}` in the warning
-tone, and the item opens the [Sessions](console.md#sessions) view.
+**`session_cap`** holds while one of the session engine's two caps, its live sessions or its agent records, stands at
+90 percent of its max or more, each cap a series of its own. At a max the engine refuses what would pass it, a new
+session or a new agent record ([Holds and lapses](keepalive.md#holds-and-lapses)), and the maxes are the two keys of
+the bootstrap file's `sessions` block ([sessions](installation.md#sessions)). The subject is the key,
+`sessions.max_sessions` or `sessions.max_agents`, and the item dates from the first read of this process that saw it.
+The detail names the cap with its count, its max and the share, which the dashboard's line reads as
+`Session engine cap at {pct}: {cap}` in the warning tone, and the item opens the [Sessions](console.md#sessions) view.
+
+**`keepalive_cap`** holds while the retained prompts' bytes stand at 90 percent of their max or more. At the max the
+cache warming refuses a recipe once its evictions cannot make room ([Holds and lapses](keepalive.md#holds-and-lapses)),
+and the max is `max_retained_bytes` of the bootstrap file's `keepalive` block ([keepalive](installation.md#keepalive)).
+The subject is `keepalive.retained`, and the item dates from the first read of this process that saw it. The detail
+names the cap with its count, its max and the share, which the dashboard's line reads as `Keepalive cap at {pct}: {cap}`
+in the warning tone, and the item opens the [Sessions](console.md#sessions) view.
 
 **`expired_between_turns`** holds while a request of the last 24 hours missed the cache because its entry expired
 between two turns, the miss probing exists to prevent, and the request ran on a pool whose keepalive policy is on, under

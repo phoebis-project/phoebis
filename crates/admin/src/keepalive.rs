@@ -106,7 +106,8 @@ impl KeepaliveFacts for EngineFacts {
         KeepaliveStanding {
             bus_gaps: stats.warming.bus_gaps,
             last_bus_gap_at: stats.warming.last_bus_gap_at,
-            caps: [sessions, agents, retained].into(),
+            caps: vec![retained],
+            session_caps: vec![sessions, agents],
             warming: self.engine.warming(),
         }
     }

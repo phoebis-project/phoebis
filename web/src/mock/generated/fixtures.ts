@@ -29144,12 +29144,14 @@ export const FIXTURES: Record<string, Fixture> = {
       },
       "gaps": [],
       "keepalive": {
-        "agents": 4,
         "bus_gaps": 0,
         "retained_bytes": 232,
-        "running_probes": 0,
-        "session_entries": 3,
-        "sessions": 2
+        "running_probes": 0
+      },
+      "sessions": {
+        "agents": 4,
+        "entries": 3,
+        "live": 2
       }
     }
   },

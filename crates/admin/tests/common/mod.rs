@@ -140,6 +140,31 @@ pub async fn admin_parts_full() -> Full {
     full_from(app_with(None, ACCOUNT_UUID, false, None).await)
 }
 
+/// `admin_parts_full` with the engine under `caps` in the place of the default session caps.
+pub async fn admin_parts_full_with_session_caps(caps: SessionCaps) -> Full {
+    full_from(
+        build_app_bounded(
+            None,
+            ACCOUNT_UUID,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            RouterConfig::default(),
+            LedgerConfig::default(),
+            Duration::from_secs(86_400),
+            Duration::from_secs(3_600),
+            None,
+            None,
+            false,
+            caps,
+        )
+        .await,
+    )
+}
+
 /// The full harness over a ledger on a file under the directory it answers, whose pool of `READERS` connections a
 /// test holds one by one. The directory comes back beside the parts so the file outlives the test's last read.
 pub async fn admin_parts_full_on_disk() -> (tempfile::TempDir, Full) {
@@ -160,6 +185,7 @@ pub async fn admin_parts_full_on_disk() -> (tempfile::TempDir, Full) {
         Some(dir.path().join("ledger.sqlite")),
         None,
         false,
+        SessionCaps::default(),
     )
     .await;
     (dir, full_from(parts))
@@ -290,6 +316,7 @@ async fn full_on_equivalent(
             None,
             None,
             true,
+            SessionCaps::default(),
         )
         .await,
     )
@@ -516,6 +543,7 @@ pub async fn admin_parts_full_on_bounded(
             None,
             None,
             false,
+            SessionCaps::default(),
         )
         .await,
     )
@@ -541,6 +569,7 @@ pub async fn admin_parts_full_with_pairs(pairs: Arc<dyn TlsPairs>) -> Full {
             None,
             Some(pairs),
             false,
+            SessionCaps::default(),
         )
         .await,
     )
@@ -1309,6 +1338,7 @@ async fn build_app_routed(
         None,
         None,
         false,
+        SessionCaps::default(),
     )
     .await
 }
@@ -1368,7 +1398,7 @@ pub fn seed_accounts(store: &Store, identity: Option<Identity>) {
 /// `build_app_routed` with the sessions route bounded by `session_expiry` and `non_companion_idle`, which the settings
 /// view mirrors, and the ledger on the file at `ledger_path` where one is given, on a file under a temporary directory
 /// otherwise. `features` gives the settings answer a feature listener, which a router without the `features` block
-/// answers as null.
+/// answers as null, and the engine holds its sessions under `session_caps`.
 #[allow(clippy::too_many_arguments)]
 async fn build_app_bounded(
     identity: Option<Identity>,
@@ -1386,6 +1416,7 @@ async fn build_app_bounded(
     ledger_path: Option<PathBuf>,
     pairs: Option<Arc<dyn TlsPairs>>,
     features: bool,
+    session_caps: SessionCaps,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_310_linux_x64();
@@ -1526,7 +1557,7 @@ async fn build_app_bounded(
         pricing: pricing.clone(),
         relay: relay.clone(),
         router: router_handle.clone(),
-        session_caps: SessionCaps::default(),
+        session_caps,
         session_expiry: Duration::from_secs(86_400),
         store: store.clone(),
         tables: tables.clone(),

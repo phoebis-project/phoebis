@@ -141,6 +141,7 @@ impl Standing {
             bus_gaps: 0,
             last_bus_gap_at: None,
             caps: Vec::new(),
+            session_caps: Vec::new(),
             warming: BTreeSet::new(),
         }))
     }
@@ -150,18 +151,20 @@ impl KeepaliveFacts for Standing {
     // Field by field, as the engine builds a fresh standing on each read and the type derives no `Clone`.
     fn standing(&self) -> KeepaliveStanding {
         let set = self.0.lock().unwrap();
-        KeepaliveStanding {
-            bus_gaps: set.bus_gaps,
-            last_bus_gap_at: set.last_bus_gap_at,
-            caps: set
-                .caps
-                .iter()
+        let copied = |caps: &[KeepaliveCap]| -> Vec<KeepaliveCap> {
+            caps.iter()
                 .map(|cap| KeepaliveCap {
                     name: cap.name,
                     count: cap.count,
                     max: cap.max,
                 })
-                .collect(),
+                .collect()
+        };
+        KeepaliveStanding {
+            bus_gaps: set.bus_gaps,
+            last_bus_gap_at: set.last_bus_gap_at,
+            caps: copied(&set.caps),
+            session_caps: copied(&set.session_caps),
             warming: set.warming.clone(),
         }
     }

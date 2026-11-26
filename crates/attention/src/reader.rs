@@ -1,4 +1,4 @@
-//! The twenty-two conditions, read fresh on every call: the account states, the pools, the feature selections and the
+//! The twenty-three conditions, read fresh on every call: the account states, the pools, the feature selections and the
 //! stored limit resets from the registry, the refresh runs and the refresh token ends from the store, the parked
 //! records, the ledger's degraded state, the unpriced models its landing or a catalog listing saw, the routing
 //! conditions its hourly fold wrote and the expiries between turns its rollups count from the ledger, the routing state
@@ -23,7 +23,9 @@ use phoebis_store::{
 };
 use serde_json::json;
 
-use crate::{AttentionError, FeatureCaFacts, KeepaliveStanding, LedgerFacts, PairFacts};
+use crate::{
+    AttentionError, FeatureCaFacts, KeepaliveCap, KeepaliveStanding, LedgerFacts, PairFacts,
+};
 
 /// How long after a run's first 429 the poll backoff condition holds, so a single 429 or a short run never reads 1.
 pub const BACKOFF_ATTENTION_AFTER_MS: i64 = 30 * 60 * 1_000;
@@ -55,7 +57,7 @@ const UNKNOWN_VERSION: &str = "unknown";
 /// The subject of the parked records served under no pool; no pool id can read `-`.
 const NO_POOL: &str = "-";
 
-/// The keepalive engine's subject, and the stem of its caps' subjects.
+/// The keepalive engine's subject, and the stem of its byte cap's subject.
 const KEEPALIVE: &str = "keepalive";
 
 /// The feature CA's subject, the key its warning line names in the router's commands too.
@@ -84,9 +86,9 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// conditions, whose causes it can explain. Those four stop no traffic and rank under every kind that does, worst first
 /// among themselves: an account that reached its wall, a move whose destination was spent within the hour, a pool whose
 /// rounds found no destination with runway, and an account whose requests waited past twice its pool's stretch
-/// threshold in the day, a slow-down that worked for long. The keepalive engine's two warnings rank last: a cap filled
-/// to 90 percent or more, then cache entries that expired between turns while the keepalive still held their agent, on
-/// a pool that warms caches, under a key the keepalive may probe for.
+/// threshold in the day, a slow-down that worked for long. Three warnings of the keepalive engine rank last: a session
+/// cap filled to 90 percent or more, then the byte cap filled as far, then cache entries that expired between turns
+/// while the keepalive still held their agent, on a pool that warms caches, under a key the keepalive may probe for.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
@@ -109,6 +111,7 @@ pub enum Kind {
     DestinationSpent,
     ShedNoRunway,
     SlowedLong,
+    SessionCap,
     KeepaliveCap,
     ExpiredBetweenTurns,
 }
@@ -136,6 +139,7 @@ impl Kind {
             Kind::DestinationSpent => RoutingKind::DestinationSpent.as_str(),
             Kind::ShedNoRunway => RoutingKind::ShedNoRunway.as_str(),
             Kind::SlowedLong => RoutingKind::SlowedLong.as_str(),
+            Kind::SessionCap => "session_cap",
             Kind::KeepaliveCap => "keepalive_cap",
             Kind::ExpiredBetweenTurns => "expired_between_turns",
         }
@@ -165,6 +169,7 @@ impl Kind {
             | Kind::KeepaliveBusGaps
             | Kind::PollBackoff
             | Kind::ModelUnpriced
+            | Kind::SessionCap
             | Kind::KeepaliveCap
             | Kind::ExpiredBetweenTurns => None,
         }
@@ -180,7 +185,8 @@ phoebis_store::text_enum! {
         Pool => "pool",
         /// One of the process's own components: the ledger or the routing state writer, a listener's pair by its key
         /// (`proxy.tls`, `admin.tls`), the feature CA as `features.ca`, the keepalive engine (`keepalive`, and
-        /// `keepalive.<cap>` for one of its caps), or `-` for a parked record served under no pool.
+        /// `keepalive.retained` for its byte cap), a session cap by its config key (`sessions.max_sessions`,
+        /// `sessions.max_agents`), or `-` for a parked record served under no pool.
         Router => "router",
         /// A model by its undated id.
         Model => "model",
@@ -188,8 +194,9 @@ phoebis_store::text_enum! {
 }
 
 /// What a condition is about: the account's or the pool's id and label, the client version as both, the router's own
-/// component as both, or a model's undated id as both. The keepalive engine's subjects are the exception among the
-/// router's components: they share the label `Keepalive`.
+/// component as both, or a model's undated id as both. The cache warming's subjects and the session engine's two are
+/// the exception among the router's components: the first share the label `Keepalive`, and the second share the label
+/// `Sessions`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Subject {
     pub kind: SubjectKind,
@@ -242,6 +249,14 @@ impl Subject {
         }
     }
 
+    fn sessions(id: &str) -> Subject {
+        Subject {
+            kind: SubjectKind::Router,
+            id: id.into(),
+            label: "Sessions".into(),
+        }
+    }
+
     fn model(model: &str) -> Subject {
         Subject {
             kind: SubjectKind::Model,
@@ -275,7 +290,7 @@ pub struct Condition {
 }
 
 /// The request-fed state and the first-seen times of the conditions `dated_condition` dates, a degraded writer and
-/// the keepalive engine's three. Nothing of it is stored: a restart starts every exhaustion and refusal over, and
+/// the keepalive engine's four. Nothing of it is stored: a restart starts every exhaustion and refusal over, and
 /// those conditions date themselves from the first read that sees them.
 #[derive(Default)]
 pub(crate) struct ReaderState {
@@ -472,6 +487,34 @@ fn dated_condition(
         *state.state_since.entry(entry).or_insert(now)
     });
     condition_for(kind, subject, None, holds, since, detail)
+}
+
+/// A cap's condition, held from 90 percent of its max. The session engine's caps and the byte cap read through this one
+/// function, so the two kinds keep one threshold and one detail.
+fn cap_condition(
+    state: &mut ReaderState,
+    seen: &mut HashSet<(Kind, String)>,
+    kind: Kind,
+    subject: Subject,
+    cap: &KeepaliveCap,
+    now: i64,
+) -> Condition {
+    let full = cap.max > 0 && cap.count * 100 >= cap.max * 90;
+    // NaN has no JSON number, so a max of 0 reads 0.
+    let pct = if cap.max == 0 {
+        0.0
+    } else {
+        cap.count as f64 / cap.max as f64
+    };
+    dated_condition(
+        state,
+        seen,
+        kind,
+        subject,
+        full,
+        now,
+        json!({ "cap": cap.name, "count": cap.count, "max": cap.max, "pct": pct }),
+    )
 }
 
 /// Each live subject as `(id, label, true)`, then each id the rows name that none of them has, labeled by its id and
@@ -933,23 +976,26 @@ pub(crate) fn conditions(
         now,
         json!({ "gaps": keepalive.bus_gaps, "last_at": keepalive.last_bus_gap_at }),
     ));
+    for cap in &keepalive.session_caps {
+        let subject = Subject::sessions(&format!("sessions.max_{}", cap.name));
+        out.push(cap_condition(
+            state,
+            &mut seen,
+            Kind::SessionCap,
+            subject,
+            cap,
+            now,
+        ));
+    }
     for cap in &keepalive.caps {
-        let id = format!("{KEEPALIVE}.{}", cap.name);
-        let full = cap.max > 0 && cap.count * 100 >= cap.max * 90;
-        // NaN has no JSON number, so a max of 0 reads 0.
-        let pct = if cap.max == 0 {
-            0.0
-        } else {
-            cap.count as f64 / cap.max as f64
-        };
-        out.push(dated_condition(
+        let subject = Subject::keepalive(&format!("{KEEPALIVE}.{}", cap.name));
+        out.push(cap_condition(
             state,
             &mut seen,
             Kind::KeepaliveCap,
-            Subject::keepalive(&id),
-            full,
+            subject,
+            cap,
             now,
-            json!({ "cap": cap.name, "count": cap.count, "max": cap.max, "pct": pct }),
         ));
     }
     if let Some(expired) = ledger.map(|l| l.expired.as_slice()) {
