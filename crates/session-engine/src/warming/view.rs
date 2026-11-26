@@ -1,5 +1,5 @@
-//! What the cache warming answers the reads that join both components: a recipe's state word, a session's summary and
-//! the warming's counts.
+//! What the cache warming answers the reads that join both components: the agent counts, a recipe's state word, a
+//! session's summary and the warming's counts.
 
 use phoebis_ledger::KeepaliveAgents;
 
@@ -123,6 +123,7 @@ pub struct KeepaliveSummary {
 pub type AgentCounts = KeepaliveAgents;
 
 /// The warming's counts.
+#[derive(Debug)]
 pub struct WarmingCounts {
     pub bus_gaps: u64,
     /// The last bus gap's instant, `None` before the first.
@@ -132,7 +133,7 @@ pub struct WarmingCounts {
 }
 
 impl AgentWarming {
-    pub(crate) fn holds_recipe(&self) -> bool {
+    fn holds_recipe(&self) -> bool {
         self.current.as_ref().is_some_and(|o| o.ready)
     }
 

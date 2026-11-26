@@ -80,6 +80,7 @@ pub struct EngineParts {
     pub timing: KeepaliveTiming,
 }
 
+#[derive(Debug)]
 pub struct EngineStats {
     /// The request events (a selection, a head, a chunk, a completion, a new request) and the reports refused because
     /// they arrived after the shutdown's quiesce, so the state the last save holds is the state at the quiesce.

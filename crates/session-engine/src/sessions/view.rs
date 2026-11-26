@@ -40,6 +40,7 @@ impl Session {
 }
 
 /// The session engine's counts.
+#[derive(Debug)]
 pub struct SessionCounts {
     pub agents: usize,
     /// Every session entry the engine holds: a session that holds no slot counts here and not in `live`.
