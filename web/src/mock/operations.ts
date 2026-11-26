@@ -94,10 +94,11 @@ const sessionSpec: ({
   compactedAgent?: number;
   companion: CompanionState;
   /**
-   * What the row's companion reports: the session's facts, and its subagents' by their place among the row's agents,
-   * as `compactedAgent` names one. Absent on a row whose companion reports none.
+   * What the row's companion reports: the session's facts, its subagents' by their place among the row's agents, as
+   * `compactedAgent` names one, and its earlier agents' by their id, since an agent with seed rows and no line has no
+   * place there. Absent on a row with no reported fact.
    */
-  facts?: { agents?: (Omit<SessionAgentFacts, 'agentId'> | null)[]; session: Partial<SessionFacts> };
+  facts?: { agents?: (Omit<SessionAgentFacts, 'agentId'> | null)[]; earlier?: Readonly<Record<string, Omit<SessionAgentFacts, 'agentId'>>>; session: Partial<SessionFacts> };
   /**
    * The row is finished: the builder writes main's cause `session_ended`, every subagent's `agent_released` and every
    * agent in `released` state.
@@ -163,10 +164,11 @@ const sessionSpec: ({
     facts: { session: { branch: 'main', cwd: '/home/dev/work/notes', project: '/home/dev/work/notes', repositoryRoot: '/home/dev/work/notes' } },
   },
   // A subagent whose park ran past the pool's parked ceiling. Its companion reports no fact of the subagent and no
-  // branch, and the session works in a folder below its project.
+  // branch, and the session works in a folder below its project. The companion reported the earlier agent 0b7f, which
+  // holds a seed row and no line, by a name and a type of its own.
   {
     keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' }, cause: 'overage', subagentHold: 'parked_limit',
-    facts: { session: { cwd: '/home/dev/work/billing-service/api', project: '/home/dev/work/billing-service', repository: 'git.example/acme/billing-service', repositoryRoot: '/home/dev/work/billing-service' } },
+    facts: { earlier: { '0b7f': { agentType: 'repo-scout', description: null, name: 'scout' } }, session: { cwd: '/home/dev/work/billing-service/api', project: '/home/dev/work/billing-service', repository: 'git.example/acme/billing-service', repositoryRoot: '/home/dev/work/billing-service' } },
   },
   // Its companion mod holds the cache warming off for the session, so the engine keeps no prompt of it and sends no
   // probe. Main's line reads ended, and the pin that a move of the story wrote stays.
@@ -197,9 +199,10 @@ const sessionSpec: ({
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true, sessionId: RELEASED_SESSION_ID },
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
   // One session the mod ended, whose companion reads none since its end, which keeps its lines, its released subagents'
-  // last probes dating their release inside all's one-hour cache TTL, and which the Sessions view's default filters
-  // hide, and one no companion reports, last used two hours ago, past the one-hour non-companion timeout, so the
-  // route's list leaves it out.
+  // last probes dating their release inside all's one-hour cache TTL, and its stored facts (a title, a project and
+  // a7f3's name), and which the Sessions view's default filters hide, and one no companion reports, last used two hours
+  // ago, past the one-hour non-companion timeout, so the route's list leaves it out. The ended session's companion word
+  // reads the engine's record, which is gone, and its facts read the stored rows.
   {
     keyId: 'desktop',
     accountId: 'nightly',
@@ -207,6 +210,7 @@ const sessionSpec: ({
     state: 'idle',
     agents: 3,
     companion: 'none',
+    facts: { agents: [null, { agentType: null, description: null, name: 'drafter' }, null], session: { project: '/home/dev/work/mobile-app', title: 'Release notes draft for the mobile app' } },
     finished: true,
     fixed: true,
     idleMinutes: FINISHED_AGENTS[0].minutes,
@@ -1037,16 +1041,17 @@ SESSIONS.forEach((pin, i) => {
     pin,
     pins.flatMap((p) => (p.listed ? [] : [p.line])),
   );
-  // The spec names a subagent's facts by its place, so they take the id the recipes drew for that place, and the route
-  // answers them in agent id order.
-  const reported = i < sessionSpec.length ? sessionSpec[i].facts?.agents : undefined;
+  // The spec names a subagent's facts by its place, so they take the id the recipes drew for that place, and an earlier
+  // agent's by its id, since no recipe draws one. The route answers one entry per agent with a stored set, in agent id
+  // order.
+  const reported = i < sessionSpec.length ? sessionSpec[i].facts : undefined;
   if (reported !== undefined) {
-    pin.agentFacts = recipes
-      .flatMap((r, j) => {
-        const facts = reported[j];
-        return facts ? [{ agentId: r.agentId, ...facts }] : [];
-      })
-      .sort((a, b) => byteOrder(a.agentId, b.agentId));
+    const lined = recipes.flatMap((r, j) => {
+      const facts = reported.agents?.[j];
+      return facts ? [{ agentId: r.agentId, ...facts }] : [];
+    });
+    const earlier = Object.entries(reported.earlier ?? {}).map(([agentId, facts]) => ({ agentId, ...facts }));
+    pin.agentFacts = [...lined, ...earlier].sort((a, b) => byteOrder(a.agentId, b.agentId));
   }
   pin.warm = pin.pinned ? warmAt(warmUntilOf(pin.lastRefreshAt, pin.cacheTtlMs)) : null;
   // The row's ended mark is its display pin's line's. A row the mod released whole lists no line, and the router holds

@@ -27184,6 +27184,9 @@ await forView('/sessions', async () => {
   // list under the non-companion timeout.
   const TWO_HOURS_ID = 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58';
   const RELEASED_SENTENCE = 'The mod released every agent of this session. Each record leaves the engine one cache TTL after its release, and a record that held a slot of the agent cap keeps it until then.';
+  // The stored title of the story's finished session (`sessionSpec` in mock/operations.ts), which outlives the engine's
+  // record of the session.
+  const FINISHED_TITLE = 'Release notes draft for the mobile app';
   const listed = await api.listSessions();
   const recipes = await api.listKeepaliveRecipes();
   const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
@@ -27272,7 +27275,8 @@ await forView('/sessions', async () => {
     // filter lists all 30 rows, the three finished ones adding no agent to the bare page's 40, since the end released
     // the ended session's main with its subagents and the Agents count leaves the released lines out. No companion
     // reports the session after its end, and its main keeps the released word: its Agents cell counts none with no word
-    // under it, and main's line in its Agents table reads released.
+    // under it, and main's line in its Agents table reads released. The session's stored facts outlive its engine
+    // record, so its Session cell leads with its stored title while its companion word reads none.
     const page = await mount('/sessions?finished=1', { now: CLOCK_ORIGIN });
     const chips = chipsOn(page);
     const count = { text: page.container.querySelector('.filter-bar__count')?.textContent ?? null, title: page.container.querySelector('.filter-bar__count [title]')?.getAttribute('title') ?? null };
@@ -27291,6 +27295,7 @@ await forView('/sessions', async () => {
       agents: { count: agentsCell?.firstChild?.textContent?.trim() ?? null, split: agentsCell?.querySelector('.srow__split')?.textContent?.trim() ?? null },
       counts: lines.map((l) => l.querySelector('.agents__counts')?.textContent?.trim() ?? ''),
       companion: finished?.companion ?? null,
+      lead: sessionCell(page, row, 'Session')?.firstElementChild?.textContent ?? null,
       main: mainLine?.children[headsOf(agentsTable).indexOf('Status')]?.textContent?.trim() ?? null,
       sentences: detail?.querySelectorAll('.srow__finished').length ?? 0,
       states: lines.map((l) => l.querySelector('.agents__state > .badge:first-child')?.textContent?.trim() ?? ''),
@@ -27298,7 +27303,7 @@ await forView('/sessions', async () => {
     };
     page.unmount();
     results.push({
-      name: '/sessions ?finished=1 lists the finished session under the chip finished sessions, its expanded row the finished sentence above its facts and its three lines each ended with its probes and credits, its main released and counted in no Agents word, and the count names every listed row',
+      name: '/sessions ?finished=1 lists the finished session under the chip finished sessions, its Session cell led by its stored title, its expanded row the finished sentence above its facts and its three lines each ended with its probes and credits, its main released and counted in no Agents word, and the count names every listed row',
       ok:
         JSON.stringify(chips) === JSON.stringify(['finished sessions']) &&
         count.text === '30 sessions · 40 agents' &&
@@ -27311,6 +27316,7 @@ await forView('/sessions', async () => {
         got.states.every((s) => s === 'ended') &&
         got.counts.every((c) => /^\d+ \/ \d+$/.test(c) && c !== '0 / 0') &&
         got.companion === 'none' &&
+        got.lead === FINISHED_TITLE &&
         got.agents.count === '0' &&
         got.agents.split === null &&
         got.main === 'released',
@@ -28972,7 +28978,9 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // The earlier agents line stands under the table, closed, over the agents with seed rows and no line: d41e on the
     // finished session 9b4e2f71 (its one row billed $0.0202 in fast mode) and story 4's Explore subagent 0b7f (its one
     // row billed $0.0055 in overage). Opened, each joins the table as a row of its own off its newest row, its model
-    // with a dash under it, dashes for the pin's facts, no pin in Status.
+    // with a dash under it, dashes for the pin's facts, no pin in Status. Story 4's companion reported a name and a
+    // type of 0b7f's own (`sessionSpec[4]` in mock/operations.ts) and none of d41e, so the hover reads 0b7f by its name
+    // with its id and d41e by its id alone, and 0b7f's row reads that name over its id and the reported type.
     const read = {};
     for (const [key, query, agent] of [
       ['finished', '?finished=1', 'd41e'],
@@ -28988,17 +28996,17 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       read[key] = {
         closed: { controls: closed.line.controls === agentsOf(detail).table?.id && closed.line.controls !== null, expanded: closed.line.expanded, hint: closed.line.hint, label: closed.line.label, rows: closed.rows.includes(agent), title: closed.line.title },
         opened: { expanded: opened.line.expanded, last: opened.rows.at(-1)?.agent ?? null },
-        row: row === undefined ? null : { account: row.account, burn: row.burn, cache: row.cache, context: row.context, cost: row.cost, costSub: row.costSub, effort: row.effort, menu: row.menu, model: row.model, requests: row.requests, status: row.status.text, muted: row.status.muted, type: row.type },
+        row: row === undefined ? null : { account: row.account, burn: row.burn, cache: row.cache, context: row.context, cost: row.cost, costSub: row.costSub, effort: row.effort, label: row.label, menu: row.menu, model: row.model, requests: row.requests, status: row.status.text, muted: row.status.muted, type: row.type },
       };
       page.unmount();
     }
-    const row = (account, cost, costSub, agent) => ({ account, burn: '-', cache: { badge: null, muted: '-', sub: null }, context: '-', cost, costSub, effort: '-', menu: `Actions for agent ${agent}`, model: 'opus-5', requests: '1', status: 'no pin', muted: true, type: 'general-purpose' });
+    const row = (account, cost, costSub, agent) => ({ account, burn: '-', cache: { badge: null, muted: '-', sub: null }, context: '-', cost, costSub, effort: '-', label: agent, menu: `Actions for agent ${agent}`, model: 'opus-5', requests: '1', status: 'no pin', muted: true, type: 'general-purpose' });
     const want = {
       finished: { closed: { controls: true, expanded: 'false', hint: '· 1 request · $0.02', label: '1 earlier agent', rows: false, title: 'd41e' }, opened: { expanded: 'true', last: 'd41e' }, row: row('nightly', '$0.02', 'fast mode', 'd41e') },
-      explored: { closed: { controls: true, expanded: 'false', hint: '· 1 request · $0.0055', label: '1 earlier agent', rows: false, title: '0b7f' }, opened: { expanded: 'true', last: '0b7f' }, row: { ...row('nightly', '$0.0055', 'overage', '0b7f'), model: 'sonnet-5', type: 'Explore' } },
+      explored: { closed: { controls: true, expanded: 'false', hint: '· 1 request · $0.0055', label: '1 earlier agent', rows: false, title: 'scout (0b7f)' }, opened: { expanded: 'true', last: '0b7f' }, row: { ...row('nightly', '$0.0055', 'overage', '0b7f'), label: 'scout', menu: 'Actions for agent scout (0b7f)', model: 'sonnet-5', type: 'repo-scout' } },
     };
     results.push({
-      name: '/sessions the earlier agents line reads its count, requests and cost closed, and opened adds one row per earlier agent off its newest request with no pin',
+      name: '/sessions the earlier agents line reads its count, requests and cost closed, its hover each agent by its label with its id or by its id alone, and opened adds one row per earlier agent off its newest request with no pin, which reads its reported label and type',
       ok: absent.length === 0 && JSON.stringify(read) === JSON.stringify(want),
       missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
     });
