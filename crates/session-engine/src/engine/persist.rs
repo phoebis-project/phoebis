@@ -282,7 +282,13 @@ impl Inner {
         for (row, revision) in &self.dirty.sessions {
             if let Some(session) = self.session_of(row) {
                 match session_row(row, session, now) {
-                    Ok(session_row) => snapshot.batch.sessions.push(session_row),
+                    Ok(session_row) => {
+                        snapshot.batch.sessions.push(session_row);
+                        snapshot
+                            .batch
+                            .session_reports
+                            .push((row.clone(), session.last_report_at));
+                    }
                     Err(error) => {
                         tracing::warn!(key = %row.0, session = %row.2, %error, "a keepalive session could not be written")
                     }

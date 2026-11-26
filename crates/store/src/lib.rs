@@ -191,7 +191,7 @@ pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The connection's cache of prepared statements. The routing writer's batch alone runs about 20 cached statements,
 /// and the session memory, the save of the engine's state and the per-holder credential reads cache theirs beside
-/// them, about 30 in all, so rusqlite's default of 16 would evict and recompile some on every batch. 64 holds them all
+/// them, about 38 in all, so rusqlite's default of 16 would evict and recompile some on every batch. 64 holds them all
 /// with room.
 const STATEMENT_CACHE_CAPACITY: usize = 64;
 
@@ -238,9 +238,9 @@ const PURGE_CHANGES: &str = "DELETE FROM registry_changes WHERE id IN ( \
 // A stored set whose session last reported before the cutoff. Each select leads with the kind, so the index
 // `companion_facts_seen` serves both cuts.
 const PURGE_AGENT_FACTS: &str = "DELETE FROM companion_facts WHERE rowid IN ( \
-     SELECT rowid FROM companion_facts WHERE kind = 'agents' AND seen_at < ?1 LIMIT ?2)";
+     SELECT rowid FROM companion_facts WHERE kind = ?3 AND seen_at < ?1 LIMIT ?2)";
 const PURGE_SESSION_FACTS: &str = "DELETE FROM companion_facts WHERE rowid IN ( \
-     SELECT rowid FROM companion_facts WHERE kind IN ('project', 'title') AND seen_at < ?1 LIMIT ?2)";
+     SELECT rowid FROM companion_facts WHERE kind IN (?3, ?4) AND seen_at < ?1 LIMIT ?2)";
 
 // A known plaintext under its own associated data: the row proves which key sealed the registry without opening a
 // credential, and AES-GCM gives a reader of the plaintext nothing toward the key.
@@ -700,23 +700,10 @@ impl Store {
     /// whatever their age, in rowid slices of 1,000, one transaction per slice; the ledger's purge pass calls it
     /// once with the request cutoff.
     pub fn purge_history(&self, before_ms: i64) -> Result<PurgedHistory, StoreError> {
-        let mut purged = PurgedHistory::default();
-        for (sql, count) in [
-            (PURGE_ATTEMPTS, &mut purged.attempts),
-            (PURGE_CHANGES, &mut purged.changes),
-        ] {
-            loop {
-                let mut conn = self.conn.lock().expect(LOCK_POISONED);
-                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                let deleted = tx.execute(sql, params![before_ms, HISTORY_SLICE as i64])?;
-                tx.commit()?;
-                *count += deleted as u64;
-                if deleted < HISTORY_SLICE {
-                    break;
-                }
-            }
-        }
-        Ok(purged)
+        Ok(PurgedHistory {
+            attempts: self.purge_in_slices(PURGE_ATTEMPTS, before_ms, &[])?,
+            changes: self.purge_in_slices(PURGE_CHANGES, before_ms, &[])?,
+        })
     }
 
     /// The stored sets whose session last reported before a cutoff, in slices of 1,000, one transaction per slice: the
@@ -727,27 +714,42 @@ impl Store {
         agents_before_ms: Option<i64>,
         sessions_before_ms: i64,
     ) -> Result<PurgedFacts, StoreError> {
-        let mut purged = PurgedFacts::default();
-        for (sql, before_ms, count) in [
-            (PURGE_AGENT_FACTS, agents_before_ms, &mut purged.agents),
-            (
-                PURGE_SESSION_FACTS,
-                Some(sessions_before_ms),
-                &mut purged.sessions,
-            ),
-        ] {
-            let Some(before_ms) = before_ms else {
-                continue;
-            };
-            loop {
-                let mut conn = self.conn.lock().expect(LOCK_POISONED);
-                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                let deleted = tx.execute(sql, params![before_ms, HISTORY_SLICE as i64])?;
-                tx.commit()?;
-                *count += deleted as u64;
-                if deleted < HISTORY_SLICE {
-                    break;
+        Ok(PurgedFacts {
+            agents: match agents_before_ms {
+                Some(before_ms) => {
+                    self.purge_in_slices(PURGE_AGENT_FACTS, before_ms, &[&FactsKind::Agents])?
                 }
+                None => 0,
+            },
+            sessions: self.purge_in_slices(
+                PURGE_SESSION_FACTS,
+                sessions_before_ms,
+                &[&FactsKind::Project, &FactsKind::Title],
+            )?,
+        })
+    }
+
+    /// `sql` binds the cutoff as `?1`, the slice's size as `?2` and `extra` from `?3` on.
+    fn purge_in_slices(
+        &self,
+        sql: &str,
+        before_ms: i64,
+        extra: &[&dyn rusqlite::ToSql],
+    ) -> Result<u64, StoreError> {
+        let slice = HISTORY_SLICE as i64;
+        let mut purged = 0;
+        loop {
+            let mut conn = self.conn.lock().expect(LOCK_POISONED);
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let bound: [&dyn rusqlite::ToSql; 2] = [&before_ms, &slice];
+            let deleted = tx.execute(
+                sql,
+                rusqlite::params_from_iter(bound.into_iter().chain(extra.iter().copied())),
+            )?;
+            tx.commit()?;
+            purged += deleted as u64;
+            if deleted < HISTORY_SLICE {
+                break;
             }
         }
         Ok(purged)

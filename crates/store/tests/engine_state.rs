@@ -24,7 +24,6 @@ fn session(key_generation: i64, session_id: &str) -> CompanionSessionRow {
         record_version: 1,
         payload: format!(r#"{{"session_id":"{session_id}"}}"#),
         updated_at: 1_000,
-        seen_at: None,
     }
 }
 
@@ -164,6 +163,7 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
             session(1, "1:s"),
             session(11, "s"),
         ],
+        session_reports: Vec::new(),
         agents: Vec::new(),
         warming_agents: vec![
             agent(1, "s:x", "y", Some(PROMPT)),
@@ -726,10 +726,8 @@ fn a_save_stamps_each_set_of_the_session_whose_row_it_writes_and_no_other_sessio
         .unwrap();
     store
         .save_engine_state(&EngineBatch {
-            sessions: vec![CompanionSessionRow {
-                seen_at: Some(2_000),
-                ..session(generation, "s1")
-            }],
+            sessions: vec![session(generation, "s1")],
+            session_reports: vec![(("k".into(), generation, "s1".into()), 2_000)],
             facts: vec![facts_set(
                 generation,
                 "s1",

@@ -35,7 +35,7 @@ pub struct FactsRow {
     pub record_version: u32,
     pub value: Vec<u8>,
     /// The instant of the report that filed the set, which a save moves to the session's last report where its batch
-    /// holds the session's row.
+    /// carries that report.
     pub seen_at: i64,
 }
 
@@ -56,9 +56,6 @@ pub struct CompanionSessionRow {
     pub record_version: u32,
     pub payload: String,
     pub updated_at: i64,
-    /// The instant of the session's last report. A save stamps it on each stored set of the session's facts, in the
-    /// transaction that writes this row. A load answers `None`, since the payload holds the instant.
-    pub seen_at: Option<i64>,
 }
 
 /// One agent row of the session engine: its identity, and the session engine's versioned payload of the agent's
@@ -122,6 +119,9 @@ pub struct IdleReturnsRow {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EngineBatch {
     pub sessions: Vec<CompanionSessionRow>,
+    /// `((key_id, key_generation, session_id), last_report_at)`: the instant of each session's last report, which the
+    /// save stamps on each stored set of the session.
+    pub session_reports: Vec<((String, i64, String), i64)>,
     pub agents: Vec<CompanionAgentRow>,
     pub warming_agents: Vec<KeepaliveAgentRow>,
     /// `(key_id, key_generation, session_id)`.
@@ -141,16 +141,7 @@ pub struct EngineBatch {
 
 impl EngineBatch {
     pub fn is_empty(&self) -> bool {
-        self.sessions.is_empty()
-            && self.agents.is_empty()
-            && self.warming_agents.is_empty()
-            && self.removed_sessions.is_empty()
-            && self.removed_agents.is_empty()
-            && self.counters.is_empty()
-            && self.purge_counters_before.is_none()
-            && self.facts.is_empty()
-            && self.removed_facts.is_empty()
-            && self.removed_fact_kinds.is_empty()
+        *self == EngineBatch::default()
     }
 }
 
@@ -162,45 +153,45 @@ pub struct EngineState {
     pub counters: Vec<IdleReturnsRow>,
 }
 
+/// Each part as `<byte length>:<bytes>`, in order. A colon inside a part cannot move a boundary (`3:s:x1:y` against
+/// `1:s3:x:y`), so a value sealed under one row's parts fails to open under any other row's.
+fn length_prefixed(parts: &[&str]) -> String {
+    parts
+        .iter()
+        .map(|part| format!("{}:{part}", part.len()))
+        .collect()
+}
+
 /// The identity tuple as length-prefixed text, each component `<byte length>:<bytes>` in this order: `key_id`,
-/// `key_generation` in decimal, `session_id`, `agent_id`, the literal `keepalive`. A colon inside an id cannot move
-/// a boundary (`3:s:x1:y` against `1:s3:x:y`), so a sealed body moved to any other row fails to open. `crypto::seal`
-/// takes the string as it takes the credentials' AAD.
+/// `key_generation` in decimal, `session_id`, `agent_id`, the literal `keepalive`. `crypto::seal` takes the string as
+/// it takes the credentials' AAD.
 pub fn keepalive_aad(
     key_id: &str,
     key_generation: i64,
     session_id: &str,
     agent_id: &str,
 ) -> String {
-    let generation = key_generation.to_string();
-    [
+    length_prefixed(&[
         key_id,
-        generation.as_str(),
+        &key_generation.to_string(),
         session_id,
         agent_id,
         "keepalive",
-    ]
-    .iter()
-    .map(|part| format!("{}:{part}", part.len()))
-    .collect()
+    ])
 }
 
 /// A stored set's key as length-prefixed text, each component `<byte length>:<bytes>` as `keepalive_aad` writes
 /// them, in this order: `key_id`, `key_generation` in decimal, `session_id`, the kind's word, `agent_id`, the literal
 /// `facts`. A sealed set moved to another row of the table, or into a recipe body's column, fails to open.
 pub(crate) fn facts_aad(key: &FactsKey) -> String {
-    let generation = key.key_generation.to_string();
-    [
-        key.key_id.as_str(),
-        generation.as_str(),
-        key.session_id.as_str(),
+    length_prefixed(&[
+        &key.key_id,
+        &key.key_generation.to_string(),
+        &key.session_id,
         key.kind.as_str(),
-        key.agent_id.as_str(),
+        &key.agent_id,
         "facts",
-    ]
-    .iter()
-    .map(|part| format!("{}:{part}", part.len()))
-    .collect()
+    ])
 }
 
 impl Store {
@@ -209,10 +200,10 @@ impl Store {
     /// leaves of a row. A batch names a set in both halves where the engine filed it behind the leave of its kind, and
     /// such a set stands, since the leaves run ahead of the writes. The engine names no other row in both halves of a
     /// batch. A removed session deletes no set of reported facts. A warming row that keeps its body leaves the stored
-    /// blob and nonce as they are, and one that clears it leaves neither. Each session row that carries `seen_at`
-    /// stamps that instant on each stored set of its session, a set that the same batch writes among them. A set is
-    /// written only under a key that the registry holds with the set's generation, and a set that this condition
-    /// refuses fails no save.
+    /// blob and nonce as they are, and one that clears it leaves neither. Each entry of `session_reports` stamps its
+    /// instant on each stored set of its session, a set that the same batch writes among them. A set is written only
+    /// under a key that the registry holds with the set's generation, and a set that this condition refuses fails no
+    /// save.
     pub fn save_engine_state(&self, batch: &EngineBatch) -> Result<(), StoreError> {
         // Sealed before the connection is taken, so a large batch holds no other writer behind the cipher.
         let mut sealed_facts = Vec::with_capacity(batch.facts.len());
@@ -237,51 +228,59 @@ impl Store {
         }
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        for (key_id, key_generation, session_id) in &batch.removed_sessions {
-            tx.execute(
+        {
+            let mut sessions = tx.prepare_cached(
                 "DELETE FROM companion_sessions WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3",
-                params![key_id, key_generation, session_id],
             )?;
-            tx.execute(
+            let mut agents = tx.prepare_cached(
                 "DELETE FROM companion_agents WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3",
-                params![key_id, key_generation, session_id],
             )?;
-            tx.execute(
+            let mut warming_agents = tx.prepare_cached(
                 "DELETE FROM keepalive_agents WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3",
-                params![key_id, key_generation, session_id],
             )?;
+            for (key_id, key_generation, session_id) in &batch.removed_sessions {
+                sessions.execute(params![key_id, key_generation, session_id])?;
+                agents.execute(params![key_id, key_generation, session_id])?;
+                warming_agents.execute(params![key_id, key_generation, session_id])?;
+            }
         }
-        for (key_id, key_generation, session_id, agent_id) in &batch.removed_agents {
-            tx.execute(
+        {
+            let mut agents = tx.prepare_cached(
                 "DELETE FROM companion_agents \
                  WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND agent_id = ?4",
-                params![key_id, key_generation, session_id, agent_id],
             )?;
-            tx.execute(
+            let mut warming_agents = tx.prepare_cached(
                 "DELETE FROM keepalive_agents \
                  WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND agent_id = ?4",
-                params![key_id, key_generation, session_id, agent_id],
             )?;
+            for (key_id, key_generation, session_id, agent_id) in &batch.removed_agents {
+                agents.execute(params![key_id, key_generation, session_id, agent_id])?;
+                warming_agents.execute(params![key_id, key_generation, session_id, agent_id])?;
+            }
         }
-        for (key_id, key_generation, session_id, kind) in &batch.removed_fact_kinds {
-            tx.execute(
+        {
+            let mut stmt = tx.prepare_cached(
                 "DELETE FROM companion_facts \
                  WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND kind = ?4",
-                params![key_id, key_generation, session_id, kind],
             )?;
+            for (key_id, key_generation, session_id, kind) in &batch.removed_fact_kinds {
+                stmt.execute(params![key_id, key_generation, session_id, kind])?;
+            }
         }
-        for key in &batch.removed_facts {
-            tx.execute(
+        {
+            let mut stmt = tx.prepare_cached(
                 "DELETE FROM companion_facts \
                  WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND kind = ?4 AND agent_id = ?5",
-                params![
+            )?;
+            for key in &batch.removed_facts {
+                stmt.execute(params![
                     key.key_id,
                     key.key_generation,
                     key.session_id,
                     key.kind,
                     key.agent_id
-                ],
-            )?;
+                ])?;
+            }
         }
         {
             let mut stmt = tx.prepare_cached(
@@ -393,17 +392,10 @@ impl Store {
         {
             let mut stmt = tx.prepare_cached(
                 "UPDATE companion_facts SET seen_at = ?4 \
-                 WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3",
+                 WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND seen_at <> ?4",
             )?;
-            for row in &batch.sessions {
-                if let Some(seen_at) = row.seen_at {
-                    stmt.execute(params![
-                        row.key_id,
-                        row.key_generation,
-                        row.session_id,
-                        seen_at
-                    ])?;
-                }
+            for ((key_id, key_generation, session_id), seen_at) in &batch.session_reports {
+                stmt.execute(params![key_id, key_generation, session_id, seen_at])?;
             }
         }
         if let Some(day) = batch.purge_counters_before {
@@ -449,7 +441,6 @@ impl Store {
                     record_version: r.get(3)?,
                     payload: r.get(4)?,
                     updated_at: r.get(5)?,
-                    seen_at: None,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -552,7 +543,7 @@ impl Store {
         let mut stored: Vec<Sealed> = Vec::new();
         {
             let conn = self.conn.lock().expect(LOCK_POISONED);
-            let mut statement = conn.prepare(
+            let mut statement = conn.prepare_cached(
                 "SELECT kind, agent_id, record_version, facts_sealed, facts_nonce FROM companion_facts \
                  WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 ORDER BY kind, agent_id",
             )?;
