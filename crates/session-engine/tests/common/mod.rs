@@ -1028,17 +1028,36 @@ pub fn lifecycle_of(engine: &Engine, session_id: &str, agent: &str) -> Option<Li
         .and_then(|s| s.lifecycles.get(agent).copied())
 }
 
-/// The saved payload of `agent` on `session_id` as the registry holds it now, with no flush of its own.
+/// The saved payload of `agent` on `session_id` as the registry holds it now, with no flush of its own: the members of
+/// the agent's row of the session engine and of its row of the warming in one object, since the two share no member.
+/// A half of the agent's rows alone panics rather than answer half an object, where a read of a member the missing row
+/// holds would compare `null` with `null`.
 pub fn saved_of(store: &Store, session_id: &str, agent: &str) -> Option<serde_json::Value> {
-    store
-        .load_keepalive()
-        .unwrap()
-        .1
+    let state = store.load_engine_state().unwrap();
+    let held = |key_id: &str, session: &str, agent_id: &str| {
+        key_id == "desktop" && session == session_id && agent_id == agent
+    };
+    let companion = state
+        .agents
         .into_iter()
-        .find(|row| {
-            row.key_id == "desktop" && row.session_id == session_id && row.agent_id == agent
-        })
-        .map(|row| serde_json::from_str(&row.payload).unwrap())
+        .find(|row| held(&row.key_id, &row.session_id, &row.agent_id));
+    let warming = state
+        .warming_agents
+        .into_iter()
+        .find(|row| held(&row.key_id, &row.session_id, &row.agent_id));
+    match (companion, warming) {
+        (None, None) => None,
+        (Some(_), None) => panic!("keepalive_agents holds no row of {agent} on {session_id}"),
+        (None, Some(_)) => panic!("companion_agents holds no row of {agent} on {session_id}"),
+        (Some(companion), Some(warming)) => {
+            let mut joined: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&companion.payload).unwrap();
+            let warming: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&warming.payload).unwrap();
+            joined.extend(warming);
+            Some(serde_json::Value::Object(joined))
+        }
+    }
 }
 
 /// A report lands on the router task's own queue, and the state it changes is visible once the handle says so.

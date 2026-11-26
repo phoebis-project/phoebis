@@ -8,6 +8,7 @@ pub(crate) mod gate;
 pub(crate) mod guard;
 pub(crate) mod idle;
 pub(crate) mod observation;
+pub(crate) mod persist;
 pub(crate) mod probe;
 pub(crate) mod recipe;
 pub(crate) mod requests;

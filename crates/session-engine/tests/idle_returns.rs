@@ -322,9 +322,9 @@ async fn two_windows_closing_on_two_utc_days_write_two_rows_per_bucket() {
     r.engine.flush_persisted().await;
     let rows: Vec<(i64, u32, u64, u64)> =
         r.h.store
-            .load_keepalive()
+            .load_engine_state()
             .unwrap()
-            .2
+            .counters
             .into_iter()
             .map(|row| (row.day, row.bucket, row.reached, row.returned))
             .collect();
@@ -433,9 +433,9 @@ async fn a_day_past_the_retention_leaves_at_the_roll_and_stays_gone_after_a_save
     r.engine.flush_persisted().await;
     let saved: BTreeSet<i64> =
         r.h.store
-            .load_keepalive()
+            .load_engine_state()
             .unwrap()
-            .2
+            .counters
             .into_iter()
             .map(|row| row.day)
             .collect();

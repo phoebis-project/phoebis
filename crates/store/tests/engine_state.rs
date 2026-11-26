@@ -1,11 +1,11 @@
-//! The keepalive engine's rows: four tables in one transaction, and the retained prompt and the reported facts sealed
-//! under the storage key and bound to the row they were written for.
+//! The engine's rows: five tables in one transaction, and the retained prompt and the reported facts sealed under the
+//! storage key and bound to the row they were written for.
 
-use phoebis_store::keepalive::BodyWrite;
+use phoebis_store::engine_state::BodyWrite;
 use phoebis_store::{
-    keepalive_aad, ApiKeyRow, CompanionPermissions, FactsKey, FactsKind, FactsRow, IdleReturnsRow,
-    KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow, KeyFeatureAccounts, PoolRow, RulesMode,
-    StorageKey, Store,
+    keepalive_aad, ApiKeyRow, CompanionAgentRow, CompanionPermissions, CompanionSessionRow,
+    EngineBatch, EngineState, FactsKey, FactsKind, FactsRow, IdleReturnsRow, KeepaliveAgentRow,
+    KeyFeatureAccounts, PoolRow, RulesMode, StorageKey, Store,
 };
 
 /// The wall clock, for a case that reads no stamp.
@@ -16,8 +16,8 @@ fn wall() -> phoebis_store::Clock {
 const PROMPT: &[u8] =
     br#"{"system":"a private prompt the store must never hold in the clear","messages":[]}"#;
 
-fn session(key_generation: i64, session_id: &str) -> KeepaliveSessionRow {
-    KeepaliveSessionRow {
+fn session(key_generation: i64, session_id: &str) -> CompanionSessionRow {
+    CompanionSessionRow {
         key_id: "k".into(),
         key_generation,
         session_id: session_id.into(),
@@ -51,7 +51,7 @@ fn agent(
     }
 }
 
-/// A written row as `load_keepalive` answers it, which reads every body back as kept.
+/// A written row as `load_engine_state` answers it, which reads every body back as kept.
 fn as_loaded(row: &KeepaliveAgentRow) -> KeepaliveAgentRow {
     KeepaliveAgentRow {
         body_write: BodyWrite::Keep,
@@ -59,26 +59,23 @@ fn as_loaded(row: &KeepaliveAgentRow) -> KeepaliveAgentRow {
     }
 }
 
-/// Every row in primary-key order, as `load_keepalive` answers them.
+/// Every row in primary-key order, as `load_engine_state` answers them, one list per table.
 fn sorted(
-    mut rows: (
-        Vec<KeepaliveSessionRow>,
-        Vec<KeepaliveAgentRow>,
-        Vec<IdleReturnsRow>,
-    ),
+    mut rows: EngineState,
 ) -> (
-    Vec<KeepaliveSessionRow>,
+    Vec<CompanionSessionRow>,
+    Vec<CompanionAgentRow>,
     Vec<KeepaliveAgentRow>,
     Vec<IdleReturnsRow>,
 ) {
-    rows.0.sort_by(|a, b| {
+    rows.sessions.sort_by(|a, b| {
         (&a.key_id, a.key_generation, &a.session_id).cmp(&(
             &b.key_id,
             b.key_generation,
             &b.session_id,
         ))
     });
-    rows.1.sort_by(|a, b| {
+    rows.agents.sort_by(|a, b| {
         (&a.key_id, a.key_generation, &a.session_id, &a.agent_id).cmp(&(
             &b.key_id,
             b.key_generation,
@@ -86,9 +83,22 @@ fn sorted(
             &b.agent_id,
         ))
     });
-    rows.2
+    rows.warming_agents.sort_by(|a, b| {
+        (&a.key_id, a.key_generation, &a.session_id, &a.agent_id).cmp(&(
+            &b.key_id,
+            b.key_generation,
+            &b.session_id,
+            &b.agent_id,
+        ))
+    });
+    rows.counters
         .sort_by(|a, b| (&a.pool_id, a.day, a.bucket).cmp(&(&b.pool_id, b.day, b.bucket)));
-    rows
+    (
+        rows.sessions,
+        rows.agents,
+        rows.warming_agents,
+        rows.counters,
+    )
 }
 
 /// The sealed blob and nonce of one agent row, read past the store.
@@ -122,12 +132,12 @@ fn set_blob(
     .unwrap();
 }
 
-/// The body `load_keepalive` opened for one agent row.
+/// The body `load_engine_state` opened for one agent row.
 fn opened(store: &Store, generation: i64, session: &str, agent: &str) -> Option<Vec<u8>> {
     store
-        .load_keepalive()
+        .load_engine_state()
         .unwrap()
-        .1
+        .warming_agents
         .into_iter()
         .find(|row| {
             row.key_generation == generation && row.session_id == session && row.agent_id == agent
@@ -147,14 +157,15 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
     let store = Store::open(&path, &StorageKey::generate(), wall()).unwrap();
     // Two pairs of identity tuples whose plain concatenation would collide: `s:x` and `y` against `s` and `x:y`,
     // and generation 1 with session `1:s` against generation 11 with session `s`.
-    let batch = KeepaliveBatch {
+    let batch = EngineBatch {
         sessions: vec![
             session(1, "s:x"),
             session(1, "s"),
             session(1, "1:s"),
             session(11, "s"),
         ],
-        agents: vec![
+        agents: Vec::new(),
+        warming_agents: vec![
             agent(1, "s:x", "y", Some(PROMPT)),
             agent(1, "s", "x:y", Some(b"the second body")),
             agent(1, "s", "main", None),
@@ -184,14 +195,15 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
         removed_facts: Vec::new(),
         removed_fact_kinds: Vec::new(),
     };
-    store.save_keepalive(&batch).unwrap();
+    store.save_engine_state(&batch).unwrap();
     assert_eq!(
-        sorted(store.load_keepalive().unwrap()),
-        sorted((
-            batch.sessions.clone(),
-            batch.agents.iter().map(as_loaded).collect(),
-            batch.counters.clone()
-        )),
+        sorted(store.load_engine_state().unwrap()),
+        sorted(EngineState {
+            sessions: batch.sessions.clone(),
+            agents: batch.agents.clone(),
+            warming_agents: batch.warming_agents.iter().map(as_loaded).collect(),
+            counters: batch.counters.clone()
+        }),
         "every row reads back as it was written, each body opened"
     );
 
@@ -232,8 +244,8 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
     let mut replaced = agent(11, "s", "a", Some(b"a newer body"));
     replaced.payload = r#"{"id":"a","newer":true}"#.into();
     store
-        .save_keepalive(&KeepaliveBatch {
-            agents: vec![replaced.clone()],
+        .save_engine_state(&EngineBatch {
+            warming_agents: vec![replaced.clone()],
             removed_sessions: vec![("k".into(), 1, "s:x".into())],
             removed_agents: vec![("k".into(), 1, "s".into(), "x:y".into())],
             counters: vec![IdleReturnsRow {
@@ -243,10 +255,10 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
                 reached: 5,
                 returned: 2,
             }],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
-    let (sessions, agents, counters) = sorted(store.load_keepalive().unwrap());
+    let (sessions, _, agents, counters) = sorted(store.load_engine_state().unwrap());
     assert_eq!(
         sessions
             .iter()
@@ -285,18 +297,18 @@ fn counter(pool_id: &str, day: i64, bucket: u32, reached: u64, returned: u64) ->
 fn the_idle_return_counters_keep_a_row_per_pool_day_and_bucket_and_load_in_that_order() {
     let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             counters: vec![
                 counter("main", 11, 2, 5, 2),
                 counter("main", 10, 2, 3, 1),
                 counter("main", 12, 0, 1, 0),
                 counter("aux", 10, 1, 4, 4),
             ],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     assert_eq!(
-        store.load_keepalive().unwrap().2,
+        store.load_engine_state().unwrap().counters,
         [
             counter("aux", 10, 1, 4, 4),
             counter("main", 10, 2, 3, 1),
@@ -306,13 +318,13 @@ fn the_idle_return_counters_keep_a_row_per_pool_day_and_bucket_and_load_in_that_
         "one bucket of one pool on two days is two rows, read by pool, day and bucket"
     );
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             counters: vec![counter("main", 11, 2, 6, 3)],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     assert_eq!(
-        store.load_keepalive().unwrap().2,
+        store.load_engine_state().unwrap().counters,
         [
             counter("aux", 10, 1, 4, 4),
             counter("main", 10, 2, 3, 1),
@@ -327,39 +339,39 @@ fn the_idle_return_counters_keep_a_row_per_pool_day_and_bucket_and_load_in_that_
 fn a_save_carrying_a_purge_drops_the_counters_of_the_days_before_its_day_and_keeps_that_day() {
     let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             counters: vec![
                 counter("aux", 10, 1, 4, 4),
                 counter("main", 10, 2, 3, 1),
                 counter("main", 11, 2, 5, 2),
                 counter("main", 12, 0, 1, 0),
             ],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             counters: vec![counter("main", 11, 2, 6, 3)],
             purge_counters_before: Some(11),
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     assert_eq!(
-        store.load_keepalive().unwrap().2,
+        store.load_engine_state().unwrap().counters,
         [counter("main", 11, 2, 6, 3), counter("main", 12, 0, 1, 0)],
         "every pool's rows before the day leave, and the day itself stays with the batch's own row"
     );
-    let purge = KeepaliveBatch {
+    let purge = EngineBatch {
         purge_counters_before: Some(12),
-        ..KeepaliveBatch::default()
+        ..EngineBatch::default()
     };
     assert!(
         !purge.is_empty(),
         "a batch carrying the purge alone still has a write to make"
     );
-    store.save_keepalive(&purge).unwrap();
+    store.save_engine_state(&purge).unwrap();
     assert_eq!(
-        store.load_keepalive().unwrap().2,
+        store.load_engine_state().unwrap().counters,
         [counter("main", 12, 0, 1, 0)],
         "the purge alone drops the days before its own"
     );
@@ -373,10 +385,10 @@ fn an_upsert_keeps_the_stored_body_unless_it_seals_a_new_one_and_a_clear_removes
     let path = dir.path().join("router.sqlite");
     let store = Store::open(&path, &StorageKey::generate(), wall()).unwrap();
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             sessions: vec![session(1, "s")],
-            agents: vec![agent(1, "s", "main", Some(PROMPT))],
-            ..KeepaliveBatch::default()
+            warming_agents: vec![agent(1, "s", "main", Some(PROMPT))],
+            ..EngineBatch::default()
         })
         .unwrap();
     let conn = rusqlite::Connection::open(&path).unwrap();
@@ -387,9 +399,9 @@ fn an_upsert_keeps_the_stored_body_unless_it_seals_a_new_one_and_a_clear_removes
     kept.body_write = BodyWrite::Keep;
     kept.payload = r#"{"id":"main","newer":true}"#.into();
     store
-        .save_keepalive(&KeepaliveBatch {
-            agents: vec![kept],
-            ..KeepaliveBatch::default()
+        .save_engine_state(&EngineBatch {
+            warming_agents: vec![kept],
+            ..EngineBatch::default()
         })
         .unwrap();
     assert_eq!(
@@ -397,7 +409,7 @@ fn an_upsert_keeps_the_stored_body_unless_it_seals_a_new_one_and_a_clear_removes
         sealed,
         "the sealed body and its nonce stay as stored"
     );
-    let (_, agents, _) = store.load_keepalive().unwrap();
+    let agents = store.load_engine_state().unwrap().warming_agents;
     assert_eq!(
         (agents[0].payload.as_str(), agents[0].body.as_deref()),
         (r#"{"id":"main","newer":true}"#, Some(PROMPT)),
@@ -407,9 +419,9 @@ fn an_upsert_keeps_the_stored_body_unless_it_seals_a_new_one_and_a_clear_removes
     let mut cleared = agent(1, "s", "main", None);
     cleared.body_write = BodyWrite::Clear;
     store
-        .save_keepalive(&KeepaliveBatch {
-            agents: vec![cleared],
-            ..KeepaliveBatch::default()
+        .save_engine_state(&EngineBatch {
+            warming_agents: vec![cleared],
+            ..EngineBatch::default()
         })
         .unwrap();
     let stored: (Option<Vec<u8>>, Option<Vec<u8>>, i64) = conn
@@ -515,14 +527,14 @@ fn sealed_sets_swapped_between_two_rows_of_one_session_read_as_no_fact() {
     let project: &[u8] = br#"{"branch":"chart-room","cwd":"/work/lighthouse"}"#;
     let title: &[u8] = br#"{"title":"Map the reef"}"#;
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             facts: vec![
                 set(FactsKind::Agents, "a1", tide),
                 set(FactsKind::Agents, "a2", buoy),
                 set(FactsKind::Project, "", project),
                 set(FactsKind::Title, "", title),
             ],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     let values = || -> Vec<Option<Vec<u8>>> {
@@ -596,7 +608,7 @@ fn an_agents_set_stamped_at_the_cutoff_stays_and_one_a_millisecond_before_it_lea
     let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     let generation = inserted_key(&store);
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             facts: vec![
                 facts_set(
                     generation,
@@ -615,7 +627,7 @@ fn an_agents_set_stamped_at_the_cutoff_stays_and_one_a_millisecond_before_it_lea
                     999_999,
                 ),
             ],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     store
@@ -633,7 +645,7 @@ fn a_sessions_title_leaves_at_the_session_cutoff_and_its_agents_set_stays() {
     let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     let generation = inserted_key(&store);
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             facts: vec![
                 facts_set(
                     generation,
@@ -668,7 +680,7 @@ fn a_sessions_title_leaves_at_the_session_cutoff_and_its_agents_set_stays() {
                     1_000_000,
                 ),
             ],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     store
@@ -690,7 +702,7 @@ fn a_save_stamps_each_set_of_the_session_whose_row_it_writes_and_no_other_sessio
     let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
     let generation = inserted_key(&store);
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             facts: vec![
                 facts_set(
                     generation,
@@ -709,12 +721,12 @@ fn a_save_stamps_each_set_of_the_session_whose_row_it_writes_and_no_other_sessio
                     1_000,
                 ),
             ],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     store
-        .save_keepalive(&KeepaliveBatch {
-            sessions: vec![KeepaliveSessionRow {
+        .save_engine_state(&EngineBatch {
+            sessions: vec![CompanionSessionRow {
                 seen_at: Some(2_000),
                 ..session(generation, "s1")
             }],
@@ -726,7 +738,7 @@ fn a_save_stamps_each_set_of_the_session_whose_row_it_writes_and_no_other_sessio
                 br#"{"name":"winch-tender"}"#,
                 1_500,
             )],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     // Each cutoff lies a millisecond past a filing instant, so a set stands only where the stamp moved it to 2,000.

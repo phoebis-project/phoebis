@@ -24,8 +24,8 @@ use phoebis_ledger::{
 };
 use phoebis_profile::fixtures::BodyFixture;
 use phoebis_store::{
-    AccountKind, BudgetPeriod, FactsKey, FactsKind, FactsRow, KeepaliveBatch, MemberWrite,
-    StorageKey, Store,
+    AccountKind, BudgetPeriod, EngineBatch, FactsKey, FactsKind, FactsRow, MemberWrite, StorageKey,
+    Store,
 };
 use tower::ServiceExt;
 
@@ -8007,7 +8007,7 @@ fn store_harbor_set(
     seen_at: i64,
 ) {
     h.store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             facts: vec![FactsRow {
                 key: FactsKey {
                     key_id: "harbor".into(),
@@ -8020,7 +8020,7 @@ fn store_harbor_set(
                 value: value.as_bytes().to_vec(),
                 seen_at,
             }],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
 }

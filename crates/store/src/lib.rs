@@ -132,7 +132,7 @@ mod schema;
 
 pub mod backup;
 pub mod crypto;
-pub mod keepalive;
+pub mod engine_state;
 pub mod migrations;
 pub mod permissions;
 
@@ -162,9 +162,9 @@ pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, CredentialStanding, LastAttempt,
     NewBundle, OutcomeWord, PendingAttempt, RefreshHistory, ResolvedAttempt, Secret, Settled,
 };
-pub use keepalive::{
-    keepalive_aad, FactsKey, FactsKind, FactsRow, IdleReturnsRow, KeepaliveAgentRow,
-    KeepaliveBatch, KeepaliveSessionRow, StoredFacts,
+pub use engine_state::{
+    keepalive_aad, CompanionAgentRow, CompanionSessionRow, EngineBatch, EngineState, FactsKey,
+    FactsKind, FactsRow, IdleReturnsRow, KeepaliveAgentRow, StoredFacts,
 };
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use registry::{
@@ -1336,7 +1336,7 @@ fn api_key_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
 
 fn recipe_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
     Ok(SealedRow {
-        aad: keepalive::keepalive_aad(
+        aad: engine_state::keepalive_aad(
             &row.get::<_, String>(0)?,
             row.get(1)?,
             &row.get::<_, String>(2)?,
@@ -1350,7 +1350,7 @@ fn recipe_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
 /// A stored kind word outside `FactsKind` fails the row's conversion, so the proof and the scan fail rather than
 /// judge a row under a key they cannot name.
 fn facts_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
-    let key = keepalive::FactsKey {
+    let key = engine_state::FactsKey {
         key_id: row.get(0)?,
         key_generation: row.get(1)?,
         session_id: row.get(2)?,
@@ -1358,7 +1358,7 @@ fn facts_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SealedRow> {
         agent_id: row.get(4)?,
     };
     Ok(SealedRow {
-        aad: keepalive::facts_aad(&key),
+        aad: engine_state::facts_aad(&key),
         nonce: row.get(5)?,
         sealed: row.get(6)?,
     })
@@ -1649,8 +1649,8 @@ mod tests {
         let key = StorageKey::generate();
         let store = Store::open(&db, &key, wall()).unwrap();
         store
-            .save_keepalive(&KeepaliveBatch {
-                agents: vec![KeepaliveAgentRow {
+            .save_engine_state(&EngineBatch {
+                warming_agents: vec![KeepaliveAgentRow {
                     key_id: "desktop".into(),
                     key_generation: 1,
                     session_id: "s-1".into(),
@@ -1658,14 +1658,14 @@ mod tests {
                     record_version: 1,
                     payload: "{}".into(),
                     body: None,
-                    body_write: keepalive::BodyWrite::Seal(b"{\"messages\":[]}".to_vec()),
+                    body_write: engine_state::BodyWrite::Seal(b"{\"messages\":[]}".to_vec()),
                     headers: "[]".into(),
                     body_size: 15,
                     dispatched_ms: None,
                     fast: false,
                     updated_at: 1_800_000_000_000,
                 }],
-                ..KeepaliveBatch::default()
+                ..EngineBatch::default()
             })
             .unwrap();
         store.debug_drop_canary().unwrap();

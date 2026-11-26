@@ -897,7 +897,14 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     // The file as a version-2 build left it.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "DROP TABLE companion_facts;
+        "DROP TABLE companion_agents;
+         DROP TABLE companion_sessions;
+         CREATE TABLE keepalive_sessions (
+           key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL,
+           record_version INTEGER NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL,
+           PRIMARY KEY (key_id, key_generation, session_id)
+         );
+         DROP TABLE companion_facts;
          ALTER TABLE pins DROP COLUMN account_bound;
          ALTER TABLE pins DROP COLUMN marked_source;
          ALTER TABLE cooldowns DROP COLUMN spend_share;

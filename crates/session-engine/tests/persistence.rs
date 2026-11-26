@@ -17,7 +17,7 @@ use phoebis_session_engine::{
     Reason, LEASE_MS,
 };
 use phoebis_store::{
-    FactsKind, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow,
+    CompanionSessionRow, EngineBatch, FactsKind, IdleReturnsRow, KeepaliveAgentRow,
 };
 use serde_json::{json, Value};
 
@@ -38,21 +38,45 @@ fn registry(r: &Rig) -> rusqlite::Connection {
     conn
 }
 
-fn saved_sessions(r: &Rig) -> Vec<KeepaliveSessionRow> {
-    r.h.store.load_keepalive().unwrap().0
+fn saved_sessions(r: &Rig) -> Vec<CompanionSessionRow> {
+    r.h.store.load_engine_state().unwrap().sessions
 }
 
+/// The warming's rows of the saved agents, each beside its row of the session engine, so a count of the rows or a row
+/// that left holds for both of an agent's rows.
 fn saved_agents(r: &Rig) -> Vec<KeepaliveAgentRow> {
-    r.h.store.load_keepalive().unwrap().1
+    let state = r.h.store.load_engine_state().unwrap();
+    assert_eq!(
+        state
+            .agents
+            .iter()
+            .map(|row| (
+                &row.key_id,
+                row.key_generation,
+                &row.session_id,
+                &row.agent_id
+            ))
+            .collect::<Vec<_>>(),
+        state
+            .warming_agents
+            .iter()
+            .map(|row| (
+                &row.key_id,
+                row.key_generation,
+                &row.session_id,
+                &row.agent_id
+            ))
+            .collect::<Vec<_>>(),
+        "each saved agent has its row of the session engine and its row of the warming"
+    );
+    state.warming_agents
 }
 
-/// One member of the saved payload of `agent` on `session`.
+/// One member of the saved payload of `agent` on `session`, from the row that holds it.
 fn saved_field(r: &Rig, session: &str, agent: &str, field: &str) -> serde_json::Value {
-    let row = saved_agents(r)
-        .into_iter()
-        .find(|row| row.session_id == session && row.agent_id == agent)
-        .unwrap_or_else(|| panic!("no saved row for {session} {agent}"));
-    serde_json::from_str::<serde_json::Value>(&row.payload).unwrap()[field].clone()
+    saved_of(&r.h.store, session, agent)
+        .unwrap_or_else(|| panic!("no saved row for {session} {agent}"))[field]
+        .clone()
 }
 
 /// The probes the registry holds unanswered for `agent` on `session`: the open chain's and those kept for the next
@@ -182,12 +206,14 @@ async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_lo
     let agents = saved_agents(&r);
     let main = &agents[0];
     let payload: serde_json::Value = serde_json::from_str(&main.payload).unwrap();
+    let lifecycle: serde_json::Value =
+        serde_json::from_str(&r.h.store.load_engine_state().unwrap().agents[0].payload).unwrap();
     assert_eq!(
         (
-            payload["state"].as_str(),
-            payload["park_kind"].as_str(),
-            payload["deadline"].as_i64(),
-            payload["park_began"].as_i64(),
+            lifecycle["state"].as_str(),
+            lifecycle["park_kind"].as_str(),
+            lifecycle["deadline"].as_i64(),
+            lifecycle["park_began"].as_i64(),
         ),
         (
             Some("parked"),
@@ -202,7 +228,7 @@ async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_lo
             payload["credited_today"].as_u64(),
             payload["counters_day"].as_i64(),
             payload["last_probe_at"].as_i64(),
-            payload["last_presence_at"].as_i64(),
+            lifecycle["last_presence_at"].as_i64(),
         ),
         (Some(1), Some(1), Some(0), Some(start + 270_000), Some(seen)),
         "the counts are the day before the last activity's"
@@ -520,9 +546,9 @@ fn day_counts(engine: &Engine, day: i64) -> ([u64; 10], [u64; 10]) {
 /// The rows of each UTC day the registry holds.
 fn saved_days(r: &Rig) -> BTreeSet<i64> {
     r.h.store
-        .load_keepalive()
+        .load_engine_state()
         .unwrap()
-        .2
+        .counters
         .into_iter()
         .map(|row| row.day)
         .collect()
@@ -574,7 +600,7 @@ async fn a_flush_after_the_purge_landed_carries_it_no_more() {
         "the save carried the purge"
     );
     r.h.store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             counters: vec![IdleReturnsRow {
                 pool_id: "main".into(),
                 day: dropped,
@@ -582,7 +608,7 @@ async fn a_flush_after_the_purge_landed_carries_it_no_more() {
                 reached: 1,
                 returned: 0,
             }],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     r.engine.flush_persisted().await;
@@ -1262,8 +1288,8 @@ async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_
     let parked = state_of(&r, "main", "parked");
     report(&mut r, parked).await.unwrap();
     conn.execute_batch(
-        "CREATE TRIGGER refuse_insert BEFORE INSERT ON keepalive_sessions BEGIN SELECT RAISE(ABORT, 'refused'); END; \
-         CREATE TRIGGER refuse_update BEFORE UPDATE ON keepalive_sessions BEGIN SELECT RAISE(ABORT, 'refused'); END; \
+        "CREATE TRIGGER refuse_insert BEFORE INSERT ON companion_sessions BEGIN SELECT RAISE(ABORT, 'refused'); END; \
+         CREATE TRIGGER refuse_update BEFORE UPDATE ON companion_sessions BEGIN SELECT RAISE(ABORT, 'refused'); END; \
          COMMIT;",
     )
     .unwrap();
@@ -1823,9 +1849,9 @@ async fn a_saved_session_without_its_slot_member_holds_its_slot_where_it_carries
         .expect("this build saves the member");
     row.payload = payload.to_string();
     r.h.store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             sessions: vec![row],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     let second = r
@@ -2179,7 +2205,10 @@ async fn a_saved_released_record_without_a_leave_loads_with_none_and_stays() {
     agent_start(&mut r, "sub").await.unwrap();
     r.state("sub", "released").await;
     r.engine.flush_persisted().await;
-    let (sessions, mut agents) = (saved_sessions(&r), saved_agents(&r));
+    let (sessions, mut agents) = (
+        saved_sessions(&r),
+        r.h.store.load_engine_state().unwrap().agents,
+    );
     for row in agents.iter_mut().filter(|row| row.agent_id == "sub") {
         let mut payload: serde_json::Value = serde_json::from_str(&row.payload).unwrap();
         payload
@@ -2189,10 +2218,10 @@ async fn a_saved_released_record_without_a_leave_loads_with_none_and_stays() {
         row.payload = payload.to_string();
     }
     r.h.store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             sessions,
             agents,
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     let second = r.restart().await;
@@ -2364,10 +2393,10 @@ async fn a_flush_saves_the_class_of_a_seats_records_and_a_payload_from_before_th
         "the save writes the class the selection and the probe's answer carried"
     );
     r.h.store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             sessions: open_sessions,
-            agents: from_before(&open_agents, &["/current", "/unanswered/0"]),
-            ..KeepaliveBatch::default()
+            warming_agents: from_before(&open_agents, &["/current", "/unanswered/0"]),
+            ..EngineBatch::default()
         })
         .unwrap();
     let older = r.restart().await;
@@ -2400,10 +2429,10 @@ async fn a_flush_saves_the_class_of_a_seats_records_and_a_payload_from_before_th
         "the restarted engine's view of the agent equals the first engine's"
     );
     r.h.store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             sessions,
-            agents: from_before(&agents, &["/kept/0"]),
-            ..KeepaliveBatch::default()
+            warming_agents: from_before(&agents, &["/kept/0"]),
+            ..EngineBatch::default()
         })
         .unwrap();
     let third = r.restart().await;
@@ -2429,10 +2458,10 @@ async fn a_saved_probe_whose_speed_reads_null_restores_and_settles_at_standard()
     payload["unanswered"][0]["usage"]["speed"] = serde_json::Value::Null;
     agents[0].payload = payload.to_string();
     r.h.store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             sessions,
-            agents,
-            ..KeepaliveBatch::default()
+            warming_agents: agents,
+            ..EngineBatch::default()
         })
         .unwrap();
     r.engine = r.restart().await;
@@ -2593,11 +2622,14 @@ async fn dropped_at_the_load_with_one_line(r: Rig, kept: serde_json::Value) {
     agents[0].payload = payload.to_string();
     sessions[0].record_version = 2;
     agents[0].record_version = 2;
+    let mut lifecycles = r.h.store.load_engine_state().unwrap().agents;
+    lifecycles[0].record_version = 2;
     r.h.store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             sessions,
-            agents,
-            ..KeepaliveBatch::default()
+            agents: lifecycles,
+            warming_agents: agents,
+            ..EngineBatch::default()
         })
         .unwrap();
     let captured = Captured::default();
@@ -2805,6 +2837,102 @@ async fn a_session_whose_main_agent_cannot_be_read_is_dropped_whole() {
         (saved_sessions(&r).len(), saved_agents(&r).len()),
         (0, 0),
         "and its rows, the subagent's with it, are gone"
+    );
+}
+
+#[tokio::test]
+async fn an_agent_whose_warming_row_is_of_an_older_version_leaves_with_its_other_row_and_takes_mains_session(
+) {
+    let r = rig(on_disk()).await;
+    let mut warming =
+        r.h.store
+            .load_engine_state()
+            .unwrap()
+            .warming_agents
+            .into_iter()
+            .find(|row| row.session_id == "session" && row.agent_id == "main")
+            .expect("the registration's save holds main's row");
+    warming.record_version = 2;
+    r.h.store
+        .save_engine_state(&EngineBatch {
+            warming_agents: vec![warming],
+            ..EngineBatch::default()
+        })
+        .unwrap();
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert!(
+        second.sessions().is_empty(),
+        "main goes, and its session with it"
+    );
+    let state = r.h.store.load_engine_state().unwrap();
+    assert_eq!(
+        (
+            state.sessions.len(),
+            state.agents.len(),
+            state.warming_agents.len()
+        ),
+        (0, 0, 0),
+        "the session's row and both of main's rows left the registry"
+    );
+}
+
+#[tokio::test]
+async fn an_agent_beside_main_whose_session_engine_row_is_of_an_older_version_leaves_with_its_warming_row_and_the_session_stays(
+) {
+    let mut r = rig(on_disk()).await;
+    agent_start(&mut r, "sub").await.unwrap();
+    r.engine.flush_persisted().await;
+    let mut lifecycle =
+        r.h.store
+            .load_engine_state()
+            .unwrap()
+            .agents
+            .into_iter()
+            .find(|row| row.session_id == "session" && row.agent_id == "sub")
+            .expect("the flush saved the subagent's row");
+    lifecycle.record_version = 2;
+    r.h.store
+        .save_engine_state(&EngineBatch {
+            agents: vec![lifecycle],
+            ..EngineBatch::default()
+        })
+        .unwrap();
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let state = r.h.store.load_engine_state().unwrap();
+    assert_eq!(
+        (
+            state
+                .sessions
+                .iter()
+                .map(|row| row.session_id.as_str())
+                .collect::<Vec<_>>(),
+            state
+                .agents
+                .iter()
+                .map(|row| row.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            state
+                .warming_agents
+                .iter()
+                .map(|row| row.agent_id.as_str())
+                .collect::<Vec<_>>()
+        ),
+        (vec!["session"], vec!["main"], vec!["main"]),
+        "both of the subagent's rows left the registry, and the session's row and main's two rows stand"
+    );
+    assert_eq!(
+        second
+            .sessions()
+            .into_iter()
+            .map(|view| (
+                view.session_id,
+                view.lifecycles.into_keys().collect::<Vec<_>>()
+            ))
+            .collect::<Vec<_>>(),
+        vec![("session".to_string(), vec!["main".to_string()])],
+        "the session restores with main alone"
     );
 }
 
@@ -3060,7 +3188,7 @@ async fn a_restored_park_drops_a_saved_part_its_kind_does_not_take() {
     .await
     .unwrap();
     r.engine.flush_persisted().await;
-    let saved = saved_agents(&r);
+    let saved = r.h.store.load_engine_state().unwrap().agents;
     let with_stray = |agent: &str, member: &str, at: i64| {
         let mut row = saved
             .iter()
@@ -3073,12 +3201,12 @@ async fn a_restored_park_drops_a_saved_part_its_kind_does_not_take() {
         row
     };
     r.h.store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             agents: vec![
                 with_stray("main", "wake_at", wake),
                 with_stray("worker", "deadline", deadline),
             ],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     r.engine = r.restart().await;

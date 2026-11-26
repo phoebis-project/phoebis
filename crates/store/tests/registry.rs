@@ -1,10 +1,10 @@
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Operator, Selector, Subject};
-use phoebis_store::keepalive::BodyWrite;
+use phoebis_store::engine_state::BodyWrite;
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, AccountUpdate,
     Affinity, AffinityChain, AffinityMode, ApiKeyRow, AttachmentSubject, BudgetPeriod, CanaryRead,
-    Cancellation, CompanionPermissions, FactsKey, FactsKind, FactsRow, Failover, FeatureOverride,
-    GuardrailAttachment, GuardrailRow, Identity, KeepaliveAgentRow, KeepaliveBatch,
+    Cancellation, CompanionPermissions, EngineBatch, FactsKey, FactsKind, FactsRow, Failover,
+    FeatureOverride, GuardrailAttachment, GuardrailRow, Identity, KeepaliveAgentRow,
     KeyFeatureAccounts, MarkSource, MemberWrite, MemoryKey, MemoryRecord, MemoryStore, ModelRule,
     NewBundle, OveragePolicy, PinBurn, PinMark, PinRow, PoolFeatureAccounts, PoolRow, PresetStamp,
     ReturnToPlan, RulesMode, Secret, SessionPlacement, ShedStamp, SlowDown, StateCause, StorageKey,
@@ -94,9 +94,20 @@ fn rename(
 }
 
 /// The eleventh step taken back on a file this build wrote, which every case that takes a file back past version 11
-/// runs first, since the step refuses its table as a duplicate on reopen.
+/// runs first, since the step refuses its three tables as duplicates on reopen. The table the step drops comes back as
+/// an earlier build left it.
 fn eleventh_step_taken_back(conn: &rusqlite::Connection) {
-    conn.execute_batch("DROP TABLE companion_facts;").unwrap();
+    conn.execute_batch(
+        "DROP TABLE companion_agents;
+         DROP TABLE companion_sessions;
+         CREATE TABLE keepalive_sessions (
+           key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL,
+           record_version INTEGER NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL,
+           PRIMARY KEY (key_id, key_generation, session_id)
+         );
+         DROP TABLE companion_facts;",
+    )
+    .unwrap();
 }
 
 /// The tenth step taken back on a file this build wrote, which every case that takes a file back past version 10
@@ -182,6 +193,55 @@ fn at_version_five(path: &std::path::Path, seed: &str) {
     conn.execute_batch("UPDATE meta SET value = '5' WHERE key = 'schema_version';")
         .unwrap();
     conn.execute_batch(seed).unwrap();
+}
+
+/// `at_version_five` with the seventh step's three columns left in place, so a reopen commits the sixth step and stops
+/// at the seventh, which refuses its first column as a duplicate. The file then holds the agent rows as the sixth step
+/// left them, which a reopen that ran through to the eleventh step would empty.
+fn at_version_five_keeping_the_seventh_steps_columns(path: &std::path::Path, seed: &str) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    eleventh_step_taken_back(&conn);
+    tenth_step_taken_back(&conn);
+    ninth_step_taken_back(&conn);
+    eighth_step_taken_back(&conn);
+    sixth_step_taken_back(&conn);
+    conn.execute_batch("UPDATE meta SET value = '5' WHERE key = 'schema_version';")
+        .unwrap();
+    conn.execute_batch(seed).unwrap();
+}
+
+#[test]
+fn a_registry_at_version_ten_that_holds_a_session_and_an_agent_opens_at_version_eleven_with_neither(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    drop(Store::open(&path, &key, wall()).unwrap());
+    // The file as a version-10 build left it, holding a session and its main agent as that build saved them.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    eleventh_step_taken_back(&conn);
+    conn.execute_batch(
+        "INSERT INTO keepalive_sessions (key_id, key_generation, session_id, record_version, payload, updated_at)
+           VALUES ('k', 1, 's', 3, '{}', 1);
+         INSERT INTO keepalive_agents (key_id, key_generation, session_id, agent_id, record_version, payload, headers,
+           body_size, fast, updated_at)
+           VALUES ('k', 1, 's', 'main', 3, '{}', '[]', 0, 0, 1);
+         UPDATE meta SET value = '10' WHERE key = 'schema_version';",
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &key, wall()).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 11);
+    let state = store.load_engine_state().unwrap();
+    assert_eq!(
+        (
+            state.sessions.len(),
+            state.agents.len(),
+            state.warming_agents.len()
+        ),
+        (0, 0, 0),
+        "the step restores no session, no agent and no prompt"
+    );
 }
 
 #[test]
@@ -279,7 +339,7 @@ fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_t
         phoebis_store::SCHEMA_VERSION
     );
     assert!(
-        store.load_keepalive().unwrap().2.is_empty(),
+        store.load_engine_state().unwrap().counters.is_empty(),
         "the all-time counters leave with their table"
     );
     let load = store.load_routing().unwrap();
@@ -350,8 +410,7 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
 }
 
 #[test]
-fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_calls_count_and_loses_the_agent_saved_under_the_released_cause(
-) {
+fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_calls_count() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
@@ -395,6 +454,40 @@ fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_c
         last_input_tokens: 1_200,
         ..saved.clone()
     };
+    {
+        let store = Store::open(&path, &key, wall()).unwrap();
+        store
+            .insert_account(&account("a", AccountKind::Oauth))
+            .unwrap();
+        store.upsert_pin(&saved).unwrap();
+        store.upsert_pin(&judged).unwrap();
+    }
+    // No build writes the flag any more, so the seed writes it onto the helper's pin as an older build saved it.
+    at_version_five(
+        &path,
+        "UPDATE pins SET last_classifier = 1 WHERE agent_id = 'helper';",
+    );
+    let store = Store::open(&path, &key, wall()).unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().pins,
+        vec![
+            PinRow {
+                last_input_tokens: 0,
+                ..judged
+            },
+            saved
+        ],
+        "the step adds the mark at its default to each pin it finds, keeps the count of the pin with the flag clear \
+         and zeroes the classifier call's count"
+    );
+}
+
+#[test]
+fn a_registry_stopped_behind_the_sixth_step_keeps_the_released_agent_and_loses_the_one_under_the_released_cause(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
     let agent = |agent_id: &str, payload: &str| KeepaliveAgentRow {
         key_id: "k".into(),
         key_generation: 1,
@@ -412,55 +505,49 @@ fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_c
     };
     {
         let store = Store::open(&path, &key, wall()).unwrap();
-        store
-            .insert_account(&account("a", AccountKind::Oauth))
-            .unwrap();
-        store.upsert_pin(&saved).unwrap();
-        store.upsert_pin(&judged).unwrap();
         // The worker's payload carries the word in its state and its wasted probe, as the companion's release
         // writes them, so a delete keyed on the word anywhere in the payload would take it as well.
         store
-            .save_keepalive(&KeepaliveBatch {
-                agents: vec![
+            .save_engine_state(&EngineBatch {
+                warming_agents: vec![
                     agent("main", r#"{"state":"idle","reason":"scheduled"}"#),
                     agent(
                         "worker",
                         r#"{"state":"released","reason":"agent_released","last_stop":"released"}"#,
                     ),
                 ],
-                ..KeepaliveBatch::default()
+                ..EngineBatch::default()
             })
             .unwrap();
     }
-    // No build writes the cause or the flag any more, so the seed writes the cause into main's payload and the flag
-    // onto the helper's pin as an older build saved them.
-    at_version_five(
+    // No build writes the cause any more, so the seed writes it into main's payload as an older build saved it.
+    at_version_five_keeping_the_seventh_steps_columns(
         &path,
         "UPDATE keepalive_agents SET payload = json_set(payload, '$.reason', 'released') \
-         WHERE agent_id = 'main'; \
-         UPDATE pins SET last_classifier = 1 WHERE agent_id = 'helper';",
+         WHERE agent_id = 'main';",
     );
-    let store = Store::open(&path, &key, wall()).unwrap();
-    assert_eq!(
-        store.load_routing().unwrap().pins,
-        vec![
-            PinRow {
-                last_input_tokens: 0,
-                ..judged
-            },
-            saved
-        ],
-        "the step adds the mark at its default to each pin it finds, keeps the count of the pin with the flag clear \
-         and zeroes the classifier call's count"
+    assert!(
+        matches!(Store::open(&path, &key, wall()), Err(StoreError::Sqlite(_))),
+        "the seventh step meets its first column and stops the open"
     );
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let version: String = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, "6", "the sixth step committed");
+    let agents: Vec<String> = conn
+        .prepare("SELECT agent_id FROM keepalive_agents ORDER BY agent_id")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
     assert_eq!(
-        store
-            .load_keepalive()
-            .unwrap()
-            .1
-            .iter()
-            .map(|row| row.agent_id.as_str())
-            .collect::<Vec<_>>(),
+        agents,
         ["worker"],
         "the agent saved under the released cause leaves and the companion's released agent stands"
     );
@@ -1398,12 +1485,12 @@ fn deleting_a_key_drops_its_stored_fact_sets_and_leaves_another_keys() {
         .unwrap()
         .created_at;
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             facts: vec![
                 title_set("back", back, "s-1", br#"{"title":"Moor the pilot boat"}"#),
                 title_set("front", front, "s-2", br#"{"title":"Paint the day marks"}"#),
             ],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     store.delete_api_key("back", "test").unwrap();
@@ -1451,12 +1538,12 @@ fn a_set_of_a_deleted_keys_generation_reaches_no_row_behind_a_re_creation_of_its
         .unwrap();
     // The batch of a save that read its sets ahead of the delete.
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             facts: vec![
                 title_set("back", first, "s-1", br#"{"title":"Coil the stern line"}"#),
                 title_set("front", front, "s-2", br#"{"title":"Trim the fog signal"}"#),
             ],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     assert_eq!(
@@ -4396,7 +4483,7 @@ fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_an
     let generation = store.insert_api_key(&desktop, "test").unwrap().created_at;
     // A stored set of reported facts, so a sequence that keeps its row leaves a sealed row the new key cannot open.
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             facts: vec![FactsRow {
                 key: FactsKey {
                     key_id: "desktop".into(),
@@ -4409,7 +4496,7 @@ fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_an
                 value: br#"{"title":"Coil the anchor rope"}"#.to_vec(),
                 seen_at: 1_800_000_000_000,
             }],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     drop(store);

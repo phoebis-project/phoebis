@@ -90,3 +90,16 @@ fn a_fresh_registry_has_the_shape_the_fixture_holds() {
     );
     assert_eq!(shape, include_str!("fixtures/registry_shape.txt"));
 }
+
+/// The baseline runs at each open, so a table that a step dropped and the baseline still declared would come back at
+/// the second.
+#[test]
+fn a_registry_opened_a_second_time_has_the_shape_the_fixture_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let key = StorageKey::generate();
+    drop(Store::open(&path, &key, wall()).unwrap());
+    drop(Store::open(&path, &key, wall()).unwrap());
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert_eq!(shape(&conn), include_str!("fixtures/registry_shape.txt"));
+}

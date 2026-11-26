@@ -1,7 +1,8 @@
-//! The keepalive engine's state on disk: its sessions, its agents with their retained prompts, the facts that a
-//! companion reports of a session and of its agents, and the idle-age counters. The engine owns the payloads' shape,
-//! and this side stores each with the version it was written under and seals the prompt and the reported facts, which
-//! are the user's own text, as the credentials are sealed.
+//! The engine's state on disk: the session engine's rows of its sessions and of their agents, the cache warming's row
+//! of each agent with the retained prompt beside it, the facts that a companion reports of a session and of its
+//! agents, and the idle-age counters. Each component owns its payloads' shape, and this side stores each payload with
+//! the version it was written under and seals the prompt and the reported facts, which are the user's own text, as the
+//! credentials are sealed.
 
 use rusqlite::params;
 
@@ -46,9 +47,9 @@ pub struct StoredFacts {
     pub value: Option<Vec<u8>>,
 }
 
-/// One session row: its identity, and the engine's versioned payload of the session's fields.
+/// One session row: its identity, and the session engine's versioned payload of the session's fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KeepaliveSessionRow {
+pub struct CompanionSessionRow {
     pub key_id: String,
     pub key_generation: i64,
     pub session_id: String,
@@ -60,6 +61,19 @@ pub struct KeepaliveSessionRow {
     pub seen_at: Option<i64>,
 }
 
+/// One agent row of the session engine: its identity, and the session engine's versioned payload of the agent's
+/// fields. The cache warming's row of the same agent stands in `KeepaliveAgentRow`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompanionAgentRow {
+    pub key_id: String,
+    pub key_generation: i64,
+    pub session_id: String,
+    pub agent_id: String,
+    pub record_version: u32,
+    pub payload: String,
+    pub updated_at: i64,
+}
+
 /// What a flush does with the stored recipe body: nothing (the body is as saved), clear it (the recipe ended), or
 /// seal a new one. A body is sealed only when it changed since the last acknowledged save.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,10 +83,10 @@ pub enum BodyWrite {
     Seal(Vec<u8>),
 }
 
-/// One agent row: its identity, the engine's versioned payload of the agent's fields, and the retained prompt the
-/// probe replays beside it, sealed only at rest. `body` is the plaintext a load opened, `None` for an agent that
-/// retains nothing or whose stored body no longer opens. A save reads `body_write` alone, and a load answers it as
-/// `Keep`.
+/// One agent row of the cache warming: its identity, the warming's versioned payload of its record of the agent, and
+/// the retained prompt the probe replays beside it, sealed only at rest. `body` is the plaintext a load opened, `None`
+/// for an agent that retains nothing or whose stored body no longer opens. A save reads `body_write` alone, and a load
+/// answers it as `Keep`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeepaliveAgentRow {
     pub key_id: String,
@@ -101,13 +115,15 @@ pub struct IdleReturnsRow {
     pub returned: u64,
 }
 
-/// What one flush writes. A removed session takes every agent row filed under it, so a session the engine dropped
-/// leaves nothing behind for a load to restore. Its stored sets of reported facts stay, since each leaves by a removal
-/// of its own, by the delete of the sets' key or by the retention pass's cut.
+/// What one flush writes. A removed session takes every agent row filed under it in both agent tables, and a removed
+/// agent takes its row of each, so a session or an agent the engine dropped leaves nothing behind for a load to
+/// restore. A removed session's stored sets of reported facts stay, since each leaves by a removal of its own, by the
+/// delete of the sets' key or by the retention pass's cut.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct KeepaliveBatch {
-    pub sessions: Vec<KeepaliveSessionRow>,
-    pub agents: Vec<KeepaliveAgentRow>,
+pub struct EngineBatch {
+    pub sessions: Vec<CompanionSessionRow>,
+    pub agents: Vec<CompanionAgentRow>,
+    pub warming_agents: Vec<KeepaliveAgentRow>,
     /// `(key_id, key_generation, session_id)`.
     pub removed_sessions: Vec<(String, i64, String)>,
     /// `(key_id, key_generation, session_id, agent_id)`.
@@ -123,10 +139,11 @@ pub struct KeepaliveBatch {
     pub removed_fact_kinds: Vec<(String, i64, String, FactsKind)>,
 }
 
-impl KeepaliveBatch {
+impl EngineBatch {
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
             && self.agents.is_empty()
+            && self.warming_agents.is_empty()
             && self.removed_sessions.is_empty()
             && self.removed_agents.is_empty()
             && self.counters.is_empty()
@@ -135,6 +152,14 @@ impl KeepaliveBatch {
             && self.removed_facts.is_empty()
             && self.removed_fact_kinds.is_empty()
     }
+}
+
+/// Every row a load answers, each list in its table's key order.
+pub struct EngineState {
+    pub sessions: Vec<CompanionSessionRow>,
+    pub agents: Vec<CompanionAgentRow>,
+    pub warming_agents: Vec<KeepaliveAgentRow>,
+    pub counters: Vec<IdleReturnsRow>,
 }
 
 /// The identity tuple as length-prefixed text, each component `<byte length>:<bytes>` in this order: `key_id`,
@@ -183,19 +208,19 @@ impl Store {
     /// and each set of reported facts with `facts_aad`. The removals land first, the leaves of a kind ahead of the
     /// leaves of a row. A batch names a set in both halves where the engine filed it behind the leave of its kind, and
     /// such a set stands, since the leaves run ahead of the writes. The engine names no other row in both halves of a
-    /// batch. A removed session deletes no set of reported facts. A row that keeps its body leaves the stored blob and
-    /// nonce as they are, and a row that clears it leaves neither. Each session row that carries `seen_at` stamps that
-    /// instant on each stored set of its session, a set that the same batch writes among them. A set is written only
-    /// under a key that the registry holds with the set's generation, and a set that this condition refuses fails no
-    /// save.
-    pub fn save_keepalive(&self, batch: &KeepaliveBatch) -> Result<(), StoreError> {
+    /// batch. A removed session deletes no set of reported facts. A warming row that keeps its body leaves the stored
+    /// blob and nonce as they are, and one that clears it leaves neither. Each session row that carries `seen_at`
+    /// stamps that instant on each stored set of its session, a set that the same batch writes among them. A set is
+    /// written only under a key that the registry holds with the set's generation, and a set that this condition
+    /// refuses fails no save.
+    pub fn save_engine_state(&self, batch: &EngineBatch) -> Result<(), StoreError> {
         // Sealed before the connection is taken, so a large batch holds no other writer behind the cipher.
         let mut sealed_facts = Vec::with_capacity(batch.facts.len());
         for row in &batch.facts {
             sealed_facts.push(crypto::seal(&self.key, &facts_aad(&row.key), &row.value)?);
         }
-        let mut sealed = Vec::with_capacity(batch.agents.len());
-        for row in &batch.agents {
+        let mut sealed = Vec::with_capacity(batch.warming_agents.len());
+        for row in &batch.warming_agents {
             sealed.push(match &row.body_write {
                 BodyWrite::Seal(body) => {
                     let aad = keepalive_aad(
@@ -214,7 +239,11 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         for (key_id, key_generation, session_id) in &batch.removed_sessions {
             tx.execute(
-                "DELETE FROM keepalive_sessions WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3",
+                "DELETE FROM companion_sessions WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3",
+                params![key_id, key_generation, session_id],
+            )?;
+            tx.execute(
+                "DELETE FROM companion_agents WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3",
                 params![key_id, key_generation, session_id],
             )?;
             tx.execute(
@@ -223,6 +252,11 @@ impl Store {
             )?;
         }
         for (key_id, key_generation, session_id, agent_id) in &batch.removed_agents {
+            tx.execute(
+                "DELETE FROM companion_agents \
+                 WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND agent_id = ?4",
+                params![key_id, key_generation, session_id, agent_id],
+            )?;
             tx.execute(
                 "DELETE FROM keepalive_agents \
                  WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND agent_id = ?4",
@@ -251,7 +285,7 @@ impl Store {
         }
         {
             let mut stmt = tx.prepare_cached(
-                "INSERT INTO keepalive_sessions \
+                "INSERT INTO companion_sessions \
                  (key_id, key_generation, session_id, record_version, payload, updated_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
                  ON CONFLICT(key_id, key_generation, session_id) DO UPDATE SET \
@@ -263,6 +297,27 @@ impl Store {
                     row.key_id,
                     row.key_generation,
                     row.session_id,
+                    row.record_version,
+                    row.payload,
+                    row.updated_at
+                ])?;
+            }
+        }
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO companion_agents \
+                 (key_id, key_generation, session_id, agent_id, record_version, payload, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                 ON CONFLICT(key_id, key_generation, session_id, agent_id) DO UPDATE SET \
+                 record_version = excluded.record_version, payload = excluded.payload, \
+                 updated_at = excluded.updated_at",
+            )?;
+            for row in &batch.agents {
+                stmt.execute(params![
+                    row.key_id,
+                    row.key_generation,
+                    row.session_id,
+                    row.agent_id,
                     row.record_version,
                     row.payload,
                     row.updated_at
@@ -283,7 +338,7 @@ impl Store {
                  body_size = excluded.body_size, dispatched_ms = excluded.dispatched_ms, fast = excluded.fast, \
                  updated_at = excluded.updated_at",
             )?;
-            for (row, (blob, nonce)) in batch.agents.iter().zip(&sealed) {
+            for (row, (blob, nonce)) in batch.warming_agents.iter().zip(&sealed) {
                 stmt.execute(params![
                     row.key_id,
                     row.key_generation,
@@ -379,25 +434,15 @@ impl Store {
     }
 
     /// Every row. A body that fails to open comes back as `body: None`, and the caller drops that recipe.
-    #[allow(clippy::type_complexity)]
-    pub fn load_keepalive(
-        &self,
-    ) -> Result<
-        (
-            Vec<KeepaliveSessionRow>,
-            Vec<KeepaliveAgentRow>,
-            Vec<IdleReturnsRow>,
-        ),
-        StoreError,
-    > {
+    pub fn load_engine_state(&self) -> Result<EngineState, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let sessions = conn
             .prepare(
                 "SELECT key_id, key_generation, session_id, record_version, payload, updated_at \
-                 FROM keepalive_sessions ORDER BY key_id, key_generation, session_id",
+                 FROM companion_sessions ORDER BY key_id, key_generation, session_id",
             )?
             .query_map([], |r| {
-                Ok(KeepaliveSessionRow {
+                Ok(CompanionSessionRow {
                     key_id: r.get(0)?,
                     key_generation: r.get(1)?,
                     session_id: r.get(2)?,
@@ -405,6 +450,23 @@ impl Store {
                     payload: r.get(4)?,
                     updated_at: r.get(5)?,
                     seen_at: None,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let agents = conn
+            .prepare(
+                "SELECT key_id, key_generation, session_id, agent_id, record_version, payload, updated_at \
+                 FROM companion_agents ORDER BY key_id, key_generation, session_id, agent_id",
+            )?
+            .query_map([], |r| {
+                Ok(CompanionAgentRow {
+                    key_id: r.get(0)?,
+                    key_generation: r.get(1)?,
+                    session_id: r.get(2)?,
+                    agent_id: r.get(3)?,
+                    record_version: r.get(4)?,
+                    payload: r.get(5)?,
+                    updated_at: r.get(6)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -453,7 +515,7 @@ impl Store {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(conn);
-        let agents = stored
+        let warming_agents = stored
             .into_iter()
             .map(|(mut row, blob, nonce)| {
                 if let (Some(blob), Some(nonce)) = (blob, nonce) {
@@ -468,7 +530,12 @@ impl Store {
                 row
             })
             .collect();
-        Ok((sessions, agents, counters))
+        Ok(EngineState {
+            sessions,
+            agents,
+            warming_agents,
+            counters,
+        })
     }
 
     /// The stored sets of `sessions`, each `(key_id, key_generation, session_id)`, in the order of the table's key. A

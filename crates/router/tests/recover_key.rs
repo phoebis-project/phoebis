@@ -9,11 +9,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use phoebis_store::keepalive::BodyWrite;
+use phoebis_store::engine_state::BodyWrite;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, AttemptOutcome, CanaryRead,
-    CompanionPermissions, FactsKey, FactsKind, FactsRow, KeepaliveAgentRow, KeepaliveBatch,
-    KeepaliveSessionRow, KeyFeatureAccounts, NewBundle, OutcomeWord, PoolRow, RulesMode, Secret,
+    CompanionPermissions, CompanionSessionRow, EngineBatch, FactsKey, FactsKind, FactsRow,
+    KeepaliveAgentRow, KeyFeatureAccounts, NewBundle, OutcomeWord, PoolRow, RulesMode, Secret,
     StateCause, StorageKey, Store, StoreError,
 };
 
@@ -201,8 +201,8 @@ fn seed(registry: &Path, key: &StorageKey) -> Vec<AccountRow> {
         .set_api_key_secret("console", &Secret::new("sk-ant-api03-not-a-key"))
         .unwrap();
     store
-        .save_keepalive(&KeepaliveBatch {
-            sessions: vec![KeepaliveSessionRow {
+        .save_engine_state(&EngineBatch {
+            sessions: vec![CompanionSessionRow {
                 key_id: "desktop".into(),
                 key_generation: 1,
                 session_id: "s-1".into(),
@@ -211,11 +211,11 @@ fn seed(registry: &Path, key: &StorageKey) -> Vec<AccountRow> {
                 updated_at: 1_800_000_000_000,
                 seen_at: None,
             }],
-            agents: vec![
+            warming_agents: vec![
                 agent("main", Some(b"the user's own prompt")),
                 agent("helper", None),
             ],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     store.accounts().unwrap()
@@ -230,7 +230,7 @@ fn assert_untouched(registry: &Path, key: &StorageKey) {
     let store = Store::open(registry, key, wall()).unwrap();
     assert!(store.credentials("claude-a").unwrap().is_some());
     assert!(store.api_key_secret("console").unwrap().is_some());
-    let (_, agents, _) = store.load_keepalive().unwrap();
+    let agents = store.load_engine_state().unwrap().warming_agents;
     assert_eq!(
         agents.iter().filter(|agent| agent.body.is_some()).count(),
         1
@@ -497,7 +497,8 @@ fn a_missing_key_file_is_generated_at_0600_and_the_recovery_discards_every_seale
         );
     }
     assert!(store.api_key_secret("console").unwrap().is_none());
-    let (sessions, agents, _) = store.load_keepalive().unwrap();
+    let state = store.load_engine_state().unwrap();
+    let (sessions, agents) = (state.sessions, state.warming_agents);
     assert_eq!(sessions.len(), 1, "the session row stays");
     assert_eq!(agents.len(), 2, "the agent rows stay");
     assert!(agents.iter().all(|agent| agent.body.is_none()));
@@ -1029,8 +1030,8 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     let old = key(OLD_KEY);
     let store = Store::open(&registry(dir.path()), &old, wall()).unwrap();
     store
-        .save_keepalive(&KeepaliveBatch {
-            sessions: vec![KeepaliveSessionRow {
+        .save_engine_state(&EngineBatch {
+            sessions: vec![CompanionSessionRow {
                 key_id: "desktop".into(),
                 key_generation: 1,
                 session_id: "s-1".into(),
@@ -1039,8 +1040,8 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
                 updated_at: 1_800_000_000_000,
                 seen_at: None,
             }],
-            agents: vec![agent("main", Some(b"the user's own prompt"))],
-            ..KeepaliveBatch::default()
+            warming_agents: vec![agent("main", Some(b"the user's own prompt"))],
+            ..EngineBatch::default()
         })
         .unwrap();
     store.debug_drop_canary().unwrap();
@@ -1063,7 +1064,7 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
         printed(&out)
     );
     let store = Store::open(&registry(dir.path()), &key(NEW_KEY), wall()).unwrap();
-    let (_, agents, _) = store.load_keepalive().unwrap();
+    let agents = store.load_engine_state().unwrap().warming_agents;
     assert!(agents.iter().all(|agent| agent.body.is_none()));
 }
 
@@ -1103,7 +1104,7 @@ fn store_a_fact_set(store: &Store) -> (String, i64, String) {
         .unwrap()
         .created_at;
     store
-        .save_keepalive(&KeepaliveBatch {
+        .save_engine_state(&EngineBatch {
             facts: vec![FactsRow {
                 key: FactsKey {
                     key_id: "desktop".into(),
@@ -1116,7 +1117,7 @@ fn store_a_fact_set(store: &Store) -> (String, i64, String) {
                 value: br#"{"title":"Sort the lantern parts"}"#.to_vec(),
                 seen_at: 1_800_000_000_000,
             }],
-            ..KeepaliveBatch::default()
+            ..EngineBatch::default()
         })
         .unwrap();
     ("desktop".into(), generation, "s-1".into())

@@ -1,13 +1,14 @@
 //! The registry schema at version 1: `account_tombstones`, `accounts`, `affinity`, `api_key_retired_secrets`,
 //! `api_key_secrets`, `api_key_tombstones`, `api_keys`, `cooldowns`, `credentials`, `guardrail_attachments`,
-//! `guardrail_tombstones`, `guardrails`, `keepalive_agents`, `keepalive_idle_returns`, `keepalive_sessions`,
-//! `model_resolutions`, `overage_state`, `pins`, `pool_members`, `pool_tombstones`, `pools`, `refresh_attempts`,
-//! `registry_changes`, `session_memory`, `shed_rounds`, `usage_credits` and `usage_windows`, plus `meta` for the schema
-//! marker. Version 3 adds `usage_window_sets`. Version 7 adds the limit resets' three columns to `accounts`. Version 8
-//! adds `accounts.state_changed_at`, `model_week_hours`, `pins.thinking_sums`, `pools.fable_reservation_shedding`,
+//! `guardrail_tombstones`, `guardrails`, `keepalive_agents`, `keepalive_idle_returns`, `model_resolutions`,
+//! `overage_state`, `pins`, `pool_members`, `pool_tombstones`, `pools`, `refresh_attempts`, `registry_changes`,
+//! `session_memory`, `shed_rounds`, `usage_credits` and `usage_windows`, plus `meta` for the schema marker. Version 3
+//! adds `usage_window_sets`. Version 7 adds the limit resets' three columns to `accounts`. Version 8 adds
+//! `accounts.state_changed_at`, `model_week_hours`, `pins.thinking_sums`, `pools.fable_reservation_shedding`,
 //! `pools.thinking_diagnostics`, `pools.weekly_ceiling` and `thinking_bindings`, renames `pools.window_ceiling` to
 //! `five_hour_ceiling` and drops `session_first_seen`. Version 10 adds `lapsed_agents`. Version 11 adds
-//! `companion_facts`.
+//! `companion_agents`, `companion_facts` and `companion_sessions`, drops `keepalive_sessions` and empties
+//! `keepalive_agents`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -221,13 +222,7 @@ CREATE TABLE IF NOT EXISTS "session_memory" (
 );
 -- last_seen is what the retention purge measures from.
 CREATE INDEX IF NOT EXISTS session_memory_seen ON session_memory (last_seen);
--- The keepalive engine's state, so a restart keeps its sessions, its agents with their retained prompts and the
--- idle-age counters.
-CREATE TABLE IF NOT EXISTS keepalive_sessions (
-  key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL,
-  record_version INTEGER NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL,
-  PRIMARY KEY (key_id, key_generation, session_id)
-);
+-- The keepalive engine's state, so a restart keeps its agents with their retained prompts and the idle-age counters.
 -- One versioned payload of the agent's fields rather than a column per field, so a field the engine reshapes moves the
 -- payload's version and no column. The prompt sits beside it sealed under the storage key, with the header block, the
 -- size and the dispatch TTL the probe replays it with.
@@ -412,6 +407,11 @@ ALTER TABLE lapsed_agents ADD COLUMN compacted INTEGER NOT NULL DEFAULT 0;
 /// The facts that a companion reports of a session and of its agents rest in `companion_facts`, one sealed row per
 /// set: a session's title, its project set and each agent's set. The table starts empty. The index serves the two cuts
 /// that end a set by the instant of its session's last report.
+/// The session engine saves its sessions in `companion_sessions` and its agents in `companion_agents`, and the cache
+/// warming keeps `keepalive_agents` for its own payload and the sealed prompt. The step moves no row. It drops
+/// `keepalive_sessions` and empties `keepalive_agents`, whose payloads held the members of both, so a registry that
+/// takes the step restores no session, no agent and no prompt. The idle counters stay. The baseline declares no
+/// `keepalive_sessions`, since it runs at each open and would bring the table back.
 const V11: &str = r#"
 CREATE TABLE companion_facts (
   key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -420,6 +420,18 @@ CREATE TABLE companion_facts (
   PRIMARY KEY (key_id, key_generation, session_id, kind, agent_id)
 );
 CREATE INDEX companion_facts_seen ON companion_facts (kind, seen_at);
+CREATE TABLE companion_sessions (
+  key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL,
+  record_version INTEGER NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (key_id, key_generation, session_id)
+);
+CREATE TABLE companion_agents (
+  key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+  record_version INTEGER NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (key_id, key_generation, session_id, agent_id)
+);
+DROP TABLE IF EXISTS keepalive_sessions;
+DELETE FROM keepalive_agents;
 "#;
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
