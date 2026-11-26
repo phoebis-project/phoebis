@@ -362,9 +362,8 @@ const speedChips = (root, whereOf) =>
  * the projection's words at `at`, compact or whole as the bar draws them, from the mock's own windows, null for a
  * window that carries none or whose reset has passed. A bar names its window by its label (`5h` or `5-hour`, `7d` or
  * `7-day`, `Fable`, else the window's key). A window with no share or no reset reads its state in the reset's place,
- * spelled out here rather than read from the console's own rule: `not reported` with no share, with or without a
- * reset, and with no reset `not open` at a utilization of 0, which draws no projection, and `not reported` at any
- * other.
+ * spelled out here rather than read from the console's own rule: `not reported` with no share, with or without a reset,
+ * and with no reset `not open` at a utilization of 0, which draws no projection, and `not reported` at any other.
  */
 const barPhrases = (bars, account, at, compact) =>
   bars
@@ -22892,10 +22891,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // alone, as the breakdown answers it, and the day holds no billed probe, so Probes by outcome draws its bars only
       // while its own reads count probes. Its legend reads the warming breakdown's probe counts, which a read with
       // probes off still holds here. The figures are the probe rows of the story's rollups (`ALL_ROLLUPS`,
-      // mock/requests.ts) over the day to 14:30: 5 ok, 1 held, 40 skipped and 32 failed, the 30 drawn probes that
-      // found no live pin and the probe whose pin moved (`MOVED_PIN_PROBE_ID`) among them, in 18 hourly buckets that
-      // stack 36 nonzero bars. jsdom lays nothing out, so the
-      // chart's container reads a browser's size here.
+      // mock/requests.ts) over the day to 14:30: 5 ok, 1 held, 40 skipped and 32 failed, the 30 drawn probes that found
+      // no live pin and the probe whose pin moved (`MOVED_PIN_PROBE_ID`) among them, in 18 hourly buckets that stack 36
+      // nonzero bars. jsdom lays nothing out, so the chart's container reads a browser's size here.
       const measure = window.HTMLElement.prototype.getBoundingClientRect;
       window.HTMLElement.prototype.getBoundingClientRect = function () {
         return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
@@ -25439,10 +25437,9 @@ await forView('/analytics', async () => {
     const low = read(page, 'Traffic by model');
     page.unmount();
     const ZERO = ['claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5'];
-    // The day's Fable rows fail 13 of 47. Its Sonnet 5.5 rows fail 10 of 74, the turn the upstream answered 400, the
-    // bare 502 and the rejection beside it among them, and its Sonnet 4.5 rows 8 of 78. The Haiku rows fail 7 of 42
-    // with the stream its client closed left out, one sixth as Opus 5.5's 1 of 6, so the name orders the two under both
-    // directions.
+    // The day's error rates order the models: Fable's first, then Haiku 4.5's and Opus 5.5's, then Sonnet 5.5's and
+    // Sonnet 4.5's. Haiku 4.5's rate, with the stream its client closed left out, equals Opus 5.5's, so the name orders
+    // the two under both directions.
     const want = {
       high: shown('down', ['claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-4-5', ...ZERO, 'no model'], '?by=model&sort=error_rate', 'Error rate', 'descending'),
       low: shown('up', [...ZERO, 'claude-sonnet-4-5', 'claude-sonnet-5-5', 'claude-haiku-4-5-20251001', 'claude-opus-5-5', 'claude-fable-5-1', 'no model'], '?by=model&sort=error_rate&dir=asc', 'Error rate', 'ascending'),
@@ -25638,8 +25635,8 @@ await forView('/analytics', async () => {
   // a key the console has no label for stands between the two known ones, so the bars read largest first and the
   // unknown key keeps its name. An empty map beside a count of requests with nothing dropped still draws the lines, so
   // the card's empty text waits for both counts as well as the map. The first group's keys arrive in another order
-  // than the console lists them, so the table's columns read the list's order. Each group's answers all reported their
-  // blocks, so a share reads of the group's requests.
+  // than the console lists them, so the table's columns read the list's order. Each group's reported count is its
+  // requests, so a share reads as it would of the requests.
   const breakdownRead = api.getAnalyticsBreakdown;
   const seriesRead = api.getAnalyticsSeries;
   const END_USER = 'thinking_dropped.end_user_binding_mismatch';
@@ -26848,10 +26845,10 @@ await forView('/keys', async () => {
   // Desktop's holds the two turns of the conversation that moved off the deleted retired workspace and the three turns
   // of the conversation whose pin the purge takes twice. The rounds' chains and the recipes' last requests add 31 seed
   // rows, 8 on laptop and 23 on desktop, and the moved pin's first turn `req_6d2a9f41-c37` and auxiliary call
-  // `req_9e1b4c63-a52` add 2 on desktop. Desktop's 147 are the 150 requests its key sent since it was issued at 18:00
-  // on Sep 15, less the 3 that a guardrail refused before any account was asked, which the rollups do not count. The
-  // account-bound session's placement and auxiliary call (`ACCOUNT_BOUND_TURN_IDS` and `ACCOUNT_BOUND_CALL_ID`) add 2
-  // on notebook.
+  // `req_9e1b4c63-a52` add 2 on desktop. Desktop's 147 are the 150 requests other than probes that its key sent since
+  // it was issued at 18:00 on Sep 15, less the 3 that a guardrail refused before any account was asked, which the
+  // rollups do not count. The account-bound session's placement and auxiliary call (`ACCOUNT_BOUND_TURN_IDS` and
+  // `ACCOUNT_BOUND_CALL_ID`) add 2 on notebook.
   const weeks = ['237 requests, 7d', '147 requests, 7d', '63 requests, 7d', '20 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
@@ -28443,21 +28440,21 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     // The summary line under the card's title, over the rows the filters keep: the 40 agents the Agents cells count, 12
     // busy, 7 idle and 4 parked among them, nightly's notebook row (`sessionSpec[19]`) idle, since its mod went silent
-    // beside main's idle recipe, the 110 client requests of the last 24 hours the rows' `day` folds, laptop's
-    // 4ef130f1 and c52dbc8e adding six and seven, and a dash for their spend, since thirteen of the rows' days hold a
-    // plan request the cost model priced nothing for, c52dbc8e's among them, and a partial sum would read as the
-    // whole, then the $1.61 the day billed in dollars, $1.6063 over these rows of the request seed (mock/requests.ts):
-    // laptop's c52dbc8e's subagent failover that lands in nightly's overage on claude-haiku-4-5 (`req_2e7c90a1-6d4`,
-    // $0.0208), the failover session's auxiliary call that fails over into nightly's overage on claude-sonnet-5
-    // (`MOVED_PIN_CALL_ID`, $0.0513), e4b7's row the seed draws onto the story's first session (`SESSION_IDS[0]`) on
-    // desktop, on overflow's API key on claude-fable-5-1 ($0.7747), the written session's row on overflow's API key
-    // that the Cost case names ($0.4812), the fleet session's three written rows on the fleet key, on contract's
-    // usage-based seat on claude-opus-5-5 and claude-sonnet-5-5 ($0.0554, $0.0174 and $0.0337), 0b7f's written row on
-    // story 4's desktop session in nightly's overage on claude-sonnet-5 ($0.0055), the failover on story 5's desktop
-    // session that ends on overflow's API key on claude-sonnet-4-6 (`REJECTION_STORY_ID`, $0.0357), the seed rows of
-    // the first session's c21e and e4b7 and of laptop's c64358b5's e90b in nightly's overage on claude-sonnet-5 and
-    // claude-haiku-4-5 ($0.0394, $0.035 and $0.0132), and story 3's Opus 5 turn on primary's fast lane
-    // (`req_b4d92e06-a17`, $0.043). The card's title carries its sentence on hover.
+    // beside main's idle recipe, the 110 client requests of the 24 whole hours before the current hour and the current
+    // hour so far, which the rows' `day` folds, laptop's 4ef130f1 and c52dbc8e adding six and seven, and a dash for
+    // their spend, since thirteen of the rows' days hold a plan request the cost model priced nothing for, c52dbc8e's
+    // among them, and a partial sum would read as the whole, then the $1.61 the day billed in dollars, $1.6063 over
+    // these rows of the request seed (mock/requests.ts): laptop's c52dbc8e's subagent failover that lands in nightly's
+    // overage on claude-haiku-4-5 (`req_2e7c90a1-6d4`, $0.0208), the failover session's auxiliary call that fails over
+    // into nightly's overage on claude-sonnet-5 (`MOVED_PIN_CALL_ID`, $0.0513), e4b7's row the seed draws onto the
+    // story's first session (`SESSION_IDS[0]`) on desktop, on overflow's API key on claude-fable-5-1 ($0.7747), the
+    // written session's row on overflow's API key that the Cost case names ($0.4812), the fleet session's three written
+    // rows on the fleet key, on contract's usage-based seat on claude-opus-5-5 and claude-sonnet-5-5 ($0.0554, $0.0174
+    // and $0.0337), 0b7f's written row on story 4's desktop session in nightly's overage on claude-sonnet-5 ($0.0055),
+    // the failover on story 5's desktop session that ends on overflow's API key on claude-sonnet-4-6
+    // (`REJECTION_STORY_ID`, $0.0357), the seed rows of the first session's c21e and e4b7 and of laptop's c64358b5's
+    // e90b in nightly's overage on claude-sonnet-5 and claude-haiku-4-5 ($0.0394, $0.035 and $0.0132), and story 3's
+    // Opus 5 turn on primary's fast lane (`req_b4d92e06-a17`, $0.043). The card's title carries its sentence on hover.
     const card = page.container.querySelector('.card--table');
     const subtitle = card?.querySelector('.card__subtitle')?.textContent ?? '';
     const parts = /^(.*) · (.*) requests and (.*) \+ (\$[\d.]+) in 24 h$/.exec(subtitle);
@@ -31854,7 +31851,7 @@ const showSetup = async (page, label) => {
   });
 }
 
-// The downstream client configuration card: one snippet and one definition per variable.
+// The downstream client configuration card: one snippet, and the terms of the variables' list in order.
 {
   const snippets = [...m.container.querySelectorAll('.snippet')].map((pre) => pre.textContent?.trim() ?? '');
   results.push({
@@ -31881,7 +31878,7 @@ const showSetup = async (page, label) => {
     'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1',
     'CLAUDE_CODE_PROMPT_CACHE_TTL=5m',
   ];
-  results.push({ name: '/settings defines every environment variable in order', ok: JSON.stringify(terms) === JSON.stringify(want), missing: terms });
+  results.push({ name: "/settings lists every environment variable's term in order", ok: JSON.stringify(terms) === JSON.stringify(want), missing: terms });
   const relayedAsIs = m.text().includes('the router relays the reduced shape as is');
   results.push({ name: '/settings no definition says the router relays the reduced shape as is', ok: !relayedAsIs, missing: [relayedAsIs ? 'still there' : ''] });
 }
