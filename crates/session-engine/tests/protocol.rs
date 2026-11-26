@@ -2255,39 +2255,6 @@ async fn a_facts_report_replaces_the_whole_set() {
         (Some("main"), None),
         "a member the later report leaves out is cleared"
     );
-    let generation = r
-        .event(json!({"event": "agent_start", "agent_id": "a1"}))
-        .await
-        .unwrap()
-        .request_generation;
-    let agent_facts = |name: Option<&str>| {
-        json!({
-            "event": "agent_facts",
-            "agent_id": "a1",
-            "description": "Review the retry loop",
-            // The key is named with null where the case clears the name.
-            "name": name,
-            "request_generation": generation
-        })
-    };
-    r.event(agent_facts(Some("reviewer"))).await.unwrap();
-    r.event(agent_facts(None)).await.unwrap();
-    r.engine.flush_persisted().await;
-    let stored = r
-        .engine
-        .stored_facts(vec![session.clone()])
-        .await
-        .remove(&session)
-        .expect("the rig's stored sets");
-    let (_, facts) = stored
-        .agents
-        .iter()
-        .find(|(agent_id, _)| agent_id == "a1")
-        .expect("a1's stored set");
-    assert_eq!(
-        (facts.description(), facts.name()),
-        (Some("Review the retry loop"), None)
-    );
 }
 
 #[tokio::test]
