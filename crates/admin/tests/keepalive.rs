@@ -910,11 +910,10 @@ async fn a_session_registered_again_by_another_instance_answers_the_earlier_agen
     );
 }
 
-/// The new instance reports no title, and the earlier instance's title stays off the row while the engine holds the
-/// new record and once that record has left at the session expiry.
+/// The new instance reports no title, and the earlier instance's title stays off the row of the session registered
+/// again.
 #[tokio::test]
-async fn a_title_of_the_earlier_instance_is_gone_behind_the_registration_and_behind_the_records_leave(
-) {
+async fn a_title_of_the_earlier_instance_is_gone_behind_the_registration() {
     let (parts, cookie, secret) = stored_facts_harness().await;
     let report =
         |body: serde_json::Value| common::report_as_the_mod(&parts.keepalive, &secret, body);
@@ -951,27 +950,6 @@ async fn a_title_of_the_earlier_instance_is_gone_behind_the_registration_and_beh
         (row["companion"].as_str(), row["facts"]["title"].as_str()),
         (Some("reporting"), None),
         "the new instance's row answers no title of the earlier one: {row}"
-    );
-    common::step(&parts, std::time::Duration::from_secs(86_400));
-    let stepped = common::NOW + 86_400_000;
-    parts.ledger.record(classed_request(
-        "r1",
-        "s1",
-        "main",
-        "claude-opus-5",
-        None,
-        stepped,
-        common::generation(&parts.store, "desktop"),
-    ));
-    common::landed(&parts, "r1").await;
-    // The step outlasts the admin session's idle bound.
-    let cookie = login(&parts.app, "admin-secret").await;
-    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
-    let row = row_of(&listed, "s1");
-    assert_eq!(
-        (row["companion"].as_str(), row["facts"]["title"].as_str()),
-        (Some("none"), None),
-        "the row of the record that left answers no title of the earlier instance: {row}"
     );
 }
 

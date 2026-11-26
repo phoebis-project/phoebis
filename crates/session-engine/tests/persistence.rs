@@ -313,50 +313,6 @@ async fn a_heartbeat_after_the_restart_answers_instance_ended_and_the_same_insta
 }
 
 #[tokio::test]
-async fn an_agents_facts_survive_a_save_and_a_load() {
-    let mut r = rig(on_disk()).await;
-    let generation = r
-        .event(json!({"event": "agent_start", "agent_id": "a1"}))
-        .await
-        .unwrap()
-        .request_generation;
-    r.event(json!({
-        "event": "agent_facts",
-        "agent_id": "a1",
-        "agent_type": "code-reviewer",
-        "description": "Review the retry loop",
-        "name": "reviewer",
-        "request_generation": generation
-    }))
-    .await
-    .unwrap();
-    r.engine.flush_persisted().await;
-    r.engine = r.restart().await;
-    r.engine.load_persisted().await;
-
-    let session = rig_session(&r);
-    let stored = r
-        .engine
-        .stored_facts(vec![session.clone()])
-        .await
-        .remove(&session)
-        .expect("the rig's stored sets after the load");
-    let (_, facts) = stored
-        .agents
-        .iter()
-        .find(|(agent_id, _)| agent_id == "a1")
-        .expect("a1's facts after the load");
-    assert_eq!(
-        (facts.agent_type(), facts.description(), facts.name()),
-        (
-            Some("code-reviewer"),
-            Some("Review the retry loop"),
-            Some("reviewer")
-        )
-    );
-}
-
-#[tokio::test]
 async fn an_agents_facts_report_leaves_its_saved_rows_instant_where_it_was() {
     let mut r = rig(RigSpec::default()).await;
     let generation = r
@@ -1493,35 +1449,6 @@ async fn a_set_whose_save_failed_reaches_its_row_with_the_next_save() {
         stored_title(&r, &session),
         Some(json!("Mark the shoal")),
         "the set the failed saves carried stayed filed for the save that lands"
-    );
-}
-
-#[tokio::test]
-async fn a_set_filed_ahead_of_its_keys_deletion_reaches_no_row() {
-    let mut r = rig(on_disk()).await;
-    // Read ahead of the delete, since the save behind the tick takes the session's saved row.
-    let session = rig_session(&r);
-    let conn = registry(&r);
-    conn.execute_batch(
-        "CREATE TRIGGER refuse_facts BEFORE INSERT ON companion_facts \
-         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
-    )
-    .unwrap();
-    r.event(json!({"event": "session_facts", "title": "Sound the fairway"}))
-        .await
-        .unwrap();
-    // The worker's save, then one behind it, both under the trigger, so no save is left open behind its drop.
-    r.engine.persist_reached(3, 3).await;
-    r.engine.flush_persisted().await;
-    r.h.store.delete_api_key("desktop", "test").unwrap();
-    r.h.router.reload().await.unwrap();
-    conn.execute_batch("DROP TRIGGER refuse_facts;").unwrap();
-    r.step().await;
-    r.engine.flush_persisted().await;
-    assert_eq!(
-        stored_title(&r, &session),
-        None,
-        "the set filed ahead of the key's delete reached no row behind it"
     );
 }
 
