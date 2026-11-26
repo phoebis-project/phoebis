@@ -848,6 +848,14 @@ test("a reservation round reads a sibling's 7-day window that serves no share as
   assert.equal(reservationRound([pin('res', 's1', 0.03, false), pin('res', 's2', 0.03, false)], sibling, 0.25).sessions, 1);
 });
 
+test("a reservation round reads a sibling's 7-day window past its reset as untouched room", () => {
+  // The sibling under its own reservation that takes no pin, its week reset a minute ago. Its served share of 0.8 is
+  // from before the reset, and the router reads its own use since the reset, so the room reads 1, over the reservation
+  // of 0.25. Each pin's 3 points an hour cover the target of 3, the cap's half of their 6, so the sibling takes one.
+  const sibling = { ...oauth('cool', 0.3, 0.85, 0.1), windows: [win('5h', 0.3), { ...win('7d', 0.85, 5 * HOUR), resetsAt: at(NOW - MINUTE), utilization: 0.8 }] };
+  assert.equal(reservationRound([pin('res', 's1', 0.03, false), pin('res', 's2', 0.03, false)], sibling, 0.25).sessions, 1);
+});
+
 test('a member under its reservation with no pin of another model to move runs no round', () => {
   const fablePins = [fable('f1', 0.03), fable('f2', 0.02)];
   assert.deepEqual(reservationRound(fablePins), { idle: ['res'], labels: [], sessions: 0, warm: 0 });

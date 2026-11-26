@@ -2,7 +2,7 @@ import type { Account, MemberEligibility, Pool, PoolPin, RateLimitWindow } from 
 import { groupInto } from './counts';
 import { byteOrder, fmtDuration, instant, noun, percentText, plural } from './format';
 import { openMark, pinTtlMs } from './keepalive';
-import { endOf, largestShare, minuteSpan, remainingOf, windowOf } from './quota';
+import { endOf, isExpired, largestShare, minuteSpan, remainingOf, windowOf } from './quota';
 import { reservationRoundsRun, speedWord, windingDown } from './selection';
 import { compareFigures } from './sort';
 import { HOUR } from './time';
@@ -342,10 +342,11 @@ export function shedPreview(
   // destination's set and nothing on a window that set lacks. A reservation round moves no pin onto a sibling whose own
   // 7-day room reads under its `fableReservation`, as the router's leaves such a sibling out, and a sibling whose 7-day
   // window serves no share, or that serves no such window, reads a room of 1, as the router reads a window it holds no
-  // reading of.
+  // reading of. A sibling whose 7-day reset has passed reads a room of 1 as well, since the route serves the reading
+  // from before the reset and the router reads its own use since, which the console cannot see.
   const shortOfReservation = (account: Account, reservation: number | null) => {
     const week = windowOf(account, '7d');
-    return reservation !== null && (week === null ? 1 : (remainingOf(week) ?? 1)) < reservation;
+    return reservation !== null && (week === null || isExpired(week, now) ? 1 : (remainingOf(week) ?? 1)) < reservation;
   };
   const hasRunway = (source: string, model: string | null, reservationRound: boolean) =>
     listed.some(
