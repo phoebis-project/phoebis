@@ -169,7 +169,7 @@ impl Inner {
         self.dirty.sessions.insert(row, revision);
     }
 
-    /// The agent's row is dirty under its session's generation now.
+    /// The agent's rows are dirty under its session's generation now.
     pub(crate) fn touch_agent(&mut self, key: &SessionKey, agent_id: &str) {
         let held = agent_ref(&self.sessions.entries, key, agent_id).is_some();
         let Some(row) = self.persist_key(key).filter(|_| held) else {
@@ -186,7 +186,7 @@ impl Inner {
         self.dirty.pools.insert(pool_id.to_string(), revision);
     }
 
-    /// The agent's row goes at the next save, under the generation its session is held under: called while the agent
+    /// The agent's rows go at the next save, under the generation its session is held under: called while the agent
     /// is still in the map.
     pub(crate) fn forget_agent(&mut self, key: &SessionKey, agent_id: &str) {
         let Some(row) = self.persist_key(key) else {

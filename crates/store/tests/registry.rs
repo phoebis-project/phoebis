@@ -242,6 +242,19 @@ fn a_registry_at_version_ten_that_holds_a_session_and_an_agent_opens_at_version_
         (0, 0, 0),
         "the step restores no session, no agent and no prompt"
     );
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let objects: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE name = 'keepalive_sessions'")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        objects,
+        Vec::<String>::new(),
+        "the earlier build's session rows leave the disk with their table"
+    );
 }
 
 #[test]
