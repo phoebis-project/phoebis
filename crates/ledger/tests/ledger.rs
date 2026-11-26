@@ -8079,8 +8079,7 @@ async fn a_pass_keeps_a_title_whose_stamp_trails_the_expiry_by_one_save_interval
     let up = FakeUpstream::start(vec![]).await;
     let config = LedgerConfig {
         purge_interval: Duration::from_millis(200),
-        session_expiry: Duration::from_secs(60),
-        stored_stamp_grace: Duration::from_secs(300),
+        session_facts_kept_for: Duration::from_secs(360),
         ..quick()
     };
     let h = harness(&up, &[api_key("a", C, 0)], (0, None), config).await;
@@ -8118,8 +8117,7 @@ async fn a_pass_under_an_expiry_that_no_cutoff_can_hold_cuts_no_title() {
     let up = FakeUpstream::start(vec![]).await;
     let config = LedgerConfig {
         purge_interval: Duration::from_millis(200),
-        session_expiry: Duration::from_secs(u64::MAX),
-        stored_stamp_grace: Duration::from_secs(300),
+        session_facts_kept_for: Duration::from_secs(u64::MAX),
         ..quick()
     };
     let h = harness(&up, &[api_key("a", C, 0)], (0, None), config).await;

@@ -1427,6 +1427,74 @@ usage:
     );
 }
 
+/// The file bounds `sessions.expire_after_seconds` from below alone, so the start's sum of the stored facts' keep
+/// period has to saturate where a plain add would overflow a `Duration` and panic.
+#[tokio::test]
+async fn a_start_under_the_largest_session_expiry_the_file_accepts_reaches_readiness() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let proxy_port = free_port();
+    let admin_port = free_port();
+    let metrics_port = free_port();
+    let yaml = format!(
+        r#"
+admin:
+  listen: 127.0.0.1:{admin_port}
+  secret_env: TEST_ADMIN_SECRET
+proxy:
+  listen: 127.0.0.1:{proxy_port}
+sessions:
+  expire_after_seconds: 18446744073709551615
+stats:
+  ledger_path: {ledger}
+  metrics_listen: 127.0.0.1:{metrics_port}
+storage:
+  encryption_key_file: {key}
+  path: {db}
+usage:
+  refresh_concurrency: 2
+"#,
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        ledger = dir.path().join("ledger.sqlite").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let ready = format!("http://127.0.0.1:{proxy_port}/api/ready");
+    let give_up = std::time::Instant::now() + SETTLE;
+    loop {
+        assert!(
+            !server.is_finished(),
+            "the binary stopped before it answered ready"
+        );
+        if let Ok(answer) = reqwest::get(&ready).await {
+            if answer.status() == 200 {
+                break;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the binary never answered ready"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+}
+
 /// A unified 429 on one seat fails the client's request over to its sibling inside a single call, and the cooldown, the
 /// log and the session all show it.
 #[tokio::test]

@@ -625,6 +625,9 @@ impl Event {
     }
 }
 
+/// The header that carries the router's marker of the client process's instance.
+pub const INSTANCE_ID_HEADER: &str = "x-phoebis-instance-id";
+
 /// Caller headers the relay never repeats upstream: the hop-by-hop ones describe the caller's connection
 /// rather than the payload, cookies and proxy credentials are the caller's own secrets, forwarding headers
 /// would disclose the caller's network, and `x-phoebis-instance-id` is the router's marker of the client process's
@@ -650,7 +653,7 @@ pub const NEVER_COPIED: &[&str] = &[
     "x-forwarded-port",
     "x-forwarded-proto",
     "x-forwarded-server",
-    "x-phoebis-instance-id",
+    INSTANCE_ID_HEADER,
     "x-real-ip",
 ];
 

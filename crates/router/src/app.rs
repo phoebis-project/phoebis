@@ -297,6 +297,7 @@ pub async fn run_until(
         );
     }
     let metrics = Arc::new(Metrics::new());
+    let session_expiry = Duration::from_secs(config.sessions.expire_after_seconds);
     let ledger = phoebis_ledger::spawn(
         ledger_db.clone(),
         pricing.clone(),
@@ -309,10 +310,12 @@ pub async fn run_until(
         LedgerConfig {
             retention_days: config.stats.retention_days,
             rollup_retention_days: config.stats.rollup_retention_days,
-            session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
-            // A stored set's instant trails its session's last report by the wait for the engine's next save, and ten
-            // save intervals cover a save that waits or fails and lands at a later interval.
-            stored_stamp_grace: PERSIST_INTERVAL * 10,
+            // A stored set's instant trails its session's last report by the wait for the engine's next save. A pass
+            // inside that lag would cut the title of a session that reported within its expiry, and a title is
+            // reported once. Ten save intervals cover a save that waits or fails and lands at a later interval, and
+            // the wait stays far below the pass's own interval. The add saturates, since
+            // `sessions.expire_after_seconds` has no upper bound.
+            session_facts_kept_for: session_expiry.saturating_add(PERSIST_INTERVAL * 10),
             start_version: Some(env!("CARGO_PKG_VERSION").into()),
             mirror_baseline: Some(mirror_baseline),
             ..LedgerConfig::default()
@@ -422,7 +425,7 @@ pub async fn run_until(
             max_agents: config.sessions.max_agents,
             max_sessions: config.sessions.max_sessions,
         },
-        session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
+        session_expiry,
         store: store.clone(),
         tables: tables.clone(),
         timing: KeepaliveTiming::for_start(),
@@ -482,7 +485,7 @@ pub async fn run_until(
         router: router_task.clone(),
         catalog: catalog.clone(),
         body_capture_max_hours: config.stats.body_capture_max_hours,
-        session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
+        session_expiry,
         non_companion_idle: Duration::from_secs(config.sessions.non_companion_idle_seconds),
         bus: bus.clone(),
         ledger: ledger.clone(),

@@ -94,7 +94,7 @@ pub fn identify(
         agent_id: header_id(headers, "x-claude-code-agent-id")
             .unwrap_or_else(|| MAIN_AGENT.to_string()),
         parent_agent_id: header_id(headers, "x-claude-code-parent-agent-id"),
-        instance_id: header_id(headers, "x-phoebis-instance-id"),
+        instance_id: header_id(headers, phoebis_bus::INSTANCE_ID_HEADER),
         model,
         canonical_model: folded_model.clone(),
         folded_model,

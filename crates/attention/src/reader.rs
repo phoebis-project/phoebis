@@ -249,14 +249,6 @@ impl Subject {
         }
     }
 
-    fn sessions(id: &str) -> Subject {
-        Subject {
-            kind: SubjectKind::Router,
-            id: id.into(),
-            label: "Sessions".into(),
-        }
-    }
-
     fn model(model: &str) -> Subject {
         Subject {
             kind: SubjectKind::Model,
@@ -977,7 +969,11 @@ pub(crate) fn conditions(
         json!({ "gaps": keepalive.bus_gaps, "last_at": keepalive.last_bus_gap_at }),
     ));
     for cap in &keepalive.session_caps {
-        let subject = Subject::sessions(&format!("sessions.max_{}", cap.name));
+        let subject = Subject::new(
+            SubjectKind::Router,
+            format!("sessions.max_{}", cap.name),
+            "Sessions".into(),
+        );
         out.push(cap_condition(
             state,
             &mut seen,
