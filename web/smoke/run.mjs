@@ -29340,6 +29340,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   // The grouping on the mock's rows (`sessionSpec` in mock/operations.ts): the story's first session and story 1, its
   // worktree, share the remote git.example/acme/storefront under two projects, story 3 reports a root with no remote,
   // story 4 a remote of its own, and each other row the bare view keeps reports neither a project nor a repository.
+  // Story 8 among them reports a working directory alone and files under that directory by project.
   const listed = await api.listSessions();
   const byProject = (path) => listed.find((s) => !s.historical && s.facts.project === path);
   const subjects = { billing: byProject('/home/dev/work/billing-service'), notes: byProject('/home/dev/work/notes'), story: byProject('/home/dev/work/storefront'), worktree: byProject('/home/dev/work/storefront-worktrees/tax-rules') };
@@ -29396,7 +29397,10 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
-    // A search for story 3's id prefix keeps its row alone, so each other group's header goes with its rows.
+    // A search for story 3's id prefix keeps its row alone, so each other group's header goes with its rows. Story 8
+    // stays out of `ids`, so the repository check above keeps its row in `others` under No repository.
+    const scratch = listed.find((s) => !s.historical && s.facts.cwd === '/home/dev/work/scratch');
+    const scratchId = scratch === undefined ? null : sessionRowId(scratch);
     const page = await mount('/sessions?by=project', { now: CLOCK_ORIGIN });
     const grouped = groupsOf(page).map((g) => [g.label, g.rows]);
     page.unmount();
@@ -29407,15 +29411,16 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       grouped: [
         ['billing-service', inOrder('billing')],
         ['notes', inOrder('notes')],
+        ['scratch', [scratchId]],
         ['storefront', inOrder('story')],
         ['tax-rules', inOrder('worktree')],
-        ['No project', others],
+        ['No project', others.filter((id) => id !== scratchId)],
       ],
       narrowed: [['notes', inOrder('notes')]],
     };
     results.push({
-      name: "/sessions ?by=project splits a checkout from its worktree, and a filter that drops a group's rows drops its header",
-      ok: found && JSON.stringify({ grouped, narrowed }) === JSON.stringify(want),
+      name: "/sessions ?by=project splits a checkout from its worktree, files a session with a working directory alone under that directory, and a filter that drops a group's rows drops its header",
+      ok: found && scratchId !== null && JSON.stringify({ grouped, narrowed }) === JSON.stringify(want),
       missing: [JSON.stringify({ grouped, narrowed }), `want ${JSON.stringify(want)}`],
     });
   }

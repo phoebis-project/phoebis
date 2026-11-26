@@ -1525,13 +1525,14 @@ companion reports a working directory and no project, with the whole path and a 
 Repository reads the last segment of the repository, or of the repository's root where it has no remote, with the branch
 under it and the whole `host/path`, the branch and the root on hover. A path at a root, `/` or a drive root such as
 `C:\`, has no folder name or last segment, so either column reads it whole, and a session with such a project and no
-title leads its Session cell with its id. Both columns cut a name or a branch past 24 characters with an ellipsis, and
-each reads a dash on a session whose companion reports neither. The rows follow the sort control: by the session's
-creation time, its first request, by its last activity, its newest request that is neither a keepalive probe nor a token
-count, or its last use where the ledger holds no such request yet, by the list dollars of its requests, which add across
-units, or by its requests, newest or largest first by default, ties by session id and a row without the value last, and
-the five-second re-read keeps a row's place under Created. Session takes the card's free width and keeps at least 74 px,
-and a set of columns wider than the card scrolls inside it.
+title leads its Session cell with its id. A session whose companion reports a working directory and no project takes
+that directory as its project in its label and under the Project grouping. Both columns cut a name or a branch past 24
+characters with an ellipsis, and each reads a dash on a session whose companion reports neither. The rows follow the
+sort control: by the session's creation time, its first request, by its last activity, its newest request that is
+neither a keepalive probe nor a token count, or its last use where the ledger holds no such request yet, by the list
+dollars of its requests, which add across units, or by its requests, newest or largest first by default, ties by session
+id and a row without the value last, and the five-second re-read keeps a row's place under Created. Session takes the
+card's free width and keeps at least 74 px, and a set of columns wider than the card scrolls inside it.
 
 Group by files the rows the filters keep under their project or their repository. Grouped by Project, the rows stand
 under their project's path. Grouped by Repository, they stand under the repository's `host/path`, or under its root
@@ -1539,35 +1540,36 @@ where it has no remote, so a checkout and its linked working trees share a group
 table that reads the last segment of that value, or the whole value at a root such as `/` or `C:\`, cut with an ellipsis
 where it is long, and the count `{n} sessions`, with the whole value on hover. The groups stand in alphabetical order of
 that segment or whole value, ignoring case, two groups that share it in the order of their whole values, and the
-sessions that report no project or no repository stand last under "No project" or "No repository". Inside a group the
-rows keep the Sort control's order. A group none of whose rows pass the filters is not drawn, and a group's row opens
-nothing and does not fold.
+sessions that report neither a project nor a working directory, or no repository, stand last under "No project" or "No
+repository". Inside a group the rows keep the Sort control's order. A group none of whose rows pass the filters is not
+drawn, and a group's row opens nothing and does not fold.
 
 The Session cell leads with the session's label, which is the custom title its companion reports, else the folder name
-of its project, else its id. A label that is not the id stands over the id, each cut with an ellipsis, and the hover
-reads both whole. A session whose companion reports neither reads its id alone, cut with an ellipsis and whole on hover,
-as each session without the mod does. A line under the id reads a `fork` badge on a session that branched from another
-conversation at depth 2 or deeper, then the client version and the placements count from 2 on, `Claude Code 2.1.310 · 2
-placements`, with the user agent as the client sent it and the count's sentence on hover: how often the session's main
-was placed or moved. The fork badge's hover names the base and the depth, and where the list holds the base with both
-pins live, whether the base is on the same account or another and the base's account. A click on the badge scrolls to
-the base's row where the list holds it. Status reads main's lifecycle word as a badge with its sentence on hover:
-`busy`, `idle`, `parked` with the park's kind and its deadline or wake time on hover, `registered` for a session whose
-main the mod registered or started again with no real request of it reaching the router since, `released` or `unknown`.
-A finished session reads `finished`, and a session no mod reports, or one whose main the engine holds no record of,
-reads `unreported` in the muted ink. Under the word, a companion session reads `seen 9s ago` while the mod reports, or
-`silent 2h 18m` in the warning ink once it went silent, with the companion's sentence and the instant on hover. Agents
-counts the session's agents less the ones the mod released, main counted where no line names it, over the agents by word
-(`1 busy, 2 idle, 1 parked`). Model reads main's model, short with the id on hover, and a "+N" badge where N agents of
-the session are pinned on another model, its hover naming each agent with its model and account in the lines' order.
-Account links to the pinned account's page with its kind on hover, then the speed chip on a slowed session with the
-Quota view's hover, the warning badge `leaving` while a shedding round's mark stands on the session's pin, its hover
-naming the account the mark was made on and its window, and a "+N" for the agents pinned on another account. A session
-that a round's move or a failover's landing already took off an account reads no badge. A session whose requests name
-state that its account holds, such as a file, a container or a skill, carries the badge `account-bound` on its row and
-on each such line of its Agents table, and the hover says that the router keeps its pin on that account and that no rule
-or round moves it. While a Model or an Account filter stands, that column's "+N" takes the accent tone where one of the
-agents it names matches every Agents filter. A row with no account reads a dash.
+of its project or, where it reports no project, of its working directory, else its id. A label that is not the id stands
+over the id, each cut with an ellipsis, and the hover reads both whole. A session whose companion reports none of the
+three reads its id alone, cut with an ellipsis and whole on hover, as each session without the mod does. A line under
+the id reads a `fork` badge on a session that branched from another conversation at depth 2 or deeper, then the client
+version and the placements count from 2 on, `Claude Code 2.1.310 · 2 placements`, with the user agent as the client sent
+it and the count's sentence on hover: how often the session's main was placed or moved. The fork badge's hover names the
+base and the depth, and where the list holds the base with both pins live, whether the base is on the same account or
+another and the base's account. A click on the badge scrolls to the base's row where the list holds it. Status reads
+main's lifecycle word as a badge with its sentence on hover: `busy`, `idle`, `parked` with the park's kind and its
+deadline or wake time on hover, `registered` for a session whose main the mod registered or started again with no real
+request of it reaching the router since, `released` or `unknown`. A finished session reads `finished`, and a session no
+mod reports, or one whose main the engine holds no record of, reads `unreported` in the muted ink. Under the word, a
+companion session reads `seen 9s ago` while the mod reports, or `silent 2h 18m` in the warning ink once it went silent,
+with the companion's sentence and the instant on hover. Agents counts the session's agents less the ones the mod
+released, main counted where no line names it, over the agents by word (`1 busy, 2 idle, 1 parked`). Model reads main's
+model, short with the id on hover, and a "+N" badge where N agents of the session are pinned on another model, its hover
+naming each agent with its model and account in the lines' order. Account links to the pinned account's page with its
+kind on hover, then the speed chip on a slowed session with the Quota view's hover, the warning badge `leaving` while a
+shedding round's mark stands on the session's pin, its hover naming the account the mark was made on and its window, and
+a "+N" for the agents pinned on another account. A session that a round's move or a failover's landing already took off
+an account reads no badge. A session whose requests name state that its account holds, such as a file, a container or a
+skill, carries the badge `account-bound` on its row and on each such line of its Agents table, and the hover says that
+the router keeps its pin on that account and that no rule or round moves it. While a Model or an Account filter stands,
+that column's "+N" takes the accent tone where one of the agents it names matches every Agents filter. A row with no
+account reads a dash.
 
 Requests counts the session's client requests the retention keeps under its key, the ones the router refused before any
 account was asked left out, with its last request's age under it and the instant on hover, and "View in requests" lists

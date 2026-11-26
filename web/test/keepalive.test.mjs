@@ -251,13 +251,15 @@ test("sessionLines reads each line's type from its companion's report, else from
   assert.equal(lines[0].facts, null, "main's line reads no fact its companion reported");
 });
 
-test("sessionLabel reads the title, else the project's base name, else null", () => {
+test('sessionLabel reads the title, else the base name of the project, for which the working directory stands in, else null', () => {
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: '/home/u/app/' }, sessionId: 'b2c4' }), 'app', 'a trailing separator');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: 'C:\\work\\app' }, sessionId: 'b2c4' }), 'app', 'a Windows path');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: 'C:\\work\\app\\' }, sessionId: 'b2c4' }), 'app', 'a Windows path with a trailing separator');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: '/' }, sessionId: 'b2c4' }), null, 'a root has no segment, so the id stands');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, project: 'C:\\' }, sessionId: 'b2c4' }), null, 'a drive root has no segment either');
   assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, title: 'b2c4' }, sessionId: 'b2c4' }), null, 'a title that is the id');
+  assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, cwd: '/home/dev/work/scratch' }, sessionId: 'b2c4' }), 'scratch', 'a working directory stands in for a project that is not reported');
+  assert.equal(d.sessionLabel({ facts: { ...NO_FACTS, cwd: '/home/dev/work/scratch', project: '/' }, sessionId: 'b2c4' }), null, 'a reported project at a root keeps the id, whatever the working directory reads');
 });
 
 test('agentLabel reads the name, else the description, else null', () => {
@@ -277,6 +279,7 @@ test("groupSessions keeps a checkout and its worktrees in one repository group, 
     row('c', { project: '/home/u/work/shop', repository: 'git.example/acme/shop', repositoryRoot: '/home/u/work/shop' }),
     row('y', { project: '/home/u/work/Zeta-worktrees/fix', repositoryRoot: '/home/u/work/Zeta' }),
     row('a', { project: '/home/u/work/alpha', repository: 'git.example/acme/alpha', repositoryRoot: '/home/u/work/alpha' }),
+    row('s', { cwd: '/home/dev/work/scratch' }),
   ];
   const read = (by) => d.groupSessions(rows, by).map((g) => [g.key, g.short, g.rows.map((r) => r.id)]);
   assert.deepEqual(read('repository'), [
@@ -284,12 +287,13 @@ test("groupSessions keeps a checkout and its worktrees in one repository group, 
     ['git.example/acme/shop', 'shop', ['w', 'c']],
     ['git.example/beta/shop', 'shop', ['b']],
     ['/home/u/work/Zeta', 'Zeta', ['z', 'y']],
-    [null, 'No repository', ['n']],
+    [null, 'No repository', ['n', 's']],
   ]);
   assert.deepEqual(read('project'), [
     ['/home/u/work/alpha', 'alpha', ['a']],
     ['/home/u/work/beta-shop', 'beta-shop', ['b']],
     ['/home/u/work/Zeta-worktrees/fix', 'fix', ['y']],
+    ['/home/dev/work/scratch', 'scratch', ['s']],
     ['/home/u/work/shop', 'shop', ['c']],
     ['/home/u/work/shop-worktrees/tax', 'tax', ['w']],
     ['/home/u/work/Zeta', 'Zeta', ['z']],

@@ -360,12 +360,19 @@ export const shortPlace = (value: string): string => baseName(value) ?? value;
 export const repositoryOf = (facts: Pick<SessionFacts, 'repository' | 'repositoryRoot'>): string | null => facts.repository ?? facts.repositoryRoot;
 
 /**
- * A session's label: its title, else its project's base name. Null where neither names one or the label is the
- * session id, so a caller draws the id alone.
+ * A session's project: the one its companion reports, else its working directory, since a client's project read can
+ * fail while its working directory read answers.
+ */
+export const projectOf = (facts: Pick<SessionFacts, 'cwd' | 'project'>): string | null => facts.project ?? facts.cwd;
+
+/**
+ * A session's label: its title, else the base name of the project, for which the working directory stands in. Null
+ * where neither names one or the label is the session id, so a caller draws the id alone.
  */
 export function sessionLabel(session: Pick<Session, 'facts' | 'sessionId'>): string | null {
   const { facts } = session;
-  const label = facts.title ?? (facts.project === null ? null : baseName(facts.project));
+  const place = projectOf(facts);
+  const label = facts.title ?? (place === null ? null : baseName(place));
   return label === session.sessionId ? null : label;
 }
 
@@ -379,7 +386,10 @@ export function agentLabel(agentId: string, facts: Pick<SessionAgentFacts, 'desc
 }
 
 export interface SessionGroup<R> {
-  /** The project path, the `host/path` or the repository's root. Null for the rows without the fact. */
+  /**
+   * The project path or the working directory that stands in for it, the `host/path` or the repository's root. Null for
+   * the rows without the fact.
+   */
   key: string | null;
   rows: R[];
   /** The key's short form, or `No project` or `No repository` where the key is null. */
@@ -391,7 +401,7 @@ const NO_FACT_GROUP: Record<Exclude<SessionGroupBy, 'none'>, string> = { project
 /** The rows in groups by their session's project or repository, the groups in name order and the rows as handed. */
 export function groupSessions<R extends { session: Pick<Session, 'facts'> }>(rows: readonly R[], by: Exclude<SessionGroupBy, 'none'>): SessionGroup<R>[] {
   // A worktree's remote and root are its checkout's, so by repository the two share a group with or without a remote.
-  const keyOf = ({ facts }: Pick<Session, 'facts'>): string | null => (by === 'project' ? facts.project : repositoryOf(facts));
+  const keyOf = ({ facts }: Pick<Session, 'facts'>): string | null => (by === 'project' ? projectOf(facts) : repositoryOf(facts));
   // Code-unit compares, so the five-second re-read and a second browser order the groups alike.
   const named = [...groupInto(rows, (row) => keyOf(row.session))]
     .map(([key, held]) => {

@@ -23,7 +23,7 @@ import { tierOrder } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
-import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, agentLabel, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, groupSessions, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, repositoryOf, requestCount, requestsSpan, sessionLabel, sessionLines, type SessionLine, shortPlace, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, agentLabel, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, groupSessions, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, projectOf, recipeFiler, repositoryOf, requestCount, requestsSpan, sessionLabel, sessionLines, type SessionLine, shortPlace, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
@@ -877,10 +877,8 @@ function SessionRows({
   const context = contextCell(session.pinned ? session.lastInputTokens : null);
   const label = sessionLabel(session);
   const shortSession = shortId(session.sessionId, SESSION_CHARS);
-  // A client's project read can fail while its working directory read answers, so the directory stands in for the
-  // project.
   const { facts } = session;
-  const folder = facts.project ?? facts.cwd;
+  const folder = projectOf(facts);
   const place = repositoryOf(facts);
   const cwdApart = facts.cwd === facts.project ? null : facts.cwd;
   const client = joinPresent([clientVersion(session.userAgent), session.placements > 1 ? `${session.placements} placements` : null], ' · ');
