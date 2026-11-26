@@ -565,7 +565,9 @@ export const KEYS: KeyRow[] = [
     // Its rotation, the key's last write.
     updatedAt: ago(12 * MINUTE),
     expiresAt: null,
-    lastUsedAt: ago(3 * MINUTE),
+    // The router stamps each request the key sends, so the stamp is its newest, the auxiliary call of 14:29:00
+    // (`MOVED_PIN_CALL_ID` in requests.ts). A keepalive probe presents no key.
+    lastUsedAt: iso(clock(14, 29)),
     // Rotated inside the last 15 minutes, which is the only window in which the route reports a session still
     // holding the previous secret.
     retiredSecretLastUsedAt: ago(2 * MINUTE),

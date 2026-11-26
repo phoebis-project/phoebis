@@ -227,6 +227,18 @@ test('the placements answer matches a Clients pattern against the client label f
   assert.deepEqual(d.placementsOf([placed], { ...range, clients: ['claude-code/*'] }), [], 'under claude-code/*');
 });
 
+test("a session's placements count no seeded creation of a pin that a subagent holds", async () => {
+  // Laptop's session c52dbc8e lists the pin its subagent's failover wrote. Loaded at 04:30, the log holds no pin event
+  // of its main, so the route counts nothing for the row.
+  const s = await storyAt('2026-09-16T04:30:00.000Z');
+  const ofSession = (x) => x.keyId === 'laptop' && x.sessionId?.startsWith('c52dbc8e');
+  const mainEvents = s.lib.ROUTING_EVENTS.filter((e) => ofSession(e) && e.agentId === 'main' && (e.kind === 'pin_created' || e.kind === 'pin_migrated'));
+  assert.equal(mainEvents.length, 0, "main's pin events at this load");
+  const row = s.sessions.find((x) => !x.historical && ofSession(x));
+  assert.equal(row?.agentId, '4d1a', "the row's pin");
+  assert.equal(row?.placements, 0, 'the placements the route counts');
+});
+
 test("the rewrites answer counts a move from the hour that holds the range's start up to the hour ceiling of its end", async () => {
   const d = await import('./dist/api.js');
   // A move an account's state forced, which the ledger files in its hour's rollup.

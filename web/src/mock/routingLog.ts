@@ -2409,7 +2409,7 @@ const RESERVATION_PINS: RoundPin[] = [
  * retry ran at 14:22, hold a model with no weight of its own, so the round skips each as unpriced. No sibling has
  * runway for a priced pin, since nightly projects past the ceiling, secondary is spent and cooling, and the Overflow
  * workspace is paused. Three pins leave the round before the order, each of a subagent whose last turn ended: `e90b`'s
- * of 14:21:12 and the two of the session the mod released whole.
+ * of 14:21:12 and the two of the session the mod released whole. The record lists them last, in key order.
  */
 const MOVED_PIN_ROUND_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.1165, cold: true, keyId: 'desktop', lastInputTokens: 57_800, marked: false, model: 'claude-fable-5-1', note: null, sessionId: sessionId('4ef130f1'), skip: 'no_runway' },
@@ -2417,9 +2417,9 @@ const MOVED_PIN_ROUND_PINS: RoundPin[] = [
   { agentId: 'main', burn: null, cold: true, keyId: 'laptop', lastInputTokens: 3_200, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('7d3e1c20'), skip: 'unpriced' },
   { agentId: '6c2b', burn: 0.0301, cold: false, keyId: 'desktop', lastInputTokens: 19_600, marked: false, model: 'claude-sonnet-5', note: 'current', sessionId: sessionId('bcc805b6'), skip: 'no_runway' },
   { agentId: 'main', burn: 0.0774, cold: false, keyId: 'desktop', lastInputTokens: 54_100, marked: false, model: 'claude-sonnet-5-5', note: null, sessionId: sessionId('d7167642'), skip: 'no_runway' },
-  { agentId: 'e90b', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 19_600, marked: false, model: 'claude-sonnet-5-5', note: null, sessionId: sessionId('89cd1c92'), skip: 'ended' },
-  { agentId: '8c1a', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 14_100, marked: false, model: 'claude-sonnet-5', note: null, sessionId: RELEASED_SESSION_ID, skip: 'ended' },
   { agentId: '2f9d', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 12_600, marked: false, model: 'claude-sonnet-5', note: null, sessionId: RELEASED_SESSION_ID, skip: 'ended' },
+  { agentId: '8c1a', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 14_100, marked: false, model: 'claude-sonnet-5', note: null, sessionId: RELEASED_SESSION_ID, skip: 'ended' },
+  { agentId: 'e90b', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 19_600, marked: false, model: 'claude-sonnet-5-5', note: null, sessionId: sessionId('89cd1c92'), skip: 'ended' },
 ];
 
 const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: p.keyId, model: p.model, sessionId: p.sessionId })), pins });
@@ -3138,7 +3138,8 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
       persisted: true,
       pins: pins.map((p) => {
         // A pin names the drop where the read its figures follow found a destination, and a pin that leaves before
-        // the walk has none. The record's destination is a mark's alone.
+        // the walk has none. The record's destination is a mark's of this round alone, since a standing mark's move
+        // was planned by an earlier round.
         const bound = boundOf(p);
         const figures = replay.get(p) ?? unread;
         const dropped = bound !== null && figures.destination !== null ? bound : null;
@@ -3151,7 +3152,7 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
         return {
           agent_id: p.agentId, burn: p.burn, cold: p.cold, ...(earlier ? {} : { dropped_thinking_tokens: dropped }), key_id: p.keyId, last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note,
           ...(earlier ? {} : { per_drop: p.burn === null || orderDrop === null ? null : Number((p.burn / orderDrop).toPrecision(7)) }),
-          per_rewrite: p.burn === null ? null : Number((p.burn / size).toPrecision(7)), planned: p.marked ? figures.destination : null, rewrite: figures.rewrite,
+          per_rewrite: p.burn === null ? null : Number((p.burn / size).toPrecision(7)), planned: p.marked && p.skip !== 'standing' ? figures.destination : null, rewrite: figures.rewrite,
           rewrite_window: figures.window, runway_ms: figures.runway, session_id: p.sessionId, skip: p.skip,
         };
       }),

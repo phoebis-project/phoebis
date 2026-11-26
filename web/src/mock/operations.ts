@@ -1563,11 +1563,12 @@ type PinEvent = Pick<RoutingEvent, 'agentId' | 'at' | 'keyId' | 'kind' | 'sessio
 /**
  * Main's placements as the route counts them: its `pin_created` and `pin_migrated` events under the row's key and
  * session at or after the row's key generation, and on an earlier holder's row before the live key's. Where the story
- * seeds the row's session with a pin whose creation the log does not hold, the count adds that creation, since a
- * router's ledger holds it. The added placement follows the seed rather than the listed row's pin, because the ledger
- * keeps the event when a write takes the pin, as a key's delete does.
+ * seeds the row's session with a pin of main's whose creation the log does not hold, the count adds that creation,
+ * since a router's ledger holds it. A seeded pin of a subagent adds none, since the route counts main's placements
+ * alone. The added placement follows the seed rather than the listed row's pin, because the ledger keeps the event when
+ * a write takes the pin, as a key's delete does.
  */
-const SEEDED_PINS: ReadonlySet<string> = new Set(SESSIONS.filter((x) => x.pinned).map((x) => activityOf(x.keyId, x.keyGeneration, x.sessionId)));
+const SEEDED_PINS: ReadonlySet<string> = new Set(SESSIONS.filter((x) => x.pinned && x.agentId === 'main').map((x) => activityOf(x.keyId, x.keyGeneration, x.sessionId)));
 const placementsOf = (s: Session, events: readonly PinEvent[]): number => {
   const live = keyById.get(s.keyId);
   // The story's key map keeps a key the operator deleted, whose own rows no live key bounds, so only a later
