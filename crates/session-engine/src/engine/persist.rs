@@ -21,7 +21,7 @@ use phoebis_store::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::engine::config::{KeepaliveTiming, LEASE_MS};
+use crate::engine::config::{KeepaliveLimits, KeepaliveTiming, LEASE_MS};
 use crate::engine::{
     agent_mut, agent_ref, Agent, AgentState, Engine, Guard, HeldPark, IdleEpisode,
     IdleReturnBucket, Inner, Kept, Observation, Park, ParkKind, PrefixAnchor, PriorCoverage,
@@ -901,12 +901,14 @@ impl Inner {
 
     fn persist_key(&self, key: &SessionKey) -> Option<PersistKey> {
         self.sessions
+            .entries
             .get(key)
             .map(|session| persist_key_of(key, session))
     }
 
     fn session_of(&self, key: &PersistKey) -> Option<&Session> {
         self.sessions
+            .entries
             .get(&(key.0.clone(), key.2.clone()))
             .filter(|session| session.key_generation == key.1)
     }
@@ -923,7 +925,7 @@ impl Inner {
 
     /// The agent's row is dirty under its session's generation now.
     pub(crate) fn touch_agent(&mut self, key: &SessionKey, agent_id: &str) {
-        let held = agent_ref(&self.sessions, key, agent_id).is_some();
+        let held = agent_ref(&self.sessions.entries, key, agent_id).is_some();
         let Some(row) = self.persist_key(key).filter(|_| held) else {
             return;
         };
@@ -953,7 +955,7 @@ impl Inner {
         let Some(row) = self.persist_key(key) else {
             return;
         };
-        let agents: Vec<String> = self.sessions[key].agents.keys().cloned().collect();
+        let agents: Vec<String> = self.sessions.entries[key].agents.keys().cloned().collect();
         for agent_id in agents {
             self.forget_agent(key, &agent_id);
         }
@@ -1029,7 +1031,7 @@ impl Inner {
     /// and retired with the rest. A filed set of reported facts goes as its report filed it, whatever the map holds.
     pub(crate) fn persist_snapshot(&mut self, now: i64) -> Snapshot {
         let mut snapshot = Snapshot {
-            settled: std::mem::take(&mut self.settlements_after_save),
+            settled: std::mem::take(&mut self.warming.settlements_after_save),
             ..Snapshot::default()
         };
         for (row, revision) in &self.dirty.sessions {
@@ -1049,7 +1051,7 @@ impl Inner {
                 .and_then(|session| session.agents.get(agent_id))
             {
                 let warming = warming_ref(
-                    &self.warming_agents,
+                    &self.warming.agents,
                     &(row.0.clone(), row.2.clone()),
                     agent_id,
                 )
@@ -1117,7 +1119,7 @@ impl Inner {
             snapshot.fact_kinds.push(((row.clone(), *kind), *revision));
         }
         for (pool_id, revision) in &self.dirty.pools {
-            for (day, counters) in self.idle_returns.get(pool_id).into_iter().flatten() {
+            for (day, counters) in self.warming.idle_returns.get(pool_id).into_iter().flatten() {
                 for (bucket, counter) in counters.buckets.iter().enumerate() {
                     snapshot.batch.counters.push(IdleReturnsRow {
                         pool_id: pool_id.clone(),
@@ -1130,15 +1132,15 @@ impl Inner {
             }
             snapshot.pools.push((pool_id.clone(), *revision));
         }
-        snapshot.purge_counters_before = self.purge_counters_before;
-        snapshot.batch.purge_counters_before = self.purge_counters_before;
+        snapshot.purge_counters_before = self.warming.purge_counters_before;
+        snapshot.batch.purge_counters_before = self.warming.purge_counters_before;
         snapshot
     }
 
     /// The settlements a landed save carried go to the ledger's queue, which the flush drains once the lock is
     /// released.
     pub(crate) fn release_settled(&mut self, settled: Vec<Settlement>) {
-        self.settlements.extend(settled);
+        self.warming.settlements.extend(settled);
     }
 
     /// Retires what a landed save carried: an entry leaves only while its revision is the one saved, so a change
@@ -1151,12 +1153,13 @@ impl Inner {
                 self.dirty.agents.get(&(row.clone(), agent_id.clone())) == Some(revision);
             if let Some(warming) = self
                 .sessions
+                .entries
                 .get(&(row.0.clone(), row.2.clone()))
                 .filter(|session| session.key_generation == row.1)
                 .and_then(|session| session.agents.get(agent_id))
                 .map(|_| {
                     warming_mut(
-                        &mut self.warming_agents,
+                        &mut self.warming.agents,
                         &(row.0.clone(), row.2.clone()),
                         agent_id,
                     )
@@ -1194,8 +1197,8 @@ impl Inner {
         }
         // Cleared only while unchanged since the snapshot: a roll in between recorded a later cutoff, which the next
         // save still owes.
-        if self.purge_counters_before == snapshot.purge_counters_before {
-            self.purge_counters_before = None;
+        if self.warming.purge_counters_before == snapshot.purge_counters_before {
+            self.warming.purge_counters_before = None;
         }
     }
 
@@ -1212,12 +1215,13 @@ impl Inner {
         tally.agents += 1;
         if row.body_size > 0 {
             tally.recipes += 1;
-            *self.reasons.entry(Reason::Evicted).or_default() += 1;
+            *self.warming.reasons.entry(Reason::Evicted).or_default() += 1;
         }
         let Some((_, mut warming, _)) = decoded else {
             return;
         };
-        self.settlements
+        self.warming
+            .settlements
             .extend(warming.settle_all(key, Wasted::Evicted));
     }
 
@@ -1230,9 +1234,9 @@ impl Inner {
         reason: Reason,
         wasted: Option<Wasted>,
     ) {
-        let generation = self.sessions[key].agents[agent_id].generation;
+        let generation = self.sessions.entries[key].agents[agent_id].generation;
         self.discard(key, agent_id, reason, wasted);
-        if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) {
+        if let Some(agent) = agent_mut(&mut self.sessions.entries, key, agent_id) {
             agent.generation = generation;
         }
     }
@@ -1243,9 +1247,17 @@ impl Inner {
     /// filed for deletion and each recipe among them counted as evicted. Agents without a session row, ended sessions,
     /// released records whose leave has passed, rows of an older version and rows this build cannot read go too.
     fn restore_persisted(&mut self, (sessions, agents, counters): Loaded, now: i64) {
-        let (limits, timing) = (self.limits.clone(), self.timing);
+        let (limits, timing) = (
+            KeepaliveLimits {
+                max_agents: self.sessions.max_agents,
+                max_retained_bytes: self.warming.max_retained_bytes,
+                max_sessions: self.sessions.max_sessions,
+            },
+            self.warming.timing,
+        );
         for row in counters {
             let counters = self
+                .warming
                 .idle_returns
                 .entry(row.pool_id)
                 .or_default()
@@ -1316,7 +1328,7 @@ impl Inner {
             let key: SessionKey = (row.key_id.clone(), row.session_id.clone());
             // An ended session is a tombstone for reports still in flight, and none of those survive the restart. A
             // second row under the same ids is an older generation's, which a newer one replaced.
-            if payload.ended || self.sessions.contains_key(&key) {
+            if payload.ended || self.sessions.entries.contains_key(&key) {
                 self.file_removed_session(stored);
                 continue;
             }
@@ -1395,7 +1407,8 @@ impl Inner {
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
                     continue;
                 }
-                self.next_incarnation = self.next_incarnation.max(agent.incarnation);
+                self.sessions.next_incarnation =
+                    self.sessions.next_incarnation.max(agent.incarnation);
                 let agent_id = agent_row.agent_id.clone();
                 // The observation's restore reads the row's other columns alone, so the opened prompt moves out.
                 match (observation, agent_row.body.take()) {
@@ -1424,8 +1437,8 @@ impl Inner {
             if holds_slot {
                 live_sessions += 1;
             }
-            self.sessions.insert(key.clone(), session);
-            self.warming_agents.insert(key, warming_agents);
+            self.sessions.entries.insert(key.clone(), session);
+            self.warming.agents.insert(key, warming_agents);
         }
         // Agent rows whose session row is gone or was dropped above.
         for (stored, rows) in by_session {
@@ -1440,8 +1453,8 @@ impl Inner {
         held.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| (&a.1, &a.2).cmp(&(&b.1, &b.2))));
         for (_, key, agent_id, observation) in held {
             let size = observation.recipe.size;
-            self.retained += size;
-            let warming = warming_mut(&mut self.warming_agents, &key, &agent_id)
+            self.warming.retained += size;
+            let warming = warming_mut(&mut self.warming.agents, &key, &agent_id)
                 .expect("the agent the load just restored");
             let expires = warming.expires;
             warming.current = Some(observation);
@@ -1461,7 +1474,7 @@ impl Inner {
                 );
                 continue;
             }
-            if self.retained > limits.max_retained_bytes {
+            if self.warming.retained > limits.max_retained_bytes {
                 by_bytes += 1;
                 self.discard_at_load(&key, &agent_id, Reason::Evicted, Some(Wasted::Evicted));
             }
@@ -1509,7 +1522,7 @@ impl Engine {
     /// Reads back what the last process saved, at start and before the scheduler ticks, bounded by the current limits.
     /// The rows the load drops or rewrites are saved before it returns, so the store and the map agree from here.
     pub async fn load_persisted(self: &Arc<Self>) {
-        if !self.lock().sessions.is_empty() {
+        if !self.lock().sessions.entries.is_empty() {
             tracing::warn!("the keepalive's saved state is read once, at start, and this engine already holds sessions");
             return;
         }
@@ -1529,15 +1542,15 @@ impl Engine {
         {
             let mut inner = self.lock();
             // A load over sessions already held would file the removal of rows the engine holds live.
-            if !inner.sessions.is_empty() {
+            if !inner.sessions.entries.is_empty() {
                 return;
             }
             inner.restore_persisted(loaded, now);
             // The registry first, then the ledger: the settlements wait for the save that carries each ended recipe's
             // agent without the probes they settle, so a failed save sends nothing and a crash between the save and
             // the ledger's write leaves a wasted probe unwritten rather than written again by the next load.
-            let settled = std::mem::take(&mut inner.settlements);
-            inner.settlements_after_save.extend(settled);
+            let settled = std::mem::take(&mut inner.warming.settlements);
+            inner.warming.settlements_after_save.extend(settled);
         }
         self.flush_persisted().await;
     }
@@ -1697,8 +1710,8 @@ impl Engine {
             }
             Err(error) => {
                 let mut inner = self.lock();
-                let queued = std::mem::replace(&mut inner.settlements_after_save, settled);
-                inner.settlements_after_save.extend(queued);
+                let queued = std::mem::replace(&mut inner.warming.settlements_after_save, settled);
+                inner.warming.settlements_after_save.extend(queued);
                 if !inner.persist_failing {
                     inner.persist_failing = true;
                     tracing::warn!(%error, "the keepalive's state could not be written to the registry, so the engine keeps it and retries at every flush");

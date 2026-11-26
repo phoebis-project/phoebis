@@ -252,10 +252,11 @@ impl Engine {
         let inner = self.lock();
         inner
             .sessions
+            .entries
             .iter()
             .map(|(key, s)| {
                 let warming_of = |agent_id: &str| {
-                    warming_ref(&inner.warming_agents, key, agent_id).expect(AGENT_HELD)
+                    warming_ref(&inner.warming.agents, key, agent_id).expect(AGENT_HELD)
                 };
                 let main = s.agents.get(MAIN_AGENT);
                 // Main's recipe stands for the session. Where main holds none, the newest other agent's does, so a
@@ -332,9 +333,10 @@ impl Engine {
         self.expire();
         let now = self.now();
         let inner = self.lock();
-        let warming_agents = &inner.warming_agents;
+        let warming_agents = &inner.warming.agents;
         inner
             .sessions
+            .entries
             .iter()
             .flat_map(|(key, s)| {
                 s.agents
@@ -350,10 +352,11 @@ impl Engine {
 
     pub fn agent_counts(&self) -> AgentCounts {
         let inner = self.lock();
-        let warming_agents = &inner.warming_agents;
+        let warming_agents = &inner.warming.agents;
         let mut counts = AgentCounts::default();
         for (agent, _) in inner
             .sessions
+            .entries
             .iter()
             .flat_map(|(key, s)| {
                 s.agents.iter().map(move |(id, a)| {

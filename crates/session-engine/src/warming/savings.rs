@@ -250,8 +250,8 @@ impl Engine {
         let (settlements, skipped) = {
             let mut inner = self.lock();
             (
-                std::mem::take(&mut inner.settlements),
-                std::mem::take(&mut inner.skipped),
+                std::mem::take(&mut inner.warming.settlements),
+                std::mem::take(&mut inner.warming.skipped),
             )
         };
         for settlement in settlements {

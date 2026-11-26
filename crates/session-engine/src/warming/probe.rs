@@ -328,7 +328,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
     engine.flush();
     // The worker slot comes back only after both sends: `Engine::stats` reads a zero count only then, and a caller
     // that asserts on the ledger right after it would otherwise race the records this probe owes.
-    engine.lock().running -= 1;
+    engine.lock().warming.running -= 1;
 }
 
 impl Inner {
@@ -402,16 +402,16 @@ impl Inner {
         // The worker slot comes back to the record the probe started on whatever the fence says. A result
         // orphaned on a record that is still alive, by a superseding request or by a discard, would otherwise
         // leave `in_flight` set, and `step` skips an agent that has a probe in flight for good.
-        if let Some(warming) = agent_ref(&self.sessions, key, agent_id)
+        if let Some(warming) = agent_ref(&self.sessions.entries, key, agent_id)
             .filter(|agent| agent.incarnation == job.incarnation)
-            .map(|_| warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD))
+            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
         {
             warming.in_flight = false;
         }
-        let fenced = agent_ref(&self.sessions, key, agent_id).is_some_and(|agent| {
+        let fenced = agent_ref(&self.sessions.entries, key, agent_id).is_some_and(|agent| {
             agent.incarnation == job.incarnation
                 && agent.generation == job.generation
-                && warming_ref(&self.warming_agents, key, agent_id)
+                && warming_ref(&self.warming.agents, key, agent_id)
                     .expect(AGENT_HELD)
                     .current
                     .as_ref()
@@ -426,7 +426,7 @@ impl Inner {
             let label = if self.closed {
                 None
             } else {
-                match self.sessions.get(key) {
+                match self.sessions.entries.get(key) {
                     None => Some(Wasted::SessionEnded),
                     Some(session) => match session
                         .agents
@@ -434,7 +434,7 @@ impl Inner {
                         .filter(|agent| agent.incarnation == job.incarnation)
                     {
                         Some(_) => {
-                            warming_ref(&self.warming_agents, key, agent_id)
+                            warming_ref(&self.warming.agents, key, agent_id)
                                 .expect(AGENT_HELD)
                                 .last_stop
                         }
@@ -452,10 +452,10 @@ impl Inner {
             // still in flight at the ceiling joins them by the entry it wrote, computed as the landing computes it.
             if label == Wasted::IdleLimit && record.outcome == ProbeOutcome::Ok {
                 if let Exchange::Answered(result) = &exchange {
-                    if let Some(warming) = agent_ref(&self.sessions, key, agent_id)
+                    if let Some(warming) = agent_ref(&self.sessions.entries, key, agent_id)
                         .filter(|agent| agent.incarnation == job.incarnation)
                         .map(|_| {
-                            warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD)
+                            warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD)
                         })
                     {
                         let requested_ms = result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms);
@@ -479,7 +479,7 @@ impl Inner {
                     }
                 }
             }
-            self.settlements.push(crate::engine::Settlement {
+            self.warming.settlements.push(crate::engine::Settlement {
                 key: key.clone(),
                 key_generation: job.key_generation,
                 pool_id: job.pool_id.clone(),
@@ -489,7 +489,7 @@ impl Inner {
             });
             return;
         }
-        let warming = warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD);
+        let warming = warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD);
         let cold_limit = warming.timing.cold_probe_limit;
         let answered = match exchange {
             Exchange::Answered(result) => Some(result),
@@ -597,7 +597,7 @@ impl Inner {
         }
         self.set_reason(key, agent_id, Reason::Scheduled);
         // A probe that consumed its whole refresh interval must not start a tight loop.
-        if warming_ref(&self.warming_agents, key, agent_id)
+        if warming_ref(&self.warming.agents, key, agent_id)
             .expect(AGENT_HELD)
             .due_at()
             .is_some_and(|due| due <= now)
@@ -608,8 +608,8 @@ impl Inner {
 
     pub(crate) fn pause(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
         self.set_reason(key, agent_id, reason);
-        if let Some(warming) = agent_ref(&self.sessions, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD))
+        if let Some(warming) = agent_ref(&self.sessions.entries, key, agent_id)
+            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
         {
             warming.pause();
         }
@@ -730,7 +730,7 @@ impl Inner {
         if outcome == ProbeOutcome::Held {
             // The router's own standing, not the account's: no failure is counted, so the cold-probe limit never
             // pauses a recipe for a ledger that is catching up, and the entry's own lapse bounds the re-sends.
-            let warming = warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD);
+            let warming = warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD);
             let wait_ms = retry_after_ms.unwrap_or(warming.timing.retry_ms);
             warming.retry_at = Some(now.saturating_add(wait_ms));
             self.set_reason(key, agent_id, Reason::LedgerBehind);
@@ -773,7 +773,7 @@ impl Inner {
         now: i64,
         wait: RetryWait,
     ) {
-        let warming = warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD);
+        let warming = warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD);
         warming.failures += 1;
         let exponent = (warming.failures - 1).min(4);
         let step = (warming.timing.retry_ms << exponent).min(warming.timing.retry_max_ms);
@@ -891,7 +891,7 @@ mod tests {
         let mut agents = BTreeMap::new();
         agents.insert("main".to_string(), Agent::new("main", "k", 1, 0));
         let mut inner = Inner::empty(KeepaliveTiming::default(), KeepaliveLimits::default(), 0);
-        inner.sessions.insert(
+        inner.sessions.entries.insert(
             key.clone(),
             Session {
                 key_generation: 0,
@@ -909,7 +909,7 @@ mod tests {
                 cache_warming: true,
             },
         );
-        inner.warming_agents.insert(
+        inner.warming.agents.insert(
             key.clone(),
             BTreeMap::from([(
                 "main".to_string(),
@@ -974,15 +974,16 @@ mod tests {
             let job = job_on(&key);
             match orphaned_by {
                 "release" => {
-                    let agent = agent_mut(&mut inner.sessions, &key, "main").expect(AGENT_HELD);
+                    let agent =
+                        agent_mut(&mut inner.sessions.entries, &key, "main").expect(AGENT_HELD);
                     let warming =
-                        warming_mut(&mut inner.warming_agents, &key, "main").expect(AGENT_HELD);
+                        warming_mut(&mut inner.warming.agents, &key, "main").expect(AGENT_HELD);
                     agent.generation = 1;
                     warming.last_stop = Some(Wasted::Released);
                 }
                 _ => {
-                    inner.sessions.clear();
-                    inner.warming_agents.clear();
+                    inner.sessions.entries.clear();
+                    inner.warming.agents.clear();
                 }
             }
             let exchange = held_answer();
@@ -995,7 +996,7 @@ mod tests {
             assert_eq!(record.outcome, ProbeOutcome::Held, "{orphaned_by}");
             inner.apply_probe(&job, exchange, &record, None, 2_000);
             assert!(
-                inner.settlements.is_empty(),
+                inner.warming.settlements.is_empty(),
                 "{orphaned_by}: the held probe settles under no label"
             );
         }
@@ -1027,7 +1028,7 @@ mod tests {
                 )),
                 1_000,
             );
-            let warming = &inner.warming_agents[&key]["main"];
+            let warming = &inner.warming.agents[&key]["main"];
             assert_eq!(
                 (warming.reason, warming.paused),
                 (reason, paused),
@@ -1053,7 +1054,7 @@ mod tests {
             )),
             1_000,
         );
-        let warming = &inner.warming_agents[&key]["main"];
+        let warming = &inner.warming.agents[&key]["main"];
         assert_eq!(
             (warming.paused, warming.reason, warming.retry_at),
             (false, Reason::ProbeQuotaExhausted, Some(121_000)),
@@ -1077,7 +1078,7 @@ mod tests {
             )),
             1_000,
         );
-        let warming = &inner.warming_agents[&key]["main"];
+        let warming = &inner.warming.agents[&key]["main"];
         assert_eq!(
             (warming.reason, warming.paused),
             (Reason::RetryableProbeError, false),
@@ -1095,7 +1096,7 @@ mod tests {
             Some(&answered(429, None, None, None)),
             1_000,
         );
-        let warming = &inner.warming_agents[&key]["main"];
+        let warming = &inner.warming.agents[&key]["main"];
         assert_eq!(
             (warming.paused, warming.reason, warming.retry_at),
             (
@@ -1129,7 +1130,7 @@ mod tests {
                 Some(&answered(403, Some(code), None, None)),
                 1_000,
             );
-            let warming = &inner.warming_agents[&key]["main"];
+            let warming = &inner.warming.agents[&key]["main"];
             assert_eq!(
                 (warming.reason, warming.paused, warming.retry_at),
                 (reason, true, None),
@@ -1162,7 +1163,7 @@ mod tests {
             Some(&answered(503, Some("ledger_behind"), None, Some(5))),
             1_000,
         );
-        let warming = &inner.warming_agents[&key]["main"];
+        let warming = &inner.warming.agents[&key]["main"];
         assert_eq!(
             (
                 warming.paused,
@@ -1185,7 +1186,7 @@ mod tests {
             Some(&answered(503, Some("ledger_behind"), None, None)),
             1_000,
         );
-        let warming = &inner.warming_agents[&key]["main"];
+        let warming = &inner.warming.agents[&key]["main"];
         assert_eq!(
             (
                 warming.paused,
@@ -1207,7 +1208,7 @@ mod tests {
     fn ledger_behind_answers_in_a_row_never_reach_the_retry_limit() {
         let (mut inner, key) = one_agent_inner();
         // An hour of entry ahead, so the ladder's deadline would pause a hold that counted a failure.
-        warming_mut(&mut inner.warming_agents, &key, "main")
+        warming_mut(&mut inner.warming.agents, &key, "main")
             .expect(AGENT_HELD)
             .expires = Some(1_000 + crate::ONE_HOUR_MS);
         let answers = 6;
@@ -1220,7 +1221,7 @@ mod tests {
                 Some(&answered(503, Some("ledger_behind"), None, Some(5))),
                 now,
             );
-            let warming = &inner.warming_agents[&key]["main"];
+            let warming = &inner.warming.agents[&key]["main"];
             assert_eq!(
                 (
                     warming.paused,
@@ -1244,7 +1245,7 @@ mod tests {
             Some(&answered(503, None, None, None)),
             1_000,
         );
-        let warming = &inner.warming_agents[&key]["main"];
+        let warming = &inner.warming.agents[&key]["main"];
         assert_eq!(
             (warming.paused, warming.failures, warming.reason),
             (false, 1, Reason::RetryableProbeError),

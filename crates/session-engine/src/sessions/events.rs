@@ -623,7 +623,7 @@ impl Inner {
         let key: SessionKey = (key_id.to_string(), report.session_id.clone());
         // A start registers the session every other report is checked against, so it takes none of the checks.
         if !matches!(report.event, Reported::SessionStart { .. }) {
-            let Some(session) = self.sessions.get(&key) else {
+            let Some(session) = self.sessions.entries.get(&key) else {
                 return Err(err("unknown_instance", 409));
             };
             // A session the previous holder of this key id registered answers as one that was never registered, so
@@ -673,7 +673,8 @@ impl Inner {
                 filed_facts = true;
             }
             Reported::SessionEnd => {
-                let agents: Vec<String> = self.sessions[&key].agents.keys().cloned().collect();
+                let agents: Vec<String> =
+                    self.sessions.entries[&key].agents.keys().cloned().collect();
                 for agent_id in &agents {
                     self.discard(
                         &key,
@@ -681,9 +682,10 @@ impl Inner {
                         Reason::SessionEnded,
                         Some(Wasted::SessionEnded),
                     );
-                    let agent = agent_mut(&mut self.sessions, &key, agent_id).expect(AGENT_HELD);
+                    let agent =
+                        agent_mut(&mut self.sessions.entries, &key, agent_id).expect(AGENT_HELD);
                     let warming =
-                        warming_mut(&mut self.warming_agents, &key, agent_id).expect(AGENT_HELD);
+                        warming_mut(&mut self.warming.agents, &key, agent_id).expect(AGENT_HELD);
                     agent.set_state(AgentState::Released);
                     // A session's end is no return, so main's window ends with it.
                     warming.close_idle_episode(agent);
@@ -692,34 +694,34 @@ impl Inner {
                         self.release_record(&key, agent_id, now, snapshot);
                     }
                 }
-                let session = self.sessions.get_mut(&key).unwrap();
+                let session = self.sessions.entries.get_mut(&key).unwrap();
                 session.ended = true;
                 session.sequence = report.sequence;
                 session.last_report_at = now;
                 self.touch_session(&key);
                 return Ok(Applied {
-                    ack: acknowledge(&key, &self.sessions[&key], None, None),
+                    ack: acknowledge(&key, &self.sessions.entries[&key], None, None),
                     filed_facts: false,
                 });
             }
             Reported::AgentStart {
                 request_generation, ..
             } => {
-                let existing =
-                    agent_ref(&self.sessions, &key, &agent_id).map(|a| (a.state, a.generation));
+                let existing = agent_ref(&self.sessions.entries, &key, &agent_id)
+                    .map(|a| (a.state, a.generation));
                 match existing {
                     Some((state, generation)) => {
                         if state != AgentState::Released || *request_generation != Some(generation)
                         {
                             return Err(err("agent_exists", 409));
                         }
-                        let released = warming_ref(&self.warming_agents, &key, &agent_id)
+                        let released = warming_ref(&self.warming.agents, &key, &agent_id)
                             .expect(AGENT_HELD)
                             .last_stop;
                         self.discard(&key, &agent_id, Reason::AwaitingRequest, None);
-                        let agent =
-                            agent_mut(&mut self.sessions, &key, &agent_id).expect(AGENT_HELD);
-                        let warming = warming_mut(&mut self.warming_agents, &key, &agent_id)
+                        let agent = agent_mut(&mut self.sessions.entries, &key, &agent_id)
+                            .expect(AGENT_HELD);
+                        let warming = warming_mut(&mut self.warming.agents, &key, &agent_id)
                             .expect(AGENT_HELD);
                         // The release's label stays until the late result lands, so a probe the release orphaned
                         // settles under it rather than under nothing.
@@ -727,16 +729,16 @@ impl Inner {
                         agent.resume(warming, now);
                     }
                     None => {
-                        if self.agent_count() >= self.limits.max_agents {
+                        if self.agent_count() >= self.sessions.max_agents {
                             return Err(err("agent_limit", 429));
                         }
                         let incarnation = self.incarnation();
-                        self.sessions.get_mut(&key).unwrap().agents.insert(
+                        self.sessions.entries.get_mut(&key).unwrap().agents.insert(
                             agent_id.clone(),
                             Agent::new(&agent_id, &key.0, incarnation, now),
                         );
-                        let warming = AgentWarming::new(now, self.timing);
-                        let warming_agents = self.warming_agents.get_mut(&key).unwrap();
+                        let warming = AgentWarming::new(now, self.warming.timing);
+                        let warming_agents = self.warming.agents.get_mut(&key).unwrap();
                         warming_agents.insert(agent_id.clone(), warming);
                         self.set_reason(&key, &agent_id, Reason::AwaitingRequest);
                     }
@@ -748,9 +750,10 @@ impl Inner {
                 ..
             } => {
                 self.reported_agent(&key, &agent_id, *request_generation)?;
-                let agent = agent_mut(&mut self.sessions, &key, &agent_id).expect(AGENT_HELD);
+                let agent =
+                    agent_mut(&mut self.sessions.entries, &key, &agent_id).expect(AGENT_HELD);
                 let warming =
-                    warming_mut(&mut self.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+                    warming_mut(&mut self.warming.agents, &key, &agent_id).expect(AGENT_HELD);
                 // A person at the terminal says nothing about the agent's work, so presence moves the idle clock
                 // alone.
                 if *presence {
@@ -805,9 +808,10 @@ impl Inner {
                 ..
             } => {
                 self.reported_agent(&key, &agent_id, *request_generation)?;
-                let agent = agent_mut(&mut self.sessions, &key, &agent_id).expect(AGENT_HELD);
+                let agent =
+                    agent_mut(&mut self.sessions.entries, &key, &agent_id).expect(AGENT_HELD);
                 let warming =
-                    warming_mut(&mut self.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+                    warming_mut(&mut self.warming.agents, &key, &agent_id).expect(AGENT_HELD);
                 let was = agent.state;
                 let state = *state;
                 // The mod's heartbeat closes a command past its deadline or sees the wake pass, and reports idle
@@ -844,7 +848,7 @@ impl Inner {
                 }
             }
         }
-        let session = self.sessions.get_mut(&key).unwrap();
+        let session = self.sessions.entries.get_mut(&key).unwrap();
         session.sequence = report.sequence;
         if renews_lease {
             session.lease = now + LEASE_MS;
@@ -865,14 +869,19 @@ impl Inner {
             Reported::Parked { .. } | Reported::State { .. }
         ) && agent_id == MAIN_AGENT
         {
-            if let Some(main) = agent_ref(&self.sessions, &key, MAIN_AGENT) {
+            if let Some(main) = agent_ref(&self.sessions.entries, &key, MAIN_AGENT) {
                 let warming =
-                    warming_mut(&mut self.warming_agents, &key, MAIN_AGENT).expect(AGENT_HELD);
+                    warming_mut(&mut self.warming.agents, &key, MAIN_AGENT).expect(AGENT_HELD);
                 open_idle_episode(main, warming, snapshot);
             }
         }
         Ok(Applied {
-            ack: acknowledge(&key, &self.sessions[&key], report.event.agent_id(), None),
+            ack: acknowledge(
+                &key,
+                &self.sessions.entries[&key],
+                report.event.agent_id(),
+                None,
+            ),
             filed_facts,
         })
     }
@@ -885,7 +894,7 @@ impl Inner {
         agent_id: &str,
         request_generation: Option<u64>,
     ) -> Result<&mut Agent, EventError> {
-        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
+        let Some(agent) = agent_mut(&mut self.sessions.entries, key, agent_id) else {
             return Err(err("unknown_agent", 409));
         };
         if request_generation != Some(agent.generation) {
@@ -915,22 +924,27 @@ impl Inner {
         // re-adopt or to conflict with; the start below replaces it whole, as it replaces an instance.
         let mine = self
             .sessions
+            .entries
             .get(&key)
             .is_some_and(|s| s.key_generation == key_generation);
         // An ended session keeps its entry until the expiry and holds no slot, and a registered one holds none
         // until the first real request the caps admit, so a session that has sent nothing never fills the count. The
         // bound is met by every start that brings a session to life, an instance replacement included. A
         // same-instance recovery of a live session consumes nothing.
-        let becomes_live = self.sessions.get(&key).is_none_or(|s| s.ended);
+        let becomes_live = self.sessions.entries.get(&key).is_none_or(|s| s.ended);
         if becomes_live {
             let live = self.live_sessions();
-            if live >= self.limits.max_sessions {
+            if live >= self.sessions.max_sessions {
                 return Err(err("session_limit", 429));
             }
         }
         if mine {
-            let full = self.agent_count() >= self.limits.max_agents;
-            let session = self.sessions.get_mut(&key).expect("the session just read");
+            let full = self.agent_count() >= self.sessions.max_agents;
+            let session = self
+                .sessions
+                .entries
+                .get_mut(&key)
+                .expect("the session just read");
             if session.instance == report.instance_id {
                 // A same-instance start after a lapse re-adopts the session: the mod may only have been silent,
                 // and the recipes it left are still the ones its next request needs. One after the session's end
@@ -960,7 +974,7 @@ impl Inner {
                     // starts again as a registration starts it. The subagents stay released until the mod starts
                     // them again, and every generation stays as the end left it.
                     if let Some(main) = session.agents.get_mut(MAIN_AGENT) {
-                        let warming = warming_mut(&mut self.warming_agents, &key, MAIN_AGENT)
+                        let warming = warming_mut(&mut self.warming.agents, &key, MAIN_AGENT)
                             .expect(AGENT_HELD);
                         main.resume(warming, now);
                     } else {
@@ -968,6 +982,7 @@ impl Inner {
                         // a fresh start does.
                         let incarnation = self.incarnation();
                         self.sessions
+                            .entries
                             .get_mut(&key)
                             .expect("the session just read")
                             .agents
@@ -975,9 +990,10 @@ impl Inner {
                                 MAIN_AGENT.to_string(),
                                 Agent::new(MAIN_AGENT, &key.0, incarnation, now),
                             );
-                        let warming = AgentWarming::new(now, self.timing);
+                        let warming = AgentWarming::new(now, self.warming.timing);
                         let warming_agents = self
-                            .warming_agents
+                            .warming
+                            .agents
                             .get_mut(&key)
                             .expect("the session just read");
                         warming_agents.insert(MAIN_AGENT.to_string(), warming);
@@ -996,7 +1012,7 @@ impl Inner {
                     filed_facts = true;
                 }
                 self.touch_session(&key);
-                let session = &self.sessions[&key];
+                let session = &self.sessions.entries[&key];
                 return Ok(Applied {
                     ack: acknowledge(&key, session, None, Some(agents_of(session))),
                     filed_facts,
@@ -1014,11 +1030,15 @@ impl Inner {
             return Err(err("unknown_previous_instance", 409));
         }
         // The replaced session's own slots, so the subtraction leaves the other sessions' count.
-        let held = self.sessions.get(&key).map_or(0, Session::agent_slots);
-        if self.agent_count() - held >= self.limits.max_agents {
+        let held = self
+            .sessions
+            .entries
+            .get(&key)
+            .map_or(0, Session::agent_slots);
+        if self.agent_count() - held >= self.sessions.max_agents {
             return Err(err("agent_limit", 429));
         }
-        if self.sessions.contains_key(&key) {
+        if self.sessions.entries.contains_key(&key) {
             self.discard_session(&key, Reason::InstanceReplaced, Some(Wasted::Replaced));
             // Filed under the generation the replaced rows were saved under: a start under a new generation leaves
             // one removal for the old row and one write for the new, so a load never meets both.
@@ -1028,6 +1048,7 @@ impl Inner {
         // generation inherits whether the session took its slots and when it last carried a real request.
         let (last_real_at, slotted) = self
             .sessions
+            .entries
             .get(&key)
             .filter(|_| mine)
             .map_or((None, false), |s| (s.last_real_at, s.slotted));
@@ -1037,7 +1058,7 @@ impl Inner {
             MAIN_AGENT.to_string(),
             Agent::new(MAIN_AGENT, &key.0, incarnation, now),
         );
-        self.sessions.insert(
+        self.sessions.entries.insert(
             key.clone(),
             Session {
                 key_generation,
@@ -1055,9 +1076,12 @@ impl Inner {
                 cache_warming,
             },
         );
-        self.warming_agents.insert(
+        self.warming.agents.insert(
             key.clone(),
-            BTreeMap::from([(MAIN_AGENT.to_string(), AgentWarming::new(now, self.timing))]),
+            BTreeMap::from([(
+                MAIN_AGENT.to_string(),
+                AgentWarming::new(now, self.warming.timing),
+            )]),
         );
         // The session's own sets start over with the record whatever the list says, and its agents' stored sets stay
         // for the earlier agents that no report states again, unless the list leaves the kind out.
@@ -1069,7 +1093,7 @@ impl Inner {
         }
         self.touch_session(&key);
         self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
-        let session = &self.sessions[&key];
+        let session = &self.sessions.entries[&key];
         Ok(Applied {
             ack: acknowledge(&key, session, None, Some(agents_of(session))),
             filed_facts: true,

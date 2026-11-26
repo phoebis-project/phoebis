@@ -5,4 +5,5 @@ pub(crate) mod breakeven;
 pub(crate) mod probe;
 pub(crate) mod recipe;
 pub(crate) mod savings;
+pub(crate) mod state;
 pub(crate) mod usage;
