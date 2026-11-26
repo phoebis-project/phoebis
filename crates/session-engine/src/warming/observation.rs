@@ -489,8 +489,8 @@ pub(crate) enum Unanswered {
 }
 
 impl WarmingState {
-    /// The one writer of an agent's reason, so the counter behind the views never disagrees with the reason
-    /// they show. Nearly every change to a recipe writes a reason, so this is where most of them become dirty.
+    /// The one writer of an agent's reason. Nearly every change to a recipe writes a reason, so this is where most of
+    /// them become dirty.
     pub(crate) fn set_reason(
         &mut self,
         sessions: &SessionsState,
@@ -502,12 +502,14 @@ impl WarmingState {
         if let Some(warming) = warming_if_held_mut(&mut self.agents, sessions, key, agent_id) {
             warming.reason = reason;
         }
+        #[cfg(any(test, feature = "debug-hooks"))]
         self.count(reason);
         changes.agent_row(key, agent_id);
         changes
     }
 
     /// Counts one cause: an agent's reason as `set_reason` writes it, or one that no agent's reason takes.
+    #[cfg(any(test, feature = "debug-hooks"))]
     pub(crate) fn count(&mut self, reason: Reason) {
         *self.reasons.entry(reason).or_default() += 1;
     }

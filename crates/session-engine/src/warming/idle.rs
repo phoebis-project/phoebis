@@ -7,6 +7,7 @@ use crate::sessions::state::{
 };
 use crate::sessions::view::CompanionState;
 use crate::warming::agent::{warming_mut, AgentWarming};
+#[cfg(any(test, feature = "debug-hooks"))]
 use crate::warming::causes::Reason;
 use crate::warming::state::{Changes, WarmingState};
 
@@ -347,15 +348,19 @@ impl WarmingState {
         }
     }
 
-    /// A lease that lapsed: the lapse is counted once for each agent of the session, and main's window closes.
+    /// A lease that lapsed: main's window closes, and a build under `debug-hooks` counts the lapse once for each agent
+    /// of the session.
     pub(crate) fn lease_lapsed(&mut self, sessions: &SessionsState, key: &SessionKey) {
         // The recipes stay: a silent companion is not an ended session, and the idle limits bound what the
         // engine spends on it. The lapse is counted once per agent, as the Go engine counted it, but no
         // agent's own reason is rewritten: a recipe the scheduler keeps probing would otherwise read held
         // in every view until its next probe.
         let session = &sessions.entries[key];
-        let agents = session.agents.len() as u64;
-        *self.reasons.entry(Reason::LeaseExpired).or_default() += agents;
+        #[cfg(any(test, feature = "debug-hooks"))]
+        {
+            let agents = session.agents.len() as u64;
+            *self.reasons.entry(Reason::LeaseExpired).or_default() += agents;
+        }
         // A lapse is no return, so main's window ends here.
         if let Some(main) = session.agents.get(MAIN_AGENT) {
             warming_mut(&mut self.agents, key, MAIN_AGENT)

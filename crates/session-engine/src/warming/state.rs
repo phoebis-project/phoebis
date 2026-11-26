@@ -30,6 +30,7 @@ pub(crate) struct WarmingState {
     pub contradiction_marks: HashMap<String, ChainMark>,
     /// The instant of the last contradiction line per client version, so one prints per version per hour.
     pub chain_warned: HashMap<String, i64>,
+    #[cfg(any(test, feature = "debug-hooks"))]
     pub reasons: BTreeMap<Reason, u64>,
     /// Every body in memory, a recipe an arrival set aside beside the current ones, since `max_retained_bytes` bounds
     /// memory.
@@ -69,6 +70,7 @@ impl WarmingState {
             compactions: HashMap::new(),
             contradiction_marks: HashMap::new(),
             chain_warned: HashMap::new(),
+            #[cfg(any(test, feature = "debug-hooks"))]
             reasons: BTreeMap::new(),
             retained: 0,
             running: 0,

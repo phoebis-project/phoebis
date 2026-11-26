@@ -769,6 +769,7 @@ impl WarmingState {
         tally.agents += 1;
         if row.body_size > 0 {
             tally.recipes += 1;
+            #[cfg(any(test, feature = "debug-hooks"))]
             self.count(Reason::Evicted);
         }
         let Some(mut warming) = warming else {

@@ -1199,7 +1199,7 @@ async fn a_bus_gap_discards_the_pending_observation_and_keeps_an_armed_recipe() 
     // The engine's own subscriber, unread, fills past the queue depth; the observer task then sees the drop
     // counter rise before the next event it reads.
     let observer = phoebis_session_engine::spawn_observer(r.engine.clone());
-    let filler = r.engine.parts_bus();
+    let filler = r.bus.clone();
     for i in 0..(phoebis_bus::QUEUE_DEPTH + 64) {
         filler.publish(r.chunk("noise", i as u32, ""));
     }

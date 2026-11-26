@@ -196,6 +196,10 @@ impl Engine {
         self.inner.lock().expect(LOCK_POISONED)
     }
 
+    /// How many times each reason was written since the start, an agent's own or one that no agent's reason takes.
+    /// Compiled only under the `debug-hooks` feature, which the crate's own dev-dependency turns on for its suites:
+    /// no view reads the count, so a release build keeps none.
+    #[cfg(any(test, feature = "debug-hooks"))]
     pub fn reasons(&self) -> BTreeMap<Reason, u64> {
         self.lock().warming.reasons.clone()
     }
@@ -475,10 +479,6 @@ impl Engine {
         inner.warm(|w, s| w.bus_gap(s, self.now()));
     }
 
-    pub fn parts_bus(&self) -> Bus {
-        self.parts.bus.clone()
-    }
-
     fn on_observed(&self, observed: RequestObserved, resolve: impl Fn(&str) -> Option<String>) {
         // Only an inference request says anything about the cache entry a recipe is for. Token counting
         // carries the same session and agent headers and writes no cache, so it must reach nothing below:
@@ -568,6 +568,7 @@ impl Engine {
             .sessions
             .instance_check(&key, observed.instance_id.as_deref(), now)
         {
+            #[cfg(any(test, feature = "debug-hooks"))]
             inner.warming.count(Reason::InstanceMismatch);
             return;
         }
@@ -1197,7 +1198,9 @@ impl Engine {
         }
     }
 
-    /// The recipes one session holds, for a test or a view that asks by ids.
+    /// The recipes one session holds, for the suites that ask by ids. Compiled only under the `debug-hooks` feature,
+    /// which the crate's own dev-dependency turns on, since no view calls it.
+    #[cfg(any(test, feature = "debug-hooks"))]
     pub fn recipes_for(&self, key_id: &str, session_id: &str) -> Vec<String> {
         let inner = self.lock();
         let key = (key_id.to_string(), session_id.to_string());
