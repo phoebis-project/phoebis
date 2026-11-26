@@ -1425,7 +1425,10 @@ fn deleting_a_key_drops_its_stored_fact_sets_and_leaves_another_keys() {
 
 #[test]
 fn a_set_of_a_deleted_keys_generation_reaches_no_row_behind_a_re_creation_of_its_id() {
-    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
+    // A clock that stands still gives `front` the first generation of `back`, so a condition that reads one of its two
+    // members alone finds a key for the set under that generation.
+    let store =
+        Store::open_in_memory(&StorageKey::generate(), std::sync::Arc::new(|| 1_000_000)).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     let first = store
         .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
@@ -1438,6 +1441,7 @@ fn a_set_of_a_deleted_keys_generation_reaches_no_row_behind_a_re_creation_of_its
         )
         .unwrap()
         .created_at;
+    assert_eq!(front, first, "front holds the first generation of back");
     store.delete_api_key("back", "test").unwrap();
     store
         .insert_api_key(

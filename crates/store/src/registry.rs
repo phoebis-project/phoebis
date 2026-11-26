@@ -1724,7 +1724,7 @@ impl Store {
         // Nothing reads these rows again, since a key created under the id next takes a later generation;
         // dropping them here spares the retention purge a table of dead entries.
         tx.execute("DELETE FROM session_memory WHERE key_id = ?1", params![id])?;
-        // A deleted key's stored sets hold its sessions' titles, paths and remotes, and nothing reads them again.
+        // A deleted key's stored sets hold its sessions' paths, remotes and titles, and nothing reads them again.
         // With request retention off no cut would end an agent's set.
         tx.execute("DELETE FROM companion_facts WHERE key_id = ?1", params![id])?;
         let now = self.now_ms();
