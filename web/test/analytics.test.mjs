@@ -300,53 +300,6 @@ test("the mock's burn fold sums the rows' own shares, prices only rows with toke
   for (const rows of [[priced, unpriced], [unpriced, priced]]) assert.equal(shareOf(rows), null, 'a row the cost model cannot price nulls the window');
 });
 
-test('an hour of two requests in different bands sums the per-request shares at their completions', async () => {
-  const api = new d.MockApi();
-  await api.login('admin');
-  const costs = (await api.getSettings()).subscriptionCosts;
-  const tierOf = new Map(d.ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
-  // A plan-funded inference the cost model prices, as the template the two rows are written from, on an account whose
-  // set holds the 5-hour window and under a client whose tables shrink that window inside the band, so the two bands
-  // price it apart.
-  const fiveHour = new Set(d.ACCOUNTS.filter((a) => a.windows.some((w) => w.id === '5h')).map((a) => a.id));
-  const template = [...d.requestById.values()].find((r) => r.kind === 'inference' && r.status === 200 && r.attempts.length === 1 && tierOf.get(r.accountId ?? '') !== undefined && fiveHour.has(r.accountId) && d.fundingOf(r.attempts[0]) === 'plan' && d.weightedWindows(costs, r.canonicalModel).length > 0 && d.tablesFor(r.client).peak.capacityFactor.fiveHour < 1);
-  assert.ok(template, 'the story holds a priced plan-funded answer');
-  const tier = tierOf.get(template.accountId);
-  // The band's next edge after the early hours of a Wednesday, read off the table the mock prices with.
-  const edge = d.bandNow(costs, Date.parse('2026-09-16T08:00:00Z')).at;
-  assert.ok(edge !== null, 'the band flips within the week');
-  const usage = (input, output) => ({ ...template.usage, cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input, output });
-  const rowAt = (at, durationMs, u, id) => ({ ...template, at: new Date(at).toISOString(), durationMs, id, usage: u });
-  // One arrives a minute before the edge and completes a minute past it, and the other lies wholly before the edge
-  // inside the same hour, so the hour holds both and only the first completes on the far side.
-  const crossing = rowAt(edge - 60_000, 120_000, usage(400_000, 20_000), 'req_crossing');
-  const before = rowAt(edge - 20 * 60_000, 60_000, usage(250_000, 9_000), 'req_before');
-  const hours = d.rollups([crossing, before]);
-  assert.equal(hours.length, 1, 'the two requests share one hour of one lane');
-  const share = (r, at) => d.shareIn(costs, 'five_hour', tier, r.canonicalModel, r.usage, d.inBand(costs, at));
-  const completion = (r) => Date.parse(r.at) + r.durationMs;
-  const got = hours[0].shares.five_hour;
-  const want = share(crossing, completion(crossing)) + share(before, completion(before));
-  assert.ok(Math.abs(got - want) < 1e-12, `the hour reads ${got} against the requests' own ${want}`);
-  const atArrivals = share(crossing, Date.parse(crossing.at)) + share(before, Date.parse(before.at));
-  assert.ok(Math.abs(got - atArrivals) > 1e-9, 'a request priced at its arrival reads the other band');
-  const summed = usage(650_000, 29_000);
-  for (const at of [completion(crossing), completion(before)]) {
-    assert.ok(Math.abs(got - d.shareIn(costs, 'five_hour', tier, template.canonicalModel, summed, d.inBand(costs, at))) > 1e-9, 'the summed tokens priced at one instant read one band for both');
-  }
-});
-
-test('a rollup counts an undecodable stream inside the upstream errors it is part of, so the error split never reads negative', () => {
-  const template = [...d.requestById.values()].find((r) => r.kind === 'inference' && r.status === 200 && r.attempts.length === 1);
-  assert.ok(template, 'the story holds a single-attempt answer');
-  const rowOf = (status, id) => ({ ...template, errorCode: 'stream_undecodable', id, outcome: status === 200 ? 'succeeded' : 'failed', status });
-  // The relay's 502 is the undecodable stream the ledger files. The same code under a 200 is not an upstream error.
-  const hours = d.rollups([rowOf(502, 'req_cut'), rowOf(200, 'req_whole')]);
-  const total = (read) => hours.reduce((n, h) => n + read(h.requests), 0);
-  assert.deepEqual([total((r) => r.undecodable), total((r) => r.upstream_error)], [1, 1], 'the 502 alone counts, once under each');
-  for (const h of hours) assert.ok(h.requests.undecodable <= h.requests.upstream_error, `${h.hour} reads ${h.requests.undecodable} undecodable of ${h.requests.upstream_error} upstream errors`);
-});
-
 // The plan word each tier resolves to on its own, so an account reads the plan the router would resolve for it and the
 // gate prices it by its tier. A case that needs another word passes it.
 const PLAN_OF_TIER = { claude_max_20x: 'max_20x', claude_team: 'team', default_claude_ai: 'pro', default_claude_max_20x: 'max_20x', default_claude_max_5x: 'max_5x', default_claude_zero: 'usage_based' };

@@ -316,7 +316,7 @@ const cooldownRows: CooldownRow[] = [
 const COOLDOWNS: CooldownRow[] = [...new Map(cooldownRows.map((c) => [`${c.accountId}|${c.scope}|${c.until}`, c])).values()];
 
 /** A member's spend as the ledger reported it at `at`: research crossed its day's budget at 12:41:07. */
-export function budgetsAt(pool: PoolSeed, accountId: string, at: number): RecordBudget[] {
+function budgetsAt(pool: PoolSeed, accountId: string, at: number): RecordBudget[] {
   const member = pool.members.find((m) => m.accountId === accountId);
   if (!member) return [];
   const spentOf = (period: 'day' | 'month') => {
@@ -355,7 +355,7 @@ const creditsAt = (accountId: string, at: number): RecordCandidate['credits'] =>
  * cooldown that holds the request, the fast credits, the budget, the fast lane's own limit, and last the attempt this
  * request already made, so a member it tried reads the cooldown that answered rather than the attempt.
  */
-export function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string, fast: boolean, attempted: string[]): RecordCandidate['obstacle'] {
+function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string, fast: boolean, attempted: string[]): RecordCandidate['obstacle'] {
   const plain = (name: string, reason: string | null = null, until: string | null = null) => ({ name, reason, scope: null, until, window: null });
   const state = stateAt(a, at);
   if (state !== 'ready' || !enabledAt(a, at)) return plain('operator');
@@ -729,7 +729,7 @@ const longestOf = <T>(list: T[], runway: (x: T) => number | null): T[] => {
  * with no read keeping its place, and none where the runway narrows nothing, so the pick line names `by_runway` only
  * where it broke the tie.
  */
-export function runwayTiesOf<T>(ties: T[], read: (c: T) => boolean, runway: (c: T) => number | null): T[] {
+function runwayTiesOf<T>(ties: T[], read: (c: T) => boolean, runway: (c: T) => number | null): T[] {
   const key = (c: T) => runway(c) ?? Number.POSITIVE_INFINITY;
   const reads = ties.filter(read);
   if (reads.length === 0) return [];
@@ -1104,7 +1104,7 @@ const fiveHourHeld = (source: RecordCandidate, pool: PoolSeed, at: number): { ag
  * horizon (its reset cut at the account's end) moved back by the threshold lies ahead, and the window is past the hold.
  * The excess is the demand's past the 5-hour ceiling there, per hour to it.
  */
-export function stretchTriggerOf(source: RecordCandidate, pool: PoolSeed, at: number): { excess: number; slowed: true; window: string } | null {
+function stretchTriggerOf(source: RecordCandidate, pool: PoolSeed, at: number): { excess: number; slowed: true; window: string } | null {
   const overSince = slowReadAt(source.accountId, pool, at)?.overSince ?? null;
   const x = source.windows.five_hour;
   if (overSince === null || at - overSince < SLOW_DOWN_WAIT_MS || x?.horizon === null || x?.horizon === undefined || x.demand === null || fiveHourHeld(source, pool, at) !== null) return null;
@@ -2091,11 +2091,8 @@ function pinEventsOf(spec: Spec, pinning: boolean): RecordOutcome['pinEvents'] {
   return [...(expired ? [{ kind: 'pin_expired', reason: reasons[0] ?? null }] : []), ...(created ? [{ kind: 'pin_created', reason: null }] : [])];
 }
 
-/**
- * A placement's summary fact, by the router's own rules. Exported so a test drives the strategies no pool of the story
- * contests a tier under.
- */
-export function placementFactOf(record: DecisionRecord, pick: ReturnType<typeof pickOf>, strategy: string): SummaryFact[] {
+/** A placement's summary fact, by the router's own rules. */
+function placementFactOf(record: DecisionRecord, pick: ReturnType<typeof pickOf>, strategy: string): SummaryFact[] {
   const rung = record.outcome.rung;
   if (rung?.rung === 'with_main') return [];
   if (rung) return [summaryFact('prefix', rung.prefixTokens, 'tokens'), summaryFact('depth', rung.depth, 'count')];
@@ -2905,8 +2902,7 @@ function buildDecisions() {
       if (record && a.selection) a.selection = { ...a.selection, skipped: skippedOf(record) };
     }
   }
-  const pins = story.flatMap((s) => (s.inFlight ? [{ attempt: s.attempt, inFlight: s.inFlight, requestId: s.request.id, seq: s.seq }] : []));
-  return { decisions, pins, summaries: summaries.sort((a, b) => Date.parse(b.at) - Date.parse(a.at)) };
+  return { decisions, summaries: summaries.sort((a, b) => Date.parse(b.at) - Date.parse(a.at)) };
 }
 
 const built = buildDecisions();
@@ -2915,11 +2911,6 @@ const built = buildDecisions();
 export const DECISIONS: Map<string, DecisionRecord> = built.decisions;
 /** One summary per record, the routing log's decision rows, newest first. */
 export const SUMMARIES: DecisionSummary[] = built.summaries;
-/**
- * The in-flight counts the story writes by hand, per decision, which alone put a story member at its cap. The seq
- * tells a hold from the placement after it on the same attempt.
- */
-export const STORY_PINS: { attempt: number; inFlight: Record<string, number>; requestId: string; seq: number }[] = built.pins;
 
 export type EventSeed = Omit<RoutingEvent, 'agentId' | 'actor' | 'id' | 'keyId' | 'model' | 'poolId' | 'requestId' | 'sessionId' | 'type'> & Partial<Pick<RoutingEvent, 'actor' | 'agentId' | 'keyId' | 'model' | 'poolId' | 'requestId' | 'sessionId'>>;
 

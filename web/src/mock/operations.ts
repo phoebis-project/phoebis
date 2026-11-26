@@ -300,11 +300,11 @@ const SESSION_EXPIRE_SECONDS = 86_400;
 const NON_COMPANION_IDLE_SECONDS = 3_600;
 /**
  * The router drops a session past `SESSION_EXPIRE_SECONDS`, so a ledger-only row is listed only while its last request
- * is inside the span. Exported for the consistency test's two instants.
+ * is inside the span.
  */
-export const insideSessionExpiry = (lastAt: string, now: number): boolean => Date.parse(lastAt) + SESSION_EXPIRE_SECONDS * 1000 > now;
+const insideSessionExpiry = (lastAt: string, now: number): boolean => Date.parse(lastAt) + SESSION_EXPIRE_SECONDS * 1000 > now;
 /** Whether an instant is inside the non-companion timeout: a row or a line with no use on record is never older. */
-export const withinNonCompanionTimeout = (at: string | null, seconds: number, now: number): boolean => at === null || now - Date.parse(at) <= seconds * 1000;
+const withinNonCompanionTimeout = (at: string | null, seconds: number, now: number): boolean => at === null || now - Date.parse(at) <= seconds * 1000;
 
 // Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
 // so the earlier holder's rows count for its own row below, never for the live session that shares their id. A refused
@@ -1313,18 +1313,17 @@ if (holderRow?.lastRequestAt && insideSessionExpiry(holderRow.lastRequestAt, NOW
 // The desktop session whose every request the key's own guardrail refused before any account was asked. The router
 // lists it off the ledger's rows with no pin and no recipe, so a drifting or blocked client stays visible, and the
 // activity fold gives it the newest refusal as its last request, and only while that refusal is inside the router's
-// session expiry, the non-companion timeout leaving it out of the route's list sooner. The row is built at an instant
-// since the mock's now is fixed at load, so the consistency test reads it inside the expiry and past it.
+// session expiry, the non-companion timeout leaving it out of the route's list sooner.
 const blockedGeneration = Date.parse(keyById.get('desktop')!.createdAt);
 const blockedLast = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === blockedGeneration && r.sessionId === BLOCKED_SESSION_ID);
-export function refusalOnlyRows(now: number): Session[] {
-  if (!blockedLast || !insideSessionExpiry(blockedLast.at, now)) return [];
+function refusalOnlyRows(): Session[] {
+  if (!blockedLast || !insideSessionExpiry(blockedLast.at, NOW)) return [];
   const row = ledgerOnlyRow({ accountId: null, historical: false, keyGeneration: blockedGeneration, keyId: 'desktop', lastRequestAt: blockedLast.at, model: blockedLast.canonicalModel, sessionId: BLOCKED_SESSION_ID });
   // The fold over its rows, every one refused, answers what the listing answers for it, its newest refusal's user agent
   // among it, so the builder's row is the one listed.
-  return [{ ...row, ...foldSessionSpend(REQUESTS, row, now) }];
+  return [{ ...row, ...foldSessionSpend(REQUESTS, row, NOW) }];
 }
-SESSIONS.push(...refusalOnlyRows(NOW));
+SESSIONS.push(...refusalOnlyRows());
 
 /**
  * Two sessions written after the recipes rather than rolled, so every drawn row and recipe keeps its rolls, and neither
@@ -1585,7 +1584,7 @@ const placementsOf = (s: Session, events: readonly PinEvent[]): number => {
  * The sessions the route lists at `now`, each folded from the request rows handed in and counting its placements in
  * the routing log's events handed in: a session no mod reports leaves once the latest of its last use, its last request
  * and its companion's end is older than the timeout, and each of its lines once its pin's last use is. The clock, the
- * rows and the events are handed in, as `refusalOnlyRows` takes the clock, since the story is built against `NOW` and a
+ * rows and the events are handed in, since the story is built against `NOW` and a
  * test reads the list at any instant without moving `Date.now`, the mock's route hands the rows its ledger has written
  * by then, and the mock's routing log reads this module's sessions.
  */

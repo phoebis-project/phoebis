@@ -1728,7 +1728,7 @@ export function rankCandidates(candidates: RecordCandidate[]): RecordCandidate[]
 type SettingKey = Exclude<keyof RecordSettings, 'legacy'>;
 
 /** The settings of the card in its order, Strategy to Retry in place. */
-export const SETTINGS_ROWS: { key: SettingKey; label: string }[] = [
+const SETTINGS_ROWS: { key: SettingKey; label: string }[] = [
   { key: 'strategy', label: 'Strategy' },
   { key: 'preferSubscription', label: 'Tier order' },
   { key: 'overagePolicy', label: 'Overage' },
@@ -1767,7 +1767,7 @@ const UNRECORDED: readonly SettingKey[] = ['fiveHourCeiling', 'loadShedding', 'r
 const UNWRITTEN: readonly SettingKey[] = ['fableReservationShedding'];
 
 /** One setting's value as the grid draws it: a span, a share, `on` or `off`, or the setting's word. */
-export function settingValue(key: SettingKey, settings: RecordSettings): string {
+function settingValue(key: SettingKey, settings: RecordSettings): string {
   const v = settings[key];
   if (key === 'strategy') return wordOf(STRATEGY_WORD, String(v));
   if (key === 'preferSubscription') return v ? 'subscriptions first' : 'priority alone';

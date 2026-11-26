@@ -46,11 +46,11 @@ export const weeklyResetsKey = (accounts: readonly Account[]): string =>
  *  minute of `observedAt`, are one use. */
 const usesOf = (claims: readonly AllowanceReset[]): number => new Set(claims.map((r) => Math.floor(Date.parse(r.observedAt) / MINUTE))).size;
 
-/** The rows the four weeks keep, `rows`: the newest `weeks` rows of the window's `resets` and then every row of its
- *  `claims` newer than the oldest of them. `counted` counts the kept resets, `used` the uses among the kept claims, and
- *  `total` sums the kept rows: the answer's own total where it keeps both lists whole. */
-export function newestResets(window: AllowanceWindow, weeks = ALLOWANCE_WEEKS): { counted: number; rows: AllowanceReset[]; total: number; used: number } {
-  const resets = window.resets.slice(0, weeks);
+/** The rows the four weeks keep, `rows`: the newest `ALLOWANCE_WEEKS` rows of the window's `resets` and then every
+ *  row of its `claims` newer than the oldest of them. `counted` counts the kept resets, `used` the uses among the kept
+ *  claims, and `total` sums the kept rows: the answer's own total where it keeps both lists whole. */
+export function newestResets(window: AllowanceWindow): { counted: number; rows: AllowanceReset[]; total: number; used: number } {
+  const resets = window.resets.slice(0, ALLOWANCE_WEEKS);
   const oldest = resets.at(-1);
   // A claim row is dated by its drop, and so is a plan change that is the oldest kept row, since the `resetAt` of each
   // is the reset of the week that its drop fell in.

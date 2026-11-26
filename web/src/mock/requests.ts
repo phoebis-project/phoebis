@@ -3239,7 +3239,7 @@ const tally = <T>(items: readonly T[], keyOf: (item: T) => string | null, into: 
 type DroppedFigures = Pick<HourlyRollup, 'inputTransformations' | 'inputTransformationsMoved' | 'inputTransformationsNone' | 'inputTransformationsReported'>;
 const emptyDropped = (): DroppedFigures => ({ inputTransformations: emptyCounts(), inputTransformationsMoved: 0, inputTransformationsNone: 0, inputTransformationsReported: 0 });
 
-export function rollups(rows: RequestLog[]): HourlyRollup[] {
+function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
   // The moved pin's rows join the story behind every drawn figure, so their lane hours take this stream's draws after

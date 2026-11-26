@@ -1569,16 +1569,11 @@ test('a placement that created its pin draws no chip where its answer lists an a
 });
 
 test('the settings fold lists twenty-six rows, draws the five as not recorded on a record from before, and a return dwell of 0 as at once', () => {
-  assert.deepEqual(d.SETTINGS_ROWS.map((s) => s.label), [
-    'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', '5-hour ceiling', 'Weekly ceiling', 'Load shedding',
-    'Move when spent', 'Overage grace', 'Return to plan', 'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Shed on the Fable reservation', 'Slow-down', 'Stretch', 'Hold',
-    'Warm sessions', 'In-flight cap', 'Retry in place',
-  ]);
-  assert.deepEqual(d.SETTINGS_ROWS.map((s) => d.settingValue(s.key, SETTINGS)), [
+  const rows = (settings) => d.settingsRows(record({ settings })).map((r) => [r.label, texts(r.chips)]);
+  assert.deepEqual(rows(SETTINGS).flatMap(([, chips]) => chips), [
     'Pace', 'subscriptions first', 'prefer plan', '10 min', 'when cached', 'by warm prefix', '20K', 'by cohort', '95%', '100%', 'on', 'on', '30 min', 'when cold', '15 min', '30 min', '50%', '30 min', '15 min',
     'on', 'on', '30 min', '2 min', 'when needed', '16', '1 min',
   ]);
-  const rows = (settings) => d.settingsRows(record({ settings })).map((r) => [r.label, texts(r.chips)]);
   assert.deepEqual(rows({ ...SETTINGS, loadShedding: false }).find(([label]) => label === 'Load shedding'), ['Load shedding', ['off']]);
   // Under always a dwell of 0 returns a warm pin at once, where a zero span elsewhere reads the setting off.
   const atOnce = rows({ ...SETTINGS, returnToPlan: 'always', returnToPlanDwellSeconds: 0, shedDwellSeconds: 0 });

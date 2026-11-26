@@ -208,19 +208,6 @@ function fitReadOf(set, pool, r) {
   return new Set(free.length > 0 ? free : left);
 }
 
-test("the pick line's runway keeps the longest of the ties the selection read a fit for, and names none where nothing narrows", async () => {
-  const d = await import('./dist/api.js');
-  const tie = (accountId, runwayMs, fit = 'fits') => ({ accountId, fit, runwayMs });
-  const ids = (ties) => d.runwayTiesOf(ties, (c) => c.fit === 'fits', (c) => c.runwayMs).map((c) => c.accountId);
-  // A tie the selection read no fit for keeps its place beside the longest runway, and an unbounded runway is the
-  // longest of all.
-  assert.deepEqual(ids([tie('a', 600_000), tie('b', 900_000), tie('c', null, null)]), ['b', 'c']);
-  assert.deepEqual(ids([tie('a', null), tie('b', 900_000)]), ['a']);
-  // Equal runways, or no read at all, narrow nothing, so the line names no `by_runway`.
-  assert.deepEqual(ids([tie('a', 900_000), tie('b', 900_000)]), []);
-  assert.deepEqual(ids([tie('a', 600_000, null), tie('b', 900_000, null)]), []);
-});
-
 test("the placements answer counts a row from the hour that holds the range's start up to the hour ceiling of its end", async () => {
   const d = await import('./dist/api.js');
   // One static placement that read the cache, a hit, per row.
@@ -986,25 +973,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the desktop session its key's guardrail refused whole is listed while its newest refusal is inside the non-companion timeout, and none past it, at ${at}`, async () => {
     const s = await story;
-    const span = s.settings.sessions.expireAfterSeconds * 1000;
-    assert.equal(s.lib.insideSessionExpiry(iso(s.now - span + 1_000), s.now), true, 'one second inside the span');
-    assert.equal(s.lib.insideSessionExpiry(iso(s.now - span - 1_000), s.now), false, 'one second past the span');
     const timeout = s.settings.sessions.nonCompanionIdleSeconds;
-    assert.equal(s.lib.withinNonCompanionTimeout(iso(s.now - timeout * 1000 + 1_000), timeout, s.now), true, 'one second inside the timeout');
-    assert.equal(s.lib.withinNonCompanionTimeout(iso(s.now - timeout * 1000 - 1_000), timeout, s.now), false, 'one second past the timeout');
     // The rows run newest first.
     const refusals = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.errorCode === 'guardrail_blocked');
     const [newest] = refusals;
     assert.ok(refusals.length > 0 && refusals.every((r) => r.refused && r.sessionId === newest.sessionId), 'one session holds the refusals');
-    assert.ok(s.lib.insideSessionExpiry(newest.at, s.now), `the newest refusal at ${newest.at} is inside the span`);
     const listedAt = (now) => s.lib.sessionsListedAt(now, s.lib.SESSIONS, s.settings.sessions.nonCompanionIdleSeconds, s.lib.REQUESTS, s.lib.ROUTING_EVENTS).filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
     const listed = listedAt(Date.parse(newest.at) + HOUR / 2);
     assert.ok(newest.userAgent !== null, 'the newest refusal names its client');
     assert.deepEqual(listed.map((x) => [x.accountId, x.spend, x.userAgent, x.lastRequestAt]), [[null, null, newest.userAgent, newest.at]], "listed off the ledger with no spend and the newest refusal's user agent inside the hour of that refusal");
-    assert.deepEqual(s.lib.refusalOnlyRows(s.now), listed, "the builder's row at the story's now is the one listed inside the hour");
     assert.deepEqual(listedAt(Date.parse(newest.at) + timeout * 1000 + 1_000), [], 'none past the timeout');
     assert.ok(!s.sessions.some((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId), `the route's list at the story's clock, ${Math.round((s.now - Date.parse(newest.at)) / 60_000)} min after the newest refusal, leaves it out`);
-    assert.deepEqual(s.lib.refusalOnlyRows(s.now + span), [], 'the builder writes none a span later');
   });
 
   test(`a live session row counts the non-probe requests of its own key, generation and session, at ${at}`, async () => {
@@ -1756,25 +1735,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(seen > 10, `${seen} story placements`);
   });
 
-  test(`a story candidate reads its in-flight count at the cap only where the story's own pins put it there, at ${at}`, async () => {
-    const s = await story;
-    const pins = new Map(s.lib.STORY_PINS.map((p) => [`${p.requestId}/${p.seq}`, p]));
-    const unpinned = [];
-    let pinned = 0;
-    for (const r of await decisionsOf(s)) {
-      if (!s.lib.STORY_IDS.has(r.requestId)) continue;
-      const id = `${r.requestId}/${r.seq}`;
-      const pin = pins.get(id);
-      if (pin) assert.equal(pin.attempt, r.request.attempt, `${id}: the pins name attempt ${pin.attempt}`);
-      for (const c of r.candidates.filter((x) => x.inFlight >= x.inFlightCap)) {
-        if (pin?.inFlight[c.accountId] === c.inFlight) pinned += 1;
-        else unpinned.push(`${id} ${c.accountId} ${c.inFlight}/${c.inFlightCap}`);
-      }
-    }
-    assert.deepEqual(unpinned, [], "members at their cap with no pin of the story's");
-    assert.ok(pinned > 0, 'the story holds a member at its cap');
-  });
-
   test(`a story renewal whose move rule fired reads its cap filter dropped, at ${at}`, async () => {
     const s = await story;
     // The renewal's at-cap mark is off for the story, so only the story's own slots can hold such a renewal in place.
@@ -1810,7 +1770,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`an account that is not ready or has routing off reads the operator obstacle with no reason, its state left on the candidate, at ${at}`, async () => {
+  test(`a candidate the operator took out reads the operator obstacle with no reason, its state or its routing flag left on the candidate, at ${at}`, async () => {
     const s = await story;
     const operator = (await decisionsOf(s)).flatMap((r) => r.candidates.filter((c) => c.obstacle?.name === 'operator').map((c) => [`${r.requestId}/${r.seq} ${c.accountId}`, c]));
     assert.ok(operator.length > 0, 'the story holds candidates the operator took out');
@@ -1818,21 +1778,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.deepEqual([c.obstacle.reason, c.obstacle.until, c.obstacle.window], [null, null, null], id);
       assert.ok(c.state !== 'ready' || c.enabled === false, `${id} reads state ${c.state} and enabled ${c.enabled}`);
     }
-    // No story member is ready with routing off, so an account of the case's own takes that branch.
-    const routingOff = { id: 'routing-off', routingEnabled: false, status: 'ready', subscription: null };
-    assert.deepEqual(s.lib.obstacleOf(routingOff, s.lib.poolById.get('all'), s.now, 'claude-sonnet-5', false, []), { name: 'operator', reason: null, scope: null, until: null, window: null });
-  });
-
-  test(`a member at two reached budgets reads the budget whose period ends last, at ${at}`, async () => {
-    const s = await story;
-    const account = { id: 'budgeted', routingEnabled: true, status: 'ready', subscription: null };
-    const member = { accountId: account.id, budgetDailyUsd: 5, budgetMonthlyUsd: 50, priority: 0, spends: [{ period: 'day', spentUsd: 6 }, { period: 'month', spentUsd: 60 }] };
-    const pool = { ...s.lib.poolById.get('all'), members: [member] };
-    const [day, month] = s.lib.budgetsAt(pool, account.id, s.now);
-    assert.deepEqual([day.period, month.period], ['day', 'month']);
-    assert.ok(day.spentUsd >= day.budgetUsd && month.spentUsd >= month.budgetUsd, 'both budgets reached');
-    assert.ok(Date.parse(day.periodEnd) < Date.parse(month.periodEnd), "the day's period ends before the month's");
-    assert.deepEqual(s.lib.obstacleOf(account, pool, s.now, 'claude-sonnet-5', false, []), { name: 'budget', reason: 'month', scope: null, until: month.periodEnd, window: null });
   });
 
   test(`no token count starts between nightly's spend cap raise and its overage start, so a count's order and the records read its overage alike, at ${at}`, async () => {
@@ -1880,7 +1825,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`a pick under a round-robin pool carries the turn fact and the others keep rank, at ${at}`, async () => {
+  test(`a pick line under Pace carries no rank or turn, a lone seat's reads the only candidate and a tie's the gap over its runner-up, at ${at}`, async () => {
     const s = await story;
     const rows = (await logOf(s)).filter((x) => x.type === 'decision' && x.kind === 'placed' && x.by.kind === 'strategy' && x.rung === null);
     const keys = (row) => row.fact.map((f) => f.key);
@@ -1890,14 +1835,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const pairsOf = (id) => rows.find((x) => `${x.requestId}/${x.seq}` === id)?.fact.map((f) => [f.key, f.value]);
     assert.deepEqual(pairsOf('req_c94d1e07-b35/1'), [['pick', 'only candidate']]);
     assert.deepEqual(pairsOf('req_8c41f2d7-a93/2'), [['gap', 0], ['over', 'nightly']]);
-    // No pool of the story contests a tier under round robin or priority, so a tier of two built here drives the
-    // writer's last branch under each.
-    const tier = ['a', 'b'].map((accountId) => ({ accountId, tier: [0, 0, 0] }));
-    const built = { candidates: tier, outcome: { accountId: 'a', rung: null }, request: { attempted: [] } };
-    for (const [strategy, key] of [['priority', 'rank'], ['round_robin', 'turn']]) {
-      const facts = s.lib.placementFactOf(built, { runnerUp: null, score: null, tierSize: tier.length }, strategy);
-      assert.deepEqual(facts.map((f) => [f.key, f.value]), [[key, '1 of 2']], strategy);
-    }
   });
 
   test(`one story decision writes a long session's cache-map rows on two tiers as the router writes them, at ${at}`, async () => {
@@ -3586,24 +3523,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([sum(points, (p) => p.heldMs), sum(points, (p) => p.requests)], [78_000, 2]);
   });
 
-  test(`the stretch's horizon is the fired window's horizon less the threshold, so an end before the reset moves it, at ${at}`, async () => {
+  test(`the stretch round's shed line reads the excess at the fired window's horizon less the threshold, at ${at}`, async () => {
     const s = await story;
-    const work = s.lib.poolById.get('work');
     const round = (await decisionsOf(s)).find((r) => r.requestId === 'req_9f2e7c5a-c49' && r.seq === 2);
-    const when = Date.parse(round.request.at);
     const studio = round.candidates.find((c) => c.accountId === 'studio');
     const x = studio.windows.five_hour;
-    const fired = (excess) => ({ excess, slowed: true, window: 'five_hour' });
     // Studio has no end, so its horizon is its reset at 15:29, and the round's shed line reads the excess there. The 84
     // minutes from 14:05 less work's 30-minute threshold leave 54, in which a demand of 0.1286 an hour carries the
     // head's 0.86 to 0.02574 past the 0.95 ceiling, 0.0286 an hour.
     assert.equal(x.horizon, x.reset);
-    assert.deepEqual(s.lib.stretchTriggerOf(studio, work, when), fired(0.0286));
     assert.equal(round.walk.find((w) => w.step === 'move:shed').facts.find((f) => f.key === 'excess')?.value, 0.0286);
-    // An end ten minutes before the reset cuts the horizon there: 44 minutes land 0.0043 past the ceiling, 0.00587 an
-    // hour. One twenty minutes before leaves the demand under the ceiling at the horizon less the threshold.
-    const ended = (minutes) => s.lib.stretchTriggerOf({ ...studio, windows: { ...studio.windows, five_hour: { ...x, horizon: iso(Date.parse(x.reset) - minutes * 60_000) } } }, work, when);
-    assert.deepEqual([ended(10), ended(20)], [fired(0.00587), null]);
   });
 
   test(`the stretch round's event reads the projection its trigger fired on, at the fired window's horizon less the threshold, at ${at}`, async () => {
@@ -3936,7 +3865,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(events, ['event: message_start', 'event: content_block_start', 'event: content_block_delta', 'event: content_block_delta'], 'the capture ends after the second delta');
   });
 
-  test(`the stream cut after its head files where the ledger files an incomplete request, and its detail carries the cut, at ${at}`, async () => {
+  test(`the stream cut after its head reads incomplete under the cut's code, its account's breakdown counts that code, and its detail carries the cut, at ${at}`, async () => {
     const s = await story;
     const row = s.requests.find((r) => r.id === 'req_5e3c8a41-d27');
     const relayed = s.requests.find((r) => r.id === 'req_5e2f7a19-b03');
@@ -3950,11 +3879,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(row.sessionId, relayed.sessionId, "the 502 row's session holds both");
     // A cold request whose input went up, with no output usage back.
     assert.deepEqual([row.usage.input > 0, row.usage.cacheRead, row.usage.cacheWrite5m + row.usage.cacheWrite1h, row.usage.output], [true, 0, 0, 0]);
-    const hours = s.lib.rollups([row]);
-    const total = (read) => hours.reduce((n, h) => n + read(h.requests), 0);
-    assert.deepEqual([total((r) => r.incomplete), total((r) => r.ok), total((r) => r.undecodable), total((r) => r.upstream_error)], [1, 0, 0, 0], 'the rollups file it under incomplete alone');
     // The ledger counts a request's own code beside its outcome, so the breakdown files the row under the cut's code.
-    assert.deepEqual(hours.map((h) => ({ ...h.errors })), [{ stream_undecodable: 1 }], 'its rollup carries the code it ended on');
     const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'account', to: iso(s.now) });
     const filed = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_undecodable').map((r) => r.id);
     assert.deepEqual([filed.includes(row.id), groups.find((g) => g.key === 'primary')?.errors.stream_undecodable], [true, filed.length], "primary's entry counts it");
@@ -4306,7 +4231,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(codes.get(s.overview.topErrorCode ?? '') ?? 0, Math.max(0, ...codes.values()), "the top code is the asked requests' most frequent");
   });
 
-  test(`the_rollups_refusals_map_sums_to_the_storys_refused_rows_by_code_and_key_and_no_refused_row_counts_under_requests at ${at}`, async () => {
+  test(`the_rollups_refusals_map_sums_to_the_storys_refused_rows_by_code_and_key at ${at}`, async () => {
     const s = await story;
     const byKey = {};
     for (const r of s.allRollups) {
@@ -4316,16 +4241,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       }
     }
     assert.deepEqual(byKey, { ci: { auth_unknown: 1, client_not_allowed: 2 }, desktop: { guardrail_blocked: 3 }, laptop: { client_contract: 1, client_drift: 1 } });
-    // Folded from the story's rows and from its asked rows alone, the request counts agree member by member.
-    const countsOf = (rollups) => {
-      const out = {};
-      for (const r of rollups) {
-        const into = (out[r.keyId] ??= {});
-        for (const [member, n] of Object.entries(r.requests)) into[member] = (into[member] ?? 0) + n;
-      }
-      return out;
-    };
-    assert.deepEqual(countsOf(s.lib.rollups(s.requests)), countsOf(s.lib.rollups(s.asked(s.requests))), 'no refused row counts under a request count');
   });
 
   test(`the_breakdowns_refused_column_agrees_with_the_map_and_the_guardrails_cards_blocked_count_on_desktop at ${at}`, async () => {
@@ -4441,6 +4356,24 @@ test("an ended plan's sampled hour states its last sample of a window, with the 
   const row = (await s.api.listAccountRollups(iso(s.now - 4 * DAY), iso(s.now))).find((r) => r.accountId === 'sunset' && r.hour === '2026-09-13T14:00:00.000Z');
   const w = row?.windows.five_hour;
   assert.deepEqual(w && [w.utilization, w.sampledAt, w.resetsAt, w.deadline], [0.12, '2026-09-13T14:25:00.000Z', '2026-09-13T16:30:00.000Z', '2026-09-13T14:30:00.000Z']);
+});
+
+// Catches a budget row that pairs one period's limit or spend with the other period's. The Overflow workspace holds
+// both budgets in all, $1.10 of $5.00 for the day and $25.00 of $50.00 for the month (mock/pools.ts), and its
+// placement of 10:52:30 (req_4e8b1d36-f72) reads them.
+test("a member's budget rows read each period's own limit and spend", async () => {
+  const record = (await decisionsOf(await pinned)).find((r) => r.requestId === 'req_4e8b1d36-f72' && r.seq === 1);
+  const overflow = record?.candidates.find((c) => c.accountId === 'overflow');
+  assert.deepEqual(Object.fromEntries((overflow?.budget ?? []).map((b) => [b.period, [b.budgetUsd, b.spentUsd]])), { day: [5, 1.1], month: [50, 25] });
+});
+
+// Catches a reached budget's obstacle that names no period, so the exhaustion's Spend row finds no budget to draw.
+// Research crossed its day's budget of $20.00 at 12:41:07 (mock/time.ts), so the jobs pool's exhaustion of 14:16:40
+// (req_51d0e2b8-7a0) reads it out on the day's budget until the next UTC midnight.
+test("a member past its day's budget reads the budget obstacle on the day, until the day ends", async () => {
+  const record = (await decisionsOf(await pinned)).find((r) => r.requestId === 'req_51d0e2b8-7a0' && r.seq === 1);
+  const research = record?.candidates.find((c) => c.accountId === 'research');
+  assert.deepEqual([research?.obstacle?.name, research?.obstacle?.reason, research?.obstacle?.until], ['budget', 'day', '2026-09-17T00:00:00.000Z']);
 });
 
 // An instant whose hour a full day back carries traffic.

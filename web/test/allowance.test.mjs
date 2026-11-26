@@ -78,7 +78,6 @@ test("the newest four resets total the answer's figures where it lists four or f
   const six = windowOf('seven_day', [0.5, 0.25, 0.125, 0.25, 0.75, 1], { total: 2.875 });
   const newest = d.newestResets(six);
   assert.deepEqual([newest.counted, newest.rows, newest.total], [4, six.resets.slice(0, 4), 1.125]);
-  assert.equal(d.newestResets(six, 2).total, 0.75, 'a narrower read sums its own newest');
   // A week the term ended inside is a reset of that week, so its share counts in the total as any other.
   const ended = windowOf('seven_day', [0.5, 0.25, 0.25, 0.125, 0.75], { sources: ['term_ended'] });
   assert.deepEqual([d.newestResets(ended).counted, d.newestResets(ended).total, d.newestResets(ended).rows[0].source], [4, 1.125, 'term_ended']);

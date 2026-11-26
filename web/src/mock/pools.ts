@@ -169,7 +169,7 @@ const unbudgeted = (accountId: string, priority: number): MemberSeed => ({ accou
  * The story members the router has not loaded, which read `unknown` on the card: its registry snapshot predates the
  * key's creation, so the pool route answers no reading of it yet.
  */
-export const UNLOADED_MEMBERS: ReadonlySet<string> = new Set(['youngest']);
+const UNLOADED_MEMBERS: ReadonlySet<string> = new Set(['youngest']);
 
 /** The next UTC calendar boundary after `now`, which is where the ledger's spend period ends. */
 function periodEndAfter(period: BudgetPeriod, now: number): string {
