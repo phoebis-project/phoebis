@@ -29,6 +29,6 @@ minute. The page keeps the secret in memory and never stores it, so it is gone w
 
 The operations of the admin listener under `/admin/`, grouped by area in the page's sidebar, each with its parameters,
 its answer's shape with an example captured from the route, and its refusals with their status and message. Not in it:
-the proxy listener's routes, which [The client](client.md) describes, the events route, which [The
+the proxy listener's routes, which [The client](client.md) describes, the companion mod's events route, which [The
 relay](relay.md#the-companion-protocol) describes, and the metrics listener, which [Statistics](statistics.md)
 describes.
