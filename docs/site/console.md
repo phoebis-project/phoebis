@@ -485,26 +485,27 @@ usage-based seat's detail draws no trend card.
 
 "Allowance left at reset" draws, for a subscription account that is not a usage-based seat, one column per weekly window
 (the 7-day window, then each model week): the share left unused at the latest reset with "left at the reset of {date}"
-("left at {date}" and the badge where that reset is the term's end), the three weeks before it with their figures, and
-"Total, {n} weeks", each week's hover naming its reset's instant and where its reading came from. The block shows the
-rows of the card "Unused allowance by account", a used limit reset that cleared its window among them with a "reset
-used" badge on its row, so its four weeks count the natural resets and add each use newer than the oldest of them,
-including one after the latest, and the total's label names the uses, such as "Total, 4 weeks and 1 used reset". A plan
-change that cleared the window stands among the resets and counts as one of the four weeks, dated by its drop, with a
-"plan changed" badge on its row and "a plan change" on its hover. The figures read in the week the week control names
-under every position: the share of the account's own window times its tier's 7-day capacity, a model week at its
-capacity factor, over the chosen week's tier's, so a Fable-week reset reads half its 7-day figure. Each week prices at
-the tier the account ran under at that reset, so a week before an upgrade reads its figure at the earlier tier's
-capacity, and a reset the router recorded no tier for at the account's current one, a dash where the cost model holds no
-capacity for the tier a week prices at (a Free plan among them, the card then noting it), and the total a dash where one
-of its weeks reads one. Each week's hover adds the reset's own share of the account's window under the plan that week
-prices at, such as `Ultra: 39% of the 7-day window left`. The block waits on the cost model, which the page reads from
-the settings once per visit whichever account opens, so it draws its placeholder until the settings answer and the
-read's error where they fail. A week the account's term ended inside counts as a reset with the badge "term ended", a
-clock-walk reset reads the last reading before it as the event carries it, and the card reads "No weekly reset recorded
-yet. The first shows once this account's week ends." before the first. The card reads its weeks once per account, again
-on the bar's Refresh, once a weekly window resets and once the account's term end moves (its cancellation flag, saved
-end or plan-ended flag), and a failed read draws its error with Try again, which reads the weeks and the settings again.
+("left at {date}" and the badge where that reset is the term's end or a plan change that cleared the window), the three
+weeks before it with their figures, and "Total, {n} weeks", each week's hover naming its reset's instant and where its
+reading came from. The block shows the rows of the card "Unused allowance by account", a used limit reset that cleared
+its window among them with a "reset used" badge on its row, so its four weeks count the natural resets and add each use
+newer than the oldest of them, including one after the latest, and the total's label names the uses, such as "Total, 4
+weeks and 1 used reset". A plan change that cleared the window stands among the resets and counts as one of the four
+weeks, dated by its drop, with a "plan changed" badge on its row and "a plan change" on its hover. The figures read in
+the week the week control names under every position: the share of the account's own window times its tier's 7-day
+capacity, a model week at its capacity factor, over the chosen week's tier's, so a Fable-week reset reads half its 7-day
+figure. Each week prices at the tier the account ran under at that reset, so a week before an upgrade reads its figure
+at the earlier tier's capacity, and a reset the router recorded no tier for at the account's current one, a dash where
+the cost model holds no capacity for the tier a week prices at (a Free plan among them, the card then noting it), and
+the total a dash where one of its weeks reads one. Each week's hover adds the reset's own share of the account's window
+under the plan that week prices at, such as `Ultra: 39% of the 7-day window left`. The block waits on the cost model,
+which the page reads from the settings once per visit whichever account opens, so it draws its placeholder until the
+settings answer and the read's error where they fail. A week the account's term ended inside counts as a reset with the
+badge "term ended", a clock-walk reset reads the last reading before it as the event carries it, and the card reads "No
+weekly reset recorded yet. The first shows once this account's week ends." before the first. The card reads its weeks
+once per account, again on the bar's Refresh, once a weekly window resets and once the account's term end moves (its
+cancellation flag, saved end or plan-ended flag), and a failed read draws its error with Try again, which reads the
+weeks and the settings again.
 
 "Meter drift" draws, beside it, one line per window kind the account's completed windows hold: the newest completed
 window's ratio of the upstream's rise over the router's priced share (a warning badge where the rise and the priced
@@ -1377,7 +1378,7 @@ counts under Not requested where its body carried no diagnostics member and unde
 one. In the hours the router stored before it filed these two words such a request counts under no reason, so those
 hours' bars add up to less than their requests. A bar draws apart the requests under its reason that read 90 % or more
 of their prompt from the cache, and the per-group table shows the same split. A bar's share is of the sum of the card's
-reasons, the answered requests that drew one, which the card's subtitle names. Every count in Misses by reason but the
+reasons, the requests that the card counts, which the card's subtitle names. Every count in Misses by reason but the
 expired column links to the Requests view on those requests with the page's filters carried over, and a count the
 Requests view cannot list exactly stays plain with the reason on hover. The Dropped thinking blocks card counts the
 requests whose answer listed a thinking block the upstream dropped or let pass, one bar per kind with its count as a
@@ -1975,41 +1976,41 @@ pairs. An event that names a request ends with "Source request", which opens the
 either side, and "Details", which opens the request's drawer. An account state change names who moved the state:
 `credential refused`, `credit balance`, `funding retried`, `refresh failed`, `by hand` or `paired`, and a deleted
 account's last row reads `deleted`. A pin moved panel names the account the pin left, the one it landed on, the reason
-and what moved it, where a rule's gate read the destination, Destination fit (`fits`, `rewrite only`, `least bad`, or
-`window spent` for a landing on a member that has no allowance left, which draws no Runway) and Runway (a span, `none`
-or `unbounded`), and on a failover's move its Cause, `429 on 5h` or `fast lane 429` for a cooldown and `re-auth required
-by credential refused` for a mark, in the account state panel's words. A shedding round's panel reads Started by,
-Trigger (`5h projection 104% at 18:20 over the wall` on the 5-hour window, which the round tests against the wall at its
-reset, `7d projection 102% in 5 h over the wall` on a weekly window whose reset is more than five hours away, which it
-tests against the pool's weekly ceiling, the wall at the default, `7d projection 96% in 5 h over the ceiling 95%` on the
-same window of a pool that holds a weekly reserve, `5h stretch 42 min over the threshold 30 min` for a round the stretch
-fired, followed by Demand, `12.0 %/h to the reset at 18:20`, or `7d room 30% under the Fable reservation 32%` for a
-round the reservation fired), Fired by (`the Fable reservation`, `the projection` or `the slow-down`), "Fable
-reservation" (the reserved share as a whole percent, on a round the reservation fired), Excess (`9.5 %/h`, which a round
-the reservation fired reads under "Walked burn", the burn of the pins the round walked), Cap with the target and the
-burn removed, Mark share (`10%`, the share of the burn left to shed that a pin's own burn must cover before the round
-marks it), Unit, Burn average, Warm sessions, the Pins table (Session, Agent, Warmth, Burn, Last prompt, Thinking
-dropped as the thinking the pin's move would drop, in tokens, which the round weighed at the output's weight beside the
-rewrite, with a dash for a pin that states none and no column on a round stored before the figure, Rewrite as the share
-of the chosen week the pin's rewrite takes, `0.111% Ultra week`, with `compared on the 7-day window` on hover naming the
-window the pick compared on, or on an earlier build's round, which names no unit, the figure as stored under its old
-label, Destination, Mark), Skipped (one chip per pin, its session and its reason, `off window` for a pin whose model
-does not draw the window that fired, `Fable model` for a Fable pin of a round the reservation fired, which the round
-leaves where it is, `ended` for a pin whose agent ended before the round read it, `no burn` for a pin with no priced
-burn on the fired window, and `sliver` for a pin the round left warm under its Mark share), Planned destinations,
-Outcome (`marked 2`, `nothing to mark: no runway`, `nothing to mark: sliver`, or, for a round that walked no pin, the
-word of the pin it left out, such as `nothing to mark: off window`), Next round after, Dwell and Survive a restart. A
-mark cleared panel reads the pin, Reason (`healed: the 5h projection read 91% under the wall` where the heal's horizon
-was the window's reset or the account's end and at the five-hour bound on a window whose ceiling is the wall, and `under
-the ceiling` at the five-hour bound on a window whose ceiling stands under it, `healed: the stretch read 24 min under
-the threshold 30 min` for a mark the stretch made, `moved` or `released`), Marked (when, on which account) and Standing
-for, and a reservation expired panel reads Request, Attempt, Cause, Reserved (`5h 10.4%`, `7d 1.2%`), Held for and the
-Effect `the booked share left the account's prediction`. A slow-down started panel reads Speed (`0.5x`), Stretch (`42
-min of 30 min`, the threshold after `of`), Demand (`12.0 %/h`), Reset and the Effect `requests of the account's sessions
-wait their cycle times the slow-down up to the hold`, and a slow-down ended panel Lasted, Slowest (`0.35x`), Held (the
-waits of the span's holds summed, with the count of the holds beside it, labeled "holds") and the Effect `requests of
-the account's sessions pass unheld again`. Held can pass Lasted, since the span's holds can overlap and one hold can
-outlast the factor's return. The kinds and what each row records:
+and what moved it, where a rule's gate or the landing's placement read the destination, Destination fit (`fits`,
+`rewrite only`, `least bad`, or `window spent` for a landing on a member that has no allowance left, which draws no
+Runway) and Runway (a span, `none` or `unbounded`), and on a failover's move its Cause, `429 on 5h` or `fast lane 429`
+for a cooldown and `re-auth required by credential refused` for a mark, in the account state panel's words. A shedding
+round's panel reads Started by, Trigger (`5h projection 104% at 18:20 over the wall` on the 5-hour window, which the
+round tests against the wall at its reset, `7d projection 102% in 5 h over the wall` on a weekly window whose reset is
+more than five hours away, which it tests against the pool's weekly ceiling, the wall at the default, `7d projection 96%
+in 5 h over the ceiling 95%` on the same window of a pool that holds a weekly reserve, `5h stretch 42 min over the
+threshold 30 min` for a round the stretch fired, followed by Demand, `12.0 %/h to the reset at 18:20`, or `7d room 30%
+under the Fable reservation 32%` for a round the reservation fired), Fired by (`the Fable reservation`, `the projection`
+or `the slow-down`), "Fable reservation" (the reserved share as a whole percent, on a round the reservation fired),
+Excess (`9.5 %/h`, which a round the reservation fired reads under "Walked burn", the burn of the pins the round
+walked), Cap with the target and the burn removed, Mark share (`10%`, the share of the burn left to shed that a pin's
+own burn must cover before the round marks it), Unit, Burn average, Warm sessions, the Pins table (Session, Agent,
+Warmth, Burn, Last prompt, Thinking dropped as the thinking the pin's move would drop, in tokens, which the round
+weighed at the output's weight beside the rewrite, with a dash for a pin that states none and no column on a round
+stored before the figure, Rewrite as the share of the chosen week the pin's rewrite takes, `0.111% Ultra week`, with
+`compared on the 7-day window` on hover naming the window the pick compared on, or on an earlier build's round, which
+names no unit, the figure as stored under its old label, Destination, Mark), Skipped (one chip per pin, its session and
+its reason, `off window` for a pin whose model does not draw the window that fired, `Fable model` for a Fable pin of a
+round the reservation fired, which the round leaves where it is, `ended` for a pin whose agent ended before the round
+read it, `no burn` for a pin with no priced burn on the fired window, and `sliver` for a pin the round left warm under
+its Mark share), Planned destinations, Outcome (`marked 2`, `nothing to mark: no runway`, `nothing to mark: sliver`, or,
+for a round that walked no pin, the word of the pin it left out, such as `nothing to mark: off window`), Next round
+after, Dwell and Survive a restart. A mark cleared panel reads the pin, Reason (`healed: the 5h projection read 91%
+under the wall` where the heal's horizon was the window's reset or the account's end and at the five-hour bound on a
+window whose ceiling is the wall, and `under the ceiling` at the five-hour bound on a window whose ceiling stands under
+it, `healed: the stretch read 24 min under the threshold 30 min` for a mark the stretch made, `moved` or `released`),
+Marked (when, on which account) and Standing for, and a reservation expired panel reads Request, Attempt, Cause,
+Reserved (`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share left the account's prediction`. A slow-down
+started panel reads Speed (`0.5x`), Stretch (`42 min of 30 min`, the threshold after `of`), Demand (`12.0 %/h`), Reset
+and the Effect `requests of the account's sessions wait their cycle times the slow-down up to the hold`, and a slow-down
+ended panel Lasted, Slowest (`0.35x`), Held (the waits of the span's holds summed, with the count of the holds beside
+it, labeled "holds") and the Effect `requests of the account's sessions pass unheld again`. Held can pass Lasted, since
+the span's holds can overlap and one hold can outlast the factor's return. The kinds and what each row records:
 
 | Event | What it records |
 | --- | --- |
