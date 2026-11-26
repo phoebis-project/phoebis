@@ -164,86 +164,89 @@ const endWords = (left: number): string => (left === 0 ? 'expires today' : left 
 /** The item's detail as the one line a pool card's row draws. */
 export function attentionDetail(item: AttentionItem, now: number): string {
   const d = item.detail;
-  switch (item.kind) {
-    case 'pool_exhausted': {
-      const key = text(d.key);
-      return key ? `no member could take a request from key ${key}` : 'no member could take a request';
-    }
-    case 'client_drift': {
-      const what = d.trigger === 'hash' ? 'its billing hash' : d.trigger === 'version_suffix' ? 'its version suffix' : 'its build';
-      const key = text(d.key);
-      return `${what} differs from the pinned build${key ? `, newest refusal from key ${key}` : ''}`;
-    }
-    case 'writer_degraded':
-      return d.component === 'ledger' ? 'ledger batches are being retried, and budgeted members are held back until a batch lands' : 'routing state is kept in memory until the registry file takes writes again';
-    case 'reauth_required':
-      return 'serves nothing until its credential is renewed';
-    case 'funding_required':
-      return 'serves nothing until its organization is funded again';
-    case 'feature_account_unavailable': {
-      const refused = `the feature calls of ${plural(list(d.selections).length, 'selection')} are refused`;
-      return d.obstacle === 'ended' ? `its plan ended, and ${refused}` : `it is signed out, and ${refused}`;
-    }
-    case 'refresh_failed': {
-      const error = text(d.last_error);
-      return `${num(d.failures)} refreshes failed in a row${error ? `: ${error}` : ''}`;
-    }
-    case 'ledger_record_parked': {
-      const n = num(d.count);
-      const accounts = strings(d.accounts);
-      return `${plural(n, 'priced record')} parked, landing at the next start or on the dashboard's Replay${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
-    }
-    case 'poll_backoff': {
-      const n = num(d.rate_limited_in_a_row);
-      const next = isoOrNull(d.next_attempt_at);
-      return `${plural(n, 'rate-limited answer')} in a row${next ? `, next attempt ${fmtRelative(next, now)}` : ''}`;
-    }
-    case 'pairing_expiring': {
-      const left = num(d.days_left);
-      return `${text(d.label) ?? item.subject.label}'s refresh token ${endWords(left)} (${fmtAbsolute(isoOrNull(d.expires))}). ${left < 0 ? 'Re-pair the account' : 'Re-pair the account before then'}.`;
-    }
-    case 'certificate_expiring': {
-      const file = text(d.cert_file);
-      const ends = `${file ? ` ${file}` : ''} ${endWords(num(d.days_left))} (${fmtAbsolute(isoOrNull(d.expires))})`;
-      // No reload reads the CA, and a new one has a new fingerprint each launcher must be given.
-      if (item.subject.id === FEATURE_CA) {
-        return `The feature CA${ends}. To replace it, remove feature-ca.pem and feature-ca-key.pem from the data directory, start the router again, and give each user the new fingerprint from the Settings view.`;
+  const sentence = ((): string => {
+    switch (item.kind) {
+      case 'pool_exhausted': {
+        const key = text(d.key);
+        return key ? `no member could take a request from key ${key}` : 'no member could take a request';
       }
-      return `The ${listenerOf(item)} listener's certificate${ends}. Replace the pair and run phoebis tls reload.`;
+      case 'client_drift': {
+        const what = d.trigger === 'hash' ? 'its billing hash' : d.trigger === 'version_suffix' ? 'its version suffix' : 'its build';
+        const key = text(d.key);
+        return `${what} differs from the pinned build${key ? `, newest refusal from key ${key}` : ''}`;
+      }
+      case 'writer_degraded':
+        return d.component === 'ledger' ? 'ledger batches are being retried, and budgeted members are held back until a batch lands' : 'routing state is kept in memory until the registry file takes writes again';
+      case 'reauth_required':
+        return 'serves nothing until its credential is renewed';
+      case 'funding_required':
+        return 'serves nothing until its organization is funded again';
+      case 'feature_account_unavailable': {
+        const refused = `the feature calls of ${plural(list(d.selections).length, 'selection')} are refused`;
+        return d.obstacle === 'ended' ? `its plan ended, and ${refused}` : `it is signed out, and ${refused}`;
+      }
+      case 'refresh_failed': {
+        const error = text(d.last_error);
+        return `${num(d.failures)} refreshes failed in a row${error ? `: ${error}` : ''}`;
+      }
+      case 'ledger_record_parked': {
+        const n = num(d.count);
+        const accounts = strings(d.accounts);
+        return `${plural(n, 'priced record')} parked, landing at the next start or on the dashboard's Replay${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
+      }
+      case 'poll_backoff': {
+        const n = num(d.rate_limited_in_a_row);
+        const next = isoOrNull(d.next_attempt_at);
+        return `${plural(n, 'rate-limited answer')} in a row${next ? `, next attempt ${fmtRelative(next, now)}` : ''}`;
+      }
+      case 'pairing_expiring': {
+        const left = num(d.days_left);
+        return `${text(d.label) ?? item.subject.label}'s refresh token ${endWords(left)} (${fmtAbsolute(isoOrNull(d.expires))}). ${left < 0 ? 'Re-pair the account' : 'Re-pair the account before then'}.`;
+      }
+      case 'certificate_expiring': {
+        const file = text(d.cert_file);
+        const ends = `${file ? ` ${file}` : ''} ${endWords(num(d.days_left))} (${fmtAbsolute(isoOrNull(d.expires))})`;
+        // No reload reads the CA, and a new one has a new fingerprint each launcher must be given.
+        if (item.subject.id === FEATURE_CA) {
+          return `The feature CA${ends}. To replace it, remove feature-ca.pem and feature-ca-key.pem from the data directory, start the router again, and give each user the new fingerprint from the Settings view.`;
+        }
+        return `The ${listenerOf(item)} listener's certificate${ends}. Replace the pair and run phoebis tls reload.`;
+      }
+      case 'certificate_reload_failed':
+        return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(isoOrNull(d.serving_since))}.`;
+      case 'limit_reset_ending': {
+        const words = clearsWords(strings(d.clears));
+        return `${resetEnds(d)} (${fmtAbsolute(isoOrNull(d.ends_at))})${words === null ? '' : ` and clears ${words}`}: ${text(d.grant_label) ?? ''}`;
+      }
+      case 'model_unpriced': {
+        const n = num(d.requests);
+        const model = text(d.model) ?? item.subject.id;
+        if (n === 0) return `${model} has no weight in the cost model, so a plan-funded request on it will price no window share.`;
+        return `${model} has no weight in the cost model, so its ${plural(n, 'plan-funded request')} since ${fmtAbsolute(item.since)} priced no window share.`;
+      }
+      case 'wall_reached':
+      case 'destination_spent':
+      case 'shed_no_runway':
+        return conditionWords(item, now);
+      case 'slowed_long':
+        return slowedWords(item, now);
+      case 'meter_drift':
+        return driftWords(item, now);
+      case 'keepalive_bus_gaps': {
+        const last = isoOrNull(d.last_at);
+        return `The keepalive subscriber fell behind the router's in-process request bus and discarded the observations it had open${last ? `, the last time ${fmtRelative(last, now)}` : ''}.`;
+      }
+      case 'keepalive_cap':
+        return 'The cache warming is near its retained-bytes cap and evicts the oldest idle recipe at it.';
+      case 'session_cap':
+        return 'The session engine is near its cap and will refuse new records at it.';
+      case 'expired_between_turns':
+        return 'Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all.';
+      case 'unknown':
+        return `a condition this console does not know (${item.rawKind ?? 'unknown'})`;
     }
-    case 'certificate_reload_failed':
-      return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(isoOrNull(d.serving_since))}.`;
-    case 'limit_reset_ending': {
-      const words = clearsWords(strings(d.clears));
-      return `${resetEnds(d)} (${fmtAbsolute(isoOrNull(d.ends_at))})${words === null ? '' : ` and clears ${words}`}: ${text(d.grant_label) ?? ''}`;
-    }
-    case 'model_unpriced': {
-      const n = num(d.requests);
-      const model = text(d.model) ?? item.subject.id;
-      if (n === 0) return `${model} has no weight in the cost model, so a plan-funded request on it will price no window share.`;
-      return `${model} has no weight in the cost model, so its ${plural(n, 'plan-funded request')} since ${fmtAbsolute(item.since)} priced no window share.`;
-    }
-    case 'wall_reached':
-    case 'destination_spent':
-    case 'shed_no_runway':
-      return conditionWords(item, now);
-    case 'slowed_long':
-      return slowedWords(item, now);
-    case 'meter_drift':
-      return driftWords(item, now);
-    case 'keepalive_bus_gaps': {
-      const last = isoOrNull(d.last_at);
-      return `The keepalive subscriber fell behind the router's in-process request bus and discarded the observations it had open${last ? `, the last time ${fmtRelative(last, now)}` : ''}. Opens the Sessions view.`;
-    }
-    case 'keepalive_cap':
-      return 'The cache warming is near its retained-bytes cap and evicts the oldest idle recipe at it. Opens the Sessions view.';
-    case 'session_cap':
-      return 'The session engine is near its cap and will refuse new records at it. Opens the Sessions view.';
-    case 'expired_between_turns':
-      return 'Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.';
-    case 'unknown':
-      return `a condition this console does not know (${item.rawKind ?? 'unknown'})`;
-  }
+  })();
+  return SESSIONS_KINDS.has(item.kind) ? `${sentence} Opens the Sessions view.` : sentence;
 }
 
 /** The spent windows as the record names them, `5h`, `7d` or `Fable`, a key the console does not know as sent. */

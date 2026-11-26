@@ -440,13 +440,14 @@ export const lineAccountOf = (line: Pick<SessionLine, 'pin' | 'recipe'>): string
 
 /**
  * The reader of what a session's companion reports of an agent, by the agent's id: its facts, null where it reports
- * none, and its type, the reported one ahead of its ledger entry's. Main reads no reported fact: its label is fixed
- * and its type is the ledger's.
+ * none, and its type, the reported one ahead of its ledger entry's, with its first request from that entry, null on an
+ * agent without one. Main reads no reported fact: its label is fixed and its type is the ledger's.
  */
-function reportedReader(s: Pick<Session, 'agentFacts' | 'agentRequests'>): (agentId: string) => { agentType: string | null; facts: SessionAgentFacts | null } {
+function reportedReader(s: Pick<Session, 'agentFacts' | 'agentRequests'>): (agentId: string) => Pick<SessionLine, 'agentType' | 'facts' | 'firstRequestAt'> {
+  // The route answers one entry per agent, which carries its newest client request's type and its first request.
   const ledger = new Map(s.agentRequests.map((entry) => [entry.agentId, entry]));
   const reported = new Map(s.agentFacts.filter((entry) => entry.agentId !== MAIN_AGENT).map((entry) => [entry.agentId, entry]));
-  return (agentId) => ({ agentType: reported.get(agentId)?.agentType ?? ledger.get(agentId)?.agentType ?? null, facts: reported.get(agentId) ?? null });
+  return (agentId) => ({ agentType: reported.get(agentId)?.agentType ?? ledger.get(agentId)?.agentType ?? null, facts: reported.get(agentId) ?? null, firstRequestAt: ledger.get(agentId)?.firstRequestAt ?? null });
 }
 
 /**
@@ -455,22 +456,18 @@ function reportedReader(s: Pick<Session, 'agentFacts' | 'agentRequests'>): (agen
  * which `orderLines` sorts into the view's.
  */
 export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentFacts' | 'agentId' | 'agentRequests' | 'lifecycle' | 'model'>, recipes: readonly KeepaliveRecipe[]): SessionLine[] {
-  // The route answers one entry per agent, which carries its newest client request's type and model and its first
-  // request.
-  const newest = new Map(s.agentRequests.map((entry) => [entry.agentId, entry]));
   const read = reportedReader(s);
-  const entryOf = (agentId: string) => ({ ...read(agentId), firstRequestAt: newest.get(agentId)?.firstRequestAt ?? null });
   const claimed = new Set<AgentContext>();
   const lines: SessionLine[] = recipes.map((recipe) => {
     const pin = lineFigures(s, recipe.agentId, recipe.model);
     if (pin !== null) claimed.add(pin);
-    return { agentId: recipe.agentId, ...entryOf(recipe.agentId), lifecycle: pin !== null ? pin.lifecycle : recipe.agentState, model: recipe.model, pin, recipe };
+    return { agentId: recipe.agentId, ...read(recipe.agentId), lifecycle: pin !== null ? pin.lifecycle : recipe.agentState, model: recipe.model, pin, recipe };
   });
-  for (const pin of s.agentContexts) if (!claimed.has(pin)) lines.push({ agentId: pin.agentId, ...entryOf(pin.agentId), lifecycle: pin.lifecycle, model: pin.model, pin, recipe: null });
+  for (const pin of s.agentContexts) if (!claimed.has(pin)) lines.push({ agentId: pin.agentId, ...read(pin.agentId), lifecycle: pin.lifecycle, model: pin.model, pin, recipe: null });
   if (lines.some((line) => line.agentId === MAIN_AGENT)) return lines;
   // A row whose pin is another agent's carries that agent's model, so main's line reads main's ledger entry.
-  const model = s.agentId === null || s.agentId === MAIN_AGENT ? s.model : (newest.get(MAIN_AGENT)?.model ?? null);
-  return [{ agentId: MAIN_AGENT, ...entryOf(MAIN_AGENT), lifecycle: s.lifecycle, model, pin: null, recipe: null }, ...lines];
+  const model = s.agentId === null || s.agentId === MAIN_AGENT ? s.model : (agentFigures(s, MAIN_AGENT)?.model ?? null);
+  return [{ agentId: MAIN_AGENT, ...read(MAIN_AGENT), lifecycle: s.lifecycle, model, pin: null, recipe: null }, ...lines];
 }
 
 /** Files the recipes under their rows on the route's flag. A recipe names no generation and belongs to the live
@@ -540,7 +537,7 @@ export function earlierAgents(session: Pick<Session, 'agentFacts' | 'agentReques
   const read = reportedReader(session);
   return earlierEntries(session, lines)
     .map((entry) => ({ ...entry, ...read(entry.agentId) }))
-    .sort((a, b) => (a.agentId < b.agentId ? -1 : 1));
+    .sort((a, b) => byteOrder(a.agentId, b.agentId));
 }
 
 /** The filters the Sessions view matches a row against, the address's values less its sort and its grouping. */
