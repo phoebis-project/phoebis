@@ -103,7 +103,7 @@ pub struct IdleReturnsRow {
 
 /// What one flush writes. A removed session takes every agent row filed under it, so a session the engine dropped
 /// leaves nothing behind for a load to restore. Its stored sets of reported facts stay, since each leaves by a removal
-/// of its own or by the retention pass's cut.
+/// of its own, by the delete of the sets' key or by the retention pass's cut.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeepaliveBatch {
     pub sessions: Vec<KeepaliveSessionRow>,
@@ -180,6 +180,8 @@ impl Store {
     /// both halves of a batch. A removed session deletes no set of reported facts. A row that keeps its body leaves the
     /// stored blob and nonce as they are, and a row that clears it leaves neither. Each session row that carries
     /// `seen_at` stamps that instant on each stored set of its session, a set that the same batch writes among them.
+    /// A set is written only under a key that the registry holds with the set's generation, and a set that this
+    /// condition refuses fails no save.
     pub fn save_keepalive(&self, batch: &KeepaliveBatch) -> Result<(), StoreError> {
         // Sealed before the connection is taken, so a large batch holds no other writer behind the cipher.
         let mut sealed_facts = Vec::with_capacity(batch.facts.len());
@@ -293,11 +295,14 @@ impl Store {
             }
         }
         {
+            // A save whose batch was read ahead of a key's delete would write the deleted generation's set behind it,
+            // so the condition reads the registry inside this transaction.
             let mut stmt = tx.prepare_cached(
                 "INSERT INTO companion_facts \
                  (key_id, key_generation, session_id, kind, agent_id, record_version, facts_sealed, facts_nonce, \
                   seen_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+                 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 \
+                 WHERE EXISTS (SELECT 1 FROM api_keys WHERE id = ?1 AND created_at = ?2) \
                  ON CONFLICT(key_id, key_generation, session_id, kind, agent_id) DO UPDATE SET \
                  record_version = excluded.record_version, facts_sealed = excluded.facts_sealed, \
                  facts_nonce = excluded.facts_nonce, seen_at = excluded.seen_at",

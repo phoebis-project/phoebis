@@ -1353,6 +1353,124 @@ fn deleting_a_key_drops_its_session_memory_so_a_reissued_id_reads_nothing() {
     );
 }
 
+/// A stored `title` set of `session` under the key `key_id` at `generation`.
+fn title_set(key_id: &str, generation: i64, session: &str, value: &[u8]) -> FactsRow {
+    FactsRow {
+        key: FactsKey {
+            key_id: key_id.into(),
+            key_generation: generation,
+            session_id: session.into(),
+            kind: FactsKind::Title,
+            agent_id: String::new(),
+        },
+        record_version: 1,
+        value: value.to_vec(),
+        seen_at: 1,
+    }
+}
+
+/// The key id and the opened value of each stored set of `sessions`, in the read's order.
+fn stored_sets(
+    store: &Store,
+    sessions: &[(String, i64, String)],
+) -> Vec<(String, Option<Vec<u8>>)> {
+    store
+        .load_companion_facts(sessions)
+        .unwrap()
+        .into_iter()
+        .map(|set| (set.key.key_id, set.value))
+        .collect()
+}
+
+#[test]
+fn deleting_a_key_drops_its_stored_fact_sets_and_leaves_another_keys() {
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    let back = store
+        .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
+        .unwrap()
+        .created_at;
+    let front = store
+        .insert_api_key(
+            &key(&store, "front", "main", "phoebis-front-secret"),
+            "test",
+        )
+        .unwrap()
+        .created_at;
+    store
+        .save_keepalive(&KeepaliveBatch {
+            facts: vec![
+                title_set("back", back, "s-1", br#"{"title":"Moor the pilot boat"}"#),
+                title_set("front", front, "s-2", br#"{"title":"Paint the day marks"}"#),
+            ],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    store.delete_api_key("back", "test").unwrap();
+    assert_eq!(
+        stored_sets(
+            &store,
+            &[
+                ("back".into(), back, "s-1".into()),
+                ("front".into(), front, "s-2".into())
+            ]
+        ),
+        vec![(
+            "front".to_string(),
+            Some(br#"{"title":"Paint the day marks"}"#.to_vec())
+        )],
+        "the deleted key's set went with the key, and the other key's stayed"
+    );
+}
+
+#[test]
+fn a_set_of_a_deleted_keys_generation_reaches_no_row_behind_a_re_creation_of_its_id() {
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    let first = store
+        .insert_api_key(&key(&store, "back", "main", "phoebis-back-secret"), "test")
+        .unwrap()
+        .created_at;
+    let front = store
+        .insert_api_key(
+            &key(&store, "front", "main", "phoebis-front-secret"),
+            "test",
+        )
+        .unwrap()
+        .created_at;
+    store.delete_api_key("back", "test").unwrap();
+    store
+        .insert_api_key(
+            &key(&store, "back", "main", "phoebis-back-reissued"),
+            "test",
+        )
+        .unwrap();
+    // The batch of a save that read its sets ahead of the delete.
+    store
+        .save_keepalive(&KeepaliveBatch {
+            facts: vec![
+                title_set("back", first, "s-1", br#"{"title":"Coil the stern line"}"#),
+                title_set("front", front, "s-2", br#"{"title":"Trim the fog signal"}"#),
+            ],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        stored_sets(
+            &store,
+            &[
+                ("back".into(), first, "s-1".into()),
+                ("front".into(), front, "s-2".into())
+            ]
+        ),
+        vec![(
+            "front".to_string(),
+            Some(br#"{"title":"Trim the fog signal"}"#.to_vec())
+        )],
+        "the set of the deleted generation reached no row, and the standing key's set did"
+    );
+}
+
 #[test]
 fn a_key_created_in_its_previous_holders_millisecond_takes_the_next_generation() {
     let dir = tempfile::tempdir().unwrap();

@@ -2674,7 +2674,8 @@ impl Inner {
 
     /// Ends every session whose key the registry no longer holds under the generation that registered it: a
     /// deletion, or the same id created again, takes the previous holder's sessions and recipes with it rather
-    /// than leaving them to the session expiry.
+    /// than leaving them to the session expiry. The filed sets of such a generation leave behind them, each found by
+    /// its own key, since a set can be filed for a session that the map holds no record of.
     pub(crate) fn drop_sessions_of_dead_keys(&mut self, snapshot: &RegistrySnapshot) {
         let dead: Vec<SessionKey> = self
             .sessions
@@ -2685,6 +2686,7 @@ impl Inner {
         for key in dead {
             self.remove_session(&key, Reason::SessionEnded);
         }
+        self.forget_facts_of_dead_keys(snapshot);
     }
 }
 

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use phoebis_ledger::{Band, Speed};
-use phoebis_routing::{FIVE_HOUR, SEVEN_DAY};
+use phoebis_routing::{RegistrySnapshot, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{
     FactsKey, FactsKind, FactsRow, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch,
@@ -981,6 +981,15 @@ impl Inner {
                 revision,
             },
         );
+    }
+
+    /// Drops each filed set whose key the registry no longer holds under the generation that filed it. The key's
+    /// delete took the stored rows and the save writes no set of such a generation, so the entry would wait for the
+    /// next landed save for nothing.
+    pub(crate) fn forget_facts_of_dead_keys(&mut self, snapshot: &RegistrySnapshot) {
+        self.dirty.facts.retain(|key, _| {
+            snapshot.key(&key.key_id).map(|k| k.created_at) == Some(key.key_generation)
+        });
     }
 
     /// The batch the dirty sets name, read as the map stands now, each row with the revision it was read at, and the

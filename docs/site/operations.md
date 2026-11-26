@@ -12,12 +12,12 @@ the cooldowns, the keys, the pins, the pools, the pricing versions and the relay
 holds what a companion mod reports, sealed under the storage key: the branches, paths, remotes and titles of a session,
 and the descriptions, names and types of its agents. Each backup of it carries the sealed rows. The registry keeps a
 session's own facts until `sessions.expire_after_seconds` has passed since the session's last report, and an agent's
-facts until `stats.retention_days` has, and the hourly retention pass removes them. `stats.ledger_path` is the ledger:
-the attempts, captured bodies, events, requests, rollups and samples. `storage.encryption_key_file` is the key that
-seals every credential the registry holds. `phoebis backup` takes a snapshot of both databases and names the key file,
-and it never copies the key. A router with the `features` block holds two more files in the data directory,
-`feature-ca.pem` and `feature-ca-key.pem`, the feature CA and its key, which `phoebis backup` leaves out too (step 5 of
-[Restore](#restore)).
+facts until `stats.retention_days` has, and the hourly retention pass removes them. The deletion of a key removes the
+facts of its sessions at once. `stats.ledger_path` is the ledger: the attempts, captured bodies, events, requests,
+rollups and samples. `storage.encryption_key_file` is the key that seals every credential the registry holds.
+`phoebis backup` takes a snapshot of both databases and names the key file, and it never copies the key. A router with
+the `features` block holds two more files in the data directory, `feature-ca.pem` and `feature-ca-key.pem`, the feature
+CA and its key, which `phoebis backup` leaves out too (step 5 of [Restore](#restore)).
 
 Both databases are SQLite in WAL mode. A plain file copy taken while the service runs can land mid-transaction and
 split a database file from its `-wal` file, losing the last transactions. SQLite's online backup API copies a

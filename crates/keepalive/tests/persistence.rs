@@ -1315,6 +1315,35 @@ async fn a_set_whose_save_failed_reaches_its_row_with_the_next_save() {
 }
 
 #[tokio::test]
+async fn a_set_filed_ahead_of_its_keys_deletion_reaches_no_row() {
+    let mut r = rig(on_disk()).await;
+    // Read ahead of the delete, since the save behind the tick takes the session's saved row.
+    let session = rig_session(&r);
+    let conn = registry(&r);
+    conn.execute_batch(
+        "CREATE TRIGGER refuse_facts BEFORE INSERT ON companion_facts \
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .unwrap();
+    r.event(json!({"event": "session_facts", "title": "Sound the fairway"}))
+        .await
+        .unwrap();
+    // The worker's save, then one behind it, both under the trigger, so no save is left open behind its drop.
+    r.engine.persist_reached(3, 3).await;
+    r.engine.flush_persisted().await;
+    r.h.store.delete_api_key("desktop", "test").unwrap();
+    r.h.router.reload().await.unwrap();
+    conn.execute_batch("DROP TRIGGER refuse_facts;").unwrap();
+    r.step().await;
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_title(&r, &session),
+        None,
+        "the set filed ahead of the key's delete reached no row behind it"
+    );
+}
+
+#[tokio::test]
 async fn a_sessions_title_and_its_project_set_rest_in_two_rows_each_with_its_own_members() {
     let mut r = rig(on_disk()).await;
     let session = rig_session(&r);
