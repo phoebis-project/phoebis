@@ -94,7 +94,9 @@ pub(crate) fn refresh_policy<'v>(
     // without a request following. The ceilings, the budget and the probe's own delta all read the pool the key
     // belongs to now.
     let moved = warming.pool_id != key.pool_id;
-    warming.pool_id = key.pool_id.clone();
+    if moved {
+        warming.pool_id = key.pool_id.clone();
+    }
     Ok((pool, policy, moved))
 }
 
