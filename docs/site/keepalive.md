@@ -99,9 +99,9 @@ lapsed, with the time the mod stopped reporting, and `none` for a session the ro
 the router still pins and whose requests it still sees. The router reads the instance header the mod has the client send
 on every model request of its process, `X-Phoebis-Instance-Id`, to tell that process's requests from another process's
 on the same session id. While the holder's lease is live, a request that names another instance leaves the session's
-recipes as they were and is counted as a mismatch. The router strips the header before a request leaves. Once the
-holder's lease has lapsed, a real request that names another instance arms its recipe as the holder's does. A
-registration starts main `busy` under the cause `awaiting_request` until its first request.
+recipes as they were. The router strips the header before a request leaves. Once the holder's lease has lapsed, a real
+request that names another instance arms its recipe as the holder's does. A registration starts main `busy` under the
+cause `awaiting_request` until its first request.
 
 ## Turning it on
 

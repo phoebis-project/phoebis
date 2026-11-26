@@ -175,9 +175,9 @@ pub(crate) struct Session {
     pub facts: SessionFacts,
     /// Main's recipe, or the newest other agent's where main holds none.
     pub keepalive: SessionKeepalive,
-    /// Main's lifecycle word from the session engine's record, whether or not a recipe stands: `busy`, `idle`,
-    /// `parked`, `registered`, `released` or `unknown`, where `registered` is a main busy awaiting a real request
-    /// since the mod registered it or started it again. Null where no mod reports the session.
+    /// Main's lifecycle word read off the session engine's state and the cache warming's cause, whether or not a recipe
+    /// stands: `busy`, `idle`, `parked`, `registered`, `released` or `unknown`, where `registered` is a main busy
+    /// awaiting a real request since the mod registered it or started it again. Null where no mod reports the session.
     #[schema(example = "busy")]
     pub lifecycle: Option<String>,
     /// The seconds since main's last presence report, null before the first one.
@@ -291,9 +291,9 @@ pub(crate) struct AgentContext {
     /// The share of the dropped thinking as output that a round's pick compares for this pin while it is cold, as the
     /// row's `move_drop_cost`. Null where `move_drop_size` is.
     pub move_drop_cost: Option<f64>,
-    /// The agent's lifecycle word from the session engine's record: `busy`, `idle`, `parked`, `registered`, `released`
-    /// or `unknown`, where `registered` is an agent busy awaiting a real request since the mod registered it or started
-    /// it again. Null where no mod reports it.
+    /// The agent's lifecycle word read off the session engine's state and the cache warming's cause: `busy`, `idle`,
+    /// `parked`, `registered`, `released` or `unknown`, where `registered` is an agent busy awaiting a real request
+    /// since the mod registered it or started it again. Null where no mod reports it.
     #[schema(example = "idle")]
     pub lifecycle: Option<String>,
 }
@@ -434,7 +434,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             .non_companion_idle
             .min(state.session_expiry)
             .as_millis() as i64;
-    let engine: std::collections::BTreeMap<SessionSpendKey, phoebis_session_engine::SessionView> =
+    let views: std::collections::BTreeMap<SessionSpendKey, phoebis_session_engine::SessionView> =
         state
             .engine
             .sessions()
@@ -445,7 +445,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         .iter()
         .filter(|standing| standing.pin.last_used_at >= idle_bound)
         .filter_map(|standing| pin_key(&standing.pin))
-        .chain(engine.keys().cloned())
+        .chain(views.keys().cloned())
         .collect();
     // One read for the activity and the fork facts: the keys the pin and engine passes can surface are known before
     // the read, the activity's come from the read itself, and a row's fork facts come from the requests of its own
@@ -491,8 +491,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         .collect();
     let mut rows: std::collections::BTreeMap<SessionSpendKey, Session> =
         std::collections::BTreeMap::new();
-    // The keepalive's own agent count answers `agents` when a session has an engine view, so every agent a pin names
-    // is counted here as the fallback where it does not.
+    // The session engine's own agent count answers `agents` when a session has an engine view, so every agent a pin
+    // names is counted here as the fallback where it does not.
     let mut agents_by_session: std::collections::BTreeMap<
         SessionSpendKey,
         std::collections::BTreeSet<String>,
@@ -593,7 +593,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         // refused keeps the agent of its newest one, which the totals' own replaces below where one was served.
         entry.user_agent = a.user_agent;
     }
-    for (key, view) in &engine {
+    for (key, view) in &views {
         let entry = rows
             .entry(key.clone())
             .or_insert_with_key(|key| unpinned_row(key, None));
@@ -617,7 +617,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     for (key, entry) in rows.iter_mut() {
         let historical = live.get(&key.key_id) != Some(&key.key_generation);
         entry.historical = historical;
-        if historical || !engine.contains_key(key) {
+        if historical || !views.contains_key(key) {
             entry.agents = agents_by_session.get(key).map_or(0, |a| a.len() as u64);
         }
     }
@@ -721,7 +721,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 &b.model,
             ))
         });
-        let view = engine.get(key);
+        let view = views.get(key);
         entry.agent_contexts = lines
             .into_iter()
             .map(|standing| AgentContext {

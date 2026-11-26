@@ -1525,8 +1525,8 @@ fn deleting_a_key_drops_its_stored_fact_sets_and_leaves_another_keys() {
 
 #[test]
 fn a_set_of_a_deleted_keys_generation_reaches_no_row_behind_a_re_creation_of_its_id() {
-    // A clock that stands still gives `front` the first generation of `back`, so a condition that reads one of its two
-    // members alone finds a key for the set under that generation.
+    // A clock that stands still gives `front` the first generation of `back`, so the save's condition on a set's key id
+    // and its generation, cut to either member alone, finds a key for the set under that generation.
     let store =
         Store::open_in_memory(&StorageKey::generate(), std::sync::Arc::new(|| 1_000_000)).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();

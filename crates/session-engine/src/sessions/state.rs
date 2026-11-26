@@ -506,7 +506,7 @@ impl SessionsState {
     ) -> bool {
         // The header is a hardening on top of the registration rule: while the holder's lease is live, a request that
         // names an instance has to name the session's. Foreign traffic proves nothing about this agent, so its status,
-        // its recipe and its schedule are left as they were, and only the mismatch itself is counted. A restored
+        // its recipe and its schedule are left as they were, and the session's first mismatch is logged. A restored
         // session's window reads as live, since the mod re-adopts the session within it. Past the lease the holder
         // reports nothing, and a process that reloaded under a new instance would otherwise arm nothing until the idle
         // limit ended the session.

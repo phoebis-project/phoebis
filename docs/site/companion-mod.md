@@ -28,12 +28,11 @@ either way, since the key's settings live on the router alone.
 
 On the router's side, a request whose instance header names another instance than the one that holds the session is
 foreign traffic while the holder's lease is live, and a session saved attended reads as live for one lease length after
-a router restart, until its registration arrives. The router leaves the session's recipes as they were, counts the
-mismatch, and at the session's first mismatch writes one WARN line,
-`a request named another instance than the session's registration`, naming the session id and never an instance id. Once
-the lease has lapsed, such a request meets no check and arms its recipe as the holder's does. The new instance's start
-still meets the silent holder and takes over as [The instance header](../companion/reports.md#the-owner-header) states,
-which replaces the agents those requests armed.
+a router restart, until its registration arrives. The router leaves the session's recipes as they were and, at the
+session's first mismatch, writes one WARN line, `a request named another instance than the session's registration`,
+naming the session id and never an instance id. Once the lease has lapsed, such a request meets no check and arms its
+recipe as the holder's does. The new instance's start still meets the silent holder and takes over as [The instance
+header](../companion/reports.md#the-owner-header) states, which replaces the agents those requests armed.
 
 ## The Sessions view
 

@@ -38,7 +38,7 @@ pub(crate) struct RawAgentFacts {
 pub struct SessionFacts(RawSessionFacts);
 
 impl SessionFacts {
-    /// The one way a value becomes a kept one. The conversion of a report and the load of a saved row call it.
+    /// The one way a value becomes a kept one. The conversion of a report and the read of a stored set call it.
     pub(crate) fn of(raw: RawSessionFacts) -> SessionFacts {
         SessionFacts(RawSessionFacts {
             branch: whole(raw.branch, SHORT_CAP),

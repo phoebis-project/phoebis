@@ -15,7 +15,8 @@ use crate::sessions::events::{
 use crate::sessions::state::{agent_ref, AgentState, SessionKey, AGENT_HELD, MAIN_AGENT};
 use crate::warming::causes::{Reason, Wasted};
 
-/// An accepted report's answer, with whether the report filed a set of facts, which asks for a save at once.
+/// An accepted report's answer, with whether the report filed a set of facts or the leave of a kind, which asks for a
+/// save at once.
 pub(crate) struct Applied {
     pub ack: Ack,
     pub filed_facts: bool,
@@ -264,7 +265,7 @@ impl Inner {
         self.sessions.tail(&key, report.sequence, renews_lease, now);
         self.touch_session(&key);
         // A session-level report moves the session alone, and a facts report moves no member of an agent's row, so
-        // neither writes an agent's sealed prompt again.
+        // neither moves the saved instant that ranks the agents at a load.
         if report.event.agent_id().is_some() && !matches!(report.event, Reported::AgentFacts { .. })
         {
             self.touch_agent(&key, &agent_id);

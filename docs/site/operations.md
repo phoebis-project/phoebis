@@ -245,10 +245,10 @@ Under the container the image ships no `sqlite3`, so the sequence runs as uid 65
 The sequence discards everything that the storage key seals, and nothing else: the API-key secrets, the canary, the
 OAuth credential bundles, the keepalive's recipe bodies and the facts that a companion mod reported go, and each account
 rests where the Accounts view's Disconnect leaves it, with the cause `operator` and its open refresh attempts settled.
-The accounts, downstream keys, pins, pools, the session engine's sessions and session memory stay. `-bail` stops at the
-first statement that fails, and the transaction it leaves open rolls back, so the file is either wholly changed or
-untouched. The subcommand seals the new canary inside the same transaction, and after the sequence run by hand the next
-start under the new key finds nothing sealed and seals one. The steps that remain are the same either way.
+The accounts, downstream keys, pins, pools, the session engine's sessions and the relay's session memory stay. `-bail`
+stops at the first statement that fails, and the transaction it leaves open rolls back, so the file is either wholly
+changed or untouched. The subcommand seals the new canary inside the same transaction, and after the sequence run by
+hand the next start under the new key finds nothing sealed and seals one. The steps that remain are the same either way.
 
 An operator who would rather start over moves the registry file aside instead, with its `-wal` and `-shm` files if
 present, and lets the next start create an empty registry, in which every account, pool and key is created again.

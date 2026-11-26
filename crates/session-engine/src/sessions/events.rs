@@ -510,8 +510,7 @@ fn validate(event: Event) -> Result<Event, EventError> {
     Ok(event)
 }
 
-/// Each kind of stored facts that a registration's list does not name, read off the store's words so that a kind the
-/// store adds is dropped too.
+/// Each kind of stored facts that a registration's list does not name, read off the store's words.
 pub(crate) fn left_out(reported: &BTreeSet<FactsKind>) -> impl Iterator<Item = FactsKind> + '_ {
     FactsKind::WORDS
         .iter()
