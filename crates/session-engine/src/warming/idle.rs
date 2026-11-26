@@ -5,6 +5,7 @@ use phoebis_routing::{RegistrySnapshot, DAY_MS};
 use crate::sessions::state::{
     agent_ref, Agent, AgentState, SessionKey, SessionsState, AGENT_HELD, MAIN_AGENT,
 };
+use crate::sessions::view::CompanionState;
 use crate::warming::agent::{warming_mut, AgentWarming};
 use crate::warming::causes::Reason;
 use crate::warming::state::{Changes, WarmingState};
@@ -199,7 +200,7 @@ impl WarmingState {
         let mut opened: Vec<SessionKey> = Vec::new();
         let mut raised: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in sessions.entries.iter() {
-            if session.ended || !session.attended {
+            if session.companion() != CompanionState::Reporting {
                 continue;
             }
             let Some(main) = session.agents.get(MAIN_AGENT) else {

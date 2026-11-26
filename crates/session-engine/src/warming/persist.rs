@@ -8,7 +8,7 @@ use phoebis_store::engine_state::BodyWrite;
 use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow};
 use serde::{Deserialize, Serialize};
 
-use crate::sessions::persist::PersistKey;
+use crate::sessions::persist::{versioned, PersistKey};
 use crate::sessions::state::{Agent, SessionKey, AGENT_HELD};
 use crate::warming::agent::{warming_mut, AgentWarming};
 use crate::warming::causes::{Reason, Wasted};
@@ -663,9 +663,7 @@ pub(crate) fn decode_warming(
     now: i64,
     timing: KeepaliveTiming,
 ) -> Option<Restored> {
-    (row.record_version == WARMING_RECORD_VERSION)
-        .then(|| serde_json::from_str::<PersistedWarming>(&row.payload).ok())
-        .flatten()
+    versioned::<PersistedWarming>(row.record_version, WARMING_RECORD_VERSION, &row.payload)
         .and_then(|payload| payload.restore(now, timing))
 }
 

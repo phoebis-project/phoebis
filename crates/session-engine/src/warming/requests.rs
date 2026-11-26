@@ -327,7 +327,8 @@ impl WarmingState {
         // the parse, and its drop has run by then, so a recipe admitted on that earlier read would stay with no tick to
         // end it.
         let session_off = sessions
-            .session(key)
+            .entries
+            .get(key)
             .is_some_and(|session| !session.cache_warming);
         if let Some(reason) = arrival_refusal.or(session_off.then_some(Reason::SessionOptedOut)) {
             self.drop_aside(sessions, key, agent_id);

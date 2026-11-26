@@ -97,7 +97,7 @@ impl PersistedSession {
             last_real_at: self.last_real_at,
             slotted: self.slotted.unwrap_or(self.last_real_at.is_some()),
             restored_until: self.attended.then_some(now + LEASE_MS),
-            instance_mismatches: 0,
+            instance_mismatch_warned: false,
             agents: BTreeMap::new(),
             cache_warming: self.cache_warming,
         }
@@ -126,21 +126,25 @@ impl PersistedAgent {
 
     /// The agent the payload describes.
     fn restore(self) -> Agent {
-        let mut agent = Agent::new(&self.id, &self.key_id, self.incarnation, self.last_activity);
-        agent.state = self.state;
-        agent.park = self
-            .park_kind
-            .zip(self.park_began)
-            .map(|(kind, began)| HeldPark {
-                began,
-                // A row that an earlier build saved can hold a part that the parser now refuses.
-                park: Park::new(kind, self.deadline, self.wake_at),
-            });
-        agent.park_ended_at = self.park_ended_at;
-        agent.generation = self.generation;
-        agent.leaves_at = self.leaves_at;
-        agent.last_presence_at = self.last_presence_at;
-        agent
+        Agent {
+            id: self.id,
+            key_id: self.key_id,
+            incarnation: self.incarnation,
+            state: self.state,
+            park: self
+                .park_kind
+                .zip(self.park_began)
+                .map(|(kind, began)| HeldPark {
+                    began,
+                    // A row that an earlier build saved can hold a part that the parser now refuses.
+                    park: Park::new(kind, self.deadline, self.wake_at),
+                }),
+            park_ended_at: self.park_ended_at,
+            generation: self.generation,
+            leaves_at: self.leaves_at,
+            last_activity: self.last_activity,
+            last_presence_at: self.last_presence_at,
+        }
     }
 }
 
@@ -177,10 +181,25 @@ pub(crate) fn agent_row(
     })
 }
 
+/// A row's payload, `None` when the row's version is not `current` or its payload does not parse.
+pub(crate) fn versioned<T: serde::de::DeserializeOwned>(
+    record_version: u32,
+    current: u32,
+    payload: &str,
+) -> Option<T> {
+    (record_version == current)
+        .then(|| serde_json::from_str::<T>(payload).ok())
+        .flatten()
+}
+
+/// The session payload a row carries, `None` when its version is one this build does not read or its payload does
+/// not parse.
+pub(crate) fn decode_session(row: &CompanionSessionRow) -> Option<PersistedSession> {
+    versioned::<PersistedSession>(row.record_version, SESSION_RECORD_VERSION, &row.payload)
+}
+
 /// The agent a row describes, `None` when its version is one this build does not read or its payload does not parse.
 pub(crate) fn decode_agent(row: &CompanionAgentRow) -> Option<Agent> {
-    (row.record_version == AGENT_RECORD_VERSION)
-        .then(|| serde_json::from_str::<PersistedAgent>(&row.payload).ok())
-        .flatten()
+    versioned::<PersistedAgent>(row.record_version, AGENT_RECORD_VERSION, &row.payload)
         .map(PersistedAgent::restore)
 }

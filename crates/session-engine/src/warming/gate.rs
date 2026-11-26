@@ -590,7 +590,7 @@ revisions:
                 last_real_at: Some(0),
                 slotted: true,
                 restored_until: None,
-                instance_mismatches: 0,
+                instance_mismatch_warned: false,
                 agents: BTreeMap::from([("main".to_string(), Agent::new("main", "k", 1, 0))]),
                 cache_warming: true,
             },

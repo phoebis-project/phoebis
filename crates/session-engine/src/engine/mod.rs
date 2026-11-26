@@ -530,10 +530,11 @@ impl Engine {
         let (held, session_off) = {
             let inner = self.lock();
             (
-                !inner.closed && inner.sessions.agent(&key, &agent_id).is_some(),
+                !inner.closed && agent_ref(&inner.sessions.entries, &key, &agent_id).is_some(),
                 inner
                     .sessions
-                    .session(&key)
+                    .entries
+                    .get(&key)
                     .is_some_and(|session| !session.cache_warming),
             )
         };
@@ -558,7 +559,7 @@ impl Engine {
         let inner = &mut *inner;
         if inner.closed {
             // A request on a session the engine holds is one the last save can no longer carry.
-            if inner.sessions.session(&key).is_some() {
+            if inner.sessions.entries.contains_key(&key) {
                 inner.late_updates += 1;
             }
             return;

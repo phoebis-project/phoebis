@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use phoebis_routing::RegistrySnapshot;
 
 use crate::sessions::config::LEASE_MS;
+use crate::sessions::view::CompanionState;
 
 /// The main conversation's agent, which the idle limits apply to.
 pub use phoebis_routing::MAIN_AGENT;
@@ -143,6 +144,21 @@ pub(crate) struct HeldPark {
     pub park: Park,
 }
 
+impl HeldPark {
+    /// How much of the park passed at `now`, with the park it leaves.
+    fn passed_at(self, now: i64) -> (ParkPassed, Option<Park>) {
+        let left = self.park.passed(now);
+        let passed = if left == Some(self.park) {
+            ParkPassed::No
+        } else if left.is_some() {
+            ParkPassed::Part
+        } else {
+            ParkPassed::Whole
+        };
+        (passed, left)
+    }
+}
+
 /// One companion registration, or one session a request revealed before any registration.
 pub(crate) struct Session {
     /// The generation of the key that registered the session, so a key id created again reaches none of the
@@ -169,9 +185,9 @@ pub(crate) struct Session {
     /// this instant or until the mod registers it again, whichever is first: the mod re-adopts a restored session
     /// within its lease, and a parked recipe must not be discarded as idle before it can.
     pub restored_until: Option<i64>,
-    /// The requests that named another instance than the registration while the holder's lease was live, so the
-    /// warning goes out once per session rather than once per request.
-    pub instance_mismatches: u64,
+    /// Set at the first request that named another instance than the registration while the holder's lease was live,
+    /// so the warning goes out once per session rather than once per request.
+    pub instance_mismatch_warned: bool,
     pub agents: BTreeMap<String, Agent>,
     /// What the session's last registration said of its own cache warming option.
     pub cache_warming: bool,
@@ -259,6 +275,11 @@ impl Agent {
         self.leaves_at = None;
         self.last_activity = now;
     }
+
+    /// Whether the record is released and its leave passed at `now`, so it leaves the engine.
+    pub(crate) fn leave_passed(&self, now: i64) -> bool {
+        self.state == AgentState::Released && self.leaves_at.is_some_and(|at| now >= at)
+    }
 }
 
 /// What a walk whose caller just read the agent under the same lock expects of it.
@@ -319,6 +340,12 @@ pub(crate) struct SessionsState {
     pub session_expiry_ms: i64,
 }
 
+/// Whether the registry still holds the key id under the generation that created it. The sessions of a key and the
+/// facts they filed leave by this one test, so they leave together.
+pub(crate) fn key_stands(snapshot: &RegistrySnapshot, key_id: &str, key_generation: i64) -> bool {
+    snapshot.key(key_id).map(|k| k.created_at) == Some(key_generation)
+}
+
 impl SessionsState {
     pub(crate) fn new(
         max_agents: usize,
@@ -342,10 +369,7 @@ impl SessionsState {
                 session
                     .agents
                     .iter()
-                    .filter(move |(_, agent)| {
-                        agent.state == AgentState::Released
-                            && agent.leaves_at.is_some_and(|at| now >= at)
-                    })
+                    .filter(move |(_, agent)| agent.leave_passed(now))
                     .map(move |(agent_id, _)| (key.clone(), agent_id.clone()))
             })
             .collect()
@@ -359,18 +383,14 @@ impl SessionsState {
 
     /// Turns each attended session whose lease ran out at `now` silent, and answers those sessions.
     pub(crate) fn lapse_leases(&mut self, now: i64) -> Vec<SessionKey> {
-        let lapsed: Vec<SessionKey> = self
-            .entries
-            .iter()
-            .filter(|(_, s)| s.attended && !s.ended && now >= s.lease)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in &lapsed {
-            if let Some(session) = self.entries.get_mut(key) {
-                session.attended = false;
-            }
-        }
-        lapsed
+        self.entries
+            .iter_mut()
+            .filter(|(_, s)| s.companion() == CompanionState::Reporting && now >= s.lease)
+            .map(|(key, s)| {
+                s.attended = false;
+                key.clone()
+            })
+            .collect()
     }
 
     /// The sessions past the session expiry at `now`, counted from the later of their last real request and their last
@@ -389,7 +409,7 @@ impl SessionsState {
     pub(crate) fn sessions_of_dead_keys(&self, snapshot: &RegistrySnapshot) -> Vec<SessionKey> {
         self.entries
             .iter()
-            .filter(|(key, s)| snapshot.key(&key.0).map(|k| k.created_at) != Some(s.key_generation))
+            .filter(|(key, s)| !key_stands(snapshot, &key.0, s.key_generation))
             .map(|(k, _)| k.clone())
             .collect()
     }
@@ -425,17 +445,18 @@ impl SessionsState {
         session.last_report_at = now;
     }
 
-    /// A presence stamps the person's last sight at the terminal and the idle clock alone. A prompt stamps the idle
-    /// clock and moves the agent to busy.
-    pub(crate) fn activity(&mut self, key: &SessionKey, agent_id: &str, presence: bool, now: i64) {
+    /// A presence stamps the person's last sight at the terminal and the idle clock alone.
+    pub(crate) fn presence_seen(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
         let agent = agent_mut(&mut self.entries, key, agent_id).expect(AGENT_HELD);
-        if presence {
-            agent.last_presence_at = Some(now);
-        }
+        agent.last_presence_at = Some(now);
         agent.last_activity = now;
-        if !presence {
-            agent.set_state(AgentState::Busy);
-        }
+    }
+
+    /// A prompt stamps the idle clock and moves the agent to busy.
+    pub(crate) fn prompted(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
+        let agent = agent_mut(&mut self.entries, key, agent_id).expect(AGENT_HELD);
+        agent.last_activity = now;
+        agent.set_state(AgentState::Busy);
     }
 
     pub(crate) fn park(&mut self, key: &SessionKey, agent_id: &str, park: Park, now: i64) {
@@ -458,14 +479,11 @@ impl SessionsState {
         key_generation: i64,
         agent_id: &str,
     ) -> bool {
-        let Some(session) = self.entries.get(key) else {
-            return false;
-        };
         // The purge ends a session whose key id now belongs to a later holder, but only at the next tick: until
         // then this is the previous holder's session, and a request of another generation arms nothing on it.
-        if session.key_generation != key_generation {
+        let Some(session) = self.held_by(key, key_generation) else {
             return false;
-        }
+        };
         if session.ended {
             return false;
         }
@@ -478,8 +496,8 @@ impl SessionsState {
         true
     }
 
-    /// Whether the instance an arrival names is the session's, while the session reads attended. A mismatch is counted
-    /// on the session, and its first one warns.
+    /// Whether the instance an arrival names is the session's, while the session reads attended. The session's first
+    /// mismatch warns.
     pub(crate) fn instance_check(
         &mut self,
         key: &SessionKey,
@@ -494,12 +512,12 @@ impl SessionsState {
         // limit ended the session.
         let session = self.entries.get_mut(key).unwrap();
         if instance_id.is_some_and(|sent| sent != session.instance) && session.attended_at(now) {
-            session.instance_mismatches += 1;
-            if session.instance_mismatches == 1 {
+            if !session.instance_mismatch_warned {
                 tracing::warn!(
                     session = %key.1,
                     "a request named another instance than the session's registration"
                 );
+                session.instance_mismatch_warned = true;
             }
             return false;
         }
@@ -512,24 +530,19 @@ impl SessionsState {
         // counts from it across a restart.
         let session = self.entries.get_mut(key).unwrap();
         session.last_real_at = Some(now);
-        let slotted = session.slotted;
-        if slotted {
+        if session.slotted {
             return Slot::Held;
         }
+        let joining = session.agents.len();
         // A session takes its slots at the first real request the caps admit, so both caps are read here at each of
         // its requests until then, the session cap first as a registration reads them, and the session's agents join
         // the agent count only where they all fit. A request over either cap is refused the slot as a registration
         // over it is: it keeps nothing and leaves `slotted` false, so the session's next request reads the caps again.
-        let joining = self.entries[key].agents.len();
-        let refused = if self.live_sessions() >= self.max_sessions {
-            Some(Slot::OverSessions)
-        } else if self.agent_count() + joining > self.max_agents {
-            Some(Slot::OverAgents)
-        } else {
-            None
-        };
-        if let Some(refused) = refused {
-            return refused;
+        if !self.session_fits() {
+            return Slot::OverSessions;
+        }
+        if !self.agents_fit(joining, 0) {
+            return Slot::OverAgents;
         }
         self.entries.get_mut(key).unwrap().slotted = true;
         Slot::Taken
@@ -551,17 +564,9 @@ impl SessionsState {
         let Some(agent) = agent_ref(&self.entries, key, agent_id) else {
             return ParkPassed::No;
         };
-        let Some(held) = agent.park else {
-            return ParkPassed::No;
-        };
-        let left = held.park.passed(now);
-        if left == Some(held.park) {
-            ParkPassed::No
-        } else if left.is_some() {
-            ParkPassed::Part
-        } else {
-            ParkPassed::Whole
-        }
+        agent
+            .park
+            .map_or(ParkPassed::No, |held| held.passed_at(now).0)
     }
 
     /// A deadline or a wake that passed ends that part of the park, and a park with nothing left ended without a
@@ -575,22 +580,21 @@ impl SessionsState {
         let Some(held) = agent.park else {
             return;
         };
-        let left = held.park.passed(now);
-        if left == Some(held.park) {
+        let (passed, left) = held.passed_at(now);
+        if passed == ParkPassed::No {
             return;
         }
         agent.park = left.map(|park| HeldPark {
             began: held.began,
             park,
         });
-        if left.is_some() {
+        if passed == ParkPassed::Part {
             return;
         }
         agent.park_ended_at = Some(now);
-        if agent.id != MAIN_AGENT {
-            return;
+        if agent.id == MAIN_AGENT {
+            agent.set_state(AgentState::Idle);
         }
-        agent.set_state(AgentState::Idle);
     }
 
     /// Moves the agent's request generation for an observation that ended, so no late result about it lands.
@@ -606,8 +610,8 @@ impl SessionsState {
             .leaves_at = Some(leaves_at);
     }
 
-    /// What every accepted report but a registration and a session's end writes on its session: the sequence, the lease
-    /// where the report renews it, the attended reading and the report's instant.
+    /// What every accepted report but a session's end and a registration of a new session writes on its session: the
+    /// sequence, the lease where the report renews it, the attended reading and the report's instant.
     pub(crate) fn tail(&mut self, key: &SessionKey, sequence: u64, renews_lease: bool, now: i64) {
         let session = self.entries.get_mut(key).unwrap();
         session.sequence = sequence;
@@ -629,12 +633,12 @@ impl SessionsState {
         })
     }
 
-    pub(crate) fn session(&self, key: &SessionKey) -> Option<&Session> {
-        self.entries.get(key)
-    }
-
-    pub(crate) fn agent(&self, key: &SessionKey, agent_id: &str) -> Option<&Agent> {
-        agent_ref(&self.entries, key, agent_id)
+    /// The session under `key` that the key generation registered, `None` where none stands or a previous holder of the
+    /// key id registered it.
+    pub(crate) fn held_by(&self, key: &SessionKey, key_generation: i64) -> Option<&Session> {
+        self.entries
+            .get(key)
+            .filter(|s| s.key_generation == key_generation)
     }
 
     /// The sessions `max_sessions` bounds, those that hold a slot.
@@ -646,6 +650,16 @@ impl SessionsState {
     /// hold none until a request the caps admit.
     pub(crate) fn agent_count(&self) -> usize {
         self.entries.values().map(Session::agent_slots).sum()
+    }
+
+    /// Whether one more session that holds a slot fits under `max_sessions`.
+    pub(crate) fn session_fits(&self) -> bool {
+        self.live_sessions() < self.max_sessions
+    }
+
+    /// Whether the agent count fits under `max_agents` once `joining` records join it and `leaving` leave it.
+    pub(crate) fn agents_fit(&self, joining: usize, leaving: usize) -> bool {
+        self.agent_count() - leaving + joining <= self.max_agents
     }
 
     pub(crate) fn incarnation(&mut self) -> u64 {

@@ -973,7 +973,7 @@ mod tests {
                 last_real_at: Some(0),
                 slotted: true,
                 restored_until: None,
-                instance_mismatches: 0,
+                instance_mismatch_warned: false,
                 agents,
                 cache_warming: true,
             },

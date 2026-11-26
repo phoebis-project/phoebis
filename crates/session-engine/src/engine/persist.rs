@@ -25,9 +25,9 @@ use crate::engine::{Engine, Inner};
 use crate::sessions::facts::{
     AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts, StoredSessionFacts,
 };
-use crate::sessions::persist::{session_row, PersistKey, PersistedSession, SESSION_RECORD_VERSION};
+use crate::sessions::persist::{decode_session, session_row, PersistKey, SESSION_RECORD_VERSION};
 use crate::sessions::state::{
-    agent_ref, Agent, AgentState, Session, SessionKey, AGENT_HELD, MAIN_AGENT,
+    agent_ref, key_stands, Agent, Session, SessionKey, AGENT_HELD, MAIN_AGENT,
 };
 use crate::warming::agent::{warming_mut, warming_ref, AgentWarming};
 use crate::warming::causes::{Reason, Wasted};
@@ -153,9 +153,7 @@ impl Inner {
 
     fn session_of(&self, key: &PersistKey) -> Option<&Session> {
         self.sessions
-            .entries
-            .get(&(key.0.clone(), key.2.clone()))
-            .filter(|session| session.key_generation == key.1)
+            .held_by(&(key.0.clone(), key.2.clone()), key.1)
     }
 
     /// The session's row is dirty under the generation it is held under now.
@@ -265,9 +263,9 @@ impl Inner {
     /// delete took the stored rows and the save writes no set of such a generation, so the entry would wait for the
     /// next landed save for nothing.
     pub(crate) fn forget_facts_of_dead_keys(&mut self, snapshot: &RegistrySnapshot) {
-        self.dirty.facts.retain(|key, _| {
-            snapshot.key(&key.key_id).map(|k| k.created_at) == Some(key.key_generation)
-        });
+        self.dirty
+            .facts
+            .retain(|key, _| key_stands(snapshot, &key.key_id, key.key_generation));
     }
 
     /// The batch the dirty sets name, read as the map stands now, each row with the revision it was read at, and the
@@ -402,15 +400,11 @@ impl Inner {
         for ((row, agent_id), revision, sealed) in &snapshot.bodies {
             let unchanged =
                 self.dirty.agents.get(&(row.clone(), agent_id.clone())) == Some(revision);
-            let key: SessionKey = (row.0.clone(), row.2.clone());
             if self
-                .sessions
-                .entries
-                .get(&key)
-                .filter(|session| session.key_generation == row.1)
-                .and_then(|session| session.agents.get(agent_id))
-                .is_some()
+                .session_of(row)
+                .is_some_and(|session| session.agents.contains_key(agent_id))
             {
+                let key: SessionKey = (row.0.clone(), row.2.clone());
                 self.warming.settle_body(&key, agent_id, *sealed, unchanged);
             }
         }
@@ -544,9 +538,7 @@ impl Inner {
                 self.file_removed_session(stored);
                 continue;
             }
-            let payload = (row.record_version == SESSION_RECORD_VERSION)
-                .then(|| serde_json::from_str::<PersistedSession>(&row.payload).ok())
-                .flatten();
+            let payload = decode_session(&row);
             let Some(payload) = payload else {
                 tracing::warn!(key = %row.key_id, session = %row.session_id, "a saved keepalive session could not be read and is dropped");
                 self.file_removed_session(stored);
@@ -628,9 +620,7 @@ impl Inner {
                 };
                 // The sweep has not run yet at the load, and a leave that passed while the router was down is already
                 // due, so the record goes here, before the cap read below can give it a live agent's slot.
-                if agent.state == AgentState::Released
-                    && agent.leaves_at.is_some_and(|at| at <= now)
-                {
+                if agent.leave_passed(now) {
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
                     continue;
                 }

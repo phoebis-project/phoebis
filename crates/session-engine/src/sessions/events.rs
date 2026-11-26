@@ -14,6 +14,7 @@ use crate::sessions::state::{
     agent_mut, agent_ref, Agent, AgentState, Park, ParkKind, Session, SessionKey, SessionsState,
     AGENT_HELD, MAIN_AGENT,
 };
+use crate::sessions::view::CompanionState;
 
 pub(crate) const PROTOCOL: u64 = 1;
 
@@ -97,6 +98,13 @@ pub(crate) const fn err(code: &'static str, status: u16) -> EventError {
         status,
     }
 }
+
+// The refusals that more than one site answers, each with the status the protocol pairs with its code.
+const AGENT_LIMIT: EventError = err("agent_limit", 429);
+pub(crate) const INVALID_EVENT: EventError = err("invalid_event", 400);
+const INVALID_STATE: EventError = err("invalid_state", 400);
+const STALE_SEQUENCE: EventError = err("stale_sequence", 409);
+const UNKNOWN_INSTANCE: EventError = err("unknown_instance", 409);
 
 fn err_for_instance(code: &'static str, instance: &str) -> EventError {
     EventError {
@@ -194,6 +202,8 @@ fn members(event: &str) -> Option<(EventKind, &'static [(&'static str, bool)])> 
 /// last value of such a key, so the read records the repeat for the checks that follow.
 struct Body {
     object: serde_json::Map<String, serde_json::Value>,
+    /// The body's last `protocol`, held apart from `object`, whose typed read as an `Event` refuses the member.
+    protocol: Option<serde_json::Value>,
     /// `protocol` stands twice in the body.
     protocol_repeated: bool,
     /// A key other than `protocol` stands twice in the body.
@@ -211,18 +221,16 @@ impl<'de> serde::Deserialize<'de> for Body {
             fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Body, A::Error> {
                 let mut body = Body {
                     object: serde_json::Map::new(),
+                    protocol: None,
                     protocol_repeated: false,
                     member_repeated: false,
                 };
                 while let Some((key, value)) = map.next_entry::<String, serde_json::Value>()? {
-                    if body.object.contains_key(&key) {
-                        if key == "protocol" {
-                            body.protocol_repeated = true;
-                        } else {
-                            body.member_repeated = true;
-                        }
+                    if key == "protocol" {
+                        body.protocol_repeated |= body.protocol.replace(value).is_some();
+                    } else {
+                        body.member_repeated |= body.object.insert(key, value).is_some();
                     }
-                    body.object.insert(key, value);
                 }
                 Ok(body)
             }
@@ -334,7 +342,7 @@ impl EventReport {
                 .iter()
                 .any(|(member, required)| *required && named.0.get(*member) != Some(&false))
         {
-            return Err(err("invalid_event", 400));
+            return Err(INVALID_EVENT);
         }
         // A word that names no kind is refused rather than skipped, so a misspelled kind never reads as one the list
         // leaves out, which would drop its stored facts.
@@ -342,36 +350,33 @@ impl EventReport {
             .reported_facts
             .iter()
             .flatten()
-            .map(|word| FactsKind::parse(word).ok_or(err("invalid_event", 400)))
+            .map(|word| FactsKind::parse(word).ok_or(INVALID_EVENT))
             .collect::<Result<BTreeSet<FactsKind>, EventError>>()?;
         let presence = match event.kind.as_deref() {
             None | Some("prompt") => false,
             Some("presence") => true,
-            Some(_) => return Err(err("invalid_state", 400)),
+            Some(_) => return Err(INVALID_STATE),
         };
         let (state, park) = match event.state.as_deref() {
             None => (None, None),
             Some(word) => {
-                let state = AgentState::parse(word).ok_or(err("invalid_state", 400))?;
+                let state = AgentState::parse(word).ok_or(INVALID_STATE)?;
                 let park = if state == AgentState::Parked {
-                    let kind = event
-                        .park_kind
-                        .as_deref()
-                        .ok_or(err("invalid_event", 400))?;
-                    let kind = ParkKind::parse(kind).ok_or(err("invalid_state", 400))?;
+                    let kind = event.park_kind.as_deref().ok_or(INVALID_EVENT)?;
+                    let kind = ParkKind::parse(kind).ok_or(INVALID_STATE)?;
                     let park = Park::new(kind, event.deadline, event.wake_at);
                     if (kind.scheduled() && event.wake_at.is_none())
                         || park.deadline() != event.deadline
                         || park.wake_at() != event.wake_at
                     {
-                        return Err(err("invalid_event", 400));
+                        return Err(INVALID_EVENT);
                     }
                     Some(park)
                 } else if event.park_kind.is_some()
                     || event.wake_at.is_some()
                     || event.deadline.is_some()
                 {
-                    return Err(err("invalid_event", 400));
+                    return Err(INVALID_EVENT);
                 } else {
                     None
                 };
@@ -397,15 +402,14 @@ impl EventReport {
             title,
             ..
         } = validate(event)?;
-        let required = || err("invalid_event", 400);
         let event = match event_kind {
             EventKind::Activity => Reported::Activity {
-                agent_id: agent_id.ok_or_else(required)?,
+                agent_id: agent_id.ok_or(INVALID_EVENT)?,
                 presence,
                 request_generation,
             },
             EventKind::AgentFacts => Reported::AgentFacts {
-                agent_id: agent_id.ok_or_else(required)?,
+                agent_id: agent_id.ok_or(INVALID_EVENT)?,
                 facts: AgentFacts::of(RawAgentFacts {
                     agent_type,
                     description,
@@ -414,7 +418,7 @@ impl EventReport {
                 request_generation,
             },
             EventKind::AgentStart => Reported::AgentStart {
-                agent_id: agent_id.ok_or_else(required)?,
+                agent_id: agent_id.ok_or(INVALID_EVENT)?,
                 request_generation,
             },
             EventKind::Heartbeat => Reported::Heartbeat,
@@ -430,13 +434,13 @@ impl EventReport {
                 }),
             },
             EventKind::SessionStart => Reported::SessionStart {
-                cache_warming: cache_warming.ok_or_else(required)?,
+                cache_warming: cache_warming.ok_or(INVALID_EVENT)?,
                 previous_instance_id,
                 reported_facts,
             },
             EventKind::State => {
-                let agent_id = agent_id.ok_or_else(required)?;
-                let state = state.ok_or_else(required)?;
+                let agent_id = agent_id.ok_or(INVALID_EVENT)?;
+                let state = state.ok_or(INVALID_EVENT)?;
                 match park {
                     Some(park) => Reported::Parked {
                         agent_id,
@@ -464,35 +468,32 @@ impl EventReport {
 /// refuses everything else the protocol does not take, before the state machine sees it.
 pub(crate) fn decode_json_event(body: &[u8]) -> Result<EventReport, EventError> {
     let Ok(Body {
-        mut object,
+        object,
+        protocol,
         protocol_repeated,
         member_repeated,
     }) = serde_json::from_slice(body)
     else {
-        return Err(err("invalid_event", 400));
+        return Err(INVALID_EVENT);
     };
     // Two `protocol` members leave no one protocol to refuse.
     if protocol_repeated {
-        return Err(err("invalid_event", 400));
+        return Err(INVALID_EVENT);
     }
     // A newer protocol's body may carry members this one does not know, so the protocol is read ahead of every member:
     // the mod has to learn that the protocol is what the router refuses rather than its report.
-    match object
-        .remove("protocol")
-        .as_ref()
-        .and_then(serde_json::Value::as_u64)
-    {
+    match protocol.as_ref().and_then(serde_json::Value::as_u64) {
         Some(PROTOCOL) => {}
         Some(_) => return Err(err("unsupported_protocol", 400)),
-        None => return Err(err("invalid_event", 400)),
+        None => return Err(INVALID_EVENT),
     }
     // The object holds the last value of a repeated member, so the typed read below cannot see the repeat.
     if member_repeated {
-        return Err(err("invalid_event", 400));
+        return Err(INVALID_EVENT);
     }
     let named = Named::of(&object);
-    let event: Event = serde_json::from_value(serde_json::Value::Object(object))
-        .map_err(|_| err("invalid_event", 400))?;
+    let event: Event =
+        serde_json::from_value(serde_json::Value::Object(object)).map_err(|_| INVALID_EVENT)?;
     EventReport::of(event, &named)
 }
 
@@ -570,24 +571,21 @@ impl SessionsState {
         key_generation: i64,
         report: &EventReport,
     ) -> Result<(), EventError> {
-        let Some(session) = self.entries.get(key) else {
-            return Err(err("unknown_instance", 409));
-        };
         // A session the previous holder of this key id registered answers as one that was never registered, so
         // a replacement holder learns nothing about it: not its instance, not its sequence, not its state.
-        if session.key_generation != key_generation {
-            return Err(err("unknown_instance", 409));
-        }
+        let Some(session) = self.held_by(key, key_generation) else {
+            return Err(UNKNOWN_INSTANCE);
+        };
         if session.instance != report.instance_id {
-            return Err(err("unknown_instance", 409));
+            return Err(UNKNOWN_INSTANCE);
         }
         // A lapsed lease reads as an ended instance to the companion, as the Go engine reported it: only a
         // `session_start` can take the session back.
-        if session.ended || !session.attended {
+        if session.companion() != CompanionState::Reporting {
             return Err(err("instance_ended", 409));
         }
         if report.sequence <= session.sequence {
-            return Err(err("stale_sequence", 409));
+            return Err(STALE_SEQUENCE);
         }
         Ok(())
     }
@@ -623,46 +621,37 @@ impl SessionsState {
         report: &EventReport,
         previous_instance_id: Option<&str>,
     ) -> Result<StartKind, EventError> {
-        // What a previous holder of this key id left under the same session id is not this caller's to
-        // re-adopt or to conflict with; the start below replaces it whole, as it replaces an instance.
-        let mine = self
-            .entries
-            .get(key)
-            .is_some_and(|s| s.key_generation == key_generation);
+        let existing = self.entries.get(key);
         // An ended session keeps its entry until the expiry and holds no slot, and a registered one holds none
         // until the first real request the caps admit, so a session that has sent nothing never fills the count. The
         // bound is met by every start that brings a session to life, an instance replacement included. A
         // same-instance recovery of a live session consumes nothing.
-        let becomes_live = self.entries.get(key).is_none_or(|s| s.ended);
-        if becomes_live {
-            let live = self.live_sessions();
-            if live >= self.max_sessions {
-                return Err(err("session_limit", 429));
-            }
+        if existing.is_none_or(|s| s.ended) && !self.session_fits() {
+            return Err(err("session_limit", 429));
         }
-        if mine {
-            let full = self.agent_count() >= self.max_agents;
-            let session = self.entries.get(key).expect("the session just read");
+        // What a previous holder of this key id left under the same session id is not this caller's to
+        // re-adopt or to conflict with. The start below replaces it whole, as it replaces an instance.
+        if let Some(session) = self.held_by(key, key_generation) {
             if session.instance == report.instance_id {
                 // A same-instance start after a lapse re-adopts the session: the mod may only have been silent,
                 // and the recipes it left are still the ones its next request needs. One after the session's end
                 // revives it: the mod's instance is its process's, so a /clear and then a /resume back to this
                 // id registers it again under the same instance, and a refusal would only draw the same start.
                 if report.sequence <= session.sequence {
-                    return Err(err("stale_sequence", 409));
+                    return Err(STALE_SEQUENCE);
                 }
                 let revived = session.ended;
                 // A main the revival registers anew takes a slot as any new record does, and a refusal leaves the
                 // session as its end left it.
                 let registers_main = revived && !session.agents.contains_key(MAIN_AGENT);
-                if registers_main && full {
-                    return Err(err("agent_limit", 429));
+                if registers_main && !self.agents_fit(1, 0) {
+                    return Err(AGENT_LIMIT);
                 }
                 return Ok(StartKind::SameInstance);
             }
             if previous_instance_id != Some(session.instance.as_str()) {
                 // An ended or silent holder is named so the mod can take over from it, and a live one is not.
-                return Err(if session.ended || !session.attended {
+                return Err(if session.companion() != CompanionState::Reporting {
                     err_for_instance("instance_conflict", &session.instance)
                 } else {
                     err("instance_conflict", 409)
@@ -672,85 +661,70 @@ impl SessionsState {
             return Err(err("unknown_previous_instance", 409));
         }
         // The replaced session's own slots, so the subtraction leaves the other sessions' count.
-        let held = self.entries.get(key).map_or(0, Session::agent_slots);
-        if self.agent_count() - held >= self.max_agents {
-            return Err(err("agent_limit", 429));
+        let held = existing.map_or(0, Session::agent_slots);
+        if !self.agents_fit(1, held) {
+            return Err(AGENT_LIMIT);
         }
-        Ok(if self.entries.contains_key(key) {
+        Ok(if existing.is_some() {
             StartKind::Replacement
         } else {
             StartKind::NewSession
         })
     }
 
-    /// The writes of a registration that passed its checks: the same instance's session renewed, or a new record with
-    /// its main in the place of whatever stood under the ids.
-    pub(crate) fn start(
+    /// The writes of a same-instance registration that passed its checks: the instance's session renewed.
+    pub(crate) fn readopt(
+        &mut self,
+        key: &SessionKey,
+        report: &EventReport,
+        cache_warming: bool,
+        now: i64,
+    ) -> Started {
+        self.tail(key, report.sequence, true, now);
+        let session = self.entries.get_mut(key).expect("the session just read");
+        let revived = session.ended;
+        let has_main = session.agents.contains_key(MAIN_AGENT);
+        // The registration's own standing outranks the one the load restored.
+        session.restored_until = None;
+        session.ended = false;
+        let turns_warming_off = session.cache_warming && !cache_warming;
+        session.cache_warming = cache_warming;
+        let mut main = MainStart::Kept;
+        if revived {
+            // The end released every agent, and a real request arms nothing on a released one, so main
+            // starts again as a registration starts it. The subagents stay released until the mod starts
+            // them again, and every generation stays as the end left it.
+            if has_main {
+                self.restart_agent(key, MAIN_AGENT, now);
+                main = MainStart::Revived;
+            } else {
+                // Main's record left one cache TTL after the end, so a resume past it registers main anew as
+                // a fresh start does.
+                self.add_agent(key, MAIN_AGENT, now);
+                main = MainStart::New;
+            }
+        }
+        Started {
+            main,
+            warming_turned_off: turns_warming_off,
+        }
+    }
+
+    /// The writes of a registration that passed its checks and starts a new record, with its main, in the place of
+    /// whatever stood under the ids.
+    pub(crate) fn register(
         &mut self,
         key: &SessionKey,
         key_generation: i64,
         report: &EventReport,
         cache_warming: bool,
-        kind: StartKind,
         now: i64,
-    ) -> Started {
-        if kind == StartKind::SameInstance {
-            let session = self.entries.get_mut(key).expect("the session just read");
-            let revived = session.ended;
-            session.sequence = report.sequence;
-            session.lease = now + LEASE_MS;
-            session.attended = true;
-            // The registration's own standing outranks the one the load restored.
-            session.restored_until = None;
-            session.ended = false;
-            session.last_report_at = now;
-            let turns_warming_off = session.cache_warming && !cache_warming;
-            session.cache_warming = cache_warming;
-            let mut main = MainStart::Kept;
-            if revived {
-                // The end released every agent, and a real request arms nothing on a released one, so main
-                // starts again as a registration starts it. The subagents stay released until the mod starts
-                // them again, and every generation stays as the end left it.
-                if let Some(agent) = session.agents.get_mut(MAIN_AGENT) {
-                    agent.resume(now);
-                    main = MainStart::Revived;
-                } else {
-                    // Main's record left one cache TTL after the end, so a resume past it registers main anew as
-                    // a fresh start does.
-                    let incarnation = self.incarnation();
-                    self.entries
-                        .get_mut(key)
-                        .expect("the session just read")
-                        .agents
-                        .insert(
-                            MAIN_AGENT.to_string(),
-                            Agent::new(MAIN_AGENT, &key.0, incarnation, now),
-                        );
-                    main = MainStart::New;
-                }
-            }
-            return Started {
-                main,
-                warming_turned_off: turns_warming_off,
-            };
-        }
+    ) {
         // A previous holder's traffic says nothing about this key's session, so only a start of the same
         // generation inherits whether the session took its slots and when it last carried a real request.
-        let mine = self
-            .entries
-            .get(key)
-            .is_some_and(|s| s.key_generation == key_generation);
         let (last_real_at, slotted) = self
-            .entries
-            .get(key)
-            .filter(|_| mine)
+            .held_by(key, key_generation)
             .map_or((None, false), |s| (s.last_real_at, s.slotted));
-        let mut agents = BTreeMap::new();
-        let incarnation = self.incarnation();
-        agents.insert(
-            MAIN_AGENT.to_string(),
-            Agent::new(MAIN_AGENT, &key.0, incarnation, now),
-        );
         self.entries.insert(
             key.clone(),
             Session {
@@ -764,15 +738,12 @@ impl SessionsState {
                 last_real_at,
                 slotted,
                 restored_until: None,
-                instance_mismatches: 0,
-                agents,
+                instance_mismatch_warned: false,
+                agents: BTreeMap::new(),
                 cache_warming,
             },
         );
-        Started {
-            main: MainStart::New,
-            warming_turned_off: false,
-        }
+        self.add_agent(key, MAIN_AGENT, now);
     }
 
     /// The refusals of an `agent_start`, and whether it makes a new record or restarts a released one.
@@ -791,57 +762,50 @@ impl SessionsState {
                 Ok(AgentStartKind::Restart)
             }
             None => {
-                if self.agent_count() >= self.max_agents {
-                    return Err(err("agent_limit", 429));
+                if !self.agents_fit(1, 0) {
+                    return Err(AGENT_LIMIT);
                 }
                 Ok(AgentStartKind::New)
             }
         }
     }
 
-    pub(crate) fn agent_start(
-        &mut self,
-        key: &SessionKey,
-        agent_id: &str,
-        kind: AgentStartKind,
-        now: i64,
-    ) {
-        match kind {
-            AgentStartKind::Restart => {
-                agent_mut(&mut self.entries, key, agent_id)
-                    .expect(AGENT_HELD)
-                    .resume(now);
-            }
-            AgentStartKind::New => {
-                let incarnation = self.incarnation();
-                self.entries.get_mut(key).unwrap().agents.insert(
-                    agent_id.to_string(),
-                    Agent::new(agent_id, &key.0, incarnation, now),
-                );
-            }
-        }
+    pub(crate) fn restart_agent(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
+        agent_mut(&mut self.entries, key, agent_id)
+            .expect(AGENT_HELD)
+            .resume(now);
+    }
+
+    pub(crate) fn add_agent(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
+        let incarnation = self.incarnation();
+        self.entries.get_mut(key).unwrap().agents.insert(
+            agent_id.to_string(),
+            Agent::new(agent_id, &key.0, incarnation, now),
+        );
     }
 
     /// `named` is the agent an agent event reports. A session-level event (a heartbeat, a `session_facts`, a
     /// `session_end`, a registration) names none and its answer carries main's generation, which the mod adopts for
-    /// main. A registration's answer carries the session's agents.
-    pub(crate) fn acknowledge(
-        &self,
-        key: &SessionKey,
-        named: Option<&str>,
-        with_agents: bool,
-    ) -> Ack {
+    /// main.
+    pub(crate) fn acknowledge(&self, key: &SessionKey, named: Option<&str>) -> Ack {
         let session = &self.entries[key];
-        let agents = with_agents.then(|| agents_of(session));
         let agent = session.agents.get(named.unwrap_or(MAIN_AGENT));
         Ack {
             agent_id: named.and(agent).map(|a| a.id.clone()),
-            agents,
+            agents: None,
             instance_id: session.instance.clone(),
             lease_expires_ms: session.lease,
             request_generation: agent.map(|a| a.generation).unwrap_or(0),
             sequence: session.sequence,
             session_id: key.1.clone(),
+        }
+    }
+
+    /// A registration's answer, which carries the session's agents beside a session-level event's answer.
+    pub(crate) fn acknowledge_start(&self, key: &SessionKey) -> Ack {
+        Ack {
+            agents: Some(agents_of(&self.entries[key])),
+            ..self.acknowledge(key, None)
         }
     }
 }

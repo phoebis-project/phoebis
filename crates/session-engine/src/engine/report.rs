@@ -2,6 +2,7 @@
 //! of its statements, with the dirty marks and the filed sets of the save between them.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use phoebis_routing::{RegistrySnapshot, Report};
 use phoebis_store::FactsKind;
@@ -10,7 +11,7 @@ use crate::engine::{Engine, Inner};
 use crate::sessions::events::{
     err, left_out, Ack, AgentStartKind, EventError, EventReport, MainStart, Reported, StartKind,
 };
-use crate::sessions::state::{AgentState, SessionKey, AGENT_HELD, MAIN_AGENT};
+use crate::sessions::state::{agent_ref, AgentState, SessionKey, AGENT_HELD, MAIN_AGENT};
 use crate::warming::causes::{Reason, Wasted};
 
 /// An accepted report's answer, with whether the report filed a set of facts, which asks for a save at once.
@@ -23,11 +24,11 @@ impl Engine {
     /// `key_id` and `key_generation` are the authenticated key's, never fields of the event: a session is
     /// scoped to the holder that reports it, and no member of the body can name another.
     pub(crate) fn apply_event(
-        &self,
+        self: &Arc<Self>,
         key_id: &str,
         key_generation: i64,
         report: EventReport,
-    ) -> Result<Applied, EventError> {
+    ) -> Result<Ack, EventError> {
         let now = self.now();
         // The pool an idle window a report opens counts under, read as the tick reads it.
         let snapshot = self.parts.router.snapshot();
@@ -67,7 +68,12 @@ impl Engine {
             }
         }
         self.flush();
-        acked
+        let applied = acked?;
+        if applied.filed_facts {
+            // Not awaited: the answer goes out at once, and the one save worker takes the request from here.
+            self.save_soon();
+        }
+        Ok(applied.ack)
     }
 }
 
@@ -132,9 +138,7 @@ impl Inner {
                     self.warming
                         .close_idle_window(&self.sessions, &key, agent_id);
                     // The leave counts from the first release, so a record the mod released before the end keeps it.
-                    if self
-                        .sessions
-                        .agent(&key, agent_id)
+                    if agent_ref(&self.sessions.entries, &key, agent_id)
                         .expect(AGENT_HELD)
                         .leaves_at
                         .is_none()
@@ -145,7 +149,7 @@ impl Inner {
                 self.sessions.end_session(&key, report.sequence, now);
                 self.touch_session(&key);
                 return Ok(Applied {
-                    ack: self.sessions.acknowledge(&key, None, false),
+                    ack: self.sessions.acknowledge(&key, None),
                     filed_facts: false,
                 });
             }
@@ -158,14 +162,12 @@ impl Inner {
                 AgentStartKind::Restart => {
                     let changes = self.warming.restart(&self.sessions, &key, &agent_id);
                     self.apply_changes(changes);
-                    self.sessions
-                        .agent_start(&key, &agent_id, AgentStartKind::Restart, now);
+                    self.sessions.restart_agent(&key, &agent_id, now);
                     // The resume moves the idle window's start on purpose, so the floor the release left goes.
                     self.warming.clear_idle_floor(&key, &agent_id);
                 }
                 AgentStartKind::New => {
-                    self.sessions
-                        .agent_start(&key, &agent_id, AgentStartKind::New, now);
+                    self.sessions.add_agent(&key, &agent_id, now);
                     let changes = self.warming.admit(&self.sessions, &key, &agent_id, now);
                     self.apply_changes(changes);
                 }
@@ -184,9 +186,9 @@ impl Inner {
                     // until a request says so. Presence moves the next window's start on purpose, so the floor goes: a
                     // clock that stepped back would otherwise leave that start behind the last close.
                     self.warming.clear_idle_floor(&key, &agent_id);
-                    self.sessions.activity(&key, &agent_id, true, now);
+                    self.sessions.presence_seen(&key, &agent_id, now);
                 } else {
-                    self.sessions.activity(&key, &agent_id, false, now);
+                    self.sessions.prompted(&key, &agent_id, now);
                     // The request this prompt announces is judged at the window's age now, however many ticks
                     // pass before it arrives. The window's start stays where it is.
                     self.warming.prompt(&key, &agent_id, Some(now));
@@ -284,9 +286,7 @@ impl Inner {
                 .open_idle_window(&self.sessions, &key, snapshot);
         }
         Ok(Applied {
-            ack: self
-                .sessions
-                .acknowledge(&key, report.event.agent_id(), false),
+            ack: self.sessions.acknowledge(&key, report.event.agent_id()),
             filed_facts,
         })
     }
@@ -300,7 +300,7 @@ impl Inner {
         now: i64,
         snapshot: &RegistrySnapshot,
     ) {
-        if self.sessions.agent(key, agent_id).is_none() {
+        if agent_ref(&self.sessions.entries, key, agent_id).is_none() {
             return;
         }
         let leaves_at = self.warming.leave_after(key, agent_id, snapshot, now);
@@ -323,9 +323,7 @@ impl Inner {
             .sessions
             .start_check(&key, key_generation, report, previous_instance_id)?;
         if kind == StartKind::SameInstance {
-            let started =
-                self.sessions
-                    .start(&key, key_generation, report, cache_warming, kind, now);
+            let started = self.sessions.readopt(&key, report, cache_warming, now);
             match started.main {
                 MainStart::Revived => {
                     // The resume moves the idle window's start on purpose, so the floor the release left goes.
@@ -358,7 +356,7 @@ impl Inner {
             }
             self.touch_session(&key);
             return Ok(Applied {
-                ack: self.sessions.acknowledge(&key, None, true),
+                ack: self.sessions.acknowledge_start(&key),
                 filed_facts,
             });
         }
@@ -376,7 +374,7 @@ impl Inner {
             self.warming.drop_records(&key);
         }
         self.sessions
-            .start(&key, key_generation, report, cache_warming, kind, now);
+            .register(&key, key_generation, report, cache_warming, now);
         // The session's own sets start over with the record whatever the list says, and its agents' stored sets stay
         // for the earlier agents that no report states again, unless the list leaves the kind out.
         let row = (key.0.clone(), key_generation, key.1.clone());
@@ -389,7 +387,7 @@ impl Inner {
         let changes = self.warming.admit(&self.sessions, &key, MAIN_AGENT, now);
         self.apply_changes(changes);
         Ok(Applied {
-            ack: self.sessions.acknowledge(&key, None, true),
+            ack: self.sessions.acknowledge_start(&key),
             filed_facts: true,
         })
     }

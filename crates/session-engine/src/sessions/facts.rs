@@ -11,7 +11,7 @@ const SHORT_CAP: usize = 256;
 const LONG_CAP: usize = 1_024;
 
 /// A session's facts as a report or a saved row gives them, ahead of this module's rules.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct RawSessionFacts {
     pub(crate) branch: Option<String>,
