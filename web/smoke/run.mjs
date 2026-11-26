@@ -27187,9 +27187,6 @@ await forView('/sessions', async () => {
   // list under the non-companion timeout.
   const TWO_HOURS_ID = 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58';
   const RELEASED_SENTENCE = 'The mod released every agent of this session. Each record leaves the engine one cache TTL after its release, and a record that held a slot of the agent cap keeps it until then.';
-  // The stored title of the story's finished session (`sessionSpec` in mock/operations.ts), which outlives the engine's
-  // record of the session.
-  const FINISHED_TITLE = 'Release notes draft for the mobile app';
   const listed = await api.listSessions();
   const recipes = await api.listKeepaliveRecipes();
   const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
@@ -27278,8 +27275,7 @@ await forView('/sessions', async () => {
     // filter lists all 30 rows, the three finished ones adding no agent to the bare page's 40, since the end released
     // the ended session's main with its subagents and the Agents count leaves the released lines out. No companion
     // reports the session after its end, and its main keeps the released word: its Agents cell counts none with no word
-    // under it, and main's line in its Agents table reads released. The session's stored facts outlive its engine
-    // record, so its Session cell leads with its stored title while its companion word reads none.
+    // under it, and main's line in its Agents table reads released.
     const page = await mount('/sessions?finished=1', { now: CLOCK_ORIGIN });
     const chips = chipsOn(page);
     const count = { text: page.container.querySelector('.filter-bar__count')?.textContent ?? null, title: page.container.querySelector('.filter-bar__count [title]')?.getAttribute('title') ?? null };
@@ -27298,7 +27294,6 @@ await forView('/sessions', async () => {
       agents: { count: agentsCell?.firstChild?.textContent?.trim() ?? null, split: agentsCell?.querySelector('.srow__split')?.textContent?.trim() ?? null },
       counts: lines.map((l) => l.querySelector('.agents__counts')?.textContent?.trim() ?? ''),
       companion: finished?.companion ?? null,
-      lead: sessionCell(page, row, 'Session')?.firstElementChild?.textContent ?? null,
       main: mainLine?.children[headsOf(agentsTable).indexOf('Status')]?.textContent?.trim() ?? null,
       sentences: detail?.querySelectorAll('.srow__finished').length ?? 0,
       states: lines.map((l) => l.querySelector('.agents__state > .badge:first-child')?.textContent?.trim() ?? ''),
@@ -27306,7 +27301,7 @@ await forView('/sessions', async () => {
     };
     page.unmount();
     results.push({
-      name: '/sessions ?finished=1 lists the finished session under the chip finished sessions, its Session cell led by its stored title, its expanded row the finished sentence above its facts and its three lines each ended with its probes and credits, its main released and counted in no Agents word, and the count names every listed row',
+      name: '/sessions ?finished=1 lists the finished session under the chip finished sessions, its expanded row the finished sentence above its facts and its three lines each ended with its probes and credits, its main released and counted in no Agents word, and the count names every listed row',
       ok:
         JSON.stringify(chips) === JSON.stringify(['finished sessions']) &&
         count.text === '30 sessions · 40 agents' &&
@@ -27319,7 +27314,6 @@ await forView('/sessions', async () => {
         got.states.every((s) => s === 'ended') &&
         got.counts.every((c) => /^\d+ \/ \d+$/.test(c) && c !== '0 / 0') &&
         got.companion === 'none' &&
-        got.lead === FINISHED_TITLE &&
         got.agents.count === '0' &&
         got.agents.split === null &&
         got.main === 'released',

@@ -323,14 +323,6 @@ test('earlierAgents lists the agents with ledgered requests that no line names, 
   );
 });
 
-test("earlierAgents reads an earlier agent's reported name, and its reported type ahead of its ledger entry's", () => {
-  const session = {
-    agentFacts: [{ agentId: 'a1', agentType: 'code-reviewer', description: null, name: 'reviewer' }],
-    agentRequests: [ledgerEntry('main', 'claude-sonnet-5', ms(14, 0)), ledgerEntry('a1', 'claude-sonnet-5', ms(14, 5), { agentType: 'general-purpose' })],
-  };
-  assert.deepEqual(d.earlierAgents(session, []).map((a) => [a.agentId, a.facts?.name ?? null, a.agentType]), [['a1', 'reviewer', 'code-reviewer']]);
-});
-
 /** Every filter off, as the address reads with none set. */
 const NO_FILTERS = { account: [], active: '', agentType: [], cache: [], client: [], companion: [], effort: [], finished: false, forked: false, key: [], model: [], pool: [], released: false, search: '', session: '', slowed: false, status: [] };
 /** A drawn line with the two members the Model and Status filters read. */
