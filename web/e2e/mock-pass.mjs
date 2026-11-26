@@ -44,4 +44,6 @@ const pass = await fanOut(parts, (part) => {
 server.close();
 // Each child's output whole, in the parts' order, so the lines of two children never mix.
 for (const run of pass.runs) for (const { chunk, stream } of run.output) process[stream].write(chunk);
-process.exit(pass.status);
+// The status is set and the process ends when its handles close: an exit call drops the output above that a pipe
+// has not taken yet.
+process.exitCode = pass.status;
