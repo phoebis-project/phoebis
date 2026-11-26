@@ -896,6 +896,10 @@ test("a confirm reads the poll's unread sentence and no reading time on a row th
     await api.disconnectAccount('contract');
     await confirm({ accountId: 'contract' });
     assert.deepEqual(await block('contract'), ['the poll has not read this account yet', null], 'a re-paired row with no reading leaves the no-credential sentence');
+    // Spare's answer withholds its windows while the router keeps its poll's samples, so its re-pair reads the last.
+    await confirm({ accountId: 'spare' });
+    const [error, fetchedAt] = await block('spare');
+    assert.deepEqual([error, Date.parse(fetchedAt) < now], [null, true], 'a re-paired row the router holds samples of keeps their reading time');
   } finally {
     Date.now = wall;
   }

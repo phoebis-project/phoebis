@@ -433,6 +433,15 @@ test("the placements table's hit share formats", () => {
   assert.deepEqual(['content', 'static', 'with_main', 'by_moonlight'].map(d.placementRungLabel), ['by its messages', 'by its static prefix', 'with the main conversation', 'by_moonlight']);
 });
 
+test('the reported count covers no range whose bucket holds answers with nothing dropped or a moved count beside a reported count of 0', () => {
+  const bucket = (group) => ({ groups: [{ inputTransformations: {}, inputTransformationsMoved: 0, inputTransformationsNone: 0, inputTransformationsReported: 0, ...group }] });
+  assert.deepEqual(
+    [d.reportedCovers([bucket({ inputTransformationsNone: 2 })]), d.reportedCovers([bucket({ inputTransformationsMoved: 2 })]), d.reportedCovers([bucket({ inputTransformationsNone: 2, inputTransformationsReported: 2 })])],
+    [false, false, true],
+    'nothing dropped alone, a moved count alone, and nothing dropped beside its reported count',
+  );
+});
+
 test("the mock files its hourly rows under the speed each hour's answers reported, one key's Opus hours fast", () => {
   const groups = d.breakdownOf(d.ALL_ROLLUPS, { from: d.ALL_ROLLUPS[0].hour, groupBy: 'speed', to: new Date(Date.parse(d.ALL_ROLLUPS.at(-1).hour) + HOUR).toISOString() });
   assert.deepEqual(groups.map((g) => g.key), ['fast', 'standard']);

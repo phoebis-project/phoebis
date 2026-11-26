@@ -349,6 +349,15 @@ test('a plan change counts among the resets of the range that holds its drop, an
   assert.deepEqual([row.resets, row.used], [1, 0]);
 });
 
+test('a plan change that dropped before the range counts as no reset of it, though the week it cut resets inside', () => {
+  // The drop eight days back cut a week that reset six days back, inside the range of the last seven days.
+  const change = { observedAt: iso(NOW - 8 * DAY), plan: null, resetAt: iso(NOW - 6 * DAY), shareLeft: 0.5, source: 'plan_changed', tier: null };
+  const window = { claims: [], resets: [change], totalShareLeft: 0.5, window: 'seven_day' };
+  const week = { fromMs: NOW - 7 * DAY, toMs: NOW };
+  const [row] = d.allowanceRows({ accounts: [accountOf('changed', MAX_20X, [window])], from: iso(NOW - 2 * WEEK), to: iso(week.toMs) }, COSTS, 'ultra', week);
+  assert.deepEqual([row.resets, row.used], [0, 0]);
+});
+
 test('a used reset alone that ran under a pair the cost model prices no capacity for marks its account unpriced', () => {
   // The use ran while the account was on Free, so its range figure reads the dash, and the fleet's note names the
   // account among those it leaves out.

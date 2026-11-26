@@ -803,12 +803,13 @@ test("every record version decodes its settings, a version 1 record's three remo
   assert.equal(v3.settings.legacy, null);
   assert.equal(d.decodeDecisionRecord({ ...body, settings: { ...s, load_shedding: false } }).settings.loadShedding, false, 'the switch reads off');
   assert.equal(d.decodeDecisionRecord({ ...body, settings: { ...s, shed_share: 0.9 } }).settings.shedCap, s.shed_cap, 'a version 3 record reads no old name');
-  const { burn_average_seconds: _a, five_hour_ceiling: _f, load_shedding: _l, shed_cap: _c, shed_dwell_seconds: _d, weekly_ceiling: _w, ...shared } = s;
+  const { burn_average_seconds: _a, fable_reservation_shedding: _r, five_hour_ceiling: _f, load_shedding: _l, shed_cap: _c, shed_dwell_seconds: _d, weekly_ceiling: _w, ...shared } = s;
   const old = { ...shared, burn_window_seconds: 600, migrate_band: 0.05, pace_floor: 0.05, select_below_utilization: 0.8, shed_ahead_of_pace: 0.2, shed_share: 0.5, source_dwell_seconds: 900 };
   const v1 = d.decodeDecisionRecord({ ...body, settings: old, version: 1 });
   assert.equal(v1.version, 1);
   assert.deepEqual(shedding(v1.settings), [null, null, null, 0.5, 600, 900], 'the three renamed settings read the old names, the switch and the ceilings none');
   assert.deepEqual(v1.settings.legacy, { paceFloor: 0.05, selectBelowUtilization: 0.8, shedAheadOfPace: 0.2 });
+  assert.equal(v1.settings.fableReservationShedding, null, 'a version 1 record, written before the Fable reservation option, reads none');
   assert.equal(v1.settings.strategy, s.strategy, 'every setting both versions name reads as today');
   const off = d.decodeDecisionRecord({ ...body, settings: { ...old, select_below_utilization: null, shed_ahead_of_pace: null }, version: 1 });
   assert.deepEqual(off.settings.legacy, { paceFloor: 0.05, selectBelowUtilization: null, shedAheadOfPace: null }, 'a setting the pool left off reads null');

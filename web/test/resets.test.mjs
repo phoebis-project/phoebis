@@ -46,6 +46,10 @@ test('the warning needs every window full', () => {
   assert.equal(d.resetClearsNothing([windowAt(0), windowAt(0.6)], NOW), false, 'the Fable week at 40% left');
 });
 
+test('a live window with no share never reads full, and a live window with nothing used does', () => {
+  assert.deepEqual([d.readsFull(windowAt(null), NOW), d.readsFull(windowAt(0), NOW)], [false, true]);
+});
+
 test('a grant that names no window has nothing to warn about', () => {
   assert.equal(d.resetClearsNothing([], NOW), false);
 });

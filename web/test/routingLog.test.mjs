@@ -1410,6 +1410,15 @@ test("an ended plan and its return read their words, their preset and the read's
   assert.deepEqual(pairs({ ...restored, detail: { ...partial, source: 'pairing' } }).slice(2).map(([label, chips]) => `${label}: ${chips.join(' ')}`), ['Source: pairing confirm', 'Organization type: claude max', 'Subscription status: active']);
 });
 
+test("a captured drop that changed the plan reads Plan changed, and a captured drop with no such member reads no such line", () => {
+  // A detail built under the console's own wire name passes a route that renames the member, so this case reads the
+  // captured drops: the 7-day window's carries the member true and the Fable week's carries none.
+  const fixture = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
+  const dropOf = (window) => fixture.rows.find((r) => r.type === 'event' && r.kind === 'window_dropped' && r.detail.window === window);
+  const planChanged = (row) => d.detailPairs(row, NOW, [], PRO, NO_TIERS).filter((p) => p.label === 'Plan changed').map((p) => texts(p.chips));
+  assert.deepEqual([planChanged(dropOf('seven_day')), planChanged(dropOf('seven_day_fable'))], [[['yes']], []]);
+});
+
 test("a round that walked no pin and left one out off the window that fired reads off window as its reason", () => {
   const pin = (o) => ({ agent_id: 'main', burn: null, cold: false, key_id: 'desktop', last_input_tokens: 61_000, marked: false, model: 'claude-opus-5', note: null, per_rewrite: null, planned: null, rewrite: null, runway_ms: null, session_id: 'e3b8d1f6-4a29', skip: 'off_window', ...o });
   const detail = {
@@ -1430,7 +1439,8 @@ test('the pin moved, shedding round, cleared mark and expired reservation detail
   assert.deepEqual([moved({ binding: 'five_hour', fit: 'fits', runway_ms: 7_800_000 })['Destination fit'], moved({ binding: 'five_hour', fit: 'fits', runway_ms: 7_800_000 }).Runway], [['fits'], ['2 h 10 min']]);
   assert.deepEqual([moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 })['Destination fit'], moved({ binding: 'five_hour', fit: 'least_bad', runway_ms: 0 }).Runway], [['least bad'], ['none']]);
   assert.deepEqual([moved({ binding: null, fit: 'rewrite_only', runway_ms: null })['Destination fit'], moved({ binding: null, fit: 'rewrite_only', runway_ms: null }).Runway], [['rewrite only'], ['unbounded']]);
-  assert.equal(moved({ binding: null, fit: 'spent', runway_ms: null }).Runway, undefined, 'a landing on a member with no allowance left states no runway');
+  const landed = moved({ binding: null, fit: 'spent', reason: 'cooldown', runway_ms: null });
+  assert.deepEqual([landed['Destination fit'], landed.Runway], [['window spent'], undefined], "a failover's landing on a member with no allowance left states its fit and no runway");
   assert.deepEqual(Object.keys(moved({})), ['When', 'Account', 'From', 'To', 'Reason', 'Moved by', 'Session', 'Agent'], 'a move the ledger wrote before the gate reads neither pair');
   // A failover's cause reads as the cooldown's own words, and a rule's move or a cause-less failover draws no Cause row.
   const cooled = moved({ cause: { reason: 'rate_limit', scope: 'account', window: 'five_hour' }, reason: 'cooldown' });

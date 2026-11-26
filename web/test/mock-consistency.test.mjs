@@ -227,18 +227,6 @@ test('the placements answer matches a Clients pattern against the client label f
   assert.deepEqual(d.placementsOf([placed], { ...range, clients: ['claude-code/*'] }), [], 'under claude-code/*');
 });
 
-test("a session's placements count no seeded creation of a pin that a subagent holds", async () => {
-  // Laptop's session c52dbc8e lists the pin its subagent's failover wrote. Loaded at 04:30, the log holds no pin event
-  // of its main, so the route counts nothing for the row.
-  const s = await storyAt('2026-09-16T04:30:00.000Z');
-  const ofSession = (x) => x.keyId === 'laptop' && x.sessionId?.startsWith('c52dbc8e');
-  const mainEvents = s.lib.ROUTING_EVENTS.filter((e) => ofSession(e) && e.agentId === 'main' && (e.kind === 'pin_created' || e.kind === 'pin_migrated'));
-  assert.equal(mainEvents.length, 0, "main's pin events at this load");
-  const row = s.sessions.find((x) => !x.historical && ofSession(x));
-  assert.equal(row?.agentId, '4d1a', "the row's pin");
-  assert.equal(row?.placements, 0, 'the placements the route counts');
-});
-
 test("the rewrites answer counts a move from the hour that holds the range's start up to the hour ceiling of its end", async () => {
   const d = await import('./dist/api.js');
   // A move an account's state forced, which the ledger files in its hour's rollup.
@@ -2466,12 +2454,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
     // Each partition writes its label on the row of every member it drops, so a count names as many rows as it counts,
     // and one that falls through, holds for a slot or stays off names none.
-    const marks = { at_cap: 0, no_fit: 0, spent: 0, winding_down: 0 };
+    const labels = { at_cap: 0, no_fit: 0, spent: 0, winding_down: 0 };
     for (const r of records) {
       const w = r.walk.find((x) => x.step === 'partitions');
       if (!w) continue;
       const id = `${r.requestId}/${r.seq}`;
-      const counts = w.facts.filter((f) => f.key in marks);
+      const counts = w.facts.filter((f) => f.key in labels);
       assert.deepEqual(
         counts.map((f) => [f.key, r.candidates.filter((c) => c.partition === f.key).length]),
         counts.map((f) => [f.key, typeof f.value === 'number' ? f.value : 0]),
@@ -2483,17 +2471,20 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const rungOf = (c) => (c.fit === null ? 'fits' : ['fits', 'rewrite_only'].includes(c.fit) || !spentOn(c, model) ? c.fit : 'every');
       const ladder = w.facts.find((f) => f.key === 'ladder')?.value;
       const kept = keptOf(r);
+      const destinations = new Set(moving(r) ? narrowedSetOf(r).map((x) => x.accountId) : []);
       for (const c of r.candidates.filter((x) => x.partition !== null)) {
-        marks[c.partition] += 1;
+        labels[c.partition] += 1;
         const row = `${id}: ${c.accountId} reads ${c.partition}`;
         if (c.partition === 'at_cap') assert.ok(c.inFlight >= c.inFlightCap, `${row} at ${c.inFlight} of ${c.inFlightCap}`);
         // The rewrite-only and least-bad rungs keep the longest runway, so a member can drop off the ladder's own rung.
         if (c.partition === 'no_fit') assert.ok(rungOf(c) !== ladder || (['least_bad', 'rewrite_only'].includes(ladder) && kept.some((k) => rungOf(k) === ladder)), `${row} on ${rungOf(c)} under ${ladder}`);
-        // The router reads a dropped member out unless the answer names it as its account, its source or a destination.
-        if (c.accountId !== r.outcome.accountId && !['destination', 'source'].includes(c.verdict)) assert.equal(c.verdict, 'out', row);
+        // The router reads a dropped member by its role in the record: the source the outcome names reads `source`, a
+        // destination of the gate's move `destination` and any other member but the outcome's account `out`.
+        const role = c.accountId === r.outcome.accountId ? null : c.accountId === r.outcome.fromAccountId ? 'source' : destinations.has(c.accountId) ? 'destination' : 'out';
+        if (role !== null) assert.equal(c.verdict, role, row);
       }
     }
-    assert.ok(marks.at_cap > 0 && marks.no_fit > 0, JSON.stringify(marks));
+    assert.ok(labels.at_cap > 0 && labels.no_fit > 0, JSON.stringify(labels));
     return records;
   };
   test(`every partitions step reads its four facts bare and within the record's own set, a landing's ladder after its no-fit count, at ${at}`, async () => readPartitions(await story));
@@ -4311,6 +4302,31 @@ test('a guardrail block carries the marker the relay computed behind its read of
   const s = await pinned;
   const detail = await s.api.getRequest('req_a8f3c6d0-e17');
   assert.equal(detail?.request.cacheMarker, true);
+});
+
+// Catches a pin's ended mark read off the lifecycle word `released`, which would end the finished session's main and
+// the written session's c3a9, both released by the session's end, and a subagent's mark read off the written session's
+// idle subagent alone, which would leave the finished session's two subagents, released by the mod, live.
+test("a pin reads ended where the mod released its agent and live where the session's end released it", async () => {
+  const s = await pinned;
+  const finished = s.sessions.find((x) => x.sessionId === '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96');
+  assert.deepEqual(finished?.agentContexts.map((c) => [c.agentId, c.ended]), [['main', false], ['5d0e', true], ['a7f3', true]]);
+  const pins = await s.api.listPoolPins('all');
+  assert.equal(pins.find((p) => p.sessionId === '7bea4514-4087-4b6a-a410-0dd5cd31cfad' && p.agentId === 'c3a9')?.ended, false, "the written session's c3a9");
+});
+
+// Laptop's session c52dbc8e lists the pin its subagent's failover wrote. Loaded at 04:30, the log holds no pin event of
+// its main, so the route counts nothing for the row.
+const subagentPinned = (loading = loading.then(() => storyAt('2026-09-16T04:30:00.000Z')));
+
+test("a session's placements count no seeded creation of a pin that a subagent holds", async () => {
+  const s = await subagentPinned;
+  const ofSession = (x) => x.keyId === 'laptop' && x.sessionId?.startsWith('c52dbc8e');
+  const mainEvents = s.lib.ROUTING_EVENTS.filter((e) => ofSession(e) && e.agentId === 'main' && (e.kind === 'pin_created' || e.kind === 'pin_migrated'));
+  assert.equal(mainEvents.length, 0, "main's pin events at this load");
+  const row = s.sessions.find((x) => !x.historical && ofSession(x));
+  assert.equal(row?.agentId, '4d1a', "the row's pin");
+  assert.equal(row?.placements, 0, 'the placements the route counts');
 });
 
 // Catches a walk that reads the pool's tier for an entry's lifetime, by the first turn, and one that states the entry
