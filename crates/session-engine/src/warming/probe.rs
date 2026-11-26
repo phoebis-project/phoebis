@@ -15,9 +15,10 @@ use phoebis_routing::{seconds_ms, Holder, SEVEN_DAY};
 use serde_json::Value;
 
 use crate::engine::{
-    agent_mut, agent_ref, Agent, AgentState, Engine, Inner, Kept, ProbeCharge, Reason, SavingsUnit,
+    agent_ref, Agent, AgentState, Engine, Inner, Kept, ProbeCharge, Reason, SavingsUnit,
     SessionKey, UnansweredProbe, Verdict, Wasted, AGENT_HELD, MAIN_AGENT,
 };
+use crate::warming::agent::{warming_mut, warming_ref};
 use crate::warming::breakeven::Ceilings;
 use crate::warming::recipe::Recipe;
 use crate::warming::savings::{
@@ -401,15 +402,17 @@ impl Inner {
         // The worker slot comes back to the record the probe started on whatever the fence says. A result
         // orphaned on a record that is still alive, by a superseding request or by a discard, would otherwise
         // leave `in_flight` set, and `step` skips an agent that has a probe in flight for good.
-        if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id)
+        if let Some(warming) = agent_ref(&self.sessions, key, agent_id)
             .filter(|agent| agent.incarnation == job.incarnation)
+            .map(|_| warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD))
         {
-            agent.in_flight = false;
+            warming.in_flight = false;
         }
         let fenced = agent_ref(&self.sessions, key, agent_id).is_some_and(|agent| {
             agent.incarnation == job.incarnation
                 && agent.generation == job.generation
-                && agent
+                && warming_ref(&self.warming_agents, key, agent_id)
+                    .expect(AGENT_HELD)
                     .current
                     .as_ref()
                     .is_some_and(|o| o.id == job.observation_id && o.attempt == job.attempt)
@@ -430,7 +433,11 @@ impl Inner {
                         .get(agent_id)
                         .filter(|agent| agent.incarnation == job.incarnation)
                     {
-                        Some(agent) => agent.last_stop,
+                        Some(_) => {
+                            warming_ref(&self.warming_agents, key, agent_id)
+                                .expect(AGENT_HELD)
+                                .last_stop
+                        }
                         None => Some(Wasted::Replaced),
                     },
                 }
@@ -445,12 +452,15 @@ impl Inner {
             // still in flight at the ceiling joins them by the entry it wrote, computed as the landing computes it.
             if label == Wasted::IdleLimit && record.outcome == ProbeOutcome::Ok {
                 if let Exchange::Answered(result) = &exchange {
-                    if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id)
+                    if let Some(warming) = agent_ref(&self.sessions, key, agent_id)
                         .filter(|agent| agent.incarnation == job.incarnation)
+                        .map(|_| {
+                            warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD)
+                        })
                     {
                         let requested_ms = result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms);
-                        let ttl = record.charge.usage.ttl_ms(agent.ttl_ms, requested_ms);
-                        agent.kept.push(Kept {
+                        let ttl = record.charge.usage.ttl_ms(warming.ttl_ms, requested_ms);
+                        warming.kept.push(Kept {
                             key_generation: job.key_generation,
                             pool_id: job.pool_id.clone(),
                             canonical_model: job.canonical_model.clone(),
@@ -479,8 +489,8 @@ impl Inner {
             });
             return;
         }
-        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
-        let cold_limit = agent.timing.cold_probe_limit;
+        let warming = warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD);
+        let cold_limit = warming.timing.cold_probe_limit;
         let answered = match exchange {
             Exchange::Answered(result) => Some(result),
             Exchange::Canceled | Exchange::TimedOut => None,
@@ -498,16 +508,16 @@ impl Inner {
         // arrives.
         // The end of the entry this probe wrote, computed once as the landing reads it, so a probe a check below
         // pauses still settles by its own entry.
-        let previous_ms = agent.ttl_ms;
+        let previous_ms = warming.ttl_ms;
         let requested_ms = result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms);
         let ttl = record.charge.usage.ttl_ms(previous_ms, requested_ms);
-        agent.unanswered.push(UnansweredProbe {
+        warming.unanswered.push(UnansweredProbe {
             id: result.request_id.clone().unwrap_or_default(),
             charge,
             unit: covered_unit,
             window: SEVEN_DAY,
             fast: job.recipe.fast,
-            model: agent.canonical_model.clone(),
+            model: warming.canonical_model.clone(),
             expires: job.started + ttl,
             covered: false,
         });
@@ -531,7 +541,7 @@ impl Inner {
             self.pause(key, agent_id, Reason::InvalidProbeUsage);
             return;
         };
-        agent.usage.add(usage);
+        warming.usage.add(usage);
         if usage.output != 0 || !content.is_empty() {
             self.pause(key, agent_id, Reason::UnexpectedOutput);
             return;
@@ -540,11 +550,11 @@ impl Inner {
         // beside it is the prefix rebuilt, which the cold streak counts.
         let covered = covers(&usage, job.expected);
         if covered {
-            agent.cold = 0;
+            warming.cold = 0;
         } else {
-            agent.cold += 1;
+            warming.cold += 1;
         }
-        let cold = agent.cold;
+        let cold = warming.cold;
         if cold >= cold_limit {
             self.pause(key, agent_id, Reason::RepeatedColdProbe);
             return;
@@ -566,9 +576,9 @@ impl Inner {
             self.pause(key, agent_id, Reason::PartialCacheCoverage);
             return;
         }
-        agent.failures = 0;
-        agent.retry_at = None;
-        agent.ttl_ms = ttl;
+        warming.failures = 0;
+        warming.retry_at = None;
+        warming.ttl_ms = ttl;
         crate::engine::note_ttl_change(
             key,
             agent_id,
@@ -577,17 +587,18 @@ impl Inner {
             requested_ms,
             &record.charge.usage,
         );
-        agent.cache_started = job.started;
-        agent.expires = Some(job.started + ttl);
-        agent.jitter_frac = rand::random::<f64>();
+        warming.cache_started = job.started;
+        warming.expires = Some(job.started + ttl);
+        warming.jitter_frac = rand::random::<f64>();
         // A full read and an accepted complete rewrite alike leave the whole prefix in an entry the next request
         // can read, so either covers from here.
-        if let Some(probe) = agent.unanswered.last_mut() {
+        if let Some(probe) = warming.unanswered.last_mut() {
             probe.covered = true;
         }
         self.set_reason(key, agent_id, Reason::Scheduled);
         // A probe that consumed its whole refresh interval must not start a tight loop.
-        if self.sessions[key].agents[agent_id]
+        if warming_ref(&self.warming_agents, key, agent_id)
+            .expect(AGENT_HELD)
             .due_at()
             .is_some_and(|due| due <= now)
         {
@@ -597,8 +608,8 @@ impl Inner {
 
     pub(crate) fn pause(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
         self.set_reason(key, agent_id, reason);
-        if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) {
-            agent.pause();
+        if let Some(warming) = warming_mut(&mut self.warming_agents, key, agent_id) {
+            warming.pause();
         }
     }
 
@@ -717,9 +728,9 @@ impl Inner {
         if outcome == ProbeOutcome::Held {
             // The router's own standing, not the account's: no failure is counted, so the cold-probe limit never
             // pauses a recipe for a ledger that is catching up, and the entry's own lapse bounds the re-sends.
-            let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
-            let wait_ms = retry_after_ms.unwrap_or(agent.timing.retry_ms);
-            agent.retry_at = Some(now.saturating_add(wait_ms));
+            let warming = warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD);
+            let wait_ms = retry_after_ms.unwrap_or(warming.timing.retry_ms);
+            warming.retry_at = Some(now.saturating_add(wait_ms));
             self.set_reason(key, agent_id, Reason::LedgerBehind);
             return;
         }
@@ -760,20 +771,23 @@ impl Inner {
         now: i64,
         wait: RetryWait,
     ) {
-        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
-        agent.failures += 1;
-        let exponent = (agent.failures - 1).min(4);
-        let step = (agent.timing.retry_ms << exponent).min(agent.timing.retry_max_ms);
+        let warming = warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD);
+        warming.failures += 1;
+        let exponent = (warming.failures - 1).min(4);
+        let step = (warming.timing.retry_ms << exponent).min(warming.timing.retry_max_ms);
         let delay = match wait {
             RetryWait::Step => step,
             RetryWait::AtLeast(ms) => ms.max(step),
         }
-        .min(agent.timing.retry_max_ms);
-        if agent.expires.is_some_and(|expires| now + delay >= expires) {
+        .min(warming.timing.retry_max_ms);
+        if warming
+            .expires
+            .is_some_and(|expires| now + delay >= expires)
+        {
             self.pause(key, agent_id, Reason::ProbeRetryLimit);
             return;
         }
-        agent.retry_at = Some(now + delay);
+        warming.retry_at = Some(now + delay);
         self.set_reason(key, agent_id, reason);
     }
 }
@@ -846,7 +860,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::engine::config::{KeepaliveLimits, KeepaliveTiming};
-    use crate::engine::{Agent, Session};
+    use crate::engine::{agent_mut, Agent, Session};
+    use crate::warming::agent::AgentWarming;
     use phoebis_ledger::PriceRevisions;
 
     use super::*;
@@ -872,10 +887,7 @@ mod tests {
     fn one_agent_inner() -> (Inner, SessionKey) {
         let key: SessionKey = ("k".into(), "s".into());
         let mut agents = BTreeMap::new();
-        agents.insert(
-            "main".to_string(),
-            Agent::new("main", "k", 1, 0, KeepaliveTiming::default()),
-        );
+        agents.insert("main".to_string(), Agent::new("main", "k", 1, 0));
         let mut inner = Inner::empty(KeepaliveTiming::default(), KeepaliveLimits::default(), 0);
         inner.sessions.insert(
             key.clone(),
@@ -894,6 +906,13 @@ mod tests {
                 agents,
                 cache_warming: true,
             },
+        );
+        inner.warming_agents.insert(
+            key.clone(),
+            BTreeMap::from([(
+                "main".to_string(),
+                AgentWarming::new(0, KeepaliveTiming::default()),
+            )]),
         );
         (inner, key)
     }
@@ -954,11 +973,14 @@ mod tests {
             match orphaned_by {
                 "release" => {
                     let agent = agent_mut(&mut inner.sessions, &key, "main").expect(AGENT_HELD);
+                    let warming =
+                        warming_mut(&mut inner.warming_agents, &key, "main").expect(AGENT_HELD);
                     agent.generation = 1;
-                    agent.last_stop = Some(Wasted::Released);
+                    warming.last_stop = Some(Wasted::Released);
                 }
                 _ => {
                     inner.sessions.clear();
+                    inner.warming_agents.clear();
                 }
             }
             let exchange = held_answer();
@@ -1003,9 +1025,9 @@ mod tests {
                 )),
                 1_000,
             );
-            let agent = &inner.sessions[&key].agents["main"];
+            let warming = &inner.warming_agents[&key]["main"];
             assert_eq!(
-                (agent.reason, agent.paused),
+                (warming.reason, warming.paused),
                 (reason, paused),
                 "the {obstacle:?} answer holds the agent under its own standing, not the exhausted pool"
             );
@@ -1029,9 +1051,9 @@ mod tests {
             )),
             1_000,
         );
-        let agent = &inner.sessions[&key].agents["main"];
+        let warming = &inner.warming_agents[&key]["main"];
         assert_eq!(
-            (agent.paused, agent.reason, agent.retry_at),
+            (warming.paused, warming.reason, warming.retry_at),
             (false, Reason::ProbeQuotaExhausted, Some(121_000)),
             "the header's 120 seconds outlast the ladder's first rung"
         );
@@ -1053,9 +1075,9 @@ mod tests {
             )),
             1_000,
         );
-        let agent = &inner.sessions[&key].agents["main"];
+        let warming = &inner.warming_agents[&key]["main"];
         assert_eq!(
-            (agent.reason, agent.paused),
+            (warming.reason, warming.paused),
             (Reason::RetryableProbeError, false),
             "the key's next request admits under its new pool, so the probe retries"
         );
@@ -1071,18 +1093,18 @@ mod tests {
             Some(&answered(429, None, None, None)),
             1_000,
         );
-        let agent = &inner.sessions[&key].agents["main"];
+        let warming = &inner.warming_agents[&key]["main"];
         assert_eq!(
-            (agent.paused, agent.reason, agent.retry_at),
+            (warming.paused, warming.reason, warming.retry_at),
             (
                 false,
                 Reason::ProbeQuotaExhausted,
-                Some(1_000 + agent.timing.retry_ms)
+                Some(1_000 + warming.timing.retry_ms)
             ),
             "the quota 429 retries rather than pausing"
         );
         assert_eq!(
-            crate::engine::view::recipe_state(agent.reason, agent.paused),
+            crate::engine::view::recipe_state(warming.reason, warming.paused),
             crate::engine::view::RecipeState::Held
         );
     }
@@ -1105,9 +1127,9 @@ mod tests {
                 Some(&answered(403, Some(code), None, None)),
                 1_000,
             );
-            let agent = &inner.sessions[&key].agents["main"];
+            let warming = &inner.warming_agents[&key]["main"];
             assert_eq!(
-                (agent.reason, agent.paused, agent.retry_at),
+                (warming.reason, warming.paused, warming.retry_at),
                 (reason, true, None),
                 "{code}"
             );
@@ -1138,9 +1160,14 @@ mod tests {
             Some(&answered(503, Some("ledger_behind"), None, Some(5))),
             1_000,
         );
-        let agent = &inner.sessions[&key].agents["main"];
+        let warming = &inner.warming_agents[&key]["main"];
         assert_eq!(
-            (agent.paused, agent.failures, agent.retry_at, agent.reason),
+            (
+                warming.paused,
+                warming.failures,
+                warming.retry_at,
+                warming.reason
+            ),
             (false, 0, Some(6_000), Reason::LedgerBehind),
             "the router's own standing: held after the header's wait, no failure counted"
         );
@@ -1156,13 +1183,18 @@ mod tests {
             Some(&answered(503, Some("ledger_behind"), None, None)),
             1_000,
         );
-        let agent = &inner.sessions[&key].agents["main"];
+        let warming = &inner.warming_agents[&key]["main"];
         assert_eq!(
-            (agent.paused, agent.failures, agent.retry_at, agent.reason),
+            (
+                warming.paused,
+                warming.failures,
+                warming.retry_at,
+                warming.reason
+            ),
             (
                 false,
                 0,
-                Some(1_000 + agent.timing.retry_ms),
+                Some(1_000 + warming.timing.retry_ms),
                 Reason::LedgerBehind
             ),
             "the timing's base wait stands in for a missing header, still with no failure counted"
@@ -1173,7 +1205,7 @@ mod tests {
     fn ledger_behind_answers_in_a_row_never_reach_the_retry_limit() {
         let (mut inner, key) = one_agent_inner();
         // An hour of entry ahead, so the ladder's deadline would pause a hold that counted a failure.
-        agent_mut(&mut inner.sessions, &key, "main")
+        warming_mut(&mut inner.warming_agents, &key, "main")
             .expect(AGENT_HELD)
             .expires = Some(1_000 + crate::ONE_HOUR_MS);
         let answers = 6;
@@ -1186,9 +1218,14 @@ mod tests {
                 Some(&answered(503, Some("ledger_behind"), None, Some(5))),
                 now,
             );
-            let agent = &inner.sessions[&key].agents["main"];
+            let warming = &inner.warming_agents[&key]["main"];
             assert_eq!(
-                (agent.paused, agent.failures, agent.retry_at, agent.reason),
+                (
+                    warming.paused,
+                    warming.failures,
+                    warming.retry_at,
+                    warming.reason
+                ),
                 (false, 0, Some(now + 5_000), Reason::LedgerBehind),
                 "answer {answer} of {answers}: a ledger catching up never pauses the recipe"
             );
@@ -1205,9 +1242,9 @@ mod tests {
             Some(&answered(503, None, None, None)),
             1_000,
         );
-        let agent = &inner.sessions[&key].agents["main"];
+        let warming = &inner.warming_agents[&key]["main"];
         assert_eq!(
-            (agent.paused, agent.failures, agent.reason),
+            (warming.paused, warming.failures, warming.reason),
             (false, 1, Reason::RetryableProbeError),
             "an upstream 503 is a failure the backoff and the retry limit count"
         );

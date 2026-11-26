@@ -32,6 +32,7 @@ use crate::engine::config::{
 };
 use crate::engine::persist::Dirty;
 use crate::engine::view::{recipe_state, RecipeState};
+use crate::warming::agent::{warming_mut, warming_ref, AgentWarming};
 use crate::warming::breakeven::{resolve_or_shipped, CeilingInputs, Ceilings, FactorRows};
 use crate::warming::probe::{ceiling, run_job, wasted_label, ProbeJob};
 use crate::warming::recipe::{make_recipe, Recipe};
@@ -481,19 +482,27 @@ fn raise_reached(counters: &mut IdleReturns, counted: Option<usize>, bucket: usi
 /// agent's own pool id, else the pinned account's own id for an account outside every pool, so no window counts under
 /// the empty key, which no pool row reads. The key comes first because the agent's pool id is a copy only an admitted
 /// selection or a retained recipe's tick refreshes.
-fn idle_returns_key(snapshot: &RegistrySnapshot, agent: &Agent) -> Option<String> {
+fn idle_returns_key(
+    snapshot: &RegistrySnapshot,
+    agent: &Agent,
+    warming: &AgentWarming,
+) -> Option<String> {
     snapshot
         .key_pool(&agent.key_id)
         .map(|pool| pool.id.clone())
-        .or_else(|| (!agent.pool_id.is_empty()).then(|| agent.pool_id.clone()))
-        .or_else(|| agent.account.clone())
+        .or_else(|| (!warming.pool_id.is_empty()).then(|| warming.pool_id.clone()))
+        .or_else(|| warming.account.clone())
 }
 
 /// Opens main's idle window when none is counted and main is idle or parked, from a start past the floor. The report
 /// that moves main there opens it, so a prompt inside the same second still ends a window, and the tick opens the
 /// ones a presence, a park's end or a load left unopened. True when a window opened.
-pub(crate) fn open_idle_episode(main: &mut Agent, snapshot: &RegistrySnapshot) -> bool {
-    if main.idle_episode.is_some()
+pub(crate) fn open_idle_episode(
+    main: &Agent,
+    warming: &mut AgentWarming,
+    snapshot: &RegistrySnapshot,
+) -> bool {
+    if warming.idle_episode.is_some()
         || matches!(
             main.state,
             AgentState::Busy | AgentState::Released | AgentState::Unknown
@@ -502,17 +511,20 @@ pub(crate) fn open_idle_episode(main: &mut Agent, snapshot: &RegistrySnapshot) -
         return false;
     }
     let start = main.idle_window_start();
-    if main.idle_window_floor.is_some_and(|floor| start <= floor) {
+    if warming
+        .idle_window_floor
+        .is_some_and(|floor| start <= floor)
+    {
         return false;
     }
     // One lookup per window, so a key that moves pools takes its next window with it.
-    let Some(pool_key) = idle_returns_key(snapshot, main) else {
+    let Some(pool_key) = idle_returns_key(snapshot, main, warming) else {
         return false;
     };
-    main.idle_episode = Some(IdleEpisode {
+    warming.idle_episode = Some(IdleEpisode {
         started: start,
         bucket: None,
-        anchor: main.last_prefix.clone(),
+        anchor: warming.last_prefix.clone(),
         prompt_at: None,
         pool_key,
         bucket_day: None,
@@ -646,9 +658,6 @@ pub(crate) struct Agent {
     pub id: String,
     /// The session's key, repeated here so a gate over one agent needs no session lookup.
     pub key_id: String,
-    /// The generation of the key the recipe was retained under, off the observed request. A probe's and a
-    /// settlement's rows file under it.
-    pub key_generation: i64,
     /// Which record this is. A replacement registration builds a new record under the same ids, and a probe
     /// worker that started on the old one must not touch the new one's bookkeeping.
     pub incarnation: u64,
@@ -661,313 +670,35 @@ pub(crate) struct Agent {
     /// since the window starts at the later of it and `last_activity` and an older end never outranks a newer
     /// request.
     pub park_ended_at: Option<i64>,
-    /// The open idle window of main, `None` while none is counted.
-    pub idle_episode: Option<IdleEpisode>,
-    /// The start of main's last closed idle window. The next opens only from a start past it, so a close that leaves
-    /// the start in place, a foreign request or a lapse a registration adopts again, never reopens the same window.
-    /// An event that moves the next window's start on purpose (an `agent_start` of a released main, a park's end, a
-    /// presence report, a request, a revival) clears it: the floor orders starts, and a clock that stepped back before
-    /// that event is no ordering.
-    pub idle_window_floor: Option<i64>,
-    /// The anchor of main's last admitted request, retained or not, which the next idle window judges a return against
-    /// and the chain watch reads the next request's chain against.
-    pub last_prefix: Option<PrefixAnchor>,
-    /// The previous main request's prompt as its completion reported it: uncached input, cache reads and both
-    /// cache writes, set by every pending main completion and every marked one, so a refused recipe's unmarked
-    /// request leaves it as it was. What the watch reads the next completion's cache reads against.
-    pub last_prompt_tokens: Option<u64>,
     pub generation: u64,
-    pub current: Option<Observation>,
-    /// Never saved: a restart keeps the current observation alone.
-    pub aside: Option<AsideRecipe>,
-    /// The compaction open on the agent, held apart from `current` so none of its events moves the recipe. Never saved:
-    /// a restart drops it with the events that would have completed it.
-    pub compaction: Option<OpenCompaction>,
-    /// The recipe was set or replaced since the last landed save that carried its body, so the next save seals it.
-    pub body_dirty: bool,
-    /// Whether the registry may hold a sealed body under this agent's row, so a save without a recipe clears it. A new
-    /// record starts true, since it can take over a row an earlier record sealed a body into, and an acknowledged seal
-    /// or clear sets it to what the registry then holds.
-    pub body_saved: bool,
-    /// When the entry the recipe keeps warm expires. The due time is this less the timing's lead and jitter.
-    pub expires: Option<i64>,
     /// When a released record leaves the engine: the release plus the longest TTL of the pool's cache TTL policy,
     /// `None` on a record that is not released.
     pub leaves_at: Option<i64>,
-    /// The share of the timing's jitter this schedule takes, rolled once per schedule so the due time holds
-    /// still between ticks.
-    pub jitter_frac: f64,
-    /// An outstanding backoff after a failed probe. The due time is the later of it and the expiry's.
-    pub retry_at: Option<i64>,
-    /// The engine's timing, held here so a due time and a retry never need the engine.
-    pub timing: KeepaliveTiming,
     pub last_activity: i64,
-    pub cache_started: i64,
-    pub ttl_ms: i64,
-    pub cold: u32,
-    pub failures: u32,
-    pub account: Option<String>,
-    /// The incarnation of `account` when the armed recipe was last answered on it. `None` on a record saved before
-    /// agents carried one, which holds under `pin_moved` until the agent's next request arms the recipe.
-    pub account_incarnation: Option<u64>,
-    pub pool_id: String,
-    /// The canonical model of the request the recipe came from, as the relay resolved it: the price lookups,
-    /// the rollup keys, the cooldown scope, and the views read this, never the caller's spelling in the recipe.
-    pub canonical_model: String,
-    /// The entrypoint of the observed request's `client` label, what its probes price under, and `None` for a label
-    /// that names none.
-    pub entrypoint: Option<String>,
-    pub reason: Reason,
-    /// The guard's verdict on the last request the agent observed, `None` before the first one. Never `reason`
-    /// itself: an auxiliary or a foreign request never reaches `reason`, which stays the recipe's own gating
-    /// state, so a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held state
-    /// all read it undisturbed.
-    pub last_guard: Option<Guard>,
-    /// Whether the current hold has already ledgered the probe it withheld. A hold can begin before its
-    /// probe is due, so the skip is counted when the due time passes rather than where the hold started.
-    pub hold_counted: bool,
-    pub paused: bool,
-    pub in_flight: bool,
-    pub probes: u64,
-    pub usage: ProbeUsage,
-    /// Every probe since the last real request with the entry it wrote, settled as wasted when the recipe stops, and
-    /// the newest covered one, else the newest, the coverage the next request reads.
-    pub unanswered: Vec<UnansweredProbe>,
-    /// The probes a superseding real request took over from `unanswered`, with the keys they were paid under: the
-    /// request moves the agent's model, account, pool and key generation before its completion decides them. A
-    /// probe sent while it is open lands on `unanswered`, for the request after it. The idle limit moves its probes
-    /// here too, pending under its label until their entry lapses or a turn reads them, and a failed turn hands back
-    /// the probes it took the same way.
-    pub kept: Vec<Kept>,
-    pub last_real_at: Option<i64>,
-    /// The arrival of the last request whose completion succeeded with a 2xx status, or of a turn whose completion the
-    /// engine missed, which the next arrival or a bus gap ends with none observed. The kept-warm gap is measured from
-    /// it rather than from `last_real_at`, so a failed turn, which stays no evidence about the cache, leaves the retry
-    /// after it the gap from the last turn that answered.
-    pub last_answered_at: Option<i64>,
-    /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
-    /// under the stop that orphaned it.
-    pub last_stop: Option<Wasted>,
     /// Main's last presence report: when the person was last seen at the terminal.
     pub last_presence_at: Option<i64>,
-    pub last_probe_at: Option<i64>,
-    /// The probes sent on `counters_day`, the UTC day both counts are for.
-    pub probes_today: u64,
-    /// The requests credited as kept warm on `counters_day`.
-    pub credited_today: u64,
-    pub counters_day: i64,
 }
 
 impl Agent {
-    pub(crate) fn new(
-        id: &str,
-        key_id: &str,
-        incarnation: u64,
-        now: i64,
-        timing: KeepaliveTiming,
-    ) -> Agent {
+    pub(crate) fn new(id: &str, key_id: &str, incarnation: u64, now: i64) -> Agent {
         Agent {
             id: id.into(),
             key_id: key_id.into(),
-            key_generation: 0,
             incarnation,
             state: AgentState::Busy,
             park: None,
             park_ended_at: None,
-            idle_episode: None,
-            idle_window_floor: None,
-            last_prefix: None,
-            last_prompt_tokens: None,
             generation: 0,
-            current: None,
-            aside: None,
-            compaction: None,
-            body_dirty: false,
-            body_saved: true,
-            expires: None,
             leaves_at: None,
-            jitter_frac: 0.0,
-            retry_at: None,
-            timing,
             last_activity: now,
-            cache_started: now,
-            ttl_ms: 0,
-            cold: 0,
-            failures: 0,
-            account: None,
-            account_incarnation: None,
-            pool_id: String::new(),
-            canonical_model: String::new(),
-            entrypoint: None,
-            reason: Reason::AwaitingRequest,
-            last_guard: None,
-            hold_counted: false,
-            paused: false,
-            in_flight: false,
-            probes: 0,
-            usage: ProbeUsage::default(),
-            unanswered: Vec::new(),
-            kept: Vec::new(),
-            last_real_at: None,
-            last_answered_at: None,
-            last_stop: None,
             last_presence_at: None,
-            last_probe_at: None,
-            probes_today: 0,
-            credited_today: 0,
-            counters_day: utc_day(now),
         }
-    }
-
-    /// Moves every model name the agent holds that `canonical` dates, and answers whether any moved: the recipe's
-    /// own, the one its open observation took from the recipe before it, an open compaction's own and the one it took,
-    /// and its kept and unanswered probes', which an agent keeps after its recipe ended.
-    pub(crate) fn follow_resolutions(&mut self, canonical: &HashMap<String, String>) -> bool {
-        let follow = |model: &mut String| match canonical.get(model.as_str()) {
-            Some(dated) => {
-                *model = dated.clone();
-                true
-            }
-            None => false,
-        };
-        let mut moved = follow(&mut self.canonical_model);
-        if let Some(prior) = self.current.as_mut().and_then(|o| o.prior.as_mut()) {
-            moved |= follow(&mut prior.model);
-        }
-        // The completion credits through the compaction's `prior` and settles the probes against its own model, so
-        // both follow the probes' move, or a credit would sit beside a cold return of the probe that earned it.
-        if let Some(compaction) = self.compaction.as_mut() {
-            moved |= follow(&mut compaction.canonical_model);
-            if let Some(prior) = compaction.prior.as_mut() {
-                moved |= follow(&mut prior.model);
-            }
-        }
-        for kept in &mut self.kept {
-            moved |= follow(&mut kept.canonical_model);
-        }
-        for probe in &mut self.unanswered {
-            moved |= follow(&mut probe.model);
-        }
-        moved
-    }
-
-    /// Every probe the agent paid for that no request answered, the unanswered ones and then the kept ones, settled
-    /// under `label`.
-    pub(crate) fn settle_all(&mut self, key: &SessionKey, label: Wasted) -> Vec<Settlement> {
-        self.take_unanswered()
-            .into_iter()
-            .chain(std::mem::take(&mut self.kept))
-            .map(|kept| kept.settle(key, label))
-            .collect()
-    }
-
-    /// The unanswered probes, taken off the agent as kept ones.
-    pub(crate) fn take_unanswered(&mut self) -> Vec<Kept> {
-        let unanswered = std::mem::take(&mut self.unanswered);
-        unanswered
-            .into_iter()
-            .map(|probe| Kept::of(self, probe))
-            .collect()
-    }
-
-    /// Whether the agent holds anything that a stop of the warming ends: an observation, a recipe set aside, or a
-    /// probe that waits for its answer or its settlement.
-    pub(crate) fn holds_warming_work(&self) -> bool {
-        self.current.is_some()
-            || self.aside.is_some()
-            || !self.unanswered.is_empty()
-            || !self.kept.is_empty()
-    }
-
-    /// The names `follow_resolutions` reads on an agent with no compaction open, as an arrival leaves it once
-    /// `end_compaction` ran: the ones the arrival looks up in the catalog's acknowledged resolution.
-    pub(crate) fn held_models(&self) -> BTreeSet<String> {
-        let mut models = BTreeSet::from([self.canonical_model.clone()]);
-        models.extend(
-            self.current
-                .as_ref()
-                .and_then(|o| o.prior.as_ref())
-                .map(|prior| prior.model.clone()),
-        );
-        models.extend(self.kept.iter().map(|kept| kept.canonical_model.clone()));
-        models.extend(self.unanswered.iter().map(|probe| probe.model.clone()));
-        models
-    }
-
-    /// When the next probe is due: the entry's expiry less the timing's lead and this schedule's share of the
-    /// jitter, or the outstanding backoff, whichever is later. `None` while nothing is armed.
-    pub(crate) fn due_at(&self) -> Option<i64> {
-        if self.paused {
-            return None;
-        }
-        let from_expiry = self.expires.map(|expires| {
-            let jitter = (self.timing.jitter_ms(self.ttl_ms) as f64 * self.jitter_frac) as i64;
-            expires - self.timing.lead_ms(self.ttl_ms) - jitter
-        });
-        from_expiry.max(self.retry_at)
-    }
-
-    /// The due time a reader is shown: none while the recipe sits under one of the two holds placed ahead of the
-    /// gate, `horizon` and a disabled pool, which withhold every probe until they end or the entry lapses. The
-    /// scheduler reads `due_at`, so a withheld probe is still counted once.
-    pub(crate) fn next_probe_at(&self) -> Option<i64> {
-        if matches!(self.reason, Reason::Horizon | Reason::PoolDisabled) {
-            return None;
-        }
-        self.due_at()
     }
 
     /// Where main's idle window starts now: the later of its last activity and a park's end without a request.
     pub(crate) fn idle_window_start(&self) -> i64 {
         self.park_ended_at
             .map_or(self.last_activity, |ended| ended.max(self.last_activity))
-    }
-
-    /// Every close of an idle window: the window start in force at the close becomes the floor the next window's start
-    /// has to pass. A prompt answered by a local command moves the start without closing the window, so the
-    /// episode's own `started` can lie behind it. A closer that moves the start calls this first.
-    pub(crate) fn close_idle_episode(&mut self) -> Option<IdleEpisode> {
-        let episode = self.idle_episode.take()?;
-        self.idle_window_floor = Some(episode.started.max(self.idle_window_start()));
-        Some(episode)
-    }
-
-    /// The expiry stays, so the lapse still drops the prompt when the entry goes cold, as it does for a held recipe.
-    pub(crate) fn pause(&mut self) {
-        self.paused = true;
-        self.retry_at = None;
-    }
-
-    /// Starts both day counts over when `now` falls on a later UTC day than the one they count. Only the two events
-    /// they count call it, so no tick resets them: `counts_today` reads a passed day as zero instead.
-    fn roll_counters_day(&mut self, now: i64) {
-        let day = utc_day(now);
-        if self.counters_day != day {
-            self.counters_day = day;
-            self.probes_today = 0;
-            self.credited_today = 0;
-        }
-    }
-
-    pub(crate) fn count_probe(&mut self, now: i64) {
-        self.roll_counters_day(now);
-        self.last_probe_at = Some(now);
-        self.probes_today += 1;
-    }
-
-    pub(crate) fn count_credit(&mut self, now: i64) {
-        self.roll_counters_day(now);
-        self.credited_today += 1;
-    }
-
-    /// The day's probes and credits as of `now`, zero once the UTC day they count has passed: a recipe that neither
-    /// probed nor earned a credit since midnight reads the new day without waiting for either event.
-    pub(crate) fn counts_today(&self, now: i64) -> (u64, u64) {
-        if self.counters_day == utc_day(now) {
-            (self.probes_today, self.credited_today)
-        } else {
-            (0, 0)
-        }
     }
 
     /// Every state write. A move to any state but `Parked` ends the park, so a stale park never outlives it.
@@ -978,12 +709,12 @@ impl Agent {
         }
     }
 
-    pub(crate) fn resume(&mut self, now: i64) {
+    pub(crate) fn resume(&mut self, warming: &mut AgentWarming, now: i64) {
         self.set_state(AgentState::Busy);
         self.leaves_at = None;
         self.last_activity = now;
         // The resume moves the idle window's start on purpose, so the floor the release left goes.
-        self.idle_window_floor = None;
+        warming.idle_window_floor = None;
     }
 }
 
@@ -1139,11 +870,11 @@ pub(crate) fn agent_ref<'a>(
 
 /// Drops the agent's observation, with the pending entry it follows and the bytes its recipe held.
 fn drop_current(
-    agent: &mut Agent,
+    warming: &mut AgentWarming,
     pending: &mut HashMap<String, (SessionKey, String)>,
     retained: &mut usize,
 ) {
-    if let Some(observation) = agent.current.take() {
+    if let Some(observation) = warming.current.take() {
         pending.remove(&observation.id);
         *retained -= observation.recipe.size;
     }
@@ -1152,9 +883,9 @@ fn drop_current(
 /// Whether a request the engine follows is open on `agent`: the turn its observation follows, while `pending` holds
 /// it, or a compaction. Its completion decides the probes and the recipe, so no lapse, eviction or sweep decides them
 /// first.
-fn request_open(pending: &HashMap<String, (SessionKey, String)>, agent: &Agent) -> bool {
-    agent.compaction.is_some()
-        || agent
+fn request_open(pending: &HashMap<String, (SessionKey, String)>, warming: &AgentWarming) -> bool {
+    warming.compaction.is_some()
+        || warming
             .current
             .as_ref()
             .is_some_and(|o| pending.contains_key(&o.id))
@@ -1167,21 +898,21 @@ fn request_open(pending: &HashMap<String, (SessionKey, String)>, agent: &Agent) 
 /// probes kept and pending, as a failed turn hands back the probes it took, so the newest of those whose entry still
 /// lives stands in for it. The gap runs from the last turn that answered, since a failed turn is no evidence about the
 /// cache.
-fn prior_coverage(agent: &Agent, now: i64) -> Option<PriorCoverage> {
-    let newest_kept = agent
+fn prior_coverage(warming: &AgentWarming, now: i64) -> Option<PriorCoverage> {
+    let newest_kept = warming
         .kept
         .iter()
         .rev()
         .find(|kept| kept.pending.is_some() && now < kept.entry_expires);
-    let newest_unanswered = agent
+    let newest_unanswered = warming
         .unanswered
         .iter()
         .rev()
         .find(|p| p.covered)
-        .or(agent.unanswered.last());
-    let answered_at = agent.last_answered_at.or(agent.last_real_at);
+        .or(warming.unanswered.last());
+    let answered_at = warming.last_answered_at.or(warming.last_real_at);
     answered_at.map(|real_at| {
-        let ttl_ms = agent.ttl_ms;
+        let ttl_ms = warming.ttl_ms;
         match (newest_unanswered, newest_kept) {
             (Some(probe), _) => PriorCoverage {
                 account: probe.charge.account.clone(),
@@ -1210,7 +941,7 @@ fn prior_coverage(agent: &Agent, now: i64) -> Option<PriorCoverage> {
                 covered: false,
                 unit: None,
                 window: SEVEN_DAY,
-                model: agent.canonical_model.clone(),
+                model: warming.canonical_model.clone(),
                 fast: false,
                 real_at,
                 ttl_ms,
@@ -1325,14 +1056,14 @@ pub(crate) struct Skipped {
 }
 
 impl Skipped {
-    fn of(key: &SessionKey, agent: &Agent, state: RecipeState) -> Skipped {
-        let observation = agent.current.as_ref();
+    fn of(key: &SessionKey, warming: &AgentWarming, state: RecipeState) -> Skipped {
+        let observation = warming.current.as_ref();
         Skipped {
             key: key.clone(),
-            key_generation: agent.key_generation,
-            pool_id: agent.pool_id.clone(),
-            account: agent.account.clone(),
-            canonical_model: agent.canonical_model.clone(),
+            key_generation: warming.key_generation,
+            pool_id: warming.pool_id.clone(),
+            account: warming.account.clone(),
+            canonical_model: warming.canonical_model.clone(),
             fast: observation.is_some_and(|o| o.recipe.fast),
             state,
             funding: observation.map(|o| o.funding).unwrap_or_default(),
@@ -1395,10 +1126,10 @@ pub(crate) struct Kept {
 }
 
 impl Kept {
-    pub(crate) fn of(agent: &Agent, probe: UnansweredProbe) -> Kept {
+    pub(crate) fn of(warming: &AgentWarming, probe: UnansweredProbe) -> Kept {
         Kept {
-            key_generation: agent.key_generation,
-            pool_id: agent.pool_id.clone(),
+            key_generation: warming.key_generation,
+            pool_id: warming.pool_id.clone(),
             canonical_model: probe.model,
             charge: probe.charge,
             fast: probe.fast,
@@ -1479,6 +1210,8 @@ pub(crate) enum Unanswered {
 
 pub(crate) struct Inner {
     pub sessions: BTreeMap<SessionKey, Session>,
+    /// The warming's record of each agent that `sessions` holds, by the session's key and the agent's id.
+    pub warming_agents: BTreeMap<SessionKey, BTreeMap<String, AgentWarming>>,
     /// Request id to the agent following it.
     pub pending: HashMap<String, (SessionKey, String)>,
     /// A compaction's request id to the agent it is open on, read before `pending` by every request event, so the
@@ -1508,7 +1241,7 @@ pub(crate) struct Inner {
     /// The last gap's instant, so a reader can tell a recent gap from one long past.
     pub last_bus_gap_at: Option<i64>,
     pub next_incarnation: u64,
-    /// The engine's timing, copied onto every agent it creates.
+    /// The engine's timing, copied onto the warming's record of every agent it creates.
     pub timing: KeepaliveTiming,
     /// The engine's fixed bounds and its session expiry in milliseconds, held beside the timing so the state machine
     /// reads them where it applies them.
@@ -1733,6 +1466,7 @@ impl Engine {
             inner.discard_session(&key, Reason::Reset, None);
         }
         inner.sessions.clear();
+        inner.warming_agents.clear();
         inner.pending.clear();
         inner.compactions.clear();
         inner.retained = 0;
@@ -1750,6 +1484,7 @@ impl Inner {
     ) -> Inner {
         Inner {
             sessions: BTreeMap::new(),
+            warming_agents: BTreeMap::new(),
             pending: HashMap::new(),
             compactions: HashMap::new(),
             contradiction_marks: HashMap::new(),
@@ -1780,8 +1515,8 @@ impl Inner {
     /// The one writer of an agent's reason, so the counter behind the views never disagrees with the reason
     /// they show. Nearly every change to a recipe writes a reason, so this is where most of them become dirty.
     pub(crate) fn set_reason(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
-        if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) {
-            agent.reason = reason;
+        if let Some(warming) = warming_mut(&mut self.warming_agents, key, agent_id) {
+            warming.reason = reason;
         }
         *self.reasons.entry(reason).or_default() += 1;
         self.touch_agent(key, agent_id);
@@ -1825,7 +1560,11 @@ impl Inner {
                 session
                     .agents
                     .iter()
-                    .filter(|(_, agent)| agent.holds_warming_work())
+                    .filter(|(id, _)| {
+                        warming_ref(&self.warming_agents, key, id)
+                            .expect(AGENT_HELD)
+                            .holds_warming_work()
+                    })
                     .map(|(id, _)| id.clone())
                     .collect()
             })
@@ -1841,6 +1580,7 @@ impl Inner {
         self.discard_session(key, reason, Some(Wasted::SessionEnded));
         self.forget_session(key);
         self.sessions.remove(key);
+        self.warming_agents.remove(key);
     }
 
     /// Drops the agent's recipe and everything following it, and moves the agent to a new generation so no
@@ -1880,39 +1620,43 @@ impl Inner {
     /// end through the discard. An older recipe set aside over a completion the engine missed leaves through the
     /// discard.
     pub(crate) fn set_aside(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
-        let aside = agent_mut(&mut self.sessions, key, agent_id)
-            .filter(|agent| !agent.paused && agent.expires.is_some_and(|expires| expires > now))
-            .and_then(|agent| {
-                let observation = agent.current.take()?;
+        let aside = warming_mut(&mut self.warming_agents, key, agent_id)
+            .filter(|warming| {
+                !warming.paused && warming.expires.is_some_and(|expires| expires > now)
+            })
+            .and_then(|warming| {
+                let observation = warming.current.take()?;
                 Some(AsideRecipe {
                     observation,
-                    expires: agent.expires,
-                    retry_at: agent.retry_at,
-                    jitter_frac: agent.jitter_frac,
-                    ttl_ms: agent.ttl_ms,
-                    cache_started: agent.cache_started,
-                    failures: agent.failures,
-                    canonical_model: agent.canonical_model.clone(),
-                    entrypoint: agent.entrypoint.clone(),
-                    account: agent.account.clone(),
-                    account_incarnation: agent.account_incarnation,
-                    pool_id: agent.pool_id.clone(),
-                    key_generation: agent.key_generation,
+                    expires: warming.expires,
+                    retry_at: warming.retry_at,
+                    jitter_frac: warming.jitter_frac,
+                    ttl_ms: warming.ttl_ms,
+                    cache_started: warming.cache_started,
+                    failures: warming.failures,
+                    canonical_model: warming.canonical_model.clone(),
+                    entrypoint: warming.entrypoint.clone(),
+                    account: warming.account.clone(),
+                    account_incarnation: warming.account_incarnation,
+                    pool_id: warming.pool_id.clone(),
+                    key_generation: warming.key_generation,
                 })
             });
         if let Some(aside) = &aside {
             self.pending.remove(&aside.observation.id);
         }
         self.discard_keeping_unanswered(key, agent_id, Reason::AwaitingSelection);
-        if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) {
-            agent.aside = aside;
+        if let Some(warming) = warming_mut(&mut self.warming_agents, key, agent_id) {
+            warming.aside = aside;
         }
     }
 
     /// The recipe the arrival set aside, taken out for the completion to restore, its body still counted in
     /// `retained`.
     pub(crate) fn take_aside(&mut self, key: &SessionKey, agent_id: &str) -> Option<AsideRecipe> {
-        agent_mut(&mut self.sessions, key, agent_id)?.aside.take()
+        warming_mut(&mut self.warming_agents, key, agent_id)?
+            .aside
+            .take()
     }
 
     /// Puts the recipe `take_aside` took back into `current` with the schedule, the error count and the model and
@@ -1926,27 +1670,27 @@ impl Inner {
         aside: AsideRecipe,
         now: i64,
     ) -> bool {
-        let agent = agent_mut(&mut self.sessions, key, agent_id)
+        let warming = warming_mut(&mut self.warming_agents, key, agent_id)
             .filter(|_| aside.expires.is_some_and(|expires| expires > now));
-        let Some(agent) = agent else {
+        let Some(warming) = warming else {
             self.retained -= aside.observation.recipe.size;
             return false;
         };
-        agent.current = Some(aside.observation);
-        agent.expires = aside.expires;
-        agent.retry_at = aside.retry_at;
-        agent.jitter_frac = aside.jitter_frac;
-        agent.ttl_ms = aside.ttl_ms;
-        agent.cache_started = aside.cache_started;
-        agent.failures = aside.failures;
-        agent.canonical_model = aside.canonical_model;
-        agent.entrypoint = aside.entrypoint;
-        agent.account = aside.account;
-        agent.account_incarnation = aside.account_incarnation;
-        agent.pool_id = aside.pool_id;
-        agent.key_generation = aside.key_generation;
+        warming.current = Some(aside.observation);
+        warming.expires = aside.expires;
+        warming.retry_at = aside.retry_at;
+        warming.jitter_frac = aside.jitter_frac;
+        warming.ttl_ms = aside.ttl_ms;
+        warming.cache_started = aside.cache_started;
+        warming.failures = aside.failures;
+        warming.canonical_model = aside.canonical_model;
+        warming.entrypoint = aside.entrypoint;
+        warming.account = aside.account;
+        warming.account_incarnation = aside.account_incarnation;
+        warming.pool_id = aside.pool_id;
+        warming.key_generation = aside.key_generation;
         // The next save seals the restored body in place of the failed request's.
-        agent.body_dirty = true;
+        warming.body_dirty = true;
         self.touch_agent(key, agent_id);
         true
     }
@@ -1994,18 +1738,18 @@ impl Inner {
     /// request read kept nothing it read. The model is the probe's as resolutions followed it. A probe sent while the
     /// request was open is not among them: it pays for the request after this one.
     pub(crate) fn decide_unanswered(&mut self, key: &SessionKey, agent_id: &str, read: u64) {
-        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
+        let Some(warming) = warming_mut(&mut self.warming_agents, key, agent_id) else {
             return;
         };
         let answer = Answer {
             // The read happened when the request reached the cache, so a stream that outlives the entry still read it.
-            started: agent.current.as_ref().map(|o| o.started),
-            account: agent.account.clone(),
-            model: agent.canonical_model.clone(),
-            fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
+            started: warming.current.as_ref().map(|o| o.started),
+            account: warming.account.clone(),
+            model: warming.canonical_model.clone(),
+            fast: warming.current.as_ref().is_some_and(|o| o.recipe.fast),
             read,
         };
-        let probes = std::mem::take(&mut agent.kept);
+        let probes = std::mem::take(&mut warming.kept);
         self.decide_against(key, agent_id, probes, answer);
     }
 
@@ -2065,36 +1809,37 @@ impl Inner {
         let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
-        drop_current(agent, &mut self.pending, &mut self.retained);
-        agent.expires = None;
-        agent.retry_at = None;
+        let warming = warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD);
+        drop_current(warming, &mut self.pending, &mut self.retained);
+        warming.expires = None;
+        warming.retry_at = None;
         agent.generation += 1;
-        agent.paused = false;
-        agent.last_stop = wasted;
+        warming.paused = false;
+        warming.last_stop = wasted;
         match (unanswered, wasted) {
             (Unanswered::Leave, _) => {}
             (Unanswered::Keep, _) => {
                 // A row apiece: a request whose completion never came leaves its probes for the next one, which may
                 // keep probes paid under other keys, and each settles by its chain's last entry. A ceiling's label
                 // rides along, for the lapse sweep to settle under when no turn reads them first.
-                let probes = agent.take_unanswered();
-                agent.kept.extend(probes.into_iter().map(|kept| Kept {
+                let probes = warming.take_unanswered();
+                warming.kept.extend(probes.into_iter().map(|kept| Kept {
                     pending: wasted,
                     ..kept
                 }));
             }
             (Unanswered::Settle, Some(label)) => {
-                self.settlements.extend(agent.settle_all(key, label));
+                self.settlements.extend(warming.settle_all(key, label));
             }
-            (Unanswered::Settle, None) => agent.unanswered.clear(),
+            (Unanswered::Settle, None) => warming.unanswered.clear(),
         }
     }
 
     /// Ends the compaction open on the agent as a failed one: it leaves the agent and the map, settles nothing and
     /// leaves the recipe as it stood, so its later events miss both maps as an unknown request's do.
     pub(crate) fn end_compaction(&mut self, key: &SessionKey, agent_id: &str) {
-        let Some(open) =
-            agent_mut(&mut self.sessions, key, agent_id).and_then(|agent| agent.compaction.take())
+        let Some(open) = warming_mut(&mut self.warming_agents, key, agent_id)
+            .and_then(|warming| warming.compaction.take())
         else {
             return;
         };
@@ -2110,28 +1855,30 @@ impl Inner {
     pub(crate) fn settle_lapsed_pending(&mut self, now: i64) {
         let open = &self.pending;
         let mut settled: Vec<(SessionKey, String)> = Vec::new();
-        for (key, session) in self.sessions.iter_mut() {
-            for (agent_id, agent) in session.agents.iter_mut() {
+        for (key, session) in self.sessions.iter() {
+            for agent_id in session.agents.keys() {
+                let warming =
+                    warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD);
                 // An open turn's or compaction's completion decides the probes, as `lapse` waits for it. A request that
                 // fails, past a head or not, or ends at a bus gap decides nothing and leaves them here.
                 // The sweep settles labeled probes alone, so an agent holding none builds no chain.
-                if request_open(open, agent)
-                    || !agent.kept.iter().any(|kept| kept.pending.is_some())
+                if request_open(open, warming)
+                    || !warming.kept.iter().any(|kept| kept.pending.is_some())
                 {
                     continue;
                 }
-                let chain: Vec<ChainLink> = agent
+                let chain: Vec<ChainLink> = warming
                     .kept
                     .iter()
                     .map(Kept::link)
-                    .chain(agent.unanswered.iter().map(UnansweredProbe::link))
+                    .chain(warming.unanswered.iter().map(UnansweredProbe::link))
                     .collect();
-                let chain_ends: Vec<i64> = agent
+                let chain_ends: Vec<i64> = warming
                     .kept
                     .iter()
                     .map(|probe| Self::chain_expires(&chain, probe.link()))
                     .collect();
-                if !agent
+                if !warming
                     .kept
                     .iter()
                     .zip(&chain_ends)
@@ -2140,7 +1887,7 @@ impl Inner {
                     continue;
                 }
                 let mut waiting = Vec::new();
-                let probes = std::mem::take(&mut agent.kept);
+                let probes = std::mem::take(&mut warming.kept);
                 for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
                     match kept.pending {
                         Some(label) if chain_end <= now => {
@@ -2149,7 +1896,7 @@ impl Inner {
                         _ => waiting.push(kept),
                     }
                 }
-                agent.kept = waiting;
+                warming.kept = waiting;
                 settled.push((key.clone(), agent_id.clone()));
             }
         }
@@ -2164,19 +1911,19 @@ impl Inner {
     /// skip waits for the due time to pass. The due time is read after the policy refresh, so the pool's current
     /// policy decides whether a probe was due, and a probe already in flight was not withheld.
     pub(crate) fn hold(&mut self, key: &SessionKey, agent_id: &str, reason: Reason, now: i64) {
-        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
+        let Some(warming) = warming_mut(&mut self.warming_agents, key, agent_id) else {
             return;
         };
-        let began = agent.reason != reason;
-        let counted = agent.hold_counted && !began;
-        let was_due = !agent.in_flight && agent.due_at().is_some_and(|at| at <= now);
+        let began = warming.reason != reason;
+        let counted = warming.hold_counted && !began;
+        let was_due = !warming.in_flight && warming.due_at().is_some_and(|at| at <= now);
         // A hold spans every tick it lasts, so only a change is written: a held recipe would otherwise rewrite its
         // sealed prompt at every flush.
-        let moved = agent.hold_counted != (counted || was_due);
-        agent.hold_counted = counted || was_due;
+        let moved = warming.hold_counted != (counted || was_due);
+        warming.hold_counted = counted || was_due;
         if !counted && was_due {
-            let state = recipe_state(reason, agent.paused);
-            self.skipped.push(Skipped::of(key, agent, state));
+            let state = recipe_state(reason, warming.paused);
+            self.skipped.push(Skipped::of(key, warming, state));
         }
         if began {
             self.set_reason(key, agent_id, reason);
@@ -2188,10 +1935,10 @@ impl Inner {
     /// The probes sent since the last real request, settled under `label` the way a discard settles them, with the
     /// recipe kept: a hold that retains the prompt still writes off what it paid for.
     pub(crate) fn settle_unanswered(&mut self, key: &SessionKey, agent_id: &str, label: Wasted) {
-        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
+        let Some(warming) = warming_mut(&mut self.warming_agents, key, agent_id) else {
             return;
         };
-        let probes = agent.take_unanswered();
+        let probes = warming.take_unanswered();
         if probes.is_empty() {
             return;
         }
@@ -2215,17 +1962,17 @@ impl Inner {
         now: i64,
         lapsed: &mut Vec<Skipped>,
     ) -> bool {
-        let agent = &self.sessions[key].agents[agent_id];
-        let Some(expires) = agent
+        let warming = warming_ref(&self.warming_agents, key, agent_id).expect(AGENT_HELD);
+        let Some(expires) = warming
             .expires
-            .filter(|expires| !agent.in_flight && now >= *expires)
+            .filter(|expires| !warming.in_flight && now >= *expires)
         else {
             return false;
         };
-        if request_open(&self.pending, agent) {
+        if request_open(&self.pending, warming) {
             return true;
         }
-        if agent.paused {
+        if warming.paused {
             tracing::info!(
                 key = %key.0,
                 session = %key.1,
@@ -2245,12 +1992,12 @@ impl Inner {
             late_ms = now - expires,
             "a keepalive recipe lapsed before its probe, so the probe was skipped"
         );
-        if !agent.hold_counted {
+        if !warming.hold_counted {
             // The lapse is what withholds the probe, so it counts under the state the recipe's end below leaves.
             lapsed.push(Skipped::of(
                 key,
-                agent,
-                recipe_state(Reason::Expired, agent.paused),
+                warming,
+                recipe_state(Reason::Expired, warming.paused),
             ));
         }
         self.lapse_probes(key, agent_id, now);
@@ -2265,12 +2012,12 @@ impl Inner {
     /// is ledgered.
     fn drop_paused_prompt(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
         self.touch_agent(key, agent_id);
-        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
+        let Some(warming) = warming_mut(&mut self.warming_agents, key, agent_id) else {
             return;
         };
-        drop_current(agent, &mut self.pending, &mut self.retained);
-        agent.expires = None;
-        agent.last_stop = Some(Wasted::Expired);
+        drop_current(warming, &mut self.pending, &mut self.retained);
+        warming.expires = None;
+        warming.last_stop = Some(Wasted::Expired);
         self.lapse_probes(key, agent_id, now);
     }
 
@@ -2280,11 +2027,11 @@ impl Inner {
     /// inside it to read. The recipe a failed turn restored can lapse while a probe the failed turn's own recipe sent
     /// keeps the chain alive past it.
     fn lapse_probes(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
-        let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
+        let Some(warming) = warming_mut(&mut self.warming_agents, key, agent_id) else {
             return;
         };
-        let unanswered = agent.take_unanswered();
-        let probes: Vec<Kept> = std::mem::take(&mut agent.kept)
+        let unanswered = warming.take_unanswered();
+        let probes: Vec<Kept> = std::mem::take(&mut warming.kept)
             .into_iter()
             .chain(unanswered)
             .collect();
@@ -2297,7 +2044,7 @@ impl Inner {
             if chain_end <= now {
                 self.settlements.push(kept.settle(key, Wasted::Expired));
             } else {
-                agent.kept.push(Kept {
+                warming.kept.push(Kept {
                     pending: Some(Wasted::Expired),
                     ..kept
                 });
@@ -2329,8 +2076,9 @@ impl Inner {
             return;
         }
         // The window restarts here, so the one counted so far ends with no return, closed before its start moves.
-        agent.close_idle_episode();
-        agent.idle_window_floor = None;
+        let warming = warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD);
+        warming.close_idle_episode(agent);
+        warming.idle_window_floor = None;
         agent.park_ended_at = Some(now);
         if agent.id != MAIN_AGENT {
             self.touch_agent(key, agent_id);
@@ -2342,8 +2090,8 @@ impl Inner {
 
     /// Drops the days the retention no longer keeps once `now` falls past the UTC day the counters last counted under,
     /// and records the cutoff for the next save, which takes the registry's rows of those days. The two sites that
-    /// count call it, as `Agent::roll_counters_day` is called, and the tick is one of them, so a day leaves within a
-    /// tick of the midnight that ages it out.
+    /// count call it, as `AgentWarming::roll_counters_day` is called, and the tick is one of them, so a day leaves
+    /// within a tick of the midnight that ages it out.
     fn roll_idle_returns_day(&mut self, now: i64) {
         let day = utc_day(now);
         if day <= self.idle_returns_day {
@@ -2376,11 +2124,11 @@ impl Inner {
         let day = utc_day(now);
         let mut opened: Vec<SessionKey> = Vec::new();
         let mut raised: Vec<(SessionKey, String)> = Vec::new();
-        for (key, session) in self.sessions.iter_mut() {
+        for (key, session) in self.sessions.iter() {
             if session.ended || !session.attended {
                 continue;
             }
-            let Some(main) = session.agents.get_mut(MAIN_AGENT) else {
+            let Some(main) = session.agents.get(MAIN_AGENT) else {
                 continue;
             };
             if matches!(
@@ -2389,10 +2137,11 @@ impl Inner {
             ) {
                 continue;
             }
-            if open_idle_episode(main, snapshot) {
+            let warming = warming_mut(&mut self.warming_agents, key, MAIN_AGENT).expect(AGENT_HELD);
+            if open_idle_episode(main, warming, snapshot) {
                 opened.push(key.clone());
             }
-            let Some(episode) = main.idle_episode.as_mut() else {
+            let Some(episode) = warming.idle_episode.as_mut() else {
                 continue;
             };
             if episode.prompt_at.is_some() {
@@ -2432,10 +2181,11 @@ impl Inner {
     /// pass before the request arrives.
     pub(crate) fn end_idle_episode(&mut self, key: &SessionKey, boundaries: &[String], now: i64) {
         self.roll_idle_returns_day(now);
-        let Some(main) = agent_mut(&mut self.sessions, key, MAIN_AGENT) else {
+        let Some(main) = agent_ref(&self.sessions, key, MAIN_AGENT) else {
             return;
         };
-        let Some(episode) = main.close_idle_episode() else {
+        let warming = warming_mut(&mut self.warming_agents, key, MAIN_AGENT).expect(AGENT_HELD);
+        let Some(episode) = warming.close_idle_episode(main) else {
             return;
         };
         // Never below the fence: the window already counted as reaching it, so its return is read there.
@@ -2486,11 +2236,11 @@ impl Inner {
         if !refreshing || observed.client.context_compacted.is_some() {
             return;
         }
-        let Some(main) = agent_ref(&self.sessions, key, MAIN_AGENT) else {
+        let Some(warming) = warming_ref(&self.warming_agents, key, MAIN_AGENT) else {
             return;
         };
         let (Some(anchor), Some(previous_prompt)) =
-            (main.last_prefix.as_ref(), main.last_prompt_tokens)
+            (warming.last_prefix.as_ref(), warming.last_prompt_tokens)
         else {
             return;
         };
@@ -2532,17 +2282,18 @@ impl Inner {
     pub(crate) fn retained_models(&self) -> Vec<String> {
         let mut models = BTreeSet::new();
         for (key, session) in &self.sessions {
-            for (agent_id, agent) in &session.agents {
+            for agent_id in session.agents.keys() {
                 if !self.live(key, agent_id) {
                     continue;
                 }
-                if let Some(observation) = &agent.current {
-                    models.insert(agent.canonical_model.clone());
+                let warming = warming_ref(&self.warming_agents, key, agent_id).expect(AGENT_HELD);
+                if let Some(observation) = &warming.current {
+                    models.insert(warming.canonical_model.clone());
                     if let Some(prior) = &observation.prior {
                         models.insert(prior.model.clone());
                     }
                 }
-                if let Some(compaction) = &agent.compaction {
+                if let Some(compaction) = &warming.compaction {
                     models.insert(compaction.canonical_model.clone());
                     if let Some(prior) = &compaction.prior {
                         models.insert(prior.model.clone());
@@ -2557,9 +2308,11 @@ impl Inner {
     /// dated id. The recipe follows, so the gate finds them and the next request's credit compares like names.
     pub(crate) fn follow_resolutions(&mut self, canonical: &HashMap<String, String>) {
         let mut followed: Vec<(SessionKey, String)> = Vec::new();
-        for (key, session) in self.sessions.iter_mut() {
-            for (agent_id, agent) in session.agents.iter_mut() {
-                if agent.follow_resolutions(canonical) {
+        for (key, session) in self.sessions.iter() {
+            for agent_id in session.agents.keys() {
+                let warming =
+                    warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD);
+                if warming.follow_resolutions(canonical) {
                     followed.push((key.clone(), agent_id.clone()));
                 }
             }
@@ -2574,10 +2327,13 @@ impl Inner {
     /// the gate to read, so the tick that finds none needs no fresher view than the one it already has.
     pub(crate) fn anything_retained(&self) -> bool {
         self.sessions.iter().any(|(key, session)| {
-            session
-                .agents
-                .iter()
-                .any(|(agent_id, agent)| self.live(key, agent_id) && agent.current.is_some())
+            session.agents.keys().any(|agent_id| {
+                self.live(key, agent_id)
+                    && warming_ref(&self.warming_agents, key, agent_id)
+                        .expect(AGENT_HELD)
+                        .current
+                        .is_some()
+            })
         })
     }
 
@@ -2589,12 +2345,13 @@ impl Inner {
         let mut candidates: Vec<(bool, i64, SessionKey, String, usize)> = Vec::new();
         for (key, session) in &self.sessions {
             for (agent_id, agent) in &session.agents {
-                let Some(observation) = agent.current.as_ref() else {
+                let warming = warming_ref(&self.warming_agents, key, agent_id).expect(AGENT_HELD);
+                let Some(observation) = warming.current.as_ref() else {
                     continue;
                 };
                 if (!session.attended || agent.state == AgentState::Idle)
-                    && !agent.in_flight
-                    && !request_open(&self.pending, agent)
+                    && !warming.in_flight
+                    && !request_open(&self.pending, warming)
                 {
                     candidates.push((
                         session.attended,
@@ -2637,10 +2394,11 @@ impl Inner {
         let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
+        let warming = warming_ref(&self.warming_agents, key, agent_id).expect(AGENT_HELD);
         // A pool the snapshot no longer holds, or none for a record that never sent a request, reads the default
         // policy, whose plan set keeps the hour.
         let policy = snapshot
-            .pool(&agent.pool_id)
+            .pool(&warming.pool_id)
             .map(|pool| CacheTtlPolicy::from_json(&pool.cache_ttl_json))
             .unwrap_or_default();
         agent.leaves_at = Some(now + longest_cache_ttl_ms(&policy));
@@ -2650,6 +2408,7 @@ impl Inner {
     pub(crate) fn expire(&mut self, now: i64) {
         // A record whose probe is still in flight waits for the result, which settles under the release's label, and
         // the next sweep takes it.
+        let warming_agents = &self.warming_agents;
         let leaving: Vec<(SessionKey, String)> = self
             .sessions
             .iter()
@@ -2657,9 +2416,11 @@ impl Inner {
                 session
                     .agents
                     .iter()
-                    .filter(|(_, agent)| {
+                    .filter(move |(agent_id, agent)| {
                         agent.state == AgentState::Released
-                            && !agent.in_flight
+                            && !warming_ref(warming_agents, key, agent_id)
+                                .expect(AGENT_HELD)
+                                .in_flight
                             && agent.leaves_at.is_some_and(|at| now >= at)
                     })
                     .map(move |(agent_id, _)| (key.clone(), agent_id.clone()))
@@ -2669,6 +2430,9 @@ impl Inner {
             self.forget_agent(&key, &agent_id);
             if let Some(session) = self.sessions.get_mut(&key) {
                 session.agents.remove(&agent_id);
+            }
+            if let Some(warming_agents) = self.warming_agents.get_mut(&key) {
+                warming_agents.remove(&agent_id);
             }
             self.touch_session(&key);
         }
@@ -2688,8 +2452,10 @@ impl Inner {
             if let Some(session) = self.sessions.get_mut(&key) {
                 session.attended = false;
                 // A lapse is no return, so main's window ends here.
-                if let Some(main) = session.agents.get_mut(MAIN_AGENT) {
-                    main.close_idle_episode();
+                if let Some(main) = session.agents.get(MAIN_AGENT) {
+                    warming_mut(&mut self.warming_agents, &key, MAIN_AGENT)
+                        .expect(AGENT_HELD)
+                        .close_idle_episode(main);
                 }
             }
             self.touch_session(&key);
@@ -2825,9 +2591,9 @@ impl Engine {
         for (key, agent_id) in open {
             // The lost events may have been this turn's completion, so it counts as the turn that answered, as a
             // missed one does at the next arrival.
-            if let Some(agent) = agent_mut(&mut inner.sessions, &key, &agent_id) {
-                if let Some(started) = agent.current.as_ref().map(|o| o.started) {
-                    agent.last_answered_at = Some(started);
+            if let Some(warming) = warming_mut(&mut inner.warming_agents, &key, &agent_id) {
+                if let Some(started) = warming.current.as_ref().map(|o| o.started) {
+                    warming.last_answered_at = Some(started);
                 }
             }
             inner.end_observation(&key, &agent_id, None, Unanswered::Leave);
@@ -2935,11 +2701,12 @@ impl Engine {
         if agent.state == AgentState::Released {
             return;
         }
-        if agent
+        let warming = warming_ref(&inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+        if warming
             .current
             .as_ref()
             .is_some_and(|o| o.id == observed.request_id)
-            || agent
+            || warming
                 .compaction
                 .as_ref()
                 .is_some_and(|c| c.request_id == observed.request_id)
@@ -2974,13 +2741,13 @@ impl Engine {
         // state, since a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held
         // state all read that field as state. The agent's own `last_guard` carries the verdict itself, every
         // request's, for the view to show.
-        let recipe_hashes = agent.current.as_ref().map(|observation| {
+        let recipe_hashes = warming.current.as_ref().map(|observation| {
             (
                 observation.recipe.static_hash.as_deref().unwrap_or(""),
                 observation.recipe.tail_hash.as_deref().unwrap_or(""),
             )
         });
-        let model_matches = agent
+        let model_matches = warming
             .current
             .as_ref()
             .is_some_and(|observation| observation.recipe.model == observed.model);
@@ -2991,7 +2758,7 @@ impl Engine {
             recipe_hashes,
             model_matches,
         );
-        agent_mut(&mut inner.sessions, &key, &agent_id)
+        warming_mut(&mut inner.warming_agents, &key, &agent_id)
             .expect(AGENT_HELD)
             .last_guard = Some(verdict);
         // One touch for everything below: the lock is held to the end, so the flush reads the agent as this request
@@ -3026,7 +2793,10 @@ impl Engine {
                 observed.canonical_model.clone(),
             );
         }
-        for held in inner.sessions[&key].agents[&agent_id].held_models() {
+        for held in warming_ref(&inner.warming_agents, &key, &agent_id)
+            .expect(AGENT_HELD)
+            .held_models()
+        {
             if resolved.contains_key(&held) {
                 continue;
             }
@@ -3034,14 +2804,14 @@ impl Engine {
                 resolved.insert(held, dated);
             }
         }
-        agent_mut(&mut inner.sessions, &key, &agent_id)
+        warming_mut(&mut inner.warming_agents, &key, &agent_id)
             .expect(AGENT_HELD)
             .follow_resolutions(&resolved);
         if verdict == Guard::Compaction {
             // The recipe, its schedule and its probes wait as they stood, so a compaction that fails leaves the old
             // context the live one. Nothing of the turn's admission below runs: the idle window's prefix, the agent's
             // activity and model, and the agent cap all belong to the turn after it.
-            let agent = &inner.sessions[&key].agents[&agent_id];
+            let warming = warming_ref(&inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
             let compaction = OpenCompaction {
                 request_id: observed.request_id.clone(),
                 received_at: observed.received_at,
@@ -3054,13 +2824,13 @@ impl Engine {
                 ok_head: false,
                 read: 0,
                 ttl_ms: 0,
-                prior: prior_coverage(agent, now),
+                prior: prior_coverage(warming, now),
                 client: RowClient {
                     client: Some(observed.client.class.clone()),
                     user_agent: user_agent_of(&observed.headers),
                 },
             };
-            agent_mut(&mut inner.sessions, &key, &agent_id)
+            warming_mut(&mut inner.warming_agents, &key, &agent_id)
                 .expect(AGENT_HELD)
                 .compaction = Some(compaction);
             inner
@@ -3071,7 +2841,7 @@ impl Engine {
         // Apart from the recipe, which keepalive off, an opt-out or a refused body leaves unretained: the next idle
         // window judges a return against this request's prefix either way. A request without both hashes leaves none.
         if agent_id == MAIN_AGENT {
-            agent_mut(&mut inner.sessions, &key, &agent_id)
+            warming_mut(&mut inner.warming_agents, &key, &agent_id)
                 .expect(AGENT_HELD)
                 .last_prefix = observed
                 .static_hash
@@ -3097,18 +2867,22 @@ impl Engine {
         // ends the observation, and `set_aside` below ends it, or sets it aside, without one. It counts as the turn
         // that answered, or the gap this arrival's coverage reads would run from a turn before it. A compaction ends no
         // turn, so it returned above and leaves the open one to its own completion.
-        let missed = inner.sessions[&key].agents[&agent_id]
+        let missed = warming_ref(&inner.warming_agents, &key, &agent_id)
+            .expect(AGENT_HELD)
             .current
             .as_ref()
             .filter(|observation| inner.pending.contains_key(&observation.id))
             .map(|observation| observation.started);
         if let Some(started) = missed {
-            agent_mut(&mut inner.sessions, &key, &agent_id)
+            warming_mut(&mut inner.warming_agents, &key, &agent_id)
                 .expect(AGENT_HELD)
                 .last_answered_at = Some(started);
         }
         // Taken before anything below overwrites it and consumed with the observation.
-        let prior = prior_coverage(&inner.sessions[&key].agents[&agent_id], now);
+        let prior = prior_coverage(
+            warming_ref(&inner.warming_agents, &key, &agent_id).expect(AGENT_HELD),
+            now,
+        );
         let poisoned = self.gap_backlog.load(Ordering::SeqCst) > 0;
         // The recipe set aside waits for this request's completion, so each return below that takes no observation
         // drops it: nothing would complete to restore it.
@@ -3135,9 +2909,10 @@ impl Engine {
             if let Some(reason) = refused {
                 // The agent saw a real request, so the view lists its line with the cause, and `slotted` stays false,
                 // so the session holds no slot.
-                let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
-                agent.last_real_at = Some(now);
-                agent.canonical_model = observed.canonical_model.clone();
+                let warming =
+                    warming_mut(&mut inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+                warming.last_real_at = Some(now);
+                warming.canonical_model = observed.canonical_model.clone();
                 inner.drop_aside(&key, &agent_id);
                 inner.set_reason(&key, &agent_id, reason);
                 return;
@@ -3152,17 +2927,18 @@ impl Engine {
         }
         agent.set_state(AgentState::Busy);
         agent.last_activity = now;
+        let warming = warming_mut(&mut inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
         // The request restarts main's idle window at its own instant, which can be the instant of the prompt that set
         // the floor at the close, so the floor goes with it. A foreign request, an auxiliary one and one on an
         // `unknown` main returned above and move no start, so their floor stands.
-        agent.idle_window_floor = None;
-        agent.cache_started = now;
-        agent.cold = 0;
-        agent.failures = 0;
-        agent.hold_counted = false;
-        agent.last_real_at = Some(now);
-        agent.canonical_model = observed.canonical_model.clone();
-        agent.key_generation = observed.key_generation;
+        warming.idle_window_floor = None;
+        warming.cache_started = now;
+        warming.cold = 0;
+        warming.failures = 0;
+        warming.hold_counted = false;
+        warming.last_real_at = Some(now);
+        warming.canonical_model = observed.canonical_model.clone();
+        warming.key_generation = observed.key_generation;
         // Past the activity writes and the slot, which such a request takes as any other does, and ahead of the build.
         // The pool's policy reads first, then the key's permission, then the session's own option. The option is read
         // again here, under the lock that admits the recipe: a registration can turn it off behind the read ahead of
@@ -3208,11 +2984,11 @@ impl Engine {
             return;
         }
         inner.retained += recipe.size;
-        let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
+        let warming = warming_mut(&mut inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
         // The probe replays this request's headers, so it meters under the entrypoint they carry.
-        agent.entrypoint =
+        warming.entrypoint =
             phoebis_ledger::entrypoint_of_client(&observed.client.class).map(String::from);
-        agent.current = Some(Observation {
+        warming.current = Some(Observation {
             id: observed.request_id.clone(),
             attempt: 0,
             started: now,
@@ -3227,7 +3003,7 @@ impl Engine {
             funding: AttemptFunding::default(),
             client_label: Some(observed.client.class.clone()),
         });
-        agent.body_dirty = true;
+        warming.body_dirty = true;
         // The mark is retired only by a save at the row's revision, so the new body takes a revision of its own.
         inner.touch_agent(&key, &agent_id);
         inner.pending.insert(observed.request_id, (key, agent_id));
@@ -3245,11 +3021,11 @@ impl Engine {
             if inner.quiesced() {
                 return;
             }
-            if let Some(agent) = inner.compaction_agent(&selected.request_id) {
+            if let Some(warming) = inner.compaction_agent(&selected.request_id) {
                 // A body the relay sent as it came carries the conversation's own markers, whose TTL the recipe's
                 // evidence settled on.
-                let ttl_ms = selected.cache_ttl_ms.unwrap_or(agent.ttl_ms);
-                if let Some(compaction) = agent.compaction.as_mut() {
+                let ttl_ms = selected.cache_ttl_ms.unwrap_or(warming.ttl_ms);
+                if let Some(compaction) = warming.compaction.as_mut() {
                     compaction.attempt = selected.attempt;
                     compaction.account = Some(selected.account_id);
                     compaction.funding = funding;
@@ -3266,8 +3042,8 @@ impl Engine {
         if !inner.live(&key, &agent_id) {
             return;
         }
-        let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
-        let Some(observation) = agent.current.as_mut() else {
+        let warming = warming_mut(&mut inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+        let Some(observation) = warming.current.as_mut() else {
             return;
         };
         observation.attempt = selected.attempt;
@@ -3276,8 +3052,8 @@ impl Engine {
         observation.ttl_ms = 0;
         observation.dispatched_ms = selected.cache_ttl_ms;
         observation.funding = funding;
-        agent.cache_started = observation.started;
-        agent.expires = None;
+        warming.cache_started = observation.started;
+        warming.expires = None;
         inner.set_reason(&key, &agent_id, Reason::AwaitingSelection);
         // The arrival reads the pool's policy and the key's opt-out, so a request refused by either never reaches here.
         if snapshot.account(&selected.account_id).is_none() {
@@ -3285,23 +3061,23 @@ impl Engine {
             return;
         }
         let pool_id = snapshot.key(&key.0).map(|row| row.pool_id.clone());
-        let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
-        if let Some(observation) = agent.current.as_mut() {
+        let warming = warming_mut(&mut inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+        if let Some(observation) = warming.current.as_mut() {
             // A poisoned observation never becomes ready, so no evidence of this request can arm a schedule.
             observation.ready = !observation.poisoned;
         }
-        if agent.account.as_deref() != Some(selected.account_id.as_str()) {
-            agent.cold = 0;
-            agent.ttl_ms = 0;
+        if warming.account.as_deref() != Some(selected.account_id.as_str()) {
+            warming.cold = 0;
+            warming.ttl_ms = 0;
         }
-        agent.account = Some(selected.account_id);
+        warming.account = Some(selected.account_id);
         // The event's own incarnation, never the snapshot's above: an id paired again between the selection and this
         // delivery would label the recipe with the replacement.
-        agent.account_incarnation = Some(selected.incarnation);
+        warming.account_incarnation = Some(selected.incarnation);
         // A key deleted since the arrival leaves the agent's pool as it stood, and the next tick's
         // `drop_sessions_of_dead_keys` ends the whole session under `session_ended`.
         if let Some(pool_id) = pool_id {
-            agent.pool_id = pool_id;
+            warming.pool_id = pool_id;
         }
         inner.set_reason(&key, &agent_id, Reason::AwaitingCacheEvidence);
     }
@@ -3317,7 +3093,7 @@ impl Engine {
             }
             if let Some(compaction) = inner
                 .compaction_agent(&head.request_id)
-                .and_then(|agent| agent.compaction.as_mut())
+                .and_then(|warming| warming.compaction.as_mut())
                 .filter(|compaction| compaction.attempt == head.attempt)
             {
                 compaction.funding.in_overage = in_overage;
@@ -3331,8 +3107,8 @@ impl Engine {
         if !inner.live(&key, &agent_id) {
             return;
         }
-        let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
-        if let Some(observation) = agent.current.as_mut() {
+        let warming = warming_mut(&mut inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+        if let Some(observation) = warming.current.as_mut() {
             if observation.attempt == head.attempt {
                 let moved = observation.funding.in_overage != in_overage;
                 observation.funding.in_overage = in_overage;
@@ -3362,7 +3138,7 @@ impl Engine {
             // A failed attempt's stream is no evidence about the cache, as for a turn.
             if let Some(compaction) = inner
                 .compaction_agent(&chunk.request_id)
-                .and_then(|agent| agent.compaction.as_mut())
+                .and_then(|warming| warming.compaction.as_mut())
                 .filter(|compaction| compaction.attempt == chunk.attempt && compaction.ok_head)
             {
                 compaction.read = compaction.read.max(usage.read);
@@ -3378,7 +3154,8 @@ impl Engine {
         if !inner.live(&key, &agent_id) {
             return;
         }
-        let current_attempt = inner.sessions[&key].agents[&agent_id]
+        let current_attempt = warming_ref(&inner.warming_agents, &key, &agent_id)
+            .expect(AGENT_HELD)
             .current
             .as_ref()
             .map(|o| o.attempt);
@@ -3408,8 +3185,8 @@ impl Engine {
         inner.touch_agent(&key, &agent_id);
         if agent_id == MAIN_AGENT {
             if let Some(prompt) = reported_prompt(complete.usage.as_ref()) {
-                if let Some(main) = agent_mut(&mut inner.sessions, &key, MAIN_AGENT) {
-                    main.last_prompt_tokens = Some(prompt);
+                if let Some(warming) = warming_mut(&mut inner.warming_agents, &key, MAIN_AGENT) {
+                    warming.last_prompt_tokens = Some(prompt);
                 }
             }
         }
@@ -3440,8 +3217,12 @@ impl Engine {
             // carries none takes `expired`, which the lapse sweep settles it under when its chain's last entry ends if
             // no turn reads it first, as its recipe's own lapse would have. The sweep reads that chain through the
             // restored recipe's probes, so a kept probe whose entry they read back waits for the turn that reads them.
-            if let Some(agent) = agent_mut(&mut inner.sessions, &key, &agent_id) {
-                for kept in agent.kept.iter_mut().filter(|kept| kept.pending.is_none()) {
+            if let Some(warming) = warming_mut(&mut inner.warming_agents, &key, &agent_id) {
+                for kept in warming
+                    .kept
+                    .iter_mut()
+                    .filter(|kept| kept.pending.is_none())
+                {
                     kept.pending = Some(Wasted::Expired);
                 }
             }
@@ -3459,32 +3240,32 @@ impl Engine {
         // Read from the observation's own snapshot of what the previous recipe had proved: a probe that ran
         // while this request was open, or a TTL this request's evidence shortens below, cannot reach into it.
         let mut credit = {
-            let agent = &inner.sessions[&key].agents[&agent_id];
-            let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
-            agent
+            let warming = warming_ref(&inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+            let fast = warming.current.as_ref().is_some_and(|o| o.recipe.fast);
+            warming
                 .current
                 .as_ref()
                 .and_then(|o| o.prior.as_ref())
                 .filter(|prior| {
                     prior.credits(
-                        agent.last_real_at.unwrap_or(now),
-                        &agent.canonical_model,
+                        warming.last_real_at.unwrap_or(now),
+                        &warming.canonical_model,
                         fast,
-                        agent.account.as_deref(),
+                        warming.account.as_deref(),
                         read,
                     )
                 })
                 .map(|_| {
-                    let served = agent.current.as_ref();
+                    let served = warming.current.as_ref();
                     Credit {
                         // Its receipt picks the hour the credit files in and the revision its band and its saving
                         // price at, as its own request row's does, though the answer may land past either boundary.
                         at: served.map_or(now, |o| o.received_at),
                         key: key.clone(),
-                        key_generation: agent.key_generation,
-                        pool_id: agent.pool_id.clone(),
-                        account: agent.account.clone(),
-                        model: agent.canonical_model.clone(),
+                        key_generation: warming.key_generation,
+                        pool_id: warming.pool_id.clone(),
+                        account: warming.account.clone(),
+                        model: warming.canonical_model.clone(),
                         read,
                         // Set below, once this request's own evidence has settled the TTL.
                         ttl_ms: 0,
@@ -3499,14 +3280,14 @@ impl Engine {
         };
         // Set once the credit has read its gap from the turn before, so the next request's gap runs from this one.
         if (200..300).contains(&complete.status) {
-            if let Some(agent) = agent_mut(&mut inner.sessions, &key, &agent_id) {
-                if let Some(request_started) = agent.current.as_ref().map(|o| o.started) {
-                    agent.last_answered_at = Some(request_started);
+            if let Some(warming) = warming_mut(&mut inner.warming_agents, &key, &agent_id) {
+                if let Some(request_started) = warming.current.as_ref().map(|o| o.started) {
+                    warming.last_answered_at = Some(request_started);
                 }
             }
         }
         inner.decide_unanswered(&key, &agent_id, read);
-        let (ready, armed) = agent_ref(&inner.sessions, &key, &agent_id)
+        let (ready, armed) = warming_ref(&inner.warming_agents, &key, &agent_id)
             .map(|a| {
                 (
                     a.current.as_ref().is_some_and(|o| o.ready),
@@ -3519,16 +3300,19 @@ impl Engine {
                 inner.observe_usage(&key, &agent_id, usage);
             }
         }
-        let (proved, observed_ttl, poisoned, current) = agent_ref(&inner.sessions, &key, &agent_id)
-            .map_or((false, 0, false, None), |a| {
-                let o = a.current.as_ref();
-                (
-                    o.is_some_and(|o| o.ready && o.expected > 0),
-                    o.map_or(0, |o| o.ttl_ms),
-                    o.is_some_and(|o| o.poisoned),
-                    Some(a.reason),
-                )
-            });
+        let (proved, observed_ttl, poisoned, current) =
+            warming_ref(&inner.warming_agents, &key, &agent_id).map_or(
+                (false, 0, false, None),
+                |a| {
+                    let o = a.current.as_ref();
+                    (
+                        o.is_some_and(|o| o.ready && o.expected > 0),
+                        o.map_or(0, |o| o.ttl_ms),
+                        o.is_some_and(|o| o.poisoned),
+                        Some(a.reason),
+                    )
+                },
+            );
         // The TTL this request's own evidence settled on, set at a stream's first event or, for an answer without a
         // stream, by the reading just above. The write a credited request avoided would have taken it, and a discard
         // below clears the observation.
@@ -3552,8 +3336,8 @@ impl Engine {
             }
         }
         if credit.is_some() {
-            if let Some(agent) = agent_mut(&mut inner.sessions, &key, &agent_id) {
-                agent.count_credit(now);
+            if let Some(warming) = warming_mut(&mut inner.warming_agents, &key, &agent_id) {
+                warming.count_credit(now);
             }
         }
         self.book_credit(inner, credit, &complete);
@@ -3599,8 +3383,9 @@ impl Engine {
             return;
         }
         if let Some(prompt) = reported_prompt(complete.usage.as_ref()) {
-            if let Some(main) = agent_mut(&mut inner.sessions, &mark.session, MAIN_AGENT) {
-                main.last_prompt_tokens = Some(prompt);
+            if let Some(warming) = warming_mut(&mut inner.warming_agents, &mark.session, MAIN_AGENT)
+            {
+                warming.last_prompt_tokens = Some(prompt);
             }
             inner.touch_agent(&mark.session, MAIN_AGENT);
         }
@@ -3658,13 +3443,13 @@ impl Inner {
 
     /// The agent holding the compaction `request_id` opened while it may still take a result, `None` for one its
     /// agent no longer holds, as for a request the engine never followed.
-    fn compaction_agent(&mut self, request_id: &str) -> Option<&mut Agent> {
+    fn compaction_agent(&mut self, request_id: &str) -> Option<&mut AgentWarming> {
         let (key, agent_id) = self.compactions.get(request_id)?.clone();
         if !self.live(&key, &agent_id) {
             return None;
         }
-        agent_mut(&mut self.sessions, &key, &agent_id).filter(|agent| {
-            agent
+        warming_mut(&mut self.warming_agents, &key, &agent_id).filter(|warming| {
+            warming
                 .compaction
                 .as_ref()
                 .is_some_and(|compaction| compaction.request_id == request_id)
@@ -3680,8 +3465,8 @@ impl Inner {
     fn complete_compaction(&mut self, complete: &RequestComplete, now: i64) -> Option<Credit> {
         let (key, agent_id) = self.compactions.remove(&complete.request_id)?;
         let live = self.live(&key, &agent_id);
-        let agent = agent_mut(&mut self.sessions, &key, &agent_id)?;
-        let compaction = agent
+        let warming = warming_mut(&mut self.warming_agents, &key, &agent_id)?;
+        let compaction = warming
             .compaction
             .take_if(|compaction| compaction.request_id == complete.request_id)?;
         if !live || complete.outcome != Outcome::Succeeded {
@@ -3696,8 +3481,8 @@ impl Inner {
         let ttl_ms = complete.usage.as_ref().map_or(compaction.ttl_ms, |usage| {
             ProbeUsage::from_bus(usage).ttl_ms(compaction.ttl_ms, 0)
         });
-        let mut probes = std::mem::take(&mut agent.kept);
-        probes.extend(agent.take_unanswered());
+        let mut probes = std::mem::take(&mut warming.kept);
+        probes.extend(warming.take_unanswered());
         let credit = compaction
             .prior
             .as_ref()
@@ -3713,8 +3498,8 @@ impl Inner {
             .map(|_| Credit {
                 at: compaction.received_at,
                 key: key.clone(),
-                key_generation: agent.key_generation,
-                pool_id: agent.pool_id.clone(),
+                key_generation: warming.key_generation,
+                pool_id: warming.pool_id.clone(),
                 account: compaction.account.clone(),
                 model: compaction.canonical_model.clone(),
                 read,
@@ -3724,7 +3509,7 @@ impl Inner {
                 client: compaction.client.clone(),
             });
         if credit.is_some() {
-            agent.count_credit(now);
+            warming.count_credit(now);
         }
         self.decide_against(
             &key,
@@ -3772,14 +3557,14 @@ impl Inner {
     /// The Go `observeLocked`: evidence from a ready attempt arms the schedule at the entry's expiry, the pool's
     /// lead and this schedule's jitter taken off by `due_at`. A retry already pending stays in force.
     pub(crate) fn observe_usage(&mut self, key: &SessionKey, agent_id: &str, usage: ProbeUsage) {
-        let agent = agent_mut(&mut self.sessions, key, agent_id).expect(AGENT_HELD);
-        let Some(observation) = agent.current.as_mut() else {
+        let warming = warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD);
+        let Some(observation) = warming.current.as_mut() else {
             return;
         };
         if !observation.ready || usage.evidence() == 0 {
             return;
         }
-        let previous_ms = agent.ttl_ms;
+        let previous_ms = warming.ttl_ms;
         let requested_ms = observation
             .dispatched_ms
             .unwrap_or(observation.recipe.ttl_ms);
@@ -3789,23 +3574,23 @@ impl Inner {
         }
         // A paused recipe takes nothing from this usage, but the request's credit from a probe sent before the pause
         // still files under the TTL its own write would have taken, so the observation keeps that TTL.
-        if agent.paused {
+        if warming.paused {
             observation.ttl_ms = ttl_ms;
             return;
         }
         observation.expected = usage.evidence();
-        agent.ttl_ms = ttl_ms;
+        warming.ttl_ms = ttl_ms;
         note_ttl_change(
             key,
             agent_id,
             previous_ms,
-            agent.ttl_ms,
+            warming.ttl_ms,
             requested_ms,
             &usage,
         );
-        observation.ttl_ms = agent.ttl_ms;
-        agent.expires = Some(agent.cache_started + agent.ttl_ms);
-        agent.jitter_frac = rand::random::<f64>();
+        observation.ttl_ms = warming.ttl_ms;
+        warming.expires = Some(warming.cache_started + warming.ttl_ms);
+        warming.jitter_frac = rand::random::<f64>();
         self.set_reason(key, agent_id, Reason::Scheduled);
     }
 }
@@ -3885,15 +3670,16 @@ impl Engine {
                 if !inner.live(&key, &agent_id) {
                     continue;
                 }
-                let agent = &inner.sessions[&key].agents[&agent_id];
+                let warming =
+                    warming_ref(&inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
                 // The ceilings and the gate run for every retained recipe, armed or not: a pause clears the
                 // schedule, so an opt-out could otherwise never discard a recipe paused by a 429 and a ceiling
                 // could never settle it while the companion keeps reporting. A recipe an open compaction holds
                 // waits as it stood for the compaction's completion to keep or stop it.
-                if agent.current.is_none() || agent.compaction.is_some() {
+                if warming.current.is_none() || warming.compaction.is_some() {
                     continue;
                 }
-                let ready = agent
+                let ready = warming
                     .current
                     .as_ref()
                     .is_some_and(|o| o.ready && o.expected > 0);
@@ -3901,8 +3687,11 @@ impl Engine {
                 // ceilings below read the pool's policy as it stands now, so a horizon raised in the console
                 // reopens the hold and an opt-out discards the prompt the hold retained.
                 let refreshed = {
-                    let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
-                    refresh_policy(&view, agent)
+                    let inner = &mut *inner;
+                    let agent = agent_ref(&inner.sessions, &key, &agent_id).expect(AGENT_HELD);
+                    let warming =
+                        warming_mut(&mut inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+                    refresh_policy(&view, agent, warming)
                 };
                 let refreshed = match refreshed {
                     Ok((pool, policy, moved)) => {
@@ -3929,7 +3718,10 @@ impl Engine {
                         }
                         // A paused recipe keeps its own reason, as under the ceilings' hold below: the pause already
                         // withholds every probe until the next real request.
-                        if !inner.sessions[&key].agents[&agent_id].paused {
+                        if !warming_ref(&inner.warming_agents, &key, &agent_id)
+                            .expect(AGENT_HELD)
+                            .paused
+                        {
                             inner.hold(&key, &agent_id, reason, now);
                         }
                         continue;
@@ -3939,7 +3731,11 @@ impl Engine {
                 // below ends `horizon`: nothing else rewrites it before the next probe, and until then an armed recipe
                 // would read held with no next probe. A recipe whose request has not brought its evidence yet goes
                 // back to waiting for it.
-                if inner.sessions[&key].agents[&agent_id].reason == Reason::PoolDisabled {
+                if warming_ref(&inner.warming_agents, &key, &agent_id)
+                    .expect(AGENT_HELD)
+                    .reason
+                    == Reason::PoolDisabled
+                {
                     let resumed = if ready {
                         Reason::Scheduled
                     } else {
@@ -3950,7 +3746,9 @@ impl Engine {
                 let verdict = {
                     let session = &inner.sessions[&key];
                     let agent = &session.agents[&agent_id];
-                    let ceilings = ceilings_for(agent, policy, &view, &rows, &self.parts.timing);
+                    let warming =
+                        warming_ref(&inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+                    let ceilings = ceilings_for(warming, policy, &view, &rows, &self.parts.timing);
                     ceiling(
                         agent,
                         session.attended_at(now),
@@ -3979,8 +3777,9 @@ impl Engine {
                         if inner.lapse(&key, &agent_id, now, &mut lapsed) {
                             continue;
                         }
-                        let agent = &inner.sessions[&key].agents[&agent_id];
-                        let (paused, began) = (agent.paused, agent.reason != reason);
+                        let warming =
+                            warming_ref(&inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+                        let (paused, began) = (warming.paused, warming.reason != reason);
                         // The probes paid so far kept nothing the wake will read, so they are written off as the
                         // hold begins. A paused recipe keeps its own reason and is written off on every held tick,
                         // which finds nothing left after the first.
@@ -3995,7 +3794,11 @@ impl Engine {
                         continue;
                     }
                     Verdict::Probe => {
-                        if inner.sessions[&key].agents[&agent_id].reason == Reason::Horizon {
+                        if warming_ref(&inner.warming_agents, &key, &agent_id)
+                            .expect(AGENT_HELD)
+                            .reason
+                            == Reason::Horizon
+                        {
                             inner.set_reason(&key, &agent_id, Reason::Scheduled);
                         }
                     }
@@ -4006,6 +3809,7 @@ impl Engine {
                 let held = gate(
                     &view,
                     &inner.sessions[&key].agents[&agent_id],
+                    warming_ref(&inner.warming_agents, &key, &agent_id).expect(AGENT_HELD),
                     &key.1,
                     pool,
                     policy,
@@ -4022,10 +3826,17 @@ impl Engine {
                     }
                     Ok(holder) => holder,
                 };
-                if !ready || inner.sessions[&key].agents[&agent_id].in_flight {
+                if !ready
+                    || warming_ref(&inner.warming_agents, &key, &agent_id)
+                        .expect(AGENT_HELD)
+                        .in_flight
+                {
                     continue;
                 }
-                let Some(at) = inner.sessions[&key].agents[&agent_id].due_at() else {
+                let Some(at) = warming_ref(&inner.warming_agents, &key, &agent_id)
+                    .expect(AGENT_HELD)
+                    .due_at()
+                else {
                     continue;
                 };
                 if at <= now {
@@ -4038,11 +3849,14 @@ impl Engine {
                 if inner.running >= MAX_WORKERS {
                     break;
                 }
-                let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
-                let observation = agent.current.as_ref().unwrap();
+                let inner = &mut *inner;
+                let agent = agent_ref(&inner.sessions, &key, &agent_id).expect(AGENT_HELD);
+                let warming =
+                    warming_mut(&mut inner.warming_agents, &key, &agent_id).expect(AGENT_HELD);
+                let observation = warming.current.as_ref().unwrap();
                 let job = ProbeJob {
                     key: key.clone(),
-                    key_generation: agent.key_generation,
+                    key_generation: warming.key_generation,
                     agent_id: agent_id.clone(),
                     incarnation: agent.incarnation,
                     observation_id: observation.id.clone(),
@@ -4050,17 +3864,17 @@ impl Engine {
                     attempt: observation.attempt,
                     started: now,
                     holder,
-                    pool_id: agent.pool_id.clone(),
-                    canonical_model: agent.canonical_model.clone(),
-                    entrypoint: agent.entrypoint.clone(),
+                    pool_id: warming.pool_id.clone(),
+                    canonical_model: warming.canonical_model.clone(),
+                    entrypoint: warming.entrypoint.clone(),
                     client_label: observation.client_label.clone(),
                     recipe: observation.recipe.clone(),
                     expected: observation.expected,
                 };
-                agent.in_flight = true;
-                agent.hold_counted = false;
-                agent.probes += 1;
-                agent.count_probe(now);
+                warming.in_flight = true;
+                warming.hold_counted = false;
+                warming.probes += 1;
+                warming.count_probe(now);
                 inner.running += 1;
                 inner.set_reason(&key, &agent_id, Reason::Probing);
                 // The tracker counts the job from here, under the lock that reserved the worker: the spawn
@@ -4220,14 +4034,20 @@ impl Engine {
     /// The recipes one session holds, for a test or a view that asks by ids.
     pub fn recipes_for(&self, key_id: &str, session_id: &str) -> Vec<String> {
         let inner = self.lock();
+        let key = (key_id.to_string(), session_id.to_string());
         inner
             .sessions
-            .get(&(key_id.to_string(), session_id.to_string()))
+            .get(&key)
             .map(|s| {
                 s.agents
-                    .values()
-                    .filter(|a| a.current.is_some())
-                    .map(|a| a.id.clone())
+                    .iter()
+                    .filter(|(agent_id, _)| {
+                        warming_ref(&inner.warming_agents, &key, agent_id)
+                            .expect(AGENT_HELD)
+                            .current
+                            .is_some()
+                    })
+                    .map(|(_, a)| a.id.clone())
                     .collect()
             })
             .unwrap_or_default()
@@ -4254,7 +4074,8 @@ impl Engine {
 /// whether the agent's pool moved.
 pub(crate) fn refresh_policy<'v>(
     view: &'v RouterView,
-    agent: &mut Agent,
+    agent: &Agent,
+    warming: &mut AgentWarming,
 ) -> Result<(&'v PoolRow, &'v KeepalivePolicy, bool), Gate> {
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
     // rather than held, because nothing on that key may be probed again until its keepalive permission is back.
@@ -4277,8 +4098,8 @@ pub(crate) fn refresh_policy<'v>(
     // The pool's policy may have changed since admission, and an admin may have moved the key to another pool
     // without a request following. The ceilings, the budget and the probe's own delta all read the pool the key
     // belongs to now.
-    let moved = agent.pool_id != key.pool_id;
-    agent.pool_id = key.pool_id.clone();
+    let moved = warming.pool_id != key.pool_id;
+    warming.pool_id = key.pool_id.clone();
     Ok((pool, policy, moved))
 }
 
@@ -4288,14 +4109,14 @@ pub(crate) fn refresh_policy<'v>(
 /// table's tightest row at the recipe's speed, so a ceiling is never unbounded. A timing whose lead is the whole TTL
 /// leaves no probe interval, and nothing is probed.
 pub(crate) fn ceilings_for(
-    agent: &Agent,
+    warming: &AgentWarming,
     policy: &KeepalivePolicy,
     view: &RouterView,
     rows: &FactorRows,
     timing: &KeepaliveTiming,
 ) -> Ceilings {
-    let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
-    let funding = agent
+    let fast = warming.current.as_ref().is_some_and(|o| o.recipe.fast);
+    let funding = warming
         .account
         .as_deref()
         .and_then(|id| view.snapshot.account(id))
@@ -4311,11 +4132,11 @@ pub(crate) fn ceilings_for(
         policy,
         rows.factors(
             funding,
-            &agent.canonical_model,
+            &warming.canonical_model,
             fast,
-            agent.current.as_ref().map_or(0, |o| o.expected),
+            warming.current.as_ref().map_or(0, |o| o.expected),
         ),
-        floor_ttl_ms(agent.ttl_ms),
+        floor_ttl_ms(warming.ttl_ms),
         timing,
         fast,
         rows,
@@ -4339,6 +4160,7 @@ pub(crate) fn ceilings_for(
 pub(crate) fn gate(
     view: &RouterView,
     agent: &Agent,
+    warming: &AgentWarming,
     session_id: &str,
     pool: &PoolRow,
     policy: &KeepalivePolicy,
@@ -4348,7 +4170,7 @@ pub(crate) fn gate(
     // A probe keeps the session on the account it warmed only while the pin outlives the probe's due time:
     // the recipe's own TTL less the lead, so a five-minute recipe needs about four minutes of pin and a
     // one-hour one about fifty-four. The save-time floor of 300 s stays the one hard refusal.
-    let due_after_ms = floor_ttl_ms(agent.ttl_ms) - agent.timing.lead_ms(agent.ttl_ms);
+    let due_after_ms = floor_ttl_ms(warming.ttl_ms) - warming.timing.lead_ms(warming.ttl_ms);
     if seconds_ms(pool.affinity_ttl_seconds) < due_after_ms {
         return Err(Gate::Hold(Reason::AffinityTooShort));
     }
@@ -4357,10 +4179,10 @@ pub(crate) fn gate(
     }
     // A recipe that names no incarnation of its holder cannot tell a re-paired account from the one that answered it,
     // so it waits for the agent's next request, which arms it.
-    let Some(incarnation) = agent.account_incarnation else {
+    let Some(incarnation) = warming.account_incarnation else {
         return Err(Gate::Hold(Reason::PinMoved));
     };
-    let holder = agent.account.clone().map(|account_id| Holder {
+    let holder = warming.account.clone().map(|account_id| Holder {
         account_id,
         incarnation,
     });
@@ -4373,7 +4195,7 @@ pub(crate) fn gate(
             key_id.clone(),
             session_id.to_string(),
             agent.id.clone(),
-            agent.canonical_model.clone(),
+            warming.canonical_model.clone(),
         ))
         .is_some_and(|pinned| holder.as_ref() != Some(pinned))
     {
@@ -4397,7 +4219,7 @@ pub(crate) fn gate(
     // A hold rather than a pause, read live on every poll like the budget below: an operator who turns the cancel
     // off, or a profile read that clears the plan-ended flag, releases the probe on the next tick.
     if let Some(term) = view.snapshot.term(&account.id) {
-        let last_interval = agent
+        let last_interval = warming
             .due_at()
             .zip(phoebis_routing::term::end_of(term, now))
             .is_some_and(|(due, end)| due + due_after_ms > end);
@@ -4405,7 +4227,7 @@ pub(crate) fn gate(
             return Err(Gate::Hold(Reason::IneligibleCredential));
         }
     }
-    let fast = agent
+    let fast = warming
         .current
         .as_ref()
         .map(|o| &o.recipe)
@@ -4414,7 +4236,7 @@ pub(crate) fn gate(
     // account and holds on its own lane's, as a fast request does.
     let cooled = view.cooled.iter().any(|((id, scope), window)| {
         id == &account.id
-            && phoebis_routing::cooldown_holds(scope, window, &agent.canonical_model, fast)
+            && phoebis_routing::cooldown_holds(scope, window, &warming.canonical_model, fast)
     });
     if cooled {
         return Err(Gate::Hold(Reason::Cooled));
@@ -4736,13 +4558,14 @@ mod tests {
 
     /// The gate's answer for `main` holding a recipe of that speed answered on `account`, with no pin in the view.
     fn gated_at(view: &RouterView, account: &str, fast: bool) -> Option<Gate> {
-        let mut agent = Agent::new("main", "k", 1, 0, KeepaliveTiming::default());
-        agent.account = Some(account.into());
-        agent.account_incarnation = Some(1);
-        agent.canonical_model = "claude-opus-5-5".into();
-        agent.current = Some(observation(fast));
-        refresh_policy(view, &mut agent)
-            .and_then(|(pool, policy, _)| gate(view, &agent, "s", pool, policy, 0))
+        let agent = Agent::new("main", "k", 1, 0);
+        let mut warming = AgentWarming::new(0, KeepaliveTiming::default());
+        warming.account = Some(account.into());
+        warming.account_incarnation = Some(1);
+        warming.canonical_model = "claude-opus-5-5".into();
+        warming.current = Some(observation(fast));
+        refresh_policy(view, &agent, &mut warming)
+            .and_then(|(pool, policy, _)| gate(view, &agent, &warming, "s", pool, policy, 0))
             .err()
     }
 
@@ -4768,22 +4591,22 @@ revisions:
         .unwrap();
         let rows = FactorRows::of(pricing.latest(), &PlanTables::shipped(), 0);
         let timing = KeepaliveTiming::default();
-        let mut agent = Agent::new("main", "k", 1, 0, timing);
-        agent.account = Some("a".into());
-        agent.canonical_model = "claude-opus-5-5".into();
-        agent.current = Some(observation(false));
+        let mut warming = AgentWarming::new(0, timing);
+        warming.account = Some("a".into());
+        warming.canonical_model = "claude-opus-5-5".into();
+        warming.current = Some(observation(false));
         let policy = KeepalivePolicy::default();
-        let break_even = |agent: &Agent| {
-            ceilings_for(agent, &policy, &pool_view(false), &rows, &timing).break_even_ms
+        let break_even = |warming: &AgentWarming| {
+            ceilings_for(warming, &policy, &pool_view(false), &rows, &timing).break_even_ms
         };
         assert_eq!(
-            break_even(&agent),
+            break_even(&warming),
             960_000,
             "over the threshold the long-context cells' 0.5 against 2.5 break even after 16 minutes"
         );
-        agent.current.as_mut().unwrap().expected = 1_000;
+        warming.current.as_mut().unwrap().expected = 1_000;
         assert_eq!(
-            break_even(&agent),
+            break_even(&warming),
             2_760_000,
             "at the threshold the standard cells' 0.1 against 1.25 break even after 46 minutes"
         );
@@ -4859,13 +4682,13 @@ revisions:
     }
 
     /// `main` of session `s` holding a standard recipe last answered on `account` under `incarnation`.
-    fn holding(account: &str, incarnation: Option<u64>) -> Agent {
-        let mut agent = Agent::new("main", "k", 1, 0, KeepaliveTiming::default());
-        agent.account = Some(account.into());
-        agent.account_incarnation = incarnation;
-        agent.canonical_model = "claude-opus-5-5".into();
-        agent.current = Some(observation(false));
-        agent
+    fn holding(account: &str, incarnation: Option<u64>) -> AgentWarming {
+        let mut warming = AgentWarming::new(0, KeepaliveTiming::default());
+        warming.account = Some(account.into());
+        warming.account_incarnation = incarnation;
+        warming.canonical_model = "claude-opus-5-5".into();
+        warming.current = Some(observation(false));
+        warming
     }
 
     /// `pool_view` with `main`'s pin on `account` under `incarnation`.
@@ -4885,9 +4708,10 @@ revisions:
     }
 
     /// The gate's whole answer for `agent` under `view`, after the policy's refresh.
-    fn gate_of(view: &RouterView, agent: &mut Agent) -> Result<Holder, Gate> {
-        refresh_policy(view, agent)
-            .and_then(|(pool, policy, _)| gate(view, agent, "s", pool, policy, 0))
+    fn gate_of(view: &RouterView, warming: &mut AgentWarming) -> Result<Holder, Gate> {
+        let agent = Agent::new("main", "k", 1, 0);
+        refresh_policy(view, &agent, warming)
+            .and_then(|(pool, policy, _)| gate(view, &agent, warming, "s", pool, policy, 0))
     }
 
     fn holder(account: &str, incarnation: u64) -> Holder {
@@ -4944,21 +4768,23 @@ revisions:
                 slotted: true,
                 restored_until: None,
                 instance_mismatches: 0,
-                agents: BTreeMap::from([("main".to_string(), armed)]),
+                agents: BTreeMap::from([("main".to_string(), Agent::new("main", "k", 1, 0))]),
                 cache_warming: true,
             },
         );
+        let warming_agents = BTreeMap::from([("main".to_string(), armed)]);
+        inner.warming_agents.insert(key.clone(), warming_agents);
         inner.set_aside(&key, "main", 1_000);
         // The arrival's selection moved the agent onto the holder of the request that then failed.
-        let agent = agent_mut(&mut inner.sessions, &key, "main").expect(AGENT_HELD);
-        agent.account = Some("o".into());
-        agent.account_incarnation = Some(3);
+        let warming = warming_mut(&mut inner.warming_agents, &key, "main").expect(AGENT_HELD);
+        warming.account = Some("o".into());
+        warming.account_incarnation = Some(3);
         let aside = inner
             .take_aside(&key, "main")
             .expect("the arrival set the recipe aside");
         assert!(inner.rearm_aside(&key, "main", aside, 2_000));
-        let agent = agent_mut(&mut inner.sessions, &key, "main").expect(AGENT_HELD);
-        assert_eq!(gate_of(&pinned_on("a", 1), agent), Ok(holder("a", 1)));
+        let warming = warming_mut(&mut inner.warming_agents, &key, "main").expect(AGENT_HELD);
+        assert_eq!(gate_of(&pinned_on("a", 1), warming), Ok(holder("a", 1)));
     }
 
     #[test]

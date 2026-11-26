@@ -6,7 +6,10 @@ use std::sync::Arc;
 
 use phoebis_ledger::{KeepaliveAgents, KeepaliveGaugeSource};
 
-use crate::engine::{Agent, AgentState, Engine, Guard, Park, ParkKind, Reason, MAIN_AGENT};
+use crate::engine::{
+    Agent, AgentState, Engine, Guard, Park, ParkKind, Reason, AGENT_HELD, MAIN_AGENT,
+};
+use crate::warming::agent::{warming_ref, AgentWarming};
 
 /// The Sessions row's one word for an agent's recipe, read off the engine's reason beside its pause bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -103,9 +106,9 @@ pub enum Lifecycle {
 
 impl Lifecycle {
     /// The agent's word, read off its state and its reason together, so every view words one record alike.
-    fn of(agent: &Agent) -> Lifecycle {
+    fn of(agent: &Agent, warming: &AgentWarming) -> Lifecycle {
         match agent.state {
-            AgentState::Busy if agent.reason == Reason::AwaitingRequest => Lifecycle::Registered,
+            AgentState::Busy if warming.reason == Reason::AwaitingRequest => Lifecycle::Registered,
             AgentState::Busy => Lifecycle::Busy,
             AgentState::Idle => Lifecycle::Idle,
             AgentState::Parked => Lifecycle::Parked,
@@ -198,40 +201,46 @@ pub struct SessionView {
 /// The ledger's record of the agent gauge, so the overview's counts and the scrape's are one type.
 pub type AgentCounts = KeepaliveAgents;
 
-fn holds_recipe(agent: &Agent) -> bool {
-    agent.current.as_ref().is_some_and(|o| o.ready)
+fn holds_recipe(warming: &AgentWarming) -> bool {
+    warming.current.as_ref().is_some_and(|o| o.ready)
 }
 
-fn recipe_of(agent: &Agent, key_id: &str, session_id: &str, now: i64) -> RecipeView {
-    let (probes_today, credited_today) = agent.counts_today(now);
+fn recipe_of(
+    agent: &Agent,
+    warming: &AgentWarming,
+    key_id: &str,
+    session_id: &str,
+    now: i64,
+) -> RecipeView {
+    let (probes_today, credited_today) = warming.counts_today(now);
     let (deadline, park_kind, wake_at) = Park::parts(agent.park.map(|held| held.park));
     RecipeView {
-        account_id: agent.account.clone(),
+        account_id: warming.account.clone(),
         agent_id: agent.id.clone(),
-        agent_state: Lifecycle::of(agent),
-        cause: agent.reason,
+        agent_state: Lifecycle::of(agent, warming),
+        cause: warming.reason,
         credited_today,
         deadline,
         key_id: key_id.into(),
-        last_guard: agent.last_guard,
-        last_probe_at: agent.last_probe_at,
-        last_request_at: agent.last_real_at,
-        model: agent.canonical_model.clone(),
-        next_probe_at: agent.next_probe_at(),
+        last_guard: warming.last_guard,
+        last_probe_at: warming.last_probe_at,
+        last_request_at: warming.last_real_at,
+        model: warming.canonical_model.clone(),
+        next_probe_at: warming.next_probe_at(),
         park_kind,
-        pool_id: agent.pool_id.clone(),
+        pool_id: warming.pool_id.clone(),
         probes_today,
         session_id: session_id.into(),
-        state: match recipe_state(agent.reason, agent.paused) {
+        state: match recipe_state(warming.reason, warming.paused) {
             // A refusal at the selection leaves a held word behind with nothing kept, as a failed request that found
             // no recipe armed leaves a retained one, and a held or retained state says the prompt is kept. A request
             // still awaiting its selection or its evidence keeps its observation.
-            RecipeState::Held | RecipeState::Retained if agent.current.is_none() => {
+            RecipeState::Held | RecipeState::Retained if warming.current.is_none() => {
                 RecipeState::NotRetained
             }
             state => state,
         },
-        ttl_seconds: agent.ttl_ms / 1_000,
+        ttl_seconds: warming.ttl_ms / 1_000,
         wake_at,
     }
 }
@@ -245,15 +254,22 @@ impl Engine {
             .sessions
             .iter()
             .map(|(key, s)| {
+                let warming_of = |agent_id: &str| {
+                    warming_ref(&inner.warming_agents, key, agent_id).expect(AGENT_HELD)
+                };
                 let main = s.agents.get(MAIN_AGENT);
                 // Main's recipe stands for the session. Where main holds none, the newest other agent's does, so a
                 // session whose main sent auxiliary calls alone while a subagent works still reads a recipe.
-                let summary = main.filter(|a| holds_recipe(a)).or_else(|| {
-                    s.agents
-                        .values()
-                        .filter(|a| holds_recipe(a))
-                        .max_by_key(|a| a.last_real_at)
-                });
+                let summary = main
+                    .map(|agent| (agent, warming_of(MAIN_AGENT)))
+                    .filter(|(_, warming)| holds_recipe(warming))
+                    .or_else(|| {
+                        s.agents
+                            .iter()
+                            .map(|(id, agent)| (agent, warming_of(id)))
+                            .filter(|(_, warming)| holds_recipe(warming))
+                            .max_by_key(|(_, warming)| warming.last_real_at)
+                    });
                 // An ended session keeps its tombstone for the lifecycle protocol, but its companion is
                 // gone: the engine refuses further events under that instance, and the lease sweep leaves an
                 // ended session alone, so `attended` stays as the last heartbeat left it.
@@ -278,14 +294,14 @@ impl Engine {
                     // of such a session.
                     keepalive: if s.cache_warming {
                         KeepaliveSummary {
-                            cause: summary.map(|a| a.reason),
-                            last_guard: summary.and_then(|a| a.last_guard),
+                            cause: summary.map(|(_, warming)| warming.reason),
+                            last_guard: summary.and_then(|(_, warming)| warming.last_guard),
                             next_probe_at: s
                                 .agents
-                                .values()
-                                .filter_map(|a| a.next_probe_at())
+                                .keys()
+                                .filter_map(|id| warming_of(id).next_probe_at())
                                 .min(),
-                            state: summary.map(|a| a.state.into()),
+                            state: summary.map(|(agent, _)| agent.state.into()),
                         }
                     } else {
                         KeepaliveSummary {
@@ -298,7 +314,7 @@ impl Engine {
                     lifecycles: s
                         .agents
                         .iter()
-                        .map(|(id, a)| (id.clone(), Lifecycle::of(a)))
+                        .map(|(id, a)| (id.clone(), Lifecycle::of(a, warming_of(id))))
                         .collect(),
                     presence_age_seconds: main
                         .and_then(|a| a.last_presence_at)
@@ -316,26 +332,35 @@ impl Engine {
         self.expire();
         let now = self.now();
         let inner = self.lock();
+        let warming_agents = &inner.warming_agents;
         inner
             .sessions
             .iter()
             .flat_map(|(key, s)| {
                 s.agents
-                    .values()
-                    .filter(|a| a.last_real_at.is_some())
-                    .map(move |a| recipe_of(a, &key.0, &key.1, now))
+                    .iter()
+                    .map(move |(id, a)| {
+                        (a, warming_ref(warming_agents, key, id).expect(AGENT_HELD))
+                    })
+                    .filter(|(_, warming)| warming.last_real_at.is_some())
+                    .map(move |(a, warming)| recipe_of(a, warming, &key.0, &key.1, now))
             })
             .collect()
     }
 
     pub fn agent_counts(&self) -> AgentCounts {
         let inner = self.lock();
+        let warming_agents = &inner.warming_agents;
         let mut counts = AgentCounts::default();
-        for agent in inner
+        for (agent, _) in inner
             .sessions
-            .values()
-            .flat_map(|s| s.agents.values())
-            .filter(|a| holds_recipe(a))
+            .iter()
+            .flat_map(|(key, s)| {
+                s.agents.iter().map(move |(id, a)| {
+                    (a, warming_ref(warming_agents, key, id).expect(AGENT_HELD))
+                })
+            })
+            .filter(|(_, warming)| holds_recipe(warming))
         {
             match agent.state {
                 AgentState::Busy => counts.busy += 1,

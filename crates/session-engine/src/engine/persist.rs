@@ -26,11 +26,12 @@ use crate::engine::{
     agent_mut, agent_ref, Agent, AgentState, Engine, Guard, HeldPark, IdleEpisode,
     IdleReturnBucket, Inner, Kept, Observation, Park, ParkKind, PrefixAnchor, PriorCoverage,
     ProbeCharge, Reason, SavingsUnit, Session, SessionKey, Settlement, UnansweredProbe, Wasted,
-    MAIN_AGENT,
+    AGENT_HELD, MAIN_AGENT,
 };
 use crate::sessions::facts::{
     AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts, StoredSessionFacts,
 };
+use crate::warming::agent::{warming_mut, warming_ref, AgentWarming};
 use crate::warming::recipe::Recipe;
 use crate::warming::savings::{AttemptFunding, RowClient};
 use crate::warming::usage::ProbeUsage;
@@ -97,9 +98,9 @@ pub(crate) struct PersistedSession {
     pub cache_warming: bool,
 }
 
-/// Every field of `Agent` but `in_flight`, with the observation's fields and the recipe's own beside it. The prompt,
-/// its header block, its size, its speed and the dispatch TTL are the row's columns, so the body is sealed apart
-/// from the payload.
+/// An agent's saved members, from its `Agent` and its `AgentWarming`, with the observation's fields and the recipe's
+/// own beside them. The prompt, its header block, its size, its speed and the dispatch TTL are the row's columns, so
+/// the body is sealed apart from the payload.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct PersistedAgent {
     pub id: String,
@@ -486,12 +487,12 @@ impl PersistedSession {
 }
 
 impl PersistedAgent {
-    fn of(agent: &Agent) -> PersistedAgent {
+    fn of(agent: &Agent, warming: &AgentWarming) -> PersistedAgent {
         let (deadline, park_kind, wake_at) = Park::parts(agent.park.map(|held| held.park));
         PersistedAgent {
             id: agent.id.clone(),
             key_id: agent.key_id.clone(),
-            key_generation: agent.key_generation,
+            key_generation: warming.key_generation,
             incarnation: agent.incarnation,
             state: agent.state,
             deadline,
@@ -499,21 +500,24 @@ impl PersistedAgent {
             wake_at,
             park_began: agent.park.map(|held| held.began),
             park_ended_at: agent.park_ended_at,
-            idle_episode: agent.idle_episode.as_ref().map(|episode| PersistedEpisode {
-                started: episode.started,
-                bucket: episode.bucket,
-                anchor: episode.anchor.as_ref().map(PersistedAnchor::of),
-                anchor_marked: episode.anchor.as_ref().and_then(|a| a.marked.clone()),
-                prompt_at: episode.prompt_at,
-                pool_key: episode.pool_key.clone(),
-                bucket_day: episode.bucket_day,
-            }),
-            idle_window_floor: agent.idle_window_floor,
-            last_prefix: agent.last_prefix.as_ref().map(PersistedAnchor::of),
-            last_prefix_marked: agent.last_prefix.as_ref().and_then(|a| a.marked.clone()),
-            last_prompt_tokens: agent.last_prompt_tokens,
+            idle_episode: warming
+                .idle_episode
+                .as_ref()
+                .map(|episode| PersistedEpisode {
+                    started: episode.started,
+                    bucket: episode.bucket,
+                    anchor: episode.anchor.as_ref().map(PersistedAnchor::of),
+                    anchor_marked: episode.anchor.as_ref().and_then(|a| a.marked.clone()),
+                    prompt_at: episode.prompt_at,
+                    pool_key: episode.pool_key.clone(),
+                    bucket_day: episode.bucket_day,
+                }),
+            idle_window_floor: warming.idle_window_floor,
+            last_prefix: warming.last_prefix.as_ref().map(PersistedAnchor::of),
+            last_prefix_marked: warming.last_prefix.as_ref().and_then(|a| a.marked.clone()),
+            last_prompt_tokens: warming.last_prompt_tokens,
             generation: agent.generation,
-            current: agent.current.as_ref().map(|o| PersistedObservation {
+            current: warming.current.as_ref().map(|o| PersistedObservation {
                 id: o.id.clone(),
                 attempt: o.attempt,
                 started: o.started,
@@ -543,28 +547,31 @@ impl PersistedAgent {
                 usage_based: o.funding.usage_based,
                 in_overage: o.funding.in_overage,
             }),
-            expires: agent.expires,
+            expires: warming.expires,
             leaves_at: agent.leaves_at,
-            jitter_frac: agent.jitter_frac,
-            retry_at: agent.retry_at,
+            jitter_frac: warming.jitter_frac,
+            retry_at: warming.retry_at,
             last_activity: agent.last_activity,
-            cache_started: agent.cache_started,
-            ttl_ms: agent.ttl_ms,
-            cold: agent.cold,
-            failures: agent.failures,
-            account: agent.account.clone(),
-            account_incarnation: agent.account_incarnation,
-            pool_id: agent.pool_id.clone(),
-            canonical_model: agent.canonical_model.clone(),
-            entrypoint: agent.entrypoint.clone(),
-            client_label: agent.current.as_ref().and_then(|o| o.client_label.clone()),
-            reason: agent.reason,
-            last_guard: agent.last_guard,
-            hold_counted: agent.hold_counted,
-            paused: agent.paused,
-            probes: agent.probes,
-            usage: persisted_usage(&agent.usage),
-            unanswered: agent
+            cache_started: warming.cache_started,
+            ttl_ms: warming.ttl_ms,
+            cold: warming.cold,
+            failures: warming.failures,
+            account: warming.account.clone(),
+            account_incarnation: warming.account_incarnation,
+            pool_id: warming.pool_id.clone(),
+            canonical_model: warming.canonical_model.clone(),
+            entrypoint: warming.entrypoint.clone(),
+            client_label: warming
+                .current
+                .as_ref()
+                .and_then(|o| o.client_label.clone()),
+            reason: warming.reason,
+            last_guard: warming.last_guard,
+            hold_counted: warming.hold_counted,
+            paused: warming.paused,
+            probes: warming.probes,
+            usage: persisted_usage(&warming.usage),
+            unanswered: warming
                 .unanswered
                 .iter()
                 .map(|probe| PersistedUnanswered {
@@ -578,7 +585,7 @@ impl PersistedAgent {
                     covered: probe.covered,
                 })
                 .collect(),
-            kept: agent
+            kept: warming
                 .kept
                 .iter()
                 .map(|kept| PersistedKept {
@@ -594,14 +601,14 @@ impl PersistedAgent {
                     pending: kept.pending,
                 })
                 .collect(),
-            last_real_at: agent.last_real_at,
-            last_answered_at: agent.last_answered_at,
-            last_stop: agent.last_stop,
+            last_real_at: warming.last_real_at,
+            last_answered_at: warming.last_answered_at,
+            last_stop: warming.last_stop,
             last_presence_at: agent.last_presence_at,
-            last_probe_at: agent.last_probe_at,
-            probes_today: agent.probes_today,
-            credited_today: agent.credited_today,
-            counters_day: agent.counters_day,
+            last_probe_at: warming.last_probe_at,
+            probes_today: warming.probes_today,
+            credited_today: warming.credited_today,
+            counters_day: warming.counters_day,
         }
     }
 
@@ -610,14 +617,9 @@ impl PersistedAgent {
     /// one this build does not know. The timing is the engine's, the binary's fixed numbers, which the build a restart
     /// brings may have changed.
     fn restore(self, timing: KeepaliveTiming) -> Option<Decoded> {
-        let mut agent = Agent::new(
-            &self.id,
-            &self.key_id,
-            self.incarnation,
-            self.last_activity,
-            timing,
-        );
-        agent.key_generation = self.key_generation;
+        let mut agent = Agent::new(&self.id, &self.key_id, self.incarnation, self.last_activity);
+        let mut warming = AgentWarming::new(self.last_activity, timing);
+        warming.key_generation = self.key_generation;
         agent.state = self.state;
         agent.park = self
             .park_kind
@@ -628,7 +630,7 @@ impl PersistedAgent {
                 park: Park::new(kind, self.deadline, self.wake_at),
             });
         agent.park_ended_at = self.park_ended_at;
-        agent.idle_episode = self.idle_episode.map(|episode| IdleEpisode {
+        warming.idle_episode = self.idle_episode.map(|episode| IdleEpisode {
             started: episode.started,
             bucket: episode.bucket,
             anchor: episode
@@ -638,32 +640,32 @@ impl PersistedAgent {
             pool_key: episode.pool_key,
             bucket_day: episode.bucket_day,
         });
-        agent.idle_window_floor = self.idle_window_floor;
-        agent.last_prefix = self
+        warming.idle_window_floor = self.idle_window_floor;
+        warming.last_prefix = self
             .last_prefix
             .map(|anchor| anchor.restore(self.last_prefix_marked));
-        agent.last_prompt_tokens = self.last_prompt_tokens;
+        warming.last_prompt_tokens = self.last_prompt_tokens;
         agent.generation = self.generation;
-        agent.expires = self.expires;
+        warming.expires = self.expires;
         agent.leaves_at = self.leaves_at;
-        agent.jitter_frac = self.jitter_frac;
-        agent.retry_at = self.retry_at;
-        agent.cache_started = self.cache_started;
-        agent.ttl_ms = self.ttl_ms;
-        agent.cold = self.cold;
-        agent.failures = self.failures;
-        agent.account = self.account;
-        agent.account_incarnation = self.account_incarnation;
-        agent.pool_id = self.pool_id;
-        agent.canonical_model = self.canonical_model;
-        agent.reason = self.reason;
-        agent.last_guard = self.last_guard;
-        agent.entrypoint = self.entrypoint;
-        agent.hold_counted = self.hold_counted;
-        agent.paused = self.paused;
-        agent.probes = self.probes;
-        agent.usage = probe_usage(self.usage);
-        agent.unanswered = self
+        warming.jitter_frac = self.jitter_frac;
+        warming.retry_at = self.retry_at;
+        warming.cache_started = self.cache_started;
+        warming.ttl_ms = self.ttl_ms;
+        warming.cold = self.cold;
+        warming.failures = self.failures;
+        warming.account = self.account;
+        warming.account_incarnation = self.account_incarnation;
+        warming.pool_id = self.pool_id;
+        warming.canonical_model = self.canonical_model;
+        warming.reason = self.reason;
+        warming.last_guard = self.last_guard;
+        warming.entrypoint = self.entrypoint;
+        warming.hold_counted = self.hold_counted;
+        warming.paused = self.paused;
+        warming.probes = self.probes;
+        warming.usage = probe_usage(self.usage);
+        warming.unanswered = self
             .unanswered
             .into_iter()
             .map(|probe| {
@@ -679,7 +681,7 @@ impl PersistedAgent {
                 })
             })
             .collect::<Option<_>>()?;
-        agent.kept = self
+        warming.kept = self
             .kept
             .into_iter()
             .map(|kept| {
@@ -697,16 +699,16 @@ impl PersistedAgent {
                 })
             })
             .collect::<Option<_>>()?;
-        agent.last_real_at = self.last_real_at;
-        agent.last_answered_at = self.last_answered_at;
-        agent.last_stop = self.last_stop;
+        warming.last_real_at = self.last_real_at;
+        warming.last_answered_at = self.last_answered_at;
+        warming.last_stop = self.last_stop;
         agent.last_presence_at = self.last_presence_at;
-        agent.last_probe_at = self.last_probe_at;
-        agent.probes_today = self.probes_today;
-        agent.credited_today = self.credited_today;
-        agent.counters_day = self.counters_day;
+        warming.last_probe_at = self.last_probe_at;
+        warming.probes_today = self.probes_today;
+        warming.credited_today = self.credited_today;
+        warming.counters_day = self.counters_day;
         let current = self.current.map(|current| (current, self.client_label));
-        Some((agent, current))
+        Some((agent, warming, current))
     }
 }
 
@@ -790,15 +792,16 @@ fn session_row(
 fn agent_row(
     key: &PersistKey,
     agent: &Agent,
+    warming: &AgentWarming,
     now: i64,
 ) -> Result<(KeepaliveAgentRow, Option<Bytes>), serde_json::Error> {
-    let recipe = agent.current.as_ref().map(|o| &o.recipe);
+    let recipe = warming.current.as_ref().map(|o| &o.recipe);
     let no_headers: &[(String, String)] = &[];
     let (body_write, sealed_body) = match recipe {
-        Some(recipe) if agent.body_dirty => {
+        Some(recipe) if warming.body_dirty => {
             (BodyWrite::Seal(Vec::new()), Some(recipe.body.clone()))
         }
-        None if agent.body_saved => (BodyWrite::Clear, None),
+        None if warming.body_saved => (BodyWrite::Clear, None),
         _ => (BodyWrite::Keep, None),
     };
     let row = KeepaliveAgentRow {
@@ -807,12 +810,12 @@ fn agent_row(
         session_id: key.2.clone(),
         agent_id: agent.id.clone(),
         record_version: RECORD_VERSION,
-        payload: serde_json::to_string(&PersistedAgent::of(agent))?,
+        payload: serde_json::to_string(&PersistedAgent::of(agent, warming))?,
         body: None,
         body_write,
         headers: serde_json::to_string(recipe.map_or(no_headers, |r| r.headers.as_slice()))?,
         body_size: recipe.map_or(0, |r| r.size),
-        dispatched_ms: agent.current.as_ref().and_then(|o| o.dispatched_ms),
+        dispatched_ms: warming.current.as_ref().and_then(|o| o.dispatched_ms),
         fast: recipe.is_some_and(|r| r.fast),
         updated_at: now,
     };
@@ -864,7 +867,11 @@ type Loaded = (
 );
 
 /// An agent row read back: the agent, and its observation's fields with its client label when it carried a recipe.
-type Decoded = (Agent, Option<(PersistedObservation, Option<String>)>);
+type Decoded = (
+    Agent,
+    AgentWarming,
+    Option<(PersistedObservation, Option<String>)>,
+);
 
 /// The agent a row describes, `None` when its version or a word in its payload is one this build does not read.
 fn decode_agent(row: &KeepaliveAgentRow, timing: KeepaliveTiming) -> Option<Decoded> {
@@ -1041,7 +1048,13 @@ impl Inner {
                 .session_of(row)
                 .and_then(|session| session.agents.get(agent_id))
             {
-                match agent_row(row, agent, now) {
+                let warming = warming_ref(
+                    &self.warming_agents,
+                    &(row.0.clone(), row.2.clone()),
+                    agent_id,
+                )
+                .expect(AGENT_HELD);
+                match agent_row(row, agent, warming, now) {
                     Ok((agent_row, body)) => {
                         let sealed = match agent_row.body_write {
                             BodyWrite::Keep => None,
@@ -1136,15 +1149,23 @@ impl Inner {
         for ((row, agent_id), revision, sealed) in &snapshot.bodies {
             let unchanged =
                 self.dirty.agents.get(&(row.clone(), agent_id.clone())) == Some(revision);
-            if let Some(agent) = self
+            if let Some(warming) = self
                 .sessions
-                .get_mut(&(row.0.clone(), row.2.clone()))
+                .get(&(row.0.clone(), row.2.clone()))
                 .filter(|session| session.key_generation == row.1)
-                .and_then(|session| session.agents.get_mut(agent_id))
+                .and_then(|session| session.agents.get(agent_id))
+                .map(|_| {
+                    warming_mut(
+                        &mut self.warming_agents,
+                        &(row.0.clone(), row.2.clone()),
+                        agent_id,
+                    )
+                    .expect(AGENT_HELD)
+                })
             {
-                agent.body_saved = *sealed;
+                warming.body_saved = *sealed;
                 if unchanged {
-                    agent.body_dirty = false;
+                    warming.body_dirty = false;
                 }
             }
         }
@@ -1193,11 +1214,11 @@ impl Inner {
             tally.recipes += 1;
             *self.reasons.entry(Reason::Evicted).or_default() += 1;
         }
-        let Some((mut agent, _)) = decoded else {
+        let Some((_, mut warming, _)) = decoded else {
             return;
         };
         self.settlements
-            .extend(agent.settle_all(key, Wasted::Evicted));
+            .extend(warming.settle_all(key, Wasted::Evicted));
     }
 
     /// `discard` for a recipe the load does not keep. The generation stays: nothing from before the restart can
@@ -1321,6 +1342,7 @@ impl Inner {
                 continue;
             }
             let mut session = payload.restore(now);
+            let mut warming_agents = BTreeMap::new();
             // A session that has sent no real request the caps admit holds no slot of either cap, so it passes both
             // bounds and counts toward neither.
             let holds_slot = session.holds_slot();
@@ -1348,7 +1370,7 @@ impl Inner {
                     .then_with(|| a.agent_id.cmp(&b.agent_id))
             });
             for (mut agent_row, decoded) in agents {
-                let Some((mut agent, observation)) = decoded else {
+                let Some((agent, mut warming, observation)) = decoded else {
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
                     continue;
                 };
@@ -1362,12 +1384,12 @@ impl Inner {
                 }
                 // Read off the row rather than the opened body, so a blob that no longer opens is cleared by the
                 // agent's next save.
-                agent.body_saved = agent_row.body_size > 0;
+                warming.body_saved = agent_row.body_size > 0;
                 if holds_slot && agent_count >= limits.max_agents {
                     self.dispose_loaded(
                         &key,
                         &agent_row,
-                        Some((agent, observation)),
+                        Some((agent, warming, observation)),
                         &mut by_agents,
                     );
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
@@ -1393,7 +1415,8 @@ impl Inner {
                     // gone, and the agent keeps everything else.
                     (Some(_), None) => unopened.push((key.clone(), agent_id.clone())),
                 }
-                session.agents.insert(agent_id, agent);
+                session.agents.insert(agent_id.clone(), agent);
+                warming_agents.insert(agent_id, warming);
                 if holds_slot {
                     agent_count += 1;
                 }
@@ -1401,7 +1424,8 @@ impl Inner {
             if holds_slot {
                 live_sessions += 1;
             }
-            self.sessions.insert(key, session);
+            self.sessions.insert(key.clone(), session);
+            self.warming_agents.insert(key, warming_agents);
         }
         // Agent rows whose session row is gone or was dropped above.
         for (stored, rows) in by_session {
@@ -1417,10 +1441,10 @@ impl Inner {
         for (_, key, agent_id, observation) in held {
             let size = observation.recipe.size;
             self.retained += size;
-            let agent = agent_mut(&mut self.sessions, &key, &agent_id)
+            let warming = warming_mut(&mut self.warming_agents, &key, &agent_id)
                 .expect("the agent the load just restored");
-            let expires = agent.expires;
-            agent.current = Some(observation);
+            let expires = warming.expires;
+            warming.current = Some(observation);
             if let Some(expires) = expires.filter(|expires| *expires <= now) {
                 tracing::info!(
                     key = %key.0,
@@ -1757,9 +1781,10 @@ mod tests {
 
     #[test]
     fn a_persisted_agent_without_an_entrypoint_loads_with_none() {
-        let mut agent = Agent::new("main", "k", 1, 0, KeepaliveTiming::default());
-        agent.entrypoint = Some("cli".into());
-        let payload = serde_json::to_value(PersistedAgent::of(&agent)).unwrap();
+        let agent = Agent::new("main", "k", 1, 0);
+        let mut warming = AgentWarming::new(0, KeepaliveTiming::default());
+        warming.entrypoint = Some("cli".into());
+        let payload = serde_json::to_value(PersistedAgent::of(&agent, &warming)).unwrap();
         let saved: PersistedAgent = serde_json::from_value(payload.clone()).unwrap();
         assert_eq!(
             saved.entrypoint.as_deref(),
@@ -1774,7 +1799,7 @@ mod tests {
         let loaded: PersistedAgent =
             serde_json::from_value(before).expect("a payload saved before the member loads");
         assert_eq!(loaded.entrypoint, None);
-        let (restored, _) = loaded
+        let (_, restored, _) = loaded
             .restore(KeepaliveTiming::default())
             .expect("every word of the payload is known");
         assert_eq!(
@@ -1785,8 +1810,9 @@ mod tests {
 
     #[test]
     fn a_settlement_payload_without_a_window_reads_five_hour_and_one_naming_the_week_keeps_it() {
-        let mut agent = Agent::new("main", "k", 1, 0, KeepaliveTiming::default());
-        agent.unanswered.push(UnansweredProbe {
+        let agent = Agent::new("main", "k", 1, 0);
+        let mut warming = AgentWarming::new(0, KeepaliveTiming::default());
+        warming.unanswered.push(UnansweredProbe {
             id: "probe".into(),
             charge: ProbeCharge {
                 account: Some("o".into()),
@@ -1807,7 +1833,7 @@ mod tests {
             expires: 0,
             covered: true,
         });
-        let payload = serde_json::to_value(PersistedAgent::of(&agent)).unwrap();
+        let payload = serde_json::to_value(PersistedAgent::of(&agent, &warming)).unwrap();
         assert_eq!(
             payload["unanswered"][0]["window"].as_str(),
             Some("seven_day"),
@@ -1818,7 +1844,7 @@ mod tests {
             serde_json::from_value::<PersistedAgent>(payload)
                 .expect("the payload loads")
                 .restore(KeepaliveTiming::default())
-                .map(|(agent, _)| agent.unanswered[0].window)
+                .map(|(_, warming, _)| warming.unanswered[0].window)
         };
         assert_eq!(
             window_of_restored(payload.clone()),

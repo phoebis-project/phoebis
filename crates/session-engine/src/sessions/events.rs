@@ -15,6 +15,7 @@ use crate::engine::{
     ParkKind, Reason, Session, SessionKey, Wasted, AGENT_HELD, MAIN_AGENT,
 };
 use crate::sessions::facts::{AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts};
+use crate::warming::agent::{warming_mut, warming_ref, AgentWarming};
 
 pub(crate) const PROTOCOL: u64 = 1;
 
@@ -681,9 +682,11 @@ impl Inner {
                         Some(Wasted::SessionEnded),
                     );
                     let agent = agent_mut(&mut self.sessions, &key, agent_id).expect(AGENT_HELD);
+                    let warming =
+                        warming_mut(&mut self.warming_agents, &key, agent_id).expect(AGENT_HELD);
                     agent.set_state(AgentState::Released);
                     // A session's end is no return, so main's window ends with it.
-                    agent.close_idle_episode();
+                    warming.close_idle_episode(agent);
                     // The leave counts from the first release, so a record the mod released before the end keeps it.
                     if agent.leaves_at.is_none() {
                         self.release_record(&key, agent_id, now, snapshot);
@@ -710,14 +713,18 @@ impl Inner {
                         {
                             return Err(err("agent_exists", 409));
                         }
-                        let released = self.sessions[&key].agents[&agent_id].last_stop;
+                        let released = warming_ref(&self.warming_agents, &key, &agent_id)
+                            .expect(AGENT_HELD)
+                            .last_stop;
                         self.discard(&key, &agent_id, Reason::AwaitingRequest, None);
                         let agent =
                             agent_mut(&mut self.sessions, &key, &agent_id).expect(AGENT_HELD);
+                        let warming = warming_mut(&mut self.warming_agents, &key, &agent_id)
+                            .expect(AGENT_HELD);
                         // The release's label stays until the late result lands, so a probe the release orphaned
                         // settles under it rather than under nothing.
-                        agent.last_stop = released;
-                        agent.resume(now);
+                        warming.last_stop = released;
+                        agent.resume(warming, now);
                     }
                     None => {
                         if self.agent_count() >= self.limits.max_agents {
@@ -726,8 +733,11 @@ impl Inner {
                         let incarnation = self.incarnation();
                         self.sessions.get_mut(&key).unwrap().agents.insert(
                             agent_id.clone(),
-                            Agent::new(&agent_id, &key.0, incarnation, now, self.timing),
+                            Agent::new(&agent_id, &key.0, incarnation, now),
                         );
+                        let warming = AgentWarming::new(now, self.timing);
+                        let warming_agents = self.warming_agents.get_mut(&key).unwrap();
+                        warming_agents.insert(agent_id.clone(), warming);
                         self.set_reason(&key, &agent_id, Reason::AwaitingRequest);
                     }
                 }
@@ -737,21 +747,24 @@ impl Inner {
                 request_generation,
                 ..
             } => {
-                let agent = self.reported_agent(&key, &agent_id, *request_generation)?;
+                self.reported_agent(&key, &agent_id, *request_generation)?;
+                let agent = agent_mut(&mut self.sessions, &key, &agent_id).expect(AGENT_HELD);
+                let warming =
+                    warming_mut(&mut self.warming_agents, &key, &agent_id).expect(AGENT_HELD);
                 // A person at the terminal says nothing about the agent's work, so presence moves the idle clock
                 // alone.
                 if *presence {
                     // An open window stays open, since a person at the terminal has not come back to the conversation
                     // until a request says so. Presence moves the next window's start on purpose, so the floor goes: a
                     // clock that stepped back would otherwise leave that start behind the last close.
-                    agent.idle_window_floor = None;
+                    warming.idle_window_floor = None;
                     agent.last_presence_at = Some(now);
                 }
                 agent.last_activity = now;
                 if !presence {
                     // The request this prompt announces is judged at the window's age now, however many ticks
                     // pass before it arrives. The window's start stays where it is.
-                    if let Some(episode) = agent.idle_episode.as_mut() {
+                    if let Some(episode) = warming.idle_episode.as_mut() {
                         episode.prompt_at = Some(now);
                     }
                     agent.set_state(AgentState::Busy);
@@ -791,22 +804,25 @@ impl Inner {
                 state,
                 ..
             } => {
-                let agent = self.reported_agent(&key, &agent_id, *request_generation)?;
+                self.reported_agent(&key, &agent_id, *request_generation)?;
+                let agent = agent_mut(&mut self.sessions, &key, &agent_id).expect(AGENT_HELD);
+                let warming =
+                    warming_mut(&mut self.warming_agents, &key, &agent_id).expect(AGENT_HELD);
                 let was = agent.state;
                 let state = *state;
                 // The mod's heartbeat closes a command past its deadline or sees the wake pass, and reports idle
                 // before or after the router's tick does: a park that ended without a request, which restarts the
                 // idle window. A request behind a busy report moves the window itself.
                 if was == AgentState::Parked && state == AgentState::Idle {
-                    agent.close_idle_episode();
-                    agent.idle_window_floor = None;
+                    warming.close_idle_episode(agent);
+                    warming.idle_window_floor = None;
                     agent.park_ended_at = Some(now);
                 } else if state == AgentState::Released {
                     // A released main is the end of its session's window, as `session_end` is.
-                    agent.close_idle_episode();
+                    warming.close_idle_episode(agent);
                 } else if state == AgentState::Idle {
                     // A prompt that sent no request, such as a local command: the window goes on.
-                    if let Some(episode) = agent.idle_episode.as_mut() {
+                    if let Some(episode) = warming.idle_episode.as_mut() {
                         episode.prompt_at = None;
                     }
                 }
@@ -849,8 +865,10 @@ impl Inner {
             Reported::Parked { .. } | Reported::State { .. }
         ) && agent_id == MAIN_AGENT
         {
-            if let Some(main) = agent_mut(&mut self.sessions, &key, MAIN_AGENT) {
-                open_idle_episode(main, snapshot);
+            if let Some(main) = agent_ref(&self.sessions, &key, MAIN_AGENT) {
+                let warming =
+                    warming_mut(&mut self.warming_agents, &key, MAIN_AGENT).expect(AGENT_HELD);
+                open_idle_episode(main, warming, snapshot);
             }
         }
         Ok(Applied {
@@ -942,7 +960,9 @@ impl Inner {
                     // starts again as a registration starts it. The subagents stay released until the mod starts
                     // them again, and every generation stays as the end left it.
                     if let Some(main) = session.agents.get_mut(MAIN_AGENT) {
-                        main.resume(now);
+                        let warming = warming_mut(&mut self.warming_agents, &key, MAIN_AGENT)
+                            .expect(AGENT_HELD);
+                        main.resume(warming, now);
                     } else {
                         // Main's record left one cache TTL after the end, so a resume past it registers main anew as
                         // a fresh start does.
@@ -953,8 +973,14 @@ impl Inner {
                             .agents
                             .insert(
                                 MAIN_AGENT.to_string(),
-                                Agent::new(MAIN_AGENT, &key.0, incarnation, now, self.timing),
+                                Agent::new(MAIN_AGENT, &key.0, incarnation, now),
                             );
+                        let warming = AgentWarming::new(now, self.timing);
+                        let warming_agents = self
+                            .warming_agents
+                            .get_mut(&key)
+                            .expect("the session just read");
+                        warming_agents.insert(MAIN_AGENT.to_string(), warming);
                     }
                     self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
                 }
@@ -1009,7 +1035,7 @@ impl Inner {
         let incarnation = self.incarnation();
         agents.insert(
             MAIN_AGENT.to_string(),
-            Agent::new(MAIN_AGENT, &key.0, incarnation, now, self.timing),
+            Agent::new(MAIN_AGENT, &key.0, incarnation, now),
         );
         self.sessions.insert(
             key.clone(),
@@ -1028,6 +1054,10 @@ impl Inner {
                 agents,
                 cache_warming,
             },
+        );
+        self.warming_agents.insert(
+            key.clone(),
+            BTreeMap::from([(MAIN_AGENT.to_string(), AgentWarming::new(now, self.timing))]),
         );
         // The session's own sets start over with the record whatever the list says, and its agents' stored sets stay
         // for the earlier agents that no report states again, unless the list leaves the kind out.
