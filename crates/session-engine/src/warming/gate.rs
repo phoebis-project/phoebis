@@ -612,12 +612,10 @@ revisions:
             .warming
             .take_aside(&inner.sessions, &key, "main")
             .expect("the arrival set the recipe aside");
-        let (changes, rearmed) =
-            inner
-                .warming
-                .rearm_aside(&inner.sessions, &key, "main", aside, 2_000);
+        let changes = inner
+            .warming
+            .rearm_aside(&inner.sessions, &key, "main", aside, 2_000);
         inner.apply_changes(changes);
-        assert!(rearmed);
         let warming = warming_mut(&mut inner.warming.agents, &key, "main").expect(AGENT_HELD);
         assert_eq!(gate_of(&pinned_on("a", 1), warming), Ok(holder("a", 1)));
     }

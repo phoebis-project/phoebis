@@ -710,7 +710,7 @@ impl WarmingState {
             // A probe sent while this request was open pays for the request after it, whatever this one did.
             changes.append(self.end_observation(sessions, key, agent_id, None, Unanswered::Leave));
             if let Some(aside) = aside {
-                let (rearmed, _) = self.rearm_aside(sessions, key, agent_id, aside, now);
+                let rearmed = self.rearm_aside(sessions, key, agent_id, aside, now);
                 changes.append(rearmed);
             }
             changes.append(self.set_reason(sessions, key, agent_id, reason));

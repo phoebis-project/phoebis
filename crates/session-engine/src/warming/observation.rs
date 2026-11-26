@@ -656,7 +656,7 @@ impl WarmingState {
     /// Puts the recipe `take_aside` took back into `current` with the schedule, the error count and the model and
     /// account it stood on, where its entry is still ahead of `now`, and otherwise drops it, its size leaving
     /// `retained`. Its id never goes back into `pending`: its own request ended before the one that set it aside
-    /// arrived, so the lapse, the eviction and the sweeps take it as any armed recipe. Answers whether it re-armed.
+    /// arrived, so the lapse, the eviction and the sweeps take it as any armed recipe.
     pub(crate) fn rearm_aside(
         &mut self,
         sessions: &SessionsState,
@@ -664,13 +664,13 @@ impl WarmingState {
         agent_id: &str,
         aside: AsideRecipe,
         now: i64,
-    ) -> (Changes, bool) {
+    ) -> Changes {
         let mut changes = Changes::default();
         let warming = warming_if_held_mut(&mut self.agents, sessions, key, agent_id)
             .filter(|_| aside.expires.is_some_and(|expires| expires > now));
         let Some(warming) = warming else {
             self.retained -= aside.observation.recipe.size;
-            return (changes, false);
+            return changes;
         };
         warming.current = Some(aside.observation);
         warming.expires = aside.expires;
@@ -688,7 +688,7 @@ impl WarmingState {
         // The next save seals the restored body in place of the failed request's.
         warming.body_dirty = true;
         changes.agent_row(key, agent_id);
-        (changes, true)
+        changes
     }
 
     /// Drops the recipe the arrival set aside, its size leaving `retained`.
