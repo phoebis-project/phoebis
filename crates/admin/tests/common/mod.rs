@@ -15,7 +15,6 @@ use phoebis_admin::{
 };
 use phoebis_attention::{Attention, AttentionHandles, AttentionParts, TlsPairs};
 use phoebis_bus::Bus;
-use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits, KeepaliveTiming};
 use phoebis_ledger::{
     spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
     PriceRevisions, Pricing, Record, RequestRecord, BATCH_RETRY_HOLD,
@@ -27,6 +26,7 @@ use phoebis_profile::{
 };
 use phoebis_relay::{AccountingSource, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle, SharePricer};
+use phoebis_session_engine::{Engine, EngineParts, KeepaliveLimits, KeepaliveTiming};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, PinBurn, Secret,
     StorageKey, Store,
@@ -732,12 +732,12 @@ pub async fn report_answer(
         .or_insert(1.into());
     let request = Request::builder()
         .method("POST")
-        .uri(phoebis_keepalive::EVENTS_PATH)
+        .uri(phoebis_session_engine::EVENTS_PATH)
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {secret}"))
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
-    let answer = phoebis_keepalive::events_router(engine.clone())
+    let answer = phoebis_session_engine::events_router(engine.clone())
         .oneshot(request)
         .await
         .unwrap();

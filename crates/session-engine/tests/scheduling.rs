@@ -2,7 +2,6 @@
 //! clears. The due time follows the entry's expiry, and the idle limits follow the pool's policy.
 mod common;
 use common::*;
-use phoebis_keepalive::{KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, LEASE_MS};
 use phoebis_ledger::{
     hour_of, member_spends, read_rollups, BudgetedMember, PriceRevisions, RollupSelect,
 };
@@ -11,6 +10,7 @@ use phoebis_routing::{
     lane_key, resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Portability, Report,
     SelectRequest, SelectResult,
 };
+use phoebis_session_engine::{KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, LEASE_MS};
 use phoebis_store::{
     AccountState, BudgetPeriod, Cancellation, CooldownRow, CooldownScope, MemberWrite,
     OveragePolicy, StateCause,

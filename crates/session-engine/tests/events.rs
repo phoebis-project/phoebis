@@ -1,7 +1,7 @@
 //! The Go events and lifecycle suites over the reporting protocol: registration, sequences, generations and leases.
 mod common;
 use common::*;
-use phoebis_keepalive::{
+use phoebis_session_engine::{
     AgentState, CompanionState, KeepaliveLimits, Lifecycle, Reason, RecipeState, SessionFacts,
 };
 use serde_json::json;
@@ -347,7 +347,7 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
     let counts = r.engine.reasons();
     assert_eq!(
         counts
-            .get(&phoebis_keepalive::Reason::LeaseExpired)
+            .get(&phoebis_session_engine::Reason::LeaseExpired)
             .copied(),
         Some(1)
     );

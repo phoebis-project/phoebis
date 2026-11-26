@@ -6338,7 +6338,7 @@ async fn one_held_probe() -> (common::Full, String) {
         }),
     )
     .await;
-    phoebis_keepalive::spawn_observer(parts.keepalive.clone());
+    phoebis_session_engine::spawn_observer(parts.keepalive.clone());
     parts.up.add_credential_rule(
         common::API_KEY,
         "/v1/messages",
@@ -6383,12 +6383,12 @@ async fn one_held_probe() -> (common::Full, String) {
     parts.keepalive.step().await;
     // The dispatch words the cause `probing`, and the probe's result replaces it.
     let line = wait_for(Duration::from_secs(5), || {
-        main().filter(|line| line.cause != phoebis_keepalive::Reason::Probing)
+        main().filter(|line| line.cause != phoebis_session_engine::Reason::Probing)
     })
     .await;
     assert_eq!(
         (line.probes_today, line.cause),
-        (1, phoebis_keepalive::Reason::LedgerBehind),
+        (1, phoebis_session_engine::Reason::LedgerBehind),
         "the relay's admission refused the one probe"
     );
     wait_for(Duration::from_secs(5), || {

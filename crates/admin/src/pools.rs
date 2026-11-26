@@ -9,9 +9,9 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_keepalive::{pool_fundings, CeilingInputs, KeepalivePolicy};
 use phoebis_relay::{CacheTtl, CacheTtlPolicy};
 use phoebis_routing::{AccountProjection, BurnUnit, MemberSpend, Obstacle, RegistrySnapshot};
+use phoebis_session_engine::{pool_fundings, CeilingInputs, KeepalivePolicy};
 use phoebis_store::{
     stamp_token, AccountRow, AffinityMode, ApiKeyRow, AttachmentSubject, Feature, MemberWrite,
     OveragePolicy, PinRow, PoolMember, PoolRow, ReturnToPlan, SessionPlacement, StoreError,
@@ -978,7 +978,7 @@ pub(crate) struct Pool {
     /// `parked_seconds`, each a `{min, max}` over the members' fundings, the main conversation's TTLs and the pool's
     /// models. The documentation site's keepalive page describes them under its four fields.
     #[schema(value_type = Option<crate::openapi::ResolvedCeilingsView>)]
-    pub keepalive_resolved: Option<phoebis_keepalive::ResolvedCeilings>,
+    pub keepalive_resolved: Option<phoebis_session_engine::ResolvedCeilings>,
     /// The full cache TTL policy: `enabled`, `inject_when_absent`, and two rule sets, `plan` and `metered`, each with
     /// `main`, `subagent`, and `models`.
     #[schema(value_type = crate::openapi::CacheTtlPolicyView)]

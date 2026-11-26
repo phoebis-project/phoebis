@@ -4,7 +4,7 @@
 mod common;
 
 use common::*;
-use phoebis_keepalive::{Lifecycle, ParkKind, Reason, RecipeState, RecipeView, SummaryState};
+use phoebis_session_engine::{Lifecycle, ParkKind, Reason, RecipeState, RecipeView, SummaryState};
 use serde_json::{json, Value};
 
 const DAY: i64 = 86_400_000;
@@ -430,10 +430,10 @@ async fn a_registered_main_reads_registered_until_its_first_real_request() {
 #[tokio::test]
 async fn an_ended_recipe_keeps_its_row_with_the_cause() {
     let mut r = rig(RigSpec {
-        policy: phoebis_keepalive::KeepalivePolicy {
+        policy: phoebis_session_engine::KeepalivePolicy {
             enabled: true,
             max_idle_seconds: 300,
-            ..phoebis_keepalive::KeepalivePolicy::default()
+            ..phoebis_session_engine::KeepalivePolicy::default()
         },
         ..RigSpec::default()
     })
@@ -466,9 +466,9 @@ async fn an_ended_recipe_keeps_its_row_with_the_cause() {
 async fn a_request_refused_at_selection_reads_not_retained_and_one_awaiting_its_selection_reads_retained(
 ) {
     let mut r = rig(RigSpec {
-        policy: phoebis_keepalive::KeepalivePolicy {
+        policy: phoebis_session_engine::KeepalivePolicy {
             enabled: false,
-            ..phoebis_keepalive::KeepalivePolicy::default()
+            ..phoebis_session_engine::KeepalivePolicy::default()
         },
         ..RigSpec::default()
     })

@@ -1,5 +1,5 @@
 //! The limits the bootstrap file carries and the policy a pool row carries, with the bounds of each.
-use phoebis_keepalive::{
+use phoebis_session_engine::{
     KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LimitsError, PolicyError, FIVE_MINUTES_MS,
     LEASE_MS, LEASE_SECONDS, MAX_WORKERS, ONE_HOUR_MS,
 };

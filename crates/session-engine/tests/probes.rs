@@ -8,11 +8,11 @@ use std::sync::Arc;
 use common::*;
 use fake_upstream::{install_at, Captured, Respond};
 use phoebis_bus::Outcome;
-use phoebis_keepalive::{
+use phoebis_relay::Accounting;
+use phoebis_session_engine::{
     CompanionState, KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, MAIN_AGENT, MAX_WORKERS,
     ONE_HOUR_MS,
 };
-use phoebis_relay::Accounting;
 use phoebis_store::{AccountState, Cancellation};
 use serde_json::json;
 
@@ -1007,8 +1007,10 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
     .await;
     assert_eq!(r.engine.stats().running_probes, 1);
     tokio::time::pause();
-    tokio::time::advance(phoebis_keepalive::PROBE_DEADLINE + std::time::Duration::from_secs(1))
-        .await;
+    tokio::time::advance(
+        phoebis_session_engine::PROBE_DEADLINE + std::time::Duration::from_secs(1),
+    )
+    .await;
     tokio::time::resume();
     no_probe_running(&r.engine).await;
     r.pump(None).await;
@@ -1527,7 +1529,7 @@ fn quota_429(retry_after_secs: u64) -> Respond {
 }
 
 /// The Sessions row of the rig's main agent.
-fn recipe_row(r: &Rig) -> phoebis_keepalive::RecipeView {
+fn recipe_row(r: &Rig) -> phoebis_session_engine::RecipeView {
     r.engine
         .recipes()
         .into_iter()
@@ -1747,8 +1749,10 @@ async fn a_probe_the_deadline_ends_retries_on_the_first_rung_under_probe_transpo
     })
     .await;
     tokio::time::pause();
-    tokio::time::advance(phoebis_keepalive::PROBE_DEADLINE + std::time::Duration::from_secs(1))
-        .await;
+    tokio::time::advance(
+        phoebis_session_engine::PROBE_DEADLINE + std::time::Duration::from_secs(1),
+    )
+    .await;
     tokio::time::resume();
     r.probe_answered("main").await;
     r.pump(None).await;

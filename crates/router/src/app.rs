@@ -13,10 +13,6 @@ use phoebis_admin::{
 };
 use phoebis_attention::FeatureCaFacts;
 use phoebis_bus::Bus;
-use phoebis_keepalive::{
-    companion_router, events_router, spawn_observer, Engine, EngineParts, KeepaliveTiming,
-    PERSIST_INTERVAL,
-};
 use phoebis_ledger::{
     metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing, QuotaPoll,
 };
@@ -24,6 +20,10 @@ use phoebis_oauth::{CredentialManager, PairingSessions, UsageService};
 use phoebis_relay::{
     Accounting, CatalogService, Limits, ListenLimits, LiveAcceptor, Relay, ShutdownMark,
     REFRESH_TICK,
+};
+use phoebis_session_engine::{
+    companion_router, events_router, spawn_observer, Engine, EngineParts, KeepaliveTiming,
+    PERSIST_INTERVAL,
 };
 use phoebis_store::permissions::data_dir_of;
 use phoebis_store::{StorageKey, Store};
@@ -450,7 +450,7 @@ pub async fn run_until(
     let observer = spawn_observer(keepalive.clone());
     let scheduler_tick = keepalive.spawn_scheduler();
     // Captured here so the metrics listener reads the engine's agent counts on every scrape without depending
-    // on the keepalive crate.
+    // on the session engine's crate.
     let keepalive_gauge_source = keepalive.gauge_source();
     let vault = Arc::new(PairingVault::new());
     let pairing = Arc::new(PairingSessions::new());

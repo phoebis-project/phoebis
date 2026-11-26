@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use common::*;
-use phoebis_keepalive::{KeepalivePolicy, KeepaliveTiming, Lifecycle, Reason};
 use phoebis_ledger::{
     hour_of, read_rollups, CostRevisions, PlanTables, PriceRevisions, RollupSelect,
 };
+use phoebis_session_engine::{KeepalivePolicy, KeepaliveTiming, Lifecycle, Reason};
 use serde_json::{json, Value};
 
 const HOUR: i64 = 3_600_000;
@@ -932,7 +932,7 @@ async fn a_silent_session_is_probed_under_the_window_from_its_last_real_request_
     tick_silent_to(&mut r, start + HOUR - 1).await;
     assert_eq!(
         r.engine.sessions()[0].companion,
-        phoebis_keepalive::CompanionState::Silent
+        phoebis_session_engine::CompanionState::Silent
     );
     assert!(retained(&r, "main"));
     tick_silent_to(&mut r, start + HOUR).await;

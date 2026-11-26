@@ -23,8 +23,6 @@ tree() {
   cp "$check" "$root/scripts/check-docs.py"
   for path in \
     crates/bus/src/event.rs \
-    crates/keepalive/src/companion.rs \
-    crates/keepalive/src/routes.rs \
     crates/ledger/src/schema.rs \
     crates/ledger/src/usage.rs \
     crates/relay/src/errors.rs \
@@ -32,6 +30,8 @@ tree() {
     crates/relay/src/messages.rs \
     crates/relay/src/models.rs \
     crates/router/src/main.rs \
+    crates/session-engine/src/companion.rs \
+    crates/session-engine/src/routes.rs \
     crates/store/src/schema.rs \
     deploy/config.example.yaml \
     deploy/phoebis.service \

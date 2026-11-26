@@ -14,12 +14,12 @@ jiff = { workspace = true }
 phoebis-attention = { path = "../attention" }
 phoebis-bus = { path = "../bus" }
 phoebis-guardrails = { path = "../guardrails" }
-phoebis-keepalive = { path = "../keepalive" }
 phoebis-ledger = { path = "../ledger" }
 phoebis-oauth = { path = "../oauth" }
 phoebis-profile = { path = "../profile" }
 phoebis-relay = { path = "../relay" }
 phoebis-routing = { path = "../routing" }
+phoebis-session-engine = { path = "../session-engine" }
 phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
 rand = { workspace = true }

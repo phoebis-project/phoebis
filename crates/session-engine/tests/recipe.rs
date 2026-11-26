@@ -1,5 +1,5 @@
 //! The recipe builder's shape checks, the TTL evidence rules, and usage parsing; the Go recipe and usage suites.
-use phoebis_keepalive::{
+use phoebis_session_engine::{
     make_recipe, request_ttl_ms, ProbeUsage, Reason, Recipe, FIVE_MINUTES_MS, MAX_USAGE_BYTES,
     ONE_HOUR_MS,
 };

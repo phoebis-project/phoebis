@@ -6,10 +6,14 @@ use std::sync::{Arc, Mutex};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 
-/// The module paths whose events are captured: the keepalive engine's (an owner mismatch's warning), the ledger's
-/// (the poll's warnings) and the oauth crate's (the refresh's steps, a 429's warning). Any other crate's events would
+/// The module paths whose events are captured: the ledger's (the poll's warnings), the oauth crate's (the refresh's
+/// steps, a 429's warning) and the session engine's (an instance mismatch's warning). Any other crate's events would
 /// only be noise in an assertion that every line names the account.
-const CAPTURED_TARGETS: &[&str] = &["phoebis_keepalive::", "phoebis_ledger::", "phoebis_oauth::"];
+const CAPTURED_TARGETS: &[&str] = &[
+    "phoebis_ledger::",
+    "phoebis_oauth::",
+    "phoebis_session_engine::",
+];
 
 /// One formatted line per captured event, the event's level first, then the enclosing spans' fields joined ahead of
 /// the event's, so a line carries what a span attached (an account id, say) without a second pass over the span stack.

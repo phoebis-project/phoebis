@@ -1284,7 +1284,7 @@ async fn a_session_registered_with_the_warming_off_reads_session_opted_out_and_e
 
 /// The ten idle-age buckets as the overview answers them, `reached` raised in the buckets `reached` names.
 fn idle_returns(reached: &[usize]) -> serde_json::Value {
-    let bounds = phoebis_keepalive::IDLE_AGE_BOUNDS_SECONDS;
+    let bounds = phoebis_session_engine::IDLE_AGE_BOUNDS_SECONDS;
     serde_json::Value::Array(
         bounds
             .iter()
@@ -1653,7 +1653,7 @@ const MINUTE: i64 = 60_000;
 
 /// The ten idle-age buckets as the overview answers them, each bucket's `reached` and `returned` as named.
 fn idle_returns_counted(reached: [u64; 10], returned: [u64; 10]) -> serde_json::Value {
-    let bounds = phoebis_keepalive::IDLE_AGE_BOUNDS_SECONDS;
+    let bounds = phoebis_session_engine::IDLE_AGE_BOUNDS_SECONDS;
     serde_json::Value::Array(
         bounds
             .iter()
@@ -1825,7 +1825,7 @@ impl<'a> Companion<'a> {
         let cell = &self.parts.clock_cell;
         while cell.load(std::sync::atomic::Ordering::SeqCst) < until {
             let now = cell.load(std::sync::atomic::Ordering::SeqCst);
-            let next = (now + phoebis_keepalive::LEASE_MS / 2).min(until);
+            let next = (now + phoebis_session_engine::LEASE_MS / 2).min(until);
             cell.store(next, std::sync::atomic::Ordering::SeqCst);
             self.report("heartbeat", None).await;
         }
@@ -2753,8 +2753,9 @@ async fn a_deleted_keys_session_is_historical_with_no_companion() {
         serde_json::json!([]),
         "the historical row answers no agent's facts"
     );
-    let held =
-        |engine: &phoebis_keepalive::Engine| engine.sessions().iter().any(|s| s.session_id == "s1");
+    let held = |engine: &phoebis_session_engine::Engine| {
+        engine.sessions().iter().any(|s| s.session_id == "s1")
+    };
     assert!(
         held(&parts.keepalive),
         "the engine holds the session until its next tick"
@@ -2771,7 +2772,7 @@ async fn a_deleted_keys_session_is_historical_with_no_companion() {
 /// array keeps that the engine dropped is a label nothing can reach.
 #[test]
 fn every_engine_reason_is_a_cause_word_the_console_types_list() {
-    use phoebis_keepalive::Reason;
+    use phoebis_session_engine::Reason;
     use std::collections::BTreeSet;
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/api/types.ts");
     let types = std::fs::read_to_string(&path).unwrap();
@@ -2888,7 +2889,7 @@ async fn a_probe_leaves_the_keys_last_used_at_alone() {
         }),
     )
     .await;
-    phoebis_keepalive::spawn_observer(parts.keepalive.clone());
+    phoebis_session_engine::spawn_observer(parts.keepalive.clone());
     parts.up.add_credential_rule(
         common::API_KEY,
         "/v1/messages",
@@ -2997,7 +2998,7 @@ async fn the_accounts_companion_id_is_the_allowance_routes_pseudonym() {
         .body(axum::body::Body::empty())
         .unwrap();
     let allowance = json(
-        phoebis_keepalive::companion_router(parts.keepalive.clone())
+        phoebis_session_engine::companion_router(parts.keepalive.clone())
             .oneshot(request)
             .await
             .unwrap(),

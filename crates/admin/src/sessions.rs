@@ -305,15 +305,15 @@ pub(crate) struct AgentContext {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionKeepalive {
     #[schema(value_type = Option<String>)]
-    pub cause: Option<phoebis_keepalive::Reason>,
+    pub cause: Option<phoebis_session_engine::Reason>,
     #[schema(value_type = Option<String>)]
-    pub last_guard: Option<phoebis_keepalive::Guard>,
+    pub last_guard: Option<phoebis_session_engine::Guard>,
     pub next_probe_at: Option<i64>,
     pub state: Option<String>,
 }
 
-impl From<&phoebis_keepalive::KeepaliveSummary> for SessionKeepalive {
-    fn from(summary: &phoebis_keepalive::KeepaliveSummary) -> Self {
+impl From<&phoebis_session_engine::KeepaliveSummary> for SessionKeepalive {
+    fn from(summary: &phoebis_session_engine::KeepaliveSummary) -> Self {
         SessionKeepalive {
             cause: summary.cause,
             last_guard: summary.last_guard,
@@ -338,8 +338,8 @@ pub(crate) struct SessionFacts {
     pub title: Option<String>,
 }
 
-impl From<&phoebis_keepalive::SessionFacts> for SessionFacts {
-    fn from(facts: &phoebis_keepalive::SessionFacts) -> Self {
+impl From<&phoebis_session_engine::SessionFacts> for SessionFacts {
+    fn from(facts: &phoebis_session_engine::SessionFacts) -> Self {
         SessionFacts {
             branch: facts.branch().map(str::to_owned),
             cwd: facts.cwd().map(str::to_owned),
@@ -433,12 +433,13 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             .non_companion_idle
             .min(state.session_expiry)
             .as_millis() as i64;
-    let engine: std::collections::BTreeMap<SessionSpendKey, phoebis_keepalive::SessionView> = state
-        .keepalive
-        .sessions()
-        .into_iter()
-        .map(|s| (session_key(&s.key_id, s.key_generation, &s.session_id), s))
-        .collect();
+    let engine: std::collections::BTreeMap<SessionSpendKey, phoebis_session_engine::SessionView> =
+        state
+            .keepalive
+            .sessions()
+            .into_iter()
+            .map(|s| (session_key(&s.key_id, s.key_generation, &s.session_id), s))
+            .collect();
     let mut candidates: std::collections::BTreeSet<SessionSpendKey> = pins
         .iter()
         .filter(|standing| standing.pin.last_used_at >= idle_bound)
@@ -675,7 +676,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // recipe belongs to the live key alone, so it joins under that generation and never reaches a historical row.
     let mut recipe_by_session: std::collections::BTreeMap<
         SessionSpendKey,
-        phoebis_keepalive::RecipeView,
+        phoebis_session_engine::RecipeView,
     > = std::collections::BTreeMap::new();
     let mut unreleased: std::collections::BTreeMap<
         SessionSpendKey,
@@ -686,7 +687,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             continue;
         };
         let key = session_key(&recipe.key_id, generation, &recipe.session_id);
-        if recipe.agent_state != phoebis_keepalive::Lifecycle::Released {
+        if recipe.agent_state != phoebis_session_engine::Lifecycle::Released {
             unreleased
                 .entry(key.clone())
                 .or_default()
@@ -974,8 +975,8 @@ fn unpinned_row(key: &SessionSpendKey, model: Option<&str>) -> Session {
 }
 
 /// The view's lifecycle word on the wire, the match with no wildcard so a word the view gains fails to build here.
-fn lifecycle_word(lifecycle: phoebis_keepalive::Lifecycle) -> &'static str {
-    use phoebis_keepalive::Lifecycle::*;
+fn lifecycle_word(lifecycle: phoebis_session_engine::Lifecycle) -> &'static str {
+    use phoebis_session_engine::Lifecycle::*;
     match lifecycle {
         Busy => "busy",
         Idle => "idle",

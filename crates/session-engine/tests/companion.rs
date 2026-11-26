@@ -4,12 +4,12 @@ mod common;
 use axum::body::Body;
 use axum::http::Request;
 use common::*;
-use phoebis_keepalive::{companion_router, KeepalivePolicy};
 use phoebis_ledger::{AttemptRecord, PriceRevisions, Record, RequestRecord};
 use phoebis_routing::{
     Report, RouterConfig, SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
     HOUR_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
+use phoebis_session_engine::{companion_router, KeepalivePolicy};
 use phoebis_store::{
     AccountKind, AccountState, AccountUpdate, AffinityMode, ApiKeyRow, Cancellation,
     CompanionPermissions, CooldownRow, CooldownScope, Identity, KeyFeatureAccounts, MemberWrite,

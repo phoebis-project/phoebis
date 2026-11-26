@@ -4968,7 +4968,7 @@ async fn a_pool_created_without_a_keepalive_policy_stores_the_default_policy_who
     )
     .await;
     assert_eq!(created.status(), 201);
-    let default = phoebis_keepalive::KeepalivePolicy::default();
+    let default = phoebis_session_engine::KeepalivePolicy::default();
     let snapshot = landed_diff(&parts.app, &cookie, "pool_created", "main").await;
     let policy: serde_json::Map<String, serde_json::Value> = snapshot
         .as_object()
@@ -5012,7 +5012,7 @@ async fn a_pool_save_naming_the_keepalive_policy_an_empty_stored_policy_reads_as
         "/admin/pools/legacy",
         &format!(
             r#"{{"keepalive":{}}}"#,
-            serde_json::to_string(&phoebis_keepalive::KeepalivePolicy::default()).unwrap()
+            serde_json::to_string(&phoebis_session_engine::KeepalivePolicy::default()).unwrap()
         ),
         Some(&cookie),
     )

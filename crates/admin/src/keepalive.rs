@@ -8,10 +8,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_attention::{KeepaliveCap, KeepaliveFacts, KeepaliveStanding};
-use phoebis_keepalive::{
+use phoebis_ledger::{read_overview_rollups, trailing_day_hours, UNATTRIBUTED};
+use phoebis_session_engine::{
     Engine, EngineStats, IdleReturns, KeepaliveLimits, Wasted, IDLE_AGE_BOUNDS_SECONDS,
 };
-use phoebis_ledger::{read_overview_rollups, trailing_day_hours, UNATTRIBUTED};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
@@ -26,7 +26,7 @@ use crate::AdminState;
 pub(crate) struct KeepaliveOverview {
     /// The agents holding a recipe, by the mod's lifecycle word `busy`, `idle` or `parked`.
     #[schema(value_type = crate::openapi::AgentCountsView)]
-    pub agents: phoebis_keepalive::AgentCounts,
+    pub agents: phoebis_session_engine::AgentCounts,
     /// The times the keepalive engine found it had missed bus events.
     pub bus_gaps: u64,
     pub expired_between_turns_24h: u64,
@@ -133,7 +133,7 @@ fn caps_of(stats: &EngineStats, limits: &KeepaliveLimits) -> [KeepaliveCap; 3] {
 #[derive(serde::Serialize, ToSchema)]
 pub(crate) struct Recipes {
     #[schema(value_type = Vec<crate::openapi::RecipeViewSchema>)]
-    pub recipes: Vec<phoebis_keepalive::RecipeView>,
+    pub recipes: Vec<phoebis_session_engine::RecipeView>,
 }
 
 /// List the keepalive recipes.

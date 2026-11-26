@@ -7,9 +7,9 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::Respond;
 use phoebis_bus::OTHER_CLIENT;
-use phoebis_keepalive::{KeepalivePolicy, Reason, RecipeState};
 use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect, UNATTRIBUTED};
 use phoebis_routing::PinUsage;
+use phoebis_session_engine::{KeepalivePolicy, Reason, RecipeState};
 use serde_json::json;
 
 /// The five counts summed.
@@ -845,7 +845,7 @@ fn sent_content(request: &fake_upstream::RecordedRequest) -> String {
 }
 
 /// The Sessions row of the rig's agent `agent`.
-fn recipe_row(r: &Rig, agent: &str) -> phoebis_keepalive::RecipeView {
+fn recipe_row(r: &Rig, agent: &str) -> phoebis_session_engine::RecipeView {
     r.engine
         .recipes()
         .into_iter()
@@ -1071,9 +1071,9 @@ async fn a_recipe_a_failed_request_left_armed_lapses_and_is_evicted_as_any_armed
         sized.engine.stats().retained_bytes
     };
     let mut r = rig(RigSpec {
-        limits: phoebis_keepalive::KeepaliveLimits {
+        limits: phoebis_session_engine::KeepaliveLimits {
             max_retained_bytes: one * 5 / 2,
-            ..phoebis_keepalive::KeepaliveLimits::default()
+            ..phoebis_session_engine::KeepaliveLimits::default()
         },
         ..RigSpec::default()
     })
@@ -1135,9 +1135,9 @@ async fn an_aside_recipe_counts_against_the_memory_bound_and_yields_first_to_its
     };
     let limit = one * 7 / 2;
     let mut r = rig(RigSpec {
-        limits: phoebis_keepalive::KeepaliveLimits {
+        limits: phoebis_session_engine::KeepaliveLimits {
             max_retained_bytes: limit,
-            ..phoebis_keepalive::KeepaliveLimits::default()
+            ..phoebis_session_engine::KeepaliveLimits::default()
         },
         ..RigSpec::default()
     })

@@ -1,5 +1,5 @@
 [package]
-name = "phoebis-keepalive"
+name = "phoebis-session-engine"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -35,14 +35,14 @@ unicode-general-category = { workspace = true }
 boring = { workspace = true }
 fake-upstream = { path = "../../tests/fake_upstream" }
 http-body-util = { workspace = true }
-# An integration test builds the library without `cfg(test)`, so the counter it reads needs the feature on.
-phoebis-keepalive = { path = ".", features = ["debug-hooks"] }
 # The test tables, kept off the dependency above so a release build carries none.
 phoebis-ledger = { path = "../ledger", features = ["test-support"] }
 # The tests read the embedded fixture files, which the feature gates.
 phoebis-profile = { path = "../profile", features = ["test-support"] }
 # The router task's projection stamp, which the release case sets past the trigger's wait so a request runs a round.
 phoebis-routing = { path = "../routing", features = ["debug-hooks"] }
+# An integration test builds the library without `cfg(test)`, so the counter it reads needs the feature on.
+phoebis-session-engine = { path = ".", features = ["debug-hooks"] }
 # The test builders of the registry's rows, kept off the dependency above so a release build carries none.
 phoebis-store = { path = "../store", features = ["test-support"] }
 phoebis-transport = { path = "../transport" }

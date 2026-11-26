@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use common::*;
 use fake_upstream::{install, Captured};
 use phoebis_bus::{ClientFacts, Event as BusEvent, Outcome, Usage};
-use phoebis_keepalive::{
+use phoebis_session_engine::{
     continues_prefix, idle_age_bucket, Engine, Guard, KeepalivePolicy, KeepaliveTiming, Lifecycle,
     PrefixAnchor, Reason,
 };

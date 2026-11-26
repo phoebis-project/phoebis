@@ -19,10 +19,6 @@ use phoebis_bus::{
     AccountSelected, Bus, Delivery, Event as BusEvent, Kind, Origin, Outcome, RequestComplete,
     RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber, Usage,
 };
-use phoebis_keepalive::{
-    events_router, AgentState, Engine, EngineParts, KeepaliveLimits, KeepalivePolicy,
-    KeepaliveTiming, Lifecycle, Reason, RecipeView, EVENTS_PATH,
-};
 use phoebis_ledger::{
     spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
     PriceRevisions, Pricing, Record, RequestRecord,
@@ -30,6 +26,10 @@ use phoebis_ledger::{
 use phoebis_oauth::Clock;
 use phoebis_relay::AccountingSource;
 use phoebis_routing::RouterConfig;
+use phoebis_session_engine::{
+    events_router, AgentState, Engine, EngineParts, KeepaliveLimits, KeepalivePolicy,
+    KeepaliveTiming, Lifecycle, Reason, RecipeView, EVENTS_PATH,
+};
 use phoebis_store::{AccountKind, StorageKey, Store};
 use serde_json::{json, Value};
 // Re-exported for every test binary that shares this rig; only some of them, this one included, reach for all
@@ -140,7 +140,7 @@ impl Scratch {
     fn new() -> Scratch {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "phoebis-keepalive-rig-{}-{}",
+            "phoebis-session-engine-rig-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::SeqCst)
         ));
@@ -437,7 +437,7 @@ impl Rig {
     pub async fn advance_attended(&mut self, ms: i64) {
         let mut left = ms;
         while left > 0 {
-            let step = left.min(phoebis_keepalive::LEASE_MS / 2);
+            let step = left.min(phoebis_session_engine::LEASE_MS / 2);
             self.advance(step);
             left -= step;
             self.event(json!({"event": "heartbeat"})).await.unwrap();
@@ -565,7 +565,7 @@ impl Rig {
                 }
                 let named = match (&ack.agent_id, agent_id) {
                     (Some(named), _) => Some(named.as_str()),
-                    (None, None) => Some(phoebis_keepalive::MAIN_AGENT),
+                    (None, None) => Some(phoebis_session_engine::MAIN_AGENT),
                     (None, Some(_)) => None,
                 };
                 if let Some(named) = named {
@@ -641,7 +641,7 @@ impl Rig {
 
     /// The companion's lease, so a test that waits one out never repeats the number.
     pub fn lease_ms(&self) -> i64 {
-        phoebis_keepalive::LEASE_MS
+        phoebis_session_engine::LEASE_MS
     }
 
     /// A `parked` word goes out as a background park, the shape the mod sends, since the route refuses a park

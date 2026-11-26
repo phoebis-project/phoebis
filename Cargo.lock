@@ -1773,12 +1773,12 @@ dependencies = [
  "phoebis-attention",
  "phoebis-bus",
  "phoebis-guardrails",
- "phoebis-keepalive",
  "phoebis-ledger",
  "phoebis-oauth",
  "phoebis-profile",
  "phoebis-relay",
  "phoebis-routing",
+ "phoebis-session-engine",
  "phoebis-store",
  "phoebis-transport",
  "rand",
@@ -1852,41 +1852,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tracing",
-]
-
-[[package]]
-name = "phoebis-keepalive"
-version = "0.1.0"
-dependencies = [
- "axum",
- "boring",
- "bytes",
- "fake-upstream",
- "http-body-util",
- "jiff",
- "phoebis-bus",
- "phoebis-cch",
- "phoebis-keepalive",
- "phoebis-ledger",
- "phoebis-oauth",
- "phoebis-profile",
- "phoebis-relay",
- "phoebis-routing",
- "phoebis-store",
- "phoebis-transport",
- "rand",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-boring",
- "tokio-util",
- "tower",
- "tracing",
- "tracing-subscriber",
- "unicode-general-category",
 ]
 
 [[package]]
@@ -2015,13 +1980,13 @@ dependencies = [
  "phoebis-attention",
  "phoebis-bus",
  "phoebis-cch",
- "phoebis-keepalive",
  "phoebis-ledger",
  "phoebis-oauth",
  "phoebis-profile",
  "phoebis-relay",
  "phoebis-router",
  "phoebis-routing",
+ "phoebis-session-engine",
  "phoebis-store",
  "phoebis-transport",
  "phoebis-ui",
@@ -2060,6 +2025,41 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "phoebis-session-engine"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "boring",
+ "bytes",
+ "fake-upstream",
+ "http-body-util",
+ "jiff",
+ "phoebis-bus",
+ "phoebis-cch",
+ "phoebis-ledger",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-relay",
+ "phoebis-routing",
+ "phoebis-session-engine",
+ "phoebis-store",
+ "phoebis-transport",
+ "rand",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-boring",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-general-category",
 ]
 
 [[package]]

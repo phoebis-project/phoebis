@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
-use phoebis_keepalive::{KeepaliveLimits, LimitsError};
+use phoebis_session_engine::{KeepaliveLimits, LimitsError};
 use phoebis_store::Secret;
 use serde::Deserialize;
 

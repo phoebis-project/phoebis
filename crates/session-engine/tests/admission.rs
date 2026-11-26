@@ -10,10 +10,10 @@ use phoebis_bus::{
     AttemptOutcome, Event as BusEvent, FeatureCall, FeatureEnd, Kind, Outcome, Phase,
     ResponseChunk, ResponseHead, Usage,
 };
-use phoebis_keepalive::{
+use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
+use phoebis_session_engine::{
     Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary, Lifecycle, Reason, RecipeState,
 };
-use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
 use serde_json::json;
 
 /// The ledger row for a request, once the writer has landed it.
@@ -1192,7 +1192,7 @@ async fn a_bus_gap_discards_the_pending_observation_and_keeps_an_armed_recipe() 
     assert_eq!(r.view("main").cause, Reason::AwaitingCacheEvidence);
     // The engine's own subscriber, unread, fills past the queue depth; the observer task then sees the drop
     // counter rise before the next event it reads.
-    let observer = phoebis_keepalive::spawn_observer(r.engine.clone());
+    let observer = phoebis_session_engine::spawn_observer(r.engine.clone());
     let filler = r.engine.parts_bus();
     for i in 0..(phoebis_bus::QUEUE_DEPTH + 64) {
         filler.publish(r.chunk("noise", i as u32, ""));
@@ -1221,7 +1221,7 @@ async fn a_burst_of_feature_calls_raises_no_gap_in_the_engine() {
     let r = rig(RigSpec::default()).await;
     // The case never yields, so on the current-thread runtime the observer reads nothing and its queue stays as the
     // burst left it, with the bus's count of what it could not take.
-    let observer = phoebis_keepalive::spawn_observer(r.engine.clone());
+    let observer = phoebis_session_engine::spawn_observer(r.engine.clone());
     let call = BusEvent::FeatureCall(FeatureCall {
         duration_ms: 0,
         end: FeatureEnd::Refused {
@@ -1483,15 +1483,15 @@ fn probes_and_credits(rows: &[RollupRow]) -> (u64, BTreeMap<String, u64>, u64) {
 
 /// The view's row of `agent` with the guard's verdict left out, for a case whose request moves the verdict alone and
 /// reads it on its own.
-fn without_guard(r: &Rig, agent: &str) -> phoebis_keepalive::RecipeView {
-    phoebis_keepalive::RecipeView {
+fn without_guard(r: &Rig, agent: &str) -> phoebis_session_engine::RecipeView {
+    phoebis_session_engine::RecipeView {
         last_guard: None,
         ..r.view(agent)
     }
 }
 
 /// The recipes route's row of main.
-fn main_recipe(r: &Rig) -> phoebis_keepalive::RecipeView {
+fn main_recipe(r: &Rig) -> phoebis_session_engine::RecipeView {
     r.engine
         .recipes()
         .into_iter()

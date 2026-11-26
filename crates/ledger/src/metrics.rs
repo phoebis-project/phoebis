@@ -571,7 +571,7 @@ pub struct KeepaliveAgents {
 }
 
 /// A closure over the keepalive engine's own lock, read fresh on every scrape rather than pushed: the ledger
-/// crate has no dependency on the keepalive crate, so the binary supplies this instead of a type it can name.
+/// crate has no dependency on the session engine's crate, so the binary supplies this instead of a type it can name.
 pub type KeepaliveGaugeSource = Arc<dyn Fn() -> KeepaliveAgents + Send + Sync>;
 
 /// One series per condition the attention reader answers: its kind, its subject, and whether it holds.
