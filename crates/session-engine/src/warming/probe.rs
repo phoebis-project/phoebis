@@ -608,7 +608,9 @@ impl Inner {
 
     pub(crate) fn pause(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
         self.set_reason(key, agent_id, reason);
-        if let Some(warming) = warming_mut(&mut self.warming_agents, key, agent_id) {
+        if let Some(warming) = agent_ref(&self.sessions, key, agent_id)
+            .map(|_| warming_mut(&mut self.warming_agents, key, agent_id).expect(AGENT_HELD))
+        {
             warming.pause();
         }
     }
