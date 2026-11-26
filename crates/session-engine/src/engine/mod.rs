@@ -4,6 +4,7 @@
 
 pub(crate) mod config;
 pub(crate) mod persist;
+pub(crate) mod report;
 pub(crate) mod view;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -12,549 +13,44 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_bus::{
-    spawn_subscriber, user_agent_of, AccountSelected, Bus, Delivery, Event as BusEvent, Outcome,
-    Phase, RequestComplete, RequestObserved, ResponseChunk, ResponseHead,
+    spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, Phase, RequestComplete,
+    RequestObserved, ResponseChunk, ResponseHead,
 };
-use phoebis_ledger::{funding_of, Band, Ledger, Metrics, PlanTables, Pricing, Speed};
+use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing};
 use phoebis_oauth::Clock;
-use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
+use phoebis_relay::Relay;
 use phoebis_routing::{
-    budget_deadline, listing, seconds_ms, Holder, MemberSpend, PinUsage, RegistrySnapshot,
-    RouterHandle, DAY_MS, SEVEN_DAY,
+    budget_deadline, listing, Holder, MemberSpend, RegistrySnapshot, RouterHandle,
 };
-use phoebis_store::{AccountKind, AccountState, CooldownScope, OveragePolicy, PoolRow, Store};
+use phoebis_store::{AccountKind, Store};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::engine::config::{
-    floor_ttl_ms, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
-    ONE_HOUR_MS,
-};
+use crate::engine::config::KeepaliveLimits;
 use crate::engine::persist::Dirty;
-use crate::engine::view::{recipe_state, RecipeState};
-use crate::sessions::state::SessionsState;
-use crate::warming::agent::{warming_mut, warming_ref, AgentWarming};
-use crate::warming::breakeven::{resolve_or_shipped, CeilingInputs, Ceilings, FactorRows};
-use crate::warming::probe::{ceiling, run_job, wasted_label, ProbeJob};
-use crate::warming::recipe::{make_recipe, Recipe};
-use crate::warming::savings::{AttemptFunding, RowClient};
-use crate::warming::state::WarmingState;
+use crate::sessions::state::{
+    agent_ref, Arrived, ParkPassed, SessionKey, SessionsState, Slot, AGENT_HELD, MAIN_AGENT,
+};
+use crate::warming::agent::{warming_mut, warming_ref};
+use crate::warming::breakeven::{CeilingInputs, FactorRows};
+use crate::warming::causes::{Reason, Wasted};
+use crate::warming::config::{KeepalivePolicy, KeepaliveTiming, MAX_WORKERS};
+use crate::warming::gate::{
+    ceilings_for, gate, pool_policies, refresh_policy, Gate, RouterView, Verdict,
+};
+use crate::warming::guard::{class_guard, Guard};
+use crate::warming::idle::{utc_day, IdleReturns};
+use crate::warming::observation::{
+    ChainMark, Credit, Skipped, Unanswered, CHAIN_CONTRADICTION_COVERAGE,
+};
+use crate::warming::probe::{ceiling, run_job, wasted_label, Exchange, ProbeJob, ProbeRecord};
+use crate::warming::recipe::make_recipe;
+use crate::warming::requests::reported_prompt;
+use crate::warming::savings::{AttemptFunding, SavingsUnit};
+use crate::warming::state::{Change, Changes, WarmingState};
 use crate::warming::usage::ProbeUsage;
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
-
-/// The main conversation's agent, which the idle limits apply to.
-pub use phoebis_routing::MAIN_AGENT;
-
-pub type SessionKey = (String, String);
-
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentState {
-    Busy,
-    Idle,
-    Parked,
-    Released,
-    Unknown,
-}
-
-impl AgentState {
-    pub fn parse(s: &str) -> Option<AgentState> {
-        Some(match s {
-            "busy" => AgentState::Busy,
-            "idle" => AgentState::Idle,
-            "parked" => AgentState::Parked,
-            "released" => AgentState::Released,
-            "unknown" => AgentState::Unknown,
-            _ => return None,
-        })
-    }
-}
-
-/// What a parked agent waits on: a background task of its own, a scheduled wakeup, or both.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ParkKind {
-    Background,
-    Both,
-    Scheduled,
-}
-
-impl ParkKind {
-    pub fn parse(s: &str) -> Option<ParkKind> {
-        Some(match s {
-            "background" => ParkKind::Background,
-            "both" => ParkKind::Both,
-            "scheduled" => ParkKind::Scheduled,
-            _ => return None,
-        })
-    }
-
-    pub(crate) fn background(self) -> bool {
-        matches!(self, ParkKind::Background | ParkKind::Both)
-    }
-
-    pub(crate) fn scheduled(self) -> bool {
-        matches!(self, ParkKind::Scheduled | ParkKind::Both)
-    }
-
-    fn of_halves(background: bool, scheduled: bool) -> Option<ParkKind> {
-        match (background, scheduled) {
-            (true, true) => Some(ParkKind::Both),
-            (true, false) => Some(ParkKind::Background),
-            (false, true) => Some(ParkKind::Scheduled),
-            (false, false) => None,
-        }
-    }
-}
-
-/// What a parked agent waits on and until when, held as one value so that a park with no kind cannot be represented
-/// and no reader has to compensate for a deadline or a wake that a pass left behind.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct Park {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deadline: Option<i64>,
-    #[serde(rename = "park_kind")]
-    kind: ParkKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    wake_at: Option<i64>,
-}
-
-impl Park {
-    /// The park of `kind`, keeping the deadline only on a background kind and the wake only on a scheduled one, so no
-    /// park holds a part its kind does not take.
-    pub(crate) fn new(kind: ParkKind, deadline: Option<i64>, wake_at: Option<i64>) -> Park {
-        Park {
-            deadline: deadline.filter(|_| kind.background()),
-            kind,
-            wake_at: wake_at.filter(|_| kind.scheduled()),
-        }
-    }
-
-    pub(crate) fn kind(self) -> ParkKind {
-        self.kind
-    }
-
-    pub(crate) fn deadline(self) -> Option<i64> {
-        self.deadline
-    }
-
-    pub(crate) fn wake_at(self) -> Option<i64> {
-        self.wake_at
-    }
-
-    /// The park left at `now` once each part whose return came without a request drops out with its half: a deadline
-    /// the harness stopped the command at, or a wake that passed. `None` when no half is left, which is when it ended.
-    pub(crate) fn passed(self, now: i64) -> Option<Park> {
-        let deadline_passed = self.deadline.is_some_and(|deadline| deadline <= now);
-        let wake_passed = self.wake_at.is_some_and(|wake| wake <= now);
-        ParkKind::of_halves(
-            self.kind.background() && !deadline_passed,
-            self.kind.scheduled() && !wake_passed,
-        )
-        .map(|kind| {
-            Park::new(
-                kind,
-                self.deadline.filter(|_| !deadline_passed),
-                self.wake_at.filter(|_| !wake_passed),
-            )
-        })
-    }
-
-    /// For the readers whose view or saved row keeps the deadline, the kind and the wake as members of their own.
-    pub(crate) fn parts(park: Option<Park>) -> (Option<i64>, Option<ParkKind>, Option<i64>) {
-        park.map_or((None, None, None), |park| {
-            (park.deadline, Some(park.kind), park.wake_at)
-        })
-    }
-}
-
-/// A park as the engine holds it: the reported value with the start the parked ceiling counts from, which no report
-/// or answer carries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct HeldPark {
-    pub began: i64,
-    pub park: Park,
-}
-
-/// Why probes a recipe paid for went unanswered: the stop that left them, or the request after them that read no
-/// cache. The label the wasted count carries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Wasted {
-    ColdReturn,
-    Evicted,
-    Expired,
-    Horizon,
-    IdleLimit,
-    ParkedLimit,
-    Released,
-    Replaced,
-    SessionEnded,
-}
-
-impl Wasted {
-    /// Every label, so a reader lists the ones no probe carried at zero rather than leaving them out.
-    pub const ALL: [Wasted; 9] = [
-        Wasted::ColdReturn,
-        Wasted::Evicted,
-        Wasted::Expired,
-        Wasted::Horizon,
-        Wasted::IdleLimit,
-        Wasted::ParkedLimit,
-        Wasted::Released,
-        Wasted::Replaced,
-        Wasted::SessionEnded,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Wasted::ColdReturn => "cold_return",
-            Wasted::Evicted => "evicted",
-            Wasted::Expired => "expired",
-            Wasted::Horizon => "horizon",
-            Wasted::IdleLimit => "idle_limit",
-            Wasted::ParkedLimit => "parked_limit",
-            Wasted::Released => "released",
-            Wasted::Replaced => "replaced",
-            Wasted::SessionEnded => "session_ended",
-        }
-    }
-}
-
-macro_rules! reasons {
-    ($($variant:ident => $text:literal),* $(,)?) => {
-        /// Every state an agent's recipe can be in, as the Go engine named them plus the router's own gates.
-        /// A reason is a permanent counter key, so nothing mints one at runtime.
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub enum Reason { $($variant),* }
-        impl Reason {
-            pub const ALL: &'static [Reason] = &[$(Reason::$variant),*];
-            pub fn as_str(self) -> &'static str {
-                match self { $(Reason::$variant => $text),* }
-            }
-        }
-    };
-}
-
-reasons! {
-    AffinityTooShort => "affinity_too_short",
-    AgentLimit => "agent_limit",
-    AgentReleased => "agent_released",
-    AgentUnknown => "agent_unknown",
-    AwaitingCacheEvidence => "awaiting_cache_evidence",
-    AwaitingRequest => "awaiting_request",
-    AwaitingSelection => "awaiting_selection",
-    Budget => "budget",
-    BusGap => "bus_gap",
-    Compacted => "compacted",
-    Cooled => "cooled",
-    Credits => "credits",
-    Evicted => "evicted",
-    Expired => "expired",
-    ExpiredAtRestart => "expired_at_restart",
-    FixedThinking => "fixed_thinking",
-    ForcedTool => "forced_tool",
-    HeadersTooLarge => "headers_too_large",
-    Horizon => "horizon",
-    IdleLimit => "idle_limit",
-    IneligibleCredential => "ineligible_credential",
-    InstanceMismatch => "instance_mismatch",
-    InstanceReplaced => "instance_replaced",
-    InvalidCacheControl => "invalid_cache_control",
-    InvalidModel => "invalid_model",
-    InvalidProbeUsage => "invalid_probe_usage",
-    InvalidRequest => "invalid_request",
-    KeepaliveOff => "keepalive_off",
-    KeyOptedOut => "key_opted_out",
-    LeaseExpired => "lease_expired",
-    LedgerBehind => "ledger_behind",
-    MissingAccount => "missing_account",
-    NoCacheEvidence => "no_cache_evidence",
-    NoPin => "no_pin",
-    NoProbeCacheEvidence => "no_probe_cache_evidence",
-    OptedOut => "opted_out",
-    Overage => "overage",
-    ParkedLimit => "parked_limit",
-    PartialCacheCoverage => "partial_cache_coverage",
-    Paused => "paused",
-    PinMoved => "pin_moved",
-    PoolDisabled => "pool_disabled",
-    ProbeAuthenticationError => "probe_authentication_error",
-    ProbePoolExhausted => "probe_pool_exhausted",
-    ProbeQuotaExhausted => "probe_quota_exhausted",
-    ProbeRetryLimit => "probe_retry_limit",
-    ProbeTransportError => "probe_transport_error",
-    Probing => "probing",
-    Reauth => "reauth",
-    RepeatedColdProbe => "repeated_cold_probe",
-    RequestCanceled => "request_canceled",
-    RequestFailed => "request_failed",
-    RequestLimit => "request_limit",
-    RequestRejected => "request_rejected",
-    RequestTooLarge => "request_too_large",
-    Reset => "reset",
-    RetryableProbeError => "retryable_probe_error",
-    Scheduled => "scheduled",
-    SessionEnded => "session_ended",
-    SessionExpired => "session_expired",
-    SessionLimit => "session_limit",
-    SessionOptedOut => "session_opted_out",
-    SlowProbe => "slow_probe",
-    Spent => "spent",
-    StorageLimit => "storage_limit",
-    StructuredOutput => "structured_output",
-    UnexpectedOutput => "unexpected_output",
-    UnsupportedProbe => "unsupported_probe",
-    UnsupportedShape => "unsupported_shape",
-}
-
-/// A cause leaves the engine as its word, the one the counters and the stored payload already key it by.
-impl serde::Serialize for Reason {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-/// A stored word reads back as its cause, and a word this build does not know refuses the payload.
-impl<'de> serde::Deserialize<'de> for Reason {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Reason, D::Error> {
-        let word = String::deserialize(deserializer)?;
-        Reason::ALL
-            .iter()
-            .copied()
-            .find(|reason| reason.as_str() == word)
-            .ok_or_else(|| serde::de::Error::custom(format!("unknown reason {word}")))
-    }
-}
-
-/// The share of the previous main prompt a completion must read from the cache, under a chain that holds none of the
-/// anchor's boundaries, for the engine to read a contradiction between its chain model and the upstream's.
-pub const CHAIN_CONTRADICTION_COVERAGE: f64 = 0.9;
-
-/// The UTC day `ms` falls on, counted from the epoch. The day counters and their reader both go through it, so the
-/// two never disagree on where a day ends.
-pub(crate) fn utc_day(ms: i64) -> i64 {
-    ms.div_euclid(DAY_MS)
-}
-
-/// What an observation does to the agent's recipe.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Guard {
-    Auxiliary,
-    Compaction,
-    Foreign,
-    Rearm,
-    Restart,
-}
-
-/// The guard of a request that names its class: one answer for `guard`, the chain mark and the prebuild, so a class
-/// added to `REFRESHING_CLASSES` reaches all three.
-fn class_guard(class: &str) -> Guard {
-    // A compaction reads the old prefix to write a context the next turn starts from, so a recipe armed from it
-    // would keep warm a body no turn reads again.
-    if class == "compaction" {
-        Guard::Compaction
-    } else if phoebis_routing::REFRESHING_CLASSES.contains(&class) {
-        Guard::Rearm
-    } else {
-        Guard::Auxiliary
-    }
-}
-
-/// The hijack guard: a class names the turn directly. Without one, the request's own chain against the armed
-/// recipe's two hashes decides, the same fallback the routing crate's `warmth_of` applies when a request
-/// carries no chain at all. `recipe` is the armed recipe's `(static_hash, tail_hash)`, `None` for a first
-/// observation with nothing to compare against.
-pub fn guard(
-    request_class: Option<&str>,
-    static_hash: Option<&str>,
-    boundaries: &[String],
-    recipe: Option<(&str, &str)>,
-    model_matches: bool,
-) -> Guard {
-    if let Some(class) = request_class {
-        return class_guard(class);
-    }
-    let Some((recipe_static, recipe_tail)) = recipe else {
-        return Guard::Rearm;
-    };
-    if static_hash.is_none() && boundaries.is_empty() {
-        return Guard::Rearm;
-    }
-    if boundaries.iter().any(|boundary| boundary == recipe_tail) {
-        return Guard::Rearm;
-    }
-    if static_hash == Some(recipe_static) && model_matches {
-        return Guard::Restart;
-    }
-    Guard::Foreign
-}
-
-/// The lower bounds of the ten idle-age buckets, in seconds: 0 to 5, 5 to 15, 15 to 30 and 30 to 60 minutes, then
-/// 1 to 2, 2 to 4, 4 to 8, 8 to 16 and 16 to 32 hours, and above.
-pub const IDLE_AGE_BOUNDS_SECONDS: [u64; 10] = [
-    0, 300, 900, 1_800, 3_600, 7_200, 14_400, 28_800, 57_600, 115_200,
-];
-
-/// The bucket of an idle window `age_ms` old. An age below zero, from a clock that stepped back, reads as the first.
-pub fn idle_age_bucket(age_ms: i64) -> usize {
-    IDLE_AGE_BOUNDS_SECONDS
-        .iter()
-        .rposition(|&bound| age_ms >= bound as i64 * 1_000)
-        .unwrap_or(0)
-}
-
-/// One idle-age bucket of a pool: the idle windows of main that reached the bucket's start, and those whose next
-/// request from main continued the same prefix inside the bucket.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct IdleReturnBucket {
-    pub reached: u64,
-    pub returned: u64,
-}
-
-/// One pool's counters, a bucket per bound of `IDLE_AGE_BOUNDS_SECONDS`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct IdleReturns {
-    pub buckets: [IdleReturnBucket; 10],
-}
-
-/// One open idle window of main: when it began, the highest bucket `reached` has been raised for, the prefix main's
-/// last admitted request carried when the window opened (kept apart from the recipe, so a return is judged against it
-/// after a ceiling discarded the recipe and on a pool that retains none), the moment a prompt announced the return,
-/// when one has, and the pool the window counts under, fixed at the open so a key that moves pools mid-window keeps
-/// the window's buckets in one pool.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct IdleEpisode {
-    pub started: i64,
-    pub bucket: Option<usize>,
-    pub anchor: Option<PrefixAnchor>,
-    pub prompt_at: Option<i64>,
-    pub pool_key: String,
-    /// The UTC day the episode's highest counted bucket was reached, where its return counts, so a day never
-    /// answers a return without its reach. `None` until a bucket is counted, and on a window restored from a row saved
-    /// without it, whose reach is held under no day, so its return counts nothing unless the request raises a bucket.
-    pub bucket_day: Option<i64>,
-}
-
-/// The prefix an idle window judges a return against: the request's static hash, its last message boundary, the one
-/// before it (`None` for a one-message chain) and the deepest marked one before those two. A return holds any of the
-/// three.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrefixAnchor {
-    pub static_hash: String,
-    pub last: String,
-    pub before_last: Option<String>,
-    /// The deepest boundary before the last two that the request marked with `cache_control`, which the upstream
-    /// reads the cache through.
-    pub marked: Option<String>,
-}
-
-/// Whether a request continues the prefix `anchor` names: one of its message boundaries equals the anchor's last
-/// boundary, the one before it or its marked one, so a return counts when the client re-sent the last message in a
-/// shape the canonical form does not restore and the message before it held, and when an interrupted turn's next
-/// request dropped both and kept the marked boundary the upstream reads the cache through. The chain is the only
-/// evidence, and the request's class is none: a refreshing class whose chain holds none of them answers false where
-/// `guard` re-arms it, as do a request with no chain and an absent anchor.
-pub fn continues_prefix(anchor: Option<&PrefixAnchor>, boundaries: &[String]) -> bool {
-    anchor.is_some_and(|anchor| {
-        boundaries.iter().any(|boundary| {
-            *boundary == anchor.last
-                || anchor.before_last.as_ref() == Some(boundary)
-                || anchor.marked.as_ref() == Some(boundary)
-        })
-    })
-}
-
-/// Raises `reached` in the buckets after `counted` up to `bucket`. A tick and the request that ends a window both
-/// count through here, and `counted` is the fence that keeps them from raising one bucket twice for one window. A
-/// bucket at or below the fence raises nothing: the wall clock can step back, and a tick can take the lock with a
-/// later `now` than a request or a report that read the clock before it.
-fn raise_reached(counters: &mut IdleReturns, counted: Option<usize>, bucket: usize) {
-    let from = counted.map_or(0, |c| c + 1);
-    for counter in counters.buckets.iter_mut().take(bucket + 1).skip(from) {
-        counter.reached += 1;
-    }
-}
-
-/// The pool a window counts under, read once at its open: the pool of the session's key in the snapshot, else the
-/// agent's own pool id, else the pinned account's own id for an account outside every pool, so no window counts under
-/// the empty key, which no pool row reads. The key comes first because the agent's pool id is a copy only an admitted
-/// selection or a retained recipe's tick refreshes.
-fn idle_returns_key(
-    snapshot: &RegistrySnapshot,
-    agent: &Agent,
-    warming: &AgentWarming,
-) -> Option<String> {
-    snapshot
-        .key_pool(&agent.key_id)
-        .map(|pool| pool.id.clone())
-        .or_else(|| (!warming.pool_id.is_empty()).then(|| warming.pool_id.clone()))
-        .or_else(|| warming.account.clone())
-}
-
-/// Opens main's idle window when none is counted and main is idle or parked, from a start past the floor. The report
-/// that moves main there opens it, so a prompt inside the same second still ends a window, and the tick opens the
-/// ones a presence, a park's end or a load left unopened. True when a window opened.
-pub(crate) fn open_idle_episode(
-    main: &Agent,
-    warming: &mut AgentWarming,
-    snapshot: &RegistrySnapshot,
-) -> bool {
-    if warming.idle_episode.is_some()
-        || matches!(
-            main.state,
-            AgentState::Busy | AgentState::Released | AgentState::Unknown
-        )
-    {
-        return false;
-    }
-    let start = main.idle_window_start();
-    if warming
-        .idle_window_floor
-        .is_some_and(|floor| start <= floor)
-    {
-        return false;
-    }
-    // One lookup per window, so a key that moves pools takes its next window with it.
-    let Some(pool_key) = idle_returns_key(snapshot, main, warming) else {
-        return false;
-    };
-    warming.idle_episode = Some(IdleEpisode {
-        started: start,
-        bucket: None,
-        anchor: warming.last_prefix.clone(),
-        prompt_at: None,
-        pool_key,
-        bucket_day: None,
-    });
-    true
-}
-
-/// The routing crate's unit selector, so the keepalive and the shedding round never disagree on a pin's unit.
-pub type SavingsUnit = phoebis_routing::BurnUnit;
-
-/// How the attempt that served a probe was paid for, the ledger's own reading of an attempt's funding, so the
-/// break-even factors and the rows a probe files under follow one rule. The keepalive reads it at standard speed, since
-/// a fast recipe reads the fast cells whatever funds it.
-pub use phoebis_ledger::Funding;
-
-/// The fundings a pool's members bring to its ceilings, from each member's kind and usage-based class with no
-/// overage, each once in the members' order: an OAuth member brings the plan's factors, an API-key member the dollar
-/// rows, and a usage-based seat the dollar rows too.
-pub fn pool_fundings(members: impl IntoIterator<Item = (AccountKind, bool)>) -> Vec<Funding> {
-    let mut fundings: Vec<Funding> = Vec::new();
-    for (kind, usage_based) in members {
-        let funding = funding_of(Some(kind), usage_based, Some(false), Speed::Standard);
-        if !fundings.contains(&funding) {
-            fundings.push(funding);
-        }
-    }
-    fundings
-}
 
 pub struct EngineParts {
     pub bus: Bus,
@@ -598,616 +94,6 @@ pub struct EngineStats {
     pub running_probes: usize,
     /// Every session entry the engine holds: a session that holds no slot counts here and not in `live_sessions`.
     pub sessions: usize,
-}
-
-/// One companion registration, or one session a request revealed before any registration.
-pub(crate) struct Session {
-    /// The generation of the key that registered the session, so a key id created again reaches none of the
-    /// previous holder's sessions: the companion identity is the pair, never the id alone.
-    pub key_generation: i64,
-    pub instance: String,
-    pub sequence: u64,
-    /// When the companion's lease runs out. Past it the session is unattended: its recipes stay and are probed
-    /// under the idle limits from `last_real_at`.
-    pub lease: i64,
-    pub attended: bool,
-    /// A `session_end` or a replacement: nothing under this instance is live any more.
-    pub ended: bool,
-    pub last_report_at: i64,
-    /// The session's last real request, one refused its slot included, which the expiry and a silent session's idle
-    /// ceiling count from. A refused session keeps no recipe, so the ceiling never reads a refused request's stamp.
-    pub last_real_at: Option<i64>,
-    /// Whether the session took its slots of `max_sessions` and `max_agents`, which the first request the caps admit
-    /// sets. From then on its agents' records hold slots of `max_agents` until each leaves, a record its end released
-    /// included. A request refused the slot leaves it false and still writes `last_real_at`, so the session's next
-    /// request reads both caps again while the expiry counts from the refused request.
-    pub slotted: bool,
-    /// A session the load restored from a save that held it attended keeps the attended reading of the ceilings until
-    /// this instant or until the mod registers it again, whichever is first: the mod re-adopts a restored session
-    /// within its lease, and a parked recipe must not be discarded as idle before it can.
-    pub restored_until: Option<i64>,
-    /// The requests that named another instance than the registration while the holder's lease was live, so the
-    /// warning goes out once per session rather than once per request.
-    pub instance_mismatches: u64,
-    pub agents: BTreeMap<String, Agent>,
-    /// What the session's last registration said of its own cache warming option.
-    pub cache_warming: bool,
-}
-
-impl Session {
-    /// Whether the ceilings read the session as attended at `now`: as the mod's lease says, or as the save said for
-    /// one lease length after a load.
-    pub(crate) fn attended_at(&self, now: i64) -> bool {
-        self.attended || self.restored_until.is_some_and(|until| now < until)
-    }
-
-    /// Holds a slot of `max_sessions`: it took its slots and has not ended.
-    pub(crate) fn holds_slot(&self) -> bool {
-        !self.ended && self.slotted
-    }
-
-    /// The slots of `max_agents` the session's agents hold, none before the session takes its slots.
-    pub(crate) fn agent_slots(&self) -> usize {
-        if self.slotted {
-            self.agents.len()
-        } else {
-            0
-        }
-    }
-}
-
-pub(crate) struct Agent {
-    pub id: String,
-    /// The session's key, repeated here so a gate over one agent needs no session lookup.
-    pub key_id: String,
-    /// Which record this is. A replacement registration builds a new record under the same ids, and a probe
-    /// worker that started on the old one must not touch the new one's bookkeeping.
-    pub incarnation: u64,
-    /// Written through `set_state`, which ends the park on any move out of `Parked`.
-    pub state: AgentState,
-    /// The park the last `parked` report described, cleared on every move out of `Parked`, so a reader never finds a
-    /// park on an agent that is not parked. Its start is kept across a repeated `parked` of the same kind.
-    pub park: Option<HeldPark>,
-    /// When a deadline or a wake passed without a request: the idle window restarts here. No report clears it,
-    /// since the window starts at the later of it and `last_activity` and an older end never outranks a newer
-    /// request.
-    pub park_ended_at: Option<i64>,
-    pub generation: u64,
-    /// When a released record leaves the engine: the release plus the longest TTL of the pool's cache TTL policy,
-    /// `None` on a record that is not released.
-    pub leaves_at: Option<i64>,
-    pub last_activity: i64,
-    /// Main's last presence report: when the person was last seen at the terminal.
-    pub last_presence_at: Option<i64>,
-}
-
-impl Agent {
-    pub(crate) fn new(id: &str, key_id: &str, incarnation: u64, now: i64) -> Agent {
-        Agent {
-            id: id.into(),
-            key_id: key_id.into(),
-            incarnation,
-            state: AgentState::Busy,
-            park: None,
-            park_ended_at: None,
-            generation: 0,
-            leaves_at: None,
-            last_activity: now,
-            last_presence_at: None,
-        }
-    }
-
-    /// Where main's idle window starts now: the later of its last activity and a park's end without a request.
-    pub(crate) fn idle_window_start(&self) -> i64 {
-        self.park_ended_at
-            .map_or(self.last_activity, |ended| ended.max(self.last_activity))
-    }
-
-    /// Every state write. A move to any state but `Parked` ends the park, so a stale park never outlives it.
-    pub(crate) fn set_state(&mut self, state: AgentState) {
-        self.state = state;
-        if state != AgentState::Parked {
-            self.park = None;
-        }
-    }
-
-    pub(crate) fn resume(&mut self, warming: &mut AgentWarming, now: i64) {
-        self.set_state(AgentState::Busy);
-        self.leaves_at = None;
-        self.last_activity = now;
-        // The resume moves the idle window's start on purpose, so the floor the release left goes.
-        warming.idle_window_floor = None;
-    }
-}
-
-/// What the ceilings decide for one retained recipe at a tick: probe on, hold the recipe with a reason, or end it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Verdict {
-    Probe,
-    Hold(Reason),
-    End(Reason),
-}
-
-/// What the agent's previous recipe had proved when this request arrived, taken at admission and consumed with
-/// the observation. The kept-warm credit reads nothing else: a probe that runs while this request is open, or a
-/// TTL this request's own evidence shortens, cannot reach into it.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PriorCoverage {
-    pub account: Option<String>,
-    pub covered: bool,
-    /// The unit the covering probe's cost settled in, decided by the kind the probe's answer carried, so an account
-    /// that leaves the registry while its probe is in flight still lands a unit. `None` when the answer named no
-    /// account (one the relay built before any selection), in which case the credit never fires.
-    pub unit: Option<SavingsUnit>,
-    /// The window a `WindowShare` settlement was priced in, `seven_day` for every entry this build writes and
-    /// `five_hour` for one loaded from an agent the earlier build saved.
-    pub window: &'static str,
-    pub model: String,
-    /// The covering recipe's speed, which the credited request's has to match.
-    pub fast: bool,
-    pub real_at: i64,
-    pub ttl_ms: i64,
-    pub until: Option<i64>,
-}
-
-impl PriorCoverage {
-    /// The kept-warm credit's test for a request that started at `request_started` on `model` at the speed `fast`, was
-    /// served by `account` and read `read` from the cache: it arrived after the previous turn's own entry would have
-    /// lapsed and read the entry the covering probe kept.
-    pub(crate) fn credits(
-        &self,
-        request_started: i64,
-        model: &str,
-        fast: bool,
-        account: Option<&str>,
-        read: u64,
-    ) -> bool {
-        let ttl = floor_ttl_ms(self.ttl_ms);
-        let gap_exceeded = request_started - self.real_at > ttl;
-        // The entry the probe kept has to be there when this request arrives, on the boundary the settlement and the
-        // scheduler read (`answer.started` before `chain_end`, `now >= expires`): a request at or after the lapse read
-        // a cache nothing the probe paid for kept, so that probe settles as expired, and a credit here would contradict
-        // that settlement.
-        let entry_alive = self.until.is_some_and(|until| request_started < until);
-        let same_model = self.model == model;
-        // The upstream shares no cached prefix across speeds, so a probe on the other lane kept nothing this request
-        // read.
-        let same_speed = self.fast == fast;
-        // The account that served this request, after any failover, has to be the one the covering probe warmed. A
-        // prefix cached elsewhere by ordinary traffic is no probe's to credit.
-        let same_account = self.account.as_deref() == account;
-        // A probe whose answer named no account (one the relay built before any selection) settled in no unit and
-        // funds nothing to credit, whatever `same_account` says of the account it was meant for.
-        self.covered
-            && gap_exceeded
-            && entry_alive
-            && same_model
-            && same_speed
-            && same_account
-            && read > 0
-            && self.unit.is_some()
-    }
-}
-
-/// The compaction the agent has open, held apart from the retained observation: its own receipt, start, lineage, head,
-/// read and TTL, and the coverage its credit reads. The recipe and its probes wait as they stood until its completion
-/// decides them, so the completion judges the agent's own lists.
-pub(crate) struct OpenCompaction {
-    pub request_id: String,
-    /// The relay's receipt, the instant the compaction's own request row keys its band at.
-    pub received_at: i64,
-    /// When it reached the engine, the arrival its answer to the probes before it is judged by.
-    pub started: i64,
-    pub canonical_model: String,
-    pub fast: bool,
-    pub attempt: u8,
-    pub account: Option<String>,
-    pub funding: AttemptFunding,
-    /// Whether the current attempt's head was a 2xx, without which its stream's usage is no evidence about the cache.
-    pub ok_head: bool,
-    /// What the current attempt's stream read from the cache, for a completion that carries no usage of its own.
-    pub read: u64,
-    /// The TTL the relay dispatched the attempt's body with, or where it went as sent, the one the recipe's evidence
-    /// settled on, the same conversation's markers, refined by the compaction's own usage: the bucket its kept-warm
-    /// credit files under.
-    pub ttl_ms: i64,
-    /// What the previous recipe had proved at the admission, as a turn's observation takes it.
-    pub prior: Option<PriorCoverage>,
-    /// The compaction request's own client label and user agent, the ones its kept-warm credit keys.
-    pub client: RowClient,
-}
-
-/// What a request that completed answers the probes before it with: when it reached the cache, the lineage it read on
-/// and what it read.
-struct Answer {
-    started: Option<i64>,
-    account: Option<String>,
-    model: String,
-    fast: bool,
-    read: u64,
-}
-
-/// A kept-warm credit a completion earned, its keys read under the lock and recorded once the lock is released. `at` is
-/// the credited request's receipt, the instant its row files under, so the credit sits in that row's hour and revision
-/// whenever the answer completes, and `ttl_ms` the TTL its own write would have taken. `funding` is its serving
-/// attempt's, so the credit files under the funding word its request row took, and `client` its client label and user
-/// agent as the relay observed them, so the credit keys its request row's client and agent and prices under that
-/// client's regime.
-pub(crate) struct Credit {
-    pub(crate) at: i64,
-    pub(crate) key: SessionKey,
-    pub(crate) key_generation: i64,
-    pub(crate) pool_id: String,
-    pub(crate) account: Option<String>,
-    pub(crate) model: String,
-    pub(crate) read: u64,
-    pub(crate) ttl_ms: i64,
-    pub(crate) fast: bool,
-    pub(crate) funding: AttemptFunding,
-    pub(crate) client: RowClient,
-}
-
-/// What a walk whose caller just read the agent under the same lock expects of it.
-pub(crate) const AGENT_HELD: &str =
-    "an agent the caller read under the lock is still in its session";
-
-/// The agent `agent_id` of the session `key`, borrowing the session map alone, so a caller may write another field of
-/// `Inner` while it holds the agent.
-pub(crate) fn agent_mut<'a>(
-    sessions: &'a mut BTreeMap<SessionKey, Session>,
-    key: &SessionKey,
-    agent_id: &str,
-) -> Option<&'a mut Agent> {
-    sessions.get_mut(key)?.agents.get_mut(agent_id)
-}
-
-/// `agent_mut`'s shared twin.
-pub(crate) fn agent_ref<'a>(
-    sessions: &'a BTreeMap<SessionKey, Session>,
-    key: &SessionKey,
-    agent_id: &str,
-) -> Option<&'a Agent> {
-    sessions.get(key)?.agents.get(agent_id)
-}
-
-/// Drops the agent's observation, with the pending entry it follows and the bytes its recipe held.
-fn drop_current(
-    warming: &mut AgentWarming,
-    pending: &mut HashMap<String, (SessionKey, String)>,
-    retained: &mut usize,
-) {
-    if let Some(observation) = warming.current.take() {
-        pending.remove(&observation.id);
-        *retained -= observation.recipe.size;
-    }
-}
-
-/// Whether a request the engine follows is open on the agent of `warming`: the turn its observation follows, while
-/// `pending` holds it, or a compaction. Its completion decides the probes and the recipe, so no lapse, eviction or
-/// sweep decides them first.
-fn request_open(pending: &HashMap<String, (SessionKey, String)>, warming: &AgentWarming) -> bool {
-    warming.compaction.is_some()
-        || warming
-            .current
-            .as_ref()
-            .is_some_and(|o| pending.contains_key(&o.id))
-}
-
-/// What the agent's previous recipe proved for a request admitted at `now`: the kept-warm credit reads this and nothing
-/// on the agent. The newest unanswered probe whose coverage held is taken, a rewrite included, then the newest
-/// unanswered probe where none held, so a late probe's `covered: false` never shadows an older covered one whose entry
-/// still lives, and the coverage leaves with the probes the request keeps. A recipe the idle limit ended leaves its
-/// probes kept and pending, as a failed turn hands back the probes it took, so the newest of those whose entry still
-/// lives stands in for it. The gap runs from the last turn that answered, since a failed turn is no evidence about the
-/// cache.
-fn prior_coverage(warming: &AgentWarming, now: i64) -> Option<PriorCoverage> {
-    let newest_kept = warming
-        .kept
-        .iter()
-        .rev()
-        .find(|kept| kept.pending.is_some() && now < kept.entry_expires);
-    let newest_unanswered = warming
-        .unanswered
-        .iter()
-        .rev()
-        .find(|p| p.covered)
-        .or(warming.unanswered.last());
-    let answered_at = warming.last_answered_at.or(warming.last_real_at);
-    answered_at.map(|real_at| {
-        let ttl_ms = warming.ttl_ms;
-        match (newest_unanswered, newest_kept) {
-            (Some(probe), _) => PriorCoverage {
-                account: probe.charge.account.clone(),
-                covered: probe.covered,
-                unit: probe.unit,
-                window: probe.window,
-                model: probe.model.clone(),
-                fast: probe.fast,
-                real_at,
-                ttl_ms,
-                until: Some(probe.expires),
-            },
-            (None, Some(kept)) => PriorCoverage {
-                account: kept.charge.account.clone(),
-                covered: kept.covered,
-                unit: kept.unit,
-                window: kept.window,
-                model: kept.canonical_model.clone(),
-                fast: kept.fast,
-                real_at,
-                ttl_ms,
-                until: Some(kept.entry_expires),
-            },
-            (None, None) => PriorCoverage {
-                account: None,
-                covered: false,
-                unit: None,
-                window: SEVEN_DAY,
-                model: warming.canonical_model.clone(),
-                fast: false,
-                real_at,
-                ttl_ms,
-                until: None,
-            },
-        }
-    })
-}
-
-/// One real request the engine is following from its observation to its completion.
-pub(crate) struct Observation {
-    pub id: String,
-    pub attempt: u8,
-    pub started: i64,
-    /// The relay's receipt of the request, the instant its own request row keys its band at.
-    pub received_at: i64,
-    pub recipe: Recipe,
-    pub ready: bool,
-    pub expected: u64,
-    pub ttl_ms: i64,
-    pub prior: Option<PriorCoverage>,
-    /// Observed inside a gap's backlog, so this request's own terminal event may be one the gap dropped:
-    /// nothing it carries may arm a recipe.
-    pub poisoned: bool,
-    /// The TTL the relay actually dispatched this attempt's body with, read off `AccountSelected`, or `None` when
-    /// the relay left the markers as sent, in which case the cap falls back to the recipe's own received TTL.
-    pub dispatched_ms: Option<i64>,
-    /// The kind and the class of the account the current attempt was placed on, read off `AccountSelected`, and
-    /// whether that attempt's head reported overage in use, the fact the request's own row files under, so a skip and a
-    /// kept-warm credit file under the funding this request ran under whatever the registry holds by then.
-    pub funding: AttemptFunding,
-    /// The request's client label, whole. Its kept-warm credit keys it, a probe takes it at dispatch for its
-    /// settlement, and a skip reads it, since a probe replays this request's headers.
-    pub client_label: Option<String>,
-}
-
-/// A main request whose chain held none of the anchor's boundaries at its arrival, kept until its completion.
-pub(crate) struct ChainMark {
-    pub session: SessionKey,
-    pub previous_prompt: u64,
-    pub arrived_at: i64,
-}
-
-/// The recipe a real request's arrival put aside, with the schedule and the error count it stood on and the model and
-/// account it was armed under, restored where the request fails or is canceled and dropped where it succeeds, is
-/// rejected, or the entry expired meanwhile. Its body stays counted in `Inner::retained` while it lives.
-pub(crate) struct AsideRecipe {
-    pub observation: Observation,
-    pub expires: Option<i64>,
-    pub retry_at: Option<i64>,
-    pub jitter_frac: f64,
-    pub ttl_ms: i64,
-    pub cache_started: i64,
-    pub failures: u32,
-    pub canonical_model: String,
-    pub entrypoint: Option<String>,
-    pub account: Option<String>,
-    /// The holder's incarnation beside `account`, so a recipe put back stands on the holder it was armed on.
-    pub account_incarnation: Option<u64>,
-    pub pool_id: String,
-    pub key_generation: i64,
-}
-
-/// What one probe was charged under, off its `ProbeRecord`, carried whole by every copy of the probe so its
-/// settlement files where its own cost row did.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ProbeCharge {
-    pub account: Option<String>,
-    /// The probe's exchange instant and band, so a settlement filed a day later keys the probe's hour and prices its
-    /// counts at the cells and the revision the probe ran at.
-    pub at: i64,
-    pub band: Band,
-    /// The client and the user agent the probe's own request row keys, off its `ProbeRecord`, so a settlement filed
-    /// after its recipe ended or past a restart keys them too.
-    pub client: RowClient,
-    /// The kind and the class the probe was served under and whether its answer reported overage, as the probe's own
-    /// cost row took them, so the waste files under the same funding word whatever the registry holds now.
-    pub funding: AttemptFunding,
-    /// The account tier the settlement read, so the credit row keys the tier the probe ran under.
-    pub tier: Option<String>,
-    /// The probe's own usage, which the rollup carries as the wasted counts and prices when read.
-    pub usage: ProbeUsage,
-}
-
-/// One unanswered probe with the label that settles it as wasted. Queued under the lock and written to the ledger by
-/// the engine once the lock is released.
-pub(crate) struct Settlement {
-    pub key: SessionKey,
-    pub key_generation: i64,
-    pub pool_id: String,
-    pub canonical_model: String,
-    pub label: Wasted,
-    pub charge: ProbeCharge,
-}
-
-/// A due probe a gate or a lapsed entry withheld, with the keys its skip row files under, read while the recipe still
-/// held its speed.
-pub(crate) struct Skipped {
-    pub key: SessionKey,
-    pub key_generation: i64,
-    pub pool_id: String,
-    pub account: Option<String>,
-    pub canonical_model: String,
-    pub fast: bool,
-    pub state: RecipeState,
-    /// The kind, the class and the overage of the request the recipe came from, off its observation, so the skip files
-    /// under the funding that request ran under.
-    pub funding: AttemptFunding,
-    /// The observation's client label and `user_agent_of` over the recipe's headers, the client and the user agent the
-    /// withheld probe's own request row would have keyed.
-    pub client: RowClient,
-}
-
-impl Skipped {
-    fn of(key: &SessionKey, warming: &AgentWarming, state: RecipeState) -> Skipped {
-        let observation = warming.current.as_ref();
-        Skipped {
-            key: key.clone(),
-            key_generation: warming.key_generation,
-            pool_id: warming.pool_id.clone(),
-            account: warming.account.clone(),
-            canonical_model: warming.canonical_model.clone(),
-            fast: observation.is_some_and(|o| o.recipe.fast),
-            state,
-            funding: observation.map(|o| o.funding).unwrap_or_default(),
-            client: RowClient {
-                client: observation.and_then(|o| o.client_label.clone()),
-                user_agent: observation.and_then(|o| user_agent_of(&o.recipe.headers)),
-            },
-        }
-    }
-}
-
-/// One probe the next real request has not answered yet: what it used and the unit it settled in, the lineage a
-/// request has to match to be read as its answer, and the end of the entry it wrote, which a later probe of its chain
-/// extends by reading the entry back.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct UnansweredProbe {
-    /// The relay's request id of the probe's exchange, which the probe's own ledger request row carries, so a
-    /// settlement of this probe can be told from a repeat of it.
-    pub id: String,
-    pub charge: ProbeCharge,
-    pub unit: Option<SavingsUnit>,
-    /// The window `unit` was priced in, as `PriorCoverage::window` reads it.
-    pub window: &'static str,
-    pub fast: bool,
-    pub model: String,
-    /// `job.started + ttl_ms` as the landing computes the entry's end, for a probe that read the whole prefix and
-    /// for one that read nothing and rewrote it alike.
-    pub expires: i64,
-    /// Whether the probe established valid full-prefix coverage: false at the push, true once the landing's checks
-    /// passed (a full read, or an accepted complete rewrite). A probe paused as `PartialCacheCoverage`,
-    /// `NoProbeCacheEvidence`, an unexpected output or a missing account keeps false and is still paid for and
-    /// settled, so the cost record and the coverage record never merge.
-    pub covered: bool,
-}
-
-/// One unanswered probe with the rollup keys it was paid under, which its settlement files under.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Kept {
-    pub key_generation: i64,
-    pub pool_id: String,
-    pub canonical_model: String,
-    pub charge: ProbeCharge,
-    pub fast: bool,
-    /// When the entry this probe wrote expires. A later probe of its chain that read the entry back extended it, so a
-    /// settlement reads the chain's last entry (`chain_expires`).
-    pub entry_expires: i64,
-    /// What the probe proved, carried from its `UnansweredProbe` by `Kept::of`, so a turn that arrives after the
-    /// ceiling moved the probe here reads the evidence the unanswered list held.
-    pub covered: bool,
-    pub unit: Option<SavingsUnit>,
-    /// The window `unit` was priced in, as `PriorCoverage::window` reads it.
-    pub window: &'static str,
-    /// The label a probe written off at a ceiling settles under when its chain's last entry lapses with no turn:
-    /// `idle_limit` today. A turn that reads the probe leaves the label in place, so one that ends without deciding the
-    /// probe hands it back to the lapse sweep. `None` for a probe a real request superseded, which waits for that
-    /// request's completion. A failed completion hands such a probe back under `expired`, the label its recipe's own
-    /// lapse settles it under. A lapse of the recipe hands a probe whose chain is still alive back the same way, under
-    /// `expired`, for the sweep to settle at the chain's end.
-    pub pending: Option<Wasted>,
-}
-
-impl Kept {
-    pub(crate) fn of(warming: &AgentWarming, probe: UnansweredProbe) -> Kept {
-        Kept {
-            key_generation: warming.key_generation,
-            pool_id: warming.pool_id.clone(),
-            canonical_model: probe.model,
-            charge: probe.charge,
-            fast: probe.fast,
-            entry_expires: probe.expires,
-            covered: probe.covered,
-            unit: probe.unit,
-            window: probe.window,
-            pending: None,
-        }
-    }
-
-    pub(crate) fn settle(self, key: &SessionKey, label: Wasted) -> Settlement {
-        Settlement {
-            key: key.clone(),
-            key_generation: self.key_generation,
-            pool_id: self.pool_id,
-            canonical_model: self.canonical_model,
-            label,
-            charge: self.charge,
-        }
-    }
-
-    fn link(&self) -> ChainLink<'_> {
-        ChainLink {
-            at: self.charge.at,
-            model: &self.canonical_model,
-            fast: self.fast,
-            account: self.charge.account.as_deref(),
-            read: self.charge.usage.read,
-            covered: self.covered,
-            expires: self.entry_expires,
-        }
-    }
-}
-
-impl UnansweredProbe {
-    /// The link the probe makes as a kept one, from the fields `Kept::of` carries over.
-    fn link(&self) -> ChainLink<'_> {
-        ChainLink {
-            at: self.charge.at,
-            model: &self.model,
-            fast: self.fast,
-            account: self.charge.account.as_deref(),
-            read: self.charge.usage.read,
-            covered: self.covered,
-            expires: self.expires,
-        }
-    }
-}
-
-/// What `chain_expires` reads of one probe, borrowed off a kept or an unanswered probe so the per-tick lapse sweep
-/// clones no probe to read its chain.
-#[derive(Clone, Copy)]
-struct ChainLink<'a> {
-    at: i64,
-    model: &'a str,
-    fast: bool,
-    account: Option<&'a str>,
-    read: u64,
-    covered: bool,
-    expires: i64,
-}
-
-/// What ending an observation does with the probes the recipe leaves unanswered.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Unanswered {
-    /// A labeled stop settles them and the kept ones under its label. A stop with no label drops them and leaves
-    /// the kept ones for whatever decides them.
-    Settle,
-    /// A real request supersedes the recipe and keeps them until its completion decides them, a failed one handing
-    /// them back pending for the next turn, or the idle limit or a lapse keeps them pending under its label until
-    /// their entry lapses or a turn reads them.
-    Keep,
-    /// A bus gap or a failed request ends the observation without deciding the probes sent while it was open: they
-    /// wait where they are, with the recipe's speed, for the next request.
-    Leave,
 }
 
 pub(crate) struct Inner {
@@ -1359,11 +245,11 @@ impl Engine {
     pub fn stats(&self) -> EngineStats {
         let inner = self.lock();
         EngineStats {
-            agents: inner.agent_count(),
+            agents: inner.sessions.agent_count(),
             bus_gaps: inner.warming.bus_gaps,
             last_bus_gap_at: inner.warming.last_bus_gap_at,
             late_updates: inner.late_updates,
-            live_sessions: inner.live_sessions(),
+            live_sessions: inner.sessions.live_sessions(),
             retained_bytes: inner.warming.retained,
             running_probes: inner.warming.running,
             sessions: inner.sessions.entries.len(),
@@ -1412,23 +298,24 @@ impl Engine {
         let now = self.now();
         {
             let mut inner = self.lock();
-            inner.expire(now);
+            inner.sweep(now);
         }
         self.flush();
     }
 
     pub fn close(&self) {
         let mut inner = self.lock();
+        let inner = &mut *inner;
         inner.closed = true;
         let keys: Vec<SessionKey> = inner.sessions.entries.keys().cloned().collect();
         for key in keys {
-            inner.discard_session(&key, Reason::Reset, None);
+            let changes = inner
+                .warming
+                .discard_session(&inner.sessions, &key, Reason::Reset, None);
+            inner.apply_changes(changes);
         }
-        inner.sessions.entries.clear();
-        inner.warming.agents.clear();
-        inner.warming.pending.clear();
-        inner.warming.compactions.clear();
-        inner.warming.retained = 0;
+        inner.sessions.clear();
+        inner.warming.clear();
         self.cancel.cancel();
     }
 }
@@ -1453,1022 +340,52 @@ impl Inner {
         }
     }
 
-    /// The one writer of an agent's reason, so the counter behind the views never disagrees with the reason
-    /// they show. Nearly every change to a recipe writes a reason, so this is where most of them become dirty.
-    pub(crate) fn set_reason(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
-        if let Some(warming) = agent_ref(&self.sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
-        {
-            warming.reason = reason;
-        }
-        *self.warming.reasons.entry(reason).or_default() += 1;
-        self.touch_agent(key, agent_id);
-    }
-
-    /// The agents `max_agents` bounds: every record of a session that took its slots. A registered session's agents
-    /// hold none until a request the caps admit.
-    pub(crate) fn agent_count(&self) -> usize {
-        self.sessions
-            .entries
-            .values()
-            .map(Session::agent_slots)
-            .sum()
-    }
-
-    /// The sessions `max_sessions` bounds, those that hold a slot.
-    pub(crate) fn live_sessions(&self) -> usize {
-        self.sessions
-            .entries
-            .values()
-            .filter(|s| s.holds_slot())
-            .count()
-    }
-
-    /// Discards every agent of the session under `reason`, each one's probes settled under `wasted`.
-    pub(crate) fn discard_session(
-        &mut self,
-        key: &SessionKey,
-        reason: Reason,
-        wasted: Option<Wasted>,
-    ) {
-        let agents: Vec<String> = self
-            .sessions
-            .entries
-            .get(key)
-            .map(|session| session.agents.keys().cloned().collect())
-            .unwrap_or_default();
-        for agent in &agents {
-            self.discard(key, agent, reason, wasted);
+    /// Applies what a warming call left, in the order of the call's statements: an end moves the agent's request
+    /// generation in the session engine, and a changed row is marked for the next save.
+    pub(crate) fn apply_changes(&mut self, changes: Changes) {
+        for change in changes.0 {
+            match change {
+                Change::Ended { key, agent_id } => self.sessions.end_observation(&key, &agent_id),
+                Change::Agent { key, agent_id } => self.touch_agent(&key, &agent_id),
+                Change::Pool(pool_id) => self.touch_pool(&pool_id),
+            }
         }
     }
 
-    /// Discards each agent of the session that holds warming work, under `reason` and with its probes settled under
-    /// `wasted`. An agent with nothing to drop keeps its generation and its reason, so its lifecycle word stands.
-    pub(crate) fn discard_warming_of(&mut self, key: &SessionKey, reason: Reason, wasted: Wasted) {
-        let agents: Vec<String> = self
-            .sessions
-            .entries
-            .get(key)
-            .map(|session| {
-                session
-                    .agents
-                    .iter()
-                    .filter(|(id, _)| {
-                        warming_ref(&self.warming.agents, key, id)
-                            .expect(AGENT_HELD)
-                            .holds_warming_work()
-                    })
-                    .map(|(id, _)| id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        for agent in &agents {
-            self.discard(key, agent, reason, Some(wasted));
+    /// The lease and expiry sweep: the released records past their leave, the leases that lapsed and the sessions past
+    /// the expiry.
+    pub(crate) fn sweep(&mut self, now: i64) {
+        // A record whose probe is still in flight waits for the result, which settles under the release's label, and
+        // the next sweep takes it.
+        for (key, agent_id) in self.sessions.released_due(now) {
+            if self.warming.in_flight(&key, &agent_id) {
+                continue;
+            }
+            self.forget_agent(&key, &agent_id);
+            self.sessions.drop_agent(&key, &agent_id);
+            self.warming.drop_record(&key, &agent_id);
+            self.touch_session(&key);
+        }
+        for key in self.sessions.lapse_leases(now) {
+            self.warming.lease_lapsed(&self.sessions, &key);
+            self.touch_session(&key);
+            self.touch_agent(&key, MAIN_AGENT);
+        }
+        for key in self.sessions.expired(now) {
+            self.remove_session(&key, Reason::SessionExpired);
         }
     }
 
     /// Ends the session under `reason`: its agents discarded, their probes settled as `session_ended`, its rows filed
     /// for removal and its entry gone.
     fn remove_session(&mut self, key: &SessionKey, reason: Reason) {
-        self.discard_session(key, reason, Some(Wasted::SessionEnded));
+        let changes =
+            self.warming
+                .discard_session(&self.sessions, key, reason, Some(Wasted::SessionEnded));
+        self.apply_changes(changes);
         self.forget_session(key);
-        self.sessions.entries.remove(key);
-        self.warming.agents.remove(key);
-    }
-
-    /// Drops the agent's recipe and everything following it, and moves the agent to a new generation so no
-    /// late result about the old one lands. `wasted` labels the probes the recipe leaves unanswered.
-    pub(crate) fn discard(
-        &mut self,
-        key: &SessionKey,
-        agent_id: &str,
-        reason: Reason,
-        wasted: Option<Wasted>,
-    ) {
-        self.end_observation(key, agent_id, wasted, Unanswered::Settle);
-        self.set_reason(key, agent_id, reason);
-    }
-
-    /// `discard` for a real request that supersedes the recipe: the probes the recipe leaves unanswered were paying
-    /// for that request, so it keeps them until the first of these decides them: its successful completion (each
-    /// probe by its chain's last entry: a warm return on its lineage inside that entry clears it, one past it settles
-    /// it under `expired`, and any other return, on another lineage or with no read, under `cold_return`), a labeled
-    /// discard (under its label), or the agent's lapse or eviction. An eviction settles them at once, and a lapse
-    /// settles at once only those whose chain has ended and hands the rest back under `expired`. A request the engine
-    /// takes no observation of leaves them kept for whichever comes next, and one that fails hands them back for the
-    /// next turn to read or the lapse sweep to settle.
-    pub(crate) fn discard_keeping_unanswered(
-        &mut self,
-        key: &SessionKey,
-        agent_id: &str,
-        reason: Reason,
-    ) {
-        self.end_observation(key, agent_id, None, Unanswered::Keep);
-        self.set_reason(key, agent_id, reason);
-    }
-
-    /// `discard_keeping_unanswered` for an arrival, an armed recipe (unpaused, its entry ahead of `now`) set aside
-    /// instead of ended: its observation leaves `current` and `pending` with its size kept in `retained`, and waits
-    /// with its schedule and context for the completion to restore or drop it. A paused recipe and one that never armed
-    /// end through the discard. An older recipe set aside over a completion the engine missed leaves through the
-    /// discard.
-    pub(crate) fn set_aside(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
-        let aside = agent_ref(&self.sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
-            .filter(|warming| {
-                !warming.paused && warming.expires.is_some_and(|expires| expires > now)
-            })
-            .and_then(|warming| {
-                let observation = warming.current.take()?;
-                Some(AsideRecipe {
-                    observation,
-                    expires: warming.expires,
-                    retry_at: warming.retry_at,
-                    jitter_frac: warming.jitter_frac,
-                    ttl_ms: warming.ttl_ms,
-                    cache_started: warming.cache_started,
-                    failures: warming.failures,
-                    canonical_model: warming.canonical_model.clone(),
-                    entrypoint: warming.entrypoint.clone(),
-                    account: warming.account.clone(),
-                    account_incarnation: warming.account_incarnation,
-                    pool_id: warming.pool_id.clone(),
-                    key_generation: warming.key_generation,
-                })
-            });
-        if let Some(aside) = &aside {
-            self.warming.pending.remove(&aside.observation.id);
-        }
-        self.discard_keeping_unanswered(key, agent_id, Reason::AwaitingSelection);
-        if let Some(warming) = agent_ref(&self.sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
-        {
-            warming.aside = aside;
-        }
-    }
-
-    /// The recipe the arrival set aside, taken out for the completion to restore, its body still counted in
-    /// `retained`.
-    pub(crate) fn take_aside(&mut self, key: &SessionKey, agent_id: &str) -> Option<AsideRecipe> {
-        agent_ref(&self.sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))?
-            .aside
-            .take()
-    }
-
-    /// Puts the recipe `take_aside` took back into `current` with the schedule, the error count and the model and
-    /// account it stood on, where its entry is still ahead of `now`, and otherwise drops it, its size leaving
-    /// `retained`. Its id never goes back into `pending`: its own request ended before the one that set it aside
-    /// arrived, so the lapse, the eviction and the sweeps take it as any armed recipe. Answers whether it re-armed.
-    pub(crate) fn rearm_aside(
-        &mut self,
-        key: &SessionKey,
-        agent_id: &str,
-        aside: AsideRecipe,
-        now: i64,
-    ) -> bool {
-        let warming = agent_ref(&self.sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
-            .filter(|_| aside.expires.is_some_and(|expires| expires > now));
-        let Some(warming) = warming else {
-            self.warming.retained -= aside.observation.recipe.size;
-            return false;
-        };
-        warming.current = Some(aside.observation);
-        warming.expires = aside.expires;
-        warming.retry_at = aside.retry_at;
-        warming.jitter_frac = aside.jitter_frac;
-        warming.ttl_ms = aside.ttl_ms;
-        warming.cache_started = aside.cache_started;
-        warming.failures = aside.failures;
-        warming.canonical_model = aside.canonical_model;
-        warming.entrypoint = aside.entrypoint;
-        warming.account = aside.account;
-        warming.account_incarnation = aside.account_incarnation;
-        warming.pool_id = aside.pool_id;
-        warming.key_generation = aside.key_generation;
-        // The next save seals the restored body in place of the failed request's.
-        warming.body_dirty = true;
-        self.touch_agent(key, agent_id);
-        true
-    }
-
-    /// Drops the recipe the arrival set aside, its size leaving `retained`.
-    pub(crate) fn drop_aside(&mut self, key: &SessionKey, agent_id: &str) {
-        if let Some(aside) = self.take_aside(key, agent_id) {
-            self.warming.retained -= aside.observation.recipe.size;
-        }
-    }
-
-    /// The entry a kept probe is judged against: the greatest `entry_expires` among the probes of its chain. The chain
-    /// is the probe and each later probe of its lineage (model, speed, account) in `chain`, in exchange order, up to
-    /// the first whose read did not cover the entry: a probe that read the whole entry back extended it, while one that
-    /// read nothing or only part of the prefix found the entry gone, whole or in part, and wrote a new one, which
-    /// starts a chain of its own. The read is tested beside `covered`, since the landing marks a cold complete rewrite
-    /// covered too. The chain also runs through the lineage's unanswered probes where the caller hands them in beside
-    /// the kept ones, as a compaction's completion, a lapse and the sweep do, since the recipe a failed turn re-arms
-    /// keeps probing the entry its kept probes paid for.
-    fn chain_expires(chain: &[ChainLink], probe: ChainLink) -> i64 {
-        let mut later: Vec<ChainLink> = chain
-            .iter()
-            .copied()
-            .filter(|other| {
-                other.at > probe.at
-                    && other.model == probe.model
-                    && other.fast == probe.fast
-                    && other.account == probe.account
-            })
-            .collect();
-        later.sort_by_key(|other| other.at);
-        later
-            .into_iter()
-            .take_while(|other| other.read > 0 && other.covered)
-            .map(|other| other.expires)
-            .fold(probe.expires, i64::max)
-    }
-
-    /// The decision `discard_keeping_unanswered` defers, taken by the successful completion of the request that
-    /// kept the probes, `read` being what the completion read from the cache. Each probe answers to the lineage it
-    /// was paid under, since a request that failed leaves its probes behind with the agent already moved to that
-    /// request's model and entry, and each probe of a chain is judged against the chain's last entry
-    /// (`chain_expires`): a warm return is one on the probe's model, speed and account, arriving before that entry
-    /// expired, that read the cache. A kept-warm credit takes no shortcut here: a probe off the lineage the credited
-    /// request read kept nothing it read. The model is the probe's as resolutions followed it. A probe sent while the
-    /// request was open is not among them: it pays for the request after this one.
-    pub(crate) fn decide_unanswered(&mut self, key: &SessionKey, agent_id: &str, read: u64) {
-        let Some(warming) = agent_ref(&self.sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
-        else {
-            return;
-        };
-        let answer = Answer {
-            // The read happened when the request reached the cache, so a stream that outlives the entry still read it.
-            started: warming.current.as_ref().map(|o| o.started),
-            account: warming.account.clone(),
-            model: warming.canonical_model.clone(),
-            fast: warming.current.as_ref().is_some_and(|o| o.recipe.fast),
-            read,
-        };
-        let probes = std::mem::take(&mut warming.kept);
-        self.decide_against(key, agent_id, probes, answer);
-    }
-
-    /// `decide_unanswered`'s test over `probes` against the arrival, the lineage and the read `answer` holds: a turn's
-    /// observation and its agent's, or a compaction's own. `probes` is every probe the request answers in one slice,
-    /// so a chain that runs from the kept probes into the unanswered ones settles against its last entry.
-    fn decide_against(
-        &mut self,
-        key: &SessionKey,
-        agent_id: &str,
-        probes: Vec<Kept>,
-        answer: Answer,
-    ) {
-        self.touch_agent(key, agent_id);
-        let links: Vec<ChainLink> = probes.iter().map(Kept::link).collect();
-        let chain_ends: Vec<i64> = links
-            .iter()
-            .map(|&probe| Self::chain_expires(&links, probe))
-            .collect();
-        for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
-            let lineage = kept.canonical_model == answer.model
-                && kept.fast == answer.fast
-                && kept.charge.account == answer.account;
-            // A probe whose chain's last entry was gone when the request arrived kept nothing the request could read,
-            // whatever it read: `expired` is its own label, so a credited request never sits beside a cold return it
-            // contradicts.
-            let label = match answer.started {
-                Some(at) if at >= chain_end => Some(Wasted::Expired),
-                Some(_) if answer.read > 0 && lineage => None,
-                _ => Some(Wasted::ColdReturn),
-            };
-            if let Some(label) = label {
-                self.warming.settlements.push(kept.settle(key, label));
-            }
-        }
-    }
-
-    /// `discard`'s bookkeeping without writing a reason: for a terminal state that is already the agent's
-    /// current reason, so ending the observation does not count that reason a second time.
-    pub(crate) fn end_observation(
-        &mut self,
-        key: &SessionKey,
-        agent_id: &str,
-        wasted: Option<Wasted>,
-        unanswered: Unanswered,
-    ) {
-        self.touch_agent(key, agent_id);
-        // A labeled stop settles or writes off the probes an open compaction would answer, so the compaction ends as a
-        // failed one, since its completion would credit a probe the stop wasted and relabel the stop. A registration
-        // that takes a released agent back follows such a stop, so it finds no compaction open.
-        if wasted.is_some() {
-            self.end_compaction(key, agent_id);
-        }
-        // Whatever ends the observation leaves nothing for a recipe set aside to wait for, so its body leaves memory
-        // with it.
-        self.drop_aside(key, agent_id);
-        let Some(agent) = agent_mut(&mut self.sessions.entries, key, agent_id) else {
-            return;
-        };
-        let warming = warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD);
-        drop_current(
-            warming,
-            &mut self.warming.pending,
-            &mut self.warming.retained,
-        );
-        warming.expires = None;
-        warming.retry_at = None;
-        agent.generation += 1;
-        warming.paused = false;
-        warming.last_stop = wasted;
-        match (unanswered, wasted) {
-            (Unanswered::Leave, _) => {}
-            (Unanswered::Keep, _) => {
-                // A row apiece: a request whose completion never came leaves its probes for the next one, which may
-                // keep probes paid under other keys, and each settles by its chain's last entry. A ceiling's label
-                // rides along, for the lapse sweep to settle under when no turn reads them first.
-                let probes = warming.take_unanswered();
-                warming.kept.extend(probes.into_iter().map(|kept| Kept {
-                    pending: wasted,
-                    ..kept
-                }));
-            }
-            (Unanswered::Settle, Some(label)) => {
-                self.warming
-                    .settlements
-                    .extend(warming.settle_all(key, label));
-            }
-            (Unanswered::Settle, None) => warming.unanswered.clear(),
-        }
-    }
-
-    /// Ends the compaction open on the agent as a failed one: it leaves the agent and the map, settles nothing and
-    /// leaves the recipe as it stood, so its later events miss both maps as an unknown request's do.
-    pub(crate) fn end_compaction(&mut self, key: &SessionKey, agent_id: &str) {
-        let Some(open) = agent_ref(&self.sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
-            .and_then(|warming| warming.compaction.take())
-        else {
-            return;
-        };
-        self.warming.compactions.remove(&open.request_id);
-    }
-
-    /// Settles every kept probe whose `pending` label is set and whose chain's last entry (`chain_expires`) ended at or
-    /// before `now` under that label, on each agent with no request open, and touches each agent it settled for the
-    /// next save, which releases the settlements. A probe whose own entry ended inside a live chain waits with the
-    /// chain, so a turn inside the chain's last entry still answers every probe of it. The chain runs through the
-    /// agent's unanswered probes of the lineage too, since the recipe a failed turn re-arms keeps probing, which is the
-    /// chain `decide_against` judges once the next arrival moves those probes into `kept`. Only kept probes settle.
-    pub(crate) fn settle_lapsed_pending(&mut self, now: i64) {
-        let open = &self.warming.pending;
-        let mut settled: Vec<(SessionKey, String)> = Vec::new();
-        for (key, session) in self.sessions.entries.iter() {
-            for agent_id in session.agents.keys() {
-                let warming =
-                    warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD);
-                // An open turn's or compaction's completion decides the probes, as `lapse` waits for it. A request that
-                // fails, past a head or not, or ends at a bus gap decides nothing and leaves them here.
-                // The sweep settles labeled probes alone, so an agent holding none builds no chain.
-                if request_open(open, warming)
-                    || !warming.kept.iter().any(|kept| kept.pending.is_some())
-                {
-                    continue;
-                }
-                let chain: Vec<ChainLink> = warming
-                    .kept
-                    .iter()
-                    .map(Kept::link)
-                    .chain(warming.unanswered.iter().map(UnansweredProbe::link))
-                    .collect();
-                let chain_ends: Vec<i64> = warming
-                    .kept
-                    .iter()
-                    .map(|probe| Self::chain_expires(&chain, probe.link()))
-                    .collect();
-                if !warming
-                    .kept
-                    .iter()
-                    .zip(&chain_ends)
-                    .any(|(kept, &chain_end)| kept.pending.is_some() && chain_end <= now)
-                {
-                    continue;
-                }
-                let mut waiting = Vec::new();
-                let probes = std::mem::take(&mut warming.kept);
-                for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
-                    match kept.pending {
-                        Some(label) if chain_end <= now => {
-                            self.warming
-                                .settlements_after_save
-                                .push(kept.settle(key, label));
-                        }
-                        _ => waiting.push(kept),
-                    }
-                }
-                warming.kept = waiting;
-                settled.push((key.clone(), agent_id.clone()));
-            }
-        }
-        for (key, agent_id) in &settled {
-            self.touch_agent(key, agent_id);
-        }
-    }
-
-    /// A gate's hold on a retained recipe. One hold withholds one probe, whatever number of ticks it spans: the
-    /// production ticker runs each second, so a five-hour cooldown would otherwise ledger 18,000 withheld probes
-    /// for the one it actually withheld. A hold that begins before the due time has withheld nothing yet, so the
-    /// skip waits for the due time to pass. The due time is read after the policy refresh, so the pool's current
-    /// policy decides whether a probe was due, and a probe already in flight was not withheld.
-    pub(crate) fn hold(&mut self, key: &SessionKey, agent_id: &str, reason: Reason, now: i64) {
-        let Some(warming) = agent_ref(&self.sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
-        else {
-            return;
-        };
-        let began = warming.reason != reason;
-        let counted = warming.hold_counted && !began;
-        let was_due = !warming.in_flight && warming.due_at().is_some_and(|at| at <= now);
-        // A hold spans every tick it lasts, so only a change is written: a held recipe would otherwise rewrite its
-        // sealed prompt at every flush.
-        let moved = warming.hold_counted != (counted || was_due);
-        warming.hold_counted = counted || was_due;
-        if !counted && was_due {
-            let state = recipe_state(reason, warming.paused);
-            self.warming.skipped.push(Skipped::of(key, warming, state));
-        }
-        if began {
-            self.set_reason(key, agent_id, reason);
-        } else if moved {
-            self.touch_agent(key, agent_id);
-        }
-    }
-
-    /// The probes sent since the last real request, settled under `label` the way a discard settles them, with the
-    /// recipe kept: a hold that retains the prompt still writes off what it paid for.
-    pub(crate) fn settle_unanswered(&mut self, key: &SessionKey, agent_id: &str, label: Wasted) {
-        let Some(warming) = agent_ref(&self.sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
-        else {
-            return;
-        };
-        let probes = warming.take_unanswered();
-        if probes.is_empty() {
-            return;
-        }
-        self.warming
-            .settlements
-            .extend(probes.into_iter().map(|kept| kept.settle(key, label)));
-        self.touch_agent(key, agent_id);
-    }
-
-    /// The entry is dead at its expiry and the lead already places the due time ahead of it, so a probe past it warms
-    /// nothing: the recipe ends under `expired` rather than being probed, held or not, its probes written off
-    /// (`lapse_probes`), and the next real request re-arms it. A probe already in flight was sent in time and settles
-    /// on its own answer, a hold that already ledgered the probe it withheld is not counted again, and the skip takes
-    /// the recipe's speed before the lapse drops the recipe. While a request is open on the agent, the one the
-    /// observation follows or a compaction, the recipe is held unprobed instead: its completion earns its credit and
-    /// decides the probes, and the next tick lapses it. A paused recipe loses its prompt alone (`drop_paused_prompt`).
-    /// True when the tick is done with the recipe.
-    fn lapse(
-        &mut self,
-        key: &SessionKey,
-        agent_id: &str,
-        now: i64,
-        lapsed: &mut Vec<Skipped>,
-    ) -> bool {
-        let warming = warming_ref(&self.warming.agents, key, agent_id).expect(AGENT_HELD);
-        let Some(expires) = warming
-            .expires
-            .filter(|expires| !warming.in_flight && now >= *expires)
-        else {
-            return false;
-        };
-        if request_open(&self.warming.pending, warming) {
-            return true;
-        }
-        if warming.paused {
-            tracing::info!(
-                key = %key.0,
-                session = %key.1,
-                agent = %agent_id,
-                expires = %phoebis_store::utc_stamp(expires),
-                late_ms = now - expires,
-                "a paused keepalive recipe's entry expired, so its prompt was dropped"
-            );
-            self.drop_paused_prompt(key, agent_id, now);
-            return true;
-        }
-        tracing::info!(
-            key = %key.0,
-            session = %key.1,
-            agent = %agent_id,
-            expires = %phoebis_store::utc_stamp(expires),
-            late_ms = now - expires,
-            "a keepalive recipe lapsed before its probe, so the probe was skipped"
-        );
-        if !warming.hold_counted {
-            // The lapse is what withholds the probe, so it counts under the state the recipe's end below leaves.
-            lapsed.push(Skipped::of(
-                key,
-                warming,
-                recipe_state(Reason::Expired, warming.paused),
-            ));
-        }
-        self.lapse_probes(key, agent_id, now);
-        self.end_observation(key, agent_id, Some(Wasted::Expired), Unanswered::Keep);
-        self.set_reason(key, agent_id, Reason::Expired);
-        true
-    }
-
-    /// The lapse of a paused recipe. The pause withheld every probe and holds until the next real request, so the agent
-    /// keeps its pause bit and its reason for the view's `paused`, and only the prompt the cold entry made worthless
-    /// leaves, with the probes it paid for written off under `expired` (`lapse_probes`). No probe was due, so no skip
-    /// is ledgered.
-    fn drop_paused_prompt(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
-        self.touch_agent(key, agent_id);
-        let Some(warming) = agent_ref(&self.sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
-        else {
-            return;
-        };
-        drop_current(
-            warming,
-            &mut self.warming.pending,
-            &mut self.warming.retained,
-        );
-        warming.expires = None;
-        warming.last_stop = Some(Wasted::Expired);
-        self.lapse_probes(key, agent_id, now);
-    }
-
-    /// A lapse's write-off of the agent's probes under `expired`, judged as the lapse sweep judges them: a probe whose
-    /// chain's last entry (`chain_expires` over the kept and the unanswered probes) ended at or before `now` settles
-    /// here, and the rest move into `kept` under the label, for the sweep to settle at their chain's end or a turn
-    /// inside it to read. The recipe a failed turn restored can lapse while a probe the failed turn's own recipe sent
-    /// keeps the chain alive past it.
-    fn lapse_probes(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
-        let Some(warming) = agent_ref(&self.sessions.entries, key, agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD))
-        else {
-            return;
-        };
-        let unanswered = warming.take_unanswered();
-        let probes: Vec<Kept> = std::mem::take(&mut warming.kept)
-            .into_iter()
-            .chain(unanswered)
-            .collect();
-        let links: Vec<ChainLink> = probes.iter().map(Kept::link).collect();
-        let chain_ends: Vec<i64> = links
-            .iter()
-            .map(|&probe| Self::chain_expires(&links, probe))
-            .collect();
-        for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
-            if chain_end <= now {
-                self.warming
-                    .settlements
-                    .push(kept.settle(key, Wasted::Expired));
-            } else {
-                warming.kept.push(Kept {
-                    pending: Some(Wasted::Expired),
-                    ..kept
-                });
-            }
-        }
-    }
-
-    /// A deadline or a wake that passed ends that part of the park, and a park with nothing left ended without a
-    /// request: the idle window restarts here and main reads idle. The mod reports the same end with `idle` when its
-    /// heartbeat sees it first, and whichever comes first records it. Main's end is the engine's own move out of
-    /// parked, which no report repeats.
-    pub(crate) fn end_passed_park(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
-        let Some(agent) = agent_mut(&mut self.sessions.entries, key, agent_id) else {
-            return;
-        };
-        let Some(held) = agent.park else {
-            return;
-        };
-        let left = held.park.passed(now);
-        if left == Some(held.park) {
-            return;
-        }
-        agent.park = left.map(|park| HeldPark {
-            began: held.began,
-            park,
-        });
-        if left.is_some() {
-            self.touch_agent(key, agent_id);
-            return;
-        }
-        // The window restarts here, so the one counted so far ends with no return, closed before its start moves.
-        let warming = warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD);
-        warming.close_idle_episode(agent);
-        warming.idle_window_floor = None;
-        agent.park_ended_at = Some(now);
-        if agent.id != MAIN_AGENT {
-            self.touch_agent(key, agent_id);
-            return;
-        }
-        agent.set_state(AgentState::Idle);
-        self.touch_agent(key, agent_id);
-    }
-
-    /// Drops the days the retention no longer keeps once `now` falls past the UTC day the counters last counted under,
-    /// and records the cutoff for the next save, which takes the registry's rows of those days. The two sites that
-    /// count call it, as `AgentWarming::roll_counters_day` is called, and the tick is one of them, so a day leaves
-    /// within a tick of the midnight that ages it out.
-    fn roll_idle_returns_day(&mut self, now: i64) {
-        let day = utc_day(now);
-        if day <= self.warming.idle_returns_day {
-            return;
-        }
-        self.warming.idle_returns_day = day;
-        let retention = self.warming.timing.idle_return_retention_days;
-        if retention == 0 {
-            return;
-        }
-        let cutoff = day - (i64::from(retention) - 1);
-        let mut dropped = false;
-        for days in self.warming.idle_returns.values_mut() {
-            let kept = days.split_off(&cutoff);
-            dropped |= !days.is_empty();
-            *days = kept;
-        }
-        self.warming.idle_returns.retain(|_, days| !days.is_empty());
-        if dropped {
-            self.warming.purge_counters_before = Some(cutoff);
-        }
-    }
-
-    /// Advances main's idle window on every attended session: opens one where none is counted and raises `reached`
-    /// up to the window's current bucket. It reads the sessions, never the retained recipes, so a session whose
-    /// recipe a ceiling discarded, or that never sent a request, still reaches the later buckets. A busy main keeps
-    /// its window and counts nothing, and a window whose return a prompt announced waits for the request.
-    pub(crate) fn advance_idle_episodes(&mut self, snapshot: &RegistrySnapshot, now: i64) {
-        self.roll_idle_returns_day(now);
-        let day = utc_day(now);
-        let mut opened: Vec<SessionKey> = Vec::new();
-        let mut raised: Vec<(SessionKey, String)> = Vec::new();
-        for (key, session) in self.sessions.entries.iter() {
-            if session.ended || !session.attended {
-                continue;
-            }
-            let Some(main) = session.agents.get(MAIN_AGENT) else {
-                continue;
-            };
-            if matches!(
-                main.state,
-                AgentState::Busy | AgentState::Released | AgentState::Unknown
-            ) {
-                continue;
-            }
-            let warming = warming_mut(&mut self.warming.agents, key, MAIN_AGENT).expect(AGENT_HELD);
-            if open_idle_episode(main, warming, snapshot) {
-                opened.push(key.clone());
-            }
-            let Some(episode) = warming.idle_episode.as_mut() else {
-                continue;
-            };
-            if episode.prompt_at.is_some() {
-                continue;
-            }
-            let bucket = idle_age_bucket(now - episode.started);
-            // Only a window that crossed into a new bucket is counted and written, so an idle session costs no save
-            // per tick and a day holds no empty counters.
-            if episode.bucket.is_some_and(|counted| bucket <= counted) {
-                continue;
-            }
-            raised.push((key.clone(), episode.pool_key.clone()));
-            raise_reached(
-                self.warming
-                    .idle_returns
-                    .entry(episode.pool_key.clone())
-                    .or_default()
-                    .entry(day)
-                    .or_default(),
-                episode.bucket,
-                bucket,
-            );
-            episode.bucket = Some(bucket);
-            episode.bucket_day = Some(day);
-        }
-        for key in opened {
-            self.touch_agent(&key, MAIN_AGENT);
-        }
-        for (key, pool) in raised {
-            self.touch_agent(&key, MAIN_AGENT);
-            self.touch_pool(&pool);
-        }
-    }
-
-    /// Main's request ends its open idle window: the buckets the window crossed since the last tick count as reached,
-    /// and the bucket of its age counts a return when the request continues the prefix the window opened on. The age
-    /// runs to the prompt that announced the request, when one did, since the user came back then however many ticks
-    /// pass before the request arrives.
-    pub(crate) fn end_idle_episode(&mut self, key: &SessionKey, boundaries: &[String], now: i64) {
-        self.roll_idle_returns_day(now);
-        let Some(main) = agent_ref(&self.sessions.entries, key, MAIN_AGENT) else {
-            return;
-        };
-        let warming = warming_mut(&mut self.warming.agents, key, MAIN_AGENT).expect(AGENT_HELD);
-        let Some(episode) = warming.close_idle_episode(main) else {
-            return;
-        };
-        // Never below the fence: the window already counted as reaching it, so its return is read there.
-        let bucket = idle_age_bucket(episode.prompt_at.unwrap_or(now) - episode.started)
-            .max(episode.bucket.unwrap_or(0));
-        let today = utc_day(now);
-        let raised = episode.bucket.is_none_or(|counted| bucket > counted);
-        // The return's bucket is the highest the window counted, so the return counts on the day that bucket was
-        // reached (today where this request raised it), and no day answers a return without its reach. Where that
-        // day has left at the roll, or a window restored from a row saved without it holds its reach under no day,
-        // the return leaves with its reach and counts nothing.
-        let retention = i64::from(self.warming.timing.idle_return_retention_days);
-        let return_day = if raised {
-            Some(today)
-        } else {
-            episode.bucket_day.filter(|day| {
-                retention == 0 || *day >= self.warming.idle_returns_day - (retention - 1)
-            })
-        }
-        .filter(|_| continues_prefix(episode.anchor.as_ref(), boundaries));
-        if raised || return_day.is_some() {
-            let days = self
-                .warming
-                .idle_returns
-                .entry(episode.pool_key.clone())
-                .or_default();
-            if raised {
-                raise_reached(days.entry(today).or_default(), episode.bucket, bucket);
-            }
-            if let Some(day) = return_day {
-                days.entry(day).or_default().buckets[bucket].returned += 1;
-            }
-        }
-        self.touch_agent(key, MAIN_AGENT);
-        if raised || return_day.is_some() {
-            self.touch_pool(&episode.pool_key);
-        }
-    }
-
-    /// Marks main's refreshing request whose chain holds none of the boundaries of main's last prefix, for its
-    /// completion to read against the previous prompt. A compaction and the first request after one rewrite the context
-    /// the chain hashes, so their chains move with no contradiction to read.
-    fn mark_chain(&mut self, key: &SessionKey, observed: &RequestObserved, now: i64) {
-        let refreshing = observed
-            .client
-            .request_class
-            .as_deref()
-            .is_some_and(|class| class_guard(class) == Guard::Rearm);
-        if !refreshing || observed.client.context_compacted.is_some() {
-            return;
-        }
-        let Some(warming) = agent_ref(&self.sessions.entries, key, MAIN_AGENT)
-            .map(|_| warming_ref(&self.warming.agents, key, MAIN_AGENT).expect(AGENT_HELD))
-        else {
-            return;
-        };
-        let (Some(anchor), Some(previous_prompt)) =
-            (warming.last_prefix.as_ref(), warming.last_prompt_tokens)
-        else {
-            return;
-        };
-        if continues_prefix(Some(anchor), &observed.boundaries) {
-            return;
-        }
-        self.warming
-            .contradiction_marks
-            .retain(|_, mark| now - mark.arrived_at <= ONE_HOUR_MS);
-        self.warming.contradiction_marks.insert(
-            observed.request_id.clone(),
-            ChainMark {
-                session: key.clone(),
-                previous_prompt,
-                arrived_at: now,
-            },
-        );
-    }
-
-    pub(crate) fn incarnation(&mut self) -> u64 {
-        self.sessions.next_incarnation += 1;
-        self.sessions.next_incarnation
-    }
-
-    /// Whether a result about `agent` may still land: the session is not ended, the agent is registered, and
-    /// its state admits traffic. An unattended session is live. The idle limits decide what happens to it.
-    pub(crate) fn live(&self, key: &SessionKey, agent_id: &str) -> bool {
-        !self.closed
-            && self.sessions.entries.get(key).is_some_and(|s| {
-                !s.ended
-                    && s.agents.get(agent_id).is_some_and(|a| {
-                        !matches!(a.state, AgentState::Released | AgentState::Unknown)
-                    })
-            })
-    }
-
-    /// Every model name a live recipe compares against the router's rows: the recipe's own, and the one its
-    /// open observation took from the recipe before it. An open compaction's own and the one it took count too, since
-    /// its completion compares them while the recipe it would answer may have ended.
-    pub(crate) fn retained_models(&self) -> Vec<String> {
-        let mut models = BTreeSet::new();
-        for (key, session) in &self.sessions.entries {
-            for agent_id in session.agents.keys() {
-                if !self.live(key, agent_id) {
-                    continue;
-                }
-                let warming = warming_ref(&self.warming.agents, key, agent_id).expect(AGENT_HELD);
-                if let Some(observation) = &warming.current {
-                    models.insert(warming.canonical_model.clone());
-                    if let Some(prior) = &observation.prior {
-                        models.insert(prior.model.clone());
-                    }
-                }
-                if let Some(compaction) = &warming.compaction {
-                    models.insert(compaction.canonical_model.clone());
-                    if let Some(prior) = &compaction.prior {
-                        models.insert(prior.model.clone());
-                    }
-                }
-            }
-        }
-        models.into_iter().collect()
-    }
-
-    /// A resolution that landed after a recipe was retained moved the router's pins and model cooldowns to the
-    /// dated id. The recipe follows, so the gate finds them and the next request's credit compares like names.
-    pub(crate) fn follow_resolutions(&mut self, canonical: &HashMap<String, String>) {
-        let mut followed: Vec<(SessionKey, String)> = Vec::new();
-        for (key, session) in self.sessions.entries.iter() {
-            for agent_id in session.agents.keys() {
-                let warming =
-                    warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD);
-                if warming.follow_resolutions(canonical) {
-                    followed.push((key.clone(), agent_id.clone()));
-                }
-            }
-        }
-        for (key, agent_id) in followed {
-            self.touch_agent(&key, &agent_id);
-        }
-    }
-
-    /// The cheap half of what a tick needs to decide before it asks the router: whether any live agent still
-    /// holds a recipe. An idle session, or one whose companion has sent nothing real yet, retains nothing for
-    /// the gate to read, so the tick that finds none needs no fresher view than the one it already has.
-    pub(crate) fn anything_retained(&self) -> bool {
-        self.sessions.entries.iter().any(|(key, session)| {
-            session.agents.keys().any(|agent_id| {
-                self.live(key, agent_id)
-                    && warming_ref(&self.warming.agents, key, agent_id)
-                        .expect(AGENT_HELD)
-                        .current
-                        .is_some()
-            })
-        })
-    }
-
-    /// Makes room under `cap` for a recipe of `size` by evicting retained recipes: unattended sessions' agents
-    /// first, then attended sessions' idle agents, each oldest activity first. An agent with a probe in flight or a
-    /// request still open is never evicted. When even every candidate would not make room nothing is evicted and
-    /// the answer is false, so the refusal that follows costs no recipe.
-    pub(crate) fn evict_for(&mut self, cap: usize, size: usize) -> bool {
-        let mut candidates: Vec<(bool, i64, SessionKey, String, usize)> = Vec::new();
-        for (key, session) in &self.sessions.entries {
-            for (agent_id, agent) in &session.agents {
-                let warming = warming_ref(&self.warming.agents, key, agent_id).expect(AGENT_HELD);
-                let Some(observation) = warming.current.as_ref() else {
-                    continue;
-                };
-                if (!session.attended || agent.state == AgentState::Idle)
-                    && !warming.in_flight
-                    && !request_open(&self.warming.pending, warming)
-                {
-                    candidates.push((
-                        session.attended,
-                        agent.last_activity,
-                        key.clone(),
-                        agent_id.clone(),
-                        observation.recipe.size,
-                    ));
-                }
-            }
-        }
-        candidates.sort();
-        let mut freed = 0;
-        let mut evicted = Vec::new();
-        for (_, _, key, agent_id, bytes) in candidates {
-            if self.warming.retained.saturating_sub(freed) + size <= cap {
-                break;
-            }
-            freed += bytes;
-            evicted.push((key, agent_id));
-        }
-        if self.warming.retained.saturating_sub(freed) + size > cap {
-            return false;
-        }
-        for (key, agent_id) in evicted {
-            self.discard(&key, &agent_id, Reason::Evicted, Some(Wasted::Evicted));
-        }
-        true
-    }
-
-    /// Sets the record's leave one pool cache TTL out from `now`, from the snapshot's pool row, on a record its caller
-    /// set released.
-    pub(crate) fn release_record(
-        &mut self,
-        key: &SessionKey,
-        agent_id: &str,
-        now: i64,
-        snapshot: &RegistrySnapshot,
-    ) {
-        let Some(agent) = agent_mut(&mut self.sessions.entries, key, agent_id) else {
-            return;
-        };
-        let warming = warming_ref(&self.warming.agents, key, agent_id).expect(AGENT_HELD);
-        // A pool the snapshot no longer holds, or none for a record that never sent a request, reads the default
-        // policy, whose plan set keeps the hour.
-        let policy = snapshot
-            .pool(&warming.pool_id)
-            .map(|pool| CacheTtlPolicy::from_json(&pool.cache_ttl_json))
-            .unwrap_or_default();
-        agent.leaves_at = Some(now + longest_cache_ttl_ms(&policy));
-        self.touch_agent(key, agent_id);
-    }
-
-    pub(crate) fn expire(&mut self, now: i64) {
-        // A record whose probe is still in flight waits for the result, which settles under the release's label, and
-        // the next sweep takes it.
-        let warming_agents = &self.warming.agents;
-        let leaving: Vec<(SessionKey, String)> = self
-            .sessions
-            .entries
-            .iter()
-            .flat_map(|(key, session)| {
-                session
-                    .agents
-                    .iter()
-                    .filter(move |(agent_id, agent)| {
-                        agent.state == AgentState::Released
-                            && !warming_ref(warming_agents, key, agent_id)
-                                .expect(AGENT_HELD)
-                                .in_flight
-                            && agent.leaves_at.is_some_and(|at| now >= at)
-                    })
-                    .map(move |(agent_id, _)| (key.clone(), agent_id.clone()))
-            })
-            .collect();
-        for (key, agent_id) in leaving {
-            self.forget_agent(&key, &agent_id);
-            if let Some(session) = self.sessions.entries.get_mut(&key) {
-                session.agents.remove(&agent_id);
-            }
-            if let Some(warming_agents) = self.warming.agents.get_mut(&key) {
-                warming_agents.remove(&agent_id);
-            }
-            self.touch_session(&key);
-        }
-        let lapsed: Vec<SessionKey> = self
-            .sessions
-            .entries
-            .iter()
-            .filter(|(_, s)| s.attended && !s.ended && now >= s.lease)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in lapsed {
-            // The recipes stay: a silent companion is not an ended session, and the idle limits bound what the
-            // engine spends on it. The lapse is counted once per agent, as the Go engine counted it, but no
-            // agent's own reason is rewritten: a recipe the scheduler keeps probing would otherwise read held
-            // in every view until its next probe.
-            let agents = self.sessions.entries[&key].agents.len() as u64;
-            *self
-                .warming
-                .reasons
-                .entry(Reason::LeaseExpired)
-                .or_default() += agents;
-            if let Some(session) = self.sessions.entries.get_mut(&key) {
-                session.attended = false;
-                // A lapse is no return, so main's window ends here.
-                if let Some(main) = session.agents.get(MAIN_AGENT) {
-                    warming_mut(&mut self.warming.agents, &key, MAIN_AGENT)
-                        .expect(AGENT_HELD)
-                        .close_idle_episode(main);
-                }
-            }
-            self.touch_session(&key);
-            self.touch_agent(&key, MAIN_AGENT);
-        }
-        let expired: Vec<SessionKey> = self
-            .sessions
-            .entries
-            .iter()
-            .filter(|(_, s)| {
-                now - s.last_real_at.unwrap_or(0).max(s.last_report_at)
-                    >= self.sessions.session_expiry_ms
-            })
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in expired {
-            self.remove_session(&key, Reason::SessionExpired);
-        }
+        self.warming.drop_records(key);
+        self.sessions.remove_session(key);
     }
 
     /// Ends every session whose key the registry no longer holds under the generation that registered it: a
@@ -2476,33 +393,11 @@ impl Inner {
     /// than leaving them to the session expiry. The filed sets of such a generation leave behind them, each found by
     /// its own key, since a set can be filed for a session that the map holds no record of.
     pub(crate) fn drop_sessions_of_dead_keys(&mut self, snapshot: &RegistrySnapshot) {
-        let dead: Vec<SessionKey> = self
-            .sessions
-            .entries
-            .iter()
-            .filter(|(key, s)| snapshot.key(&key.0).map(|k| k.created_at) != Some(s.key_generation))
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in dead {
+        for key in self.sessions.sessions_of_dead_keys(snapshot) {
             self.remove_session(&key, Reason::SessionEnded);
         }
         self.forget_facts_of_dead_keys(snapshot);
     }
-}
-
-/// The longest TTL the policy names in milliseconds, over both rule sets' `main`, `subagent` and model overrides.
-pub(crate) fn longest_cache_ttl_ms(policy: &CacheTtlPolicy) -> i64 {
-    // Whatever `enabled` says: the rules are what a body's markers are completed against, so a resumed agent's next
-    // request can land under the longest of them.
-    [&policy.plan, &policy.metered]
-        .into_iter()
-        .flat_map(|rules| {
-            [rules.main, rules.subagent]
-                .into_iter()
-                .chain(rules.models.iter().flat_map(|m| [m.main, m.subagent]))
-        })
-        .map(CacheTtl::ms)
-        .fold(FIVE_MINUTES_MS, i64::max)
 }
 
 /// The engine's bus task. Every event is handed to `observe` under the lock. Nothing here awaits while holding
@@ -2578,33 +473,14 @@ impl Engine {
     /// armed recipe's evidence was complete before the gap and stays.
     pub fn bus_gap(&self, dropped: u64, backlog: usize) {
         let mut inner = self.lock();
-        inner.warming.bus_gaps += 1;
-        inner.warming.last_bus_gap_at = Some(self.now());
+        let inner = &mut *inner;
         self.gap_backlog.store(backlog, Ordering::SeqCst);
         tracing::warn!(
             dropped,
             "the keepalive subscriber fell behind the bus, so the pending observations were discarded"
         );
-        let open: Vec<(SessionKey, String)> = inner.warming.pending.values().cloned().collect();
-        for (key, agent_id) in open {
-            let inner = &mut *inner;
-            // The lost events may have been this turn's completion, so it counts as the turn that answered, as a
-            // missed one does at the next arrival.
-            if let Some(warming) = agent_ref(&inner.sessions.entries, &key, &agent_id)
-                .map(|_| warming_mut(&mut inner.warming.agents, &key, &agent_id).expect(AGENT_HELD))
-            {
-                if let Some(started) = warming.current.as_ref().map(|o| o.started) {
-                    warming.last_answered_at = Some(started);
-                }
-            }
-            inner.end_observation(&key, &agent_id, None, Unanswered::Leave);
-            inner.set_reason(&key, &agent_id, Reason::BusGap);
-        }
-        // A compaction's completion may be among the lost events too, and an open compaction holds its agent's recipe
-        // and sweep until it completes, so each ends as a failed one.
-        for (key, agent_id) in std::mem::take(&mut inner.warming.compactions).into_values() {
-            inner.end_compaction(&key, &agent_id);
-        }
+        let changes = inner.warming.bus_gap(&inner.sessions, self.now());
+        inner.apply_changes(changes);
     }
 
     pub fn parts_bus(&self) -> Bus {
@@ -2652,11 +528,10 @@ impl Engine {
         let (held, session_off) = {
             let inner = self.lock();
             (
-                !inner.closed && agent_ref(&inner.sessions.entries, &key, &agent_id).is_some(),
+                !inner.closed && inner.sessions.agent(&key, &agent_id).is_some(),
                 inner
                     .sessions
-                    .entries
-                    .get(&key)
+                    .session(&key)
                     .is_some_and(|session| !session.cache_warming),
             )
         };
@@ -2678,346 +553,88 @@ impl Engine {
                 .is_none_or(|class| class_guard(class) == Guard::Rearm))
         .then(build);
         let mut inner = self.lock();
+        let inner = &mut *inner;
         if inner.closed {
             // A request on a session the engine holds is one the last save can no longer carry.
-            if inner.sessions.entries.contains_key(&key) {
+            if inner.sessions.session(&key).is_some() {
                 inner.late_updates += 1;
             }
             return;
         }
-        inner.expire(now);
-        let Some(session) = inner.sessions.entries.get(&key) else {
-            return;
-        };
-        // The purge ends a session whose key id now belongs to a later holder, but only at the next tick: until
-        // then this is the previous holder's session, and a request of another generation arms nothing on it.
-        if session.key_generation != observed.key_generation {
-            return;
-        }
-        if session.ended {
-            return;
-        }
-        let Some(agent) = session.agents.get(&agent_id) else {
-            return;
-        };
-        if agent.state == AgentState::Released {
-            return;
-        }
-        let warming = warming_ref(&inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-        if warming
-            .current
-            .as_ref()
-            .is_some_and(|o| o.id == observed.request_id)
-            || warming
-                .compaction
-                .as_ref()
-                .is_some_and(|c| c.request_id == observed.request_id)
+        inner.sweep(now);
+        if !inner
+            .sessions
+            .arrival_check(&key, observed.key_generation, &agent_id)
         {
             return;
         }
-        // The header is a hardening on top of the registration rule: while the holder's lease is live, a request that
-        // names an instance has to name the session's. Foreign traffic proves nothing about this agent, so its status,
-        // its recipe and its schedule are left as they were, and only the mismatch itself is counted. A restored
-        // session's window reads as live, since the mod re-adopts the session within it. Past the lease the holder
-        // reports nothing, and a process that reloaded under a new instance would otherwise arm nothing until the idle
-        // limit ended the session.
-        if observed
-            .instance_id
-            .as_ref()
-            .is_some_and(|sent| *sent != session.instance)
-            && session.attended_at(now)
-        {
-            *inner
-                .warming
-                .reasons
-                .entry(Reason::InstanceMismatch)
-                .or_default() += 1;
-            let session = inner.sessions.entries.get_mut(&key).unwrap();
-            session.instance_mismatches += 1;
-            if session.instance_mismatches == 1 {
-                tracing::warn!(
-                    session = %key.1,
-                    "a request named another instance than the session's registration"
-                );
-            }
+        if inner.warming.follows(&key, &agent_id, &observed.request_id) {
             return;
         }
-        // The hijack guard: an auxiliary or foreign request must not touch the recipe, the schedule, or the
-        // unanswered probes a re-arming request's credit depends on. `reason` stays the recipe's gating
-        // state, since a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held
-        // state all read that field as state. The agent's own `last_guard` carries the verdict itself, every
-        // request's, for the view to show.
-        let recipe_hashes = warming.current.as_ref().map(|observation| {
-            (
-                observation.recipe.static_hash.as_deref().unwrap_or(""),
-                observation.recipe.tail_hash.as_deref().unwrap_or(""),
-            )
-        });
-        let model_matches = warming
-            .current
-            .as_ref()
-            .is_some_and(|observation| observation.recipe.model == observed.model);
-        let verdict = guard(
-            observed.client.request_class.as_deref(),
-            observed.static_hash.as_deref(),
-            &observed.boundaries,
-            recipe_hashes,
-            model_matches,
-        );
-        warming_mut(&mut inner.warming.agents, &key, &agent_id)
-            .expect(AGENT_HELD)
-            .last_guard = Some(verdict);
-        // One touch for everything below: the lock is held to the end, so the flush reads the agent as this request
-        // leaves it.
-        inner.touch_agent(&key, &agent_id);
-        // Ahead of every refusal below, so a request whose recipe the engine refuses or cannot hold still reaches the
-        // watch at its completion, and ahead of the store of this request's own prefix, since the mark reads the one
-        // before it.
-        if agent_id == MAIN_AGENT {
-            inner.mark_chain(&key, &observed, now);
-        }
-        // Ahead of the return below, so a foreign request on a new prefix ends the window too. The return is judged
-        // against the prefix the window opened on, never on the verdict, which re-arms on any chain once a ceiling
-        // has discarded the recipe.
-        if agent_id == MAIN_AGENT && verdict != Guard::Auxiliary {
-            inner.end_idle_episode(&key, &observed.boundaries, now);
-        }
-        if matches!(verdict, Guard::Auxiliary | Guard::Foreign) {
+        if !inner
+            .sessions
+            .instance_check(&key, observed.instance_id.as_deref(), now)
+        {
+            inner.warming.count(Reason::InstanceMismatch);
             return;
         }
-        // A turn or a second compaction moves the agent past the context an open compaction was reading, so that one
-        // ends as a failed one and leaves the recipe to this request's own path.
-        inner.end_compaction(&key, &agent_id);
-        // A tick asks the router only about the models of retained recipes and of open compactions, so a probe an
-        // agent keeps past its recipe's end can miss a resolution: the catalog's acknowledged resolution dates the held
-        // probes' spellings here, the request's own pair first, before the credit compares its model with the
-        // request's, a compaction's as a turn's.
-        let mut resolved = HashMap::new();
-        if observed.wire_model != observed.canonical_model {
-            resolved.insert(
-                observed.wire_model.clone(),
-                observed.canonical_model.clone(),
-            );
-        }
-        for held in warming_ref(&inner.warming.agents, &key, &agent_id)
-            .expect(AGENT_HELD)
-            .held_models()
-        {
-            if resolved.contains_key(&held) {
-                continue;
-            }
-            if let Some(dated) = resolve(&held).filter(|dated| *dated != held) {
-                resolved.insert(held, dated);
-            }
-        }
-        warming_mut(&mut inner.warming.agents, &key, &agent_id)
-            .expect(AGENT_HELD)
-            .follow_resolutions(&resolved);
-        if verdict == Guard::Compaction {
-            // The recipe, its schedule and its probes wait as they stood, so a compaction that fails leaves the old
-            // context the live one. Nothing of the turn's admission below runs: the idle window's prefix, the agent's
-            // activity and model, and the agent cap all belong to the turn after it.
-            let warming = warming_ref(&inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-            let compaction = OpenCompaction {
-                request_id: observed.request_id.clone(),
-                received_at: observed.received_at,
-                started: now,
-                canonical_model: observed.canonical_model.clone(),
-                fast: observed.shape.speed.as_deref() == Some("fast"),
-                attempt: 0,
-                account: None,
-                funding: AttemptFunding::default(),
-                ok_head: false,
-                read: 0,
-                ttl_ms: 0,
-                prior: prior_coverage(warming, now),
-                client: RowClient {
-                    client: Some(observed.client.class.clone()),
-                    user_agent: user_agent_of(&observed.headers),
-                },
-            };
-            warming_mut(&mut inner.warming.agents, &key, &agent_id)
-                .expect(AGENT_HELD)
-                .compaction = Some(compaction);
+        let (changes, arriving) =
             inner
                 .warming
-                .compactions
-                .insert(observed.request_id, (key, agent_id));
+                .arrival_guard(&inner.sessions, &key, &agent_id, &observed, &resolve, now);
+        inner.apply_changes(changes);
+        let Some(arriving) = arriving else {
             return;
-        }
-        // Apart from the recipe, which keepalive off, an opt-out or a refused body leaves unretained: the next idle
-        // window judges a return against this request's prefix either way. A request without both hashes leaves none.
-        if agent_id == MAIN_AGENT {
-            warming_mut(&mut inner.warming.agents, &key, &agent_id)
-                .expect(AGENT_HELD)
-                .last_prefix = observed
-                .static_hash
-                .clone()
-                .zip(observed.boundaries.last().cloned())
-                .map(|(static_hash, last)| PrefixAnchor {
-                    static_hash,
-                    last,
-                    before_last: observed
-                        .boundaries
-                        .len()
-                        .checked_sub(2)
-                        .map(|at| observed.boundaries[at].clone()),
-                    marked: observed
-                        .marked
-                        .iter()
-                        .rev()
-                        .find(|at| **at + 2 < observed.boundaries.len())
-                        .and_then(|at| observed.boundaries.get(*at).cloned()),
-                });
-        }
-        // A turn still pending here had no completion observed, since a success takes it off `pending` and a failure
-        // ends the observation, and `set_aside` below ends it, or sets it aside, without one. It counts as the turn
-        // that answered, or the gap this arrival's coverage reads would run from a turn before it. A compaction ends no
-        // turn, so it returned above and leaves the open one to its own completion.
-        let missed = warming_ref(&inner.warming.agents, &key, &agent_id)
-            .expect(AGENT_HELD)
-            .current
-            .as_ref()
-            .filter(|observation| inner.warming.pending.contains_key(&observation.id))
-            .map(|observation| observation.started);
-        if let Some(started) = missed {
-            warming_mut(&mut inner.warming.agents, &key, &agent_id)
-                .expect(AGENT_HELD)
-                .last_answered_at = Some(started);
-        }
-        // Taken before anything below overwrites it and consumed with the observation.
-        let prior = prior_coverage(
-            warming_ref(&inner.warming.agents, &key, &agent_id).expect(AGENT_HELD),
-            now,
-        );
+        };
         let poisoned = self.gap_backlog.load(Ordering::SeqCst) > 0;
         // The recipe set aside waits for this request's completion, so each return below that takes no observation
         // drops it: nothing would complete to restore it.
-        inner.set_aside(&key, &agent_id, now);
-        // A request refused the slot below moves the session's request time too, which is saved, since the expiry
-        // counts from it across a restart.
-        let session = inner.sessions.entries.get_mut(&key).unwrap();
-        session.last_real_at = Some(now);
-        let slotted = session.slotted;
-        inner.touch_session(&key);
-        // A session takes its slots at the first real request the caps admit, so both caps are read here at each of
-        // its requests until then, the session cap first as a registration reads them, and the session's agents join
-        // the agent count only where they all fit. A request over either cap is refused the slot as a registration
-        // over it is: it keeps nothing and leaves `slotted` false, so the session's next request reads the caps again.
-        if !slotted {
-            let joining = inner.sessions.entries[&key].agents.len();
-            let refused = if inner.live_sessions() >= inner.sessions.max_sessions {
-                Some(Reason::SessionLimit)
-            } else if inner.agent_count() + joining > inner.sessions.max_agents {
-                Some(Reason::AgentLimit)
-            } else {
-                None
-            };
-            if let Some(reason) = refused {
-                // The agent saw a real request, so the view lists its line with the cause, and `slotted` stays false,
-                // so the session holds no slot.
-                let warming =
-                    warming_mut(&mut inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-                warming.last_real_at = Some(now);
-                warming.canonical_model = observed.canonical_model.clone();
-                inner.drop_aside(&key, &agent_id);
-                inner.set_reason(&key, &agent_id, reason);
-                return;
-            }
-            inner.sessions.entries.get_mut(&key).unwrap().slotted = true;
-        }
-        let agent = agent_mut(&mut inner.sessions.entries, &key, &agent_id).expect(AGENT_HELD);
-        if agent.state == AgentState::Unknown {
-            inner.drop_aside(&key, &agent_id);
-            inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
-            return;
-        }
-        agent.set_state(AgentState::Busy);
-        agent.last_activity = now;
-        let warming = warming_mut(&mut inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-        // The request restarts main's idle window at its own instant, which can be the instant of the prompt that set
-        // the floor at the close, so the floor goes with it. A foreign request, an auxiliary one and one on an
-        // `unknown` main returned above and move no start, so their floor stands.
-        warming.idle_window_floor = None;
-        warming.cache_started = now;
-        warming.cold = 0;
-        warming.failures = 0;
-        warming.hold_counted = false;
-        warming.last_real_at = Some(now);
-        warming.canonical_model = observed.canonical_model.clone();
-        warming.key_generation = observed.key_generation;
-        // Past the activity writes and the slot, which such a request takes as any other does, and ahead of the build.
-        // The pool's policy reads first, then the key's permission, then the session's own option. The option is read
-        // again here, under the lock that admits the recipe: a registration can turn it off behind the read ahead of
-        // the parse, and its drop has run by then, so a recipe admitted on that earlier read would stay with no tick to
-        // end it.
-        let session_off = inner
-            .sessions
-            .entries
-            .get(&key)
-            .is_some_and(|session| !session.cache_warming);
-        if let Some(reason) = arrival_refusal.or(session_off.then_some(Reason::SessionOptedOut)) {
-            inner.drop_aside(&key, &agent_id);
-            inner.set_reason(&key, &agent_id, reason);
-            return;
-        }
-        if inner.warming.pending.len() >= inner.sessions.max_agents {
-            inner.drop_aside(&key, &agent_id);
-            inner.set_reason(&key, &agent_id, Reason::RequestLimit);
-            return;
-        }
-        let built = prebuilt.unwrap_or_else(build);
-        let mut recipe = match built {
-            Ok(recipe) => recipe,
-            Err(reason) => {
-                inner.drop_aside(&key, &agent_id);
-                inner.set_reason(&key, &agent_id, reason);
-                return;
-            }
-        };
-        // What the next observation's guard compares against: this request's own two hashes, not the ones a
-        // prior arm happened to leave behind.
-        recipe.static_hash = observed.static_hash.clone();
-        recipe.tail_hash = observed.boundaries.last().cloned();
-        // The agent's own aside recipe yields first, so the bound reads as it would with that recipe ended, and the
-        // eviction never reaches it: an agent with a request open is no candidate.
-        let max_retained_bytes = inner.warming.max_retained_bytes;
-        if inner.warming.retained + recipe.size > max_retained_bytes {
-            inner.drop_aside(&key, &agent_id);
-        }
-        if inner.warming.retained + recipe.size > max_retained_bytes
-            && !inner.evict_for(max_retained_bytes, recipe.size)
-        {
-            inner.set_reason(&key, &agent_id, Reason::StorageLimit);
-            return;
-        }
-        inner.warming.retained += recipe.size;
-        let warming = warming_mut(&mut inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-        // The probe replays this request's headers, so it meters under the entrypoint they carry.
-        warming.entrypoint =
-            phoebis_ledger::entrypoint_of_client(&observed.client.class).map(String::from);
-        warming.current = Some(Observation {
-            id: observed.request_id.clone(),
-            attempt: 0,
-            started: now,
-            received_at: observed.received_at,
-            recipe,
-            ready: false,
-            expected: 0,
-            ttl_ms: 0,
-            prior,
-            poisoned,
-            dispatched_ms: None,
-            funding: AttemptFunding::default(),
-            client_label: Some(observed.client.class.clone()),
-        });
-        warming.body_dirty = true;
-        // The mark is retired only by a save at the row's revision, so the new body takes a revision of its own.
-        inner.touch_agent(&key, &agent_id);
-        inner
+        let changes = inner
             .warming
-            .pending
-            .insert(observed.request_id, (key, agent_id));
+            .set_aside(&inner.sessions, &key, &agent_id, now);
+        inner.apply_changes(changes);
+        let slot = inner.sessions.arrival_slot(&key, now);
+        inner.touch_session(&key);
+        let refused = match slot {
+            Slot::OverSessions => Some(Reason::SessionLimit),
+            Slot::OverAgents => Some(Reason::AgentLimit),
+            Slot::Held | Slot::Taken => None,
+        };
+        if let Some(reason) = refused {
+            // The agent saw a real request, so the view lists its line with the cause, and `slotted` stays false,
+            // so the session holds no slot.
+            inner
+                .warming
+                .arrival_seen(&key, &agent_id, &observed.canonical_model, now);
+            let changes = inner
+                .warming
+                .arrival_refuse(&inner.sessions, &key, &agent_id, reason);
+            inner.apply_changes(changes);
+            return;
+        }
+        if inner.sessions.arrival_busy(&key, &agent_id, now) == Arrived::Unknown {
+            let changes = inner.warming.arrival_refuse(
+                &inner.sessions,
+                &key,
+                &agent_id,
+                Reason::AgentUnknown,
+            );
+            inner.apply_changes(changes);
+            return;
+        }
+        let changes = inner.warming.arrival_arm(
+            &inner.sessions,
+            &key,
+            &agent_id,
+            &observed,
+            now,
+            arrival_refusal,
+            prebuilt,
+            build,
+            arriving,
+            poisoned,
+        );
+        inner.apply_changes(changes);
     }
 
     fn on_selected(&self, selected: AccountSelected) {
@@ -3028,69 +645,28 @@ impl Engine {
         };
         let snapshot = self.parts.router.snapshot();
         let mut inner = self.lock();
-        if inner.warming.compactions.contains_key(&selected.request_id) {
+        let inner = &mut *inner;
+        if inner.warming.compaction_open(&selected.request_id) {
             if inner.quiesced() {
                 return;
             }
-            if let Some(warming) = inner.compaction_agent(&selected.request_id) {
-                // A body the relay sent as it came carries the conversation's own markers, whose TTL the recipe's
-                // evidence settled on.
-                let ttl_ms = selected.cache_ttl_ms.unwrap_or(warming.ttl_ms);
-                if let Some(compaction) = warming.compaction.as_mut() {
-                    compaction.attempt = selected.attempt;
-                    compaction.account = Some(selected.account_id);
-                    compaction.funding = funding;
-                    compaction.ok_head = false;
-                    compaction.read = 0;
-                    compaction.ttl_ms = ttl_ms;
-                }
-            }
+            inner
+                .warming
+                .on_compaction_selected(&inner.sessions, selected, funding);
             return;
         }
         let Some((key, agent_id)) = inner.followed(&selected.request_id) else {
             return;
         };
-        if !inner.live(&key, &agent_id) {
-            return;
-        }
-        let warming = warming_mut(&mut inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-        let Some(observation) = warming.current.as_mut() else {
-            return;
-        };
-        observation.attempt = selected.attempt;
-        observation.ready = false;
-        observation.expected = 0;
-        observation.ttl_ms = 0;
-        observation.dispatched_ms = selected.cache_ttl_ms;
-        observation.funding = funding;
-        warming.cache_started = observation.started;
-        warming.expires = None;
-        inner.set_reason(&key, &agent_id, Reason::AwaitingSelection);
-        // The arrival reads the pool's policy and the key's opt-out, so a request refused by either never reaches here.
-        if snapshot.account(&selected.account_id).is_none() {
-            inner.set_reason(&key, &agent_id, Reason::IneligibleCredential);
-            return;
-        }
-        let pool_id = snapshot.key(&key.0).map(|row| row.pool_id.clone());
-        let warming = warming_mut(&mut inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-        if let Some(observation) = warming.current.as_mut() {
-            // A poisoned observation never becomes ready, so no evidence of this request can arm a schedule.
-            observation.ready = !observation.poisoned;
-        }
-        if warming.account.as_deref() != Some(selected.account_id.as_str()) {
-            warming.cold = 0;
-            warming.ttl_ms = 0;
-        }
-        warming.account = Some(selected.account_id);
-        // The event's own incarnation, never the snapshot's above: an id paired again between the selection and this
-        // delivery would label the recipe with the replacement.
-        warming.account_incarnation = Some(selected.incarnation);
-        // A key deleted since the arrival leaves the agent's pool as it stood, and the next tick's
-        // `drop_sessions_of_dead_keys` ends the whole session under `session_ended`.
-        if let Some(pool_id) = pool_id {
-            warming.pool_id = pool_id;
-        }
-        inner.set_reason(&key, &agent_id, Reason::AwaitingCacheEvidence);
+        let changes = inner.warming.on_selected(
+            &inner.sessions,
+            &key,
+            &agent_id,
+            selected,
+            funding,
+            &snapshot,
+        );
+        inner.apply_changes(changes);
     }
 
     fn on_head(&self, head: ResponseHead) {
@@ -3098,40 +674,23 @@ impl Engine {
             .and_then(|unified| unified.overage_in_use)
             == Some(true);
         let mut inner = self.lock();
-        if inner.warming.compactions.contains_key(&head.request_id) {
+        let inner = &mut *inner;
+        if inner.warming.compaction_open(&head.request_id) {
             if inner.quiesced() {
                 return;
             }
-            if let Some(compaction) = inner
-                .compaction_agent(&head.request_id)
-                .and_then(|warming| warming.compaction.as_mut())
-                .filter(|compaction| compaction.attempt == head.attempt)
-            {
-                compaction.funding.in_overage = in_overage;
-                compaction.ok_head = (200..300).contains(&head.status);
-            }
+            inner
+                .warming
+                .on_compaction_head(&inner.sessions, &head, in_overage);
             return;
         }
         let Some((key, agent_id)) = inner.followed(&head.request_id) else {
             return;
         };
-        if !inner.live(&key, &agent_id) {
-            return;
-        }
-        let warming = warming_mut(&mut inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-        if let Some(observation) = warming.current.as_mut() {
-            if observation.attempt == head.attempt {
-                let moved = observation.funding.in_overage != in_overage;
-                observation.funding.in_overage = in_overage;
-                // A failed attempt is not evidence about the cache, and the next selection re-arms the attempt.
-                if !(200..300).contains(&head.status) {
-                    observation.ready = false;
-                    inner.touch_agent(&key, &agent_id);
-                } else if moved {
-                    inner.touch_agent(&key, &agent_id);
-                }
-            }
-        }
+        let changes = inner
+            .warming
+            .on_head(&inner.sessions, &key, &agent_id, &head, in_overage);
+        inner.apply_changes(changes);
     }
 
     fn on_chunk(&self, chunk: ResponseChunk) {
@@ -3142,234 +701,53 @@ impl Engine {
             _ => return,
         };
         let mut inner = self.lock();
-        if inner.warming.compactions.contains_key(&chunk.request_id) {
+        let inner = &mut *inner;
+        if inner.warming.compaction_open(&chunk.request_id) {
             if inner.quiesced() {
                 return;
             }
-            // A failed attempt's stream is no evidence about the cache, as for a turn.
-            if let Some(compaction) = inner
-                .compaction_agent(&chunk.request_id)
-                .and_then(|warming| warming.compaction.as_mut())
-                .filter(|compaction| compaction.attempt == chunk.attempt && compaction.ok_head)
-            {
-                compaction.read = compaction.read.max(usage.read);
-                // The credit files under the TTL the compaction's own write would take, which its usage proves over
-                // the selection's figure, as a turn's `observe_usage` settles it.
-                compaction.ttl_ms = usage.ttl_ms(compaction.ttl_ms, 0);
-            }
+            inner
+                .warming
+                .on_compaction_chunk(&inner.sessions, &chunk, usage);
             return;
         }
         let Some((key, agent_id)) = inner.followed(&chunk.request_id) else {
             return;
         };
-        if !inner.live(&key, &agent_id) {
-            return;
-        }
-        let current_attempt = warming_ref(&inner.warming.agents, &key, &agent_id)
-            .expect(AGENT_HELD)
-            .current
-            .as_ref()
-            .map(|o| o.attempt);
-        if current_attempt != Some(chunk.attempt) {
-            return;
-        }
-        inner.observe_usage(&key, &agent_id, usage);
+        let changes = inner
+            .warming
+            .on_chunk(&inner.sessions, &key, &agent_id, &chunk, usage);
+        inner.apply_changes(changes);
     }
 
     fn on_complete(&self, complete: RequestComplete) {
         let now = self.now();
-        let mut inner = self.lock();
-        if inner.warming.compactions.contains_key(&complete.request_id) {
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        if inner.warming.compaction_open(&complete.request_id) {
             if inner.quiesced() {
                 return;
             }
-            let credit = inner.complete_compaction(&complete, now);
-            self.book_credit(inner, credit, &complete);
+            let (changes, credit) =
+                inner
+                    .warming
+                    .complete_compaction(&inner.sessions, &complete, now);
+            inner.apply_changes(changes);
+            self.book_credit(guard, credit, &complete);
             return;
         }
-        if let Some(mark) = inner
-            .warming
-            .contradiction_marks
-            .remove(&complete.request_id)
-        {
-            self.read_chain_mark(&mut inner, mark, &complete, now);
+        if let Some(mark) = inner.warming.take_chain_mark(&complete.request_id) {
+            self.read_chain_mark(inner, mark, &complete, now);
         }
         let Some((key, agent_id)) = inner.followed(&complete.request_id) else {
             return;
         };
-        inner.touch_agent(&key, &agent_id);
-        if agent_id == MAIN_AGENT {
-            if let Some(prompt) = reported_prompt(complete.usage.as_ref()) {
-                let inner = &mut *inner;
-                if let Some(warming) =
-                    agent_ref(&inner.sessions.entries, &key, MAIN_AGENT).map(|_| {
-                        warming_mut(&mut inner.warming.agents, &key, MAIN_AGENT).expect(AGENT_HELD)
-                    })
-                {
-                    warming.last_prompt_tokens = Some(prompt);
-                }
-            }
-        }
-        let read = complete
-            .usage
-            .as_ref()
-            .and_then(|u| u.cache_read_tokens)
-            .unwrap_or(0);
-        let reason = match complete.outcome {
-            Outcome::Succeeded => None,
-            Outcome::Canceled => Some(Reason::RequestCanceled),
-            Outcome::Failed | Outcome::Exhausted | Outcome::Incomplete => {
-                Some(Reason::RequestFailed)
-            }
-            Outcome::Rejected => Some(Reason::RequestRejected),
-        };
-        if let Some(reason) = reason {
-            // A failed or canceled turn leaves the last answered recipe armed as its arrival set it aside, and a
-            // rejected one is a pause, which `end_observation` below makes by dropping what the arrival set aside.
-            let aside = match reason {
-                Reason::RequestCanceled | Reason::RequestFailed => {
-                    inner.take_aside(&key, &agent_id)
-                }
-                _ => None,
-            };
-            let inner = &mut *inner;
-            // A failed turn is no evidence about the cache, past a head or not, so it decides none of the probes it
-            // kept and hands them back for the next turn to read. A label the turn found stays, and a probe that
-            // carries none takes `expired`, which the lapse sweep settles it under when its chain's last entry ends if
-            // no turn reads it first, as its recipe's own lapse would have. The sweep reads that chain through the
-            // restored recipe's probes, so a kept probe whose entry they read back waits for the turn that reads them.
-            if let Some(warming) = agent_ref(&inner.sessions.entries, &key, &agent_id)
-                .map(|_| warming_mut(&mut inner.warming.agents, &key, &agent_id).expect(AGENT_HELD))
-            {
-                for kept in warming
-                    .kept
-                    .iter_mut()
-                    .filter(|kept| kept.pending.is_none())
-                {
-                    kept.pending = Some(Wasted::Expired);
-                }
-            }
-            // A probe sent while this request was open pays for the request after it, whatever this one did.
-            inner.end_observation(&key, &agent_id, None, Unanswered::Leave);
-            if let Some(aside) = aside {
-                inner.rearm_aside(&key, &agent_id, aside, now);
-            }
-            inner.set_reason(&key, &agent_id, reason);
-            return;
-        }
-        inner.warming.pending.remove(&complete.request_id);
-        // The answered turn's own recipe replaces the one its arrival set aside.
-        inner.drop_aside(&key, &agent_id);
-        // Read from the observation's own snapshot of what the previous recipe had proved: a probe that ran
-        // while this request was open, or a TTL this request's evidence shortens below, cannot reach into it.
-        let mut credit = {
-            let warming = warming_ref(&inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-            let fast = warming.current.as_ref().is_some_and(|o| o.recipe.fast);
-            warming
-                .current
-                .as_ref()
-                .and_then(|o| o.prior.as_ref())
-                .filter(|prior| {
-                    prior.credits(
-                        warming.last_real_at.unwrap_or(now),
-                        &warming.canonical_model,
-                        fast,
-                        warming.account.as_deref(),
-                        read,
-                    )
-                })
-                .map(|_| {
-                    let served = warming.current.as_ref();
-                    Credit {
-                        // Its receipt picks the hour the credit files in and the revision its band and its saving
-                        // price at, as its own request row's does, though the answer may land past either boundary.
-                        at: served.map_or(now, |o| o.received_at),
-                        key: key.clone(),
-                        key_generation: warming.key_generation,
-                        pool_id: warming.pool_id.clone(),
-                        account: warming.account.clone(),
-                        model: warming.canonical_model.clone(),
-                        read,
-                        // Set below, once this request's own evidence has settled the TTL.
-                        ttl_ms: 0,
-                        fast,
-                        funding: served.map(|o| o.funding).unwrap_or_default(),
-                        client: RowClient {
-                            client: served.and_then(|o| o.client_label.clone()),
-                            user_agent: served.and_then(|o| user_agent_of(&o.recipe.headers)),
-                        },
-                    }
-                })
-        };
-        // Set once the credit has read its gap from the turn before, so the next request's gap runs from this one.
-        if (200..300).contains(&complete.status) {
-            let inner = &mut *inner;
-            if let Some(warming) = agent_ref(&inner.sessions.entries, &key, &agent_id)
-                .map(|_| warming_mut(&mut inner.warming.agents, &key, &agent_id).expect(AGENT_HELD))
-            {
-                if let Some(request_started) = warming.current.as_ref().map(|o| o.started) {
-                    warming.last_answered_at = Some(request_started);
-                }
-            }
-        }
-        inner.decide_unanswered(&key, &agent_id, read);
-        let (ready, armed) = agent_ref(&inner.sessions.entries, &key, &agent_id)
-            .map(|_| warming_ref(&inner.warming.agents, &key, &agent_id).expect(AGENT_HELD))
-            .map(|a| {
-                (
-                    a.current.as_ref().is_some_and(|o| o.ready),
-                    a.current.as_ref().is_some_and(|o| o.expected > 0),
-                )
-            })
-            .unwrap_or((false, false));
-        if ready && !armed {
-            if let Some(usage) = complete.usage.as_ref().map(ProbeUsage::from_bus) {
-                inner.observe_usage(&key, &agent_id, usage);
-            }
-        }
-        let (proved, observed_ttl, poisoned, current) =
-            agent_ref(&inner.sessions.entries, &key, &agent_id)
-                .map(|_| warming_ref(&inner.warming.agents, &key, &agent_id).expect(AGENT_HELD))
-                .map_or((false, 0, false, None), |a| {
-                    let o = a.current.as_ref();
-                    (
-                        o.is_some_and(|o| o.ready && o.expected > 0),
-                        o.map_or(0, |o| o.ttl_ms),
-                        o.is_some_and(|o| o.poisoned),
-                        Some(a.reason),
-                    )
-                });
-        // The TTL this request's own evidence settled on, set at a stream's first event or, for an answer without a
-        // stream, by the reading just above. The write a credited request avoided would have taken it, and a discard
-        // below clears the observation.
-        if let Some(credit) = credit.as_mut() {
-            credit.ttl_ms = observed_ttl;
-        }
-        if !proved {
-            if poisoned {
-                // The gap that poisoned it is what this request proved nothing under.
-                inner.discard(&key, &agent_id, Reason::BusGap, None);
-            } else {
-                // The credential's standing does not vary between attempts of one request, and the pool's toggle
-                // reaches this arm through the tick's hold, so ending the observation must not recount a reason the
-                // request already carries.
-                match current {
-                    Some(Reason::KeepaliveOff | Reason::IneligibleCredential) if !ready => {
-                        inner.end_observation(&key, &agent_id, None, Unanswered::Settle);
-                    }
-                    _ => inner.discard(&key, &agent_id, Reason::NoCacheEvidence, None),
-                }
-            }
-        }
-        if credit.is_some() {
-            let inner = &mut *inner;
-            if let Some(warming) = agent_ref(&inner.sessions.entries, &key, &agent_id)
-                .map(|_| warming_mut(&mut inner.warming.agents, &key, &agent_id).expect(AGENT_HELD))
-            {
-                warming.count_credit(now);
-            }
-        }
-        self.book_credit(inner, credit, &complete);
+        let (changes, credit) =
+            inner
+                .warming
+                .on_complete(&inner.sessions, &key, &agent_id, &complete, now);
+        inner.apply_changes(changes);
+        self.book_credit(guard, credit, &complete);
     }
 
     /// The chain watch: a marked request whose completion read the cache at or above `CHAIN_CONTRADICTION_COVERAGE` of
@@ -3391,13 +769,7 @@ impl Engine {
         if read as f64 >= mark.previous_prompt as f64 * CHAIN_CONTRADICTION_COVERAGE {
             let version = complete.client_version.as_deref().unwrap_or("unknown");
             self.parts.metrics.observe_chain_contradiction(version);
-            let printed = inner
-                .warming
-                .chain_warned
-                .get(version)
-                .is_some_and(|at| now - at < ONE_HOUR_MS);
-            if !printed {
-                inner.warming.chain_warned.insert(version.to_string(), now);
+            if inner.warming.note_chain_warning(version, now) {
                 tracing::warn!(
                     client_version = %version,
                     session = %mark.session.1,
@@ -3413,14 +785,9 @@ impl Engine {
             return;
         }
         if let Some(prompt) = reported_prompt(complete.usage.as_ref()) {
-            if let Some(warming) = agent_ref(&inner.sessions.entries, &mark.session, MAIN_AGENT)
-                .map(|_| {
-                    warming_mut(&mut inner.warming.agents, &mark.session, MAIN_AGENT)
-                        .expect(AGENT_HELD)
-                })
-            {
-                warming.last_prompt_tokens = Some(prompt);
-            }
+            inner
+                .warming
+                .set_last_prompt(&inner.sessions, &mark.session, prompt);
             inner.touch_agent(&mark.session, MAIN_AGENT);
         }
     }
@@ -3465,199 +832,14 @@ impl Inner {
 
     /// The agent following `request_id`, `None` for a request no agent follows and for any once the engine is
     /// closed. After the quiesce the last save holds each agent as it stood then, so a later event is refused and
-    /// counted, where `live` would refuse it uncounted: a completion earns no credit and arms nothing, and the relay
-    /// has answered the client either way.
+    /// counted: a completion earns no credit and arms nothing, and the relay has answered the client either way.
     fn followed(&mut self, request_id: &str) -> Option<(SessionKey, String)> {
-        let followed = self.warming.pending.get(request_id).cloned()?;
+        let followed = self.warming.follower(request_id)?;
         if self.quiesced() {
             return None;
         }
         Some(followed)
     }
-
-    /// The agent holding the compaction `request_id` opened while it may still take a result, `None` for one its
-    /// agent no longer holds, as for a request the engine never followed.
-    fn compaction_agent(&mut self, request_id: &str) -> Option<&mut AgentWarming> {
-        let (key, agent_id) = self.warming.compactions.get(request_id)?.clone();
-        if !self.live(&key, &agent_id) {
-            return None;
-        }
-        Some(warming_mut(&mut self.warming.agents, &key, &agent_id).expect(AGENT_HELD)).filter(
-            |warming| {
-                warming
-                    .compaction
-                    .as_ref()
-                    .is_some_and(|compaction| compaction.request_id == request_id)
-            },
-        )
-    }
-
-    /// The completion of an open compaction. Only a complete answer (`Outcome::Succeeded`) decides anything: every
-    /// probe the recipe paid for, the kept ones and then the unanswered ones as one slice in exchange order, is judged
-    /// against the compaction's own arrival, lineage and read, its kept-warm credit is its own, and the recipe stops
-    /// under `compacted`, since it keeps a context the next turn never reads, so no probe goes out until that turn
-    /// re-arms. Any other outcome leaves the recipe, its schedule and its probes as they stood, the old context the
-    /// live one. The credit it earned comes back for the caller to book.
-    fn complete_compaction(&mut self, complete: &RequestComplete, now: i64) -> Option<Credit> {
-        let (key, agent_id) = self.warming.compactions.remove(&complete.request_id)?;
-        let live = self.live(&key, &agent_id);
-        let warming = agent_ref(&self.sessions.entries, &key, &agent_id)
-            .map(|_| warming_mut(&mut self.warming.agents, &key, &agent_id).expect(AGENT_HELD))?;
-        let compaction = warming
-            .compaction
-            .take_if(|compaction| compaction.request_id == complete.request_id)?;
-        if !live || complete.outcome != Outcome::Succeeded {
-            return None;
-        }
-        let read = complete
-            .usage
-            .as_ref()
-            .and_then(|usage| usage.cache_read_tokens)
-            .unwrap_or(compaction.read);
-        // An answer without a stream proves its TTL here alone, as the stream's phases do in `on_chunk`.
-        let ttl_ms = complete.usage.as_ref().map_or(compaction.ttl_ms, |usage| {
-            ProbeUsage::from_bus(usage).ttl_ms(compaction.ttl_ms, 0)
-        });
-        let mut probes = std::mem::take(&mut warming.kept);
-        probes.extend(warming.take_unanswered());
-        let credit = compaction
-            .prior
-            .as_ref()
-            .filter(|prior| {
-                prior.credits(
-                    compaction.started,
-                    &compaction.canonical_model,
-                    compaction.fast,
-                    compaction.account.as_deref(),
-                    read,
-                )
-            })
-            .map(|_| Credit {
-                at: compaction.received_at,
-                key: key.clone(),
-                key_generation: warming.key_generation,
-                pool_id: warming.pool_id.clone(),
-                account: compaction.account.clone(),
-                model: compaction.canonical_model.clone(),
-                read,
-                ttl_ms,
-                fast: compaction.fast,
-                funding: compaction.funding,
-                client: compaction.client.clone(),
-            });
-        if credit.is_some() {
-            warming.count_credit(now);
-        }
-        self.decide_against(
-            &key,
-            &agent_id,
-            probes,
-            Answer {
-                started: Some(compaction.started),
-                account: compaction.account,
-                model: compaction.canonical_model,
-                fast: compaction.fast,
-                read,
-            },
-        );
-        // No label: a probe still in flight lands orphaned and unsettled, since nothing around a compaction reads as
-        // wasted.
-        self.discard(&key, &agent_id, Reason::Compacted, None);
-        credit
-    }
-}
-
-/// The prompt a completion reported: its uncached input, cache reads and both cache writes, `None` for an answer that
-/// reported none of the four, which leaves the previous prompt in place.
-fn reported_prompt(usage: Option<&phoebis_bus::Usage>) -> Option<u64> {
-    let usage = usage?;
-    let members = [
-        usage.input_tokens,
-        usage.cache_read_tokens,
-        usage.cache_write_5m_tokens,
-        usage.cache_write_1h_tokens,
-    ];
-    members.iter().any(Option::is_some).then(|| {
-        let [input, cache_read, write_5m, write_1h] = members.map(|m| m.unwrap_or(0));
-        PinUsage {
-            input,
-            cache_read,
-            write_5m,
-            write_1h,
-            output: 0,
-        }
-        .prompt_tokens()
-    })
-}
-
-impl Inner {
-    /// The Go `observeLocked`: evidence from a ready attempt arms the schedule at the entry's expiry, the pool's
-    /// lead and this schedule's jitter taken off by `due_at`. A retry already pending stays in force.
-    pub(crate) fn observe_usage(&mut self, key: &SessionKey, agent_id: &str, usage: ProbeUsage) {
-        let warming = warming_mut(&mut self.warming.agents, key, agent_id).expect(AGENT_HELD);
-        let Some(observation) = warming.current.as_mut() else {
-            return;
-        };
-        if !observation.ready || usage.evidence() == 0 {
-            return;
-        }
-        let previous_ms = warming.ttl_ms;
-        let requested_ms = observation
-            .dispatched_ms
-            .unwrap_or(observation.recipe.ttl_ms);
-        let mut ttl_ms = usage.ttl_ms(previous_ms, requested_ms);
-        if observation.ttl_ms > 0 && observation.ttl_ms < ttl_ms {
-            ttl_ms = observation.ttl_ms;
-        }
-        // A paused recipe takes nothing from this usage, but the request's credit from a probe sent before the pause
-        // still files under the TTL its own write would have taken, so the observation keeps that TTL.
-        if warming.paused {
-            observation.ttl_ms = ttl_ms;
-            return;
-        }
-        observation.expected = usage.evidence();
-        warming.ttl_ms = ttl_ms;
-        note_ttl_change(
-            key,
-            agent_id,
-            previous_ms,
-            warming.ttl_ms,
-            requested_ms,
-            &usage,
-        );
-        observation.ttl_ms = warming.ttl_ms;
-        warming.expires = Some(warming.cache_started + warming.ttl_ms);
-        warming.jitter_frac = rand::random::<f64>();
-        self.set_reason(key, agent_id, Reason::Scheduled);
-    }
-}
-
-/// The one line at a TTL decision, written only when the TTL moved, so a settled recipe's two stream phases and its
-/// probes stay silent. The counts are the evidence the decision read, never a body.
-pub(crate) fn note_ttl_change(
-    key: &SessionKey,
-    agent_id: &str,
-    previous_ms: i64,
-    ttl_ms: i64,
-    requested_ms: i64,
-    usage: &ProbeUsage,
-) {
-    if previous_ms == ttl_ms {
-        return;
-    }
-    tracing::debug!(
-        key = %key.0,
-        session = %key.1,
-        agent = %agent_id,
-        previous_ms,
-        ttl_ms,
-        requested_ms,
-        read = usage.read,
-        write = usage.write,
-        five_minutes = usage.five_minutes,
-        one_hour = usage.one_hour,
-        "a keepalive recipe's TTL changed on cache evidence"
-    );
 }
 
 impl Engine {
@@ -3671,16 +853,24 @@ impl Engine {
         let snapshot = self.parts.router.snapshot();
         let retained_models = {
             let mut inner = self.lock();
+            let inner = &mut *inner;
             if inner.closed {
                 return;
             }
-            inner.expire(now);
+            inner.sweep(now);
             inner.drop_sessions_of_dead_keys(&snapshot);
-            inner.advance_idle_episodes(&snapshot, now);
+            let changes = inner
+                .warming
+                .advance_idle_episodes(&inner.sessions, &snapshot, now);
+            inner.apply_changes(changes);
             // A probe the ceiling wrote off keeps its entry alive for a turn that may still read it, so the write-off
             // waits for the entry's own end, whether or not any recipe is still retained.
-            inner.settle_lapsed_pending(now);
-            inner.anything_retained().then(|| inner.retained_models())
+            let changes = inner.warming.settle_lapsed_pending(&inner.sessions, now);
+            inner.apply_changes(changes);
+            inner
+                .warming
+                .anything_retained(&inner.sessions)
+                .then(|| inner.warming.retained_models(&inner.sessions))
         };
         let Some(retained_models) = retained_models else {
             return;
@@ -3692,11 +882,15 @@ impl Engine {
         let rows = FactorRows::of(revisions.in_force(now), &self.parts.tables, now);
         let (jobs, lapsed) = {
             let mut inner = self.lock();
+            let inner = &mut *inner;
             if inner.closed {
                 return;
             }
             let mut lapsed: Vec<Skipped> = Vec::new();
-            inner.follow_resolutions(&view.canonical);
+            let changes = inner
+                .warming
+                .follow_resolutions(&inner.sessions, &view.canonical);
+            inner.apply_changes(changes);
             let mut due: Vec<(i64, SessionKey, String, Holder)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
                 .sessions
@@ -3705,7 +899,7 @@ impl Engine {
                 .flat_map(|(key, s)| s.agents.keys().map(move |a| (key.clone(), a.clone())))
                 .collect();
             for (key, agent_id) in candidates {
-                if !inner.live(&key, &agent_id) {
+                if !inner.sessions.live(&key, &agent_id) {
                     continue;
                 }
                 let warming =
@@ -3725,7 +919,6 @@ impl Engine {
                 // ceilings below read the pool's policy as it stands now, so a horizon raised in the console
                 // reopens the hold and an opt-out discards the prompt the hold retained.
                 let refreshed = {
-                    let inner = &mut *inner;
                     let agent =
                         agent_ref(&inner.sessions.entries, &key, &agent_id).expect(AGENT_HELD);
                     let warming =
@@ -3741,18 +934,46 @@ impl Engine {
                         Ok((pool, policy))
                     }
                     Err(Gate::Drop(reason, label)) => {
-                        inner.discard(&key, &agent_id, reason, Some(label));
+                        let changes = inner.warming.discard(
+                            &inner.sessions,
+                            &key,
+                            &agent_id,
+                            reason,
+                            Some(label),
+                        );
+                        inner.apply_changes(changes);
                         continue;
                     }
                     Err(Gate::Hold(reason)) => Err(reason),
                 };
                 // Ahead of the refresh's hold, so a deadline or a wake that passes while the pool is disabled is
                 // recorded when it passes.
-                inner.end_passed_park(&key, &agent_id, now);
+                match inner.sessions.park_passed(&key, &agent_id, now) {
+                    ParkPassed::No => {}
+                    ParkPassed::Part => {
+                        inner.sessions.end_passed_park(&key, &agent_id, now);
+                        inner.touch_agent(&key, &agent_id);
+                    }
+                    ParkPassed::Whole => {
+                        // The window restarts here, so the one counted so far ends with no return, closed before its
+                        // start moves.
+                        inner
+                            .warming
+                            .close_idle_window(&inner.sessions, &key, &agent_id);
+                        inner.warming.clear_idle_floor(&key, &agent_id);
+                        inner.sessions.end_passed_park(&key, &agent_id, now);
+                        inner.touch_agent(&key, &agent_id);
+                    }
+                }
                 let (pool, policy) = match refreshed {
                     Ok(refreshed) => refreshed,
                     Err(reason) => {
-                        if inner.lapse(&key, &agent_id, now, &mut lapsed) {
+                        let (changes, done) =
+                            inner
+                                .warming
+                                .lapse(&inner.sessions, &key, &agent_id, now, &mut lapsed);
+                        inner.apply_changes(changes);
+                        if done {
                             continue;
                         }
                         // A paused recipe keeps its own reason, as under the ceilings' hold below: the pause already
@@ -3761,7 +982,11 @@ impl Engine {
                             .expect(AGENT_HELD)
                             .paused
                         {
-                            inner.hold(&key, &agent_id, reason, now);
+                            let changes =
+                                inner
+                                    .warming
+                                    .hold(&inner.sessions, &key, &agent_id, reason, now);
+                            inner.apply_changes(changes);
                         }
                         continue;
                     }
@@ -3780,7 +1005,11 @@ impl Engine {
                     } else {
                         Reason::AwaitingCacheEvidence
                     };
-                    inner.set_reason(&key, &agent_id, resumed);
+                    let changes =
+                        inner
+                            .warming
+                            .set_reason(&inner.sessions, &key, &agent_id, resumed);
+                    inner.apply_changes(changes);
                 }
                 let verdict = {
                     let session = &inner.sessions.entries[&key];
@@ -3798,22 +1027,42 @@ impl Engine {
                 };
                 match verdict {
                     Verdict::End(Reason::IdleLimit) => {
-                        inner.end_observation(
+                        let changes = inner.warming.end_observation(
+                            &inner.sessions,
                             &key,
                             &agent_id,
                             Some(Wasted::IdleLimit),
                             Unanswered::Keep,
                         );
-                        inner.set_reason(&key, &agent_id, Reason::IdleLimit);
+                        inner.apply_changes(changes);
+                        let changes = inner.warming.set_reason(
+                            &inner.sessions,
+                            &key,
+                            &agent_id,
+                            Reason::IdleLimit,
+                        );
+                        inner.apply_changes(changes);
                         continue;
                     }
                     Verdict::End(reason) => {
-                        inner.discard(&key, &agent_id, reason, wasted_label(reason));
+                        let changes = inner.warming.discard(
+                            &inner.sessions,
+                            &key,
+                            &agent_id,
+                            reason,
+                            wasted_label(reason),
+                        );
+                        inner.apply_changes(changes);
                         continue;
                     }
                     Verdict::Hold(reason) => {
                         // A held recipe still ends at its entry's expiry: a cold body is worth nothing to the wake.
-                        if inner.lapse(&key, &agent_id, now, &mut lapsed) {
+                        let (changes, done) =
+                            inner
+                                .warming
+                                .lapse(&inner.sessions, &key, &agent_id, now, &mut lapsed);
+                        inner.apply_changes(changes);
+                        if done {
                             continue;
                         }
                         let warming =
@@ -3824,11 +1073,21 @@ impl Engine {
                         // which finds nothing left after the first.
                         if began || paused {
                             if let Some(label) = wasted_label(reason) {
-                                inner.settle_unanswered(&key, &agent_id, label);
+                                let changes = inner.warming.settle_unanswered(
+                                    &inner.sessions,
+                                    &key,
+                                    &agent_id,
+                                    label,
+                                );
+                                inner.apply_changes(changes);
                             }
                         }
                         if !paused {
-                            inner.hold(&key, &agent_id, reason, now);
+                            let changes =
+                                inner
+                                    .warming
+                                    .hold(&inner.sessions, &key, &agent_id, reason, now);
+                            inner.apply_changes(changes);
                         }
                         continue;
                     }
@@ -3838,11 +1097,22 @@ impl Engine {
                             .reason
                             == Reason::Horizon
                         {
-                            inner.set_reason(&key, &agent_id, Reason::Scheduled);
+                            let changes = inner.warming.set_reason(
+                                &inner.sessions,
+                                &key,
+                                &agent_id,
+                                Reason::Scheduled,
+                            );
+                            inner.apply_changes(changes);
                         }
                     }
                 }
-                if inner.lapse(&key, &agent_id, now, &mut lapsed) {
+                let (changes, done) =
+                    inner
+                        .warming
+                        .lapse(&inner.sessions, &key, &agent_id, now, &mut lapsed);
+                inner.apply_changes(changes);
+                if done {
                     continue;
                 }
                 let held = gate(
@@ -3856,11 +1126,22 @@ impl Engine {
                 );
                 let holder = match held {
                     Err(Gate::Drop(reason, label)) => {
-                        inner.discard(&key, &agent_id, reason, Some(label));
+                        let changes = inner.warming.discard(
+                            &inner.sessions,
+                            &key,
+                            &agent_id,
+                            reason,
+                            Some(label),
+                        );
+                        inner.apply_changes(changes);
                         continue;
                     }
                     Err(Gate::Hold(reason)) => {
-                        inner.hold(&key, &agent_id, reason, now);
+                        let changes =
+                            inner
+                                .warming
+                                .hold(&inner.sessions, &key, &agent_id, reason, now);
+                        inner.apply_changes(changes);
                         continue;
                     }
                     Ok(holder) => holder,
@@ -3888,34 +1169,11 @@ impl Engine {
                 if inner.warming.running >= MAX_WORKERS {
                     break;
                 }
-                let inner = &mut *inner;
-                let agent = agent_ref(&inner.sessions.entries, &key, &agent_id).expect(AGENT_HELD);
-                let warming =
-                    warming_mut(&mut inner.warming.agents, &key, &agent_id).expect(AGENT_HELD);
-                let observation = warming.current.as_ref().unwrap();
-                let job = ProbeJob {
-                    key: key.clone(),
-                    key_generation: warming.key_generation,
-                    agent_id: agent_id.clone(),
-                    incarnation: agent.incarnation,
-                    observation_id: observation.id.clone(),
-                    generation: agent.generation,
-                    attempt: observation.attempt,
-                    started: now,
-                    holder,
-                    pool_id: warming.pool_id.clone(),
-                    canonical_model: warming.canonical_model.clone(),
-                    entrypoint: warming.entrypoint.clone(),
-                    client_label: observation.client_label.clone(),
-                    recipe: observation.recipe.clone(),
-                    expected: observation.expected,
-                };
-                warming.in_flight = true;
-                warming.hold_counted = false;
-                warming.probes += 1;
-                warming.count_probe(now);
-                inner.warming.running += 1;
-                inner.set_reason(&key, &agent_id, Reason::Probing);
+                let (changes, job) =
+                    inner
+                        .warming
+                        .dispatch_probe(&inner.sessions, &key, &agent_id, holder, now);
+                inner.apply_changes(changes);
                 // The tracker counts the job from here, under the lock that reserved the worker: the spawn
                 // below happens after the lock is released, and a `shutdown` that passes between the two
                 // would otherwise find an empty tracker and return while this job was still to come.
@@ -3947,46 +1205,30 @@ impl Engine {
         self.flush_persisted().await;
         self.close();
     }
-}
 
-pub(crate) struct RouterView {
-    /// `(pool, account)` of every member whose spend rows refuse it now: the gate holds a probe pinned there.
-    pub budgets: BTreeSet<(String, String)>,
-    /// A retained model name to the one the router keys its rows on, for the names that differ.
-    pub canonical: HashMap<String, String>,
-    /// `(account, scope)` of every live cooldown row to its window, so the gate can tell a plan-window row apart.
-    pub cooled: BTreeMap<(String, CooldownScope), String>,
-    /// The accounts whose usage credits block the fast lane: the gate holds a fast probe pinned there.
-    pub credits: BTreeSet<String>,
-    pub overage: BTreeSet<String>,
-    /// `(key, session, agent, canonical model)` to the pinned account's id and the incarnation the pin was made on:
-    /// the holder a probe would actually run on, so a sibling's pin never overwrites an agent's own.
-    pub pins: BTreeMap<(String, String, String, String), Holder>,
-    /// Each pool's keepalive policy, parsed once per tick rather than once per recipe.
-    pub policies: HashMap<String, KeepalivePolicy>,
-    pub snapshot: Arc<RegistrySnapshot>,
-    /// The usage-based seats at their spend cap: the gate holds a probe pinned there.
-    pub spent: BTreeSet<String>,
-}
-
-/// Every pool's keepalive policy in `snapshot`, by pool id.
-pub(crate) fn pool_policies(snapshot: &RegistrySnapshot) -> HashMap<String, KeepalivePolicy> {
-    snapshot
-        .pools()
-        .map(|pool| {
-            (
-                pool.id.clone(),
-                KeepalivePolicy::from_json(&pool.keepalive_json),
-            )
-        })
-        .collect()
-}
-
-/// What the gate decided for a due recipe: wait with a reason, or drop it with the label its probes settle under.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Gate {
-    Drop(Reason, Wasted),
-    Hold(Reason),
+    /// A probe's result, which its worker hands in under the lock. The quiesce is read under the same hold, so a result
+    /// that lands behind it changes no recipe the last save carries.
+    pub(crate) fn apply_probe(
+        &self,
+        job: &ProbeJob,
+        exchange: Exchange,
+        record: &ProbeRecord,
+        covered_unit: Option<SavingsUnit>,
+        now: i64,
+    ) {
+        let mut inner = self.lock();
+        let inner = &mut *inner;
+        let changes = inner.warming.apply_probe(
+            &inner.sessions,
+            job,
+            exchange,
+            record,
+            covered_unit,
+            now,
+            inner.closed,
+        );
+        inner.apply_changes(changes);
+    }
 }
 
 impl Engine {
@@ -4105,769 +1347,5 @@ impl Engine {
                 }
             }
         })
-    }
-}
-
-/// The key's opt-out drops the recipe, a disabled pool holds it, and the pool's current id lands on the agent. Answers
-/// the key's pool and its current policy, which the ceilings and the gate read, so a horizon raised in the console
-/// reaches a held recipe at the next tick and an opt-out discards a held prompt rather than leaving it retained, and
-/// whether the agent's pool moved.
-pub(crate) fn refresh_policy<'v>(
-    view: &'v RouterView,
-    agent: &Agent,
-    warming: &mut AgentWarming,
-) -> Result<(&'v PoolRow, &'v KeepalivePolicy, bool), Gate> {
-    // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
-    // rather than held, because nothing on that key may be probed again until its keepalive permission is back.
-    let Some(key) = view
-        .snapshot
-        .key(&agent.key_id)
-        .filter(|k| k.companion_permissions.keepalive)
-    else {
-        return Err(Gate::Drop(Reason::KeyOptedOut, Wasted::Released));
-    };
-    // The view's map is read in the same lookup, so a pool the map lacks holds as a disabled one does.
-    let Some((pool, policy)) = view
-        .snapshot
-        .pool(&key.pool_id)
-        .filter(|p| p.enabled)
-        .zip(view.policies.get(&key.pool_id))
-    else {
-        return Err(Gate::Hold(Reason::PoolDisabled));
-    };
-    // The pool's policy may have changed since admission, and an admin may have moved the key to another pool
-    // without a request following. The ceilings, the budget and the probe's own delta all read the pool the key
-    // belongs to now.
-    let moved = warming.pool_id != key.pool_id;
-    warming.pool_id = key.pool_id.clone();
-    Ok((pool, policy, moved))
-}
-
-/// The ceilings of one agent at a tick: its policy, the factors of its model under its account's funding (dollars
-/// at the fast cells for a fast recipe, dollars for an account the view lacks) from the tick's rows, its TTL and the
-/// engine's timing. Tables that give no break-even (no priced row, or a free read) fall back to the shipped price
-/// table's tightest row at the recipe's speed, so a ceiling is never unbounded. A timing whose lead is the whole TTL
-/// leaves no probe interval, and nothing is probed.
-pub(crate) fn ceilings_for(
-    warming: &AgentWarming,
-    policy: &KeepalivePolicy,
-    view: &RouterView,
-    rows: &FactorRows,
-    timing: &KeepaliveTiming,
-) -> Ceilings {
-    let fast = warming.current.as_ref().is_some_and(|o| o.recipe.fast);
-    let funding = warming
-        .account
-        .as_deref()
-        .and_then(|id| view.snapshot.account(id))
-        .map_or(Funding::ApiKey, |account| {
-            funding_of(
-                Some(account.kind),
-                view.snapshot.usage_based(&account.id),
-                Some(view.overage.contains(&account.id)),
-                Speed::Standard,
-            )
-        });
-    resolve_or_shipped(
-        policy,
-        rows.factors(
-            funding,
-            &warming.canonical_model,
-            fast,
-            warming.current.as_ref().map_or(0, |o| o.expected),
-        ),
-        floor_ttl_ms(warming.ttl_ms),
-        timing,
-        fast,
-        rows,
-    )
-    .unwrap_or(Ceilings {
-        idle_ms: 0,
-        parked_ms: 0,
-        horizon_ms: 0,
-        break_even_ms: 0,
-        idle_share: 0.0,
-    })
-}
-
-/// The spec's "Scheduling against router state" row, in its order, after `refresh_policy` answered `pool`. `Err`
-/// names why the due probe waits, or why the recipe goes. `Ok` lets the probe run on the holder it names, the recipe's
-/// holder: the account id with the incarnation the recipe was last answered on. The pinned account's subscription term
-/// holds the probe under `ineligible_credential` once it ended, and while the probe's due time plus its interval (the
-/// TTL less the lead) passes the end, since the cache that probe writes dies at the end. The end is `term::end_of`'s,
-/// the one the router's wind-down reads, so the last interval before a trial end still ahead holds too and probing
-/// resumes once the trial end passes.
-pub(crate) fn gate(
-    view: &RouterView,
-    agent: &Agent,
-    warming: &AgentWarming,
-    session_id: &str,
-    pool: &PoolRow,
-    policy: &KeepalivePolicy,
-    now: i64,
-) -> Result<Holder, Gate> {
-    let key_id = agent.key_id.clone();
-    // A probe keeps the session on the account it warmed only while the pin outlives the probe's due time:
-    // the recipe's own TTL less the lead, so a five-minute recipe needs about four minutes of pin and a
-    // one-hour one about fifty-four. The save-time floor of 300 s stays the one hard refusal.
-    let due_after_ms = floor_ttl_ms(warming.ttl_ms) - warming.timing.lead_ms(warming.ttl_ms);
-    if seconds_ms(pool.affinity_ttl_seconds) < due_after_ms {
-        return Err(Gate::Hold(Reason::AffinityTooShort));
-    }
-    if !policy.enabled {
-        return Err(Gate::Hold(Reason::KeepaliveOff));
-    }
-    // A recipe that names no incarnation of its holder cannot tell a re-paired account from the one that answered it,
-    // so it waits for the agent's next request, which arms it.
-    let Some(incarnation) = warming.account_incarnation else {
-        return Err(Gate::Hold(Reason::PinMoved));
-    };
-    let holder = warming.account.clone().map(|account_id| Holder {
-        account_id,
-        incarnation,
-    });
-    // The probe replays the prompt on the holder that last answered the recipe. A pin that names another holder has
-    // moved since, and a probe there would write the whole prompt cold, so the recipe waits for the next request that
-    // arms it on the pin's account.
-    if view
-        .pins
-        .get(&(
-            key_id.clone(),
-            session_id.to_string(),
-            agent.id.clone(),
-            warming.canonical_model.clone(),
-        ))
-        .is_some_and(|pinned| holder.as_ref() != Some(pinned))
-    {
-        return Err(Gate::Hold(Reason::PinMoved));
-    }
-    let Some(holder) = holder else {
-        return Err(Gate::Hold(Reason::Paused));
-    };
-    let Some(account) = view.snapshot.account(&holder.account_id) else {
-        return Err(Gate::Hold(Reason::Paused));
-    };
-    if !account.enabled {
-        return Err(Gate::Hold(Reason::Paused));
-    }
-    if matches!(
-        account.state,
-        AccountState::ReauthRequired | AccountState::FundingRequired
-    ) {
-        return Err(Gate::Hold(Reason::Reauth));
-    }
-    // A hold rather than a pause, read live on every poll like the budget below: an operator who turns the cancel
-    // off, or a profile read that clears the plan-ended flag, releases the probe on the next tick.
-    if let Some(term) = view.snapshot.term(&account.id) {
-        let last_interval = warming
-            .due_at()
-            .zip(phoebis_routing::term::end_of(term, now))
-            .is_some_and(|(due, end)| due + due_after_ms > end);
-        if last_interval || phoebis_routing::term::ended(term, now) {
-            return Err(Gate::Hold(Reason::IneligibleCredential));
-        }
-    }
-    let fast = warming
-        .current
-        .as_ref()
-        .map(|o| &o.recipe)
-        .is_some_and(|r| r.fast);
-    // The router's own rule decides which live row holds the probe: a fast recipe passes a plan-window row on the
-    // account and holds on its own lane's, as a fast request does.
-    let cooled = view.cooled.iter().any(|((id, scope), window)| {
-        id == &account.id
-            && phoebis_routing::cooldown_holds(scope, window, &warming.canonical_model, fast)
-    });
-    if cooled {
-        return Err(Gate::Hold(Reason::Cooled));
-    }
-    // A fast recipe draws usage credits, not a plan window, so plan overage does not hold it.
-    if !fast && view.overage.contains(&account.id) && pool.overage_policy != OveragePolicy::Allow {
-        return Err(Gate::Hold(Reason::Overage));
-    }
-    // Read live on every poll like the two holds above: the period's end or a raised budget clears it on the
-    // next tick, and a real request that moves the pin clears it, since it arms the recipe on the pin's account.
-    if view
-        .budgets
-        .contains(&(pool.id.clone(), account.id.clone()))
-    {
-        return Err(Gate::Hold(Reason::Budget));
-    }
-    // The selector's own two tests on the pin, read live like the holds above, so such a probe writes no rejected
-    // request row at each rung of the ladder. The spend funds every lane, and the credits the fast one alone.
-    if view.spent.contains(&account.id) {
-        return Err(Gate::Hold(Reason::Spent));
-    }
-    if fast && view.credits.contains(&account.id) {
-        return Err(Gate::Hold(Reason::Credits));
-    }
-    Ok(holder)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// `ALL` is kept by hand. The cycle below names every variant with no wildcard, so a variant the enum gains stops
-    /// this test compiling until it joins the cycle, and the walk then wants it in `ALL`.
-    #[test]
-    fn wasted_all_holds_every_variant() {
-        let next = |label: Wasted| match label {
-            Wasted::ColdReturn => Wasted::Evicted,
-            Wasted::Evicted => Wasted::Expired,
-            Wasted::Expired => Wasted::Horizon,
-            Wasted::Horizon => Wasted::IdleLimit,
-            Wasted::IdleLimit => Wasted::ParkedLimit,
-            Wasted::ParkedLimit => Wasted::Released,
-            Wasted::Released => Wasted::Replaced,
-            Wasted::Replaced => Wasted::SessionEnded,
-            Wasted::SessionEnded => Wasted::ColdReturn,
-        };
-        let mut walked = vec![Wasted::ColdReturn];
-        let mut label = next(Wasted::ColdReturn);
-        while label != Wasted::ColdReturn && walked.len() <= Wasted::ALL.len() {
-            walked.push(label);
-            label = next(label);
-        }
-        assert_eq!(walked, Wasted::ALL.to_vec());
-    }
-
-    #[test]
-    fn the_longest_cache_ttl_reads_both_sets_and_their_model_overrides_while_the_policy_is_off() {
-        let longest =
-            |raw: serde_json::Value| longest_cache_ttl_ms(&CacheTtlPolicy::parse(&raw).unwrap());
-        let five = serde_json::json!({"main": "5m", "subagent": "5m"});
-        let with_model = |main: &str, subagent: &str| {
-            serde_json::json!({
-                "main": "5m",
-                "models": [{"main": main, "model": "claude-opus-4-1", "subagent": subagent}],
-                "subagent": "5m",
-            })
-        };
-        assert_eq!(longest(serde_json::json!({})), ONE_HOUR_MS);
-        assert_eq!(
-            longest(serde_json::json!({"metered": five, "plan": five})),
-            FIVE_MINUTES_MS
-        );
-        for (name, policy) in [
-            (
-                "a metered subagent",
-                serde_json::json!({"metered": {"main": "5m", "subagent": "1h"}, "plan": five}),
-            ),
-            (
-                "a plan main",
-                serde_json::json!({"metered": five, "plan": {"main": "1h", "subagent": "5m"}}),
-            ),
-            (
-                "a metered model's main",
-                serde_json::json!({"metered": with_model("1h", "5m"), "plan": five}),
-            ),
-            (
-                "a plan model's subagent",
-                serde_json::json!({"metered": five, "plan": with_model("5m", "1h")}),
-            ),
-        ] {
-            assert_eq!(longest(policy), ONE_HOUR_MS, "{name}");
-        }
-    }
-
-    #[test]
-    fn a_refreshing_class_rearms_whatever_the_chain_says() {
-        assert_eq!(
-            guard(Some("subagent"), None, &[], Some(("s", "t")), false),
-            Guard::Rearm
-        );
-    }
-
-    #[test]
-    fn a_compaction_answers_its_own_verdict_whatever_the_chain_says() {
-        let continuing = ["t".to_string()];
-        let fresh = ["fresh".to_string()];
-        for (static_hash, boundaries, recipe, model_matches) in [
-            (None, &[][..], Some(("s", "t")), false),
-            (None, &[][..], None, false),
-            (Some("s"), &continuing[..], Some(("s", "t")), true),
-            (Some("s"), &fresh[..], Some(("s", "t")), true),
-        ] {
-            assert_eq!(
-                guard(
-                    Some("compaction"),
-                    static_hash,
-                    boundaries,
-                    recipe,
-                    model_matches
-                ),
-                Guard::Compaction,
-                "{static_hash:?} {boundaries:?} {recipe:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn any_other_class_is_auxiliary() {
-        assert_eq!(
-            guard(Some("title"), None, &[], Some(("s", "t")), false),
-            Guard::Auxiliary
-        );
-    }
-
-    #[test]
-    fn a_first_observation_with_no_recipe_rearms_whatever_it_says() {
-        assert_eq!(
-            guard(None, Some("s"), &["t".to_string()], None, false),
-            Guard::Rearm
-        );
-    }
-
-    #[test]
-    fn a_body_without_a_chain_rearms_every_request() {
-        assert_eq!(
-            guard(None, None, &[], Some(("s", "t")), false),
-            Guard::Rearm
-        );
-    }
-
-    #[test]
-    fn boundaries_holding_the_recipes_tail_rearm() {
-        assert_eq!(
-            guard(
-                None,
-                Some("other"),
-                &["a".into(), "t".into()],
-                Some(("s", "t")),
-                false
-            ),
-            Guard::Rearm
-        );
-    }
-
-    #[test]
-    fn the_same_static_prefix_and_model_without_a_continuation_restarts() {
-        assert_eq!(
-            guard(None, Some("s"), &["fresh".into()], Some(("s", "t")), true),
-            Guard::Restart
-        );
-    }
-
-    #[test]
-    fn the_same_static_prefix_on_another_model_is_foreign_not_a_restart() {
-        assert_eq!(
-            guard(None, Some("s"), &["fresh".into()], Some(("s", "t")), false),
-            Guard::Foreign
-        );
-    }
-
-    /// The class decides after the kind: a usage-based seat's probe settles in dollars whatever the overage flag, as an
-    /// API-key member's does, and a plan account's in its window share or, in overage, in dollars.
-    #[test]
-    fn a_usage_based_seat_funds_its_probes_in_dollars_whatever_the_overage_flag() {
-        for in_overage in [false, true] {
-            assert_eq!(
-                (
-                    funding_of(
-                        Some(AccountKind::Oauth),
-                        true,
-                        Some(in_overage),
-                        Speed::Standard
-                    ),
-                    funding_of(
-                        Some(AccountKind::ApiKey),
-                        false,
-                        Some(in_overage),
-                        Speed::Standard
-                    )
-                ),
-                (Funding::UsageBased, Funding::ApiKey),
-                "overage flag {in_overage}"
-            );
-        }
-        assert_eq!(
-            (
-                funding_of(
-                    Some(AccountKind::Oauth),
-                    false,
-                    Some(false),
-                    Speed::Standard
-                ),
-                funding_of(Some(AccountKind::Oauth), false, Some(true), Speed::Standard)
-            ),
-            (Funding::Plan, Funding::Overage)
-        );
-    }
-
-    /// One pool holding one key and two members, subscription account `o` and api_key account `a`, with keepalive
-    /// on.
-    fn pool_view(o_in_overage: bool) -> RouterView {
-        pool_view_under(o_in_overage, OveragePolicy::Allow)
-    }
-
-    /// `pool_view` with the pool's overage policy named, for a case the overage hold has to reach.
-    fn pool_view_under(o_in_overage: bool, overage_policy: OveragePolicy) -> RouterView {
-        let policy = KeepalivePolicy {
-            enabled: true,
-            ..KeepalivePolicy::default()
-        };
-        let account = |id: &str, kind| phoebis_store::AccountRow::for_tests(id, kind);
-        let member = |account_id: &str| phoebis_store::PoolMember {
-            pool_id: "main".into(),
-            account_id: account_id.into(),
-            priority: 0,
-            budget_daily_usd: None,
-            budget_monthly_usd: None,
-        };
-        let load = phoebis_store::RegistryLoad {
-            accounts: vec![
-                account("a", AccountKind::ApiKey),
-                account("o", AccountKind::Oauth),
-            ],
-            keys: vec![phoebis_store::ApiKeyRow {
-                id: "k".into(),
-                label: "k".into(),
-                notes: None,
-                pool_id: "main".into(),
-                enabled: true,
-                revoked_at: None,
-                expires_at: None,
-                model_rules: Vec::new(),
-                model_rules_mode: phoebis_store::RulesMode::default(),
-                long_context_twins: false,
-                companion_permissions: phoebis_store::CompanionPermissions::default(),
-                body_capture_hours: None,
-                secret_digest: vec![0; 32],
-                prefix: "00000000".into(),
-                incarnation: 1,
-                created_at: 0,
-                updated_at: 0,
-                rotated_at: None,
-                last_used_at: None,
-                retired_secret_last_used_at: None,
-                auto_mode_server: None,
-                feature_accounts: phoebis_store::KeyFeatureAccounts::default(),
-            }],
-            members: vec![member("a"), member("o")],
-            pools: vec![phoebis_store::PoolRow {
-                overage_policy,
-                keepalive_json: serde_json::to_string(&policy).unwrap(),
-                prefer_subscription: false,
-                ..phoebis_store::PoolRow::for_tests("main")
-            }],
-            ..phoebis_store::RegistryLoad::default()
-        };
-        let snapshot = Arc::new(RegistrySnapshot::from_load(load, [0; 32], 0, 1));
-        RouterView {
-            budgets: BTreeSet::new(),
-            canonical: HashMap::new(),
-            cooled: BTreeMap::new(),
-            credits: BTreeSet::new(),
-            overage: if o_in_overage {
-                BTreeSet::from(["o".to_string()])
-            } else {
-                BTreeSet::new()
-            },
-            pins: BTreeMap::new(),
-            policies: pool_policies(&snapshot),
-            snapshot,
-            spent: BTreeSet::new(),
-        }
-    }
-
-    /// An observation whose recipe `make_recipe` built from a body sent in fast mode, or at standard speed.
-    fn observation(fast: bool) -> Observation {
-        let speed = if fast { r#""speed":"fast","# } else { "" };
-        let body = format!(
-            r#"{{"model":"claude-opus-5-5",{speed}"max_tokens":1024,"messages":[{{"role":"user","content":"hi"}}]}}"#
-        );
-        let recipe = make_recipe(&[], body.as_bytes(), "claude-opus-5-5", 1 << 20).unwrap();
-        assert_eq!(recipe.fast, fast, "{body}");
-        Observation {
-            id: "r".into(),
-            attempt: 1,
-            started: 0,
-            received_at: 0,
-            recipe,
-            ready: true,
-            expected: 2_000,
-            ttl_ms: 0,
-            prior: None,
-            poisoned: false,
-            dispatched_ms: None,
-            funding: AttemptFunding::default(),
-            client_label: None,
-        }
-    }
-
-    /// The gate's answer for `main` holding a recipe of that speed answered on `account`, with no pin in the view.
-    fn gated_at(view: &RouterView, account: &str, fast: bool) -> Option<Gate> {
-        let agent = Agent::new("main", "k", 1, 0);
-        let mut warming = AgentWarming::new(0, KeepaliveTiming::default());
-        warming.account = Some(account.into());
-        warming.account_incarnation = Some(1);
-        warming.canonical_model = "claude-opus-5-5".into();
-        warming.current = Some(observation(fast));
-        refresh_policy(view, &agent, &mut warming)
-            .and_then(|(pool, policy, _)| gate(view, &agent, &warming, "s", pool, policy, 0))
-            .err()
-    }
-
-    /// A recipe's ceilings read the price set its prompt selects, its length the tokens the cache evidence counted: the
-    /// fixture's body is under a hundred bytes, and its 2,000 tokens put it over the threshold.
-    #[test]
-    fn a_recipes_ceilings_read_the_price_set_its_prompt_tokens_select() {
-        let pricing = phoebis_ledger::PriceRevisions::from_yaml(
-            r#"
-revisions:
-  - effective: 2026-01-01
-    models:
-      claude-opus-5-5:
-        input: 4
-        cache_write_5m: 1.25
-        cache_write_1h: 2
-        cache_read: 0.1
-        output: 20
-        long_context: {over: 1000, input: 8, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.5, output: 40}
-"#,
-            "test",
-        )
-        .unwrap();
-        let rows = FactorRows::of(pricing.latest(), &PlanTables::shipped(), 0);
-        let timing = KeepaliveTiming::default();
-        let mut warming = AgentWarming::new(0, timing);
-        warming.account = Some("a".into());
-        warming.canonical_model = "claude-opus-5-5".into();
-        warming.current = Some(observation(false));
-        let policy = KeepalivePolicy::default();
-        let break_even = |warming: &AgentWarming| {
-            ceilings_for(warming, &policy, &pool_view(false), &rows, &timing).break_even_ms
-        };
-        assert_eq!(
-            break_even(&warming),
-            960_000,
-            "over the threshold the long-context cells' 0.5 against 2.5 break even after 16 minutes"
-        );
-        warming.current.as_mut().unwrap().expected = 1_000;
-        assert_eq!(
-            break_even(&warming),
-            2_760_000,
-            "at the threshold the standard cells' 0.1 against 1.25 break even after 46 minutes"
-        );
-    }
-
-    #[test]
-    fn a_fast_recipe_passes_a_plan_window_hold_takes_no_overage_hold_and_holds_on_a_fast_row() {
-        let cooled = |scope: &str, window: &str| RouterView {
-            cooled: BTreeMap::from([(
-                ("o".to_string(), CooldownScope::parse(scope).unwrap()),
-                window.to_string(),
-            )]),
-            ..pool_view(false)
-        };
-        let plan_window = cooled("account", "five_hour");
-        assert_eq!(
-            (
-                gated_at(&plan_window, "o", true),
-                gated_at(&plan_window, "o", false)
-            ),
-            (None, Some(Gate::Hold(Reason::Cooled))),
-            "an account row on a plan window holds the standard recipe alone"
-        );
-        let fast_row = cooled("fast", "fast");
-        assert_eq!(
-            (
-                gated_at(&fast_row, "o", true),
-                gated_at(&fast_row, "o", false)
-            ),
-            (Some(Gate::Hold(Reason::Cooled)), None),
-            "the fast lane's row holds the fast recipe alone"
-        );
-        let overage = pool_view_under(true, OveragePolicy::Never);
-        assert_eq!(
-            (
-                gated_at(&overage, "o", true),
-                gated_at(&overage, "o", false)
-            ),
-            (None, Some(Gate::Hold(Reason::Overage))),
-            "plan overage holds the standard recipe alone"
-        );
-    }
-
-    #[test]
-    fn the_gate_holds_on_a_cooldown_row_exactly_when_the_routers_rule_does() {
-        // Each row's pair is whether the row holds a standard recipe and a fast one.
-        let rows = [
-            ("account", "five_hour", (true, false)),
-            ("account", "seven_day", (true, false)),
-            ("account", "seven_day_fable", (true, false)),
-            ("account", "retry_after", (true, true)),
-            ("fast", "fast", (false, true)),
-            ("model:claude-opus-5-5", "retry_after", (true, true)),
-            ("model:claude-sonnet-5", "retry_after", (false, false)),
-        ];
-        for (scope, window, holds) in rows {
-            let view = RouterView {
-                cooled: BTreeMap::from([(
-                    ("o".to_string(), CooldownScope::parse(scope).unwrap()),
-                    window.to_string(),
-                )]),
-                ..pool_view(false)
-            };
-            assert_eq!(
-                (
-                    gated_at(&view, "o", false) == Some(Gate::Hold(Reason::Cooled)),
-                    gated_at(&view, "o", true) == Some(Gate::Hold(Reason::Cooled))
-                ),
-                holds,
-                "{scope} at {window}"
-            );
-        }
-    }
-
-    /// `main` of session `s` holding a standard recipe last answered on `account` under `incarnation`.
-    fn holding(account: &str, incarnation: Option<u64>) -> AgentWarming {
-        let mut warming = AgentWarming::new(0, KeepaliveTiming::default());
-        warming.account = Some(account.into());
-        warming.account_incarnation = incarnation;
-        warming.canonical_model = "claude-opus-5-5".into();
-        warming.current = Some(observation(false));
-        warming
-    }
-
-    /// `pool_view` with `main`'s pin on `account` under `incarnation`.
-    fn pinned_on(account: &str, incarnation: u64) -> RouterView {
-        RouterView {
-            pins: BTreeMap::from([(
-                (
-                    "k".to_string(),
-                    "s".to_string(),
-                    "main".to_string(),
-                    "claude-opus-5-5".to_string(),
-                ),
-                holder(account, incarnation),
-            )]),
-            ..pool_view(false)
-        }
-    }
-
-    /// The gate's whole answer for main with the record `warming` under `view`, after the policy's refresh.
-    fn gate_of(view: &RouterView, warming: &mut AgentWarming) -> Result<Holder, Gate> {
-        let agent = Agent::new("main", "k", 1, 0);
-        refresh_policy(view, &agent, warming)
-            .and_then(|(pool, policy, _)| gate(view, &agent, warming, "s", pool, policy, 0))
-    }
-
-    fn holder(account: &str, incarnation: u64) -> Holder {
-        Holder {
-            account_id: account.into(),
-            incarnation,
-        }
-    }
-
-    #[test]
-    fn a_due_probe_holds_while_its_pin_stands_on_another_holder() {
-        assert_eq!(
-            gate_of(&pinned_on("o", 1), &mut holding("a", Some(1))),
-            Err(Gate::Hold(Reason::PinMoved)),
-            "a pin on another account holds the recipe rather than writing its prompt cold there"
-        );
-        assert_eq!(
-            gate_of(&pinned_on("a", 1), &mut holding("a", Some(1))),
-            Ok(holder("a", 1)),
-            "a pin on the recipe's own holder lets the probe run there"
-        );
-        assert_eq!(
-            gate_of(&pinned_on("a", 2), &mut holding("a", Some(1))),
-            Err(Gate::Hold(Reason::PinMoved)),
-            "a pin on the same id paired again is another holder"
-        );
-    }
-
-    #[test]
-    fn a_recipe_with_no_holder_incarnation_holds_with_no_pin_in_the_view() {
-        assert_eq!(
-            gate_of(&pool_view(false), &mut holding("a", None)),
-            Err(Gate::Hold(Reason::PinMoved))
-        );
-    }
-
-    #[test]
-    fn a_recipe_put_back_after_a_failed_request_gates_on_its_own_holder() {
-        let key: SessionKey = ("k".into(), "s".into());
-        let mut inner = Inner::empty(KeepaliveTiming::default(), KeepaliveLimits::default(), 0);
-        let mut armed = holding("a", Some(1));
-        armed.expires = Some(300_000);
-        inner.sessions.entries.insert(
-            key.clone(),
-            Session {
-                key_generation: 0,
-                instance: "i".into(),
-                sequence: 0,
-                lease: i64::MAX,
-                attended: true,
-                ended: false,
-                last_report_at: 0,
-                last_real_at: Some(0),
-                slotted: true,
-                restored_until: None,
-                instance_mismatches: 0,
-                agents: BTreeMap::from([("main".to_string(), Agent::new("main", "k", 1, 0))]),
-                cache_warming: true,
-            },
-        );
-        let warming_agents = BTreeMap::from([("main".to_string(), armed)]);
-        inner.warming.agents.insert(key.clone(), warming_agents);
-        inner.set_aside(&key, "main", 1_000);
-        // The arrival's selection moved the agent onto the holder of the request that then failed.
-        let warming = warming_mut(&mut inner.warming.agents, &key, "main").expect(AGENT_HELD);
-        warming.account = Some("o".into());
-        warming.account_incarnation = Some(3);
-        let aside = inner
-            .take_aside(&key, "main")
-            .expect("the arrival set the recipe aside");
-        assert!(inner.rearm_aside(&key, "main", aside, 2_000));
-        let warming = warming_mut(&mut inner.warming.agents, &key, "main").expect(AGENT_HELD);
-        assert_eq!(gate_of(&pinned_on("a", 1), warming), Ok(holder("a", 1)));
-    }
-
-    #[test]
-    fn a_probe_pinned_on_a_seat_at_its_spend_cap_holds_as_spent() {
-        let spent = RouterView {
-            spent: BTreeSet::from(["a".to_string()]),
-            ..pool_view(false)
-        };
-        assert_eq!(
-            (
-                gated_at(&spent, "a", false),
-                gated_at(&pool_view(false), "a", false)
-            ),
-            (Some(Gate::Hold(Reason::Spent)), None)
-        );
-    }
-
-    #[test]
-    fn a_fast_recipe_holds_on_blocked_credits_and_a_standard_one_passes() {
-        let blocked = RouterView {
-            credits: BTreeSet::from(["a".to_string()]),
-            ..pool_view(false)
-        };
-        assert_eq!(
-            (
-                gated_at(&blocked, "a", true),
-                gated_at(&blocked, "a", false)
-            ),
-            (Some(Gate::Hold(Reason::Credits)), None)
-        );
-    }
-
-    #[test]
-    fn neither_the_chain_nor_the_static_prefix_matching_is_foreign() {
-        assert_eq!(
-            guard(
-                None,
-                Some("other"),
-                &["fresh".into()],
-                Some(("s", "t")),
-                false
-            ),
-            Guard::Foreign
-        );
     }
 }

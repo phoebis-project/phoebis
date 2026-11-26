@@ -4,14 +4,34 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, OnceLock};
 
-use phoebis_ledger::{PlanTables, PriceRevisions, PriceTable, SubscriptionCosts, TypeMultiplier};
+use phoebis_ledger::{
+    funding_of, PlanTables, PriceRevisions, PriceTable, Speed, SubscriptionCosts, TypeMultiplier,
+};
 use phoebis_relay::{CacheTtlPolicy, TtlBranch};
 use phoebis_routing::rules::{allows, process, RulesMode};
 use phoebis_routing::{listing::row_for, seconds_ms, LongContextRates, Rates};
-use phoebis_store::{canonical_id, ModelRule};
+use phoebis_store::{canonical_id, AccountKind, ModelRule};
 
-use crate::engine::config::{KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, ONE_HOUR_MS};
-use crate::engine::Funding;
+use crate::warming::config::{KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, ONE_HOUR_MS};
+
+/// How the attempt that served a probe was paid for, the ledger's own reading of an attempt's funding, so the
+/// break-even factors and the rows a probe files under follow one rule. The keepalive reads it at standard speed, since
+/// a fast recipe reads the fast cells whatever funds it.
+pub use phoebis_ledger::Funding;
+
+/// The fundings a pool's members bring to its ceilings, from each member's kind and usage-based class with no
+/// overage, each once in the members' order: an OAuth member brings the plan's factors, an API-key member the dollar
+/// rows, and a usage-based seat the dollar rows too.
+pub fn pool_fundings(members: impl IntoIterator<Item = (AccountKind, bool)>) -> Vec<Funding> {
+    let mut fundings: Vec<Funding> = Vec::new();
+    for (kind, usage_based) in members {
+        let funding = funding_of(Some(kind), usage_based, Some(false), Speed::Standard);
+        if !fundings.contains(&funding) {
+            fundings.push(funding);
+        }
+    }
+    fundings
+}
 
 /// The read and write factors of one model under one funding, any unit: only their ratio enters the break-even.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -473,6 +493,44 @@ mod tests {
         assert_ne!(
             before.effective, after.effective,
             "the two calls read two revisions"
+        );
+    }
+
+    /// The class decides after the kind: a usage-based seat's probe settles in dollars whatever the overage flag, as an
+    /// API-key member's does, and a plan account's in its window share or, in overage, in dollars.
+    #[test]
+    fn a_usage_based_seat_funds_its_probes_in_dollars_whatever_the_overage_flag() {
+        for in_overage in [false, true] {
+            assert_eq!(
+                (
+                    funding_of(
+                        Some(AccountKind::Oauth),
+                        true,
+                        Some(in_overage),
+                        Speed::Standard
+                    ),
+                    funding_of(
+                        Some(AccountKind::ApiKey),
+                        false,
+                        Some(in_overage),
+                        Speed::Standard
+                    )
+                ),
+                (Funding::UsageBased, Funding::ApiKey),
+                "overage flag {in_overage}"
+            );
+        }
+        assert_eq!(
+            (
+                funding_of(
+                    Some(AccountKind::Oauth),
+                    false,
+                    Some(false),
+                    Speed::Standard
+                ),
+                funding_of(Some(AccountKind::Oauth), false, Some(true), Speed::Standard)
+            ),
+            (Funding::Plan, Funding::Overage)
         );
     }
 }

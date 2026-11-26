@@ -6,10 +6,11 @@ use std::sync::Arc;
 
 use phoebis_ledger::{KeepaliveAgents, KeepaliveGaugeSource};
 
-use crate::engine::{
-    Agent, AgentState, Engine, Guard, Park, ParkKind, Reason, AGENT_HELD, MAIN_AGENT,
-};
+use crate::engine::Engine;
+use crate::sessions::state::{Agent, AgentState, Park, ParkKind, AGENT_HELD, MAIN_AGENT};
 use crate::warming::agent::{warming_ref, AgentWarming};
+use crate::warming::causes::Reason;
+use crate::warming::guard::Guard;
 
 /// The Sessions row's one word for an agent's recipe, read off the engine's reason beside its pause bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]

@@ -9,27 +9,33 @@ mod sessions;
 mod warming;
 
 pub use companion::companion_router;
-pub use engine::config::{
-    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LimitsError, PolicyError, FIVE_MINUTES_MS,
-    LEASE_MS, LEASE_SECONDS, MAX_WORKERS, MIN_AFFINITY_SECONDS, ONE_HOUR_MS, PERSIST_INTERVAL,
-};
+pub use engine::config::{KeepaliveLimits, LimitsError, PERSIST_INTERVAL};
 pub use engine::view::{
     recipe_state, AgentCounts, CompanionState, KeepaliveSummary, Lifecycle, RecipeState,
     RecipeView, SessionView, SummaryState,
 };
-pub use engine::{
-    continues_prefix, guard, idle_age_bucket, pool_fundings, spawn_observer, AgentState, Engine,
-    EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns, Park, ParkKind,
-    PrefixAnchor, Reason, SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS, MAIN_AGENT,
-};
+pub use engine::{spawn_observer, Engine, EngineParts, EngineStats};
 pub use routes::{events_router, EVENTS_PATH, MAX_BODY_BYTES};
+pub use sessions::config::{LEASE_MS, LEASE_SECONDS};
 pub use sessions::facts::{AgentFacts, SessionFacts, StoredSessionFacts};
+pub use sessions::state::{AgentState, Park, ParkKind, SessionKey, MAIN_AGENT};
 pub use warming::breakeven::{
-    break_even_ms, factors_for, resolve, BreakEvenFactors, CeilingInputs, Ceilings, Range,
-    ResolvedCeilings,
+    break_even_ms, factors_for, pool_fundings, resolve, BreakEvenFactors, CeilingInputs, Ceilings,
+    Funding, Range, ResolvedCeilings,
+};
+pub use warming::causes::{Reason, Wasted};
+pub use warming::config::{
+    KeepalivePolicy, KeepaliveTiming, PolicyError, FIVE_MINUTES_MS, MAX_WORKERS,
+    MIN_AFFINITY_SECONDS, ONE_HOUR_MS,
+};
+pub use warming::guard::{guard, Guard};
+pub use warming::idle::{
+    continues_prefix, idle_age_bucket, IdleReturnBucket, IdleReturns, PrefixAnchor,
+    IDLE_AGE_BOUNDS_SECONDS,
 };
 pub use warming::probe::PROBE_DEADLINE;
 pub use warming::recipe::{
     make_recipe, request_ttl_ms, valid_opaque, Recipe, MAX_HEADER_BYTES, MAX_HEADER_VALUE,
 };
+pub use warming::savings::SavingsUnit;
 pub use warming::usage::{ProbeUsage, MAX_USAGE_BYTES};

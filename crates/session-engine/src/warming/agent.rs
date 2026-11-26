@@ -2,10 +2,13 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::engine::config::KeepaliveTiming;
-use crate::engine::{
-    utc_day, Agent, AsideRecipe, Guard, IdleEpisode, Kept, Observation, OpenCompaction,
-    PrefixAnchor, Reason, SessionKey, Settlement, UnansweredProbe, Wasted,
+use crate::sessions::state::{Agent, SessionKey};
+use crate::warming::causes::{Reason, Wasted};
+use crate::warming::config::KeepaliveTiming;
+use crate::warming::guard::Guard;
+use crate::warming::idle::{utc_day, IdleEpisode, PrefixAnchor};
+use crate::warming::observation::{
+    AsideRecipe, Kept, Observation, OpenCompaction, Settlement, UnansweredProbe,
 };
 use crate::warming::usage::ProbeUsage;
 

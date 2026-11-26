@@ -8,8 +8,15 @@ use phoebis_routing::{PinUsage, SEVEN_DAY};
 use phoebis_store::AccountKind;
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{Credit, Engine, SavingsUnit, SessionKey, Settlement, Skipped};
+use crate::engine::Engine;
+use crate::sessions::state::SessionKey;
+use crate::warming::config::ONE_HOUR_MS;
+use crate::warming::observation::{Credit, Settlement, Skipped};
+use crate::warming::state::WarmingState;
 use crate::warming::usage::ProbeUsage;
+
+/// The routing crate's unit selector, so the keepalive and the shedding round never disagree on a pin's unit.
+pub type SavingsUnit = phoebis_routing::BurnUnit;
 
 /// The serving attempt's funding as the credit and the probe price it: one `Copy` value the saved forms convert at
 /// `of` and `restore`, each saved form keeping its own members. The default is an attempt no account served yet.
@@ -180,7 +187,7 @@ impl Engine {
         );
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
-        if credit.ttl_ms == crate::engine::config::ONE_HOUR_MS {
+        if credit.ttl_ms == ONE_HOUR_MS {
             d.kept_warm_1h_tokens = credit.read;
         } else {
             d.kept_warm_5m_tokens = credit.read;
@@ -247,19 +254,23 @@ impl Engine {
     /// withheld. Called after every lock release by the entry points that can queue either.
     pub(crate) fn flush(&self) {
         let now = self.now();
-        let (settlements, skipped) = {
-            let mut inner = self.lock();
-            (
-                std::mem::take(&mut inner.warming.settlements),
-                std::mem::take(&mut inner.warming.skipped),
-            )
-        };
+        let (settlements, skipped) = self.lock().warming.take_ledger_rows();
         for settlement in settlements {
             self.record_settlement(settlement);
         }
         for skip in &skipped {
             self.record_skipped(now, skip);
         }
+    }
+}
+
+impl WarmingState {
+    /// The settlements and the skips the last locked section queued, for the flush to send once the lock is released.
+    pub(crate) fn take_ledger_rows(&mut self) -> (Vec<Settlement>, Vec<Skipped>) {
+        (
+            std::mem::take(&mut self.settlements),
+            std::mem::take(&mut self.skipped),
+        )
     }
 }
 

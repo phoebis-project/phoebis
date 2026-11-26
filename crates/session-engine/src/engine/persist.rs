@@ -21,19 +21,27 @@ use phoebis_store::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::engine::config::{KeepaliveLimits, KeepaliveTiming, LEASE_MS};
-use crate::engine::{
-    agent_mut, agent_ref, Agent, AgentState, Engine, Guard, HeldPark, IdleEpisode,
-    IdleReturnBucket, Inner, Kept, Observation, Park, ParkKind, PrefixAnchor, PriorCoverage,
-    ProbeCharge, Reason, SavingsUnit, Session, SessionKey, Settlement, UnansweredProbe, Wasted,
-    AGENT_HELD, MAIN_AGENT,
-};
+use crate::engine::config::KeepaliveLimits;
+use crate::engine::{Engine, Inner};
+use crate::sessions::config::LEASE_MS;
 use crate::sessions::facts::{
     AgentFacts, RawAgentFacts, RawSessionFacts, SessionFacts, StoredSessionFacts,
 };
+use crate::sessions::state::{
+    agent_ref, Agent, AgentState, HeldPark, Park, ParkKind, Session, SessionKey, AGENT_HELD,
+    MAIN_AGENT,
+};
 use crate::warming::agent::{warming_mut, warming_ref, AgentWarming};
+use crate::warming::causes::{Reason, Wasted};
+use crate::warming::config::KeepaliveTiming;
+use crate::warming::guard::Guard;
+use crate::warming::idle::{IdleEpisode, IdleReturnBucket, PrefixAnchor};
+use crate::warming::observation::{
+    Kept, Observation, PriorCoverage, ProbeCharge, Settlement, UnansweredProbe,
+};
 use crate::warming::recipe::Recipe;
-use crate::warming::savings::{AttemptFunding, RowClient};
+use crate::warming::savings::{AttemptFunding, RowClient, SavingsUnit};
+use crate::warming::state::{Change, Changes};
 use crate::warming::usage::ProbeUsage;
 
 /// The payloads' shape. A row of an older version is dropped at the load: version 1 carried no funding and version 2
@@ -1234,11 +1242,15 @@ impl Inner {
         reason: Reason,
         wasted: Option<Wasted>,
     ) {
-        let generation = self.sessions.entries[key].agents[agent_id].generation;
-        self.discard(key, agent_id, reason, wasted);
-        if let Some(agent) = agent_mut(&mut self.sessions.entries, key, agent_id) {
-            agent.generation = generation;
-        }
+        let Changes(changes) = self
+            .warming
+            .discard(&self.sessions, key, agent_id, reason, wasted);
+        self.apply_changes(Changes(
+            changes
+                .into_iter()
+                .filter(|change| !matches!(change, Change::Ended { .. }))
+                .collect(),
+        ));
     }
 
     /// The rows the store answered, restored within the limits the file sets now rather than the ones the save ran
@@ -1299,8 +1311,8 @@ impl Inner {
         let mut held: Vec<(i64, SessionKey, String, Observation)> = Vec::new();
         // Raised at each insert, so it counts the agents of the session in the making before that session joins
         // the map.
-        let mut agent_count = self.agent_count();
-        let mut live_sessions = self.live_sessions();
+        let mut agent_count = self.sessions.agent_count();
+        let mut live_sessions = self.sessions.live_sessions();
         for row in sessions {
             let stored: PersistKey = (
                 row.key_id.clone(),
