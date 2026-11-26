@@ -3,7 +3,7 @@
 //! reconciles from the answer. The contract is the Go engine's, plus the park fields of a `parked` state, the
 //! `presence` activity, the key scope on every session and the two facts events.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use phoebis_relay::is_valid_id as valid_id;
 use phoebis_routing::{RegistrySnapshot, Report};
@@ -37,6 +37,7 @@ pub(crate) struct Event {
     pub park_kind: Option<String>,
     pub previous_instance_id: Option<String>,
     pub project: Option<String>,
+    pub reported_facts: Option<Vec<String>>,
     pub repository: Option<String>,
     pub repository_root: Option<String>,
     pub request_generation: Option<u64>,
@@ -171,7 +172,10 @@ fn members(event: &str) -> Option<(EventKind, &'static [(&'static str, bool)])> 
                 ("title", false),
             ],
         ),
-        "session_start" => (EventKind::SessionStart, &[("previous_instance_id", false)]),
+        "session_start" => (
+            EventKind::SessionStart,
+            &[("previous_instance_id", false), ("reported_facts", true)],
+        ),
         "state" => (
             EventKind::State,
             &[
@@ -285,6 +289,8 @@ pub(crate) enum Reported {
     },
     SessionStart {
         previous_instance_id: Option<String>,
+        /// The kinds of facts the instance reports. The session's record keeps no copy.
+        reported_facts: BTreeSet<FactsKind>,
     },
     /// Any state but `parked`.
     State {
@@ -330,6 +336,14 @@ impl EventReport {
         {
             return Err(err("invalid_event", 400));
         }
+        // A word that names no kind is refused rather than skipped, so a misspelled kind never reads as one the list
+        // leaves out, which would drop its stored facts.
+        let reported_facts = event
+            .reported_facts
+            .iter()
+            .flatten()
+            .map(|word| FactsKind::parse(word).ok_or(err("invalid_event", 400)))
+            .collect::<Result<BTreeSet<FactsKind>, EventError>>()?;
         let presence = match event.kind.as_deref() {
             None | Some("prompt") => false,
             Some("presence") => true,
@@ -416,6 +430,7 @@ impl EventReport {
             },
             EventKind::SessionStart => Reported::SessionStart {
                 previous_instance_id,
+                reported_facts,
             },
             EventKind::State => {
                 let agent_id = agent_id.ok_or_else(required)?;
@@ -490,6 +505,15 @@ fn validate(event: Event) -> Result<Event, EventError> {
         return Err(err("invalid_identity", 400));
     }
     Ok(event)
+}
+
+/// Each kind of stored facts that a registration's list does not name, read off the store's words so that a kind the
+/// store adds is dropped too.
+fn left_out(reported: &BTreeSet<FactsKind>) -> impl Iterator<Item = FactsKind> + '_ {
+    FactsKind::WORDS
+        .iter()
+        .filter_map(|word| FactsKind::parse(word))
+        .filter(|kind| !reported.contains(kind))
 }
 
 fn agents_of(session: &Session) -> Vec<AckAgent> {
@@ -618,12 +642,14 @@ impl Inner {
         match &report.event {
             Reported::SessionStart {
                 previous_instance_id,
+                reported_facts,
             } => {
                 return self.start(
                     key,
                     key_generation,
                     &report,
                     previous_instance_id.as_deref(),
+                    reported_facts,
                     now,
                 );
             }
@@ -851,6 +877,7 @@ impl Inner {
         key_generation: i64,
         report: &EventReport,
         previous_instance_id: Option<&str>,
+        reported_facts: &BTreeSet<FactsKind>,
         now: i64,
     ) -> Result<Applied, EventError> {
         // What a previous holder of this key id left under the same session id is not this caller's to
@@ -916,11 +943,18 @@ impl Inner {
                     }
                     self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
                 }
+                // An install that turned a kind off would otherwise keep the sets that an earlier run stored.
+                let row = (key.0.clone(), key_generation, key.1.clone());
+                let mut filed_facts = false;
+                for kind in left_out(reported_facts) {
+                    self.file_kind_leave(&row, kind);
+                    filed_facts = true;
+                }
                 self.touch_session(&key);
                 let session = &self.sessions[&key];
                 return Ok(Applied {
                     ack: acknowledge(&key, session, None, Some(agents_of(session))),
-                    filed_facts: false,
+                    filed_facts,
                 });
             }
             if previous_instance_id != Some(session.instance.as_str()) {
@@ -975,11 +1009,14 @@ impl Inner {
                 agents,
             },
         );
-        // The session's own sets start over with the record, and its agents' stored sets stay for the earlier
-        // agents that no report states again.
+        // The session's own sets start over with the record whatever the list says, and its agents' stored sets stay
+        // for the earlier agents that no report states again, unless the list leaves the kind out.
         let row = (key.0.clone(), key_generation, key.1.clone());
-        self.file_facts(&row, FactsKind::Project, "", None, now);
-        self.file_facts(&row, FactsKind::Title, "", None, now);
+        self.file_kind_leave(&row, FactsKind::Project);
+        self.file_kind_leave(&row, FactsKind::Title);
+        if !reported_facts.contains(&FactsKind::Agents) {
+            self.file_kind_leave(&row, FactsKind::Agents);
+        }
         self.touch_session(&key);
         self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
         let session = &self.sessions[&key];

@@ -490,7 +490,7 @@ id is `main`.
 
 | Event | Fields | What the router does |
 | --- | --- | --- |
-| `session_start` | `previous_instance_id` when it takes over from another instance | Registers the session under the key, or takes it back after a lapse or an end, and answers with the agents it holds |
+| `session_start` | `reported_facts`, and `previous_instance_id` when it takes over from another instance | Registers the session under the key, or takes it back after a lapse or an end, and answers with the agents it holds |
 | `heartbeat` | none | Renews the lease, the one event besides a `session_start` that does |
 | `agent_start` | `agent_id`, and `request_generation` when known | Starts the agent `busy`, or restarts a released one under the generation the start names |
 | `activity` | `agent_id`, `kind` (`prompt` or `presence`), and `request_generation` when known | A prompt sets the agent `busy` and resets its idle clock. A presence moves the idle clock alone |
@@ -508,8 +508,11 @@ whole characters, an `agent_type` or a `branch` over 256 bytes is left out, and 
 letters of the host in lower case, without the scheme, the user information, the port, the query, the fragment, one
 trailing `.git` and each trailing slash, and a value already in the form `host/path` is kept as it is given. A `file`
 URL, a local path, a remote with an `@` behind its host part and each other remote the rule cannot read are left out.
-The facts are display values of the console's Sessions view, and the router never refuses a report over a fact's
-content.
+A registration names the kinds of facts that its instance reports in `reported_facts`, a list of the words `agents`
+(each agent's description, name and type), `project` (the session's branch, project, repository, repository root and
+working directory) and `title`. An empty list says that the instance reports none. When the router accepts the
+registration, it drops each stored kind of the session that the list leaves out. The facts are display values of the
+console's Sessions view, and the router never refuses a report over a fact's content.
 
 The router accepts five states. `busy` is an agent at work. `idle` is an agent between requests: a prompt that sent no
 request, such as a local command, lets the idle window go on, and a park that ended restarts it. `parked` is an agent

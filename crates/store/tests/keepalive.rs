@@ -182,6 +182,7 @@ fn the_keepalive_rows_round_trip_and_the_body_is_sealed_at_rest() {
         purge_counters_before: None,
         facts: Vec::new(),
         removed_facts: Vec::new(),
+        removed_fact_kinds: Vec::new(),
     };
     store.save_keepalive(&batch).unwrap();
     assert_eq!(

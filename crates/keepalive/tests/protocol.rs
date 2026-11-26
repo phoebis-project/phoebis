@@ -110,7 +110,8 @@ async fn listed_generation_is_current(app: &axum::Router, sequence: u64, listed:
     );
 }
 
-/// A report as the mod sends it: the five members every body carries, then the event's own.
+/// A report as the mod sends it: the five members every body carries, then the event's own, and on a `session_start`
+/// that names no `reported_facts` the three kinds.
 fn report(event: &str, session: &str, instance: &str, sequence: u64, fields: Value) -> Value {
     let mut body = json!({
         "protocol": 1,
@@ -119,6 +120,9 @@ fn report(event: &str, session: &str, instance: &str, sequence: u64, fields: Val
         "instance_id": instance,
         "sequence": sequence,
     });
+    if event == "session_start" {
+        body["reported_facts"] = json!(["agents", "project", "title"]);
+    }
     if let Value::Object(fields) = fields {
         body.as_object_mut().unwrap().extend(fields);
     }
@@ -598,6 +602,33 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
             "a previous instance off session_start",
             Some(JSON),
             json_body(heartbeat(json!({"previous_instance_id": "i"}))),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a registration that names no reported facts",
+            Some(JSON),
+            json_body(json!({
+                "protocol": 1,
+                "event": "session_start",
+                "session_id": "unlisted",
+                "instance_id": "i-unlisted",
+                "sequence": 1
+            })),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a registration whose list holds a word that is no kind",
+            Some(JSON),
+            json_body(json!({
+                "protocol": 1,
+                "event": "session_start",
+                "session_id": "misspelled",
+                "instance_id": "i-misspelled",
+                "sequence": 1,
+                "reported_facts": ["agent"]
+            })),
             400,
             code("invalid_event"),
         ),

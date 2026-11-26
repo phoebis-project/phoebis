@@ -1343,6 +1343,102 @@ async fn a_set_filed_ahead_of_its_keys_deletion_reaches_no_row() {
     );
 }
 
+// Apart from the workers, and waiting on the flush counts, as the held-save cases above explain. The held save keeps
+// any save from reading its batch between the facts report and the registration, so the next save reads both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_set_filed_ahead_of_a_registration_that_leaves_its_kind_out_reaches_no_row() {
+    let mut r = rig(on_disk()).await;
+    let session = rig_session(&r);
+    let generation = r
+        .event(json!({"event": "agent_start", "agent_id": "a1"}))
+        .await
+        .unwrap()
+        .request_generation;
+    let held = registry(&r);
+    held.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let engine = r.engine.clone();
+    let first = on_own_thread(async move { engine.flush_persisted().await });
+    r.engine.persist_reached(3, 3).await;
+    r.event(json!({
+        "event": "agent_facts",
+        "agent_id": "a1",
+        "name": "tide-gauge-reader",
+        "request_generation": generation
+    }))
+    .await
+    .unwrap();
+    r.event(json!({"event": "session_start", "reported_facts": []}))
+        .await
+        .unwrap();
+    held.execute_batch("COMMIT").unwrap();
+    first.join().unwrap();
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_set(&r, &session, FactsKind::Agents, "a1"),
+        None,
+        "the set filed ahead of the registration that left its kind out reached no row"
+    );
+}
+
+// Apart from the workers, and waiting on the flush counts, as the held-save cases above explain. The held save keeps
+// any save from reading its batch between the registration and the facts report, so the next save carries the kind's
+// leave and the set of that kind in one batch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_set_filed_behind_a_registration_that_leaves_its_kind_out_reaches_its_row() {
+    let mut r = rig(on_disk()).await;
+    let session = rig_session(&r);
+    r.event(json!({"event": "agent_start", "agent_id": "a1"}))
+        .await
+        .unwrap();
+    let held = registry(&r);
+    held.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let engine = r.engine.clone();
+    let first = on_own_thread(async move { engine.flush_persisted().await });
+    r.engine.persist_reached(3, 3).await;
+    r.event(json!({"event": "session_start", "reported_facts": ["agents", "project"]}))
+        .await
+        .unwrap();
+    r.event(json!({"event": "session_facts", "title": "Rig the storm shutters"}))
+        .await
+        .unwrap();
+    held.execute_batch("COMMIT").unwrap();
+    first.join().unwrap();
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_title(&r, &session),
+        Some(json!("Rig the storm shutters")),
+        "the title reported behind the registration that left its kind out reached its row"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_registration_of_another_instance_drops_no_stored_kind() {
+    let mut r = rig(RigSpec::default()).await;
+    let session = rig_session(&r);
+    r.event(json!({"event": "session_facts", "title": "Lash the deck cargo"}))
+        .await
+        .unwrap();
+    r.engine.flush_persisted().await;
+    let refused = r
+        .event(json!({
+            "event": "session_start",
+            "instance_id": "second",
+            "reported_facts": []
+        }))
+        .await
+        .expect_err("a second instance that names none it replaces is refused");
+    assert_eq!(
+        (refused.status, refused.code.as_str()),
+        (409, "instance_conflict")
+    );
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        stored_title(&r, &session),
+        Some(json!("Lash the deck cargo")),
+        "the refused registration that named no kind left the stored title in place"
+    );
+}
+
 #[tokio::test]
 async fn a_sessions_title_and_its_project_set_rest_in_two_rows_each_with_its_own_members() {
     let mut r = rig(on_disk()).await;

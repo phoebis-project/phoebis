@@ -118,6 +118,9 @@ pub struct KeepaliveBatch {
     pub purge_counters_before: Option<i64>,
     pub facts: Vec<FactsRow>,
     pub removed_facts: Vec<FactsKey>,
+    /// `(key_id, key_generation, session_id, kind)`: each stored set of the kind under the session leaves, an agent's
+    /// set of an agent that the engine holds no record of among them.
+    pub removed_fact_kinds: Vec<(String, i64, String, FactsKind)>,
 }
 
 impl KeepaliveBatch {
@@ -130,6 +133,7 @@ impl KeepaliveBatch {
             && self.purge_counters_before.is_none()
             && self.facts.is_empty()
             && self.removed_facts.is_empty()
+            && self.removed_fact_kinds.is_empty()
     }
 }
 
@@ -176,12 +180,14 @@ pub(crate) fn facts_aad(key: &FactsKey) -> String {
 
 impl Store {
     /// One transaction of upserts and deletes, each new body sealed under the storage key with the AAD `keepalive_aad`
-    /// and each set of reported facts with `facts_aad`. The removals land first, and the engine never names one row in
-    /// both halves of a batch. A removed session deletes no set of reported facts. A row that keeps its body leaves the
-    /// stored blob and nonce as they are, and a row that clears it leaves neither. Each session row that carries
-    /// `seen_at` stamps that instant on each stored set of its session, a set that the same batch writes among them.
-    /// A set is written only under a key that the registry holds with the set's generation, and a set that this
-    /// condition refuses fails no save.
+    /// and each set of reported facts with `facts_aad`. The removals land first, the leaves of a kind ahead of the
+    /// leaves of a row. A batch names a set in both halves where the engine filed it behind the leave of its kind, and
+    /// such a set stands, since the leaves run ahead of the writes. The engine names no other row in both halves of a
+    /// batch. A removed session deletes no set of reported facts. A row that keeps its body leaves the stored blob and
+    /// nonce as they are, and a row that clears it leaves neither. Each session row that carries `seen_at` stamps that
+    /// instant on each stored set of its session, a set that the same batch writes among them. A set is written only
+    /// under a key that the registry holds with the set's generation, and a set that this condition refuses fails no
+    /// save.
     pub fn save_keepalive(&self, batch: &KeepaliveBatch) -> Result<(), StoreError> {
         // Sealed before the connection is taken, so a large batch holds no other writer behind the cipher.
         let mut sealed_facts = Vec::with_capacity(batch.facts.len());
@@ -221,6 +227,13 @@ impl Store {
                 "DELETE FROM keepalive_agents \
                  WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND agent_id = ?4",
                 params![key_id, key_generation, session_id, agent_id],
+            )?;
+        }
+        for (key_id, key_generation, session_id, kind) in &batch.removed_fact_kinds {
+            tx.execute(
+                "DELETE FROM companion_facts \
+                 WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND kind = ?4",
+                params![key_id, key_generation, session_id, kind],
             )?;
         }
         for key in &batch.removed_facts {

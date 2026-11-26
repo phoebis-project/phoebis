@@ -689,12 +689,21 @@ pub async fn created_key_secret(app: &Router, cookie: &str, body: &str) -> Strin
 /// The report goes as the mod sends it: under the request generation the body carries, which the caller takes from
 /// the agent's last answer, and once more under the generation that a `stale_request_generation` refusal names, under
 /// the same sequence, which the refusal did not take. The engine moves an agent's generation at its real request with
-/// no answer in between. `body` is a JSON object, and `protocol` is filled with 1 where the body names none.
+/// no answer in between. `body` is a JSON object, and `protocol` is filled with 1 where the body names none, and
+/// `reported_facts` with the three kinds on a `session_start` that names none.
 pub async fn report_as_the_mod(
     engine: &Arc<Engine>,
     secret: &str,
     mut body: serde_json::Value,
 ) -> serde_json::Value {
+    let fields = body
+        .as_object_mut()
+        .expect("a report's body is a JSON object");
+    if fields.get("event") == Some(&serde_json::json!("session_start")) {
+        fields
+            .entry("reported_facts")
+            .or_insert(serde_json::json!(["agents", "project", "title"]));
+    }
     let (mut status, mut answer) = report_answer(engine, secret, &body).await;
     if status == StatusCode::CONFLICT && answer["code"] == "stale_request_generation" {
         body["request_generation"] = answer["request_generation"].clone();

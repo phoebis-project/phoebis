@@ -1078,6 +1078,160 @@ async fn a_report_that_empties_a_set_deletes_its_stored_row() {
     );
 }
 
+/// The case calls no flush, so the title leaves the row through the save that the second registration asked for.
+#[tokio::test]
+async fn a_registration_that_names_the_project_alone_drops_the_stored_title_and_keeps_the_project()
+{
+    let (parts, cookie, secret) = stored_facts_harness().await;
+    let report =
+        |body: serde_json::Value| common::report_as_the_mod(&parts.keepalive, &secret, body);
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 1
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 2,
+        "project": "/home/dev/work/harbor-charts",
+        "title": "Dredge the inner basin"
+    }))
+    .await;
+    common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        let facts = &row_of(v, "s1")["facts"];
+        facts["title"] == "Dredge the inner basin"
+            && facts["project"] == "/home/dev/work/harbor-charts"
+    })
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 3,
+        "reported_facts": ["project"]
+    }))
+    .await;
+    let listed = common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        row_of(v, "s1")["facts"]["title"].is_null()
+    })
+    .await;
+    let facts = &row_of(&listed, "s1")["facts"];
+    assert_eq!(
+        (facts["project"].as_str(), facts["title"].as_str()),
+        (Some("/home/dev/work/harbor-charts"), None),
+        "the registration that names the project alone keeps the stored project and drops the title: {facts}"
+    );
+}
+
+/// The released subagent's record leaves an hour behind its release, so its stored name stands with no record of the
+/// agent in the engine when the registration drops the kind.
+#[tokio::test]
+async fn a_registration_that_names_no_agents_drops_each_agents_stored_set() {
+    let (parts, _, secret) = stored_facts_harness().await;
+    let report =
+        |body: serde_json::Value| common::report_as_the_mod(&parts.keepalive, &secret, body);
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 1
+    }))
+    .await;
+    let first = report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 2,
+        "agent_id": "a1"
+    }))
+    .await;
+    let second = report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 3,
+        "agent_id": "a2"
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 4,
+        "agent_id": "a1",
+        "request_generation": first["request_generation"],
+        "name": "buoy-tender"
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "agent_facts",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 5,
+        "agent_id": "a2",
+        "request_generation": second["request_generation"],
+        "name": "lock-keeper"
+    }))
+    .await;
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "state",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 6,
+        "agent_id": "a2",
+        "request_generation": second["request_generation"],
+        "state": "released"
+    }))
+    .await;
+    parts.keepalive.flush_persisted().await;
+    common::step(&parts, std::time::Duration::from_secs(3_601));
+    // The step outlasts the admin session's idle bound. The session's lease lapsed too, so no report but the
+    // registration goes out until it stands.
+    let cookie = login(&parts.app, "admin-secret").await;
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = row_of(&listed, "s1");
+    assert_eq!(
+        (row["agents"].as_u64(), &row["agent_facts"]),
+        (
+            Some(2),
+            &serde_json::json!([
+                {"agent_id": "a1", "agent_type": null, "description": null, "name": "buoy-tender"},
+                {"agent_id": "a2", "agent_type": null, "description": null, "name": "lock-keeper"}
+            ])
+        ),
+        "the engine holds no record of the released subagent, and both stored names stand: {row}"
+    );
+    report(serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "s1",
+        "instance_id": "i1",
+        "sequence": 7,
+        "reported_facts": ["project", "title"]
+    }))
+    .await;
+    parts.keepalive.flush_persisted().await;
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    assert_eq!(
+        row_of(&listed, "s1")["agent_facts"],
+        serde_json::json!([]),
+        "the registration that names no agents drops the stored set of each agent, the one with no record among them"
+    );
+}
+
 /// The ten idle-age buckets as the overview answers them, `reached` raised in the buckets `reached` names.
 fn idle_returns(reached: &[usize]) -> serde_json::Value {
     let bounds = phoebis_keepalive::IDLE_AGE_BOUNDS_SECONDS;

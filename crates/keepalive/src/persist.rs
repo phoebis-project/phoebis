@@ -68,6 +68,10 @@ pub(crate) struct Dirty {
     /// records, since a registration by another instance takes an agent's record out of the map while the set it
     /// reported still waits for its row.
     pub facts: BTreeMap<FactsKey, FiledFacts>,
+    /// The leave of each stored set of one kind under a session, filed by a registration whose list leaves the kind
+    /// out. Filing it takes back each set of the kind that is filed and not yet saved, and a set filed behind it
+    /// stands, since the save runs the leaves of a kind ahead of its writes.
+    pub fact_kinds: BTreeMap<(PersistKey, FactsKind), u64>,
 }
 
 /// Every field of `Session` but its agents, which have rows of their own, and the restored standing, which the load
@@ -831,6 +835,7 @@ pub(crate) struct Snapshot {
     /// pool was dirty still has the registry's rows of that day to delete.
     purge_counters_before: Option<i64>,
     facts: Vec<(FactsKey, u64)>,
+    fact_kinds: Vec<((PersistKey, FactsKind), u64)>,
 }
 
 impl Snapshot {
@@ -842,6 +847,7 @@ impl Snapshot {
             && self.pools.is_empty()
             && self.purge_counters_before.is_none()
             && self.facts.is_empty()
+            && self.fact_kinds.is_empty()
     }
 }
 
@@ -983,6 +989,19 @@ impl Inner {
         );
     }
 
+    /// Files the leave of each stored set of `kind` under the session, and takes back each set of that kind and
+    /// session that is filed and not yet saved. A set filed behind it stands.
+    pub(crate) fn file_kind_leave(&mut self, row: &PersistKey, kind: FactsKind) {
+        let revision = self.bump();
+        self.dirty.facts.retain(|key, _| {
+            !(key.key_id == row.0
+                && key.key_generation == row.1
+                && key.session_id == row.2
+                && key.kind == kind)
+        });
+        self.dirty.fact_kinds.insert((row.clone(), kind), revision);
+    }
+
     /// Drops each filed set whose key the registry no longer holds under the generation that filed it. The key's
     /// delete took the stored rows and the save writes no set of such a generation, so the entry would wait for the
     /// next landed save for nothing.
@@ -1072,6 +1091,13 @@ impl Inner {
             }
             snapshot.facts.push((key.clone(), filed.revision));
         }
+        for ((row, kind), revision) in &self.dirty.fact_kinds {
+            snapshot
+                .batch
+                .removed_fact_kinds
+                .push((row.0.clone(), row.1, row.2.clone(), *kind));
+            snapshot.fact_kinds.push(((row.clone(), *kind), *revision));
+        }
         for (pool_id, revision) in &self.dirty.pools {
             for (day, counters) in self.idle_returns.get(pool_id).into_iter().flatten() {
                 for (bucket, counter) in counters.buckets.iter().enumerate() {
@@ -1129,6 +1155,7 @@ impl Inner {
         retire(&mut self.dirty.removed_sessions, &snapshot.removed_sessions);
         retire(&mut self.dirty.removed_agents, &snapshot.removed_agents);
         retire(&mut self.dirty.pools, &snapshot.pools);
+        retire(&mut self.dirty.fact_kinds, &snapshot.fact_kinds);
         for (key, revision) in &snapshot.facts {
             if self
                 .dirty

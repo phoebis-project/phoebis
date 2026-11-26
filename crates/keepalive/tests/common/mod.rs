@@ -512,13 +512,19 @@ impl Rig {
         session_id
     }
 
-    /// A body as the case wrote it, under the bearer `secret`: the rig fills `protocol` where the body names none and
-    /// nothing else, and it keeps no instance and no generation of the answer.
+    /// A body as the case wrote it, under the bearer `secret`: the rig fills `protocol` where the body names none, and
+    /// `reported_facts` with the three kinds on a `session_start` that names none, and nothing else, and it keeps no
+    /// instance and no generation of the answer.
     pub async fn post(&self, secret: &str, mut body: Value) -> Result<Acked, Refused> {
-        body.as_object_mut()
-            .expect("a report's body is a JSON object")
-            .entry("protocol")
-            .or_insert(1.into());
+        let fields = body
+            .as_object_mut()
+            .expect("a report's body is a JSON object");
+        fields.entry("protocol").or_insert(1.into());
+        if fields.get("event") == Some(&json!("session_start")) {
+            fields
+                .entry("reported_facts")
+                .or_insert(json!(["agents", "project", "title"]));
+        }
         let request = Request::builder()
             .method("POST")
             .uri(EVENTS_PATH)
