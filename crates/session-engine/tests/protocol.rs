@@ -1655,6 +1655,47 @@ async fn a_scheduled_park_ends_whole_when_its_wake_passes_and_the_answer_carries
     listed_generation_is_current(&app, base + 3, listed).await;
 }
 
+/// A main that has sent no request holds no recipe, as each main of a session with its warming off does, and the tick
+/// still ends its park once the wake passes, so main reads idle without waiting for the mod's own report.
+#[tokio::test]
+async fn a_scheduled_park_of_a_main_without_a_recipe_ends_whole_when_its_wake_passes() {
+    let mut r = rig(RigSpec::default()).await;
+    let base = r.sequence;
+    let app = events_router(r.engine.clone());
+    let wake = r.now() + 10 * MINUTE;
+    let park = report(
+        "state",
+        "session",
+        "instance",
+        base + 1,
+        json!({
+            "agent_id": "main",
+            "state": "parked",
+            "park_kind": "scheduled",
+            "wake_at": wake,
+            "request_generation": r.request_generation("main")
+        }),
+    );
+    let parked = post_current(&app, park).await;
+    assert_eq!(parked.status, 200, "{}", parked.text);
+    r.advance(11 * MINUTE);
+    r.step().await;
+    let again = post(
+        &app,
+        report("session_start", "session", "instance", base + 2, json!({})),
+        Some(KEY),
+    )
+    .await;
+    assert_eq!(
+        (
+            again.status,
+            without(again.body["agents"][0].clone(), "request_generation")
+        ),
+        (200, json!({"agent_id": "main", "state": "idle"})),
+        "the passed wake ended main's park with no recipe held"
+    );
+}
+
 #[tokio::test]
 async fn a_both_park_whose_deadline_passes_first_narrows_to_scheduled_and_keeps_its_wake() {
     let mut r = rig(RigSpec::default()).await;

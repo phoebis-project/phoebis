@@ -395,6 +395,32 @@ impl Inner {
         }
         self.forget_facts_of_dead_keys(snapshot);
     }
+
+    /// Ends each part of a live agent's park that passed at `now`, and the whole park where no part is left.
+    fn end_passed_parks(&mut self, now: i64) {
+        let passed: Vec<(SessionKey, String, ParkPassed)> = self
+            .sessions
+            .entries
+            .iter()
+            .flat_map(|(key, s)| s.agents.keys().map(move |a| (key, a)))
+            .filter(|(key, a)| self.sessions.live(key, a))
+            .filter_map(|(key, a)| match self.sessions.park_passed(key, a, now) {
+                ParkPassed::No => None,
+                passed => Some((key.clone(), a.clone(), passed)),
+            })
+            .collect();
+        for (key, agent_id, passed) in passed {
+            if passed == ParkPassed::Whole {
+                // The window restarts here, so the one counted so far ends with no return, closed before its start
+                // moves.
+                self.warming
+                    .close_idle_window(&self.sessions, &key, &agent_id);
+                self.warming.clear_idle_floor(&key, &agent_id);
+            }
+            self.sessions.end_passed_park(&key, &agent_id, now);
+            self.touch_agent(&key, &agent_id);
+        }
+    }
 }
 
 /// The engine's bus task. Every event is handed to `observe` under the lock. Nothing here awaits while holding
@@ -843,6 +869,11 @@ impl Engine {
             // A probe the ceiling wrote off keeps its entry alive for a turn that may still read it, so the write-off
             // waits for the entry's own end, whether or not any recipe is still retained.
             inner.warm(|w, s| w.settle_lapsed_pending(s, now));
+            // Ahead of the test for a retained recipe, since a park ends whether or not its agent holds one, and no
+            // agent of a session with its warming off does. Ahead of the refresh's hold too, so a deadline or a wake
+            // that passes while the pool is disabled is recorded when it passes. The ceilings below read the park
+            // this left, under the same `now`.
+            inner.end_passed_parks(now);
             inner
                 .warming
                 .anything_retained(&inner.sessions)
@@ -917,25 +948,6 @@ impl Engine {
                     }
                     Err(Gate::Hold(reason)) => Err(reason),
                 };
-                // Ahead of the refresh's hold, so a deadline or a wake that passes while the pool is disabled is
-                // recorded when it passes.
-                match inner.sessions.park_passed(&key, &agent_id, now) {
-                    ParkPassed::No => {}
-                    ParkPassed::Part => {
-                        inner.sessions.end_passed_park(&key, &agent_id, now);
-                        inner.touch_agent(&key, &agent_id);
-                    }
-                    ParkPassed::Whole => {
-                        // The window restarts here, so the one counted so far ends with no return, closed before its
-                        // start moves.
-                        inner
-                            .warming
-                            .close_idle_window(&inner.sessions, &key, &agent_id);
-                        inner.warming.clear_idle_floor(&key, &agent_id);
-                        inner.sessions.end_passed_park(&key, &agent_id, now);
-                        inner.touch_agent(&key, &agent_id);
-                    }
-                }
                 let (pool, policy) = match refreshed {
                     Ok(refreshed) => refreshed,
                     Err(reason) => {
