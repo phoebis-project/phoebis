@@ -654,11 +654,11 @@ async function sidebarBrand(theme) {
 /**
  * The dashboard's attention line above the tiles: one 22 px row in every state, every badge it shows and its "+N more"
  * badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges on the row's one top edge, none past
- * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's twenty-five
+ * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's twenty-six
  * items, nightly's reset item among them, more than the row holds at 1280 by 800: the badges shown and the fold's count
- * add up to twenty-five, the fold badge draws its dashed border, and its list opens under it inside the window with
- * all twenty-five, closing on Escape with the focus back on the badge. The router pass seeds an exhaustion of its main
- * pool, which any request the pool serves later in the run (a keepalive probe among them) clears: the light pass, which
+ * add up to twenty-six, the fold badge draws its dashed border, and its list opens under it inside the window with all
+ * twenty-six, closing on Escape with the focus back on the badge. The router pass seeds an exhaustion of its main pool,
+ * which any request the pool serves later in the run (a keepalive probe among them) clears: the light pass, which
  * reaches the dashboard first, requires that item, so a route answering an empty list fails it, and the dark pass draws
  * that item or the quiet line, never the unavailable one.
  */
@@ -702,7 +702,7 @@ async function attentionLine(theme) {
   const texts = read.badges.map((b) => b.text);
   const folded = Number(/^\+(\d+) more$/.exec(read.more?.text ?? '')?.[1] ?? 0);
   if (mock) {
-    if (read.lead !== '25 need attention' || texts.length + folded !== 25 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's twenty-five items, nightly's reset item among them, folded behind a dashed "+N more" at 1280 by 800`);
+    if (read.lead !== '26 need attention' || texts.length + folded !== 26 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's twenty-six items, nightly's reset item among them, folded behind a dashed "+N more" at 1280 by 800`);
     else {
       await attentionList(theme);
       await attentionLineNarrow(theme);
@@ -793,7 +793,7 @@ async function attentionList(theme) {
   measurements.push(`${theme} / attention line list ${JSON.stringify(read, (key, value) => (key === 'contrast' ? printedRatio(value) : value))}`);
   if (!read) say('did not open');
   else {
-    if (read.badges !== 25 || read.rows !== 25 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's twenty-five items, nightly's reset item among them, one per row`);
+    if (read.badges !== 26 || read.rows !== 26 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's twenty-six items, nightly's reset item among them, one per row`);
     if (!read.across) say('draws a badge past its left or right edge');
     if (!read.inside) {
       say(read.scrollHeight > read.clientHeight ? `capped at ${read.clientHeight} of its ${read.scrollHeight} px draws its first badge above its top at rest or its last past its bottom at the scroll's end` : 'draws a badge past its top or bottom');
@@ -1155,10 +1155,10 @@ async function dashboardTileWords(theme) {
 const AGENT_RECORDS_TITLE = 'A released record that held a slot keeps it for one cache TTL after the release';
 
 /**
- * The Dashboard's Sessions card at the pass's viewport: its subtitle, the Keepalive engine and Cache probes, 24h
- * headings, the three caps each with its label and figure on one line and in the type and ink of the grid's labels and
- * figures above them, the Agent records cap's hover on a released record's slot, the probes line and the expired and bus
- * gaps line in their forms, and the probe bar from the hero's left edge to the card's content edge.
+ * The Dashboard's Sessions card at the pass's viewport: its subtitle, the Engine caps and Cache probes, 24h headings,
+ * the three caps each with its label and figure on one line and in the type and ink of the grid's labels and figures
+ * above them, the Agent records cap's hover on a released record's slot, the probes line and the expired and bus gaps
+ * line in their forms, and the probe bar from the hero's left edge to the card's content edge.
  */
 async function dashboardSessionsCard(theme) {
   const say = (what) => failures.push(`${theme} /: the Sessions card ${what}`);
@@ -1207,7 +1207,7 @@ async function dashboardSessionsCard(theme) {
     return;
   }
   if (read.subtitle !== 'Sessions, their agents and the engine that keeps their caches warm') say(`reads the subtitle ${JSON.stringify(read.subtitle)}`);
-  if (JSON.stringify(read.heads) !== JSON.stringify(['Keepalive engine', 'Cache probes, 24h'])) say(`draws the engine block's headings ${JSON.stringify(read.heads)}`);
+  if (JSON.stringify(read.heads) !== JSON.stringify(['Engine caps', 'Cache probes, 24h'])) say(`draws the engine block's headings ${JSON.stringify(read.heads)}`);
   const forms = [
     ['Sessions', /^\d[\d,]* of \d[\d,]*$/],
     ['Agent records', /^\d[\d,]* of \d[\d,]*$/],

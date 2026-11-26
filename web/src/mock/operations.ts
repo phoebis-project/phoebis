@@ -1724,6 +1724,15 @@ export const EXPIRED_BETWEEN_TURNS = REQUESTS.filter((r) => r.status === 200 && 
 // SESSIONS lists the spec's rows first, in its order, and the one written row a recipe warms is one the mod reports.
 const ENGINE_SESSIONS = SESSIONS.filter((s, i) => s.companion !== 'none' || (i < sessionSpec.length && sessionSpec[i].state !== null));
 
+// The router counts a session against `max_sessions` while it holds a slot, from its first request until its end
+// (`Session::holds_slot` in the session engine). A session that registered and sent nothing holds none, an ended one
+// holds none while its entry stays, and the mod's release of each agent is no end. In the story a session sent a
+// request where the engine keeps a recipe of it, and it ended where its main's recipe reads the session's end.
+const SLOT_HOLDERS = ENGINE_SESSIONS.filter((s) => {
+  const own = RECIPES.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId);
+  return own.length > 0 && !own.some((r) => r.agentId === 'main' && r.cause === 'session_ended');
+});
+
 // Router-wide, so every probe counted here belongs to a pool that keeps caches
 // warm, and `jobs` has warming off and contributes none. Hand-set at a busier
 // scale than the logged rows. The probe whose pin moved files under failed, and the gate's hold behind it withholds
@@ -1743,13 +1752,14 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   busGaps: 3,
   expiredBetweenTurns24h: EXPIRED_BETWEEN_TURNS.length,
   lastBusGapAt: ago(2 * HOUR),
-  // The caps are the bootstrap file's defaults. The retained bytes are hand-set like the probe counts, at 92 percent of
-  // their cap, so the cap item holds on the retained prompts alone. Every agent record the story's engine holds carries
-  // a recipe, the released ones among them, so the records count the recipes.
+  // The caps are the bootstrap file's defaults but the sessions cap, which the story sets to 18, so that the 17
+  // sessions that hold a slot stand at 94 percent and the session engine's item holds beside the cache warming's. The
+  // retained bytes are hand-set like the probe counts, at 92 percent of their cap. Every agent record the story's
+  // engine holds carries a recipe, the released ones among them, so the records count the recipes.
   limits: {
     agents: { count: RECIPES.length, max: 1_024 },
     retainedBytes: { count: Math.round(0.92 * 256 * 1_048_576), max: 256 * 1_048_576 },
-    sessions: { count: ENGINE_SESSIONS.length, max: 128 },
+    sessions: { count: SLOT_HOLDERS.length, max: 18 },
   },
   // `all` is the one pool that keeps caches warm, so its probes are the router-wide count. Its buckets keep the bounds
   // the router answered in the capture.

@@ -392,7 +392,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'feature_account_unavailable', 'refresh_failed', 'pairing_expiring', 'certificate_expiring', 'limit_reset_ending', 'ledger_record_parked', 'keepalive_bus_gaps', 'poll_backoff', 'model_unpriced', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long', 'keepalive_cap', 'expired_between_turns'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'feature_account_unavailable', 'refresh_failed', 'pairing_expiring', 'certificate_expiring', 'limit_reset_ending', 'ledger_record_parked', 'keepalive_bus_gaps', 'poll_backoff', 'model_unpriced', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long', 'session_cap', 'keepalive_cap', 'expired_between_turns'] as const;
 /** `unknown` stands for a kind this console does not know, which the route never answers under that name. */
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number] | 'unknown';
 
@@ -418,7 +418,8 @@ export interface AttentionItem {
    * An account or a pool by id and label, a client version as both, a model's undated id as both, or one of the
    * router's own components as both: the ledger or the routing state writer, a listener's pair by its key
    * (`proxy.tls`, `admin.tls`), the feature CA as `features.ca`, or `-` for a parked record without a pool. The
-   * keepalive engine and its caps read `keepalive` and `keepalive.<cap>` under the label `Keepalive`.
+   * keepalive engine reads `keepalive`, and `keepalive.retained` for its byte cap, under the label `Keepalive`. A
+   * session cap reads its config key (`sessions.max_sessions`, `sessions.max_agents`) under the label `Sessions`.
    */
   subject: { id: string; label: string; type: (typeof ATTENTION_SUBJECT_VALUES)[number] };
 }

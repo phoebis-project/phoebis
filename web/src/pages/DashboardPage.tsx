@@ -487,7 +487,7 @@ function KeepaliveEngine({ busGaps, expired, now, read }: { busGaps: boolean; ex
   const gap = k?.lastBusGapAt ?? null;
   return (
     <section className="sess-summary__engine">
-      <h3 className="section-title">Keepalive engine</h3>
+      <h3 className="section-title">Engine caps</h3>
       {failed && <ReadNotice className="sess-summary__notice" error={read.error} name="keepalive overview" retry={read.reload} />}
       <dl className="sess-summary__caps">
         <div>

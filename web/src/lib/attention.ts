@@ -26,6 +26,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   pool_exhausted: 'Pool exhausted',
   reauth_required: 'Re-auth required',
   refresh_failed: 'Credential refresh failed',
+  session_cap: 'Session engine cap',
   shed_no_runway: 'Rounds without a destination',
   slowed_long: 'Slowed past twice the stretch',
   unknown: 'Unknown condition',
@@ -53,6 +54,7 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'info' | 'seriou
   pool_exhausted: 'critical',
   reauth_required: 'critical',
   refresh_failed: 'serious',
+  session_cap: 'warning',
   shed_no_runway: 'warning',
   slowed_long: 'warning',
   unknown: 'warning',
@@ -93,7 +95,7 @@ function conditionLog(item: LinkedItem): { log: Pick<LogLink, 'accounts' | 'kind
 /** The entity each of the route's three link pages opens, in the kind entityHref takes. */
 const PAGE_ENTITY = { accounts: 'account', keys: 'key', pools: 'pool' } as const;
 
-const SESSIONS_KINDS: ReadonlySet<AttentionKind> = new Set(['expired_between_turns', 'keepalive_bus_gaps', 'keepalive_cap']);
+const SESSIONS_KINDS: ReadonlySet<AttentionKind> = new Set(['expired_between_turns', 'keepalive_bus_gaps', 'keepalive_cap', 'session_cap']);
 
 /** An item's key in a list. The raw kind keeps two conditions the console does not know apart on one subject. */
 export const attentionKey = (item: Pick<AttentionItem, 'kind' | 'rawKind' | 'subject'>): string => `${item.rawKind ?? item.kind}:${item.subject.type}:${item.subject.id}`;
@@ -102,9 +104,10 @@ export const attentionKey = (item: Pick<AttentionItem, 'kind' | 'rawKind' | 'sub
  * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
  * routing condition on its subject's rounds, moves, walls and slow-downs since then. A reset that ends soon and a wall
  * a reset can clear open the account's Quota card. A meter drift opens the Meter view narrowed to the account, where
- * its reconciled windows are listed. The keepalive engine's conditions open the Sessions view, though their link names
- * no page. Every other kind opens the account, pool or key where it is fixed. Null when the item names none, and for a
- * kind this console does not know whatever its link, since the console cannot say what the page would fix.
+ * its reconciled windows are listed. The session engine's and the cache warming's conditions open the Sessions view,
+ * though their link names no page. Every other kind opens the account, pool or key where it is fixed. Null when the
+ * item names none, and for a kind this console does not know whatever its link, since the console cannot say what the
+ * page would fix.
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
   const { link } = item;
@@ -233,7 +236,9 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       return `The keepalive subscriber fell behind the router's in-process request bus and discarded the observations it had open${last ? `, the last time ${fmtRelative(last, now)}` : ''}. Opens the Sessions view.`;
     }
     case 'keepalive_cap':
-      return 'The engine is near its cap and will refuse new records at it. Opens the Sessions view.';
+      return 'The cache warming is near its retained-bytes cap and evicts the oldest idle recipe at it. Opens the Sessions view.';
+    case 'session_cap':
+      return 'The session engine is near its cap and will refuse new records at it. Opens the Sessions view.';
     case 'expired_between_turns':
       return 'Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.';
     case 'unknown':
@@ -323,17 +328,18 @@ function driftWords(item: AttentionItem, now: number): string {
   return [...ratios, sinceWords(item, now)].join(', ');
 }
 
-/** The engine's cap names in the words a `keepalive_cap` item reads, a name the console does not know as sent. */
+/** The cap names in the words a cap item reads, a name the console does not know as sent. */
 const CAP_WORD: Record<string, string> = { agents: 'agent records', retained: 'retained prompts', sessions: 'sessions' };
 
 /**
- * A routing condition's or a meter drift's sentence as the dashboard's line draws it, its subject first, a keepalive
- * condition's after its label, or null for any other kind, which keeps its label and subject.
+ * A routing condition's or a meter drift's sentence as the dashboard's line draws it, its subject first, that of a
+ * condition of the session engine or of the cache warming after its label, or null for any other kind, which keeps its
+ * label and subject.
  */
 export function attentionWords(item: AttentionItem, now: number): string | null {
   const d = item.detail;
   if (item.kind === 'keepalive_bus_gaps') return `${ATTENTION_LABEL[item.kind]}: ${num(d.gaps)} since the start`;
-  if (item.kind === 'keepalive_cap') {
+  if (item.kind === 'keepalive_cap' || item.kind === 'session_cap') {
     const cap = text(d.cap) ?? '';
     return `${ATTENTION_LABEL[item.kind]} at ${fmtPct(num(d.pct))}: ${lookup(CAP_WORD, cap) ?? cap}`;
   }

@@ -881,8 +881,11 @@ await forView('/', async () => {
       '/routing-log',
       ['bar_ms: 3600000', 'held: 72', 'held_ms: 7700000', 'open: true', 'setting: ["slow_down_stretch_seconds"]', 'setting_values: {"slow_down_stretch_seconds":1800}', 'spans: 2'],
     ],
-    // The engine's retained prompts at 92 percent of their cap, the mock overview's retained bytes.
-    ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
+    // The session engine's sessions at 94 percent of their cap: the 17 sessions of the mock overview that hold a slot,
+    // of the story's cap of 18. The hover reads the ratio as the route sends it, 17 over 18.
+    ['Session engine cap at 94%: sessions', 'badge--warning', '/sessions', ['The session engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: sessions', 'count: 17', 'max: 18', 'pct: 0.9444444444444444']],
+    // The cache warming's retained prompts at 92 percent of their cap, the mock overview's retained bytes.
+    ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The cache warming is near its retained-bytes cap and evicts the oldest idle recipe at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
     // The expiries between turns rank last: the day's five, the drawn turns the mock seats inside their pin's window
     // but a subagent's return behind its answer that stopped with `end_turn` (`RELEASED_AT_REQUEST` in
     // mock/requests.ts), each sit on a pool that warms caches under a key the keepalive may probe for (`ATTENTION` in
@@ -1177,7 +1180,7 @@ let m;
 // The Sessions card's count check below reads the Sessions view's summary line, so the call names /sessions too.
 await forView(['/', '/sessions'], async () => {
 m = await mount('/');
-expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '7d remaining', 'Fable week remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sessions, their agents and the engine that keeps their caches warm', 'active pins', 'Keepalive engine', 'of 128', 'of 1,024', 'Retained', 'of 256 MiB', 'Cache probes, 24h', 'ok (', 'expired between turns', 'bus gaps', 'Fable', 'none']);
+expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '7d remaining', 'Fable week remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sessions, their agents and the engine that keeps their caches warm', 'active pins', 'Engine caps', '17 of 18', 'of 1,024', 'Retained', 'of 256 MiB', 'Cache probes, 24h', 'ok (', 'expired between turns', 'bus gaps', 'Fable', 'none']);
 {
   const tiles = [...m.container.querySelectorAll('.stat-grid > .stat')];
   const read = (t) => [t?.querySelector('.stat__label')?.textContent ?? null, t?.querySelector('.stat__value')?.textContent ?? null, t?.querySelector('.stat__note')?.textContent ?? null];
@@ -1314,12 +1317,12 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   });
 }
 {
-  // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 19
-  // sessions the engine holds and its 34 agent records, one per recipe the story writes, against the bootstrap file's
-  // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (225
-  // ok of 279), the 5 expiries between turns the ledger rows of the day hold, the drawn turns the mock seats inside
-  // their pin's window but a subagent's return behind its answer that stopped with `end_turn`, and the three bus gaps,
-  // the last two hours back.
+  // The Engine caps block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 17
+  // sessions that hold a slot, of the story's cap of 18, and the engine's 34 agent records, one per recipe the story
+  // writes, against the bootstrap file's cap of 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the
+  // day's probes `PROBES_24H` (225 ok of 279), the 5 expiries between turns the ledger rows of the day hold, the drawn
+  // turns the mock seats inside their pin's window but a subagent's return behind its answer that stopped with
+  // `end_turn`, and the three bus gaps, the last two hours back.
   // The expired part takes the warning ink while the attention item `expired_between_turns` holds, which the mock holds
   // over its expiries on the pools that warm caches under keys that may be probed for (`ATTENTION` in
   // mock/attention.ts), and with an attention answer that lacks the item it takes none, the overview's count of 5
@@ -1361,11 +1364,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const want = {
     bar: 'Probes in the last 24h: 225 ok, 4 held, 46 skipped, 4 failed',
     caps: [
-      ['Sessions', '19 of 128'],
+      ['Sessions', '17 of 18'],
       ['Agent records', '34 of 1,024'],
       ['Retained', '235.5 MiB of 256 MiB'],
     ],
-    heads: ['Keepalive engine', 'Cache probes, 24h'],
+    heads: ['Engine caps', 'Cache probes, 24h'],
     line: 'expired between turns 5 · bus gaps 3',
     parts: [
       { text: 'expired between turns 5', title: null, warning: true },
@@ -1374,7 +1377,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     probes: '225 ok (81%) of 279',
   };
   results.push({
-    name: "/ the Sessions card's Keepalive engine block reads the caps, the day's probes over their bar, and the line whose expired part takes the warning ink while the attention item on expiries between turns holds and whose bus gaps part takes it while the last gap is inside the day, its instant on hover",
+    name: "/ the Sessions card's Engine caps block reads the caps, the day's probes over their bar, and the line whose expired part takes the warning ink while the attention item on expiries between turns holds and whose bus gaps part takes it while the last gap is inside the day, its instant on hover",
     ok: JSON.stringify(warm) === JSON.stringify(want) && JSON.stringify(cold.parts.map((p) => p.warning)) === JSON.stringify([false, true]),
     missing: [JSON.stringify(warm), JSON.stringify(cold.parts)],
   });
@@ -1415,9 +1418,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       drawn.hero === '45' &&
       retry !== undefined &&
       calls === 1 &&
-      // `19 of 128` is the Sessions cap after Try again: `ENGINE_SESSIONS.length` of
-      // `KEEPALIVE_OVERVIEW.limits.sessions` in the mock's operations.
-      JSON.stringify([again.caps[0], again.notice]) === JSON.stringify(['19 of 128', null]),
+      // `17 of 18` is the Sessions cap after Try again: `KEEPALIVE_OVERVIEW.limits.sessions` in the mock's operations,
+      // which counts the sessions of the mock's overview that hold a slot.
+      JSON.stringify([again.caps[0], again.notice]) === JSON.stringify(['17 of 18', null]),
     missing: [JSON.stringify(failed), String(role), JSON.stringify(drawn), `Try again ${retry !== undefined}, ${calls} reads`, JSON.stringify(again)],
   });
 }
@@ -28158,7 +28161,7 @@ m = await mount('/sessions');
 expect('/sessions', m.text(), ['Every session the router lists: what it runs, where it is pinned, what it has spent and whether its prompt cache is warm.', 'How pins and recipes work', 'Cost reference', 'Sessions', 'agents:', 'busy', 'idle', 'parked', 'requests and', 'in 24 h', 'Expand all', 'Session', 'Status', 'Agents', 'Model', 'Account', 'Requests', 'Cost', 'Last used', 'Cache', 'registered', 'unreported', 'warm', 'cold', 'no recipe', 'no pin', 'fork', 'Claude Code 2.1.310', '2 placements', 'seen ', 'expires in', 'fable-5-1']);
 {
   // The tiles left the view for the Dashboard's Sessions card, so none of their words reads here.
-  const TILE_WORDS = ['of 128', 'with a recipe', 'of 1,024', 'Retained', 'prompts kept for probes', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps'];
+  const TILE_WORDS = ['17 of 18', 'with a recipe', 'of 1,024', 'Retained', 'prompts kept for probes', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps'];
   const left = TILE_WORDS.filter((w) => m.text().includes(w));
   results.push({ name: "/sessions draws no tile and none of the tiles' words", ok: m.container.querySelector('.stat-grid') === null && left.length === 0, missing: left });
 }

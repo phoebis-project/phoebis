@@ -141,16 +141,17 @@ warning's days reads, under the label "Reset ending", `nightly: a reset ends in 
 of 2 resets ends in 4 days` where several end within those days, and `ends today` on the last day, and opens the
 account's card on the [Quota](#quota) view. A wall on an account that holds a reset usable now for a window at its limit
 adds `, a reset can clear it` after its own words and opens that card in place of the routing log. Both point at the
-card's "Use reset", and the Dashboard uses no reset. The keepalive engine's three items open the [Sessions](#sessions)
-view: `Keepalive bus gaps: {n} since the start` in the serious tone while the engine missed bus events in the last 24
-hours, `Keepalive cap at {pct}: {cap}` in the warning tone while one of its caps (sessions, agent records or retained
-prompts) stands at 90 percent of its max or more, and `Expired between turns: {n} in 24h` in the warning tone while
-prompt caches of agents that the keepalive still held expired between turns on a pool whose keepalive policy is on,
-under a key the keepalive may probe for. A parked ledger record adds "Replay parked records", which answers
-`Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its
-answer together, the button and its answer take a second row. The line also reads again when the window regains focus,
-and a tick or a focus that finds its previous read still out is skipped, so a slow read lands and the next tick reads
-again.
+card's "Use reset", and the Dashboard uses no reset. Four items of the session engine and the cache warming open the
+[Sessions](#sessions) view: `Keepalive bus gaps: {n} since the start` in the serious tone while the engine missed bus
+events in the last 24 hours, `Session engine cap at {pct}: {cap}` in the warning tone while one of the session engine's
+caps (sessions or agent records) stands at 90 percent of its max or more, `Keepalive cap at {pct}: retained prompts` in
+the warning tone while the retained prompts stand at 90 percent of their max or more, and `Expired between turns: {n} in
+24h` in the warning tone while prompt caches of agents that the keepalive still held expired between turns on a pool
+whose keepalive policy is on, under a key the keepalive may probe for. A parked ledger record adds "Replay parked
+records", which answers `Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge
+and that button with its answer together, the button and its answer take a second row. The line also reads again when
+the window regains focus, and a tick or a focus that finds its previous read still out is skipped, so a slow read lands
+and the next tick reads again.
 
 Five tiles follow, each reading the 24 whole hours before the current hour and the current hour so far, which its
 sparkline draws as the last point, and a note per hour under a tile reads over the hours covered: "Requests, 24h" with
@@ -226,15 +227,15 @@ card it scrolls inside it.
 `active pins across {n} accounts`. Its grid counts the live sessions as the [Sessions](#sessions) view's summary line
 does, the sessions the router lists that have not finished: Agents counts each session's agents less the released ones,
 main among them where no line names it, and Busy, Idle and Parked count them by lifecycle word, a registered, unknown or
-unreported agent in none of the three. Under the grid, "Keepalive engine" reads the engine's three caps as `{n} of
-{max}`: Sessions, Agent records, whose hover says that a released record that held a slot keeps it for one cache TTL
-after the release, and Retained in MiB. "Cache probes, 24h" reads `{ok} ok ({pct}) of {total}` over a bar of the day's
-probes by outcome (ok, held, skipped and failed), and a line reads `expired between turns {n} · bus gaps {n}`. The
-expired part takes the warning ink while the attention item `expired_between_turns` holds, which counts the expiries of
-agents that the keepalive still held on pools that warm caches under keys the keepalive may probe for, so the part's own
-count, the keepalive overview's over every pool, can stand above zero in the plain ink. The bus gaps part takes the ink
-while `keepalive_bus_gaps` holds, the last gap's instant on hover. Where the keepalive overview's first read fails, the
-caps, the probes and the line read a dash each under `Could not load the keepalive overview: {error}` and a "Try again"
+unreported agent in none of the three. Under the grid, "Engine caps" reads the three caps as `{n} of {max}`: Sessions,
+Agent records, whose hover says that a released record that held a slot keeps it for one cache TTL after the release,
+and Retained in MiB. "Cache probes, 24h" reads `{ok} ok ({pct}) of {total}` over a bar of the day's probes by outcome
+(ok, held, skipped and failed), and a line reads `expired between turns {n} · bus gaps {n}`. The expired part takes the
+warning ink while the attention item `expired_between_turns` holds, which counts the expiries of agents that the
+keepalive still held on pools that warm caches under keys the keepalive may probe for, so the part's own count, the
+keepalive overview's over every pool, can stand above zero in the plain ink. The bus gaps part takes the ink while
+`keepalive_bus_gaps` holds, the last gap's instant on hover. Where the keepalive overview's first read fails, the caps,
+the probes and the line read a dash each under `Could not load the keepalive overview: {error}` and a "Try again"
 button. A failed recipes read draws in the card as a failed keepalive overview does, under a notice of its own. What
 each figure means is on [Statistics](statistics.md).
 

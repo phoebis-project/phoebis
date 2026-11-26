@@ -393,8 +393,9 @@ const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   busGaps: 0,
   expiredBetweenTurns24h: 0,
   lastBusGapAt: null,
-  // The caps are the bootstrap file's defaults, which the story's overview carries.
-  limits: { agents: { ...KEEPALIVE_OVERVIEW.limits.agents, count: 0 }, retainedBytes: { ...KEEPALIVE_OVERVIEW.limits.retainedBytes, count: 0 }, sessions: { ...KEEPALIVE_OVERVIEW.limits.sessions, count: 0 } },
+  // The caps are the bootstrap file's defaults. The story's overview carries the agent records' and the retained
+  // bytes', and it sets a sessions cap of its own, so the default of `max_sessions` is written here.
+  limits: { agents: { ...KEEPALIVE_OVERVIEW.limits.agents, count: 0 }, retainedBytes: { ...KEEPALIVE_OVERVIEW.limits.retainedBytes, count: 0 }, sessions: { count: 0, max: 128 } },
   pools: [],
   probes24h: { failed: 0, held: 0, ok: 0, skipped: 0 },
 };
