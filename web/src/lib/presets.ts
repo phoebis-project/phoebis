@@ -93,6 +93,16 @@ function shedMarks(
   // The guard sums the pins that stay, as the router does, since the round's sum less what leaves can round under a
   // floor those pins reach exactly.
   const refused = (candidate: Pin) => !unpricedStays && ordered.filter((q) => q !== candidate && !q.standing && !marks.includes(q.id)).reduce((n, q) => n + (q.burn ?? 0), 0) + stays.burn < SHED_MARK_SHARE * sum;
+  // The walk asks the guard about a pin again at each later position, and a mark is the one thing that changes its
+  // answer, so each answer stands until the next mark.
+  const refusedMemo = new Map<Pin, boolean>();
+  const refusedOf = (candidate: Pin): boolean => {
+    const known = refusedMemo.get(candidate);
+    if (known !== undefined) return known;
+    const answer = refused(candidate);
+    refusedMemo.set(candidate, answer);
+    return answer;
+  };
   // By position, as the router keeps them: a later position's pick reads a covering pin again.
   const words: (ShedCause | null)[] = ordered.map(() => null);
   let met = false;
@@ -113,11 +123,12 @@ function shedMarks(
     let pick: { burn: number; cost: number; id: string } | null = null;
     for (const [k, q] of ordered.entries()) {
       if (k < index || q.burn === null || q.burn < rest || q.standing || q.pastCold) continue;
-      words[k] = refused(q) ? 'last_pin' : q.runway ? null : 'no_runway';
+      words[k] = refusedOf(q) ? 'last_pin' : q.runway ? null : 'no_runway';
       if (words[k] === null && (pick === null || q.cost < pick.cost)) pick = { burn: q.burn, cost: q.cost, id: q.id };
     }
     if (pick !== null) {
       marks.push(pick.id);
+      refusedMemo.clear();
       removed += pick.burn;
       met = true;
     } else if (pin.burn < SHED_MARK_SHARE * rest) {
@@ -125,10 +136,11 @@ function shedMarks(
       words[index] = 'sliver';
     } else if (pin.burn < rest) {
       // The guard refuses this pin alone: a later pin's smaller mark may still leave a tenth on the account.
-      if (refused(pin)) words[index] = 'last_pin';
+      if (refusedOf(pin)) words[index] = 'last_pin';
       else if (!pin.runway) words[index] = 'no_runway';
       else {
         marks.push(pin.id);
+        refusedMemo.clear();
         removed += pin.burn;
       }
     }
