@@ -51,7 +51,7 @@ fn the_default_limits_are_the_specs() {
         ),
         (1_024, 256 << 20, 128)
     );
-    assert_eq!(limits.validate(RELAY_BOUND), Ok(()));
+    assert!(matches!(limits.validate(RELAY_BOUND), Ok(())));
     assert_eq!(
         (LEASE_SECONDS, LEASE_MS, MAX_WORKERS),
         (90, 90_000, 4),
@@ -120,18 +120,21 @@ fn the_retained_budget_accepts_the_relays_body_bound_to_512_mib() {
         }
         .validate(RELAY_BOUND)
     };
-    assert_eq!(with(RELAY_BOUND), Ok(()));
-    assert_eq!(with(512 << 20), Ok(()));
+    assert!(matches!(with(RELAY_BOUND), Ok(())));
+    assert!(matches!(with(512 << 20), Ok(())));
     for value in [RELAY_BOUND - 1, (512 << 20) + 1] {
         let refused = with(value).unwrap_err();
-        assert_eq!(
-            refused,
-            LimitsError::OutOfRange {
-                field: "max_retained_bytes",
-                min: 33_554_432,
-                max: 536_870_912,
-                value: value as u64
-            }
+        assert!(
+            matches!(
+                refused,
+                LimitsError::OutOfRange {
+                    field: "max_retained_bytes",
+                    min: 33_554_432,
+                    max: 536_870_912,
+                    value: refused_value
+                } if refused_value == value as u64
+            ),
+            "{refused:?}"
         );
         assert_eq!(
             refused.to_string(),

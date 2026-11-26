@@ -31,7 +31,7 @@ fn bound<E>(
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct KeepaliveLimits {
     pub max_retained_bytes: usize,
@@ -45,7 +45,7 @@ impl Default for KeepaliveLimits {
     }
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error)]
 pub enum LimitsError {
     #[error("keepalive.{field} must be between {min} and {max}, not {value}")]
     OutOfRange {
