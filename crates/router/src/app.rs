@@ -309,6 +309,10 @@ pub async fn run_until(
         LedgerConfig {
             retention_days: config.stats.retention_days,
             rollup_retention_days: config.stats.rollup_retention_days,
+            session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
+            // A stored set's instant trails its session's last report by the wait for the engine's next save, and ten
+            // save intervals cover a save that waits or fails and lands at a later interval.
+            stored_stamp_grace: PERSIST_INTERVAL * 10,
             start_version: Some(env!("CARGO_PKG_VERSION").into()),
             mirror_baseline: Some(mirror_baseline),
             ..LedgerConfig::default()

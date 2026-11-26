@@ -1345,6 +1345,47 @@ async fn a_sessions_title_and_its_project_set_rest_in_two_rows_each_with_its_own
     );
 }
 
+#[tokio::test]
+async fn a_title_reported_once_stays_while_its_session_reports_past_the_cutoff() {
+    let mut r = rig(RigSpec::default()).await;
+    let session = rig_session(&r);
+    let reported_at = r.now();
+    r.event(json!({"event": "session_facts", "title": "Survey the breakwater"}))
+        .await
+        .unwrap();
+    // The title lands in a save of its own ahead of the heartbeat, so only a later save's stamp moves its instant.
+    r.engine.persist_reached(3, 3).await;
+    r.engine.flush_persisted().await;
+    r.advance(MINUTE);
+    r.event(heartbeat()).await.unwrap();
+    let heartbeat_at = r.now();
+    r.advance(20_000);
+    r.engine.flush_persisted().await;
+    let title = || async {
+        r.engine
+            .stored_facts(vec![session.clone()])
+            .await
+            .remove(&session)
+            .and_then(|stored| stored.session.title().map(str::to_string))
+    };
+    r.h.store
+        .purge_companion_facts(None, reported_at + 30_000)
+        .unwrap();
+    assert_eq!(
+        title().await.as_deref(),
+        Some("Survey the breakwater"),
+        "the title ages from its session's last report and not from its own"
+    );
+    r.h.store
+        .purge_companion_facts(None, heartbeat_at + 1)
+        .unwrap();
+    assert_eq!(
+        title().await,
+        None,
+        "the title leaves once the cutoff passes its session's last report"
+    );
+}
+
 /// The wasted probes the ledger has settled, by reason, once `probes` of them have landed.
 async fn wasted(r: &Rig, probes: u64) -> BTreeMap<String, u64> {
     wait_for(Duration::from_secs(30), || {

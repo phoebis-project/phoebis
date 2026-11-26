@@ -234,6 +234,13 @@ const PURGE_CHANGES: &str = "DELETE FROM registry_changes WHERE id IN ( \
                             WHERE n.target = c.target AND n.kind = c.kind)) \
      ORDER BY c.id LIMIT ?2)";
 
+// A stored set whose session last reported before the cutoff. Each select leads with the kind, so the index
+// `companion_facts_seen` serves both cuts.
+const PURGE_AGENT_FACTS: &str = "DELETE FROM companion_facts WHERE rowid IN ( \
+     SELECT rowid FROM companion_facts WHERE kind = 'agents' AND seen_at < ?1 LIMIT ?2)";
+const PURGE_SESSION_FACTS: &str = "DELETE FROM companion_facts WHERE rowid IN ( \
+     SELECT rowid FROM companion_facts WHERE kind IN ('project', 'title') AND seen_at < ?1 LIMIT ?2)";
+
 // A known plaintext under its own associated data: the row proves which key sealed the registry without opening a
 // credential, and AES-GCM gives a reader of the plaintext nothing toward the key.
 const CANARY_AAD: &str = "storage_key_canary";
@@ -354,6 +361,13 @@ pub fn is_database_wide_failure(error: &rusqlite::Error) -> bool {
 pub struct PurgedHistory {
     pub attempts: u64,
     pub changes: u64,
+}
+
+/// What one cut of the stored facts removed.
+#[derive(Debug, Default)]
+pub struct PurgedFacts {
+    pub agents: u64,
+    pub sessions: u64,
 }
 
 /// What a key recovery discards, printed as counts before the operator confirms and after the transaction lands.
@@ -690,6 +704,40 @@ impl Store {
             (PURGE_ATTEMPTS, &mut purged.attempts),
             (PURGE_CHANGES, &mut purged.changes),
         ] {
+            loop {
+                let mut conn = self.conn.lock().expect(LOCK_POISONED);
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let deleted = tx.execute(sql, params![before_ms, HISTORY_SLICE as i64])?;
+                tx.commit()?;
+                *count += deleted as u64;
+                if deleted < HISTORY_SLICE {
+                    break;
+                }
+            }
+        }
+        Ok(purged)
+    }
+
+    /// The stored sets whose session last reported before a cutoff, in slices of 1,000, one transaction per slice: the
+    /// kind `agents` before `agents_before_ms`, `None` keeping each, and the kinds `project` and `title` before
+    /// `sessions_before_ms`. The ledger's purge pass calls it once.
+    pub fn purge_companion_facts(
+        &self,
+        agents_before_ms: Option<i64>,
+        sessions_before_ms: i64,
+    ) -> Result<PurgedFacts, StoreError> {
+        let mut purged = PurgedFacts::default();
+        for (sql, before_ms, count) in [
+            (PURGE_AGENT_FACTS, agents_before_ms, &mut purged.agents),
+            (
+                PURGE_SESSION_FACTS,
+                Some(sessions_before_ms),
+                &mut purged.sessions,
+            ),
+        ] {
+            let Some(before_ms) = before_ms else {
+                continue;
+            };
             loop {
                 let mut conn = self.conn.lock().expect(LOCK_POISONED);
                 let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;

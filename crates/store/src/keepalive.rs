@@ -33,6 +33,8 @@ pub struct FactsRow {
     pub key: FactsKey,
     pub record_version: u32,
     pub value: Vec<u8>,
+    /// The instant of the report that filed the set, which a save moves to the session's last report where its batch
+    /// holds the session's row.
     pub seen_at: i64,
 }
 
@@ -54,6 +56,9 @@ pub struct KeepaliveSessionRow {
     pub record_version: u32,
     pub payload: String,
     pub updated_at: i64,
+    /// The instant of the session's last report. A save stamps it on each stored set of the session's facts, in the
+    /// transaction that writes this row. A load answers `None`, since the payload holds the instant.
+    pub seen_at: Option<i64>,
 }
 
 /// What a flush does with the stored recipe body: nothing (the body is as saved), clear it (the recipe ended), or
@@ -99,7 +104,7 @@ pub struct IdleReturnsRow {
 
 /// What one flush writes. A removed session takes every agent row filed under it, so a session the engine dropped
 /// leaves nothing behind for a load to restore. Its stored sets of reported facts stay, since each leaves by a removal
-/// of its own.
+/// of its own or by the retention pass's cut.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeepaliveBatch {
     pub sessions: Vec<KeepaliveSessionRow>,
@@ -174,7 +179,8 @@ impl Store {
     /// One transaction of upserts and deletes, each new body sealed under the storage key with the AAD `keepalive_aad`
     /// and each set of reported facts with `facts_aad`. The removals land first, and the engine never names one row in
     /// both halves of a batch. A removed session deletes no set of reported facts. A row that keeps its body leaves the
-    /// stored blob and nonce as they are, and a row that clears it leaves neither.
+    /// stored blob and nonce as they are, and a row that clears it leaves neither. Each session row that carries
+    /// `seen_at` stamps that instant on each stored set of its session, a set that the same batch writes among them.
     pub fn save_keepalive(&self, batch: &KeepaliveBatch) -> Result<(), StoreError> {
         // Sealed before the connection is taken, so a large batch holds no other writer behind the cipher.
         let mut sealed_facts = Vec::with_capacity(batch.facts.len());
@@ -311,6 +317,23 @@ impl Store {
                 ])?;
             }
         }
+        // Behind the sets' upserts, since an upsert writes its own instant over the stamp.
+        {
+            let mut stmt = tx.prepare_cached(
+                "UPDATE companion_facts SET seen_at = ?4 \
+                 WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3",
+            )?;
+            for row in &batch.sessions {
+                if let Some(seen_at) = row.seen_at {
+                    stmt.execute(params![
+                        row.key_id,
+                        row.key_generation,
+                        row.session_id,
+                        seen_at
+                    ])?;
+                }
+            }
+        }
         if let Some(day) = batch.purge_counters_before {
             tx.execute(
                 "DELETE FROM keepalive_idle_returns WHERE day < ?1",
@@ -364,6 +387,7 @@ impl Store {
                     record_version: r.get(3)?,
                     payload: r.get(4)?,
                     updated_at: r.get(5)?,
+                    seen_at: None,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

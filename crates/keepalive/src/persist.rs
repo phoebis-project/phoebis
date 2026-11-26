@@ -771,6 +771,7 @@ fn session_row(
         record_version: RECORD_VERSION,
         payload: serde_json::to_string(&PersistedSession::of(key, session))?,
         updated_at: now,
+        seen_at: Some(session.last_report_at),
     })
 }
 

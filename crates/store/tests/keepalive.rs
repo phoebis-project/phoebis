@@ -24,6 +24,7 @@ fn session(key_generation: i64, session_id: &str) -> KeepaliveSessionRow {
         record_version: 1,
         payload: format!(r#"{{"session_id":"{session_id}"}}"#),
         updated_at: 1_000,
+        seen_at: None,
     }
 }
 
@@ -549,5 +550,199 @@ fn sealed_sets_swapped_between_two_rows_of_one_session_read_as_no_fact() {
         values(),
         vec![None, None, None, None],
         "no swapped set opens under the other row"
+    );
+}
+
+/// One stored set of `session_id` under the key `k`, stamped `seen_at`.
+fn facts_set(
+    generation: i64,
+    session_id: &str,
+    kind: FactsKind,
+    agent_id: &str,
+    value: &[u8],
+    seen_at: i64,
+) -> FactsRow {
+    FactsRow {
+        key: FactsKey {
+            key_id: "k".into(),
+            key_generation: generation,
+            session_id: session_id.into(),
+            kind,
+            agent_id: agent_id.into(),
+        },
+        record_version: 1,
+        value: value.to_vec(),
+        seen_at,
+    }
+}
+
+/// Each stored set of `sessions` under the key `k` as `(session, kind, agent, seen_at)`, in the order of the read.
+fn stamps(
+    store: &Store,
+    generation: i64,
+    sessions: &[&str],
+) -> Vec<(String, FactsKind, String, i64)> {
+    let sessions: Vec<(String, i64, String)> = sessions
+        .iter()
+        .map(|session| ("k".to_string(), generation, session.to_string()))
+        .collect();
+    store
+        .load_companion_facts(&sessions)
+        .unwrap()
+        .into_iter()
+        .map(|set| {
+            (
+                set.key.session_id,
+                set.key.kind,
+                set.key.agent_id,
+                set.seen_at,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn an_agents_set_stamped_at_the_cutoff_stays_and_one_a_millisecond_before_it_leaves() {
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
+    let generation = inserted_key(&store);
+    store
+        .save_keepalive(&KeepaliveBatch {
+            facts: vec![
+                facts_set(
+                    generation,
+                    "s",
+                    FactsKind::Agents,
+                    "a1",
+                    br#"{"name":"pier-gauge"}"#,
+                    1_000_000,
+                ),
+                facts_set(
+                    generation,
+                    "s",
+                    FactsKind::Agents,
+                    "a2",
+                    br#"{"name":"tide-clerk"}"#,
+                    999_999,
+                ),
+            ],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    store
+        .purge_companion_facts(Some(1_000_000), 1_000_000)
+        .unwrap();
+    assert_eq!(
+        stamps(&store, generation, &["s"]),
+        vec![(
+            "s".to_string(),
+            FactsKind::Agents,
+            "a1".to_string(),
+            1_000_000
+        )],
+        "the set stamped at the cutoff stays and the one a millisecond before it leaves"
+    );
+}
+
+#[test]
+fn a_sessions_title_leaves_at_the_session_cutoff_and_its_agents_set_stays() {
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
+    let generation = inserted_key(&store);
+    store
+        .save_keepalive(&KeepaliveBatch {
+            facts: vec![
+                facts_set(
+                    generation,
+                    "s1",
+                    FactsKind::Agents,
+                    "a1",
+                    br#"{"name":"rigging-checker"}"#,
+                    999_999,
+                ),
+                facts_set(
+                    generation,
+                    "s1",
+                    FactsKind::Title,
+                    "",
+                    br#"{"title":"Caulk the hull seams"}"#,
+                    999_999,
+                ),
+                facts_set(
+                    generation,
+                    "s2",
+                    FactsKind::Title,
+                    "",
+                    br#"{"title":"Chart the tide rips"}"#,
+                    1_000_000,
+                ),
+            ],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    store
+        .purge_companion_facts(Some(500_000), 1_000_000)
+        .unwrap();
+    assert_eq!(
+        stamps(&store, generation, &["s1", "s2"]),
+        vec![
+            ("s1".to_string(), FactsKind::Agents, "a1".to_string(), 999_999),
+            ("s2".to_string(), FactsKind::Title, String::new(), 1_000_000)
+        ],
+        "the title before the session cutoff leaves, the agent's set inside the request cutoff stays, and so does a \
+         title stamped at the session cutoff"
+    );
+}
+
+#[test]
+fn a_save_stamps_each_set_of_the_session_whose_row_it_writes_and_no_other_sessions() {
+    let store = Store::open_in_memory(&StorageKey::generate(), wall()).unwrap();
+    let generation = inserted_key(&store);
+    store
+        .save_keepalive(&KeepaliveBatch {
+            facts: vec![
+                facts_set(
+                    generation,
+                    "s1",
+                    FactsKind::Title,
+                    "",
+                    br#"{"title":"Sweep the slipway"}"#,
+                    1_000,
+                ),
+                facts_set(
+                    generation,
+                    "s2",
+                    FactsKind::Title,
+                    "",
+                    br#"{"title":"Grease the capstan"}"#,
+                    1_000,
+                ),
+            ],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    store
+        .save_keepalive(&KeepaliveBatch {
+            sessions: vec![KeepaliveSessionRow {
+                seen_at: Some(2_000),
+                ..session(generation, "s1")
+            }],
+            facts: vec![facts_set(
+                generation,
+                "s1",
+                FactsKind::Agents,
+                "a1",
+                br#"{"name":"winch-tender"}"#,
+                1_500,
+            )],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    assert_eq!(
+        stamps(&store, generation, &["s1", "s2"]),
+        vec![
+            ("s1".to_string(), FactsKind::Agents, "a1".to_string(), 2_000),
+            ("s1".to_string(), FactsKind::Title, String::new(), 2_000),
+            ("s2".to_string(), FactsKind::Title, String::new(), 1_000)
+        ],
+        "the session's row stamps its earlier set and the one its own batch writes, and no set of another session"
     );
 }

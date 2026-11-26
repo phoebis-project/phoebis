@@ -23,7 +23,10 @@ use phoebis_ledger::{
     BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
 };
 use phoebis_profile::fixtures::BodyFixture;
-use phoebis_store::{AccountKind, BudgetPeriod, MemberWrite, StorageKey, Store};
+use phoebis_store::{
+    AccountKind, BudgetPeriod, FactsKey, FactsKind, FactsRow, KeepaliveBatch, MemberWrite,
+    StorageKey, Store,
+};
 use tower::ServiceExt;
 
 fn request_id(resp: &axum::http::Response<axum::body::Body>) -> String {
@@ -7973,6 +7976,190 @@ async fn the_hourly_purge_refreshes_the_planner_statistics_and_moves_the_readers
         (h.db.debug_statistics_generation() >= 1).then_some(())
     })
     .await;
+    up.shutdown().await;
+}
+
+/// The key `harbor` in the harness's pool `main`, answering the `created_at` it stamped, which is the generation of its
+/// stored sets.
+fn harbor_key(h: &Harness) -> i64 {
+    let desktop = h.store.api_key("desktop").unwrap().unwrap();
+    h.store
+        .insert_api_key(
+            &phoebis_store::ApiKeyRow {
+                id: "harbor".into(),
+                label: "harbor".into(),
+                secret_digest: h.store.api_key_digest("phoebis-harbor").to_vec(),
+                prefix: phoebis_store::key_prefix("phoebis-harbor"),
+                ..desktop
+            },
+            "test",
+        )
+        .unwrap()
+        .created_at
+}
+
+/// Writes one stored set of `session_id` under the key `harbor`, stamped `seen_at`, in a batch with no session row.
+fn store_harbor_set(
+    h: &Harness,
+    generation: i64,
+    (session_id, kind, agent_id): (&str, FactsKind, &str),
+    value: &str,
+    seen_at: i64,
+) {
+    h.store
+        .save_keepalive(&KeepaliveBatch {
+            facts: vec![FactsRow {
+                key: FactsKey {
+                    key_id: "harbor".into(),
+                    key_generation: generation,
+                    session_id: session_id.into(),
+                    kind,
+                    agent_id: agent_id.into(),
+                },
+                record_version: 1,
+                value: value.as_bytes().to_vec(),
+                seen_at,
+            }],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+}
+
+/// Each stored set of `session_id` under the key `harbor` as `(kind, agent, value)`, in the order of the read.
+fn harbor_sets(h: &Harness, generation: i64, session_id: &str) -> Vec<(FactsKind, String, String)> {
+    h.store
+        .load_companion_facts(&[("harbor".into(), generation, session_id.into())])
+        .unwrap()
+        .into_iter()
+        .map(|set| {
+            let value = String::from_utf8(set.value.expect("the set opens")).unwrap();
+            (set.key.kind, set.key.agent_id, value)
+        })
+        .collect()
+}
+
+const DAY_MS: i64 = 86_400_000;
+
+#[tokio::test]
+async fn a_pass_under_no_request_retention_cuts_an_expired_title_and_keeps_an_old_agents_set() {
+    let up = FakeUpstream::start(vec![]).await;
+    let config = LedgerConfig {
+        retention_days: 0,
+        purge_interval: Duration::from_millis(200),
+        ..quick()
+    };
+    let h = harness(&up, &[api_key("a", C, 0)], (0, None), config).await;
+    let generation = harbor_key(&h);
+    let agent = r#"{"name":"dock-warden"}"#;
+    store_harbor_set(
+        &h,
+        generation,
+        ("s", FactsKind::Agents, "a1"),
+        agent,
+        NOW - 400 * DAY_MS,
+    );
+    store_harbor_set(
+        &h,
+        generation,
+        ("s", FactsKind::Title, ""),
+        r#"{"title":"Scrape the dry dock"}"#,
+        NOW - 400 * DAY_MS,
+    );
+    wait_for(Duration::from_secs(5), || {
+        (harbor_sets(&h, generation, "s")
+            == vec![(FactsKind::Agents, "a1".to_string(), agent.to_string())])
+        .then_some(())
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_pass_keeps_a_title_whose_stamp_trails_the_expiry_by_one_save_interval() {
+    let up = FakeUpstream::start(vec![]).await;
+    let config = LedgerConfig {
+        purge_interval: Duration::from_millis(200),
+        session_expiry: Duration::from_secs(60),
+        stored_stamp_grace: Duration::from_secs(300),
+        ..quick()
+    };
+    let h = harness(&up, &[api_key("a", C, 0)], (0, None), config).await;
+    let generation = harbor_key(&h);
+    let live = r#"{"title":"Dredge the turning basin"}"#;
+    store_harbor_set(
+        &h,
+        generation,
+        ("s1", FactsKind::Title, ""),
+        live,
+        NOW - 90_000,
+    );
+    store_harbor_set(
+        &h,
+        generation,
+        ("s2", FactsKind::Title, ""),
+        r#"{"title":"Relight the leading marks"}"#,
+        NOW - 86_400_000,
+    );
+    // One statement cuts both titles, so the first one's answer is settled once the second is gone.
+    wait_for(Duration::from_secs(5), || {
+        harbor_sets(&h, generation, "s2").is_empty().then_some(())
+    })
+    .await;
+    assert_eq!(
+        harbor_sets(&h, generation, "s1"),
+        vec![(FactsKind::Title, String::new(), live.to_string())],
+        "a title whose stamp trails the expiry by one save interval stays inside the grace"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_pass_under_an_expiry_that_no_cutoff_can_hold_cuts_no_title() {
+    let up = FakeUpstream::start(vec![]).await;
+    let config = LedgerConfig {
+        purge_interval: Duration::from_millis(200),
+        session_expiry: Duration::from_secs(u64::MAX),
+        stored_stamp_grace: Duration::from_secs(300),
+        ..quick()
+    };
+    let h = harness(&up, &[api_key("a", C, 0)], (0, None), config).await;
+    let generation = harbor_key(&h);
+    let title = r#"{"title":"Paint the bollards"}"#;
+    store_harbor_set(
+        &h,
+        generation,
+        ("s1", FactsKind::Title, ""),
+        title,
+        NOW - 3_600_000,
+    );
+    store_harbor_set(
+        &h,
+        generation,
+        ("s2", FactsKind::Agents, "a1"),
+        r#"{"name":"fender-hand"}"#,
+        NOW - 400 * DAY_MS,
+    );
+    wait_for(Duration::from_secs(5), || {
+        harbor_sets(&h, generation, "s2").is_empty().then_some(())
+    })
+    .await;
+    // The second agent's set leaves in a later pass, so the pass that took the first one has run both of its cuts.
+    store_harbor_set(
+        &h,
+        generation,
+        ("s2", FactsKind::Agents, "a2"),
+        r#"{"name":"bollard-painter"}"#,
+        NOW - 400 * DAY_MS,
+    );
+    wait_for(Duration::from_secs(5), || {
+        harbor_sets(&h, generation, "s2").is_empty().then_some(())
+    })
+    .await;
+    assert_eq!(
+        harbor_sets(&h, generation, "s1"),
+        vec![(FactsKind::Title, String::new(), title.to_string())],
+        "an expiry past what an instant can hold keeps the title"
+    );
     up.shutdown().await;
 }
 

@@ -209,6 +209,7 @@ fn seed(registry: &Path, key: &StorageKey) -> Vec<AccountRow> {
                 record_version: 1,
                 payload: "{}".into(),
                 updated_at: 1_800_000_000_000,
+                seen_at: None,
             }],
             agents: vec![
                 agent("main", Some(b"the user's own prompt")),
@@ -1036,6 +1037,7 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
                 record_version: 1,
                 payload: "{}".into(),
                 updated_at: 1_800_000_000_000,
+                seen_at: None,
             }],
             agents: vec![agent("main", Some(b"the user's own prompt"))],
             ..KeepaliveBatch::default()

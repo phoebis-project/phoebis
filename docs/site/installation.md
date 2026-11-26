@@ -676,9 +676,10 @@ unknown field, named in the error. How a cooldown and the failover use the timin
 Defaults whole. `expire_after_seconds` is how long a session may go without a request before it leaves the Sessions
 view, taking its pin and any keepalive recipe with it, and `non_companion_idle_seconds` how much sooner a session no
 companion reports leaves the view, past the latest of its newest pin use, its last request and, where its companion
-ended the session, that end, its pin staying to the expiry. The three `memory_` keys bound the relay's memory of a
-session's previous request id and prompt id, the record behind `cc_prev_req`
-([client](client.md#the-environment-block)).
+ended the session, that end, its pin staying to the expiry. `expire_after_seconds` is also how long the registry keeps
+the facts that a companion mod reports of the session itself (its branch, its paths, its repository and its title),
+counted from the session's last report. The three `memory_` keys bound the relay's memory of a session's previous
+request id and prompt id, the record behind `cc_prev_req` ([client](client.md#the-environment-block)).
 
 | Key | Default | Accepts |
 | --- | --- | --- |
@@ -706,7 +707,7 @@ Defaults whole.
 | `body_capture_max_hours` | `72` | 1 to 168 |
 | `ledger_path` | `./data/ledger.sqlite` | a file path with a parent directory, not the same file as `storage.path` |
 | `metrics_listen` | `127.0.0.1:9464` | a socket address |
-| `retention_days` | `365` | 0 for forever, else a number of days, which covers the decisions, the events, the feature calls, the kept-warm marks, the quota and extra-usage samples, the registry's settled refresh attempts and change log, and the requests with their attempts |
+| `retention_days` | `365` | 0 for forever, else a number of days, which covers the decisions, the events, the feature calls, the kept-warm marks, the quota and extra-usage samples, the registry's settled refresh attempts and change log, and the requests with their attempts. It is also how long the registry keeps the facts that a companion mod reports of an agent (its description, its name and its type), counted from the last report of the agent's session. |
 | `rollup_retention_days` | `365` | covers the hourly rollups and the account rollups: 0 for forever, else a number of days of at least `retention_days` |
 | `subscription_costs_path` | `./subscription_costs.yaml` | a path, and a missing file is fine |
 

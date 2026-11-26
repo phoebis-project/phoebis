@@ -74,6 +74,16 @@ pub struct LedgerConfig {
     pub retention_days: u32,
     pub rollup_retention_days: u32,
     pub purge_interval: Duration,
+    /// The session expiry, which a session's own stored facts outlive by `stored_stamp_grace`, counted from the
+    /// session's last report. The default is the config's default of `sessions.expire_after_seconds`.
+    pub session_expiry: Duration,
+    /// How far past the session expiry the pass waits before it cuts a session's own stored facts, which the router
+    /// sets to ten of the engine's save intervals. The engine stamps a stored set with its session's last report at a
+    /// save, so the stored instant trails the report by a save interval and the save's own time. A pass inside that lag
+    /// would cut the title of a session that reported within its expiry, and a title is reported once. Ten save
+    /// intervals cover a save that waits or fails and lands at a later interval, and the wait stays far below the
+    /// pass's own interval.
+    pub stored_stamp_grace: Duration,
     pub event_poll: Duration,
     /// How often the assembler ages out entries whose completion never arrived.
     pub expire_interval: Duration,
@@ -91,6 +101,9 @@ impl Default for LedgerConfig {
             retention_days: 365,
             rollup_retention_days: 365,
             purge_interval: Duration::from_secs(3_600),
+            session_expiry: Duration::from_secs(86_400),
+            // The ledger's crate knows no save interval, so the router's wiring sets the grace.
+            stored_stamp_grace: Duration::ZERO,
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
             start_version: None,
@@ -1931,6 +1944,34 @@ async fn run_purge(
             }
         }
     };
+    // A session's own stored facts leave at the session expiry and the grace in each pass, whatever `retention_days`
+    // says. An agent's leave at the requests' cutoff, so a zero `retention_days` keeps them as it keeps the requests.
+    let agents_before = request_cutoff(config.retention_days, now);
+    // `sessions.expire_after_seconds` has no upper bound, so the age saturates, and an expiry that no instant can hold
+    // puts the cutoff before each stamp.
+    let kept_for = config
+        .session_expiry
+        .saturating_add(config.stored_stamp_grace);
+    let sessions_before =
+        now.saturating_sub(i64::try_from(kept_for.as_millis()).unwrap_or(i64::MAX));
+    let facts = {
+        let store = store.clone();
+        match tokio::task::spawn_blocking(move || {
+            store.purge_companion_facts(agents_before, sessions_before)
+        })
+        .await
+        {
+            Ok(Ok(facts)) => Some(facts),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "stored facts retention failed");
+                None
+            }
+            Err(error) => {
+                tracing::warn!(%error, "stored facts retention did not finish");
+                None
+            }
+        }
+    };
     match blocking(db, |db| db.refresh_statistics()).await {
         Ok(true) => tracing::debug!("the ledger's planner statistics were refreshed"),
         Ok(false) => {}
@@ -1939,8 +1980,8 @@ async fn run_purge(
         }
     }
     match purged {
-        Ok(purged) => tracing::debug!(?purged, ?history, "ledger retention ran"),
-        Err(error) => tracing::warn!(%error, ?history, "ledger retention failed"),
+        Ok(purged) => tracing::debug!(?purged, ?history, ?facts, "ledger retention ran"),
+        Err(error) => tracing::warn!(%error, ?history, ?facts, "ledger retention failed"),
     }
 }
 
