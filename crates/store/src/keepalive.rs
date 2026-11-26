@@ -44,7 +44,6 @@ pub struct StoredFacts {
     pub key: FactsKey,
     pub record_version: u32,
     pub value: Option<Vec<u8>>,
-    pub seen_at: i64,
 }
 
 /// One session row: its identity, and the engine's versioned payload of the session's fields.
@@ -464,12 +463,12 @@ impl Store {
         let mut sessions: Vec<&(String, i64, String)> = sessions.iter().collect();
         sessions.sort();
         sessions.dedup();
-        type Sealed = (FactsKey, u32, Vec<u8>, Vec<u8>, i64);
+        type Sealed = (FactsKey, u32, Vec<u8>, Vec<u8>);
         let mut stored: Vec<Sealed> = Vec::new();
         {
             let conn = self.conn.lock().expect(LOCK_POISONED);
             let mut statement = conn.prepare(
-                "SELECT kind, agent_id, record_version, facts_sealed, facts_nonce, seen_at FROM companion_facts \
+                "SELECT kind, agent_id, record_version, facts_sealed, facts_nonce FROM companion_facts \
                  WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 ORDER BY kind, agent_id",
             )?;
             for (key_id, key_generation, session_id) in sessions {
@@ -486,7 +485,6 @@ impl Store {
                             r.get(2)?,
                             r.get(3)?,
                             r.get(4)?,
-                            r.get(5)?,
                         ))
                     })?;
                 for row in rows {
@@ -496,13 +494,12 @@ impl Store {
         }
         Ok(stored
             .into_iter()
-            .map(|(key, record_version, blob, nonce, seen_at)| {
+            .map(|(key, record_version, blob, nonce)| {
                 let value = crypto::open(&self.key, &facts_aad(&key), &nonce, &blob).ok();
                 StoredFacts {
                     key,
                     record_version,
                     value,
-                    seen_at,
                 }
             })
             .collect())

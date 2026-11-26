@@ -576,12 +576,8 @@ fn facts_set(
     }
 }
 
-/// Each stored set of `sessions` under the key `k` as `(session, kind, agent, seen_at)`, in the order of the read.
-fn stamps(
-    store: &Store,
-    generation: i64,
-    sessions: &[&str],
-) -> Vec<(String, FactsKind, String, i64)> {
+/// Each stored set of `sessions` under the key `k` that stands, as `(session, kind, agent)`, in the order of the read.
+fn standing(store: &Store, generation: i64, sessions: &[&str]) -> Vec<(String, FactsKind, String)> {
     let sessions: Vec<(String, i64, String)> = sessions
         .iter()
         .map(|session| ("k".to_string(), generation, session.to_string()))
@@ -590,14 +586,7 @@ fn stamps(
         .load_companion_facts(&sessions)
         .unwrap()
         .into_iter()
-        .map(|set| {
-            (
-                set.key.session_id,
-                set.key.kind,
-                set.key.agent_id,
-                set.seen_at,
-            )
-        })
+        .map(|set| (set.key.session_id, set.key.kind, set.key.agent_id))
         .collect()
 }
 
@@ -632,13 +621,8 @@ fn an_agents_set_stamped_at_the_cutoff_stays_and_one_a_millisecond_before_it_lea
         .purge_companion_facts(Some(1_000_000), 1_000_000)
         .unwrap();
     assert_eq!(
-        stamps(&store, generation, &["s"]),
-        vec![(
-            "s".to_string(),
-            FactsKind::Agents,
-            "a1".to_string(),
-            1_000_000
-        )],
+        standing(&store, generation, &["s"]),
+        vec![("s".to_string(), FactsKind::Agents, "a1".to_string())],
         "the set stamped at the cutoff stays and the one a millisecond before it leaves"
     );
 }
@@ -656,6 +640,14 @@ fn a_sessions_title_leaves_at_the_session_cutoff_and_its_agents_set_stays() {
                     FactsKind::Agents,
                     "a1",
                     br#"{"name":"rigging-checker"}"#,
+                    999_999,
+                ),
+                facts_set(
+                    generation,
+                    "s1",
+                    FactsKind::Project,
+                    "",
+                    br#"{"branch":"sea-wall-survey","cwd":null,"project":null,"repository":null,"repository_root":null}"#,
                     999_999,
                 ),
                 facts_set(
@@ -682,13 +674,13 @@ fn a_sessions_title_leaves_at_the_session_cutoff_and_its_agents_set_stays() {
         .purge_companion_facts(Some(500_000), 1_000_000)
         .unwrap();
     assert_eq!(
-        stamps(&store, generation, &["s1", "s2"]),
+        standing(&store, generation, &["s1", "s2"]),
         vec![
-            ("s1".to_string(), FactsKind::Agents, "a1".to_string(), 999_999),
-            ("s2".to_string(), FactsKind::Title, String::new(), 1_000_000)
+            ("s1".to_string(), FactsKind::Agents, "a1".to_string()),
+            ("s2".to_string(), FactsKind::Title, String::new())
         ],
-        "the title before the session cutoff leaves, the agent's set inside the request cutoff stays, and so does a \
-         title stamped at the session cutoff"
+        "the project set and the title before the session cutoff leave, the agent's set inside the request cutoff \
+         stays, and so does a title stamped at the session cutoff"
     );
 }
 
@@ -736,12 +728,13 @@ fn a_save_stamps_each_set_of_the_session_whose_row_it_writes_and_no_other_sessio
             ..KeepaliveBatch::default()
         })
         .unwrap();
+    // Each cutoff lies a millisecond past a filing instant, so a set stands only where the stamp moved it to 2,000.
+    store.purge_companion_facts(Some(1_501), 1_001).unwrap();
     assert_eq!(
-        stamps(&store, generation, &["s1", "s2"]),
+        standing(&store, generation, &["s1", "s2"]),
         vec![
-            ("s1".to_string(), FactsKind::Agents, "a1".to_string(), 2_000),
-            ("s1".to_string(), FactsKind::Title, String::new(), 2_000),
-            ("s2".to_string(), FactsKind::Title, String::new(), 1_000)
+            ("s1".to_string(), FactsKind::Agents, "a1".to_string()),
+            ("s1".to_string(), FactsKind::Title, String::new())
         ],
         "the session's row stamps its earlier set and the one its own batch writes, and no set of another session"
     );
