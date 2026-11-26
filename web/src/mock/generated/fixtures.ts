@@ -15318,7 +15318,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "last_bus_gap_at": null,
       "limits": {
         "agents": {
-          "count": 3,
+          "count": 4,
           "max": 1024
         },
         "retained_bytes": {
@@ -15326,7 +15326,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "max": 268435456
         },
         "sessions": {
-          "count": 1,
+          "count": 2,
           "max": 128
         }
       },
@@ -15485,6 +15485,27 @@ export const FIXTURES: Record<string, Fixture> = {
           "session_id": "s1",
           "state": "not_retained",
           "ttl_seconds": 300,
+          "wake_at": null
+        },
+        {
+          "account_id": null,
+          "agent_id": "main",
+          "agent_state": "busy",
+          "cause": "session_opted_out",
+          "credited_today": 0,
+          "deadline": null,
+          "key_id": "desktop",
+          "last_guard": "rearm",
+          "last_probe_at": null,
+          "last_request_at": 1791721000000,
+          "model": "claude-sonnet-5",
+          "next_probe_at": null,
+          "park_kind": null,
+          "pool_id": "",
+          "probes_today": 0,
+          "session_id": "s9-quiet",
+          "state": "ended",
+          "ttl_seconds": 0,
           "wake_at": null
         }
       ]
@@ -28077,6 +28098,79 @@ export const FIXTURES: Record<string, Fixture> = {
           "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
+        },
+        {
+          "key_id": "desktop",
+          "key_generation": 1791721000000,
+          "session_id": "s9-quiet",
+          "agent_id": null,
+          "model": "claude-sonnet-5",
+          "account_id": null,
+          "placements": 0,
+          "pinned_at": null,
+          "last_used_at": null,
+          "last_request_at": null,
+          "last_inference_at": null,
+          "first_request_at": null,
+          "user_agent": null,
+          "spend": null,
+          "day": {
+            "requests": {},
+            "usd": 0,
+            "billed_usd": {},
+            "equivalent": 0
+          },
+          "pinned": false,
+          "burn": null,
+          "burn_unit": null,
+          "burn_window": null,
+          "burn_equivalent": null,
+          "burn_usd": null,
+          "burn_at": null,
+          "runway_ms": null,
+          "runway_bounded": null,
+          "factor": null,
+          "speed": null,
+          "cycle_ms": null,
+          "cache_ttl_ms": null,
+          "warm": null,
+          "last_input_tokens": null,
+          "effort": null,
+          "last_refresh_at": null,
+          "shed": null,
+          "mark": null,
+          "ended": null,
+          "fast": null,
+          "account_bound": null,
+          "move_cost": null,
+          "move_size": null,
+          "move_drop_size": null,
+          "move_drop_cost": null,
+          "historical": false,
+          "companion": "reporting",
+          "companion_since": null,
+          "agents": 1,
+          "agent_contexts": [],
+          "agent_facts": [],
+          "agent_requests": [],
+          "facts": {
+            "branch": null,
+            "cwd": null,
+            "project": null,
+            "repository": null,
+            "repository_root": null,
+            "title": null
+          },
+          "keepalive": {
+            "cause": "session_opted_out",
+            "last_guard": null,
+            "next_probe_at": null,
+            "state": "ended"
+          },
+          "lifecycle": "busy",
+          "presence_age_seconds": null,
+          "forked_from": null,
+          "fork_depth": null
         }
       ]
     }
@@ -29050,12 +29144,12 @@ export const FIXTURES: Record<string, Fixture> = {
       },
       "gaps": [],
       "keepalive": {
-        "agents": 3,
+        "agents": 4,
         "bus_gaps": 0,
         "retained_bytes": 232,
         "running_probes": 0,
-        "session_entries": 2,
-        "sessions": 1
+        "session_entries": 3,
+        "sessions": 2
       }
     }
   },

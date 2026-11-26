@@ -298,7 +298,8 @@ pub(crate) struct AgentContext {
 }
 
 /// Main's recipe as the session row reads it, or the newest other agent's where main holds none, every member null
-/// while no agent holds one.
+/// while no agent holds one. A session whose own option holds the cache warming off reads the cause
+/// `session_opted_out` and the state `ended`.
 #[derive(Default, serde::Serialize, ToSchema)]
 #[cfg_attr(test, derive(serde::Deserialize))]
 #[serde(deny_unknown_fields)]

@@ -64,6 +64,27 @@
         "state": "not_retained",
         "ttl_seconds": 300,
         "wake_at": null
+      },
+      {
+        "account_id": null,
+        "agent_id": "main",
+        "agent_state": "busy",
+        "cause": "session_opted_out",
+        "credited_today": 0,
+        "deadline": null,
+        "key_id": "desktop",
+        "last_guard": "rearm",
+        "last_probe_at": null,
+        "last_request_at": 1791721000000,
+        "model": "claude-sonnet-5",
+        "next_probe_at": null,
+        "park_kind": null,
+        "pool_id": "",
+        "probes_today": 0,
+        "session_id": "s9-quiet",
+        "state": "ended",
+        "ttl_seconds": 0,
+        "wake_at": null
       }
     ]
   }

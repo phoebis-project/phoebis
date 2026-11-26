@@ -892,6 +892,7 @@ mod tests {
                 restored_until: None,
                 instance_mismatches: 0,
                 agents,
+                cache_warming: true,
             },
         );
         (inner, key)

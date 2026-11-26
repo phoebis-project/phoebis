@@ -26,6 +26,7 @@ pub(crate) struct Event {
     pub agent_id: Option<String>,
     pub agent_type: Option<String>,
     pub branch: Option<String>,
+    pub cache_warming: Option<bool>,
     pub cwd: Option<String>,
     /// Epoch milliseconds: the latest deadline across the background commands a park waits on.
     pub deadline: Option<i64>,
@@ -174,7 +175,11 @@ fn members(event: &str) -> Option<(EventKind, &'static [(&'static str, bool)])> 
         ),
         "session_start" => (
             EventKind::SessionStart,
-            &[("previous_instance_id", false), ("reported_facts", true)],
+            &[
+                ("cache_warming", true),
+                ("previous_instance_id", false),
+                ("reported_facts", true),
+            ],
         ),
         "state" => (
             EventKind::State,
@@ -288,6 +293,8 @@ pub(crate) enum Reported {
         facts: SessionFacts,
     },
     SessionStart {
+        /// What the session's own option says of its cache warming, `false` where it holds the warming off.
+        cache_warming: bool,
         previous_instance_id: Option<String>,
         /// The kinds of facts the instance reports. The session's record keeps no copy.
         reported_facts: BTreeSet<FactsKind>,
@@ -382,6 +389,7 @@ impl EventReport {
             agent_id,
             agent_type,
             branch,
+            cache_warming,
             cwd,
             description,
             instance_id,
@@ -429,6 +437,7 @@ impl EventReport {
                 }),
             },
             EventKind::SessionStart => Reported::SessionStart {
+                cache_warming: cache_warming.ok_or_else(required)?,
                 previous_instance_id,
                 reported_facts,
             },
@@ -641,6 +650,7 @@ impl Inner {
         let mut filed_facts = false;
         match &report.event {
             Reported::SessionStart {
+                cache_warming,
                 previous_instance_id,
                 reported_facts,
             } => {
@@ -648,6 +658,7 @@ impl Inner {
                     key,
                     key_generation,
                     &report,
+                    *cache_warming,
                     previous_instance_id.as_deref(),
                     reported_facts,
                     now,
@@ -871,11 +882,13 @@ impl Inner {
         Ok(agent)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start(
         &mut self,
         key: SessionKey,
         key_generation: i64,
         report: &EventReport,
+        cache_warming: bool,
         previous_instance_id: Option<&str>,
         reported_facts: &BTreeSet<FactsKind>,
         now: i64,
@@ -922,6 +935,8 @@ impl Inner {
                 session.restored_until = None;
                 session.ended = false;
                 session.last_report_at = now;
+                let turns_warming_off = session.cache_warming && !cache_warming;
+                session.cache_warming = cache_warming;
                 if revived {
                     // The end released every agent, and a real request arms nothing on a released one, so main
                     // starts again as a registration starts it. The subagents stay released until the mod starts
@@ -942,6 +957,10 @@ impl Inner {
                             );
                     }
                     self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
+                }
+                // No tick reads the session's option, so a prompt held from before the turn would go on being warmed.
+                if turns_warming_off {
+                    self.discard_warming_of(&key, Reason::SessionOptedOut, Wasted::Released);
                 }
                 // An install that turned a kind off would otherwise keep the sets that an earlier run stored.
                 let row = (key.0.clone(), key_generation, key.1.clone());
@@ -1007,6 +1026,7 @@ impl Inner {
                 restored_until: None,
                 instance_mismatches: 0,
                 agents,
+                cache_warming,
             },
         );
         // The session's own sets start over with the record whatever the list says, and its agents' stored sets stay

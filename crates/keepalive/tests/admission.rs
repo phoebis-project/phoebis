@@ -192,6 +192,86 @@ async fn a_request_on_a_keepalive_off_pool_keeps_no_body_at_its_arrival_while_on
     );
 }
 
+/// A session whose own option holds the cache warming off is refused at the arrival as a key without the permission
+/// is: the request keeps no prompt, and main's line names the session's cause with no probe ahead.
+#[tokio::test]
+async fn a_request_on_a_session_registered_with_the_warming_off_retains_nothing_and_reads_session_opted_out(
+) {
+    let mut r = rig(RigSpec::default()).await;
+    r.event(json!({"event": "session_start", "cache_warming": false}))
+        .await
+        .unwrap();
+    r.observe("main").await;
+    assert_eq!(
+        (
+            r.engine.stats().retained_bytes,
+            r.view("main").cause,
+            r.view("main").next_probe_at
+        ),
+        (0, Reason::SessionOptedOut, None)
+    );
+}
+
+/// No later tick reads the session's option, so the registration that turns it off drops the held prompt in its own
+/// step, and the probe that no request answered settles under `released`, as a key's lost permission settles it.
+#[tokio::test]
+async fn a_registration_that_turns_the_warming_off_drops_the_held_prompt_and_settles_its_probe_as_released(
+) {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.advance_attended(270_000).await;
+    r.step().await;
+    r.event(json!({"event": "session_start", "cache_warming": false}))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            r.engine.stats().retained_bytes,
+            r.view("main").cause,
+            r.view("main").next_probe_at
+        ),
+        (0, Reason::SessionOptedOut, None)
+    );
+    assert_eq!(
+        probes_and_credits(&final_rollups(&r).await),
+        (1, BTreeMap::from([("released".to_string(), 1)]), 0),
+        "the one probe settled under the drop"
+    );
+}
+
+/// The drop reaches only an agent that holds warming work, so a main that has sent nothing keeps its generation and its
+/// cause, and the views word it `registered` as they did before the registration.
+#[tokio::test]
+async fn a_main_that_waits_for_its_first_request_stays_registered_through_a_registration_that_turns_the_warming_off(
+) {
+    let mut r = rig(RigSpec::default()).await;
+    r.event(json!({"event": "session_start", "cache_warming": false}))
+        .await
+        .unwrap();
+    assert_eq!(r.lifecycle("main"), Some(Lifecycle::Registered));
+}
+
+/// A registration that turns the session's option back on lets the next request arm a recipe as a first request does.
+#[tokio::test]
+async fn a_request_behind_a_registration_that_turns_the_warming_back_on_is_retained() {
+    let mut r = rig(RigSpec::default()).await;
+    r.event(json!({"event": "session_start", "cache_warming": false}))
+        .await
+        .unwrap();
+    r.event(json!({"event": "session_start", "cache_warming": true}))
+        .await
+        .unwrap();
+    r.observe("main").await;
+    assert_eq!(
+        (
+            r.engine.stats().retained_bytes > 0,
+            r.view("main").next_probe_at
+        ),
+        (true, Some(r.now() + 270_000)),
+        "cache start plus TTL less the 30 s lead, no jitter"
+    );
+}
+
 /// The attention reader counts an expiry between turns on the pools this set names alone.
 #[tokio::test]
 async fn the_warming_pools_are_the_pools_whose_policy_is_on() {

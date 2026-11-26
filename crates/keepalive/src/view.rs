@@ -70,7 +70,9 @@ pub fn recipe_state(reason: Reason, paused: bool) -> RecipeState {
         | UnsupportedProbe => RecipeState::Paused,
         AgentReleased | AgentUnknown | BusGap | Compacted | Evicted | Expired
         | ExpiredAtRestart | IdleLimit | InstanceReplaced | KeyOptedOut | OptedOut
-        | ParkedLimit | Reset | SessionEnded | SessionExpired => RecipeState::Ended,
+        | ParkedLimit | Reset | SessionEnded | SessionExpired | SessionOptedOut => {
+            RecipeState::Ended
+        }
     };
     match state {
         RecipeState::Held | RecipeState::Retained if paused => RecipeState::Paused,
@@ -142,14 +144,40 @@ pub struct RecipeView {
     pub wake_at: Option<i64>,
 }
 
+/// The state word of a session row's summary: the state of the agent whose recipe stands for the session, or `Ended`
+/// for a session whose own option holds the cache warming off, which holds no recipe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryState {
+    Busy,
+    Ended,
+    Idle,
+    Parked,
+    Released,
+    Unknown,
+}
+
+impl From<AgentState> for SummaryState {
+    fn from(state: AgentState) -> SummaryState {
+        match state {
+            AgentState::Busy => SummaryState::Busy,
+            AgentState::Idle => SummaryState::Idle,
+            AgentState::Parked => SummaryState::Parked,
+            AgentState::Released => SummaryState::Released,
+            AgentState::Unknown => SummaryState::Unknown,
+        }
+    }
+}
+
 /// Main's recipe as the session row reads it, or the newest other agent's where main holds none, every member null
-/// while no agent holds one.
+/// while no agent holds one. A session whose own option holds the cache warming off reads the cause
+/// `session_opted_out` and the state `ended`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct KeepaliveSummary {
     pub cause: Option<Reason>,
     pub last_guard: Option<Guard>,
     pub next_probe_at: Option<i64>,
-    pub state: Option<AgentState>,
+    pub state: Option<SummaryState>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -245,11 +273,27 @@ impl Engine {
                         .then_some(s.last_report_at),
                     key_id: key.0.clone(),
                     key_generation: s.key_generation,
-                    keepalive: KeepaliveSummary {
-                        cause: summary.map(|a| a.reason),
-                        last_guard: summary.and_then(|a| a.last_guard),
-                        next_probe_at: s.agents.values().filter_map(|a| a.next_probe_at()).min(),
-                        state: summary.map(|a| a.state),
+                    // A session whose own option holds the warming off holds no recipe, so no agent stands for its
+                    // row. The row reads the cause and the state that a line of the recipes route reads for an agent
+                    // of such a session.
+                    keepalive: if s.cache_warming {
+                        KeepaliveSummary {
+                            cause: summary.map(|a| a.reason),
+                            last_guard: summary.and_then(|a| a.last_guard),
+                            next_probe_at: s
+                                .agents
+                                .values()
+                                .filter_map(|a| a.next_probe_at())
+                                .min(),
+                            state: summary.map(|a| a.state.into()),
+                        }
+                    } else {
+                        KeepaliveSummary {
+                            cause: Some(Reason::SessionOptedOut),
+                            last_guard: None,
+                            next_probe_at: None,
+                            state: Some(SummaryState::Ended),
+                        }
                     },
                     lifecycles: s
                         .agents

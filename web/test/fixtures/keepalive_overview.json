@@ -11,7 +11,7 @@
     "last_bus_gap_at": null,
     "limits": {
       "agents": {
-        "count": 3,
+        "count": 4,
         "max": 1024
       },
       "retained_bytes": {
@@ -19,7 +19,7 @@
         "max": 268435456
       },
       "sessions": {
-        "count": 1,
+        "count": 2,
         "max": 128
       }
     },

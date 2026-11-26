@@ -4,7 +4,7 @@
 mod common;
 
 use common::*;
-use phoebis_keepalive::{AgentState, Lifecycle, ParkKind, Reason, RecipeState, RecipeView};
+use phoebis_keepalive::{Lifecycle, ParkKind, Reason, RecipeState, RecipeView, SummaryState};
 use serde_json::{json, Value};
 
 const DAY: i64 = 86_400_000;
@@ -381,7 +381,7 @@ async fn a_session_whose_main_holds_no_recipe_reads_the_newest_other_agents_reci
     r.state("worker-2", "idle").await;
     assert_eq!(
         r.engine.sessions()[0].keepalive.state,
-        Some(AgentState::Idle),
+        Some(SummaryState::Idle),
         "{:?}",
         r.engine.sessions()
     );

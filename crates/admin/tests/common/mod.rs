@@ -689,8 +689,9 @@ pub async fn created_key_secret(app: &Router, cookie: &str, body: &str) -> Strin
 /// The report goes as the mod sends it: under the request generation the body carries, which the caller takes from
 /// the agent's last answer, and once more under the generation that a `stale_request_generation` refusal names, under
 /// the same sequence, which the refusal did not take. The engine moves an agent's generation at its real request with
-/// no answer in between. `body` is a JSON object, and `protocol` is filled with 1 where the body names none, and
-/// `reported_facts` with the three kinds on a `session_start` that names none.
+/// no answer in between. `body` is a JSON object, and `protocol` is filled with 1 where the body names none, and on a
+/// `session_start` `cache_warming` with `true` and `reported_facts` with the three kinds, each where the body names
+/// none.
 pub async fn report_as_the_mod(
     engine: &Arc<Engine>,
     secret: &str,
@@ -700,6 +701,9 @@ pub async fn report_as_the_mod(
         .as_object_mut()
         .expect("a report's body is a JSON object");
     if fields.get("event") == Some(&serde_json::json!("session_start")) {
+        fields
+            .entry("cache_warming")
+            .or_insert(serde_json::Value::Bool(true));
         fields
             .entry("reported_facts")
             .or_insert(serde_json::json!(["agents", "project", "title"]));

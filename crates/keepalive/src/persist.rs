@@ -92,6 +92,7 @@ pub(crate) struct PersistedSession {
     /// build wrote the stamp only at a request that took the slots.
     #[serde(default)]
     pub slotted: Option<bool>,
+    pub cache_warming: bool,
 }
 
 /// Every field of `Agent` but `in_flight`, with the observation's fields and the recipe's own beside it. The prompt,
@@ -455,6 +456,7 @@ impl PersistedSession {
             last_report_at: session.last_report_at,
             last_real_at: session.last_real_at,
             slotted: Some(session.slotted),
+            cache_warming: session.cache_warming,
         }
     }
 
@@ -476,6 +478,7 @@ impl PersistedSession {
             restored_until: self.attended.then_some(now + LEASE_MS),
             instance_mismatches: 0,
             agents: BTreeMap::new(),
+            cache_warming: self.cache_warming,
         }
     }
 }

@@ -112,7 +112,10 @@ subscription account as to an API-key one. A key without the `keepalive` compani
 Sessions view names the cause for such a session as `key <name> permits no cache warming`. Taking the permission away
 reaches a session that is already idle: its held prompt is dropped under `key_opted_out` rather than kept, since nothing
 on that key may be probed again until the permission is back. A new key holds the permission, and the key dialog edits
-it as "Cache warming" ([The key's permissions](companion-mod.md#the-keys-permissions)).
+it as "Cache warming" ([The key's permissions](companion-mod.md#the-keys-permissions)). A session whose companion mod
+registers it with its own cache warming option off is never retained either, and the Sessions view names the cause as
+`cache warming off for the session`. A registration that turns the option off reaches a held prompt in the same step:
+the prompt is dropped under `session_opted_out`.
 
 In the console the switch is in the pool dialog: Pools, Edit, the Keepalive group under Caching, "Keep prompt caches
 warm", with the policy's three numbers under it (see [Pools](console.md#pools)).
@@ -340,7 +343,7 @@ Each state reads these causes:
   `request_limit`, `request_too_large`, `session_limit`, `storage_limit`, `structured_output`, `unsupported_shape`.
 - `ended`: `agent_released`, `agent_unknown`, `bus_gap`, `compacted`, `evicted`, `expired`, `expired_at_restart`,
   `idle_limit`, `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `reset`, `session_ended`,
-  `session_expired`.
+  `session_expired`, `session_opted_out`.
 
 A `held` or `retained` cause reads `paused` while the engine's own pause holds. A probe's structural error
 (`invalid_probe_usage`, `missing_account`, `partial_cache_coverage`, `probe_authentication_error`,
@@ -355,11 +358,11 @@ when its entry goes cold: at the entry's expiry the engine drops it, writes off 
 chain's last entry ends, and sends nothing, and the row still reads `paused`. The same hold on an armed recipe reads
 `held`, since the gate reads it again at every tick and probing resumes when it clears. A recipe held on a disabled pool
 reads `retained` again at the first tick after the pool is enabled. A `held` or `retained` cause reads `not_retained`
-when the agent holds no prompt, as a request refused at its account selection does. `keepalive_off` and `opted_out` are
-recorded when the request arrives and no body is kept, while `ineligible_credential` is read at the account selection. A
-request refused at its arrival credits no probe, so a probe outstanding when the pool's keepalive is turned off or the
-key's `keepalive` permission is taken away is judged at the agent's next followed turn or completed compaction, or
-settles as wasted.
+when the agent holds no prompt, as a request refused at its account selection does. `keepalive_off`, `opted_out` and
+`session_opted_out` are recorded when the request arrives and no body is kept, while `ineligible_credential` is read at
+the account selection. A request refused at its arrival credits no probe, so a probe outstanding when the pool's
+keepalive is turned off or the key's `keepalive` permission is taken away is judged at the agent's next followed turn
+or completed compaction, or settles as wasted.
 
 `partial_cache_coverage` names a probe that did not leave the whole prefix in the cache. The measure is the count of the
 agent's last request, the tokens it read and wrote. A probe on the recipe's own account covers by reading that many
@@ -443,7 +446,7 @@ request), or when the next request after the probe reads nothing from the entry 
 | `horizon` | The recipe was held under `horizon` before a real request answered the probe. |
 | `idle_limit` | The idle window ran out and the last entry of the probe's chain lapsed before a real request read it. |
 | `parked_limit` | The parked ceiling ran out before a real request answered the probe. |
-| `released` | The key's `keepalive` permission taken away, or the mod reporting the agent released. |
+| `released` | The key's `keepalive` permission taken away, a registration that turns the session's cache warming off, or the mod reporting the agent released. |
 | `replaced` | A replacement registration arrived for the same agent. |
 | `session_ended` | By an explicit `session_end` report or the session's own expiry with no report. |
 
@@ -571,6 +574,7 @@ The state's cause on the Sessions view reads a label in place of the engine's id
 | session ended | `session_ended` |
 | session expired | `session_expired` |
 | session limit | `session_limit` |
+| cache warming off for the session | `session_opted_out` |
 | slow probe | `slow_probe` |
 | spend cap reached | `spent` |
 | storage limit | `storage_limit` |

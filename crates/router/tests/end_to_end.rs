@@ -4276,6 +4276,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         "session_id": "e2e-warm",
         "instance_id": "e2e-instance",
         "sequence": 1,
+        "cache_warming": true,
         "reported_facts": ["agents", "project", "title"],
     });
     let ack = client
@@ -4642,6 +4643,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
                 "session_id": "e2e-ui",
                 "instance_id": "e2e-instance",
                 "sequence": 1,
+                "cache_warming": true,
                 "reported_facts": ["agents", "project", "title"],
             }))
             .send()

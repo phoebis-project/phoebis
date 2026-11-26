@@ -294,6 +294,7 @@ reasons! {
     SessionEnded => "session_ended",
     SessionExpired => "session_expired",
     SessionLimit => "session_limit",
+    SessionOptedOut => "session_opted_out",
     SlowProbe => "slow_probe",
     Spent => "spent",
     StorageLimit => "storage_limit",
@@ -611,6 +612,8 @@ pub(crate) struct Session {
     /// warning goes out once per session rather than once per request.
     pub instance_mismatches: u64,
     pub agents: BTreeMap<String, Agent>,
+    /// What the session's last registration said of its own cache warming option.
+    pub cache_warming: bool,
 }
 
 impl Session {
@@ -861,6 +864,15 @@ impl Agent {
             .into_iter()
             .map(|probe| Kept::of(self, probe))
             .collect()
+    }
+
+    /// Whether the agent holds anything that a stop of the warming ends: an observation, a recipe set aside, or a
+    /// probe that waits for its answer or its settlement.
+    pub(crate) fn holds_warming_work(&self) -> bool {
+        self.current.is_some()
+            || self.aside.is_some()
+            || !self.unanswered.is_empty()
+            || !self.kept.is_empty()
     }
 
     /// The names `follow_resolutions` reads on an agent with no compaction open, as an arrival leaves it once
@@ -1796,6 +1808,26 @@ impl Inner {
             .unwrap_or_default();
         for agent in &agents {
             self.discard(key, agent, reason, wasted);
+        }
+    }
+
+    /// Discards each agent of the session that holds warming work, under `reason` and with its probes settled under
+    /// `wasted`. An agent with nothing to drop keeps its generation and its reason, so its lifecycle word stands.
+    pub(crate) fn discard_warming_of(&mut self, key: &SessionKey, reason: Reason, wasted: Wasted) {
+        let agents: Vec<String> = self
+            .sessions
+            .get(key)
+            .map(|session| {
+                session
+                    .agents
+                    .iter()
+                    .filter(|(_, agent)| agent.holds_warming_work())
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for agent in &agents {
+            self.discard(key, agent, reason, Some(wasted));
         }
     }
 
@@ -2843,12 +2875,18 @@ impl Engine {
             }
         };
         // The body's parse and edits run apart from the lock, which the bus observer, the tick and the companion
-        // route all take, for a request on an agent the engine holds and of a class that can arm a recipe: a
-        // compaction stores none. Every check below runs again under the lock, which builds the recipe itself where
-        // none was built here.
-        let held = {
+        // route all take, for a request on an agent the engine holds, of a session whose own option holds the warming
+        // on, and of a class that can arm a recipe: a compaction stores none. Every check below runs again under the
+        // lock, which builds the recipe itself where none was built here.
+        let (held, session_off) = {
             let inner = self.lock();
-            !inner.closed && agent_ref(&inner.sessions, &key, &agent_id).is_some()
+            (
+                !inner.closed && agent_ref(&inner.sessions, &key, &agent_id).is_some(),
+                inner
+                    .sessions
+                    .get(&key)
+                    .is_some_and(|session| !session.cache_warming),
+            )
         };
         let build = || {
             make_recipe(
@@ -2860,6 +2898,7 @@ impl Engine {
         };
         let prebuilt = (held
             && arrival_refusal.is_none()
+            && !session_off
             && observed
                 .client
                 .request_class
@@ -3121,7 +3160,15 @@ impl Engine {
         agent.canonical_model = observed.canonical_model.clone();
         agent.key_generation = observed.key_generation;
         // Past the activity writes and the slot, which such a request takes as any other does, and ahead of the build.
-        if let Some(reason) = arrival_refusal {
+        // The pool's policy reads first, then the key's permission, then the session's own option. The option is read
+        // again here, under the lock that admits the recipe: a registration can turn it off behind the read ahead of
+        // the parse, and its drop has run by then, so a recipe admitted on that earlier read would stay with no tick to
+        // end it.
+        let session_off = inner
+            .sessions
+            .get(&key)
+            .is_some_and(|session| !session.cache_warming);
+        if let Some(reason) = arrival_refusal.or(session_off.then_some(Reason::SessionOptedOut)) {
             inner.drop_aside(&key, &agent_id);
             inner.set_reason(&key, &agent_id, reason);
             return;
@@ -4894,6 +4941,7 @@ revisions:
                 restored_until: None,
                 instance_mismatches: 0,
                 agents: BTreeMap::from([("main".to_string(), armed)]),
+                cache_warming: true,
             },
         );
         inner.set_aside(&key, "main", 1_000);

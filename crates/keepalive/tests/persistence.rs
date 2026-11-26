@@ -2619,6 +2619,32 @@ async fn a_second_load_leaves_the_sessions_the_engine_holds_and_their_rows() {
     );
 }
 
+/// A request can arrive between a restart and the mod's next registration, so the saved row carries what the last
+/// registration said of the session's own option: the session that holds the warming off names its cause on its row
+/// after the load, and the rig's session, which holds it on and sent nothing, names none.
+#[tokio::test]
+async fn a_restart_keeps_what_each_sessions_registration_said_of_its_cache_warming() {
+    let mut r = rig(on_disk()).await;
+    r.event(json!({"event": "session_start", "session_id": "quiet", "cache_warming": false}))
+        .await
+        .unwrap();
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let causes: BTreeMap<String, Option<Reason>> = second
+        .sessions()
+        .into_iter()
+        .map(|view| (view.session_id, view.keepalive.cause))
+        .collect();
+    assert_eq!(
+        causes,
+        BTreeMap::from([
+            ("quiet".to_string(), Some(Reason::SessionOptedOut)),
+            ("session".to_string(), None)
+        ])
+    );
+}
+
 #[tokio::test]
 async fn a_session_whose_main_agent_cannot_be_read_is_dropped_whole() {
     let mut r = rig(on_disk()).await;

@@ -1232,6 +1232,56 @@ async fn a_registration_that_names_no_agents_drops_each_agents_stored_set() {
     );
 }
 
+/// No agent of a session whose own option holds the cache warming off holds a recipe that its row could stand on, so
+/// the row reads the cause and the state from the session's word, while a session with the option on that sent nothing
+/// reads neither.
+#[tokio::test]
+async fn a_session_registered_with_the_warming_off_reads_session_opted_out_and_ended_on_its_row() {
+    let (parts, cookie, secret) = stored_facts_harness().await;
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &secret,
+        serde_json::json!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s-off",
+            "instance_id": "i-off",
+            "sequence": 1,
+            "cache_warming": false
+        }),
+    )
+    .await;
+    common::report_as_the_mod(
+        &parts.keepalive,
+        &secret,
+        serde_json::json!({
+            "protocol": 1,
+            "event": "session_start",
+            "session_id": "s-on",
+            "instance_id": "i-on",
+            "sequence": 1,
+            "cache_warming": true
+        }),
+    )
+    .await;
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let summary = |session: &str| {
+        let keepalive = &row_of(&listed, session)["keepalive"];
+        (keepalive["cause"].clone(), keepalive["state"].clone())
+    };
+    assert_eq!(
+        (summary("s-off"), summary("s-on")),
+        (
+            (
+                serde_json::json!("session_opted_out"),
+                serde_json::json!("ended")
+            ),
+            (serde_json::Value::Null, serde_json::Value::Null)
+        ),
+        "{listed}"
+    );
+}
+
 /// The ten idle-age buckets as the overview answers them, `reached` raised in the buckets `reached` names.
 fn idle_returns(reached: &[usize]) -> serde_json::Value {
     let bounds = phoebis_keepalive::IDLE_AGE_BOUNDS_SECONDS;

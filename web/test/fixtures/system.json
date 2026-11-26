@@ -86,12 +86,12 @@
     },
     "gaps": [],
     "keepalive": {
-      "agents": 3,
+      "agents": 4,
       "bus_gaps": 0,
       "retained_bytes": 232,
       "running_probes": 0,
-      "session_entries": 2,
-      "sessions": 1
+      "session_entries": 3,
+      "sessions": 2
     }
   }
 }

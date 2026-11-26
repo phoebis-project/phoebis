@@ -111,7 +111,7 @@ async fn listed_generation_is_current(app: &axum::Router, sequence: u64, listed:
 }
 
 /// A report as the mod sends it: the five members every body carries, then the event's own, and on a `session_start`
-/// that names no `reported_facts` the three kinds.
+/// `cache_warming` with `true` where it names none and the three kinds where it names no `reported_facts`.
 fn report(event: &str, session: &str, instance: &str, sequence: u64, fields: Value) -> Value {
     let mut body = json!({
         "protocol": 1,
@@ -121,6 +121,7 @@ fn report(event: &str, session: &str, instance: &str, sequence: u64, fields: Val
         "sequence": sequence,
     });
     if event == "session_start" {
+        body["cache_warming"] = true.into();
         body["reported_facts"] = json!(["agents", "project", "title"]);
     }
     if let Value::Object(fields) = fields {
@@ -613,7 +614,8 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
                 "event": "session_start",
                 "session_id": "unlisted",
                 "instance_id": "i-unlisted",
-                "sequence": 1
+                "sequence": 1,
+                "cache_warming": true
             })),
             400,
             code("invalid_event"),
@@ -627,7 +629,22 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
                 "session_id": "misspelled",
                 "instance_id": "i-misspelled",
                 "sequence": 1,
+                "cache_warming": true,
                 "reported_facts": ["agent"]
+            })),
+            400,
+            code("invalid_event"),
+        ),
+        (
+            "a registration that names no cache warming",
+            Some(JSON),
+            json_body(json!({
+                "protocol": 1,
+                "event": "session_start",
+                "session_id": "unwarmed",
+                "instance_id": "i-unwarmed",
+                "sequence": 1,
+                "reported_facts": ["agents", "project", "title"]
             })),
             400,
             code("invalid_event"),

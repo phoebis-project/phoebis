@@ -39,5 +39,5 @@ pub use routes::{events_router, EVENTS_PATH, MAX_BODY_BYTES};
 pub use usage::{ProbeUsage, MAX_USAGE_BYTES};
 pub use view::{
     recipe_state, AgentCounts, CompanionState, KeepaliveSummary, Lifecycle, RecipeState,
-    RecipeView, SessionView,
+    RecipeView, SessionView, SummaryState,
 };

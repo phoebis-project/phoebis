@@ -490,7 +490,7 @@ id is `main`.
 
 | Event | Fields | What the router does |
 | --- | --- | --- |
-| `session_start` | `reported_facts`, and `previous_instance_id` when it takes over from another instance | Registers the session under the key, or takes it back after a lapse or an end, and answers with the agents it holds |
+| `session_start` | `cache_warming` (whether the session's own option holds the cache warming on), `reported_facts`, and `previous_instance_id` when it takes over from another instance | Registers the session under the key, or takes it back after a lapse or an end, and answers with the agents it holds |
 | `heartbeat` | none | Renews the lease, the one event besides a `session_start` that does |
 | `agent_start` | `agent_id`, and `request_generation` when known | Starts the agent `busy`, or restarts a released one under the generation the start names |
 | `activity` | `agent_id`, `kind` (`prompt` or `presence`), and `request_generation` when known | A prompt sets the agent `busy` and resets its idle clock. A presence moves the idle clock alone |
@@ -556,7 +556,7 @@ without a registration. The eighteen codes, by status:
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_event` | 400 | The body is not typed `application/json`, is not this protocol's JSON, names no `protocol`, carries a field its event does not take (such as a `title` on a `heartbeat`, whatever its value) or lacks one it requires, carries a park field on a state other than `parked`, reports `parked` without `park_kind` or, outside `background`, without `wake_at`, or carries a `wake_at` on a `background` park or a `deadline` on a `scheduled` park |
+| `invalid_event` | 400 | The body is not typed `application/json`, is not this protocol's JSON, names no `protocol`, carries a field its event does not take (such as a `title` on a `heartbeat`, whatever its value) or lacks one it requires, names a kind in `reported_facts` that is none of the three, carries a park field on a state other than `parked`, reports `parked` without `park_kind` or, outside `background`, without `wake_at`, or carries a `wake_at` on a `background` park or a `deadline` on a `scheduled` park |
 | `invalid_identity` | 400 | `session_id`, `instance_id`, `agent_id` or `previous_instance_id` is not a valid id, or `sequence` is 0 |
 | `invalid_state` | 400 | `kind` is neither `prompt` nor `presence`, `state` is none of the five, or `park_kind` is none of the three |
 | `unknown_event` | 400 | `event` is none of the eight |
